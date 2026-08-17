@@ -5,8 +5,9 @@ use lumina_core::{
 };
 use lumina_raw::{RawError, RawMetadata};
 use lumina_sidecar::{
-    load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint, DecodeFingerprint,
-    GeometryFingerprint, HistoryEntry, Preset, SidecarDocument, SourceIdentity,
+    artifact_status, load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint,
+    ArtifactStatus, DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskStatus, Preset,
+    SidecarDocument, SourceIdentity,
 };
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -309,6 +310,10 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
     if args.migrate {
         migrate_sidecar(&sidecar_path_for(&args.input))?;
     }
+    // This check is deliberately before decoding and writing the export.  A
+    // warning is allowed by the product contract, but an explicit update must
+    // never pretend that an unavailable inference engine succeeded.
+    preflight_masks(&args.input, args.virtual_copy.as_deref(), args.update_masks)?;
     let output = args.output.with_extension(format_extension(&args.format));
     process_selected(
         ProcessArgs {
@@ -330,6 +335,44 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
         serde_json::json!({"command":"export", "output":output, "quality":args.quality, "status":"ok"}),
         "exported",
     )
+}
+
+fn preflight_masks(input: &Path, virtual_copy: Option<&str>, update: bool) -> Result<(), CliError> {
+    let path = sidecar_path_for(input);
+    let document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let id = virtual_copy.unwrap_or("vc-original");
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))?;
+    let root = input.parent().unwrap_or_else(|| Path::new("."));
+    let missing = copy
+        .mask_library
+        .iter()
+        .filter(|mask| {
+            !matches!(mask.status, MaskStatus::Valid)
+                || mask.artifact.as_ref().map_or(true, |artifact| {
+                    artifact_status(root, artifact) != ArtifactStatus::Available
+                })
+        })
+        .count();
+    if missing == 0 {
+        return Ok(());
+    }
+    if update {
+        return Err(CliError::Message(format!(
+            "--update-masks requested for {missing} mask(s), but no AI inference engine is available; export aborted"
+        )));
+    }
+    eprintln!(
+        "warning: {missing} mask(s) are missing or unavailable; they will not be applied (use --update-masks when an inference engine is installed)"
+    );
+    Ok(())
 }
 
 fn mask(args: MaskArgs) -> Result<(), CliError> {
@@ -954,6 +997,27 @@ mod tests {
                 exposure: Some(1.0),
                 highlights: Some(-0.25),
                 shadows: Some(0.4),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn export_accepts_update_masks_before_export() {
+        let cli = Cli::try_parse_from([
+            "lumina",
+            "export",
+            "--input",
+            "a.png",
+            "--output",
+            "b.png",
+            "--update-masks",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Export(ExportArgs {
+                update_masks: true,
                 ..
             })
         ));

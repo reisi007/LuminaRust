@@ -19,6 +19,78 @@ use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
+/// Work which may be performed when the GUI has no interactive input.
+///
+/// Queueing is deliberately separate from mask status: a missing/pending mask
+/// is never inserted here implicitly.  The caller must enqueue it as the
+/// result of an explicit user action (or a future CLI/GUI command).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdleTask {
+    MaskInference { mask_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueuedIdleTask {
+    id: u64,
+    priority: u8,
+    task: IdleTask,
+}
+
+/// Small, bounded priority queue for work that is safe to defer until idle.
+#[derive(Debug, Clone)]
+pub struct IdleQueue {
+    capacity: usize,
+    next_id: u64,
+    tasks: Vec<QueuedIdleTask>,
+}
+
+impl IdleQueue {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            next_id: 0,
+            tasks: Vec::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Enqueue only explicit requests. Returns a stable cancellation handle.
+    pub fn enqueue(&mut self, task: IdleTask, priority: u8) -> Option<u64> {
+        if self.tasks.len() >= self.capacity {
+            return None;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        self.tasks.push(QueuedIdleTask { id, priority, task });
+        Some(id)
+    }
+
+    pub fn cancel(&mut self, id: u64) -> bool {
+        let before = self.tasks.len();
+        self.tasks.retain(|task| task.id != id);
+        self.tasks.len() != before
+    }
+
+    /// Takes the highest-priority task. Equal priorities retain FIFO order.
+    pub fn pop_next(&mut self) -> Option<(u64, IdleTask)> {
+        let index = self
+            .tasks
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, task)| task.priority)?
+            .0;
+        let task = self.tasks.remove(index);
+        Some((task.id, task.task))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GuiError {
     #[error("{0}")]
@@ -63,6 +135,7 @@ pub struct LuminaApp {
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
+    idle_queue: IdleQueue,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -133,6 +206,7 @@ impl LuminaApp {
                 ("shadows".into(), false),
             ]),
             preset_relative_exposure: false,
+            idle_queue: IdleQueue::new(32),
         }
     }
 
@@ -262,6 +336,9 @@ impl LuminaApp {
     }
     pub fn status(&self) -> &str {
         &self.status
+    }
+    pub fn idle_queue(&self) -> &IdleQueue {
+        &self.idle_queue
     }
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -614,6 +691,15 @@ impl LuminaApp {
             .ok_or_else(|| GuiError::Io("Maske nicht gefunden".into()))?;
         mask.status = MaskStatus::Pending;
         mask.error_text = Some("Explizite Neuberechnung angefordert".into());
+        let queued = self.idle_queue.enqueue(
+            IdleTask::MaskInference {
+                mask_id: mask_id.clone(),
+            },
+            100,
+        );
+        if queued.is_none() {
+            return Err(GuiError::Io("Idle-Warteschlange ist voll".into()));
+        }
         self.status = "Neuberechnung angefordert; Jobsteuerung erforderlich".into();
         Ok(())
     }
@@ -834,8 +920,52 @@ impl LuminaApp {
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
         self.error = None;
-        self.status = "Vorschau aktuell".into();
+        self.status = if self.active_mask_needs_attention() {
+            "Warnung: Maske nicht verfügbar; sie wird in der Vorschau nicht angewendet".into()
+        } else {
+            "Vorschau aktuell".into()
+        };
         Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn active_mask_needs_attention(&self) -> bool {
+        let Some(document) = &self.document else {
+            return false;
+        };
+        let Some(copy) = document
+            .virtual_copies
+            .iter()
+            .find(|c| c.id == self.virtual_copy_id)
+        else {
+            return false;
+        };
+        copy.mask_layers.iter().any(|layer| {
+            let Some(mask) = copy
+                .mask_library
+                .iter()
+                .find(|m| m.id == layer.mask.mask_id)
+            else {
+                return true;
+            };
+            if !matches!(mask.status, MaskStatus::Valid) {
+                return true;
+            }
+            let Some(artifact) = &mask.artifact else {
+                return true;
+            };
+            lumina_sidecar::artifact_status(
+                Path::new(&self.path)
+                    .parent()
+                    .unwrap_or_else(|| Path::new(".")),
+                artifact,
+            ) != ArtifactStatus::Available
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn active_mask_needs_attention(&self) -> bool {
+        false
     }
 
     fn show_error(&mut self, error: impl ToString) {
@@ -1086,6 +1216,15 @@ fn decoder_identity(source_is_raw: bool) -> &'static str {
 
 impl eframe::App for LuminaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !ctx.input(|input| input.pointer.any_down()) {
+            // A queue item is consumed only while idle.  The current build has
+            // no ONNX adapter, so consuming it records the hand-off point and
+            // leaves inference itself to the future adapter.
+            if let Some((_id, IdleTask::MaskInference { mask_id })) = self.idle_queue.pop_next() {
+                self.status = format!("Maske {mask_id}: Hintergrundjob wartet auf Inferenz-Engine");
+            }
+        }
         for file in ctx.input(|input| input.raw.dropped_files.clone()) {
             if let Some(bytes) = file.bytes {
                 if let Err(error) = self.load_bytes(bytes.to_vec(), file.name) {
@@ -1144,10 +1283,12 @@ impl eframe::App for LuminaApp {
                     }
                 });
             });
-        egui::SidePanel::left("controls")
+        // Lightroom places the Develop controls on the right; the left side is
+        // reserved for the browser and the central area for the navigator.
+        egui::SidePanel::right("controls")
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading("Entwicklung");
+                ui.heading("Entwickeln");
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     ui.horizontal(|ui| {
@@ -1210,79 +1351,119 @@ impl eframe::App for LuminaApp {
                     }
                     ui.label(format!("Masken: {} nicht verfügbar/aktuell", missing_masks));
                     ui.separator();
-                    ui.heading("Maskenwerkzeuge");
-                    let mask_options: Vec<(String, String)> = document
-                        .virtual_copies
-                        .iter()
-                        .find(|copy| copy.id == self.virtual_copy_id)
-                        .map(|copy| {
-                            copy.mask_library
-                                .iter()
-                                .map(|mask| (mask.id.clone(), mask.name.clone()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let mut selected_mask = self.selected_mask_id.clone().unwrap_or_default();
-                    egui::ComboBox::from_label("Maske auswählen")
-                        .selected_text(
-                            mask_options
-                                .iter()
-                                .find(|(id, _)| id == &selected_mask)
-                                .map(|(_, name)| name.as_str())
-                                .unwrap_or("Keine"),
-                        )
-                        .show_ui(ui, |ui| {
-                            for (id, name) in &mask_options {
-                                ui.selectable_value(&mut selected_mask, id.clone(), name);
+                    ui.collapsing("Maskierung", |ui| {
+                        let mask_options: Vec<(String, String)> = document
+                            .virtual_copies
+                            .iter()
+                            .find(|copy| copy.id == self.virtual_copy_id)
+                            .map(|copy| {
+                                copy.mask_library
+                                    .iter()
+                                    .map(|mask| (mask.id.clone(), mask.name.clone()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let mut selected_mask = self.selected_mask_id.clone().unwrap_or_default();
+                        egui::ComboBox::from_label("Maske auswählen")
+                            .selected_text(
+                                mask_options
+                                    .iter()
+                                    .find(|(id, _)| id == &selected_mask)
+                                    .map(|(_, name)| name.as_str())
+                                    .unwrap_or("Keine"),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (id, name) in &mask_options {
+                                    ui.selectable_value(&mut selected_mask, id.clone(), name);
+                                }
+                            });
+                        if selected_mask != self.selected_mask_id.clone().unwrap_or_default()
+                            && !selected_mask.is_empty()
+                        {
+                            if let Err(error) = self.select_mask(&selected_mask) {
+                                self.show_error(error);
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.text_edit_singleline(&mut self.mask_name_input);
+                            if ui.button("Maske anlegen").clicked() {
+                                if let Err(error) = self.create_mask(self.mask_name_input.clone()) {
+                                    self.show_error(error);
+                                } else {
+                                    self.mask_name_input.clear();
+                                }
                             }
                         });
-                    if selected_mask != self.selected_mask_id.clone().unwrap_or_default()
-                        && !selected_mask.is_empty()
-                    {
-                        if let Err(error) = self.select_mask(&selected_mask) {
-                            self.show_error(error);
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.mask_name_input);
-                        if ui.button("Maske anlegen").clicked() {
-                            if let Err(error) = self.create_mask(self.mask_name_input.clone()) {
-                                self.show_error(error);
-                            } else {
-                                self.mask_name_input.clear();
+                        if self.selected_mask_id.is_some() {
+                            let mut inverted = document
+                                .virtual_copies
+                                .iter()
+                                .find(|copy| copy.id == self.virtual_copy_id)
+                                .and_then(|copy| copy.mask_layers.first())
+                                .is_some_and(|layer| layer.inverted);
+                            if ui.checkbox(&mut inverted, "Invertieren").changed() {
+                                if let Err(error) = self.set_mask_inverted(inverted) {
+                                    self.show_error(error);
+                                }
+                            }
+                            let mut feather = document
+                                .virtual_copies
+                                .iter()
+                                .find(|copy| copy.id == self.virtual_copy_id)
+                                .and_then(|copy| copy.mask_layers.first())
+                                .map_or(0.0, |layer| layer.feather);
+                            if ui
+                                .add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feathering"))
+                                .changed()
+                            {
+                                if let Err(error) = self.set_mask_feather(feather) {
+                                    self.show_error(error);
+                                }
+                            }
+                            if ui.button("Neuberechnung anbieten").clicked() {
+                                if let Err(error) =
+                                    self.offer_mask_recalculation().and_then(|offered| {
+                                        if offered {
+                                            self.mark_mask_for_recalculation()
+                                        } else {
+                                            Ok(())
+                                        }
+                                    })
+                                {
+                                    self.show_error(error);
+                                }
+                            }
+                            ui.label("Lokale Anpassungen der ausgewählten Maske");
+                            for (key, label) in
+                                [("exposure", "Belichtung"), ("contrast", "Kontrast")]
+                            {
+                                let stored = document
+                                    .virtual_copies
+                                    .iter()
+                                    .find(|copy| copy.id == self.virtual_copy_id)
+                                    .and_then(|copy| copy.mask_layers.first())
+                                    .and_then(|layer| {
+                                        layer.extras.get(&format!("adjustment_{key}"))
+                                    })
+                                    .and_then(Value::as_f64)
+                                    .unwrap_or(0.0);
+                                let range = if key == "exposure" {
+                                    -10.0..=10.0
+                                } else {
+                                    -1.0..=1.0
+                                };
+                                let mut value = stored;
+                                if ui
+                                    .add(egui::Slider::new(&mut value, range).text(label))
+                                    .changed()
+                                {
+                                    if let Err(error) = self.set_mask_local_adjustment(key, value) {
+                                        self.show_error(error);
+                                    }
+                                }
                             }
                         }
                     });
-                    if self.selected_mask_id.is_some() {
-                        let mut inverted = document
-                            .virtual_copies
-                            .iter()
-                            .find(|copy| copy.id == self.virtual_copy_id)
-                            .and_then(|copy| copy.mask_layers.first())
-                            .is_some_and(|layer| layer.inverted);
-                        if ui.checkbox(&mut inverted, "Invertieren").changed() {
-                            if let Err(error) = self.set_mask_inverted(inverted) {
-                                self.show_error(error);
-                            }
-                        }
-                        let mut feather = document
-                            .virtual_copies
-                            .iter()
-                            .find(|copy| copy.id == self.virtual_copy_id)
-                            .and_then(|copy| copy.mask_layers.first())
-                            .map_or(0.0, |layer| layer.feather);
-                        if ui
-                            .add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feathering"))
-                            .changed()
-                        {
-                            if let Err(error) = self.set_mask_feather(feather) {
-                                self.show_error(error);
-                            }
-                        }
-                        if ui.button("Neuberechnung anbieten").clicked() {
-                            let _ = self.offer_mask_recalculation();
-                        }
-                    }
                 }
                 let mut exposure = self
                     .recipe
@@ -1781,5 +1962,62 @@ mod tests {
         assert!(app.status().contains("Neuberechnung"));
         app.mark_mask_for_recalculation().unwrap();
         assert!(app.status().contains("angefordert"));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_mask_adjustments_roundtrip_through_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.create_mask("Subject").unwrap();
+        app.set_mask_local_adjustment("exposure", 1.25).unwrap();
+        app.set_mask_local_adjustment("contrast", -0.35).unwrap();
+        app.save_sidecar();
+
+        let mut reopened = new_app();
+        reopened.open_file(source.display().to_string());
+        let layer = &reopened.document.as_ref().unwrap().virtual_copies[0].mask_layers[0];
+        assert_eq!(layer.extras["adjustment_exposure"].as_f64(), Some(1.25));
+        assert_eq!(layer.extras["adjustment_contrast"].as_f64(), Some(-0.35));
+    }
+
+    #[test]
+    fn idle_queue_is_bounded_prioritized_and_cancellable() {
+        let mut queue = IdleQueue::new(2);
+        let low = queue
+            .enqueue(
+                IdleTask::MaskInference {
+                    mask_id: "low".into(),
+                },
+                1,
+            )
+            .unwrap();
+        queue
+            .enqueue(
+                IdleTask::MaskInference {
+                    mask_id: "high".into(),
+                },
+                9,
+            )
+            .unwrap();
+        assert!(queue
+            .enqueue(
+                IdleTask::MaskInference {
+                    mask_id: "full".into()
+                },
+                9
+            )
+            .is_none());
+        assert!(queue.cancel(low));
+        assert_eq!(
+            queue.pop_next().unwrap().1,
+            IdleTask::MaskInference {
+                mask_id: "high".into()
+            }
+        );
+        assert!(queue.is_empty());
     }
 }
