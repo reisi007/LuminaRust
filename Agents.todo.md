@@ -122,9 +122,6 @@ produktseitig vollständig, wenn native RAW-Decodierung, Orientierung und die
 minimalen RAW-Golden-Tests vorhanden sind. WASM bleibt für RAW ausdrücklich
 außerhalb des Scopes.
 
-- [ ] **F-032** Unterstützte RAW-Formate, Kamera-Fixtures, Metadatenfelder und
-  Fehlerverhalten definieren.
-- [ ] **F-033** RAW-Backend integrieren und von `lumina-core` entkoppeln.
 - [ ] **F-034** EXIF, Orientierung, Kamera-Farbmatrix und relevante Profile
   extrahieren und persistierbar machen.
 - [ ] **F-035** Demosaicing-Strategie mit Qualitäts-, Speicher- und
@@ -133,21 +130,25 @@ außerhalb des Scopes.
   Kontrast, Highlights, Shadows, Whites und Blacks implementieren.
 - [ ] **F-037** sRGB-, PNG-, JPEG- und WebP-Export mit Bit-Tiefe,
   Qualitätswerten, Profilen, Metadaten und Dithering definieren.
-- [ ] **F-038** RAW-Golden-Tests, Orientation-Tests und fehlerhafte/teilweise
-  lesbare Datei-Tests ergänzen.
+- [ ] **F-038** Echte RAW-Golden-Tests mit Referenzexporten sowie Tests für
+  fehlerhafte/teilweise lesbare Dateien ergänzen; CR3-Decode-, Orientation-
+  und Geometrie-Fixtures sind vorhanden und separat verifiziert.
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
-- [ ] **F-039** Messdomäne für Luminanz, Gewichtung, Histogramm und Perzentile
-  eindeutig festlegen.
-- [ ] **F-040** Auto-Tone-Analyse und Begrenzungen für EV, Kontrast,
-  Highlights und Shadows implementieren.
-- [ ] **F-041** `Match Total Exposure` mit Zielbereich, Schutz vor Division durch
-  null, Clipping-Grenzen und Fallbacks implementieren.
-- [ ] **F-042** Optionale Reihenfolge von Auto-WB/Auto-Tone, Preset, lokalen
-  Masken und Match Total Exposure als reproduzierbare Regel implementieren.
-- [ ] **F-043** Mathematische Unit-Tests, Property-Tests und Referenzbildtests
-  für Auto-Tone und Exposure Matching schreiben.
+- [ ] **F-039** Eine explizite Histogramm-Repräsentation ergänzen; die aktuelle
+  RGBA8-/Rec.709-Messdomäne, Gewichtung und Perzentilinterpolation sind für den
+  Raster-MVP festgelegt.
+- [ ] **F-040** Automatische Highlights-/Shadows-Vorschläge und die vollständige
+  RAW-/Farbmanagement-Semantik ergänzen; manuelle Raster-MVP-Adjustments für
+  Exposure, Contrast, Highlights und Shadows sind vorhanden.
+- [ ] **F-041** `Match Total Exposure` auf den finalen sichtbaren Messbereich
+  nach Crop, Geometrie und aktiven Masken erweitern; Epsilon-, Clipping- und
+  Fallback-Schutz sind im aktuellen Raster-Messbereich vorhanden.
+- [ ] **F-042** Auto-WB, Source-Actions und lokale Masken in die dokumentierte
+  Reihenfolge integrieren; die aktuelle Raster-Reihenfolge ist festgelegt.
+- [ ] **F-043** Echte Property-Tests und Referenzbildtests für Auto-Tone und
+  Exposure Matching ergänzen; deterministische Invariantentests sind vorhanden.
 
 ## Phase 6: Persistente AI-Masken
 
@@ -226,7 +227,6 @@ außerhalb des Scopes.
 
 ## Phase 10: WASM und Plattformen
 
-- [ ] **F-068** WASM-kompatiblen Core-Build in CI einrichten.
 - [ ] **F-069** Browser-Dateiimport, temporären Speicher und Exportmodell
   definieren.
 - [ ] **F-070** ONNX im Browser als optionale Fähigkeit mit klarer
