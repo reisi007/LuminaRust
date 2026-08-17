@@ -395,8 +395,10 @@ Flächen, Kanten bleiben wirksam. Radius wird bei Vorschau/Export proportional
 zur effektiven Bildskalierung umgerechnet.
 
 Schärfen liegt am Ende von `Adjustments`, nach Rauschreduzierung und vor
-Masks/Crop/Output. Werte, Version und effektive Skalierung sind im RenderKey/
-`recipe_hash`; Änderungen invalidieren ab Schärfen. Abnahme: Unsharp-Verhalten,
+Masks/Crop/Output. Werte und Version sind im `recipe_hash`; die effektive
+Skalierung wird aus Quellauflösung und Ausgabedimensionen abgeleitet und ist
+im render-scopeigenen Digest enthalten (Ausgabedimensionen sind Teil des
+RenderKeys). Änderungen invalidieren ab Schärfen. Abnahme: Unsharp-Verhalten,
 Kantenmaske, Skalierung, Clipping und Cache. MVP-Grenzen: keine
 Ausgabe-Schärfung mit eigenem Profil und kein lokales Masken-Schärfen.
 Abhängigkeiten: F-031, F-036, F-096.
