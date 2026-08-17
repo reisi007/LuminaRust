@@ -86,18 +86,31 @@ Ein Dateipfad oder Zeitstempel allein ist kein gültiger Render-Key.
 
 ## Auto-Tone
 
-Die Messdomäne für Histogramm, Median, 1%- und 99%-Perzentil sowie gewichtete
-Luminanz muss festgelegt werden. Auto-Tone benötigt begrenzte Ausgabewerte,
-definiertes Clipping-Verhalten und reproduzierbare Fallbacks für leere,
-überbelichtete oder nahezu schwarze Bilder.
+Im Raster-MVP werden die RGBA8-RGB-Kanäle als sRGB-codierte Werte auf 0..=1
+normalisiert und mit Rec.709 (0.2126/0.7152/0.0722) gewichtet. Alpha wird
+ignoriert, auch bei transparenten Pixeln. Perzentile verwenden lineare
+Interpolation zwischen sortierten Samples. Auto-Tone richtet den Median auf das
+Ziel aus und bestimmt Kontrast aus der p01/p99-Spanne; Exposure ist auf
+-10..=10 EV und Contrast auf -1..=1 begrenzt. Leere Bilder liefern 0, Schwarz
+liefert den oberen Exposure-Fallback und Weiß den unteren.
 
 ## Exposure Matching
 
 `Match Total Exposure` misst nach dem Auto-Schritt die definierte gewichtete
-Luminanz und berechnet die Zielkorrektur. Die Implementierung muss Schutz gegen
+Luminanz und berechnet `log2(target/current)` mit Epsilon, finite-Schutz und
+-10..=10-Begrenzung. Die Implementierung muss Schutz gegen
 Division durch null, extreme Zielwerte, Clipping und Maskeneinflüsse enthalten.
-Das Matching misst die finale sichtbare Fläche nach Crop/Geometrie und aktiven
-Masken, aber vor Outputprofil und Export-Transferfunktion. Es bleibt optional.
+Im aktuellen Raster-MVP messen Auto-Tone und Matching ausschließlich den
+dekodierten aktuellen Raster-Messbereich (alle RGBA-Pixel, Alpha ignoriert).
+Der spätere finale Messbereich ist davon getrennt: Er entsteht erst nach Crop,
+Geometrie und aktiven Masken und liegt vor Outputprofil und Export-
+Transferfunktion. Dieser finale Messbereich ist noch nicht implementiert;
+F-041 bleibt deshalb offen, bis Crop und Masken in dieser Pipeline tatsächlich
+verfügbar sind.
+Die Raster-MVP-Reihenfolge lautet Source-Actions (noch nicht im CLI),
+Auto-Tone, Preset, CLI-Overrides, Masken später, danach Matching. Berechnete
+Auto-Werte und ein RGBA8-Analysefingerprint werden im Rezept persistiert und
+bei gültigem Fingerprint wiederverwendet.
 
 ## Cache und Invalidierung
 

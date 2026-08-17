@@ -46,7 +46,10 @@ die Presetwerte überschreiben und schreibt Export sowie Sidecar jeweils atomar.
 Diese beiden Einzeldatei-Writes bilden keine atomare Zwei-Dateien-Transaktion;
 ein Abbruch zwischen ihnen kann daher einen bereits geschriebenen Export ohne
 aktualisiertes Sidecar (oder umgekehrt) hinterlassen. `inspect` zeigt den
-JSON-Status und die virtuellen Kopien ohne GUI.
+JSON-Status und die virtuellen Kopien ohne GUI. `inspect` zeigt auch Auto-Tone-
+und Matching-Status. `process` akzeptiert `--auto-tone`,
+`--match-total-exposure` und `--target-luminance 0..=1`; die Reihenfolge ist
+Auto-Tone, Preset, CLI-Overrides, Masken später, Matching am finalen Rasterbild.
 
 RAW ist ein verbindlicher MVP-Bestandteil. Der native LibRaw-Adapter unterstützt
 CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2, CRW, PEF, SRW, 3FR, IIQ, RWL, MOS,

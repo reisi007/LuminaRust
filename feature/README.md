@@ -126,6 +126,8 @@ Sidecars vollständig wiederherstellbar sein.
   Masken, Matching.
 - Auto-WB, Auto-Tone und Auto-Exposure persistieren Ergebnis und
   Analysefingerprint.
+- Der Raster-MVP misst sRGB-codierte RGBA8-RGB-Werte mit Rec.709-Gewichten,
+  ignoriert Alpha und begrenzt Auto-/Matching-Exposure auf -10..=10 EV.
 - Der schnelle Quell-Fingerprint wird nur bei kritischen Operationen durch
   einen vollständigen BLAKE3-Hash ergänzt.
 - Output ist zunächst sRGB; weitere Profile werden im Modell vorbereitet.

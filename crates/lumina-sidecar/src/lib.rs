@@ -193,8 +193,46 @@ pub struct MaskLayer {
 pub struct EditRecipe {
     pub adjustments: BTreeMap<String, f64>,
     pub options: BTreeMap<String, String>,
+    #[serde(default)]
+    pub auto_features: AutoFeatures,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoFeatures {
+    #[serde(default)]
+    pub enable_auto_tone: bool,
+    #[serde(default)]
+    pub match_total_exposure: bool,
+    #[serde(default = "default_target_luminance")]
+    pub target_luminance: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_exposure: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_contrast: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_exposure: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_fingerprint: Option<AnalysisFingerprint>,
+}
+
+impl Default for AutoFeatures {
+    fn default() -> Self {
+        Self {
+            enable_auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: default_target_luminance(),
+            auto_exposure: None,
+            auto_contrast: None,
+            matched_exposure: None,
+            analysis_fingerprint: None,
+        }
+    }
+}
+
+fn default_target_luminance() -> f64 {
+    0.5
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -720,6 +758,7 @@ mod tests {
             recipe: EditRecipe {
                 adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
+                auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
             },
             mask_library: vec![],
@@ -741,6 +780,7 @@ mod tests {
                 recipe: EditRecipe {
                     adjustments: BTreeMap::from([("contrast".into(), -0.4)]),
                     options: BTreeMap::from([("source".into(), "preset".into())]),
+                    auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
                 },
                 recorded_at: Some("2026-02-03T04:05:06Z".into()),
@@ -761,6 +801,7 @@ mod tests {
             recipe: EditRecipe {
                 adjustments: BTreeMap::from([("highlights".into(), -0.75)]),
                 options: BTreeMap::from([("curve".into(), "film".into())]),
+                auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
             },
             extras: Extras::new(),
@@ -773,6 +814,28 @@ mod tests {
     fn empty_sidecar_roundtrip() {
         let d = SidecarDocument::new(source(), "pipeline-1");
         let json = d.to_json().unwrap();
+        assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn auto_features_roundtrip_with_result_and_fingerprint() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        let features = &mut d.virtual_copies[0].recipe.auto_features;
+        features.enable_auto_tone = true;
+        features.match_total_exposure = true;
+        features.target_luminance = 0.42;
+        features.auto_exposure = Some(1.25);
+        features.auto_contrast = Some(-0.2);
+        features.matched_exposure = Some(0.5);
+        features.analysis_fingerprint = Some(AnalysisFingerprint {
+            algorithm: "tone-rgba8-rec709".into(),
+            version: "1".into(),
+            input_fingerprint: "tone-rgba8-rec709:abc".into(),
+            extras: Extras::new(),
+        });
+        let json = d.to_json().unwrap();
+        assert!(json.contains("auto_exposure"));
+        assert!(json.contains("tone-rgba8-rec709:abc"));
         assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
     }
 

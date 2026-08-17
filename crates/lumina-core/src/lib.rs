@@ -6,7 +6,12 @@ use std::io::Cursor;
 use thiserror::Error;
 
 pub mod masks;
+pub mod tone;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
+pub use tone::{
+    analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
+    AutoToneResult, ToneAnalysis,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFileFormat {
@@ -44,6 +49,8 @@ pub enum CoreError {
         minimum: f64,
         maximum: f64,
     },
+    #[error("invalid auto-tone configuration: {0}")]
+    InvalidAutoToneConfig(String),
 }
 
 impl ImageFrame {

@@ -67,6 +67,29 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  wasm:
+    name: WASM checks
+    needs: detect
+    if: needs.detect.outputs.has_cargo == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check portable core and GUI
+        run: |
+          cargo check -p lumina-core --target wasm32-unknown-unknown
+          cargo check -p lumina-gui --target wasm32-unknown-unknown
+
   docs:
     name: Documentation checks
     runs-on: ubuntu-latest

@@ -1,14 +1,15 @@
 //! Shared eframe application for the native and browser MVP.
 
 use eframe::egui;
-use lumina_core::ImageFrame;
+use lumina_core::{
+    match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig, ImageFrame,
+};
 use lumina_raw::RawError;
-use lumina_sidecar::EditRecipe;
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::SidecarDocument;
+use lumina_sidecar::{AnalysisFingerprint, EditRecipe};
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::{DecodeFingerprint, GeometryFingerprint, SourceIdentity};
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -94,6 +95,52 @@ impl LuminaApp {
     pub fn set_adjustment(&mut self, name: &str, value: f64) {
         self.recipe.adjustments.insert(name.into(), value);
         self.error = None;
+    }
+
+    pub fn auto_tone(&mut self) -> Result<(), GuiError> {
+        let Some(frame) = &self.original else {
+            return Ok(());
+        };
+        let config = AutoToneConfig {
+            target_luminance: self.recipe.auto_features.target_luminance,
+            ..Default::default()
+        };
+        let result = suggest_auto_tone(frame, config)?;
+        self.recipe
+            .adjustments
+            .insert("exposure".into(), result.exposure);
+        self.recipe
+            .adjustments
+            .insert("contrast".into(), result.contrast);
+        self.recipe.auto_features.enable_auto_tone = true;
+        self.recipe.auto_features.auto_exposure = Some(result.exposure);
+        self.recipe.auto_features.auto_contrast = Some(result.contrast);
+        self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
+            algorithm: "tone-rgba8-rec709".into(),
+            version: "1".into(),
+            input_fingerprint: tone_fingerprint(frame, config),
+            extras: BTreeMap::new(),
+        });
+        self.render()
+    }
+
+    pub fn match_total_exposure(&mut self, target: f64) -> Result<(), GuiError> {
+        let Some(frame) = &self.preview else {
+            return Ok(());
+        };
+        let value = match_total_exposure(frame, target)?;
+        let exposure = self
+            .recipe
+            .adjustments
+            .get("exposure")
+            .copied()
+            .unwrap_or(0.0)
+            + value;
+        self.recipe.adjustments.insert("exposure".into(), exposure);
+        self.recipe.auto_features.match_total_exposure = true;
+        self.recipe.auto_features.target_luminance = target;
+        self.recipe.auto_features.matched_exposure = Some(value);
+        self.render()
     }
 
     pub fn reset(&mut self) {
@@ -182,6 +229,32 @@ impl LuminaApp {
                     path.file_name().and_then(|v| v.to_str()).unwrap_or("image"),
                 ) {
                     self.show_error(error);
+                } else if let Ok(document) =
+                    lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&path))
+                {
+                    let candidate = document.virtual_copies[0].recipe.clone();
+                    let config = AutoToneConfig {
+                        target_luminance: candidate.auto_features.target_luminance,
+                        ..Default::default()
+                    };
+                    let fingerprint =
+                        tone_fingerprint(self.original.as_ref().expect("loaded frame"), config);
+                    let valid = candidate
+                        .auto_features
+                        .analysis_fingerprint
+                        .as_ref()
+                        .is_some_and(|stored| is_current_tone_analysis(stored, &fingerprint));
+                    self.recipe = candidate;
+                    let stale_auto_tone = self.recipe.auto_features.enable_auto_tone && !valid;
+                    if stale_auto_tone {
+                        clear_stale_auto_tone(&mut self.recipe);
+                        self.status = "Auto-Tone veraltet; Neuberechnung erforderlich".into();
+                    }
+                    if let Err(error) = self.render() {
+                        self.show_error(error);
+                    } else if stale_auto_tone {
+                        self.status = "Auto-Tone veraltet; Neuberechnung erforderlich".into();
+                    }
                 }
             }
             Err(error) => self.show_error(GuiError::Io(format!("{}: {}", path.display(), error))),
@@ -252,6 +325,19 @@ fn is_raw_name(name: &str) -> bool {
                 | "x3f"
         )
     )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
+    recipe.auto_features.auto_exposure = None;
+    recipe.auto_features.auto_contrast = None;
+    recipe.adjustments.remove("exposure");
+    recipe.adjustments.remove("contrast");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_current_tone_analysis(stored: &AnalysisFingerprint, input_fingerprint: &str) -> bool {
+    stored.input_fingerprint == input_fingerprint
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -327,6 +413,16 @@ impl eframe::App for LuminaApp {
                     .changed()
                 {
                     self.set_adjustment("exposure", exposure);
+                }
+                if ui.button("Auto-Tone").clicked() {
+                    if let Err(error) = self.auto_tone() {
+                        self.show_error(error);
+                    }
+                }
+                if ui.button("Match Total Exposure").clicked() {
+                    if let Err(error) = self.match_total_exposure(0.5) {
+                        self.show_error(error);
+                    }
                 }
                 if ui
                     .add(egui::Slider::new(&mut contrast, -1.0..=1.0).text("Contrast"))
@@ -407,6 +503,16 @@ mod tests {
         assert_eq!(app.preview().unwrap().pixels[0], 20);
     }
     #[test]
+    fn auto_and_matching_use_core_and_persist_recipe_state() {
+        let mut app = app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.auto_tone().unwrap();
+        assert!(app.recipe().auto_features.enable_auto_tone);
+        app.match_total_exposure(0.5).unwrap();
+        assert!(app.recipe().auto_features.match_total_exposure);
+        assert!(app.recipe().auto_features.matched_exposure.is_some());
+    }
+    #[test]
     fn reset_restores_original_preview() {
         let mut app = app();
         app.load_bytes(png(), "test.png").unwrap();
@@ -424,6 +530,51 @@ mod tests {
         app.show_error(result.unwrap_err());
         assert_eq!(app.status(), "Fehler");
         assert!(app.error().is_some());
+    }
+
+    #[test]
+    fn stale_auto_tone_clears_active_adjustments_but_keeps_status_state() {
+        let mut recipe = EditRecipe::default();
+        recipe.auto_features.enable_auto_tone = true;
+        recipe.auto_features.auto_exposure = Some(1.25);
+        recipe.auto_features.auto_contrast = Some(-0.2);
+        recipe.adjustments.insert("exposure".into(), 1.25);
+        recipe.adjustments.insert("contrast".into(), -0.2);
+        recipe.adjustments.insert("highlights".into(), -0.5);
+
+        clear_stale_auto_tone(&mut recipe);
+
+        assert!(recipe.auto_features.enable_auto_tone);
+        assert!(recipe.auto_features.auto_exposure.is_none());
+        assert!(recipe.auto_features.auto_contrast.is_none());
+        assert!(!recipe.adjustments.contains_key("exposure"));
+        assert!(!recipe.adjustments.contains_key("contrast"));
+        assert_eq!(recipe.adjustments["highlights"], -0.5);
+    }
+
+    #[test]
+    fn stale_auto_tone_validation_checks_input_fingerprint() {
+        let frame = ImageFrame::new(1, 1, vec![128, 128, 128, 255]).unwrap();
+        let input = tone_fingerprint(&frame, AutoToneConfig::default());
+        let valid = AnalysisFingerprint {
+            algorithm: "tone-rgba8-rec709".into(),
+            version: "1".into(),
+            input_fingerprint: input.clone(),
+            extras: BTreeMap::new(),
+        };
+        assert!(is_current_tone_analysis(&valid, &input));
+        for stored_input in [input.as_str(), "wrong"] {
+            let stored = AnalysisFingerprint {
+                algorithm: "arbitrary-pre-mvp-label".into(),
+                version: "arbitrary-pre-mvp-value".into(),
+                input_fingerprint: stored_input.into(),
+                extras: BTreeMap::new(),
+            };
+            assert_eq!(
+                is_current_tone_analysis(&stored, &input),
+                stored_input == input
+            );
+        }
     }
 
     #[test]

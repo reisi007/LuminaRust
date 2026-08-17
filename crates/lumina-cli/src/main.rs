@@ -1,9 +1,12 @@
 use clap::{Args, Parser, Subcommand};
-use lumina_core::{ImageFileFormat, ImageFrame};
+use lumina_core::{
+    match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig, ImageFileFormat,
+    ImageFrame,
+};
 use lumina_raw::{RawError, RawMetadata};
 use lumina_sidecar::{
-    load_sidecar, save_sidecar, sidecar_path_for, DecodeFingerprint, GeometryFingerprint,
-    HistoryEntry, Preset, SidecarDocument, SourceIdentity,
+    load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint, DecodeFingerprint,
+    GeometryFingerprint, HistoryEntry, Preset, SidecarDocument, SourceIdentity,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -37,6 +40,12 @@ struct ProcessArgs {
     exposure: Option<f64>,
     #[arg(long)]
     contrast: Option<f64>,
+    #[arg(long)]
+    auto_tone: bool,
+    #[arg(long)]
+    match_total_exposure: bool,
+    #[arg(long, default_value_t = 0.5)]
+    target_luminance: f64,
 }
 
 #[derive(Debug, Args)]
@@ -97,12 +106,65 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
             args.input.display()
         )));
     }
+    if !args.target_luminance.is_finite() || !(0.0..=1.0).contains(&args.target_luminance) {
+        return Err(CliError::Message(
+            "invalid target-luminance: must be finite and in 0..=1".into(),
+        ));
+    }
     let mut recipe = document.virtual_copies[0].recipe.clone();
+    let auto_requested = args.auto_tone;
+    if auto_requested {
+        recipe.auto_features.enable_auto_tone = true;
+        recipe.auto_features.target_luminance = args.target_luminance;
+        let config = AutoToneConfig {
+            target_luminance: args.target_luminance,
+            ..Default::default()
+        };
+        let fingerprint = tone_fingerprint(&frame, config);
+        let persisted = recipe
+            .auto_features
+            .analysis_fingerprint
+            .as_ref()
+            .filter(|f| f.input_fingerprint == fingerprint);
+        let (exposure, contrast, reused) = if let (Some(exposure), Some(contrast)) = (
+            persisted.and(recipe.auto_features.auto_exposure),
+            persisted.and(recipe.auto_features.auto_contrast),
+        ) {
+            (exposure, contrast, true)
+        } else {
+            let result = suggest_auto_tone(&frame, config)?;
+            recipe.auto_features.auto_exposure = Some(result.exposure);
+            recipe.auto_features.auto_contrast = Some(result.contrast);
+            recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
+                algorithm: "tone-rgba8-rec709".into(),
+                version: "1".into(),
+                input_fingerprint: fingerprint,
+                extras: BTreeMap::new(),
+            });
+            (result.exposure, result.contrast, false)
+        };
+        println!(
+            "auto-tone: {}",
+            if reused {
+                "reused"
+            } else {
+                "recomputed (stale or missing analysis)"
+            }
+        );
+        recipe.adjustments.insert("exposure".into(), exposure);
+        recipe.adjustments.insert("contrast".into(), contrast);
+    }
     if let Some(path) = args.preset {
         let json = fs::read_to_string(&path).map_err(|error| io_error(&path, error))?;
         let preset: Preset =
             serde_json::from_str(&json).map_err(|error| CliError::Preset(error.to_string()))?;
+        // MVP rule: auto values are computed first, preset values replace them,
+        // and explicit CLI values win last. Preserve auto metadata in the recipe.
+        let auto_features = recipe.auto_features.clone();
         recipe = preset.recipe;
+        if auto_requested {
+            recipe.auto_features = auto_features;
+        }
     }
     if let Some(value) = args.exposure {
         recipe.adjustments.insert("exposure".into(), value);
@@ -111,6 +173,20 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
         recipe.adjustments.insert("contrast".into(), value);
     }
     frame.apply_recipe(&recipe)?;
+    if args.match_total_exposure {
+        recipe.auto_features.match_total_exposure = true;
+        recipe.auto_features.target_luminance = args.target_luminance;
+        let matching = match_total_exposure(&frame, args.target_luminance)?;
+        recipe.auto_features.matched_exposure = Some(matching);
+        let total_exposure = (recipe.adjustments.get("exposure").copied().unwrap_or(0.0)
+            + matching)
+            .clamp(-10.0, 10.0);
+        recipe.adjustments.insert("exposure".into(), total_exposure);
+        frame.apply_recipe(&lumina_sidecar::EditRecipe {
+            adjustments: BTreeMap::from([(String::from("exposure"), matching)]),
+            ..Default::default()
+        })?;
+    }
     let encoded = frame.encode(format)?;
     write_atomically(&args.output, &encoded)?;
 
@@ -165,6 +241,12 @@ fn inspect(args: InspectArgs) -> Result<(), CliError> {
             println!("source: {}", document.source.relative_name);
             for copy in document.virtual_copies {
                 println!("virtual-copy: {} [{}]", copy.name, copy.id);
+                println!(
+                    "auto-tone: {} matching: {} target-luminance: {}",
+                    copy.recipe.auto_features.enable_auto_tone,
+                    copy.recipe.auto_features.match_total_exposure,
+                    copy.recipe.auto_features.target_luminance
+                );
             }
         }
         Err(lumina_sidecar::SidecarError::Missing(_)) => {
@@ -387,6 +469,9 @@ mod tests {
             preset: None,
             exposure: None,
             contrast: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
         })
         .unwrap();
         let changed = ImageFrame::new(1, 1, vec![21, 30, 40, 255]).unwrap();
@@ -398,6 +483,9 @@ mod tests {
             preset: None,
             exposure: None,
             contrast: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
         })
         .unwrap_err();
         assert!(error.to_string().contains("source changed"));
@@ -417,6 +505,9 @@ mod tests {
             preset: None,
             exposure: Some(f64::INFINITY),
             contrast: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
         })
         .unwrap_err();
         assert!(invalid.to_string().contains("invalid exposure"));
@@ -439,6 +530,9 @@ mod tests {
             preset: Some(preset_path),
             exposure: None,
             contrast: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
         })
         .unwrap_err();
         assert!(unknown
@@ -471,6 +565,9 @@ mod tests {
                     preset: None,
                     exposure: (name == "exposure").then_some(value),
                     contrast: (name == "contrast").then_some(value),
+                    auto_tone: false,
+                    match_total_exposure: false,
+                    target_luminance: 0.5,
                 })
                 .unwrap_err();
                 assert!(error.to_string().contains(&format!("invalid {name}")));
@@ -493,6 +590,9 @@ mod tests {
                     preset: None,
                     exposure: (name == "exposure").then_some(value),
                     contrast: (name == "contrast").then_some(value),
+                    auto_tone: false,
+                    match_total_exposure: false,
+                    target_luminance: 0.5,
                 })
                 .unwrap();
             }
@@ -523,6 +623,9 @@ mod tests {
             preset: Some(preset_path),
             exposure: Some(0.0),
             contrast: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
         })
         .unwrap();
         assert!(output.exists());

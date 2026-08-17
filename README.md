@@ -109,6 +109,8 @@ GitHub Actions liegt unter [`.github/workflows/ci.yml`](.github/workflows/ci.yml
 - Dokumentationsdateien werden bereits geprüft.
 - Der Rust-Job startet automatisch, sobald ein Root-`Cargo.toml` existiert.
 - Danach laufen `fmt`, `check`, `test` und `clippy` mit stabiler Toolchain.
+- Ein separater WASM-Job prüft `lumina-core` und `lumina-gui` für
+  `wasm32-unknown-unknown`.
 - `actionlint` ist lokal bereits vorhanden und kann den Workflow prüfen.
 
 ## Arbeitsweise
