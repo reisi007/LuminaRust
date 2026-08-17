@@ -5,7 +5,9 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawMetadata {
+    /// Visible output geometry; this is not necessarily the pre-orientation buffer geometry.
     pub width: u32,
+    /// Visible output geometry; this is not necessarily the pre-orientation buffer geometry.
     pub height: u32,
     pub orientation: u8,
     pub camera_make: Option<String>,
@@ -268,20 +270,13 @@ mod tests {
         assert!(image.metadata.width > 0 && image.metadata.height > 0);
         assert!((1..=8).contains(&image.metadata.orientation));
         assert_eq!(
+            (image.frame.width, image.frame.height),
+            (image.metadata.width, image.metadata.height)
+        );
+        assert_eq!(
             image.frame.pixels.len(),
             image.frame.width as usize * image.frame.height as usize * 4
         );
-        if (5..=8).contains(&image.metadata.orientation) {
-            assert_eq!(
-                (image.frame.width, image.frame.height),
-                (image.metadata.height, image.metadata.width)
-            );
-        } else {
-            assert_eq!(
-                (image.frame.width, image.frame.height),
-                (image.metadata.width, image.metadata.height)
-            );
-        }
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -16,10 +16,11 @@ fn write_png(directory: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
 
 #[test]
 fn help_is_available_from_built_binary() {
-    let output = cli().arg("--help").output().unwrap();
+    let output = cli().args(["process", "--help"]).output().unwrap();
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Non-destructive raster image MVP"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("--highlights"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("--shadows"));
 }
 
 #[test]
@@ -36,6 +37,9 @@ fn process_writes_jpeg_output_and_sidecar() {
             output.to_str().unwrap(),
             "--exposure",
             "0.5",
+            "--highlights=-0.25",
+            "--shadows",
+            "0.2",
         ])
         .output()
         .unwrap();

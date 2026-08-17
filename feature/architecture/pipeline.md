@@ -54,9 +54,26 @@ Source-Actions
 ```
 
 Im Raster-MVP sind `exposure` endliche Werte im Bereich `-10..=10` EV und
-`contrast` endliche Werte im Bereich `-1..=1`. Ungültige Werte und unbekannte
-Adjustment-Keys werden mit einem Fehler abgelehnt; sie werden nicht still
-geclippt oder ignoriert.
+`contrast`, `highlights` sowie `shadows` endliche Werte im Bereich `-1..=1`.
+Ungültige Werte und unbekannte Adjustment-Keys werden mit einem Fehler
+abgelehnt; sie werden nicht still geclippt oder ignoriert.
+
+Die globalen Raster-Adjustments arbeiten auf jedem RGB-Kanal als `x` in
+`0..=1`; Alpha bleibt unverändert. Nach Exposure und Contrast werden die
+Stufen in Rezeptreihenfolge angewendet. Sind beide Stufen vorhanden, wird
+`shadows` zuerst und `highlights` danach ausgeführt:
+
+```text
+shadow_weight = ((0.5 - x) / 0.5).max(0)^2
+x' = clamp(x + shadows * shadow_weight * 0.25)
+
+highlight_weight = ((x - 0.5) / 0.5).max(0)^2
+x' = clamp(x + highlights * highlight_weight * 0.25)
+```
+
+Dabei bezeichnet `x` bei der zweiten Formel den Wert nach der Shadows-Stufe,
+falls diese aktiv ist. Dies ist bewusst eine einfache deterministische
+Raster-MVP-Heuristik und keine finale RAW-/Farbmanagement-Semantik.
 
 Source-Actions wie nicht-destruktive Staubentfernung und spätere KI-
 Teil-Ersetzung werden als Rezeptoperationen gespeichert. Sie wirken nach

@@ -31,18 +31,21 @@
 
 ### RAW-MVP
 
-1. Eine CR2-, NEF-, ARW- oder DNG-Datei wird über den nativen LibRaw-Adapter
+1. Eine CR2-, CR3-, NEF-, ARW- oder DNG-Datei wird über den nativen LibRaw-Adapter
    geöffnet.
 2. EXIF-Orientierung und die vollständige Bildgeometrie werden übernommen.
 3. Das Bild läuft durch denselben Core-/CLI-Renderpfad wie ein Rasterbild.
 4. Ein optionaler RAW-Fixture-Test prüft Decode, Orientierung und Dimensionen;
    er wird ohne `LUMINA_RAW_FIXTURE` übersprungen und nicht als Golden bestanden
-   gezählt. Lizenzgeeignete CR2/NEF/ARW/DNG-Dateien liegen unter
-   `tests/fixtures/raw/` oder werden extern über diese Variable referenziert.
-    Im Browser wird RAW als nicht verfügbare Fähigkeit ausgewiesen. Der echte
-    Testlauf lautet `LUMINA_RAW_FIXTURE=/pfad/zu/datei.cr2 rustup run stable cargo test -p lumina-raw -- --ignored`.
-    Lens, Kamera-Farbmatrix und Profile bleiben bis zur Prüfung der konkreten
-    LibRaw-Felder als F-034 offen.
+   gezählt. Lizenzgeeignete CR2/CR3/NEF/ARW/DNG-Dateien liegen unter
+   `sample-data/raw/` oder werden extern über diese Variable referenziert.
+   Die lokalen Testläufe lauten beispielsweise:
+   `LUMINA_RAW_FIXTURE="$PWD/sample-data/raw/aircraft-landscape.cr3" rustup run stable cargo test -p lumina-raw -- --ignored`
+   und
+   `LUMINA_RAW_FIXTURE="$PWD/sample-data/raw/aircraft-portrait.cr3" rustup run stable cargo test -p lumina-raw -- --ignored`.
+   Im Browser wird RAW als nicht verfügbare Fähigkeit ausgewiesen. Lens,
+   Kamera-Farbmatrix und Profile bleiben bis zur Prüfung der konkreten
+   LibRaw-Felder als F-034 offen.
 
 ### Sidecar ohne DB
 

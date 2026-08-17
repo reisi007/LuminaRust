@@ -96,7 +96,7 @@ impl ImageFrame {
         for (key, value) in &recipe.adjustments {
             let (minimum, maximum) = match key.as_str() {
                 "exposure" => (-10.0, 10.0),
-                "contrast" => (-1.0, 1.0),
+                "contrast" | "highlights" | "shadows" => (-1.0, 1.0),
                 _ => return Err(CoreError::UnsupportedAdjustment { key: key.clone() }),
             };
             if !value.is_finite() || !(minimum..=maximum).contains(value) {
@@ -129,6 +129,28 @@ impl ImageFrame {
             {
                 *channel =
                     (((*channel as f64 - 128.0) * factor + 128.0).round()).clamp(0.0, 255.0) as u8;
+            }
+        }
+        if let Some(shadows) = recipe.adjustments.get("shadows") {
+            for channel in self
+                .pixels
+                .chunks_exact_mut(4)
+                .flat_map(|pixel| &mut pixel[..3])
+            {
+                let x = *channel as f64 / 255.0;
+                let weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
+                *channel = ((x + shadows * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+        if let Some(highlights) = recipe.adjustments.get("highlights") {
+            for channel in self
+                .pixels
+                .chunks_exact_mut(4)
+                .flat_map(|pixel| &mut pixel[..3])
+            {
+                let x = *channel as f64 / 255.0;
+                let weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
+                *channel = ((x + highlights * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
         Ok(())
@@ -214,6 +236,14 @@ mod tests {
                 "contrast",
                 [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
             ),
+            (
+                "highlights",
+                [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
+            ),
+            (
+                "shadows",
+                [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
+            ),
         ] {
             for value in values {
                 let mut frame = ImageFrame::new(1, 1, vec![1, 2, 3, 255]).unwrap();
@@ -230,11 +260,52 @@ mod tests {
 
     #[test]
     fn accepts_both_adjustment_boundaries() {
-        for (name, boundaries) in [("exposure", [-10.0, 10.0]), ("contrast", [-1.0, 1.0])] {
+        for (name, boundaries) in [
+            ("exposure", [-10.0, 10.0]),
+            ("contrast", [-1.0, 1.0]),
+            ("highlights", [-1.0, 1.0]),
+            ("shadows", [-1.0, 1.0]),
+        ] {
             for value in boundaries {
                 let mut frame = ImageFrame::new(1, 1, vec![64, 128, 192, 255]).unwrap();
                 assert!(frame.apply_recipe(&recipe(&[(name, value)])).is_ok());
             }
         }
+    }
+
+    #[test]
+    fn highlights_and_shadows_adjust_expected_tones_and_preserve_alpha() {
+        let mut shadows = ImageFrame::new(1, 1, vec![32, 96, 160, 17]).unwrap();
+        shadows.apply_recipe(&recipe(&[("shadows", 1.0)])).unwrap();
+        assert_eq!(shadows.pixels, vec![68, 100, 160, 17]);
+
+        let mut highlights = ImageFrame::new(1, 1, vec![96, 160, 224, 23]).unwrap();
+        highlights
+            .apply_recipe(&recipe(&[("highlights", -1.0)]))
+            .unwrap();
+        assert_eq!(highlights.pixels, vec![96, 156, 187, 23]);
+    }
+
+    #[test]
+    fn highlights_and_shadows_leave_midpoint_unchanged_and_clamp_extremes() {
+        let mut frame = ImageFrame::new(2, 1, vec![0, 128, 255, 31, 250, 1, 128, 47]).unwrap();
+        frame
+            .apply_recipe(&recipe(&[("shadows", -1.0), ("highlights", 1.0)]))
+            .unwrap();
+        assert_eq!(frame.pixels, vec![0, 128, 255, 31, 255, 0, 128, 47]);
+    }
+
+    #[test]
+    fn shadows_are_applied_before_highlights() {
+        let mut frame = ImageFrame::new(1, 1, vec![64, 128, 192, 255]).unwrap();
+        frame
+            .apply_recipe(&recipe(&[("shadows", 1.0), ("highlights", -1.0)]))
+            .unwrap();
+        let mut expected = ImageFrame::new(1, 1, vec![64, 128, 192, 255]).unwrap();
+        expected.apply_recipe(&recipe(&[("shadows", 1.0)])).unwrap();
+        expected
+            .apply_recipe(&recipe(&[("highlights", -1.0)]))
+            .unwrap();
+        assert_eq!(frame, expected);
     }
 }

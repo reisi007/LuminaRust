@@ -41,6 +41,10 @@ struct ProcessArgs {
     #[arg(long)]
     contrast: Option<f64>,
     #[arg(long)]
+    highlights: Option<f64>,
+    #[arg(long)]
+    shadows: Option<f64>,
+    #[arg(long)]
     auto_tone: bool,
     #[arg(long)]
     match_total_exposure: bool,
@@ -171,6 +175,12 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
     }
     if let Some(value) = args.contrast {
         recipe.adjustments.insert("contrast".into(), value);
+    }
+    if let Some(value) = args.highlights {
+        recipe.adjustments.insert("highlights".into(), value);
+    }
+    if let Some(value) = args.shadows {
+        recipe.adjustments.insert("shadows".into(), value);
     }
     frame.apply_recipe(&recipe)?;
     if args.match_total_exposure {
@@ -428,12 +438,17 @@ mod tests {
             "b.webp",
             "--exposure",
             "1",
+            "--highlights=-0.25",
+            "--shadows",
+            "0.4",
         ])
         .unwrap();
         assert!(matches!(
             cli.command,
             Command::Process(ProcessArgs {
                 exposure: Some(1.0),
+                highlights: Some(-0.25),
+                shadows: Some(0.4),
                 ..
             })
         ));
@@ -469,6 +484,8 @@ mod tests {
             preset: None,
             exposure: None,
             contrast: None,
+            highlights: None,
+            shadows: None,
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
@@ -483,6 +500,8 @@ mod tests {
             preset: None,
             exposure: None,
             contrast: None,
+            highlights: None,
+            shadows: None,
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
@@ -505,6 +524,8 @@ mod tests {
             preset: None,
             exposure: Some(f64::INFINITY),
             contrast: None,
+            highlights: None,
+            shadows: None,
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
@@ -530,6 +551,8 @@ mod tests {
             preset: Some(preset_path),
             exposure: None,
             contrast: None,
+            highlights: None,
+            shadows: None,
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
@@ -556,6 +579,14 @@ mod tests {
                 "contrast",
                 [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
             ),
+            (
+                "highlights",
+                [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
+            ),
+            (
+                "shadows",
+                [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
+            ),
         ] {
             for value in values {
                 let output = directory.path().join(format!("{name}-{value:?}.png"));
@@ -565,6 +596,8 @@ mod tests {
                     preset: None,
                     exposure: (name == "exposure").then_some(value),
                     contrast: (name == "contrast").then_some(value),
+                    highlights: (name == "highlights").then_some(value),
+                    shadows: (name == "shadows").then_some(value),
                     auto_tone: false,
                     match_total_exposure: false,
                     target_luminance: 0.5,
@@ -582,7 +615,12 @@ mod tests {
         let input = directory.path().join("input.png");
         let frame = ImageFrame::new(1, 1, vec![20, 30, 40, 255]).unwrap();
         fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
-        for (name, values) in [("exposure", [-10.0, 10.0]), ("contrast", [-1.0, 1.0])] {
+        for (name, values) in [
+            ("exposure", [-10.0, 10.0]),
+            ("contrast", [-1.0, 1.0]),
+            ("highlights", [-1.0, 1.0]),
+            ("shadows", [-1.0, 1.0]),
+        ] {
             for (index, value) in values.into_iter().enumerate() {
                 process(ProcessArgs {
                     input: input.clone(),
@@ -590,6 +628,8 @@ mod tests {
                     preset: None,
                     exposure: (name == "exposure").then_some(value),
                     contrast: (name == "contrast").then_some(value),
+                    highlights: (name == "highlights").then_some(value),
+                    shadows: (name == "shadows").then_some(value),
                     auto_tone: false,
                     match_total_exposure: false,
                     target_luminance: 0.5,
@@ -623,6 +663,8 @@ mod tests {
             preset: Some(preset_path),
             exposure: Some(0.0),
             contrast: None,
+            highlights: None,
+            shadows: None,
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,

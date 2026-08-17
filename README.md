@@ -130,7 +130,7 @@ Der Raster-MVP kann beispielsweise so verwendet werden:
 
 ```bash
 cargo run -p lumina-cli -- process --input photo.png --output edited.webp \
-  --exposure 0.5 --contrast 0.2
+  --exposure 0.5 --contrast 0.2 --highlights -0.15 --shadows 0.2
 cargo run -p lumina-cli -- inspect photo.png
 ```
 
@@ -152,12 +152,14 @@ RAW ist ein verbindliches MVP-Gate: Native CLI und Desktop dekodieren die
 unterstützten RAW-Endungen über LibRaw und führen das Ergebnis durch denselben
 `ImageFrame`-/Rezeptpfad wie Rasterbilder. Browser/WASM bleibt für RAW
 ausdrücklich nicht verfügbar und meldet eine Capability-Fehlermeldung.
-Lizenzgeeignete Fixtures gehören nach `tests/fixtures/raw/` (nicht ins
+Lizenzgeeignete Fixtures gehören nach `sample-data/raw/` (nicht ins
 Repository, falls ihre Lizenz das verbietet); `LUMINA_RAW_FIXTURE` kann auf
 eine einzelne CR2-, NEF-, ARW- oder DNG-Datei zeigen. Ohne Fixture gibt es
 keinen bestandenen Kamera-Golden-Test.
-Der echte Testlauf lautet
-`LUMINA_RAW_FIXTURE=/pfad/zu/datei.cr2 rustup run stable cargo test -p lumina-raw -- --ignored`.
+Die lokalen Nutzer-Fixtures `sample-data/raw/aircraft-landscape.cr3` und
+`sample-data/raw/aircraft-portrait.cr3` sind für den Testlauf geeignet. Der
+echte Testlauf lautet zum Beispiel
+`LUMINA_RAW_FIXTURE="$PWD/sample-data/raw/aircraft-landscape.cr3" rustup run stable cargo test -p lumina-raw -- --ignored`.
 Lens, Kamera-Farbmatrix und Profile bleiben bis zur Prüfung der konkreten
 LibRaw-Felder als F-034 offen; es werden keine Dummywerte verwendet.
 
