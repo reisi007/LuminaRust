@@ -139,9 +139,11 @@ Sidecars vollständig wiederherstellbar sein.
   `architecture/pipeline.md`).
 - GUI-Technologie ist egui/eframe.
 - **Pre-MVP-Schema-Entscheidung (2026-08-17):** Bis zum MVP ist das
-  Sidecar-/Rezept-Schema bewusst nicht abwärtskompatibel — Schemaänderungen
-  sind Breaking Changes ohne Migration; ab dem MVP gilt wieder die
-  Migrationsstrategie mit Bestätigung und Backup.
+  Sidecar-/Rezept-Schema bewusst nicht abwärtskompatibel — Altdateien müssen
+  nicht lesbar bleiben. Die Migrations-Maschinerie bleibt dauerhaft erhalten
+  und **jede Schemaänderung wird von einer Migration mit permanenten Tests
+  begleitet**; ab dem MVP gilt die volle Migrationsstrategie mit Bestätigung
+  und Backup.
 - BiRefNet ist das erste automatische Subject-Modell; SAM 2 ist das erste
   interaktive Box-/Pinsel-Modell. Der ONNX-Adapter bleibt austauschbar.
 - Es gibt in v1 keine zentrale Datenbank.

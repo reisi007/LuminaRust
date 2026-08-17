@@ -48,16 +48,20 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 2: Rezept, virtuelle Kopien und Migrationen
 
-**Produktentscheidung (2026-08-17, Pre-MVP):** Wir befinden uns in der
-Pre-MVP-Phase — das Sidecar-Schema wird bei Bedarf **bewusst nicht
+**Produktentscheidung (2026-08-17, Pre-MVP, präzisiert):** Wir befinden uns in
+der Pre-MVP-Phase — das Sidecar-Schema wird bei Bedarf **bewusst nicht
 abwärtskompatibel** abgeändert. Es gilt: (a) Schemaänderungen sind bis zum MVP
-Breaking Changes, Altdateien müssen nicht lesbar bleiben; (b) es gibt bis zum
-MVP **keine Migrationen v1→v2** — die Schema-Version wird einfach hochgezogen;
-(c) die Migrations-Maschinerie (`migrate_sidecar_file`, `.bak`-Backup) bleibt
-im Code erhalten und wird ab dem MVP für Release-Migrationen genutzt.
+Breaking Changes, Altdateien müssen nicht lesbar bleiben; (b) trotzdem wird
+**jede** Schemaänderung von einer Migration begleitet, die **permanente Tests**
+bekommt („wir brauchen Tests für jede Migration") — die Migrations-Maschinerie
+(`migrate_sidecar_file`, `.bak`-Backup, `migrate_json`) bleibt dauerhaft im
+Code und wird ab dem MVP für Release-Migrationen genutzt; (c) eine
+v1→v2-Migration existiert und ist getestet, auch wenn sie pre-MVP nur einen
+Versions-Bump darstellt.
 Konsequenz: Die Spec-Vorgabe „Altdateien mit flacher adjustments-Map bleiben
 als schema_version: 1 gültig" (pipeline.md, Abschnitt Bearbeitungsregler) ist
-bis zum MVP ausgesetzt; F-089–F-099 können das Schema frei erweitern.
+als Produktanforderung bis zum MVP ausgesetzt; die Migrations- und Testpfade
+dafür werden trotzdem umgesetzt.
 
 - [ ] **F-019** (deferriert auf Post-MVP) CLI `migrate_sidecar`
   (crates/lumina-cli/src/main.rs ~Z. 560) auf `lumina_sidecar::migrate_sidecar_file`
@@ -71,8 +75,9 @@ bis zum MVP ausgesetzt; F-089–F-099 können das Schema frei erweitern.
   (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
 - [ ] **F-089** Gradationskurve mit Master- und getrennten RGB-Kanalkurven,
   monotoner Interpolation, Versionierung und Cache-Tests umsetzen
-  (Schema-v2-Erweiterung; gemäß Pre-MVP-Entscheidung kein v1-Kompatibilitäts-
-  oder Migrationscode nötig).
+  (Schema-v2-Erweiterung; gemäß Pre-MVP-Entscheidung kein
+  Abwärtskompatibilitäts-Zwang, aber Migration v1→v2 + permanente
+  Migrationstests).
 - [ ] **F-090** HSL/Farbmischer mit acht sRGB-Kanälen, Nachbargewichtung und
   Roundtrip-/Wertebereichstests umsetzen.
 - [ ] **F-091** Color Grading für Schatten, Mitteltöne, Lichter und Balance mit

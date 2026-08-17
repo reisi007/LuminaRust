@@ -229,12 +229,13 @@ und ändern dieses Format-Tupel nicht.
 ist erforderlich, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`,
 `color_grading`, `presence`, `sharpening`, `noise_reduction`) oder neue
 Top-Level-Keys (`geometry`, `lens_correction`, `perspective`, `effects`)
-verwendet werden. **Produktentscheidung (2026-08-17):** Bis zum MVP ist das
-Schema bewusst **nicht abwärtskompatibel** — Schemaänderungen sind Breaking
-Changes, Altdateien müssen nicht lesbar bleiben, und es findet keine Migration
-v1→v2 statt (Version wird hochgezogen; nicht gesetzte Felder gelten als
-Identität). Ab dem MVP gilt wieder die festgelegte Migrationsstrategie
-(verzögert mit Bestätigung, `.bak`-Backup, expliziter Aufruf).
+verwendet werden. **Produktentscheidung (2026-08-17, präzisiert):** Bis zum MVP
+ist das Schema bewusst **nicht abwärtskompatibel** — Altdateien müssen nicht
+lesbar bleiben. Die Migrations-Maschinerie und die Migrationspfade werden
+trotzdem für **jede** Schemaänderung umgesetzt und dauerhaft getestet (jede
+Migration bekommt Tests, auch wenn sie pre-MVP nur einen Versions-Bump
+darstellt). Ab dem MVP gilt die volle Migrationsstrategie (verzögert mit
+Bestätigung, `.bak`-Backup, expliziter Aufruf).
 
 ### F-089 Gradationskurve
 
