@@ -50,7 +50,14 @@ Innerhalb von `Adjustments` gilt verbindlich: `exposure → contrast →
 shadows → highlights → whites → blacks` (mit WB vor diesen Tonwerten). Exposure
 und Kontrast setzen den globalen Pegel und die Spreizung; Highlights/Shadows
 schützen selektiv die oberen/unteren Bereiche; Whites/Blacks dehnen zuletzt die
-Tonwertskala an den Rändern. Auto-Tone wird davor berechnet und angewandt;
+Tonwertskala an den Rändern. Die Whites/Blacks-Anwendung ist gewichtet-linear
+pro Kanal mit `x` in `0..=1` (Lightroom-Semantik: positives `whites` hebt die
+Lichter an, positives `blacks` senkt die Schatten ab, 0 ist Identität):
+
+- Whites: `weight_w = max(0, (x - 0.5) / 0.5)`, `x' = clamp(x + whites * weight_w * 0.25)`
+- Blacks: `weight_b = max(0, (0.5 - x) / 0.5)`, `x' = clamp(x - blacks * weight_b * 0.25)`
+
+Auto-Tone wird davor berechnet und angewandt;
 manuelle Werte überschreiben nicht stillschweigend persistierte Auto-Ergebnisse.
 0 ist für jeden Regler Identität, Operationen sind monoton und pro Kanal auf
 `0..=1` geclippt. Neue flache Schlüssel sind Bestandteil des bestehenden
@@ -136,7 +143,9 @@ erfolgt im aktuellen Raster-MVP **nicht**.
 - Ungültige Adjustment-Werte werden **nicht** still geclippt, sondern mit einem
   Fehler abgelehnt:
   - `exposure` endlich und in `-10..=10` EV
-  - `contrast`, `highlights`, `shadows` endlich und in `-1..=1`
+  - `contrast`, `highlights`, `shadows`, `whites`, `blacks`, `wb_tint` endlich
+    und in `-1..=1`
+  - `wb_temperature` endlich und in `1500..=12000` Kelvin
   - unbekannte Adjustment-Keys werden mit `UnsupportedAdjustment` abgelehnt
 - Auto-Tone und Exposure Matching sind explizit gegen Division durch null,
   extreme Zielwerte und Clipping abgesichert (Epsilon-Schutz, Begrenzung auf

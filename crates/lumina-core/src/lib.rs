@@ -297,7 +297,7 @@ impl ImageFrame {
             {
                 let x = *channel as f64 / 255.0;
                 let weight = ((0.5 - x) / 0.5).max(0.0);
-                *channel = ((x + blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
+                *channel = ((x - blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
         Ok(())
@@ -382,7 +382,7 @@ mod tests {
         assert!(warm.pixels[2] < original.pixels[2]);
         let mut edges = ImageFrame::new(2, 1, vec![20, 20, 20, 255, 230, 230, 230, 255]).unwrap();
         edges
-            .apply_recipe(&recipe(&[("whites", 1.0), ("blacks", -1.0)]))
+            .apply_recipe(&recipe(&[("whites", 1.0), ("blacks", 1.0)]))
             .unwrap();
         assert!(edges.pixels[0] < 20 && edges.pixels[4] > 230);
     }
