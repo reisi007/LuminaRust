@@ -87,6 +87,17 @@ pub struct ImageFrame {
     pub pixels: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeasurementDomain {
+    pub output_width: u32,
+    pub output_height: u32,
+    /// Normalized source rectangle before rotation/mirroring.
+    pub source_x: f32,
+    pub source_y: f32,
+    pub source_width: f32,
+    pub source_height: f32,
+}
+
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("could not decode raster image: {0}")]
@@ -134,6 +145,60 @@ impl ImageFrame {
             image::load_from_memory(bytes).map_err(|error| CoreError::Decode(error.to_string()))?;
         let rgba = image.to_rgba8();
         Self::new(rgba.width(), rgba.height(), rgba.into_raw())
+    }
+
+    /// Apply Crop → rotation (bilinear, black outside) → exact flips.
+    /// Lens and perspective correction are intentionally reserved before crop
+    /// for F-098/F-099 and are not silently substituted here.
+    pub fn apply_geometry(&mut self, geometry: &lumina_sidecar::Geometry) -> Result<(), CoreError> {
+        if geometry.version != 1
+            || !geometry.rotation_degrees.is_finite()
+            || !(-180.0..=180.0).contains(&geometry.rotation_degrees)
+        {
+            return Err(CoreError::InvalidAdjustment {
+                name: "geometry.version/rotation".into(),
+                value: geometry.rotation_degrees as f64,
+                minimum: -180.0,
+                maximum: 180.0,
+            });
+        }
+        let (x, y, w, h) = crop_rect(self.width, self.height, geometry.crop.as_ref())?;
+        let cropped = crop_frame(self, x, y, w, h)?;
+        let mut transformed = rotate_frame(&cropped, geometry.rotation_degrees);
+        if geometry.mirror_horizontal {
+            flip_horizontal(&mut transformed);
+        }
+        if geometry.mirror_vertical {
+            flip_vertical(&mut transformed);
+        }
+        *self = transformed;
+        Ok(())
+    }
+
+    pub fn measurement_domain(
+        &self,
+        geometry: Option<&lumina_sidecar::Geometry>,
+    ) -> Result<MeasurementDomain, CoreError> {
+        let Some(g) = geometry else {
+            return Ok(MeasurementDomain {
+                output_width: self.width,
+                output_height: self.height,
+                source_x: 0.0,
+                source_y: 0.0,
+                source_width: 1.0,
+                source_height: 1.0,
+            });
+        };
+        let (x, y, w, h) = crop_rect(self.width, self.height, g.crop.as_ref())?;
+        let rotated = rotate_dimensions(w, h, g.rotation_degrees);
+        Ok(MeasurementDomain {
+            output_width: rotated.0,
+            output_height: rotated.1,
+            source_x: x as f32 / self.width as f32,
+            source_y: y as f32 / self.height as f32,
+            source_width: w as f32 / self.width as f32,
+            source_height: h as f32 / self.height as f32,
+        })
     }
 
     pub fn encode(&self, format: ImageFileFormat) -> Result<Vec<u8>, CoreError> {
@@ -300,6 +365,9 @@ impl ImageFrame {
                 *channel = ((x - blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
+        if let Some(presence) = &recipe.presence {
+            apply_presence(&mut self.pixels, self.width, self.height, presence);
+        }
         if let Some(curves) = &recipe.curves {
             for pixel in self.pixels.chunks_exact_mut(4) {
                 let original = [
@@ -332,7 +400,7 @@ impl ImageFrame {
         }
         // F-092 deliberately follows HSL: vibrance is the selective operation,
         // then global saturation scales the resulting HSL saturation.
-        apply_presence(
+        apply_vibrance_and_saturation(
             &mut self.pixels,
             recipe.adjustments.get("vibrance"),
             recipe.adjustments.get("saturation"),
@@ -344,11 +412,227 @@ impl ImageFrame {
     }
 }
 
+fn crop_rect(
+    width: u32,
+    height: u32,
+    crop: Option<&lumina_sidecar::Crop>,
+) -> Result<(u32, u32, u32, u32), CoreError> {
+    let (x, y, w, h) = match crop {
+        None => (0.0, 0.0, 1.0, 1.0),
+        Some(lumina_sidecar::Crop::Free {
+            x,
+            y,
+            width,
+            height,
+        }) => (*x as f64, *y as f64, *width as f64, *height as f64),
+        Some(lumina_sidecar::Crop::Aspect { preset }) => {
+            let ratio = match preset {
+                lumina_sidecar::AspectPreset::Original => width as f64 / height as f64,
+                lumina_sidecar::AspectPreset::OneToOne => 1.0,
+                lumina_sidecar::AspectPreset::FourToFive => 4.0 / 5.0,
+                lumina_sidecar::AspectPreset::FiveToFour => 5.0 / 4.0,
+                lumina_sidecar::AspectPreset::ThreeToTwo => 3.0 / 2.0,
+                lumina_sidecar::AspectPreset::TwoToThree => 2.0 / 3.0,
+                lumina_sidecar::AspectPreset::FourToThree => 4.0 / 3.0,
+                lumina_sidecar::AspectPreset::ThreeToFour => 3.0 / 4.0,
+                lumina_sidecar::AspectPreset::SixteenToNine => 16.0 / 9.0,
+                lumina_sidecar::AspectPreset::NineToSixteen => 9.0 / 16.0,
+            };
+            let source_ratio = width as f64 / height as f64;
+            if source_ratio > ratio {
+                (
+                    (1.0 - ratio / source_ratio) / 2.0,
+                    0.0,
+                    ratio / source_ratio,
+                    1.0,
+                )
+            } else {
+                (
+                    0.0,
+                    (1.0 - source_ratio / ratio) / 2.0,
+                    1.0,
+                    source_ratio / ratio,
+                )
+            }
+        }
+    };
+    if ![x, y, w, h].iter().all(|v| v.is_finite())
+        || w <= 0.0
+        || h <= 0.0
+        || x < 0.0
+        || y < 0.0
+        || x + w > 1.0 + 1e-6
+        || y + h > 1.0 + 1e-6
+    {
+        return Err(CoreError::InvalidAdjustment {
+            name: "geometry.crop".into(),
+            value: -1.0,
+            minimum: 0.0,
+            maximum: 1.0,
+        });
+    }
+    let px = (x * width as f64).round() as u32;
+    let py = (y * height as f64).round() as u32;
+    let pw = ((w * width as f64).round() as u32).max(1).min(width - px);
+    let ph = ((h * height as f64).round() as u32).max(1).min(height - py);
+    Ok((px, py, pw, ph))
+}
+
+fn crop_frame(frame: &ImageFrame, x: u32, y: u32, w: u32, h: u32) -> Result<ImageFrame, CoreError> {
+    let mut out = vec![0; w as usize * h as usize * 4];
+    for row in 0..h {
+        let src = ((y + row) * frame.width + x) as usize * 4;
+        let dst = (row * w) as usize * 4;
+        out[dst..dst + w as usize * 4].copy_from_slice(&frame.pixels[src..src + w as usize * 4]);
+    }
+    ImageFrame::new(w, h, out)
+}
+fn rotate_dimensions(w: u32, h: u32, degrees: f32) -> (u32, u32) {
+    let quarter_turn = degrees.rem_euclid(180.0).abs() < 1e-4;
+    if quarter_turn {
+        return (w.max(1), h.max(1));
+    }
+    let right_angle = (degrees - 90.0).rem_euclid(180.0).abs() < 1e-4;
+    if right_angle {
+        return (h.max(1), w.max(1));
+    }
+    let r = degrees.to_radians();
+    (
+        (w as f32 * r.cos().abs() + h as f32 * r.sin().abs())
+            .ceil()
+            .max(1.0) as u32,
+        (w as f32 * r.sin().abs() + h as f32 * r.cos().abs())
+            .ceil()
+            .max(1.0) as u32,
+    )
+}
+fn rotate_frame(frame: &ImageFrame, degrees: f32) -> ImageFrame {
+    let turns = (degrees / 90.0).round();
+    if (degrees - turns * 90.0).abs() < 1e-4 {
+        let turn = (turns as i32).rem_euclid(4);
+        if turn == 0 {
+            return frame.clone();
+        }
+        let (ow, oh) = if turn % 2 == 0 {
+            (frame.width, frame.height)
+        } else {
+            (frame.height, frame.width)
+        };
+        let mut out = vec![0; ow as usize * oh as usize * 4];
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                let (dx, dy) = match turn {
+                    1 => (frame.height - 1 - y, x),
+                    2 => (frame.width - 1 - x, frame.height - 1 - y),
+                    _ => (y, frame.width - 1 - x),
+                };
+                let source = (y * frame.width + x) as usize * 4;
+                let destination = (dy * ow + dx) as usize * 4;
+                out[destination..destination + 4]
+                    .copy_from_slice(&frame.pixels[source..source + 4]);
+            }
+        }
+        return ImageFrame::new(ow, oh, out).unwrap();
+    }
+    if degrees.rem_euclid(360.0).abs() < f32::EPSILON {
+        return frame.clone();
+    }
+    let (ow, oh) = rotate_dimensions(frame.width, frame.height, degrees);
+    let mut out = vec![0; ow as usize * oh as usize * 4];
+    let r = degrees.to_radians();
+    let (s, c) = (r.sin(), r.cos());
+    for y in 0..oh {
+        for x in 0..ow {
+            let dx = x as f32 - (ow as f32 - 1.0) / 2.0;
+            let dy = y as f32 - (oh as f32 - 1.0) / 2.0;
+            let sx = c * dx + s * dy + (frame.width as f32 - 1.0) / 2.0;
+            let sy = -s * dx + c * dy + (frame.height as f32 - 1.0) / 2.0;
+            if sx >= 0.0 && sy >= 0.0 && sx < frame.width as f32 && sy < frame.height as f32 {
+                let x0 = sx.floor() as u32;
+                let y0 = sy.floor() as u32;
+                let x1 = (x0 + 1).min(frame.width - 1);
+                let y1 = (y0 + 1).min(frame.height - 1);
+                let fx = sx - x0 as f32;
+                let fy = sy - y0 as f32;
+                let oi = (y * ow + x) as usize * 4;
+                for ch in 0..4 {
+                    let a = frame.pixels[(y0 * frame.width + x0) as usize * 4 + ch] as f32;
+                    let b = frame.pixels[(y0 * frame.width + x1) as usize * 4 + ch] as f32;
+                    let d = frame.pixels[(y1 * frame.width + x0) as usize * 4 + ch] as f32;
+                    let e = frame.pixels[(y1 * frame.width + x1) as usize * 4 + ch] as f32;
+                    out[oi + ch] = ((a * (1.0 - fx) + b * fx) * (1.0 - fy)
+                        + (d * (1.0 - fx) + e * fx) * fy)
+                        .round() as u8;
+                }
+            }
+        }
+    }
+    ImageFrame::new(ow, oh, out).unwrap()
+}
+fn flip_horizontal(f: &mut ImageFrame) {
+    for y in 0..f.height {
+        for x in 0..f.width / 2 {
+            let a = (y * f.width + x) as usize * 4;
+            let b = (y * f.width + f.width - 1 - x) as usize * 4;
+            for c in 0..4 {
+                f.pixels.swap(a + c, b + c);
+            }
+        }
+    }
+}
+fn flip_vertical(f: &mut ImageFrame) {
+    for y in 0..f.height / 2 {
+        for x in 0..f.width {
+            let a = (y * f.width + x) as usize * 4;
+            let b = ((f.height - 1 - y) * f.width + x) as usize * 4;
+            for c in 0..4 {
+                f.pixels.swap(a + c, b + c);
+            }
+        }
+    }
+}
+
 /// Validate the structured adjustments here rather than relying on sidecar
 /// deserialization/validation.  Recipes can be constructed directly by API
 /// consumers, so this must run before any renderer indexes into a curve or
 /// applies an HSL value.
 fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
+    if let Some(g) = &recipe.geometry {
+        if g.version != 1
+            || !g.rotation_degrees.is_finite()
+            || !(-180.0..=180.0).contains(&g.rotation_degrees)
+        {
+            return Err(CoreError::InvalidAdjustment {
+                name: "geometry.version/rotation".into(),
+                value: g.rotation_degrees as f64,
+                minimum: -180.0,
+                maximum: 180.0,
+            });
+        }
+        if let Some(lumina_sidecar::Crop::Free {
+            x,
+            y,
+            width,
+            height,
+        }) = &g.crop
+        {
+            if ![x, y, width, height].iter().all(|v| v.is_finite())
+                || *width <= 0.0
+                || *height <= 0.0
+                || *x < 0.0
+                || *y < 0.0
+                || *x + *width > 1.0
+                || *y + *height > 1.0
+            {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "geometry.crop".into(),
+                    value: -1.0,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                });
+            }
+        }
+    }
     if let Some(curves) = &recipe.curves {
         if curves.version != 1 {
             return Err(CoreError::InvalidAdjustment {
@@ -404,6 +688,31 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
                         });
                     }
                 }
+            }
+        }
+    }
+
+    if let Some(p) = &recipe.presence {
+        if p.version != 1 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "presence.version".into(),
+                value: p.version as f64,
+                minimum: 1.0,
+                maximum: 1.0,
+            });
+        }
+        for (name, value) in [
+            ("texture", p.texture),
+            ("clarity", p.clarity),
+            ("dehaze", p.dehaze),
+        ] {
+            if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+                return Err(CoreError::InvalidAdjustment {
+                    name: format!("presence.{name}"),
+                    value: value as f64,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                });
             }
         }
     }
@@ -603,7 +912,84 @@ fn apply_hsl(pixels: &mut [u8], h: &lumina_sidecar::HslAdjustments) -> Result<()
     Ok(())
 }
 
-fn apply_presence(pixels: &mut [u8], vibrance: Option<&f64>, saturation: Option<&f64>) {
+/// F-094 deterministic raster heuristic. DoG is `x - box_blur(x, radius)`;
+/// radius is 1..3 for Texture and 8..32 for Clarity. A box kernel is used as
+/// the portable, separable Gaussian approximation (edge pixels replicate).
+fn apply_presence(pixels: &mut [u8], width: u32, height: u32, p: &lumina_sidecar::Presence) {
+    let texture_radius = 1 + (p.texture.abs() * 2.0).round() as usize;
+    let clarity_radius = 8 + (p.clarity.abs() * 24.0).round() as usize;
+    apply_dog(pixels, width, height, texture_radius, p.texture);
+    apply_dog(pixels, width, height, clarity_radius, p.clarity);
+    if p.dehaze == 0.0 {
+        return;
+    }
+    // Dark channel is min(R,G,B) followed by a radius-2 local minimum. A is
+    // the deterministic 95th percentile of that channel, with a floor.
+    let n = width as usize * height as usize;
+    let mut dark = vec![0.0f32; n];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let mut m: f32 = 1.0;
+            for yy in y.saturating_sub(2)..=(y + 2).min(height as usize - 1) {
+                for xx in x.saturating_sub(2)..=(x + 2).min(width as usize - 1) {
+                    let i = (yy * width as usize + xx) * 4;
+                    m = m.min(pixels[i].min(pixels[i + 1]).min(pixels[i + 2]) as f32 / 255.0);
+                }
+            }
+            dark[y * width as usize + x] = m;
+        }
+    }
+    let mut sorted = dark.clone();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let a = sorted[((sorted.len() as f32 * 0.95) as usize).min(sorted.len().saturating_sub(1))]
+        .max(0.05);
+    for (index, px) in pixels.chunks_exact_mut(4).enumerate() {
+        let base_t = (1.0 - 0.95 * dark[index] / a).clamp(0.05, 1.0);
+        let t = if p.dehaze > 0.0 {
+            1.0 - p.dehaze * (1.0 - base_t)
+        } else {
+            1.0 + (-p.dehaze) * 0.5 * (1.0 - base_t)
+        };
+        for c in &mut px[..3] {
+            let x = *c as f32 / 255.0;
+            *c = (((x - a) / t + a).clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+}
+
+fn apply_dog(pixels: &mut [u8], width: u32, height: u32, radius: usize, amount: f32) {
+    if amount == 0.0 {
+        return;
+    }
+    let source = pixels.to_vec();
+    let w = width as usize;
+    let h = height as usize;
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..3 {
+                let mut sum = 0.0;
+                for yy in y.saturating_sub(radius)..=(y + radius).min(h - 1) {
+                    for xx in x.saturating_sub(radius)..=(x + radius).min(w - 1) {
+                        sum += source[(yy * w + xx) * 4 + c] as f32;
+                    }
+                }
+                let count = ((y + radius).min(h - 1) - y.saturating_sub(radius) + 1)
+                    * ((x + radius).min(w - 1) - x.saturating_sub(radius) + 1);
+                let i = (y * w + x) * 4 + c;
+                let detail = source[i] as f32 - sum / count as f32;
+                pixels[i] = (source[i] as f32 + amount * detail)
+                    .clamp(0.0, 255.0)
+                    .round() as u8;
+            }
+        }
+    }
+}
+
+fn apply_vibrance_and_saturation(
+    pixels: &mut [u8],
+    vibrance: Option<&f64>,
+    saturation: Option<&f64>,
+) {
     if vibrance.is_none() && saturation.is_none() {
         return;
     }
@@ -1312,5 +1698,496 @@ mod tests {
         );
         assert!((saturation - 0.6).abs() < 0.02);
         assert!((luminance - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn presence_is_deterministic_clipped_and_preserves_alpha() {
+        let original = ImageFrame::new(
+            3,
+            1,
+            vec![20, 30, 40, 7, 128, 96, 64, 19, 240, 220, 200, 31],
+        )
+        .unwrap();
+        let recipe = EditRecipe {
+            presence: Some(lumina_sidecar::Presence {
+                version: 1,
+                texture: 1.0,
+                clarity: 1.0,
+                dehaze: 1.0,
+            }),
+            ..Default::default()
+        };
+        let mut first = original.clone();
+        let mut second = original.clone();
+        first.apply_recipe(&recipe).unwrap();
+        second.apply_recipe(&recipe).unwrap();
+        assert_eq!(first, second);
+        assert_ne!(&first.pixels[..9], &original.pixels[..9]);
+        assert_eq!(
+            [first.pixels[3], first.pixels[7], first.pixels[11]],
+            [7, 19, 31]
+        );
+        assert!(first.pixels[..]
+            .chunks_exact(4)
+            .flat_map(|pixel| &pixel[..3])
+            .any(|channel| *channel == 0 || *channel == 255));
+    }
+
+    #[test]
+    fn presence_validation_rejects_invalid_nested_values() {
+        for presence in [
+            lumina_sidecar::Presence {
+                version: 2,
+                texture: 0.0,
+                clarity: 0.0,
+                dehaze: 0.0,
+            },
+            lumina_sidecar::Presence {
+                version: 1,
+                texture: f32::NAN,
+                clarity: 0.0,
+                dehaze: 0.0,
+            },
+            lumina_sidecar::Presence {
+                version: 1,
+                texture: 0.0,
+                clarity: 1.01,
+                dehaze: 0.0,
+            },
+            lumina_sidecar::Presence {
+                version: 1,
+                texture: 0.0,
+                clarity: 0.0,
+                dehaze: -1.01,
+            },
+        ] {
+            let mut frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+            assert!(matches!(
+                frame.apply_recipe(&EditRecipe {
+                    presence: Some(presence),
+                    ..Default::default()
+                }),
+                Err(CoreError::InvalidAdjustment { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn geometry_crop_rotation_and_mirror_are_applied_in_order() {
+        let mut frame = ImageFrame::new(
+            3,
+            2,
+            vec![
+                1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+            ],
+        )
+        .unwrap();
+        frame
+            .apply_geometry(&lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 1.0 / 3.0,
+                    y: 0.0,
+                    width: 2.0 / 3.0,
+                    height: 1.0,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: true,
+                mirror_vertical: false,
+            })
+            .unwrap();
+        assert_eq!((frame.width, frame.height), (2, 2));
+        assert_eq!(
+            frame.pixels,
+            vec![3, 0, 0, 255, 2, 0, 0, 255, 6, 0, 0, 255, 5, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn geometry_measurement_domain_tracks_crop_and_quarter_turn() {
+        let frame = ImageFrame::new(4, 2, vec![0; 32]).unwrap();
+        let domain = frame
+            .measurement_domain(Some(&lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.25,
+                    y: 0.0,
+                    width: 0.5,
+                    height: 1.0,
+                }),
+                rotation_degrees: 90.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }))
+            .unwrap();
+        assert_eq!((domain.output_width, domain.output_height), (2, 2));
+        assert_eq!((domain.source_x, domain.source_y), (0.25, 0.0));
+        assert_eq!((domain.source_width, domain.source_height), (0.5, 1.0));
+    }
+
+    #[test]
+    fn all_aspect_crop_presets_have_expected_dimensions_and_centering() {
+        let presets = [
+            (lumina_sidecar::AspectPreset::Original, 200, 100, 0),
+            (lumina_sidecar::AspectPreset::OneToOne, 100, 100, 50),
+            (lumina_sidecar::AspectPreset::FourToFive, 80, 100, 60),
+            (lumina_sidecar::AspectPreset::FiveToFour, 125, 100, 38),
+            (lumina_sidecar::AspectPreset::ThreeToTwo, 150, 100, 25),
+            (lumina_sidecar::AspectPreset::TwoToThree, 67, 100, 67),
+            (lumina_sidecar::AspectPreset::FourToThree, 133, 100, 33),
+            (lumina_sidecar::AspectPreset::ThreeToFour, 75, 100, 63),
+            (lumina_sidecar::AspectPreset::SixteenToNine, 178, 100, 11),
+            (lumina_sidecar::AspectPreset::NineToSixteen, 56, 100, 72),
+        ];
+        for (preset, expected_width, expected_height, expected_x) in presets {
+            let frame = ImageFrame::new(200, 100, vec![0; 200 * 100 * 4]).unwrap();
+            let domain = frame
+                .measurement_domain(Some(&lumina_sidecar::Geometry {
+                    version: 1,
+                    crop: Some(lumina_sidecar::Crop::Aspect { preset }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }))
+                .unwrap();
+            assert_eq!(
+                (domain.output_width, domain.output_height),
+                (expected_width, expected_height)
+            );
+            assert_eq!((domain.source_x * 200.0).round() as u32, expected_x);
+            assert_eq!(domain.source_y, 0.0);
+        }
+    }
+
+    #[test]
+    fn free_crop_50_by_25_percent_is_exactly_centered() {
+        let frame = ImageFrame::new(200, 100, vec![0; 200 * 100 * 4]).unwrap();
+        let domain = frame
+            .measurement_domain(Some(&lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.25,
+                    y: 0.25,
+                    width: 0.5,
+                    height: 0.5,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }))
+            .unwrap();
+        assert_eq!((domain.output_width, domain.output_height), (100, 50));
+        assert_eq!(
+            (
+                domain.source_x,
+                domain.source_y,
+                domain.source_width,
+                domain.source_height
+            ),
+            (0.25, 0.25, 0.5, 0.5)
+        );
+    }
+
+    #[test]
+    fn rotation_90_and_180_have_exact_non_square_dimensions_and_pattern() {
+        let geometry = |degrees| lumina_sidecar::Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: degrees,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        };
+        let mut quarter =
+            ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
+        quarter.apply_geometry(&geometry(90.0)).unwrap();
+        assert_eq!((quarter.width, quarter.height), (2, 2));
+        assert_eq!(
+            quarter
+                .pixels
+                .iter()
+                .step_by(4)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![3, 1, 4, 2]
+        );
+        let mut half =
+            ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
+        half.apply_geometry(&geometry(180.0)).unwrap();
+        assert_eq!((half.width, half.height), (2, 2));
+        assert_eq!(
+            half.pixels.iter().step_by(4).copied().collect::<Vec<_>>(),
+            vec![4, 3, 2, 1]
+        );
+    }
+
+    #[test]
+    fn non_quarter_rotation_keeps_black_pixels_outside_non_square_source() {
+        let mut frame = ImageFrame::new(3, 2, vec![255; 3 * 2 * 4]).unwrap();
+        frame
+            .apply_geometry(&lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 45.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            })
+            .unwrap();
+        assert_eq!((frame.width, frame.height), (4, 4));
+        for index in [0, 3, 12, 15] {
+            assert_eq!(&frame.pixels[index * 4..index * 4 + 4], &[0, 0, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn horizontal_and_vertical_mirrors_are_exact() {
+        let geometry = |horizontal, vertical| lumina_sidecar::Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: horizontal,
+            mirror_vertical: vertical,
+        };
+        let source =
+            || ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
+        let mut horizontal = source();
+        horizontal.apply_geometry(&geometry(true, false)).unwrap();
+        assert_eq!(
+            horizontal
+                .pixels
+                .iter()
+                .step_by(4)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![2, 1, 4, 3]
+        );
+        let mut vertical = source();
+        vertical.apply_geometry(&geometry(false, true)).unwrap();
+        assert_eq!(
+            vertical
+                .pixels
+                .iter()
+                .step_by(4)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![3, 4, 1, 2]
+        );
+    }
+
+    #[test]
+    fn geometry_none_is_identity_and_core_validates_version_rotation_and_free_crop() {
+        let frame = ImageFrame::new(4, 2, vec![7; 32]).unwrap();
+        let mut unchanged = frame.clone();
+        unchanged
+            .apply_geometry(&lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            })
+            .unwrap();
+        assert_eq!(unchanged, frame);
+        let identity = frame.measurement_domain(None).unwrap();
+        assert_eq!(
+            (
+                identity.output_width,
+                identity.output_height,
+                identity.source_x,
+                identity.source_y,
+                identity.source_width,
+                identity.source_height
+            ),
+            (4, 2, 0.0, 0.0, 1.0, 1.0)
+        );
+        for geometry in [
+            lumina_sidecar::Geometry {
+                version: 2,
+                crop: None,
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            },
+            lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 181.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            },
+            lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.8,
+                    y: 0.0,
+                    width: 0.3,
+                    height: 0.5,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            },
+        ] {
+            let mut candidate = frame.clone();
+            assert!(candidate
+                .apply_recipe(&EditRecipe {
+                    geometry: Some(geometry),
+                    ..Default::default()
+                })
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn presence_is_identity_for_zero_and_texture_is_edge_directional() {
+        let original =
+            ImageFrame::new(3, 1, vec![20, 20, 20, 9, 200, 200, 200, 9, 20, 20, 20, 9]).unwrap();
+        let mut identity = original.clone();
+        identity
+            .apply_recipe(&EditRecipe {
+                presence: Some(lumina_sidecar::Presence {
+                    version: 1,
+                    texture: 0.0,
+                    clarity: 0.0,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(identity, original);
+        let mut texture = original.clone();
+        texture
+            .apply_recipe(&EditRecipe {
+                presence: Some(lumina_sidecar::Presence {
+                    version: 1,
+                    texture: 1.0,
+                    clarity: 0.0,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(texture.pixels[0] < original.pixels[0] && texture.pixels[4] > original.pixels[4]);
+    }
+
+    #[test]
+    fn clarity_has_broader_edge_influence_than_texture() {
+        let pixels: Vec<u8> = (0..40)
+            .flat_map(|x| {
+                let v = if x < 20 { 20 } else { 200 };
+                [v, v, v, 255]
+            })
+            .collect();
+        let mut texture = ImageFrame::new(40, 1, pixels.clone()).unwrap();
+        let mut clarity = ImageFrame::new(40, 1, pixels).unwrap();
+        let p = |texture, clarity| EditRecipe {
+            presence: Some(lumina_sidecar::Presence {
+                version: 1,
+                texture,
+                clarity,
+                dehaze: 0.0,
+            }),
+            ..Default::default()
+        };
+        texture.apply_recipe(&p(1.0, 0.0)).unwrap();
+        clarity.apply_recipe(&p(0.0, 1.0)).unwrap();
+        let texture_changed = texture
+            .pixels
+            .chunks_exact(4)
+            .filter(|px| px[0] != 20 && px[0] != 200)
+            .count();
+        let clarity_changed = clarity
+            .pixels
+            .chunks_exact(4)
+            .filter(|px| px[0] != 20 && px[0] != 200)
+            .count();
+        assert!(clarity_changed > texture_changed);
+    }
+
+    #[test]
+    fn dehaze_positive_direction_and_negative_direction_are_bounded() {
+        let source = ImageFrame::new(
+            3,
+            1,
+            vec![40, 40, 40, 255, 120, 120, 120, 255, 220, 220, 220, 255],
+        )
+        .unwrap();
+        let make = |amount| EditRecipe {
+            presence: Some(lumina_sidecar::Presence {
+                version: 1,
+                texture: 0.0,
+                clarity: 0.0,
+                dehaze: amount,
+            }),
+            ..Default::default()
+        };
+        let mut positive = source.clone();
+        positive.apply_recipe(&make(1.0)).unwrap();
+        let mut negative = source.clone();
+        negative.apply_recipe(&make(-1.0)).unwrap();
+        assert!(positive.pixels[8] > source.pixels[8]);
+        assert!(negative.pixels[4] < source.pixels[4] && negative.pixels[8] < source.pixels[8]);
+        assert!(
+            negative
+                .pixels
+                .iter()
+                .zip(source.pixels.iter())
+                .map(|(a, b)| (*a as i16 - *b as i16).abs())
+                .sum::<i16>()
+                < 300
+        );
+    }
+
+    #[test]
+    fn presence_is_applied_before_curves() {
+        let curve = lumina_sidecar::Curves {
+            version: 1,
+            master: vec![
+                lumina_sidecar::CurvePoint {
+                    input: 0.0,
+                    output: 0.0,
+                },
+                lumina_sidecar::CurvePoint {
+                    input: 0.5,
+                    output: 1.0,
+                },
+                lumina_sidecar::CurvePoint {
+                    input: 1.0,
+                    output: 1.0,
+                },
+            ],
+            channels: Default::default(),
+        };
+        let presence = lumina_sidecar::Presence {
+            version: 1,
+            texture: 1.0,
+            clarity: 0.0,
+            dehaze: 0.0,
+        };
+        let input = vec![
+            60, 60, 60, 255, 80, 80, 80, 255, 100, 100, 100, 255, 120, 120, 120, 255, 140, 140,
+            140, 255,
+        ];
+        let mut combined = ImageFrame::new(5, 1, input.clone()).unwrap();
+        combined
+            .apply_recipe(&EditRecipe {
+                presence: Some(presence),
+                curves: Some(curve.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut reverse = ImageFrame::new(5, 1, input).unwrap();
+        reverse
+            .apply_recipe(&EditRecipe {
+                curves: Some(curve),
+                ..Default::default()
+            })
+            .unwrap();
+        reverse
+            .apply_recipe(&EditRecipe {
+                presence: Some(presence),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_ne!(combined.pixels, reverse.pixels);
     }
 }

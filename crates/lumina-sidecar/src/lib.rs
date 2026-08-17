@@ -202,6 +202,9 @@ pub struct EditRecipe {
     /// Pre-MVP schema decision: these optional fields are additive in schema v2;
     /// absent values remain identity and require no migration.
     pub color_grading: Option<ColorGrading>,
+    pub presence: Option<Presence>,
+    /// Optional top-level geometric transform. Absent is the identity.
+    pub geometry: Option<Geometry>,
     pub options: BTreeMap<String, String>,
     pub auto_features: AutoFeatures,
     pub extras: Extras,
@@ -242,6 +245,18 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(color_grading).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(presence) = &self.presence {
+            adjustment.insert(
+                "presence".into(),
+                serde_json::to_value(presence).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(geometry) = &self.geometry {
+            root.insert(
+                "geometry".into(),
+                serde_json::to_value(geometry).map_err(serde::ser::Error::custom)?,
+            );
+        }
         root.insert("adjustments".into(), Value::Object(adjustment));
         root.insert(
             "options".into(),
@@ -272,6 +287,12 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut curves = None;
         let mut hsl = None;
         let mut color_grading = None;
+        let mut presence = None;
+        let geometry = root
+            .remove("geometry")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
         if let Some(Value::Object(mut object)) = root.remove("adjustments") {
             if let Some(value) = object.remove("curves") {
                 curves = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
@@ -282,6 +303,9 @@ impl<'de> Deserialize<'de> for EditRecipe {
             if let Some(value) = object.remove("color_grading") {
                 color_grading =
                     Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
+            if let Some(value) = object.remove("presence") {
+                presence = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
             for (key, value) in object {
                 adjustments.insert(
@@ -308,6 +332,8 @@ impl<'de> Deserialize<'de> for EditRecipe {
             curves,
             hsl,
             color_grading,
+            presence,
+            geometry,
             options,
             auto_features,
             extras: root.into_iter().collect(),
@@ -388,6 +414,64 @@ pub struct ColorGrading {
     pub balance: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Presence {
+    pub version: u8,
+    #[serde(default)]
+    pub texture: f32,
+    #[serde(default)]
+    pub clarity: f32,
+    #[serde(default)]
+    pub dehaze: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Geometry {
+    pub version: u8,
+    pub crop: Option<Crop>,
+    pub rotation_degrees: f32,
+    pub mirror_horizontal: bool,
+    pub mirror_vertical: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum Crop {
+    Aspect {
+        preset: AspectPreset,
+    },
+    Free {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AspectPreset {
+    #[serde(rename = "original")]
+    Original,
+    #[serde(rename = "1:1")]
+    OneToOne,
+    #[serde(rename = "4:5")]
+    FourToFive,
+    #[serde(rename = "5:4")]
+    FiveToFour,
+    #[serde(rename = "3:2")]
+    ThreeToTwo,
+    #[serde(rename = "2:3")]
+    TwoToThree,
+    #[serde(rename = "4:3")]
+    FourToThree,
+    #[serde(rename = "3:4")]
+    ThreeToFour,
+    #[serde(rename = "16:9")]
+    SixteenToNine,
+    #[serde(rename = "9:16")]
+    NineToSixteen,
+}
+
 fn default_recipe_version() -> String {
     "1".into()
 }
@@ -400,6 +484,8 @@ impl Default for EditRecipe {
             curves: None,
             hsl: None,
             color_grading: None,
+            presence: None,
+            geometry: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),
@@ -1245,6 +1331,46 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    if let Some(p) = &a.presence {
+        if p.version != 1 {
+            return invalid("unsupported presence version");
+        }
+        for (name, v) in [
+            ("texture", p.texture),
+            ("clarity", p.clarity),
+            ("dehaze", p.dehaze),
+        ] {
+            if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                return invalid(format!("invalid presence {name}"));
+            }
+        }
+    }
+    if let Some(g) = &a.geometry {
+        if g.version != 1
+            || !g.rotation_degrees.is_finite()
+            || !(-180.0..=180.0).contains(&g.rotation_degrees)
+        {
+            return invalid("invalid geometry version or rotation");
+        }
+        if let Some(Crop::Free {
+            x,
+            y,
+            width,
+            height,
+        }) = &g.crop
+        {
+            if ![x, y, width, height].iter().all(|v| v.is_finite())
+                || *width <= 0.0
+                || *height <= 0.0
+                || *x < 0.0
+                || *y < 0.0
+                || *x + *width > 1.0
+                || *y + *height > 1.0
+            {
+                return invalid("invalid geometry free crop");
+            }
+        }
+    }
     Ok(())
 }
 fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
@@ -1403,6 +1529,8 @@ mod tests {
                 curves: None,
                 hsl: None,
                 color_grading: None,
+                presence: None,
+                geometry: None,
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
@@ -1429,6 +1557,8 @@ mod tests {
                     curves: None,
                     hsl: None,
                     color_grading: None,
+                    presence: None,
+                    geometry: None,
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
@@ -1454,6 +1584,8 @@ mod tests {
                 curves: None,
                 hsl: None,
                 color_grading: None,
+                presence: None,
+                geometry: None,
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
@@ -1491,6 +1623,103 @@ mod tests {
         assert!(json.contains("auto_exposure"));
         assert!(json.contains("tone-rgba8-rec709:abc"));
         assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn presence_and_geometry_roundtrip_in_recipe() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.presence = Some(Presence {
+            version: 1,
+            texture: 0.25,
+            clarity: -0.5,
+            dehaze: 1.0,
+        });
+        d.virtual_copies[0].recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: Some(Crop::Aspect {
+                preset: AspectPreset::FourToFive,
+            }),
+            rotation_degrees: -12.5,
+            mirror_horizontal: true,
+            mirror_vertical: false,
+        });
+        let json = d.to_json().unwrap();
+        assert!(json.contains("\"presence\""));
+        assert!(json.contains("\"geometry\""));
+        assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn geometry_free_crop_rotation_and_both_mirrors_roundtrip() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: Some(Crop::Free {
+                x: 0.125,
+                y: 0.25,
+                width: 0.5,
+                height: 0.375,
+            }),
+            rotation_degrees: 90.0,
+            mirror_horizontal: true,
+            mirror_vertical: true,
+        });
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.geometry,
+            d.virtual_copies[0].recipe.geometry
+        );
+    }
+
+    #[test]
+    fn presence_values_roundtrip_without_loss() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.presence = Some(Presence {
+            version: 1,
+            texture: -0.75,
+            clarity: 0.375,
+            dehaze: -1.0,
+        });
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.presence,
+            d.virtual_copies[0].recipe.presence
+        );
+    }
+
+    #[test]
+    fn presence_and_geometry_validation_rejects_invalid_values() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.presence = Some(Presence {
+            version: 2,
+            texture: 0.0,
+            clarity: 0.0,
+            dehaze: 0.0,
+        });
+        assert!(d.validate().is_err());
+
+        d.virtual_copies[0].recipe.presence = Some(Presence {
+            version: 1,
+            texture: f32::NAN,
+            clarity: 0.0,
+            dehaze: 0.0,
+        });
+        assert!(d.validate().is_err());
+
+        d.virtual_copies[0].recipe.presence = None;
+        d.virtual_copies[0].recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: Some(Crop::Free {
+                x: 0.8,
+                y: 0.0,
+                width: 0.3,
+                height: 0.5,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        assert!(d.validate().is_err());
     }
 
     #[test]

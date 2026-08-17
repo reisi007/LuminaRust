@@ -116,6 +116,9 @@ impl RenderKey {
         let recipe_bytes = serde_json::to_vec(recipe).expect("EditRecipe is serializable");
         let recipe_hash = blake3::hash(&recipe_bytes).to_hex().to_string();
         let mut mask_recipe = recipe.clone();
+        // Geometry is downstream of source-sized masks; keep it in the full
+        // recipe hash but remove it from the mask identity.
+        mask_recipe.geometry = None;
         for key in [
             "crop",
             "rotation",
@@ -310,6 +313,54 @@ mod tests {
             "srgb",
             200,
             200,
+            "png",
+        );
+        assert_eq!(
+            first.stage_digest(crate::cache::CacheStage::Decode),
+            second.stage_digest(crate::cache::CacheStage::Decode)
+        );
+        assert_eq!(
+            first.stage_digest(crate::cache::CacheStage::Mask),
+            second.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        assert_ne!(first.digest(), second.digest());
+    }
+
+    #[test]
+    fn geometry_changes_render_but_not_source_sized_mask_digest() {
+        let base = EditRecipe::default();
+        let mut cropped = base.clone();
+        cropped.geometry = Some(lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Aspect {
+                preset: lumina_sidecar::AspectPreset::OneToOne,
+            }),
+            rotation_degrees: 90.0,
+            mirror_horizontal: true,
+            mirror_vertical: false,
+        });
+        let first = RenderKey::new(
+            "source",
+            "decode",
+            "pipeline",
+            "vc",
+            &base,
+            vec![],
+            "srgb",
+            10,
+            20,
+            "png",
+        );
+        let second = RenderKey::new(
+            "source",
+            "decode",
+            "pipeline",
+            "vc",
+            &cropped,
+            vec![],
+            "srgb",
+            20,
+            10,
             "png",
         );
         assert_eq!(
