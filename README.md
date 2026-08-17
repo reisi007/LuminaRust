@@ -32,9 +32,11 @@ Workspace enthält einen portablen Rasterbild-MVP: PNG/JPEG/WebP werden über
 `lumina-core` dekodiert, mit Exposure/Contrast bearbeitet und exportiert.
 `lumina-sidecar` persistiert Rezepte atomar als JSON; `lumina-cli` bietet dafür
 `process` und `inspect`. Der erste gemeinsame Desktop-/WASM-User-Test ist als
-`lumina-gui` verfügbar. RAW, ONNX, Maskenpayloads, Migrationen, Cache und
-Mehrbild-Synchronisierung sind weiterhin offen. Die Feature-SOLL-Dokumentation bleibt vor jeder weiteren
-Implementierung die verbindliche Zieldefinition.
+`lumina-gui` verfügbar. RAW ist Teil des MVP-Gates und wird nativ über den
+installierten LibRaw-Adapter ergänzt; ONNX, Maskenoperatoren, Migrationen,
+Cache und Mehrbild-Synchronisierung sind weiterhin offen. Die Feature-SOLL-
+Dokumentation bleibt vor jeder weiteren Implementierung die verbindliche
+Zieldefinition.
 
 ## Dokumentation
 
@@ -79,7 +81,7 @@ Cargo-Workspace angelegt wird, wird auf macOS empfohlen:
 
 ```bash
 xcode-select --install
-brew install rustup pkg-config cmake
+brew install rustup pkg-config cmake libraw
 rustup toolchain install stable
 rustup default stable
 rustup component add rustfmt clippy
@@ -92,8 +94,10 @@ cargo --version
 ```
 
 Homebrew ist nicht zwingend erforderlich, wenn Rust und die nativen Buildtools
-bereits anderweitig installiert sind. Die konkreten RAW- und ONNX-
-Abhängigkeiten werden erst nach der Backend-Entscheidung installiert. Die
+bereits anderweitig installiert sind. Für native RAW-Unterstützung müssen
+`libraw` und `pkg-config` verfügbar sein (`brew install libraw pkg-config`).
+LibRaw steht unter der LGPL-2.1-or-later; Distributionen müssen die LibRaw-
+Lizenz und die dynamische Systemabhängigkeit berücksichtigen. Die
 `rustup which`-Symlinks stellen bei der Homebrew-Variante sicher, dass
 `cargo fmt` und `cargo clippy` auch nach einer separaten Component-Installation
 als lokale Cargo-Subcommands gefunden werden.
@@ -142,7 +146,18 @@ und speichert das Rezept als `<original>.lumina.json`. Im Browser werden Bilder
 über Drag-and-drop geladen; Browser-Dateispeichern ist im MVP noch nicht
 implementiert.
 
-RAW-Endungen werden ausdrücklich abgelehnt; dieser MVP macht kein RAW-Versprechen.
+RAW ist ein verbindliches MVP-Gate: Native CLI und Desktop dekodieren die
+unterstützten RAW-Endungen über LibRaw und führen das Ergebnis durch denselben
+`ImageFrame`-/Rezeptpfad wie Rasterbilder. Browser/WASM bleibt für RAW
+ausdrücklich nicht verfügbar und meldet eine Capability-Fehlermeldung.
+Lizenzgeeignete Fixtures gehören nach `tests/fixtures/raw/` (nicht ins
+Repository, falls ihre Lizenz das verbietet); `LUMINA_RAW_FIXTURE` kann auf
+eine einzelne CR2-, NEF-, ARW- oder DNG-Datei zeigen. Ohne Fixture gibt es
+keinen bestandenen Kamera-Golden-Test.
+Der echte Testlauf lautet
+`LUMINA_RAW_FIXTURE=/pfad/zu/datei.cr2 rustup run stable cargo test -p lumina-raw -- --ignored`.
+Lens, Kamera-Farbmatrix und Profile bleiben bis zur Prüfung der konkreten
+LibRaw-Felder als F-034 offen; es werden keine Dummywerte verwendet.
 
 Der Workspace und der vertikale Rasterbild-MVP sind vorhanden. Der nächste
 Schritt ist ein Desktop-/WASM-GUI-Grundgerüst mit einem ersten User-Test.

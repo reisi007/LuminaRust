@@ -40,12 +40,22 @@ Die langfristige Struktur sieht `lumina-sidecar` als verpflichtendes Modul und
 ## CLI
 
 Der erste vertikale Raster-MVP stellt zusätzlich die direkt ausführbaren
-Befehle `process` und `inspect` bereit. `process` verarbeitet PNG, JPEG und
-WebP, liest optional ein `Preset`, lässt `--exposure` und `--contrast` die
-Presetwerte überschreiben und schreibt Export sowie Sidecar jeweils atomar. Diese beiden Einzeldatei-Writes bilden keine atomare Zwei-Dateien-Transaktion; ein Abbruch zwischen ihnen kann daher einen bereits geschriebenen Export ohne aktualisiertes Sidecar (oder umgekehrt) hinterlassen. `inspect`
-zeigt den JSON-Status und die virtuellen Kopien ohne GUI. RAW-Endungen werden
-mit einem sichtbaren Fehler abgelehnt, bis ein separates RAW-Backend festgelegt
-und implementiert ist.
+Befehle `process` und `inspect` bereit. `process` verarbeitet aktuell PNG,
+JPEG und WebP, liest optional ein `Preset`, lässt `--exposure` und `--contrast`
+die Presetwerte überschreiben und schreibt Export sowie Sidecar jeweils atomar.
+Diese beiden Einzeldatei-Writes bilden keine atomare Zwei-Dateien-Transaktion;
+ein Abbruch zwischen ihnen kann daher einen bereits geschriebenen Export ohne
+aktualisiertes Sidecar (oder umgekehrt) hinterlassen. `inspect` zeigt den
+JSON-Status und die virtuellen Kopien ohne GUI.
+
+RAW ist ein verbindlicher MVP-Bestandteil. Der native LibRaw-Adapter unterstützt
+CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2, CRW, PEF, SRW, 3FR, IIQ, RWL, MOS,
+ERF, KDC und X3F einschließlich EXIF-Orientierung und überführt sie in denselben
+Core-/CLI-/Desktop-Pfad. Browser/WASM unterstützt RAW nicht und meldet
+`UnsupportedPlatform`; lokale LibRaw-/Dateisystemlogik wird dort nicht gebaut.
+Der aktuelle Implementierungsstand enthält den Adapter, den gemeinsamen
+CLI-/Desktop-Pfad und Fehler-/Capability-Tests. Ein echter Kamera-Golden-Test
+bleibt bis zur Bereitstellung einer lizenzgeeigneten Fixture offen.
 
 Die CLI soll mindestens `import`, `inspect`, `develop`, `render`, `export`,
 `batch`, `mask`, `reindex` und `validate` unterstützen. Einzel- und
@@ -94,12 +104,12 @@ trunk serve
 trunk build --release
 ```
 
-Die Oberfläche lädt PNG, JPEG und WebP nativ per Pfad oder auf beiden Plattformen
-per Drag-and-drop. Preview, Exposure (`-10..=10`) und Contrast (`-1..=1`) laufen
-über `lumina-core::ImageFrame` und `lumina-sidecar::EditRecipe`. Native Sidecars
-werden neben dem Original gespeichert; Browser-Dateispeichern ist im MVP noch
-nicht implementiert. RAW, ONNX, Masken, Cache und Mehrbild-Synchronisierung
-bleiben ausdrücklich offen.
+Die Oberfläche lädt PNG, JPEG und WebP sowie native RAW-Dateien per Pfad oder
+Drag-and-drop. Browser/WASM bleibt RAW-frei und weist diese Capability klar aus. Preview, Exposure
+(`-10..=10`) und Contrast (`-1..=1`) laufen über `lumina-core::ImageFrame` und
+`lumina-sidecar::EditRecipe`. Native Sidecars werden neben dem Original
+gespeichert; Browser-Dateispeichern ist im MVP noch nicht implementiert. ONNX,
+Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 
 ## Optionale zentrale Indizierung
 

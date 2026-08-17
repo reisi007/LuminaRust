@@ -8,6 +8,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+#[cfg(feature = "zdata")]
+mod zdata;
+#[cfg(feature = "zdata")]
+pub use zdata::{load_zdata, save_zdata, zdata_path_for, MaskTile, ZDataContainer, ZDataError};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 1;
 pub type Extras = BTreeMap<String, Value>;

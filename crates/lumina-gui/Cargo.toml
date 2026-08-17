@@ -8,6 +8,7 @@ description = "Native and WASM Lumina raster preview GUI"
 blake3 = "1"
 eframe = { version = "0.31", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }
 lumina-core = { path = "../lumina-core" }
+lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
 

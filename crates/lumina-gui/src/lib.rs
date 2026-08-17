@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use lumina_core::ImageFrame;
+use lumina_raw::RawError;
 use lumina_sidecar::EditRecipe;
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::SidecarDocument;
@@ -20,12 +21,16 @@ pub enum GuiError {
     Sidecar(#[from] lumina_sidecar::SidecarError),
     #[error("{0}")]
     Io(String),
+    #[error(transparent)]
+    Raw(#[from] RawError),
 }
 
 pub struct LuminaApp {
     original: Option<ImageFrame>,
     preview: Option<ImageFrame>,
     source_bytes: Option<Vec<u8>>,
+    source_is_raw: bool,
+    raw_orientation: u8,
     source_name: String,
     #[cfg(not(target_arch = "wasm32"))]
     path: String,
@@ -41,6 +46,8 @@ impl LuminaApp {
             original: None,
             preview: None,
             source_bytes: None,
+            source_is_raw: false,
+            raw_orientation: 1,
             source_name: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
             path: String::new(),
@@ -65,9 +72,18 @@ impl LuminaApp {
     }
 
     pub fn load_bytes(&mut self, bytes: Vec<u8>, name: impl Into<String>) -> Result<(), GuiError> {
-        let frame = ImageFrame::decode(&bytes)?;
-        self.source_name = name.into();
+        let name = name.into();
+        let source_is_raw = is_raw_name(&name);
+        let (frame, orientation) = if source_is_raw {
+            let image = lumina_raw::decode_bytes(&bytes, &name)?;
+            (image.frame, image.metadata.orientation)
+        } else {
+            (ImageFrame::decode(&bytes)?, 1)
+        };
+        self.source_name = name;
         self.source_bytes = Some(bytes);
+        self.source_is_raw = source_is_raw;
+        self.raw_orientation = orientation;
         self.original = Some(frame);
         self.recipe = EditRecipe::default();
         self.error = None;
@@ -138,9 +154,9 @@ impl LuminaApp {
                 .and_then(|v| v.to_str())
                 .unwrap_or("raster")
                 .to_ascii_uppercase(),
-            orientation: 1,
+            orientation: self.raw_orientation,
             decode_fingerprint: DecodeFingerprint {
-                decoder: "image".into(),
+                decoder: decoder_identity(self.source_is_raw).into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 parameters: BTreeMap::new(),
                 extras: BTreeMap::new(),
@@ -148,7 +164,7 @@ impl LuminaApp {
             geometry_fingerprint: GeometryFingerprint {
                 width: frame.width,
                 height: frame.height,
-                orientation: 1,
+                orientation: self.raw_orientation,
                 pixel_aspect_ratio: 1.0,
                 extras: BTreeMap::new(),
             },
@@ -205,6 +221,45 @@ impl LuminaApp {
                 ui.label("Bild hierher ziehen oder einen Pfad laden");
             });
         }
+    }
+}
+
+fn is_raw_name(name: &str) -> bool {
+    matches!(
+        std::path::Path::new(name)
+            .extension()
+            .and_then(|v| v.to_str())
+            .map(|v| v.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "cr2"
+                | "cr3"
+                | "nef"
+                | "arw"
+                | "dng"
+                | "orf"
+                | "raf"
+                | "rw2"
+                | "crw"
+                | "pef"
+                | "srw"
+                | "3fr"
+                | "iiq"
+                | "rwl"
+                | "mos"
+                | "erf"
+                | "kdc"
+                | "x3f"
+        )
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decoder_identity(source_is_raw: bool) -> &'static str {
+    if source_is_raw {
+        "libraw"
+    } else {
+        "image"
     }
 }
 
@@ -369,5 +424,12 @@ mod tests {
         app.show_error(result.unwrap_err());
         assert_eq!(app.status(), "Fehler");
         assert!(app.error().is_some());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sidecar_decoder_identity_distinguishes_raw_from_raster() {
+        assert_eq!(decoder_identity(true), "libraw");
+        assert_eq!(decoder_identity(false), "image");
     }
 }

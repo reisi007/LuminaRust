@@ -74,6 +74,26 @@ Index, Prüfsummen und Zstd-komprimierte Kacheln. Maskenwerte werden als
 normierte `uint16`-Werte im Bereich `0..65535` gespeichert. Der maximale
 absolute Quantisierungsfehler beträgt `1/65535`.
 
+### ZData-Format v1
+
+Der optionale `lumina-sidecar`-Featurepfad `zdata` implementiert ein Little-
+Endian-Format. Der 40-Byte-Header beginnt mit `LUMZDATA`, gefolgt von
+Formatversion `u16 = 1`, Headerlänge, Recordanzahl, Indexoffset und Indexlänge.
+Der Index steht am Dateiende und enthält pro Record ID-Länge, Tilekoordinaten,
+Dimensionen, Recordoffset und Recordlänge. IDs sind UTF-8 und innerhalb eines
+Containers eindeutig. Jeder Record enthält dieselben Tilemetadaten, die
+unkomprimierte und komprimierte Länge, eine 32-Byte-BLAKE3-Prüfsumme der
+unkomprimierten Little-Endian-`uint16`-Werte und die Zstd-Nutzlast. Beim Lesen
+werden Magic, Version, Bounds, Dimensions-/Payload-Länge, Duplikate und
+Prüfsumme vor der Ausgabe geprüft; feste Größenlimits verhindern übergroße
+Allokationen. Random Access dekodiert nur den angeforderten Tile.
+
+Die JSON-Datei speichert Masken-DAG, Maskenidentität und Referenzen; zdata
+speichert ausschließlich die binären Maskenpayloads. Vorschauen und Cache
+bleiben außerhalb beider Dateien. Atomare JSON- und zdata-Schreibvorgänge sind
+jeweils gewährleistet; eine gemeinsame Zwei-Dateien-Transaktion ist ausdrücklich
+noch offen.
+
 Der Container muss Random Access auf einzelne Kacheln erlauben und darf später
 weitere Artefakttypen aufnehmen. OpenEXR und 7z sind für dieses Arbeitsformat
 nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.

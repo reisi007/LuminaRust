@@ -1,0 +1,16 @@
+[package]
+name = "lumina-raw"
+version = "0.1.0"
+edition = "2021"
+description = "Native LibRaw adapter for Lumina"
+license = "MIT"
+
+[dependencies]
+lumina-core = { path = "../lumina-core" }
+thiserror = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libraw-sys = "0.1.1"
+
+[dev-dependencies]
+tempfile = "3"

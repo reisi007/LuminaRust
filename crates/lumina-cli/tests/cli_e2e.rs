@@ -103,7 +103,7 @@ fn unknown_adjustment_exits_non_zero_with_error() {
 }
 
 #[test]
-fn raw_extension_exits_non_zero_with_unsupported_raw_error() {
+fn corrupt_raw_exits_non_zero_with_decode_error() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("input.arw");
     let output = directory.path().join("output.png");
@@ -119,5 +119,8 @@ fn raw_extension_exits_non_zero_with_unsupported_raw_error() {
         .unwrap();
 
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("UnsupportedRaw"));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("I/O error")
+            || String::from_utf8_lossy(&result.stderr).contains("LibRaw")
+    );
 }

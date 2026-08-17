@@ -1,5 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use lumina_core::{ImageFileFormat, ImageFrame};
+use lumina_raw::{RawError, RawMetadata};
 use lumina_sidecar::{
     load_sidecar, save_sidecar, sidecar_path_for, DecodeFingerprint, GeometryFingerprint,
     HistoryEntry, Preset, SidecarDocument, SourceIdentity,
@@ -53,6 +54,8 @@ enum CliError {
     Sidecar(#[from] lumina_sidecar::SidecarError),
     #[error(transparent)]
     Core(#[from] lumina_core::CoreError),
+    #[error(transparent)]
+    Raw(#[from] RawError),
     #[error("invalid preset JSON: {0}")]
     Preset(String),
 }
@@ -72,21 +75,20 @@ fn run(cli: Cli) -> Result<(), CliError> {
 }
 
 fn process(args: ProcessArgs) -> Result<(), CliError> {
-    reject_raw(&args.input)?;
     reject_same_path(&args.input, &args.output)?;
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
-    let mut frame = ImageFrame::decode(&bytes)?;
+    let (mut frame, raw_metadata) = decode_input(&args.input, &bytes)?;
     let sidecar_path = sidecar_path_for(&args.input);
     let mut document = match load_sidecar(&sidecar_path) {
         Ok(document) => document,
         Err(lumina_sidecar::SidecarError::Missing(_)) => SidecarDocument::new(
-            source_identity(&args.input, &bytes, &frame)?,
+            source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?,
             "raster-mvp-1",
         ),
         Err(error) => return Err(error.into()),
     };
-    let current_identity = source_identity(&args.input, &bytes, &frame)?;
+    let current_identity = source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?;
     if document.source.content_hash != current_identity.content_hash
         || document.source.byte_length != current_identity.byte_length
     {
@@ -130,6 +132,32 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
 }
 
 fn inspect(args: InspectArgs) -> Result<(), CliError> {
+    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    if is_raw_path(&args.input) {
+        let image = lumina_raw::decode_bytes(
+            &bytes,
+            args.input
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("input.raw"),
+        )?;
+        println!(
+            "raw: {}x{} orientation {}",
+            image.metadata.width, image.metadata.height, image.metadata.orientation
+        );
+        println!(
+            "camera: {} {}",
+            image.metadata.camera_make.as_deref().unwrap_or("unknown"),
+            image.metadata.camera_model.as_deref().unwrap_or("unknown")
+        );
+        println!(
+            "iso: {:?}, shutter: {:?}, aperture: {:?}, lens: {:?}",
+            image.metadata.iso,
+            image.metadata.shutter,
+            image.metadata.aperture,
+            image.metadata.lens
+        );
+    }
     let path = sidecar_path_for(&args.input);
     match load_sidecar(&path) {
         Ok(document) => {
@@ -151,23 +179,30 @@ fn inspect(args: InspectArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn reject_raw(path: &Path) -> Result<(), CliError> {
+fn is_raw_path(path: &Path) -> bool {
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if [
+    [
         "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr", "iiq",
         "rwl", "mos", "erf", "kdc", "x3f",
     ]
     .contains(&extension.as_str())
-    {
-        return Err(CliError::Message(format!(
-            "UnsupportedRaw: RAW input `.{extension}` is not supported by this raster MVP"
-        )));
+}
+
+fn decode_input(path: &Path, bytes: &[u8]) -> Result<(ImageFrame, Option<RawMetadata>), CliError> {
+    if is_raw_path(path) {
+        let name = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("input.raw");
+        let image = lumina_raw::decode_bytes(bytes, name)?;
+        Ok((image.frame, Some(image.metadata)))
+    } else {
+        Ok((ImageFrame::decode(bytes)?, None))
     }
-    Ok(())
 }
 
 fn output_format(path: &Path) -> Result<ImageFileFormat, CliError> {
@@ -191,6 +226,7 @@ fn source_identity(
     path: &Path,
     bytes: &[u8],
     frame: &ImageFrame,
+    raw_metadata: Option<&RawMetadata>,
 ) -> Result<SourceIdentity, CliError> {
     let name = path
         .file_name()
@@ -207,17 +243,25 @@ fn source_identity(
             .and_then(|value| value.to_str())
             .unwrap_or("")
             .to_ascii_uppercase(),
-        orientation: 1,
+        orientation: raw_metadata.map_or(1, |metadata| metadata.orientation),
         decode_fingerprint: DecodeFingerprint {
-            decoder: "image".into(),
+            decoder: if raw_metadata.is_some() {
+                "libraw"
+            } else {
+                "image"
+            }
+            .into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            parameters: BTreeMap::new(),
-            extras: BTreeMap::new(),
+            parameters: BTreeMap::from([(
+                "geometry".into(),
+                format!("{}x{}", frame.width, frame.height),
+            )]),
+            extras: BTreeMap::from([("orientation_applied".into(), "true".into())]),
         },
         geometry_fingerprint: GeometryFingerprint {
             width: frame.width,
             height: frame.height,
-            orientation: 1,
+            orientation: raw_metadata.map_or(1, |metadata| metadata.orientation),
             pixel_aspect_ratio: 1.0,
             extras: BTreeMap::new(),
         },
@@ -314,10 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_raw_before_decode() {
+    fn recognizes_supported_raw_extensions() {
         for extension in ["ARW", "crw", "pef", "3fr", "x3f"] {
-            let error = reject_raw(Path::new(&format!("photo.{extension}"))).unwrap_err();
-            assert!(error.to_string().contains("UnsupportedRaw"));
+            assert!(is_raw_path(Path::new(&format!("photo.{extension}"))));
         }
     }
 

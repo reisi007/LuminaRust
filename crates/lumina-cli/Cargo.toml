@@ -8,6 +8,7 @@ description = "Headless Lumina raster MVP"
 clap = { version = "4", features = ["derive"] }
 blake3 = "1"
 lumina-core = { path = "../lumina-core" }
+lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 serde_json = "1"
 tempfile = "3"

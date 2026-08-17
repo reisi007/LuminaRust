@@ -117,6 +117,11 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 4: RAW-Verarbeitung
 
+Diese Phase ist ein verbindliches MVP-Gate. Der erste User-Test gilt erst als
+produktseitig vollständig, wenn native RAW-Decodierung, Orientierung und die
+minimalen RAW-Golden-Tests vorhanden sind. WASM bleibt für RAW ausdrücklich
+außerhalb des Scopes.
+
 - [ ] **F-032** Unterstützte RAW-Formate, Kamera-Fixtures, Metadatenfelder und
   Fehlerverhalten definieren.
 - [ ] **F-033** RAW-Backend integrieren und von `lumina-core` entkoppeln.
@@ -148,8 +153,6 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 - [ ] **F-044** Union, Intersect, Subtract und Invert als auswertbare Operatoren
   auf dem bereits validierten Masken-DAG implementieren.
-- [ ] **F-045** `.lumina.zdata` als eigenen Container mit Index, Prüfsummen,
-  Kachelung und Zstd-komprimierten `uint16`-Masken implementieren.
 - [ ] **F-047** Austauschbaren ONNX-Inferenzadapter mit BiRefNet als erstem
   automatischen Subject-Modell integrieren, ohne den WASM-kompatiblen Core zu
   belasten.
