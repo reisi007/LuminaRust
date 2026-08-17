@@ -94,6 +94,9 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
   Kontrast, Highlights, Shadows, Whites und Blacks implementieren.
 - [ ] **F-037** sRGB-, PNG-, JPEG- und WebP-Export mit Bit-Tiefe,
   Qualitätswerten, Profilen, Metadaten und Dithering definieren.
+  **Produktentscheidung (2026-08-17):** Im Zweifel Formate einschränken —
+  MVP nur PNG + JPEG + WebP-lossless (image-Crate, keine native Dependency);
+  lossy WebP, 16-Bit, ICC/EXIF sind dokumentierte Post-MVP-Grenzen.
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
@@ -141,11 +144,6 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 
 (UI-Konventionen F-100 sind spezifiziert, verifiziert und für jede GUI-Arbeit
 verbindlich — normativ in feature/platform/cli-gui-wasm.md)
-
-- [ ] **F-088** Idle-Queue mit Opt-out für fehlende AI-Masken sowie Warnungen und
-  `--update-masks`-Verhalten vor dem Export implementieren.
-- [ ] **F-061-N1** Roundtrip-Test für `set_mask_local_adjustment` ergänzen
-  (Extras via `adjustment_*`-Keys in `MaskLayer.extras` persistieren und laden).
 
 ## Phase 9: Optionale zentrale Indizierung
 
