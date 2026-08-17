@@ -26,6 +26,36 @@ angeglichen (Abweichungen wurden zugunsten des Codes korrigiert).
 - [Cache und Invalidierung](#cache-und-invalidierung)
 - [Abnahme](#abnahme)
 
+## F-036 Globale Tonwerte und Weißabgleich
+
+Die flache `recipe.adjustments`-Map bleibt mit Schema v1 kompatibel. F-036
+verwendet die Schlüssel `wb_temperature` (Kelvin, `1500..=12000`), `wb_tint`
+(`-1..=1`), `exposure` (`-10..=10` EV), `contrast`, `highlights`, `shadows`,
+`whites` und `blacks` (jeweils `-1..=1`). Kelvin und die normierte Tint-Skala
+sind absichtlich geräteunabhängig und vermeiden UI-spezifische Prozentwerte.
+Ungültige Werte werden abgelehnt, nicht geclippt. `wb_temperature`/`wb_tint`
+bilden im Raster-MVP eine deterministische RGB-Näherung; ohne WB-Schlüssel ist
+die Identität (As-Shot wird erst möglich, wenn `RawMetadata.camera_white_balance`
+über eine Core-API übergeben wird). Für Nicht-RAW gilt ebenfalls Identität.
+
+Die aktive MVP-Pipeline bleibt `Decode → SourceActions → AutoAnalysis →
+Adjustments → Masks → Crop → Output` und arbeitet sRGB-codiertem RGBA8. Eine
+echte lineare Zwischenrepräsentation ist daher noch nicht vorhanden. Sobald ein
+linearer Pfad aktiviert wird, muss Weißabgleich dort vor Tone-Mapping und vor
+sRGB-Encoding erfolgen; im aktuellen Raster-MVP werden die bestehenden Regler
+deterministisch im sRGB-Arbeitsraum angewandt und behalten ihre bisherige
+Clipping-Semantik.
+
+Innerhalb von `Adjustments` gilt verbindlich: `exposure → contrast →
+shadows → highlights → whites → blacks` (mit WB vor diesen Tonwerten). Exposure
+und Kontrast setzen den globalen Pegel und die Spreizung; Highlights/Shadows
+schützen selektiv die oberen/unteren Bereiche; Whites/Blacks dehnen zuletzt die
+Tonwertskala an den Rändern. Auto-Tone wird davor berechnet und angewandt;
+manuelle Werte überschreiben nicht stillschweigend persistierte Auto-Ergebnisse.
+0 ist für jeden Regler Identität, Operationen sind monoton und pro Kanal auf
+`0..=1` geclippt. Neue flache Schlüssel sind Bestandteil des bestehenden
+`recipe_hash` und invalidieren daher Preview/Export automatisch.
+
 ## Ziel
 
 Vorschauen und Exporte werden immer aus dem unveränderten Original, der

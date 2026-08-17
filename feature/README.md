@@ -64,6 +64,8 @@ Sidecars vollständig wiederherstellbar sein.
   Identität, Rezepttrennung, Standardkopie-Regeln (F-014) und geteilte Artefakte
 - [`product/ai-masks.md`](product/ai-masks.md): persistierte AI-Masken,
   Modellidentität, Status und lokale Anpassungen
+- [`product/export.md`](product/export.md): sRGB-, PNG-, JPEG- und WebP-Export,
+  Bit-Tiefe, Qualität, Profile, Metadaten und Dithering (F-037)
 
 ### Plattformen
 
@@ -88,6 +90,8 @@ Sidecars vollständig wiederherstellbar sein.
 | F-006 | Optionale DB | [Plattformen](platform/cli-gui-wasm.md) | mittel |
 | F-007 | RAW-Import | [Plattformen](platform/cli-gui-wasm.md) | hoch |
 | F-008 | Auto-Tone und Exposure Matching | [Pipeline](architecture/pipeline.md) | mittel |
+| F-036 | Weißabgleich und globale Tonwerte | [Pipeline](architecture/pipeline.md) | hoch |
+| F-037 | Bildexport | [Export](product/export.md) | mittel |
 | F-009 | Presets | [Virtual Copies](product/virtual-copies.md) | mittel |
 | F-010 | CLI, GUI und WASM | [Plattformen](platform/cli-gui-wasm.md) | hoch |
 | F-011 | Konflikt- und Releasequalität | [Qualität](quality/conflicts-and-acceptance.md) | hoch |
