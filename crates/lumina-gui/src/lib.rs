@@ -133,6 +133,11 @@ impl LuminaApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_file(&mut self, path: impl Into<String>) {
         self.path = path.into();
+        // Populate the file browser with the directory containing the opened file.
+        if let Some(parent) = Path::new(&self.path).parent() {
+            self.directory = parent.display().to_string();
+        }
+        self.list_directory();
         self.load_path();
     }
 
@@ -147,10 +152,34 @@ impl LuminaApp {
         let directory = std::path::PathBuf::from(self.directory.trim());
         self.entries.clear();
         match std::fs::read_dir(&directory) {
-            Ok(entries) => {
-                for entry in entries.flatten() {
+            Ok(dir_entries) => {
+                for entry in dir_entries.flatten() {
                     if let Some(scanned) = Self::scan_entry(&entry.path()) {
                         self.entries.push(scanned);
+                    }
+                }
+                // Also pick up orphan sidecars whose source file is missing.
+                // After deleting the source, read_dir won't list it, but the
+                // .lumina.json sidecar still exists on disk.
+                if let Ok(sidecar_entries) = std::fs::read_dir(&directory) {
+                    for entry in sidecar_entries.flatten() {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.ends_with(".lumina.json") {
+                                if let Some(source_name) =
+                                    name.strip_suffix(".lumina.json")
+                                {
+                                    let source_path = directory.join(source_name);
+                                    if !self.entries.iter().any(|e| e.path == source_path) {
+                                        if let Some(scanned) =
+                                            Self::scan_entry(&source_path)
+                                        {
+                                            self.entries.push(scanned);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 self.entries.sort_by(|a, b| a.name.cmp(&b.name));
