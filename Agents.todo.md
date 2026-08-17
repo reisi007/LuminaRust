@@ -139,8 +139,9 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 
 ## Phase 8: Desktop-GUI
 
-- [ ] **F-100** UI-Konventionen für alle GUI-Arbeit verbindlich festlegen und
-  Lightroom-Desktop-Struktur, Regler- und Interaktionsregeln spezifizieren.
+(UI-Konventionen F-100 sind spezifiziert, verifiziert und für jede GUI-Arbeit
+verbindlich — normativ in feature/platform/cli-gui-wasm.md)
+
 - [ ] **F-088** Idle-Queue mit Opt-out für fehlende AI-Masken sowie Warnungen und
   `--update-masks`-Verhalten vor dem Export implementieren.
 - [ ] **F-061-N1** Roundtrip-Test für `set_mask_local_adjustment` ergänzen
