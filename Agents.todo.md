@@ -48,9 +48,21 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 2: Rezept, virtuelle Kopien und Migrationen
 
-- [ ] **F-019** CLI `migrate_sidecar` (crates/lumina-cli/src/main.rs ~Z. 560) auf
-  `lumina_sidecar::migrate_sidecar_file` umstellen (`.bak`-Backup + Lock);
-  Verifikations-Hinweis: Library-Teil in `lumina-sidecar` ist verifiziert.
+**Produktentscheidung (2026-08-17, Pre-MVP):** Wir befinden uns in der
+Pre-MVP-Phase — das Sidecar-Schema wird bei Bedarf **bewusst nicht
+abwärtskompatibel** abgeändert. Es gilt: (a) Schemaänderungen sind bis zum MVP
+Breaking Changes, Altdateien müssen nicht lesbar bleiben; (b) es gibt bis zum
+MVP **keine Migrationen v1→v2** — die Schema-Version wird einfach hochgezogen;
+(c) die Migrations-Maschinerie (`migrate_sidecar_file`, `.bak`-Backup) bleibt
+im Code erhalten und wird ab dem MVP für Release-Migrationen genutzt.
+Konsequenz: Die Spec-Vorgabe „Altdateien mit flacher adjustments-Map bleiben
+als schema_version: 1 gültig" (pipeline.md, Abschnitt Bearbeitungsregler) ist
+bis zum MVP ausgesetzt; F-089–F-099 können das Schema frei erweitern.
+
+- [ ] **F-019** (deferriert auf Post-MVP) CLI `migrate_sidecar`
+  (crates/lumina-cli/src/main.rs ~Z. 560) auf `lumina_sidecar::migrate_sidecar_file`
+  umstellen (`.bak`-Backup + Lock); erst nach MVP relevant, da bis dahin keine
+  Migrationen laufen. Verifikations-Hinweis: Library-Teil ist verifiziert.
 
 ## Phase 3: Renderpipeline und Cache
 
@@ -58,7 +70,9 @@ keine dauerhafte Liste abgehakter Aufgaben.
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
   (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
 - [ ] **F-089** Gradationskurve mit Master- und getrennten RGB-Kanalkurven,
-  monotoner Interpolation, Versionierung und Cache-Tests umsetzen.
+  monotoner Interpolation, Versionierung und Cache-Tests umsetzen
+  (Schema-v2-Erweiterung; gemäß Pre-MVP-Entscheidung kein v1-Kompatibilitäts-
+  oder Migrationscode nötig).
 - [ ] **F-090** HSL/Farbmischer mit acht sRGB-Kanälen, Nachbargewichtung und
   Roundtrip-/Wertebereichstests umsetzen.
 - [ ] **F-091** Color Grading für Schatten, Mitteltöne, Lichter und Balance mit

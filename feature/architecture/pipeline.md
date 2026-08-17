@@ -225,15 +225,16 @@ Adjustments → Masks → Crop → Output`. Die in diesem Abschnitt genannten
 Unterstufen innerhalb von `Adjustments` beziehungsweise `Crop` sind verbindlich
 und ändern dieses Format-Tupel nicht.
 
-**Schema-Migration:** Das Upgrade von `recipe_schema_version` 1 auf 2 ist
-erforderlich, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`,
+**Schema-Migration (Pre-MVP):** Das Upgrade von `recipe_schema_version` 1 auf 2
+ist erforderlich, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`,
 `color_grading`, `presence`, `sharpening`, `noise_reduction`) oder neue
 Top-Level-Keys (`geometry`, `lens_correction`, `perspective`, `effects`)
-verwendet werden. Altdateien mit flacher `adjustments`-Map bleiben als
-`schema_version: 1` gültig; nicht gesetzte verschachtelte Felder werden als
-Identität interpretiert. Eine automatische Migration von `schema_version: 1`
-nach `2` findet nicht statt; sie erfolgt verzögert mit Bestätigung gemäß der
-festgelegten Migrationsstrategie.
+verwendet werden. **Produktentscheidung (2026-08-17):** Bis zum MVP ist das
+Schema bewusst **nicht abwärtskompatibel** — Schemaänderungen sind Breaking
+Changes, Altdateien müssen nicht lesbar bleiben, und es findet keine Migration
+v1→v2 statt (Version wird hochgezogen; nicht gesetzte Felder gelten als
+Identität). Ab dem MVP gilt wieder die festgelegte Migrationsstrategie
+(verzögert mit Bestätigung, `.bak`-Backup, expliziter Aufruf).
 
 ### F-089 Gradationskurve
 
