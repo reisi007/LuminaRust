@@ -409,6 +409,28 @@ mod tests {
     }
 
     #[test]
+    fn auto_tone_and_exposure_matching_are_bit_exactly_deterministic() {
+        let frame = ImageFrame::new(
+            3,
+            2,
+            vec![
+                3, 17, 91, 0, 42, 128, 211, 255, 255, 64, 7, 32, 99, 101, 203, 17, 180, 220, 12,
+                200, 71, 33, 88, 250,
+            ],
+        )
+        .unwrap();
+        let config = AutoToneConfig::default();
+        let reference = suggest_auto_tone(&frame, config).unwrap();
+        let reference_match = match_total_exposure(&frame, 0.63).unwrap();
+        let fingerprint = tone_fingerprint(&frame, config);
+        for _ in 0..16 {
+            assert_eq!(suggest_auto_tone(&frame, config).unwrap(), reference);
+            assert_eq!(match_total_exposure(&frame, 0.63).unwrap(), reference_match);
+            assert_eq!(tone_fingerprint(&frame, config), fingerprint);
+        }
+    }
+
+    #[test]
     fn matching_exposure_is_bounded_and_monotonic_for_increasing_targets() {
         let frame = ImageFrame::new(
             5,

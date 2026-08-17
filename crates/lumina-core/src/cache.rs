@@ -313,6 +313,69 @@ mod tests {
         assert_eq!(cache.get(CacheStage::Decode, &second), Some(vec![1]));
         assert_eq!(cache.get(CacheStage::Preview, &second), None);
     }
+
+    #[test]
+    fn crop_changes_reuse_decode_and_mask_but_miss_preview() {
+        let mut cache = CacheStore::new(100);
+        let stop = Cancellation::default();
+        let first = key();
+        let mut second = first.clone();
+        second.recipe_hash = "crop-changed".into();
+        // A crop is downstream of masks; the stage key has the same upstream
+        // identity even though the final recipe/render key differs.
+        cache
+            .put(CacheStage::Decode, &first, vec![1], &stop)
+            .unwrap();
+        cache.put(CacheStage::Mask, &first, vec![2], &stop).unwrap();
+        cache
+            .put(CacheStage::Preview, &first, vec![3], &stop)
+            .unwrap();
+        assert_eq!(cache.get(CacheStage::Decode, &second), Some(vec![1]));
+        assert_eq!(cache.get(CacheStage::Mask, &second), Some(vec![2]));
+        assert_eq!(cache.get(CacheStage::Preview, &second), None);
+    }
+
+    #[test]
+    fn source_or_decode_context_change_misses_decode_and_mask() {
+        let mut cache = CacheStore::new(100);
+        let stop = Cancellation::default();
+        let first = key();
+        cache
+            .put(CacheStage::Decode, &first, vec![1], &stop)
+            .unwrap();
+        cache.put(CacheStage::Mask, &first, vec![2], &stop).unwrap();
+        let mut changed = first.clone();
+        changed.source_content_hash = "new-source".into();
+        assert_eq!(cache.get(CacheStage::Decode, &changed), None);
+        assert_eq!(cache.get(CacheStage::Mask, &changed), None);
+        cache
+            .put(CacheStage::Decode, &first, vec![1], &stop)
+            .unwrap();
+        cache.put(CacheStage::Mask, &first, vec![2], &stop).unwrap();
+        changed = first.clone();
+        changed.decode_version = "new-decoder".into();
+        assert_eq!(cache.get(CacheStage::Decode, &changed), None);
+        assert_eq!(cache.get(CacheStage::Mask, &changed), None);
+    }
+
+    #[test]
+    fn mask_artifact_change_misses_mask_and_preview_but_reuses_decode() {
+        let mut cache = CacheStore::new(100);
+        let stop = Cancellation::default();
+        let first = key();
+        cache
+            .put(CacheStage::Decode, &first, vec![1], &stop)
+            .unwrap();
+        cache.put(CacheStage::Mask, &first, vec![2], &stop).unwrap();
+        cache
+            .put(CacheStage::Preview, &first, vec![3], &stop)
+            .unwrap();
+        let mut changed = first.clone();
+        changed.mask_artifact_hashes.push("changed".into());
+        assert_eq!(cache.get(CacheStage::Decode, &changed), Some(vec![1]));
+        assert_eq!(cache.get(CacheStage::Mask, &changed), None);
+        assert_eq!(cache.get(CacheStage::Preview, &changed), None);
+    }
     #[test]
     fn newer_job_makes_older_result_stale() {
         let tracker = StaleTracker::default();

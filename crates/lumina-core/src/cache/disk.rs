@@ -183,7 +183,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), DiskCacheError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
     fn folder() -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -192,6 +195,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
+                .wrapping_add(u128::from(NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)))
         ))
     }
     fn setup() -> (PathBuf, DiskFolderCache) {
@@ -250,6 +254,29 @@ mod tests {
                 .load_preview("a.raw", "main", PreviewKind::OneToOne)
                 .unwrap(),
             Some(b"1".to_vec())
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn partial_child_settings_inherit_the_other_parent_field() {
+        let (path, parent) = setup();
+        parent
+            .save_settings(&FolderCacheSettings {
+                standard_preview: false,
+                one_to_one_preview: true,
+            })
+            .unwrap();
+        let child_path = path.join("child");
+        let child = DiskFolderCache::in_folder(&child_path).unwrap();
+        fs::write(child.settings_path(), br#"{"standard_preview":true}"#).unwrap();
+
+        assert_eq!(
+            child.effective_settings().unwrap(),
+            FolderCacheSettings {
+                standard_preview: true,
+                one_to_one_preview: true,
+            }
         );
         fs::remove_dir_all(path).unwrap();
     }

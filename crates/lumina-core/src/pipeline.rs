@@ -92,6 +92,7 @@ pub struct RenderKey {
     pub pipeline_version: String,
     pub virtual_copy_id: String,
     pub recipe_hash: String,
+    mask_recipe_hash: String,
     pub mask_artifact_hashes: Vec<String>,
     pub output_profile: String,
     pub output_width: u32,
@@ -114,12 +115,31 @@ impl RenderKey {
     ) -> Self {
         let recipe_bytes = serde_json::to_vec(recipe).expect("EditRecipe is serializable");
         let recipe_hash = blake3::hash(&recipe_bytes).to_hex().to_string();
+        let mut mask_recipe = recipe.clone();
+        for key in [
+            "crop",
+            "rotation",
+            "mirror",
+            "geometry",
+            "output",
+            "output_profile",
+            "output_width",
+            "output_height",
+            "output_format",
+        ] {
+            mask_recipe.options.remove(key);
+            mask_recipe.extras.remove(key);
+        }
+        let mask_recipe_bytes =
+            serde_json::to_vec(&mask_recipe).expect("EditRecipe is serializable");
+        let mask_recipe_hash = blake3::hash(&mask_recipe_bytes).to_hex().to_string();
         Self {
             source_content_hash: source_content_hash.into(),
             decode_version: decode_version.into(),
             pipeline_version: pipeline_version.into(),
             virtual_copy_id: virtual_copy_id.into(),
             recipe_hash,
+            mask_recipe_hash,
             mask_artifact_hashes,
             output_profile: output_profile.into(),
             output_width,
@@ -157,7 +177,15 @@ impl RenderKey {
             hasher.update(&[0]);
         }
         if scope != "decode" {
-            hasher.update(self.recipe_hash.as_bytes());
+            // Crop and output are downstream of masks.  They are deliberately
+            // not part of the mask identity: changing either must reuse the
+            // decoded source and any source-sized matte.
+            let recipe_hash = if scope == "mask" {
+                &self.mask_recipe_hash
+            } else {
+                &self.recipe_hash
+            };
+            hasher.update(recipe_hash.as_bytes());
             hasher.update(&[0]);
             for value in &self.mask_artifact_hashes {
                 hasher.update(value.as_bytes());
@@ -226,6 +254,72 @@ mod tests {
     }
     #[test]
     fn pipeline_order_and_formats_are_explicit() {
-        assert!(Pipeline::default().validate());
+        let pipeline = Pipeline::default();
+        let stages = pipeline.stages();
+        assert_eq!(
+            stages
+                .iter()
+                .map(|(stage, _, _)| *stage)
+                .collect::<Vec<_>>(),
+            vec![
+                PipelineStage::Decode,
+                PipelineStage::SourceActions,
+                PipelineStage::AutoAnalysis,
+                PipelineStage::Adjustments,
+                PipelineStage::Masks,
+                PipelineStage::Crop,
+                PipelineStage::Output,
+            ]
+        );
+        assert!(pipeline.validate());
+    }
+
+    #[test]
+    fn downstream_recipe_options_do_not_change_decode_or_mask_digest() {
+        let mut first_recipe = EditRecipe::default();
+        first_recipe
+            .options
+            .insert("crop".into(), "original".into());
+        first_recipe
+            .options
+            .insert("output".into(), "100x100".into());
+        let mut second_recipe = first_recipe.clone();
+        second_recipe.options.insert("crop".into(), "square".into());
+        second_recipe
+            .options
+            .insert("output".into(), "200x200".into());
+        let first = RenderKey::new(
+            "source",
+            "decode",
+            "pipeline",
+            "vc",
+            &first_recipe,
+            vec![],
+            "srgb",
+            100,
+            100,
+            "png",
+        );
+        let second = RenderKey::new(
+            "source",
+            "decode",
+            "pipeline",
+            "vc",
+            &second_recipe,
+            vec![],
+            "srgb",
+            200,
+            200,
+            "png",
+        );
+        assert_eq!(
+            first.stage_digest(crate::cache::CacheStage::Decode),
+            second.stage_digest(crate::cache::CacheStage::Decode)
+        );
+        assert_eq!(
+            first.stage_digest(crate::cache::CacheStage::Mask),
+            second.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        assert_ne!(first.digest(), second.digest());
     }
 }
