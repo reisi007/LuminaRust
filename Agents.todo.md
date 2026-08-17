@@ -73,12 +73,10 @@ Tests wird trotzdem umgesetzt.
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
   (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
-- [ ] **F-089** Gradationskurve mit Master- und getrennten RGB-Kanalkurven,
-  monotoner Interpolation, Versionierung und Cache-Tests umsetzen
-  (Schema-v2-Erweiterung; v1→v2-Migration samt Tests als dauerhaftes Muster —
-  pre-MVP kein Test-Zwang für weitere Migrationen).
-- [ ] **F-090** HSL/Farbmischer mit acht sRGB-Kanälen, Nachbargewichtung und
-  Roundtrip-/Wertebereichstests umsetzen.
+- [ ] **F-089-N1** Cleanup: ungenutzten Legacy-`Curve`-Wrapper
+  (crates/lumina-sidecar/src/lib.rs ~Z. 321-324) entfernen
+  („legacy wrapper retained for source compatibility", nirgends verwendet;
+  Verifikations-Befund B-2 aus F-089/F-090-Verifizierung).
 - [ ] **F-091** Color Grading für Schatten, Mitteltöne, Lichter und Balance mit
   weichen Bereichsgewichten umsetzen.
 - [ ] **F-092** Dynamik- und lineare Sättigungsregler einschließlich
