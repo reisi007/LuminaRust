@@ -332,4 +332,108 @@ mod tests {
             "invalid target_luminance: must be finite and in 0..=1, got NaN"
         );
     }
+
+    #[test]
+    fn auto_tone_is_finite_and_bounded_for_deterministic_rgba8_frames() {
+        let config = AutoToneConfig {
+            target_luminance: 0.62,
+            epsilon: 1e-5,
+            exposure_bounds: (-3.5, 4.25),
+            contrast_bounds: (-0.75, 0.8),
+        };
+        for frame_index in 0..12u8 {
+            let width = 3 + u32::from(frame_index % 4);
+            let height = 2 + u32::from(frame_index % 3);
+            let pixels = (0..width * height)
+                .flat_map(|pixel_index| {
+                    let value = frame_index
+                        .wrapping_mul(37)
+                        .wrapping_add((pixel_index as u8).wrapping_mul(19));
+                    [
+                        value,
+                        value.wrapping_mul(3).wrapping_add(11),
+                        value.wrapping_mul(7).wrapping_add(23),
+                        value.wrapping_mul(13),
+                    ]
+                })
+                .collect();
+            let frame = ImageFrame::new(width, height, pixels).unwrap();
+            let result = suggest_auto_tone(&frame, config).unwrap();
+
+            assert_eq!(result.analysis.sample_count, (width * height) as usize);
+            for value in [
+                result.analysis.mean,
+                result.analysis.median,
+                result.analysis.p01,
+                result.analysis.p99,
+            ] {
+                assert!(value.is_finite());
+                assert!((0.0..=1.0).contains(&value));
+            }
+            assert!(result.exposure.is_finite());
+            assert!(
+                (config.exposure_bounds.0..=config.exposure_bounds.1).contains(&result.exposure)
+            );
+            assert!(result.contrast.is_finite());
+            assert!(
+                (config.contrast_bounds.0..=config.contrast_bounds.1).contains(&result.contrast)
+            );
+        }
+    }
+
+    #[test]
+    fn auto_tone_is_independent_of_alpha_for_multiple_rgb_values() {
+        let rgb_values = [[0, 0, 0], [17, 129, 241], [64, 96, 128], [255, 128, 1]];
+        let reference_pixels: Vec<u8> = rgb_values
+            .iter()
+            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+            .collect();
+        let reference = ImageFrame::new(4, 1, reference_pixels).unwrap();
+        let expected = suggest_auto_tone(&reference, AutoToneConfig::default()).unwrap();
+
+        for alpha_set in [[0, 1, 127, 255], [255, 128, 32, 0], [7, 99, 200, 250]] {
+            let pixels: Vec<u8> = rgb_values
+                .iter()
+                .zip(alpha_set)
+                .flat_map(|(rgb, alpha)| [rgb[0], rgb[1], rgb[2], alpha])
+                .collect();
+            let result = suggest_auto_tone(
+                &ImageFrame::new(4, 1, pixels).unwrap(),
+                AutoToneConfig::default(),
+            )
+            .unwrap();
+            assert_eq!(result.analysis, expected.analysis);
+            assert_eq!(result.exposure, expected.exposure);
+            assert_eq!(result.contrast, expected.contrast);
+        }
+    }
+
+    #[test]
+    fn matching_exposure_is_bounded_and_monotonic_for_increasing_targets() {
+        let frame = ImageFrame::new(
+            5,
+            1,
+            vec![
+                7, 31, 99, 0, 32, 64, 128, 17, 96, 128, 160, 127, 192, 224, 240, 200, 255, 255,
+                255, 255,
+            ],
+        )
+        .unwrap();
+        let targets = [0.0, 0.01, 0.05, 0.15, 0.3, 0.5, 0.7, 0.9, 1.0];
+        let values: Vec<f64> = targets
+            .iter()
+            .map(|target| match_total_exposure(&frame, *target).unwrap())
+            .collect();
+
+        for value in &values {
+            assert!(value.is_finite());
+            assert!((-10.0..=10.0).contains(value));
+        }
+        for pair in values.windows(2) {
+            assert!(
+                pair[0] <= pair[1],
+                "matching exposure is not monotonic: {pair:?}"
+            );
+        }
+    }
 }
