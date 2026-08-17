@@ -216,6 +216,7 @@ impl ImageFrame {
                 });
             }
         }
+        validate_nested_adjustments(recipe)?;
         if recipe.adjustments.contains_key("wb_temperature")
             || recipe.adjustments.contains_key("wb_tint")
         {
@@ -300,8 +301,296 @@ impl ImageFrame {
                 *channel = ((x - blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
+        if let Some(curves) = &recipe.curves {
+            for pixel in self.pixels.chunks_exact_mut(4) {
+                let original = [
+                    pixel[0] as f64 / 255.0,
+                    pixel[1] as f64 / 255.0,
+                    pixel[2] as f64 / 255.0,
+                ];
+                let luminance = 0.2126 * original[0] + 0.7152 * original[1] + 0.0722 * original[2];
+                let master = monotone_curve(&curves.master, luminance as f32) as f64;
+                let channels = [
+                    &curves.channels.red,
+                    &curves.channels.green,
+                    &curves.channels.blue,
+                ];
+                for i in 0..3 {
+                    let value = channels[i].as_ref().map_or(original[i], |c| {
+                        monotone_curve(c, original[i] as f32) as f64
+                    });
+                    let value = if luminance > 1e-9 {
+                        value * master / luminance
+                    } else {
+                        master
+                    };
+                    pixel[i] = (value.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        if let Some(hsl) = &recipe.hsl {
+            apply_hsl(&mut self.pixels, hsl)?;
+        }
         Ok(())
     }
+}
+
+/// Validate the structured adjustments here rather than relying on sidecar
+/// deserialization/validation.  Recipes can be constructed directly by API
+/// consumers, so this must run before any renderer indexes into a curve or
+/// applies an HSL value.
+fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
+    if let Some(curves) = &recipe.curves {
+        if curves.version != 1 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "curves.version".into(),
+                value: curves.version as f64,
+                minimum: 1.0,
+                maximum: 1.0,
+            });
+        }
+        validate_curve("curves.master", &curves.master)?;
+        for (name, curve) in [
+            ("curves.channels.red", &curves.channels.red),
+            ("curves.channels.green", &curves.channels.green),
+            ("curves.channels.blue", &curves.channels.blue),
+        ] {
+            if let Some(curve) = curve {
+                validate_curve(name, curve)?;
+            }
+        }
+    }
+
+    if let Some(hsl) = &recipe.hsl {
+        if hsl.version != 1 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "hsl.version".into(),
+                value: hsl.version as f64,
+                minimum: 1.0,
+                maximum: 1.0,
+            });
+        }
+        for (name, channel) in [
+            ("hsl.red", &hsl.red),
+            ("hsl.orange", &hsl.orange),
+            ("hsl.yellow", &hsl.yellow),
+            ("hsl.green", &hsl.green),
+            ("hsl.cyan", &hsl.cyan),
+            ("hsl.blue", &hsl.blue),
+            ("hsl.violet", &hsl.violet),
+            ("hsl.magenta", &hsl.magenta),
+        ] {
+            if let Some(channel) = channel {
+                for (field, value) in [
+                    ("hue", channel.hue),
+                    ("saturation", channel.saturation),
+                    ("luminance", channel.luminance),
+                ] {
+                    if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+                        return Err(CoreError::InvalidAdjustment {
+                            name: format!("{name}.{field}"),
+                            value: value as f64,
+                            minimum: -1.0,
+                            maximum: 1.0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_curve(name: &str, curve: &[lumina_sidecar::CurvePoint]) -> Result<(), CoreError> {
+    if !(2..=32).contains(&curve.len()) {
+        return Err(CoreError::InvalidAdjustment {
+            name: format!("{name}.points"),
+            value: curve.len() as f64,
+            minimum: 2.0,
+            maximum: 32.0,
+        });
+    }
+
+    for (index, point) in curve.iter().enumerate() {
+        for (field, value) in [("input", point.input), ("output", point.output)] {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(CoreError::InvalidAdjustment {
+                    name: format!("{name}.points[{index}].{field}"),
+                    value: value as f64,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                });
+            }
+        }
+        if index > 0 && point.input <= curve[index - 1].input {
+            return Err(CoreError::InvalidAdjustment {
+                name: format!("{name}.points[{index}].input"),
+                value: point.input as f64,
+                minimum: curve[index - 1].input as f64,
+                maximum: 1.0,
+            });
+        }
+    }
+
+    let first = curve[0];
+    let last = curve[curve.len() - 1];
+    if first.input != 0.0 || first.output != 0.0 {
+        return Err(CoreError::InvalidAdjustment {
+            name: format!("{name}.points[0]"),
+            value: first.output as f64,
+            minimum: 0.0,
+            maximum: 0.0,
+        });
+    }
+    if last.input != 1.0 || last.output != 1.0 {
+        return Err(CoreError::InvalidAdjustment {
+            name: format!("{name}.points[{}]", curve.len() - 1),
+            value: last.output as f64,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    }
+    Ok(())
+}
+
+fn monotone_curve(curve: &[lumina_sidecar::CurvePoint], x: f32) -> f32 {
+    let p = curve;
+    let x = x.clamp(0.0, 1.0);
+    let i = p
+        .windows(2)
+        .position(|w| x <= w[1].input)
+        .unwrap_or(p.len() - 2);
+    let (a, b) = (&p[i], &p[i + 1]);
+    let h = b.input - a.input;
+    let t = ((x - a.input) / h).clamp(0.0, 1.0);
+    let slope = |j: usize| {
+        if j == 0 {
+            (p[1].output - p[0].output) / (p[1].input - p[0].input)
+        } else if j + 1 == p.len() {
+            (p[j].output - p[j - 1].output) / (p[j].input - p[j - 1].input)
+        } else {
+            (p[j + 1].output - p[j - 1].output) / (p[j + 1].input - p[j - 1].input)
+        }
+    };
+    let m0 = slope(i);
+    let m1 = slope(i + 1);
+    let d = (b.output - a.output) / h;
+    let (m0, m1) = if d == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (m0.clamp(0.0, 3.0 * d), m1.clamp(0.0, 3.0 * d))
+    };
+    let t2 = t * t;
+    let t3 = t2 * t;
+    ((2.0 * t3 - 3.0 * t2 + 1.0) * a.output
+        + (t3 - 2.0 * t2 + t) * h * m0
+        + (-2.0 * t3 + 3.0 * t2) * b.output
+        + (t3 - t2) * h * m1)
+        .clamp(0.0, 1.0)
+}
+
+fn apply_hsl(pixels: &mut [u8], h: &lumina_sidecar::HslAdjustments) -> Result<(), CoreError> {
+    let channels = [
+        h.red, h.orange, h.yellow, h.green, h.cyan, h.blue, h.violet, h.magenta,
+    ];
+    // These are deliberately not an evenly spaced `i * 30` sequence: green
+    // through blue use the conventional Lightroom-like 60 degree sectors,
+    // while violet and magenta remain distinct adjacent controls.
+    const CENTERS: [f32; 8] = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0];
+    for px in pixels.chunks_exact_mut(4) {
+        let (mut hue, mut sat, mut l) = rgb_to_hsl(
+            px[0] as f32 / 255.0,
+            px[1] as f32 / 255.0,
+            px[2] as f32 / 255.0,
+        );
+        let mut dh = 0.0;
+        let mut ds = 0.0;
+        let mut dl = 0.0;
+        let weights: [f32; 8] = CENTERS.map(|center| {
+            let i = CENTERS.iter().position(|&c| c == center).unwrap();
+            let previous = if i == 0 {
+                360.0 - CENTERS[7]
+            } else {
+                center - CENTERS[i - 1]
+            };
+            let next = if i + 1 == CENTERS.len() {
+                360.0 - center + CENTERS[0]
+            } else {
+                CENTERS[i + 1] - center
+            };
+            // Piecewise-linear cyclic triangle: the weight reaches zero at
+            // each neighbouring centre and is one at this centre.
+            let clockwise = (hue - center).rem_euclid(360.0);
+            let counterclockwise = (center - hue).rem_euclid(360.0);
+            if clockwise <= next {
+                1.0 - clockwise / next
+            } else if counterclockwise <= previous {
+                1.0 - counterclockwise / previous
+            } else {
+                0.0
+            }
+        });
+        let weight_sum: f32 = weights.iter().sum();
+        if weight_sum <= f32::EPSILON {
+            continue;
+        }
+        for (i, channel) in channels.iter().enumerate() {
+            let w = weights[i] / weight_sum;
+            if let Some(channel) = channel {
+                dh += channel.hue * 30.0 * w;
+                ds += channel.saturation * w;
+                dl += channel.luminance * w;
+            }
+        }
+        hue = (hue + dh).rem_euclid(360.0);
+        sat = (sat + ds).clamp(0.0, 1.0);
+        l = (l + dl).clamp(0.0, 1.0);
+        let rgb = hsl_to_rgb(hue, sat, l);
+        px[0] = (rgb[0] * 255.0).round() as u8;
+        px[1] = (rgb[1] * 255.0).round() as u8;
+        px[2] = (rgb[2] * 255.0).round() as u8;
+    }
+    Ok(())
+}
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    if max == min {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let mut h = if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    if h < 0.0 {
+        h += 360.0
+    }
+    (h, s, l)
+}
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let m = l - c / 2.0;
+    let q = if h < 60.0 {
+        [c, x, 0.0]
+    } else if h < 120.0 {
+        [x, c, 0.0]
+    } else if h < 180.0 {
+        [0.0, c, x]
+    } else if h < 240.0 {
+        [0.0, x, c]
+    } else if h < 300.0 {
+        [x, 0.0, c]
+    } else {
+        [c, 0.0, x]
+    };
+    [q[0] + m, q[1] + m, q[2] + m]
 }
 
 fn dither_rgba8(pixels: &mut [u8], seed: u64) {
@@ -516,5 +805,280 @@ mod tests {
             .apply_recipe(&recipe(&[("highlights", -1.0)]))
             .unwrap();
         assert_eq!(frame, expected);
+    }
+
+    #[test]
+    fn identity_curve_and_hsl_preserve_rgb_and_alpha() {
+        let identity = vec![
+            lumina_sidecar::CurvePoint {
+                input: 0.0,
+                output: 0.0,
+            },
+            lumina_sidecar::CurvePoint {
+                input: 1.0,
+                output: 1.0,
+            },
+        ];
+        let hsl = lumina_sidecar::HslAdjustments {
+            version: 1,
+            red: None,
+            orange: None,
+            yellow: None,
+            green: None,
+            cyan: None,
+            blue: None,
+            violet: None,
+            magenta: None,
+        };
+        let mut frame = ImageFrame::new(1, 1, vec![80, 140, 210, 7]).unwrap();
+        let recipe = EditRecipe {
+            curves: Some(lumina_sidecar::Curves {
+                version: 1,
+                master: identity,
+                channels: Default::default(),
+            }),
+            hsl: Some(hsl),
+            ..Default::default()
+        };
+        frame.apply_recipe(&recipe).unwrap();
+        assert_eq!(frame.pixels, vec![80, 140, 210, 7]);
+    }
+
+    #[test]
+    fn apply_recipe_rejects_invalid_nested_curves() {
+        let point = |input, output| lumina_sidecar::CurvePoint { input, output };
+        let invalid_curves = [
+            lumina_sidecar::Curves {
+                version: 2,
+                master: vec![point(0.0, 0.0), point(1.0, 1.0)],
+                channels: Default::default(),
+            },
+            lumina_sidecar::Curves {
+                version: 1,
+                master: vec![point(0.0, 0.0)],
+                channels: Default::default(),
+            },
+            lumina_sidecar::Curves {
+                version: 1,
+                master: vec![point(0.0, 0.0), point(0.5, 0.5), point(0.4, 1.0)],
+                channels: Default::default(),
+            },
+            lumina_sidecar::Curves {
+                version: 1,
+                master: vec![point(0.0, 0.1), point(1.0, 1.0)],
+                channels: Default::default(),
+            },
+            lumina_sidecar::Curves {
+                version: 1,
+                master: vec![point(0.0, 0.0), point(1.0, 0.9)],
+                channels: lumina_sidecar::CurveChannels {
+                    red: Some(vec![point(0.0, 0.0), point(1.0, f32::NAN)]),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        for curves in invalid_curves {
+            let mut frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+            let recipe = EditRecipe {
+                curves: Some(curves),
+                ..Default::default()
+            };
+            assert!(matches!(
+                frame.apply_recipe(&recipe),
+                Err(CoreError::InvalidAdjustment { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn apply_recipe_rejects_invalid_nested_hsl() {
+        for (version, channel) in [
+            (2, None),
+            (
+                1,
+                Some(lumina_sidecar::HslChannel {
+                    hue: f32::INFINITY,
+                    ..Default::default()
+                }),
+            ),
+            (
+                1,
+                Some(lumina_sidecar::HslChannel {
+                    saturation: -1.01,
+                    ..Default::default()
+                }),
+            ),
+            (
+                1,
+                Some(lumina_sidecar::HslChannel {
+                    luminance: f32::NAN,
+                    ..Default::default()
+                }),
+            ),
+        ] {
+            let mut frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+            let recipe = EditRecipe {
+                hsl: Some(lumina_sidecar::HslAdjustments {
+                    version,
+                    red: channel,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(matches!(
+                frame.apply_recipe(&recipe),
+                Err(CoreError::InvalidAdjustment { .. })
+            ));
+        }
+    }
+
+    fn hsl_recipe(channel: usize, adjustment: lumina_sidecar::HslChannel) -> EditRecipe {
+        let mut channels = [None; 8];
+        channels[channel] = Some(adjustment);
+        EditRecipe {
+            hsl: Some(lumina_sidecar::HslAdjustments {
+                version: 1,
+                red: channels[0],
+                orange: channels[1],
+                yellow: channels[2],
+                green: channels[3],
+                cyan: channels[4],
+                blue: channels[5],
+                violet: channels[6],
+                magenta: channels[7],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hsl_violet_and_magenta_have_distinct_centres() {
+        let mut frame = ImageFrame::new(1, 1, {
+            let rgb = hsl_to_rgb(270.0, 1.0, 0.5);
+            vec![
+                (rgb[0] * 255.0).round() as u8,
+                (rgb[1] * 255.0).round() as u8,
+                (rgb[2] * 255.0).round() as u8,
+                255,
+            ]
+        })
+        .unwrap();
+        frame
+            .apply_recipe(&hsl_recipe(
+                6,
+                lumina_sidecar::HslChannel {
+                    hue: 1.0,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        let (hue, _, _) = rgb_to_hsl(
+            frame.pixels[0] as f32 / 255.0,
+            frame.pixels[1] as f32 / 255.0,
+            frame.pixels[2] as f32 / 255.0,
+        );
+        assert!(
+            (hue - 300.0).abs() < 1.0,
+            "violet centre must be 270 degrees, got {hue}"
+        );
+
+        let mut frame = ImageFrame::new(1, 1, {
+            let rgb = hsl_to_rgb(300.0, 1.0, 0.5);
+            vec![
+                (rgb[0] * 255.0).round() as u8,
+                (rgb[1] * 255.0).round() as u8,
+                (rgb[2] * 255.0).round() as u8,
+                255,
+            ]
+        })
+        .unwrap();
+        frame
+            .apply_recipe(&hsl_recipe(
+                7,
+                lumina_sidecar::HslChannel {
+                    hue: -1.0,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        let (hue, _, _) = rgb_to_hsl(
+            frame.pixels[0] as f32 / 255.0,
+            frame.pixels[1] as f32 / 255.0,
+            frame.pixels[2] as f32 / 255.0,
+        );
+        assert!(
+            (hue - 270.0).abs() < 1.0,
+            "magenta centre must be 300 degrees, got {hue}"
+        );
+    }
+
+    #[test]
+    fn hsl_neighbour_contributions_are_normalized() {
+        let rgb = hsl_to_rgb(45.0, 0.6, 0.5);
+        let mut frame = ImageFrame::new(
+            1,
+            1,
+            vec![
+                (rgb[0] * 255.0).round() as u8,
+                (rgb[1] * 255.0).round() as u8,
+                (rgb[2] * 255.0).round() as u8,
+                255,
+            ],
+        )
+        .unwrap();
+        let mut recipe = hsl_recipe(
+            1,
+            lumina_sidecar::HslChannel {
+                hue: 1.0,
+                ..Default::default()
+            },
+        );
+        recipe.hsl.as_mut().unwrap().yellow = Some(lumina_sidecar::HslChannel {
+            hue: -1.0,
+            ..Default::default()
+        });
+        frame.apply_recipe(&recipe).unwrap();
+        assert_eq!(
+            frame.pixels[0..3],
+            [
+                (rgb[0] * 255.0).round() as u8,
+                (rgb[1] * 255.0).round() as u8,
+                (rgb[2] * 255.0).round() as u8,
+            ]
+        );
+    }
+
+    #[test]
+    fn hsl_saturation_and_luminance_are_additive() {
+        let rgb = hsl_to_rgb(0.0, 0.4, 0.5);
+        let mut frame = ImageFrame::new(
+            1,
+            1,
+            vec![
+                (rgb[0] * 255.0).round() as u8,
+                (rgb[1] * 255.0).round() as u8,
+                (rgb[2] * 255.0).round() as u8,
+                255,
+            ],
+        )
+        .unwrap();
+        frame
+            .apply_recipe(&hsl_recipe(
+                0,
+                lumina_sidecar::HslChannel {
+                    saturation: 0.2,
+                    luminance: 0.1,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        let (_, saturation, luminance) = rgb_to_hsl(
+            frame.pixels[0] as f32 / 255.0,
+            frame.pixels[1] as f32 / 255.0,
+            frame.pixels[2] as f32 / 255.0,
+        );
+        assert!((saturation - 0.6).abs() < 0.02);
+        assert!((luminance - 0.6).abs() < 0.01);
     }
 }

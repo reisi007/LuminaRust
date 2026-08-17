@@ -16,7 +16,7 @@ mod zdata;
 pub use zdata::{load_zdata, save_zdata, zdata_path_for, MaskTile, ZDataContainer, ZDataError};
 
 pub const FORMAT: &str = "lumina-sidecar";
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MAX_SIDECAR_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_VIRTUAL_COPIES: usize = 10_000;
 pub type Extras = BTreeMap<String, Value>;
@@ -193,16 +193,169 @@ pub struct MaskLayer {
     pub extras: Extras,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EditRecipe {
-    #[serde(default = "default_recipe_version")]
     pub recipe_version: String,
     pub adjustments: BTreeMap<String, f64>,
+    pub curves: Option<Curves>,
+    pub hsl: Option<HslAdjustments>,
     pub options: BTreeMap<String, String>,
-    #[serde(default)]
     pub auto_features: AutoFeatures,
-    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
+}
+
+impl Serialize for EditRecipe {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut root = serde_json::Map::new();
+        root.insert(
+            "recipe_version".into(),
+            Value::String(self.recipe_version.clone()),
+        );
+        let mut adjustment = serde_json::Map::new();
+        for (key, value) in &self.adjustments {
+            adjustment.insert(
+                key.clone(),
+                serde_json::to_value(value).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(curves) = &self.curves {
+            adjustment.insert(
+                "curves".into(),
+                serde_json::to_value(curves).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(hsl) = &self.hsl {
+            adjustment.insert(
+                "hsl".into(),
+                serde_json::to_value(hsl).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        root.insert("adjustments".into(), Value::Object(adjustment));
+        root.insert(
+            "options".into(),
+            serde_json::to_value(&self.options).map_err(serde::ser::Error::custom)?,
+        );
+        root.insert(
+            "auto_features".into(),
+            serde_json::to_value(&self.auto_features).map_err(serde::ser::Error::custom)?,
+        );
+        for (key, value) in &self.extras {
+            root.insert(key.clone(), value.clone());
+        }
+        Value::Object(root).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EditRecipe {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut root = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+        let recipe_version = root
+            .remove("recipe_version")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(default_recipe_version);
+        let mut adjustments = BTreeMap::new();
+        let mut curves = None;
+        let mut hsl = None;
+        if let Some(Value::Object(mut object)) = root.remove("adjustments") {
+            if let Some(value) = object.remove("curves") {
+                curves = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
+            if let Some(value) = object.remove("hsl") {
+                hsl = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
+            for (key, value) in object {
+                adjustments.insert(
+                    key,
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+                );
+            }
+        }
+        let options = root
+            .remove("options")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
+        let auto_features = root
+            .remove("auto_features")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
+        Ok(Self {
+            recipe_version,
+            adjustments,
+            curves,
+            hsl,
+            options,
+            auto_features,
+            extras: root.into_iter().collect(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Curves {
+    pub version: u8,
+    pub master: CurvePoints,
+    #[serde(default)]
+    pub channels: CurveChannels,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CurveChannels {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red: Option<CurvePoints>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green: Option<CurvePoints>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blue: Option<CurvePoints>,
+}
+pub type CurvePoints = Vec<CurvePoint>;
+/// Legacy wrapper retained for source compatibility; Curves itself uses lists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Curve {
+    pub points: CurvePoints,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CurvePoint {
+    pub input: f32,
+    pub output: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct HslAdjustments {
+    pub version: u8,
+    #[serde(default)]
+    pub red: Option<HslChannel>,
+    #[serde(default)]
+    pub orange: Option<HslChannel>,
+    #[serde(default)]
+    pub yellow: Option<HslChannel>,
+    #[serde(default)]
+    pub green: Option<HslChannel>,
+    #[serde(default)]
+    pub cyan: Option<HslChannel>,
+    #[serde(default)]
+    pub blue: Option<HslChannel>,
+    #[serde(default)]
+    pub violet: Option<HslChannel>,
+    #[serde(default)]
+    pub magenta: Option<HslChannel>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct HslChannel {
+    #[serde(default)]
+    pub hue: f32,
+    #[serde(default)]
+    pub saturation: f32,
+    #[serde(default)]
+    pub luminance: f32,
 }
 
 fn default_recipe_version() -> String {
@@ -214,6 +367,8 @@ impl Default for EditRecipe {
         Self {
             recipe_version: default_recipe_version(),
             adjustments: BTreeMap::new(),
+            curves: None,
+            hsl: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),
@@ -550,7 +705,25 @@ pub fn xmp_supported() -> bool {
 }
 
 pub fn migrate_json(json: &str) -> Result<String, SidecarError> {
-    let document = SidecarDocument::from_json(json)?;
+    let mut value: Value =
+        serde_json::from_str(json).map_err(|e| SidecarError::Json(e.to_string()))?;
+    let version = value
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SidecarError::Invalid("missing schema_version".into()))?;
+    if version > u64::from(SCHEMA_VERSION) {
+        return Err(SidecarError::Invalid(format!(
+            "unsupported schema_version {version}; explicit migration is required"
+        )));
+    }
+    if version == 0 {
+        value["schema_version"] = Value::from(1);
+    }
+    if value["schema_version"].as_u64() == Some(1) {
+        value["schema_version"] = Value::from(2);
+        // v1's flat map is deliberately retained; only the schema stamp changes.
+    }
+    let document = SidecarDocument::from_json(&serde_json::to_string(&value).unwrap())?;
     document.to_json()
 }
 
@@ -644,8 +817,8 @@ impl SidecarDocument {
             .and_then(Value::as_u64)
             .ok_or_else(|| SidecarError::Invalid("missing schema_version".into()))?;
         if version == 0 {
-            value["schema_version"] = Value::from(SCHEMA_VERSION);
-        } else if version != u64::from(SCHEMA_VERSION) {
+            value["schema_version"] = Value::from(1);
+        } else if version != 1 && version != u64::from(SCHEMA_VERSION) {
             return Err(SidecarError::Invalid(format!(
                 "unsupported schema_version {version}; explicit migration is required"
             )));
@@ -734,7 +907,7 @@ impl SidecarDocument {
         if self.format != FORMAT {
             return invalid("format must be `lumina-sidecar`");
         }
-        if self.schema_version != SCHEMA_VERSION {
+        if self.schema_version != 1 && self.schema_version != SCHEMA_VERSION {
             return invalid("unsupported schema_version");
         }
         validate_name("pipeline_version", &self.pipeline_version)?;
@@ -755,6 +928,7 @@ impl SidecarDocument {
             validate_name("virtual copy id", &copy.id)?;
             validate_name("virtual copy name", &copy.name)?;
             validate_name("recipe_version", &copy.recipe.recipe_version)?;
+            validate_adjustments(&copy.recipe)?;
             if !copy_ids.insert(&copy.id) {
                 return invalid(format!("duplicate virtual copy id `{}`", copy.id));
             }
@@ -813,6 +987,7 @@ impl SidecarDocument {
             validate_name("deleted virtual copy id", &copy.id)?;
             validate_name("deleted virtual copy name", &copy.name)?;
             validate_name("recipe_version", &copy.recipe.recipe_version)?;
+            validate_adjustments(&copy.recipe)?;
             if !copy_ids.insert(&copy.id) {
                 return invalid(format!("duplicate virtual copy id `{}`", copy.id));
             }
@@ -968,6 +1143,82 @@ fn validate_artifact(a: &ArtifactReference) -> Result<(), SidecarError> {
     validate_name("artifact data_version", &a.data_version)
 }
 
+fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
+    for (name, value) in &a.adjustments {
+        let (lo, hi) = match name.as_str() {
+            "exposure" => (-10.0, 10.0),
+            "wb_temperature" => (1500.0, 12000.0),
+            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint" => (-1.0, 1.0),
+            _ => continue,
+        };
+        if !value.is_finite() || !(*value >= lo && *value <= hi) {
+            return invalid(format!("invalid adjustment `{name}`"));
+        }
+    }
+    if let Some(c) = &a.curves {
+        if c.version != 1 {
+            return invalid("unsupported curves version");
+        }
+        validate_curve(&c.master)?;
+        for curve in [&c.channels.red, &c.channels.green, &c.channels.blue]
+            .into_iter()
+            .flatten()
+        {
+            validate_curve(curve)?;
+        }
+    }
+    if let Some(h) = &a.hsl {
+        if h.version != 1 {
+            return invalid("unsupported hsl version");
+        }
+        for (name, c) in [
+            ("red", h.red),
+            ("orange", h.orange),
+            ("yellow", h.yellow),
+            ("green", h.green),
+            ("cyan", h.cyan),
+            ("blue", h.blue),
+            ("violet", h.violet),
+            ("magenta", h.magenta),
+        ] {
+            let Some(c) = c else { continue };
+            for (field, v) in [
+                ("hue", c.hue),
+                ("saturation", c.saturation),
+                ("luminance", c.luminance),
+            ] {
+                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                    return invalid(format!("invalid hsl {name}.{field}"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
+    if !(2..=32).contains(&c.len()) {
+        return invalid("curve must contain 2..=32 points");
+    }
+    let mut previous = -1.0;
+    for p in c {
+        if !p.input.is_finite()
+            || !p.output.is_finite()
+            || !(0.0..=1.0).contains(&p.input)
+            || !(0.0..=1.0).contains(&p.output)
+            || p.input <= previous
+        {
+            return invalid("curve points must be finite, bounded and strictly increasing");
+        }
+        previous = p.input;
+    }
+    let first = c.first().unwrap();
+    let last = c.last().unwrap();
+    if first.input != 0.0 || first.output != 0.0 || last.input != 1.0 || last.output != 1.0 {
+        return invalid("curve must have (0,0) and (1,1) endpoints");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1097,6 +1348,8 @@ mod tests {
             recipe: EditRecipe {
                 recipe_version: "1".into(),
                 adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
+                curves: None,
+                hsl: None,
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
@@ -1120,6 +1373,8 @@ mod tests {
                 recipe: EditRecipe {
                     recipe_version: "1".into(),
                     adjustments: BTreeMap::from([("contrast".into(), -0.4)]),
+                    curves: None,
+                    hsl: None,
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
@@ -1142,6 +1397,8 @@ mod tests {
             recipe: EditRecipe {
                 recipe_version: "1".into(),
                 adjustments: BTreeMap::from([("highlights".into(), -0.75)]),
+                curves: None,
+                hsl: None,
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
@@ -1622,7 +1879,130 @@ mod tests {
         let decoded = SidecarDocument::from_json(&migrated).unwrap();
         assert_eq!(decoded.virtual_copies[0].recipe.recipe_version, "1");
         value["schema_version"] = Value::from(99);
-        assert!(SidecarDocument::from_json(&serde_json::to_string(&value).unwrap()).is_err());
+        assert_eq!(
+            migrate_json(&serde_json::to_string(&value).unwrap()).unwrap_err(),
+            SidecarError::Invalid(
+                "unsupported schema_version 99; explicit migration is required".into()
+            )
+        );
+    }
+
+    #[test]
+    fn explicit_v1_to_v2_migration_keeps_flat_adjustments() {
+        let mut document = SidecarDocument::new(source(), "pipeline-1");
+        document.virtual_copies[0].recipe.adjustments.extend([
+            (String::from("exposure"), 1.5),
+            (String::from("contrast"), -0.25),
+        ]);
+        let mut legacy: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+        legacy["schema_version"] = Value::from(1);
+
+        let migrated: Value =
+            serde_json::from_str(&migrate_json(&serde_json::to_string(&legacy).unwrap()).unwrap())
+                .unwrap();
+
+        assert_eq!(migrated["schema_version"], Value::from(2));
+        assert_eq!(
+            migrated["virtual_copies"][0]["recipe"]["adjustments"]["exposure"],
+            Value::from(1.5)
+        );
+        assert_eq!(
+            migrated["virtual_copies"][0]["recipe"]["adjustments"]["contrast"],
+            Value::from(-0.25)
+        );
+        assert_eq!(
+            SidecarDocument::from_json(&serde_json::to_string(&migrated).unwrap())
+                .unwrap()
+                .schema_version,
+            2
+        );
+    }
+
+    #[test]
+    fn curve_and_hsl_validation_reject_invalid_values() {
+        let valid_sidecar = || {
+            let document = SidecarDocument::new(source(), "pipeline-1");
+            serde_json::to_value(document).unwrap()
+        };
+        let curve = |points: Vec<(f32, f32)>| {
+            Value::from(serde_json::json!({
+                "version": 1,
+                "master": points.into_iter().map(|(input, output)| {
+                    serde_json::json!({"input": input, "output": output})
+                }).collect::<Vec<_>>(),
+                "channels": {}
+            }))
+        };
+
+        let invalid_curves = [
+            // Fewer than two points.
+            curve(vec![(0.0, 0.0)]),
+            // Inputs are not strictly ascending.
+            curve(vec![(0.0, 0.0), (0.5, 0.5), (0.5, 0.75), (1.0, 1.0)]),
+            // Both required endpoints are absent.
+            curve(vec![(0.25, 0.25), (0.75, 0.75)]),
+        ];
+        for invalid_curve in invalid_curves {
+            let mut sidecar = valid_sidecar();
+            sidecar["virtual_copies"][0]["recipe"]["adjustments"]["curves"] = invalid_curve;
+            assert!(SidecarDocument::from_json(&serde_json::to_string(&sidecar).unwrap()).is_err());
+        }
+
+        let mut sidecar = valid_sidecar();
+        sidecar["virtual_copies"][0]["recipe"]["adjustments"]["hsl"] = serde_json::json!({
+            "version": 1,
+            "red": {"hue": 1.1, "saturation": 0.0, "luminance": 0.0}
+        });
+        assert!(SidecarDocument::from_json(&serde_json::to_string(&sidecar).unwrap()).is_err());
+    }
+
+    #[test]
+    fn legacy_flat_adjustments_api_and_json_remain_compatible() {
+        let json = r#"{
+            "recipe_version":"1",
+            "adjustments":{"exposure":1.5,"contrast":-0.25},
+            "options":{}, "auto_features":{}, "future_recipe":{"kept":true}
+        }"#;
+        let recipe: EditRecipe = serde_json::from_str(json).unwrap();
+        assert_eq!(recipe.adjustments["exposure"], 1.5);
+        assert_eq!(recipe.adjustments["contrast"], -0.25);
+        assert!(recipe.curves.is_none() && recipe.hsl.is_none());
+        assert!(recipe.extras.contains_key("future_recipe"));
+        let encoded = serde_json::to_value(&recipe).unwrap();
+        assert_eq!(encoded["adjustments"]["exposure"], 1.5);
+        assert!(encoded["adjustments"].get("curves").is_none());
+    }
+
+    #[test]
+    fn curves_use_curve_points_lists_and_hsl_channels_are_optional() {
+        let recipe = EditRecipe {
+            curves: Some(Curves {
+                version: 1,
+                master: vec![
+                    CurvePoint {
+                        input: 0.0,
+                        output: 0.0,
+                    },
+                    CurvePoint {
+                        input: 1.0,
+                        output: 1.0,
+                    },
+                ],
+                channels: CurveChannels::default(),
+            }),
+            hsl: Some(HslAdjustments {
+                version: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        assert!(value["adjustments"]["curves"]["master"].is_array());
+        assert!(value["adjustments"]["curves"]["master"]
+            .get("points")
+            .is_none());
+        let roundtrip: EditRecipe = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, recipe);
     }
 
     #[test]
