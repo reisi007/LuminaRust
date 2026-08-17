@@ -67,6 +67,28 @@ keine dauerhafte Liste abgehakter Aufgaben.
 - [ ] **F-086-N1** Test für partielle Vererbung von `.lumina/settings.json`
   ergänzen: Kind-JSON mit nur einem gesetzten Feld erbt das andere Feld vom
   Eltern-JSON (Code in `cache/disk.rs` implementiert das bereits korrekt).
+- [ ] **F-089** Gradationskurve mit Master- und getrennten RGB-Kanalkurven,
+  monotoner Interpolation, Versionierung und Cache-Tests umsetzen.
+- [ ] **F-090** HSL/Farbmischer mit acht sRGB-Kanälen, Nachbargewichtung und
+  Roundtrip-/Wertebereichstests umsetzen.
+- [ ] **F-091** Color Grading für Schatten, Mitteltöne, Lichter und Balance mit
+  weichen Bereichsgewichten umsetzen.
+- [ ] **F-092** Dynamik- und lineare Sättigungsregler einschließlich
+  Schutzlogik für schwache/bereits gesättigte Farben umsetzen.
+- [ ] **F-093** Vollwertige Crop-/Dreh-/Spiegelungsgeometrie, RenderKey-
+  Invalidierung und finale F-041-Messdomäne umsetzen.
+- [ ] **F-094** Presence-Regler für Texture, Clarity und Dehaze mit
+  dokumentierten MVP-Heuristiken und Reihenfolgentests umsetzen.
+- [ ] **F-095** Lightroom-artiges Unsharp-Mask-Schärfen mit Luminanz-Maskierung
+  und skalierungsabhängigem Radius umsetzen.
+- [ ] **F-096** Manuelle Luminanz-/Farbrauschreduzierung vor dem Schärfen
+  umsetzen; KI-Denoise als spätere Option offenhalten.
+- [ ] **F-098** Manuelle Objektivkorrektur mit Radialmodell, Vignette und
+  R-/B-Kanal-CA umsetzen; Lensfun nur als Post-MVP prüfen.
+- [ ] **F-099** Manuelle Upright-/Perspektivkorrektur als Homographie vor Crop
+  umsetzen; automatische Linienanalyse als Post-MVP offenhalten.
+- [ ] **F-097** (niedrige Priorität) Deterministische Vignettierung und Körnung
+  mit RenderKey-abgeleitetem Seed umsetzen.
 
 ## Phase 4: RAW-Verarbeitung
 
@@ -127,10 +149,10 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 
 ## Phase 8: Desktop-GUI
 
-- [ ] **F-061** Maskenwerkzeuge für Auswahl, Benennung, Invertierung,
-  Feathering, lokale Anpassungen, Speichern und Neuberechnung implementieren.
 - [ ] **F-088** Idle-Queue mit Opt-out für fehlende AI-Masken sowie Warnungen und
   `--update-masks`-Verhalten vor dem Export implementieren.
+- [ ] **F-061-N1** Roundtrip-Test für `set_mask_local_adjustment` ergänzen
+  (Extras via `adjustment_*`-Keys in `MaskLayer.extras` persistieren und laden).
 
 ## Phase 9: Optionale zentrale Indizierung
 
