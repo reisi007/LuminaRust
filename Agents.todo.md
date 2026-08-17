@@ -33,6 +33,9 @@ keine dauerhafte Liste abgehakter Aufgaben.
   Abnahmekriterien.
 - Der Build-Agent delegiert die Implementierung und anschließend die Prüfung an
   unterschiedliche Subagenten.
+- Implementierungs-Agenten werden als `general`-Agenten delegiert (nicht als
+  `build`-Agenten); Verifikation läuft immer über einen davon unabhängigen
+  `general`-Agenten.
 - Der unabhängige Verifizierungs-Agent muss Korrektheit und Testabdeckung
   bestätigen, bevor die Aufgabe aus dieser Datei entfernt wird.
 - Eine fehlgeschlagene Verifizierung lässt die Aufgabe offen und erzeugt eine
