@@ -203,6 +203,8 @@ pub struct EditRecipe {
     /// absent values remain identity and require no migration.
     pub color_grading: Option<ColorGrading>,
     pub presence: Option<Presence>,
+    pub noise_reduction: Option<NoiseReduction>,
+    pub sharpening: Option<Sharpening>,
     /// Optional top-level geometric transform. Absent is the identity.
     pub geometry: Option<Geometry>,
     pub options: BTreeMap<String, String>,
@@ -251,6 +253,18 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(presence).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(noise_reduction) = &self.noise_reduction {
+            adjustment.insert(
+                "noise_reduction".into(),
+                serde_json::to_value(noise_reduction).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(sharpening) = &self.sharpening {
+            adjustment.insert(
+                "sharpening".into(),
+                serde_json::to_value(sharpening).map_err(serde::ser::Error::custom)?,
+            );
+        }
         if let Some(geometry) = &self.geometry {
             root.insert(
                 "geometry".into(),
@@ -288,6 +302,8 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut hsl = None;
         let mut color_grading = None;
         let mut presence = None;
+        let mut noise_reduction = None;
+        let mut sharpening = None;
         let geometry = root
             .remove("geometry")
             .map(serde_json::from_value)
@@ -306,6 +322,13 @@ impl<'de> Deserialize<'de> for EditRecipe {
             }
             if let Some(value) = object.remove("presence") {
                 presence = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
+            if let Some(value) = object.remove("noise_reduction") {
+                noise_reduction =
+                    Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
+            if let Some(value) = object.remove("sharpening") {
+                sharpening = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
             for (key, value) in object {
                 adjustments.insert(
@@ -333,6 +356,8 @@ impl<'de> Deserialize<'de> for EditRecipe {
             hsl,
             color_grading,
             presence,
+            noise_reduction,
+            sharpening,
             geometry,
             options,
             auto_features,
@@ -425,6 +450,22 @@ pub struct Presence {
     pub dehaze: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NoiseReduction {
+    pub version: u8,
+    pub luminance: f32,
+    pub color: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Sharpening {
+    pub version: u8,
+    pub amount: f32,
+    pub radius: f32,
+    pub detail: f32,
+    pub masking: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Geometry {
     pub version: u8,
@@ -485,6 +526,8 @@ impl Default for EditRecipe {
             hsl: None,
             color_grading: None,
             presence: None,
+            noise_reduction: None,
+            sharpening: None,
             geometry: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
@@ -1345,6 +1388,31 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    if let Some(n) = &a.noise_reduction {
+        if n.version != 1 {
+            return invalid("unsupported noise_reduction version");
+        }
+        for (name, v) in [("luminance", n.luminance), ("color", n.color)] {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return invalid(format!("invalid noise_reduction {name}"));
+            }
+        }
+    }
+    if let Some(s) = &a.sharpening {
+        if s.version != 1 {
+            return invalid("unsupported sharpening version");
+        }
+        for (name, v, lo, hi) in [
+            ("amount", s.amount, 0.0, 3.0),
+            ("radius", s.radius, 0.1, 10.0),
+            ("detail", s.detail, 0.0, 1.0),
+            ("masking", s.masking, 0.0, 1.0),
+        ] {
+            if !v.is_finite() || !(lo..=hi).contains(&v) {
+                return invalid(format!("invalid sharpening {name}"));
+            }
+        }
+    }
     if let Some(g) = &a.geometry {
         if g.version != 1
             || !g.rotation_degrees.is_finite()
@@ -1530,6 +1598,8 @@ mod tests {
                 hsl: None,
                 color_grading: None,
                 presence: None,
+                noise_reduction: None,
+                sharpening: None,
                 geometry: None,
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
@@ -1558,6 +1628,8 @@ mod tests {
                     hsl: None,
                     color_grading: None,
                     presence: None,
+                    noise_reduction: None,
+                    sharpening: None,
                     geometry: None,
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
@@ -1585,6 +1657,8 @@ mod tests {
                 hsl: None,
                 color_grading: None,
                 presence: None,
+                noise_reduction: None,
+                sharpening: None,
                 geometry: None,
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
@@ -2467,5 +2541,40 @@ mod tests {
             SidecarError::XmpUnsupported,
             SidecarError::XmpUnsupported
         ));
+    }
+
+    #[test]
+    fn noise_and_sharpening_roundtrip_and_validate_ranges() {
+        let recipe = EditRecipe {
+            noise_reduction: Some(NoiseReduction {
+                version: 1,
+                luminance: 0.4,
+                color: 0.8,
+            }),
+            sharpening: Some(Sharpening {
+                version: 1,
+                amount: 2.0,
+                radius: 3.0,
+                detail: 0.5,
+                masking: 0.7,
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        assert!(value["adjustments"]["noise_reduction"].is_object());
+        assert_eq!(recipe, serde_json::from_value(value).unwrap());
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.noise_reduction = Some(NoiseReduction {
+            version: 2,
+            luminance: 0.0,
+            color: 0.0,
+        });
+        assert!(d.validate().is_err());
+        d.virtual_copies[0].recipe.noise_reduction = Some(NoiseReduction {
+            version: 1,
+            luminance: f32::NAN,
+            color: 0.0,
+        });
+        assert!(d.validate().is_err());
     }
 }

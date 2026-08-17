@@ -373,4 +373,54 @@ mod tests {
         );
         assert_ne!(first.digest(), second.digest());
     }
+
+    #[test]
+    fn sharpening_render_scale_changes_render_only() {
+        let recipe = EditRecipe {
+            sharpening: Some(lumina_sidecar::Sharpening {
+                version: 1,
+                amount: 1.0,
+                radius: 2.0,
+                detail: 0.5,
+                masking: 0.0,
+            }),
+            ..Default::default()
+        };
+        let small = RenderKey::new(
+            "source",
+            "decode",
+            "pipeline",
+            "vc",
+            &recipe,
+            vec![],
+            "srgb",
+            100,
+            100,
+            "png",
+        );
+        let large = RenderKey::new(
+            "source",
+            "decode",
+            "pipeline",
+            "vc",
+            &recipe,
+            vec![],
+            "srgb",
+            200,
+            200,
+            "png",
+        );
+        assert_eq!(
+            small.stage_digest(crate::cache::CacheStage::Decode),
+            large.stage_digest(crate::cache::CacheStage::Decode)
+        );
+        assert_eq!(
+            small.stage_digest(crate::cache::CacheStage::Mask),
+            large.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        assert_ne!(
+            small.stage_digest(crate::cache::CacheStage::Preview),
+            large.stage_digest(crate::cache::CacheStage::Preview)
+        );
+    }
 }
