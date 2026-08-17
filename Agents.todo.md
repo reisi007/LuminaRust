@@ -77,10 +77,10 @@ Tests wird trotzdem umgesetzt.
   (crates/lumina-sidecar/src/lib.rs ~Z. 321-324) entfernen
   („legacy wrapper retained for source compatibility", nirgends verwendet;
   Verifikations-Befund B-2 aus F-089/F-090-Verifizierung).
-- [ ] **F-091** Color Grading für Schatten, Mitteltöne, Lichter und Balance mit
-  weichen Bereichsgewichten umsetzen.
-- [ ] **F-092** Dynamik- und lineare Sättigungsregler einschließlich
-  Schutzlogik für schwache/bereits gesättigte Farben umsetzen.
+- [ ] **F-092-N1** Cleanup: Funktion `apply_presence` (crates/lumina-core/src/lib.rs
+  ~Z. 335-339) umbenennen — sie implementiert F-092 (vibrance/saturation),
+  nicht F-094 (Präsenz); sinnvoll zusammen mit F-094 umzusetzen
+  (Verifikations-Hinweis F-091/F-092-Verifizierung).
 - [ ] **F-093** Vollwertige Crop-/Dreh-/Spiegelungsgeometrie, RenderKey-
   Invalidierung und finale F-041-Messdomäne umsetzen.
 - [ ] **F-094** Presence-Regler für Texture, Clarity und Dehaze mit
