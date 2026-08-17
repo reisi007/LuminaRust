@@ -232,6 +232,15 @@ Ordneroption und standardmäßig deaktiviert. Verwaiste Cacheeinträge dürfen
 gelöscht werden, sobald ein Bild über Lumina verschoben oder umbenannt wurde
 beziehungsweise beim Scan nicht mehr gefunden wird.
 
+> **Implementierungsstatus (F-086, 2026-08-17):** Umgesetzt und unabhängig
+> verifiziert. `lumina-core` besitzt eine native, per
+> `#[cfg(not(target_arch = "wasm32"))]` gekapselte Disk-Schicht
+> (`DiskFolderCache`, crates/lumina-core/src/cache/disk.rs): atomare Writes,
+> `settings.json` mit feldweiser Eltern-Vererbung, Vorschauen pro Quelle +
+> virtueller Kopie unter `.lumina/previews/` (Standard- vs. 1:1-Vorschau) und
+> sofortiger Prune verwaister Einträge. Offene Folgeaufgabe: Test für partielle
+> Settings-Vererbung (Kind-JSON mit nur einem gesetzten Feld).
+
 Eine reine Crop- oder Ausgabeänderung soll keine unnötige AI-Inferenz auslösen.
 Ändert sich dagegen Quelle, Decode-Kontext, Pipelineversion, Maskenartefakt oder
 Rezeptabschnitt einer abhängigen Stufe, wird die betroffene Stufe invalidiert.

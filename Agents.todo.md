@@ -64,9 +64,9 @@ keine dauerhafte Liste abgehakter Aufgaben.
   festlegen und durch Referenztests absichern.
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen.
-- [ ] **F-086** Ordner-Cache unter `.lumina/` mit geerbter `settings.json`,
-  Standardvorschau, optionaler 1:1-Vorschau und sofortigem Prune verwaister
-  Einträge implementieren.
+- [ ] **F-086-N1** Test für partielle Vererbung von `.lumina/settings.json`
+  ergänzen: Kind-JSON mit nur einem gesetzten Feld erbt das andere Feld vom
+  Eltern-JSON (Code in `cache/disk.rs` implementiert das bereits korrekt).
 
 ## Phase 4: RAW-Verarbeitung
 

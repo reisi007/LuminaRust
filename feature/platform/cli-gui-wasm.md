@@ -91,6 +91,11 @@ optional, wird in `.lumina/settings.json` auf Ordnerebene gespeichert und von
 übergeordneten Ordnern geerbt. `.lumina/` enthält ausschließlich löschbaren
 Cache und Einstellungen, keine autoritativen Rezepte.
 
+> **Implementierungsstatus (F-086, 2026-08-17):** Umgesetzt und unabhängig
+> verifiziert. Die `.lumina/`-Disk-Schicht (settings.json inkl.
+> Eltern-Vererbung, Preview-Ablage, Prune) liegt in `lumina-core`
+> (`DiskFolderCache`), WASM-gekapselt; siehe feature/architecture/pipeline.md.
+
 Für v1 ist egui/eframe festgelegt. Tauri ist keine v1-Abhängigkeit und kann in
 einer späteren Architekturentscheidung erneut bewertet werden.
 
