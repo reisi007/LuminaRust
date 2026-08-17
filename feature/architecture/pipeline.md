@@ -231,11 +231,12 @@ ist erforderlich, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`,
 Top-Level-Keys (`geometry`, `lens_correction`, `perspective`, `effects`)
 verwendet werden. **Produktentscheidung (2026-08-17, präzisiert):** Bis zum MVP
 ist das Schema bewusst **nicht abwärtskompatibel** — Altdateien müssen nicht
-lesbar bleiben. Die Migrations-Maschinerie und die Migrationspfade werden
-trotzdem für **jede** Schemaänderung umgesetzt und dauerhaft getestet (jede
-Migration bekommt Tests, auch wenn sie pre-MVP nur einen Versions-Bump
-darstellt). Ab dem MVP gilt die volle Migrationsstrategie (verzögert mit
-Bestätigung, `.bak`-Backup, expliziter Aufruf).
+lesbar bleiben. Die Migrations-Maschinerie bleibt dauerhaft erhalten; die
+v1→v2-Migration samt Tests (aus F-089/F-090) bleibt als Muster. **Pre-MVP gibt
+es keinen Zwang, für jede Migration einen eigenen Test zu schreiben** — die
+Regel „Tests für jede Migration" gilt ab dem MVP zusammen mit der vollen
+Migrationsstrategie (verzögert mit Bestätigung, `.bak`-Backup, expliziter
+Aufruf).
 
 ### F-089 Gradationskurve
 
