@@ -147,10 +147,30 @@ impl ImageFrame {
         Self::new(rgba.width(), rgba.height(), rgba.into_raw())
     }
 
-    /// Apply Crop → rotation (bilinear, black outside) → exact flips.
-    /// Lens and perspective correction are intentionally reserved before crop
-    /// for F-098/F-099 and are not silently substituted here.
-    pub fn apply_geometry(&mut self, geometry: &lumina_sidecar::Geometry) -> Result<(), CoreError> {
+    /// Apply the crop stage: distortion → vignette → perspective → CA → crop
+    /// → rotation → mirroring. Coordinates for the crop are normalized on the
+    /// perspective-transformed image. All resampling is inverse bilinear with
+    /// black (zero RGBA) outside the source.
+    pub fn apply_geometry(
+        &mut self,
+        geometry: Option<&lumina_sidecar::Geometry>,
+        lens: Option<&lumina_sidecar::LensCorrection>,
+        perspective: Option<&lumina_sidecar::Perspective>,
+    ) -> Result<(), CoreError> {
+        if let Some(l) = lens {
+            validate_lens(l)?;
+            apply_lens(self, l);
+        }
+        if let Some(p) = perspective {
+            validate_perspective(p)?;
+            *self = apply_perspective(self, p);
+        }
+        if let Some(l) = lens {
+            apply_ca(self, l);
+        }
+        let Some(geometry) = geometry else {
+            return Ok(());
+        };
         if geometry.version != 1
             || !geometry.rotation_degrees.is_finite()
             || !(-180.0..=180.0).contains(&geometry.rotation_degrees)
@@ -179,25 +199,41 @@ impl ImageFrame {
         &self,
         geometry: Option<&lumina_sidecar::Geometry>,
     ) -> Result<MeasurementDomain, CoreError> {
+        self.measurement_domain_with_perspective(geometry, None, None)
+    }
+
+    /// Computes dimensions in the same order as rendering: lens (same bounds),
+    /// perspective (projected-corner bounding box), crop, rotation, mirror.
+    pub fn measurement_domain_with_perspective(
+        &self,
+        geometry: Option<&lumina_sidecar::Geometry>,
+        lens: Option<&lumina_sidecar::LensCorrection>,
+        perspective: Option<&lumina_sidecar::Perspective>,
+    ) -> Result<MeasurementDomain, CoreError> {
+        if let Some(l) = lens {
+            validate_lens(l)?;
+        }
+        let (base_width, base_height) =
+            perspective_dimensions(self.width, self.height, perspective)?;
         let Some(g) = geometry else {
             return Ok(MeasurementDomain {
-                output_width: self.width,
-                output_height: self.height,
+                output_width: base_width,
+                output_height: base_height,
                 source_x: 0.0,
                 source_y: 0.0,
                 source_width: 1.0,
                 source_height: 1.0,
             });
         };
-        let (x, y, w, h) = crop_rect(self.width, self.height, g.crop.as_ref())?;
+        let (x, y, w, h) = crop_rect(base_width, base_height, g.crop.as_ref())?;
         let rotated = rotate_dimensions(w, h, g.rotation_degrees);
         Ok(MeasurementDomain {
             output_width: rotated.0,
             output_height: rotated.1,
-            source_x: x as f32 / self.width as f32,
-            source_y: y as f32 / self.height as f32,
-            source_width: w as f32 / self.width as f32,
-            source_height: h as f32 / self.height as f32,
+            source_x: x as f32 / base_width as f32,
+            source_y: y as f32 / base_height as f32,
+            source_width: w as f32 / base_width as f32,
+            source_height: h as f32 / base_height as f32,
         })
     }
 
@@ -443,6 +479,304 @@ impl ImageFrame {
     }
 }
 
+fn validate_lens(l: &lumina_sidecar::LensCorrection) -> Result<(), CoreError> {
+    if l.version != 1 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "lens_correction.version".into(),
+            value: l.version as f64,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    }
+    if let Some(profile) = l.profile.as_deref() {
+        if !matches!(profile, "wide-light" | "tele-light" | "standard-neutral") {
+            return Err(CoreError::UnsupportedAdjustment {
+                key: format!("lens profile `{profile}`"),
+            });
+        }
+    }
+    for (name, v, lo, hi) in [
+        ("distortion_k1", l.distortion_k1, -1., 1.),
+        ("distortion_k2", l.distortion_k2, -1., 1.),
+        ("distortion_k3", l.distortion_k3, -1., 1.),
+        ("vignette_c0", l.vignette_c0, -1., 1.),
+        ("vignette_c1", l.vignette_c1, -1., 1.),
+        ("vignette_c2", l.vignette_c2, -1., 1.),
+        ("ca_red", l.ca_red, -0.05, 0.05),
+        ("ca_blue", l.ca_blue, -0.05, 0.05),
+    ]
+    .into_iter()
+    .filter_map(|(name, value, lo, hi)| value.map(|v| (name, v, lo, hi)))
+    {
+        if !v.is_finite() || !(lo..=hi).contains(&v) {
+            return Err(CoreError::InvalidAdjustment {
+                name: name.into(),
+                value: v as f64,
+                minimum: lo as f64,
+                maximum: hi as f64,
+            });
+        }
+    }
+    Ok(())
+}
+fn validate_perspective(p: &lumina_sidecar::Perspective) -> Result<(), CoreError> {
+    if p.version != 1 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "perspective.version".into(),
+            value: p.version as f64,
+            minimum: 1.,
+            maximum: 1.,
+        });
+    }
+    for (name, v, lo, hi) in [
+        ("vertical", p.vertical, -1., 1.),
+        ("horizontal", p.horizontal, -1., 1.),
+        ("rotation", p.rotation, -1., 1.),
+        ("shift_x", p.shift_x, -1., 1.),
+        ("shift_y", p.shift_y, -1., 1.),
+        ("scale", p.scale, 0.1, 10.),
+        ("aspect_ratio", p.aspect_ratio, 0.1, 10.),
+    ] {
+        if !v.is_finite() || !(lo..=hi).contains(&v) {
+            return Err(CoreError::InvalidAdjustment {
+                name: name.into(),
+                value: v as f64,
+                minimum: lo as f64,
+                maximum: hi as f64,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Forward matrix is `T(shift) * R(rotation*pi/4) * S(scale,aspect) *
+/// Hy(vertical) * Hx(horizontal)` on column vectors and normalized corners
+/// `[-1,1]^2`.  `Hx=[[1,0,0],[0,1,0],[tan(h),0,1]]`,
+/// `Hy=[[1,0,0],[0,1,0],[0,tan(v),1]]`, `S=diag(scale,scale*aspect,1)`,
+/// and `T,R` are the usual translation and counter-clockwise rotation.
+/// Rendering uses the inverse of this exact matrix for every output pixel.
+fn perspective_matrix(p: &lumina_sidecar::Perspective) -> [[f32; 3]; 3] {
+    let sh = (p.horizontal * std::f32::consts::FRAC_PI_4).tan();
+    let sv = (p.vertical * std::f32::consts::FRAC_PI_4).tan();
+    let a = p.rotation * std::f32::consts::FRAC_PI_4;
+    let (s, c) = (a.sin(), a.cos());
+    // `scale` is an output magnification: scale=2 doubles the projected
+    // bounding box instead of shrinking it to half size.
+    let sx = p.scale;
+    let sy = p.scale * p.aspect_ratio;
+    let t = [[1., 0., p.shift_x], [0., 1., p.shift_y], [0., 0., 1.]];
+    let r = [[c, -s, 0.], [s, c, 0.], [0., 0., 1.]];
+    let scale = [[sx, 0., 0.], [0., sy, 0.], [0., 0., 1.]];
+    let hy = [[1., 0., 0.], [0., 1., 0.], [0., sv, 1.]];
+    let hx = [[1., 0., 0.], [0., 1., 0.], [sh, 0., 1.]];
+    fn mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+        let mut o = [[0.; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..3 {
+                    o[i][j] += a[i][k] * b[k][j];
+                }
+            }
+        }
+        o
+    }
+    mul(mul(mul(mul(t, r), scale), hy), hx)
+}
+
+fn perspective_dimensions(
+    w: u32,
+    h: u32,
+    p: Option<&lumina_sidecar::Perspective>,
+) -> Result<(u32, u32), CoreError> {
+    let Some(p) = p else {
+        return Ok((w, h));
+    };
+    validate_perspective(p)?;
+    let m = perspective_matrix(p);
+    let mut min = [f32::INFINITY; 2];
+    let mut max = [f32::NEG_INFINITY; 2];
+    for x in [-1.0, 1.0] {
+        for y in [-1.0, 1.0] {
+            let d = m[2][0] * x + m[2][1] * y + m[2][2];
+            let q = [
+                (m[0][0] * x + m[0][1] * y + m[0][2]) / d,
+                (m[1][0] * x + m[1][1] * y + m[1][2]) / d,
+            ];
+            min[0] = min[0].min(q[0]);
+            max[0] = max[0].max(q[0]);
+            min[1] = min[1].min(q[1]);
+            max[1] = max[1].max(q[1]);
+        }
+    }
+    Ok((
+        ((max[0] - min[0]) * w as f32 / 2.0).ceil().max(1.0) as u32,
+        ((max[1] - min[1]) * h as f32 / 2.0).ceil().max(1.0) as u32,
+    ))
+}
+
+// Presets are deliberately small and built in: wide-light (k1=0.12,k2=-0.04,k3=0.01,
+// c0=1,c1=0,c2=0, CA R=0.006 B=-0.006), standard-neutral (0,0,0,1,0,0,0,0),
+// tele-light (k1=-0.08,k2=0.02,k3=0,c0=1,c1=0,c2=0, CA R=-0.004 B=0.004).
+fn lens_coefficients(l: &lumina_sidecar::LensCorrection) -> [f32; 8] {
+    let mut c = match l.profile.as_deref() {
+        Some("wide-light") => [0.12, -0.04, 0.01, 1., 0., 0., 0.006, -0.006],
+        Some("tele-light") => [-0.08, 0.02, 0., 1., 0., 0., -0.004, 0.004],
+        Some("standard-neutral") => [0., 0., 0., 1., 0., 0., 0., 0.],
+        None => [0., 0., 0., 1., 0., 0., 0., 0.],
+        Some(other) => panic!("validated lens profile unexpectedly reached renderer: {other}"),
+    };
+    let explicit = [
+        l.distortion_k1.unwrap_or(c[0]),
+        l.distortion_k2.unwrap_or(c[1]),
+        l.distortion_k3.unwrap_or(c[2]),
+        l.vignette_c0.unwrap_or(c[3]),
+        l.vignette_c1.unwrap_or(c[4]),
+        l.vignette_c2.unwrap_or(c[5]),
+        l.ca_red.unwrap_or(c[6]),
+        l.ca_blue.unwrap_or(c[7]),
+    ];
+    c.copy_from_slice(&explicit);
+    c
+}
+fn sample(frame: &ImageFrame, x: f32, y: f32, ch: usize) -> f32 {
+    if x < 0.0 || y < 0.0 || x >= frame.width as f32 || y >= frame.height as f32 {
+        return 0.0;
+    }
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(frame.width - 1);
+    let y1 = (y0 + 1).min(frame.height - 1);
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+    let at = |xx, yy| frame.pixels[(yy * frame.width + xx) as usize * 4 + ch] as f32;
+    (at(x0, y0) * (1. - fx) + at(x1, y0) * fx) * (1. - fy)
+        + (at(x0, y1) * (1. - fx) + at(x1, y1) * fx) * fy
+}
+fn apply_lens(frame: &mut ImageFrame, l: &lumina_sidecar::LensCorrection) {
+    let c = lens_coefficients(l);
+    let src = frame.clone();
+    let (w, h) = (frame.width as f32, frame.height as f32);
+    let diag = (w * w + h * h).sqrt() / 2.;
+    for y in 0..frame.height {
+        for x in 0..frame.width {
+            let nx = (x as f32 - (w - 1.) / 2.) / diag;
+            let ny = (y as f32 - (h - 1.) / 2.) / diag;
+            let target = (nx * nx + ny * ny).sqrt();
+            let mut r = target;
+            for _ in 0..8 {
+                let f = r * (1. + c[0] * r * r + c[1] * r.powi(4) + c[2] * r.powi(6)) - target;
+                let d = 1. + 3. * c[0] * r * r + 5. * c[1] * r.powi(4) + 7. * c[2] * r.powi(6);
+                r = (r - f / d).max(0.);
+            }
+            let q = if target > 1e-6 { r / target } else { 1. };
+            let sx = (w - 1.) / 2. + nx * q * diag;
+            let sy = (h - 1.) / 2. + ny * q * diag;
+            let vig = (c[3] + c[4] * target * target + c[5] * target.powi(4)).max(0.01);
+            let i = (y * frame.width + x) as usize * 4;
+            for ch in 0..3 {
+                frame.pixels[i + ch] =
+                    (sample(&src, sx, sy, ch) * vig).round().clamp(0., 255.) as u8;
+            }
+            frame.pixels[i + 3] = sample(&src, sx, sy, 3).round().clamp(0., 255.) as u8;
+        }
+    }
+}
+fn apply_ca(frame: &mut ImageFrame, l: &lumina_sidecar::LensCorrection) {
+    let c = lens_coefficients(l);
+    let src = frame.clone();
+    let cx = (frame.width as f32 - 1.) / 2.;
+    let cy = (frame.height as f32 - 1.) / 2.;
+    for y in 0..frame.height {
+        for x in 0..frame.width {
+            let i = (y * frame.width + x) as usize * 4;
+            for (ch, k) in [(0, c[6]), (2, c[7])] {
+                let sx = cx + (x as f32 - cx) * (1. + k);
+                let sy = cy + (y as f32 - cy) * (1. + k);
+                frame.pixels[i + ch] = sample(&src, sx, sy, ch).round().clamp(0., 255.) as u8;
+            }
+        }
+    }
+}
+fn apply_perspective(src: &ImageFrame, p: &lumina_sidecar::Perspective) -> ImageFrame {
+    if p.vertical == 0.
+        && p.horizontal == 0.
+        && p.rotation == 0.
+        && p.scale == 1.
+        && p.aspect_ratio == 1.
+        && p.shift_x == 0.
+        && p.shift_y == 0.
+    {
+        return src.clone();
+    }
+    let m = perspective_matrix(p);
+    let mut min = [f32::INFINITY; 2];
+    let mut max = [f32::NEG_INFINITY; 2];
+    for x in [-1.0, 1.0] {
+        for y in [-1.0, 1.0] {
+            let d = m[2][0] * x + m[2][1] * y + m[2][2];
+            let q = [
+                (m[0][0] * x + m[0][1] * y + m[0][2]) / d,
+                (m[1][0] * x + m[1][1] * y + m[1][2]) / d,
+            ];
+            min[0] = min[0].min(q[0]);
+            max[0] = max[0].max(q[0]);
+            min[1] = min[1].min(q[1]);
+            max[1] = max[1].max(q[1]);
+        }
+    }
+    let ow = ((max[0] - min[0]) * src.width as f32 / 2.0).ceil().max(1.0) as u32;
+    let oh = ((max[1] - min[1]) * src.height as f32 / 2.0)
+        .ceil()
+        .max(1.0) as u32;
+    let mut out = ImageFrame::new(
+        ow.max(1),
+        oh.max(1),
+        vec![0; ow.max(1) as usize * oh.max(1) as usize * 4],
+    )
+    .unwrap();
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let inv = |x: f32, y: f32| {
+        let z = [x, y, 1.];
+        let a = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * z[0]
+            + (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * z[1]
+            + (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * z[2];
+        let b = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * z[0]
+            + (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * z[1]
+            + (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * z[2];
+        let d = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * z[0]
+            + (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * z[1]
+            + (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * z[2];
+        (a / det, b / det, d / det)
+    };
+    for y in 0..out.height {
+        for x in 0..out.width {
+            // Keep the output canvas centered. Translation therefore remains
+            // visible as a shift within the projected bounding box instead of
+            // being cancelled by translating both bbox endpoints.
+            let range_x = max[0] - min[0];
+            let range_y = max[1] - min[1];
+            let canvas_min_x = -range_x / 2.0;
+            let canvas_min_y = -range_y / 2.0;
+            let nx =
+                canvas_min_x + (x as f32 / (out.width.saturating_sub(1).max(1)) as f32) * range_x;
+            let ny =
+                canvas_min_y + (y as f32 / (out.height.saturating_sub(1).max(1)) as f32) * range_y;
+            let (sx, sy, sd) = inv(nx, ny);
+            let sx = sx / sd;
+            let sy = sy / sd;
+            let px = (sx / 2. + 0.5) * (src.width - 1) as f32;
+            let py = (sy / 2. + 0.5) * (src.height - 1) as f32;
+            let i = (y * out.width + x) as usize * 4;
+            for ch in 0..4 {
+                out.pixels[i + ch] = sample(src, px, py, ch).round().clamp(0., 255.) as u8;
+            }
+        }
+    }
+    out
+}
+
 fn crop_rect(
     width: u32,
     height: u32,
@@ -628,6 +962,12 @@ fn flip_vertical(f: &mut ImageFrame) {
 /// consumers, so this must run before any renderer indexes into a curve or
 /// applies an HSL value.
 fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
+    if let Some(l) = &recipe.lens_correction {
+        validate_lens(l)?;
+    }
+    if let Some(p) = &recipe.perspective {
+        validate_perspective(p)?;
+    }
     if let Some(g) = &recipe.geometry {
         if g.version != 1
             || !g.rotation_degrees.is_finite()
@@ -1998,18 +2338,22 @@ mod tests {
         )
         .unwrap();
         frame
-            .apply_geometry(&lumina_sidecar::Geometry {
-                version: 1,
-                crop: Some(lumina_sidecar::Crop::Free {
-                    x: 1.0 / 3.0,
-                    y: 0.0,
-                    width: 2.0 / 3.0,
-                    height: 1.0,
+            .apply_geometry(
+                Some(&lumina_sidecar::Geometry {
+                    version: 1,
+                    crop: Some(lumina_sidecar::Crop::Free {
+                        x: 1.0 / 3.0,
+                        y: 0.0,
+                        width: 2.0 / 3.0,
+                        height: 1.0,
+                    }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: true,
+                    mirror_vertical: false,
                 }),
-                rotation_degrees: 0.0,
-                mirror_horizontal: true,
-                mirror_vertical: false,
-            })
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!((frame.width, frame.height), (2, 2));
         assert_eq!(
@@ -2038,6 +2382,183 @@ mod tests {
         assert_eq!((domain.output_width, domain.output_height), (2, 2));
         assert_eq!((domain.source_x, domain.source_y), (0.25, 0.0));
         assert_eq!((domain.source_width, domain.source_height), (0.5, 1.0));
+    }
+
+    fn test_perspective() -> lumina_sidecar::Perspective {
+        lumina_sidecar::Perspective {
+            version: 1,
+            vertical: 0.0,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        }
+    }
+
+    #[test]
+    fn perspective_identity_preserves_bytes_and_dimensions() {
+        let pixels = vec![
+            10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
+        ];
+        let mut rendered = ImageFrame::new(2, 2, pixels.clone()).unwrap();
+        let p = test_perspective();
+        rendered.apply_geometry(None, None, Some(&p)).unwrap();
+        assert_eq!((rendered.width, rendered.height), (2, 2));
+        assert_eq!(rendered.pixels, pixels);
+        let domain = rendered
+            .measurement_domain_with_perspective(None, None, Some(&p))
+            .unwrap();
+        assert_eq!((domain.output_width, domain.output_height), (2, 2));
+    }
+
+    #[test]
+    fn perspective_scale_two_doubles_bounding_box_and_projects_corners() {
+        let pixels = vec![10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255];
+        let mut rendered = ImageFrame::new(2, 2, pixels).unwrap();
+        let mut p = test_perspective();
+        p.scale = 2.0;
+        rendered.apply_geometry(None, None, Some(&p)).unwrap();
+        assert_eq!((rendered.width, rendered.height), (4, 4));
+        assert_eq!(rendered.pixels[0], 10);
+        assert_eq!(rendered.pixels[3 * 4], 20);
+        assert_eq!(rendered.pixels[(3 * 4) * rendered.width as usize], 30);
+        assert_eq!(rendered.pixels[((4 * rendered.width - 1) * 4) as usize], 40);
+        let domain = ImageFrame::new(2, 2, vec![0; 16])
+            .unwrap()
+            .measurement_domain_with_perspective(None, None, Some(&p))
+            .unwrap();
+        assert_eq!((domain.output_width, domain.output_height), (4, 4));
+    }
+
+    #[test]
+    fn perspective_shift_rotation_and_direction_change_rendered_geometry() {
+        let base =
+            ImageFrame::new(4, 2, (0..8).flat_map(|v| [v * 20, 100, 50, 255]).collect()).unwrap();
+        let mut shifted = base.clone();
+        let mut p = test_perspective();
+        p.shift_x = 0.5;
+        p.shift_y = -0.25;
+        shifted.apply_geometry(None, None, Some(&p)).unwrap();
+        assert_eq!((shifted.width, shifted.height), (4, 2));
+        assert_ne!(shifted.pixels, base.pixels);
+
+        let mut rotated = base.clone();
+        p = test_perspective();
+        p.rotation = 1.0;
+        rotated.apply_geometry(None, None, Some(&p)).unwrap();
+        assert!(rotated.width > base.width && rotated.height > base.height);
+
+        for (vertical, horizontal) in [(0.5, 0.0), (0.0, 0.5), (-0.5, 0.0), (0.0, -0.5)] {
+            let mut directional = base.clone();
+            p = test_perspective();
+            p.vertical = vertical;
+            p.horizontal = horizontal;
+            directional.apply_geometry(None, None, Some(&p)).unwrap();
+            assert!(directional.width >= base.width && directional.height >= base.height);
+        }
+    }
+
+    #[test]
+    fn perspective_combines_lens_then_perspective_then_crop_and_measurement() {
+        let mut frame =
+            ImageFrame::new(8, 4, (0..32).flat_map(|v| [v, 100, 50, 255]).collect()).unwrap();
+        let lens = lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(0.2),
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: Some(1.0),
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        let mut p = test_perspective();
+        p.scale = 2.0;
+        p.aspect_ratio = 0.5;
+        let geometry = lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Free {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        };
+        let expected = frame
+            .measurement_domain_with_perspective(Some(&geometry), Some(&lens), Some(&p))
+            .unwrap();
+        frame
+            .apply_geometry(Some(&geometry), Some(&lens), Some(&p))
+            .unwrap();
+        assert_eq!(
+            (frame.width, frame.height),
+            (expected.output_width, expected.output_height)
+        );
+        assert!(frame.pixels.iter().any(|&v| v != 0));
+    }
+
+    #[test]
+    fn lens_explicit_zero_overrides_profile_and_invalid_geometry_is_rejected() {
+        let source =
+            ImageFrame::new(5, 5, (0..25).flat_map(|v| [v * 7, 20, 30, 255]).collect()).unwrap();
+        let profile = lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: Some("wide-light".into()),
+            distortion_k1: None,
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        let mut explicit = profile.clone();
+        explicit.distortion_k1 = Some(0.0);
+        let mut a = source.clone();
+        let mut b = source.clone();
+        a.apply_geometry(None, Some(&profile), None).unwrap();
+        b.apply_geometry(None, Some(&explicit), None).unwrap();
+        assert_ne!(a.pixels, b.pixels);
+
+        for bad in [
+            lumina_sidecar::Perspective {
+                version: 2,
+                ..test_perspective()
+            },
+            lumina_sidecar::Perspective {
+                scale: f32::NAN,
+                ..test_perspective()
+            },
+        ] {
+            assert!(source
+                .clone()
+                .apply_geometry(None, None, Some(&bad))
+                .is_err());
+        }
+        let bad_lens = lumina_sidecar::LensCorrection {
+            distortion_k1: Some(1.1),
+            ..profile
+        };
+        assert!(source
+            .clone()
+            .apply_geometry(None, Some(&bad_lens), None)
+            .is_err());
+        let bad_ca = lumina_sidecar::LensCorrection {
+            ca_red: Some(f32::NAN),
+            ..bad_lens
+        };
+        assert!(source
+            .clone()
+            .apply_geometry(None, Some(&bad_ca), None)
+            .is_err());
     }
 
     #[test]
@@ -2114,7 +2635,9 @@ mod tests {
         };
         let mut quarter =
             ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
-        quarter.apply_geometry(&geometry(90.0)).unwrap();
+        quarter
+            .apply_geometry(Some(&geometry(90.0)), None, None)
+            .unwrap();
         assert_eq!((quarter.width, quarter.height), (2, 2));
         assert_eq!(
             quarter
@@ -2127,7 +2650,8 @@ mod tests {
         );
         let mut half =
             ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
-        half.apply_geometry(&geometry(180.0)).unwrap();
+        half.apply_geometry(Some(&geometry(180.0)), None, None)
+            .unwrap();
         assert_eq!((half.width, half.height), (2, 2));
         assert_eq!(
             half.pixels.iter().step_by(4).copied().collect::<Vec<_>>(),
@@ -2139,13 +2663,17 @@ mod tests {
     fn non_quarter_rotation_keeps_black_pixels_outside_non_square_source() {
         let mut frame = ImageFrame::new(3, 2, vec![255; 3 * 2 * 4]).unwrap();
         frame
-            .apply_geometry(&lumina_sidecar::Geometry {
-                version: 1,
-                crop: None,
-                rotation_degrees: 45.0,
-                mirror_horizontal: false,
-                mirror_vertical: false,
-            })
+            .apply_geometry(
+                Some(&lumina_sidecar::Geometry {
+                    version: 1,
+                    crop: None,
+                    rotation_degrees: 45.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!((frame.width, frame.height), (4, 4));
         for index in [0, 3, 12, 15] {
@@ -2165,7 +2693,9 @@ mod tests {
         let source =
             || ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
         let mut horizontal = source();
-        horizontal.apply_geometry(&geometry(true, false)).unwrap();
+        horizontal
+            .apply_geometry(Some(&geometry(true, false)), None, None)
+            .unwrap();
         assert_eq!(
             horizontal
                 .pixels
@@ -2176,7 +2706,9 @@ mod tests {
             vec![2, 1, 4, 3]
         );
         let mut vertical = source();
-        vertical.apply_geometry(&geometry(false, true)).unwrap();
+        vertical
+            .apply_geometry(Some(&geometry(false, true)), None, None)
+            .unwrap();
         assert_eq!(
             vertical
                 .pixels
@@ -2193,13 +2725,17 @@ mod tests {
         let frame = ImageFrame::new(4, 2, vec![7; 32]).unwrap();
         let mut unchanged = frame.clone();
         unchanged
-            .apply_geometry(&lumina_sidecar::Geometry {
-                version: 1,
-                crop: None,
-                rotation_degrees: 0.0,
-                mirror_horizontal: false,
-                mirror_vertical: false,
-            })
+            .apply_geometry(
+                Some(&lumina_sidecar::Geometry {
+                    version: 1,
+                    crop: None,
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(unchanged, frame);
         let identity = frame.measurement_domain(None).unwrap();

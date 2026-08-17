@@ -119,6 +119,8 @@ impl RenderKey {
         // Geometry is downstream of source-sized masks; keep it in the full
         // recipe hash but remove it from the mask identity.
         mask_recipe.geometry = None;
+        mask_recipe.lens_correction = None;
+        mask_recipe.perspective = None;
         for key in [
             "crop",
             "rotation",
@@ -422,5 +424,44 @@ mod tests {
             small.stage_digest(crate::cache::CacheStage::Preview),
             large.stage_digest(crate::cache::CacheStage::Preview)
         );
+    }
+
+    #[test]
+    fn lens_and_perspective_change_render_not_decode_or_mask_digest() {
+        let base = EditRecipe::default();
+        let mut changed = base.clone();
+        changed.lens_correction = Some(lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: Some("wide-light".into()),
+            distortion_k1: Some(0.0),
+            distortion_k2: Some(0.0),
+            distortion_k3: Some(0.0),
+            vignette_c0: Some(1.0),
+            vignette_c1: Some(0.0),
+            vignette_c2: Some(0.0),
+            ca_red: Some(0.0),
+            ca_blue: Some(0.0),
+        });
+        changed.perspective = Some(lumina_sidecar::Perspective {
+            version: 1,
+            vertical: 0.2,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        });
+        let a = RenderKey::new("s", "d", "p", "v", &base, vec![], "sRGB", 10, 10, "png");
+        let b = RenderKey::new("s", "d", "p", "v", &changed, vec![], "sRGB", 10, 10, "png");
+        assert_eq!(
+            a.stage_digest(crate::cache::CacheStage::Decode),
+            b.stage_digest(crate::cache::CacheStage::Decode)
+        );
+        assert_eq!(
+            a.stage_digest(crate::cache::CacheStage::Mask),
+            b.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        assert_ne!(a.digest(), b.digest());
     }
 }

@@ -207,6 +207,10 @@ pub struct EditRecipe {
     pub sharpening: Option<Sharpening>,
     /// Optional top-level geometric transform. Absent is the identity.
     pub geometry: Option<Geometry>,
+    /// Optional F-098 lens model, additive in schema v2.
+    pub lens_correction: Option<LensCorrection>,
+    /// Optional F-099 perspective model, additive in schema v2.
+    pub perspective: Option<Perspective>,
     pub options: BTreeMap<String, String>,
     pub auto_features: AutoFeatures,
     pub extras: Extras,
@@ -271,6 +275,18 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(geometry).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(lens) = &self.lens_correction {
+            root.insert(
+                "lens_correction".into(),
+                serde_json::to_value(lens).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(perspective) = &self.perspective {
+            root.insert(
+                "perspective".into(),
+                serde_json::to_value(perspective).map_err(serde::ser::Error::custom)?,
+            );
+        }
         root.insert("adjustments".into(), Value::Object(adjustment));
         root.insert(
             "options".into(),
@@ -306,6 +322,16 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut sharpening = None;
         let geometry = root
             .remove("geometry")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let lens_correction = root
+            .remove("lens_correction")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let perspective = root
+            .remove("perspective")
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
@@ -359,6 +385,8 @@ impl<'de> Deserialize<'de> for EditRecipe {
             noise_reduction,
             sharpening,
             geometry,
+            lens_correction,
+            perspective,
             options,
             auto_features,
             extras: root.into_iter().collect(),
@@ -476,6 +504,41 @@ pub struct Geometry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensCorrection {
+    pub version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distortion_k1: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distortion_k2: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distortion_k3: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vignette_c0: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vignette_c1: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vignette_c2: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_red: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_blue: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Perspective {
+    pub version: u8,
+    pub vertical: f32,
+    pub horizontal: f32,
+    pub rotation: f32,
+    pub scale: f32,
+    pub aspect_ratio: f32,
+    pub shift_x: f32,
+    pub shift_y: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum Crop {
     Aspect {
@@ -529,6 +592,8 @@ impl Default for EditRecipe {
             noise_reduction: None,
             sharpening: None,
             geometry: None,
+            lens_correction: None,
+            perspective: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),
@@ -1439,6 +1504,51 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    if let Some(l) = &a.lens_correction {
+        if l.version != 1 || l.profile.as_deref().is_some_and(|p| p.is_empty()) {
+            return invalid("invalid lens_correction version or profile");
+        }
+        if let Some(profile) = l.profile.as_deref() {
+            if !matches!(profile, "wide-light" | "tele-light" | "standard-neutral") {
+                return invalid("unknown lens correction profile");
+            }
+        }
+        for v in [
+            l.distortion_k1,
+            l.distortion_k2,
+            l.distortion_k3,
+            l.vignette_c0,
+            l.vignette_c1,
+            l.vignette_c2,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                return invalid("invalid lens correction coefficient");
+            }
+        }
+        for v in [l.ca_red, l.ca_blue].into_iter().flatten() {
+            if !v.is_finite() || !(-0.05..=0.05).contains(&v) {
+                return invalid("invalid chromatic aberration coefficient");
+            }
+        }
+    }
+    if let Some(p) = &a.perspective {
+        if p.version != 1 {
+            return invalid("unsupported perspective version");
+        }
+        for v in [p.vertical, p.horizontal, p.rotation, p.shift_x, p.shift_y] {
+            if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                return invalid("invalid perspective coefficient");
+            }
+        }
+        for (v, lo, hi) in [(p.scale, 0.1, 10.0), (p.aspect_ratio, 0.1, 10.0)] {
+            if !v.is_finite() || !(lo..=hi).contains(&v) {
+                return invalid("invalid perspective scale");
+            }
+        }
+    }
     Ok(())
 }
 fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
@@ -1601,6 +1711,8 @@ mod tests {
                 noise_reduction: None,
                 sharpening: None,
                 geometry: None,
+                lens_correction: None,
+                perspective: None,
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
@@ -1631,6 +1743,8 @@ mod tests {
                     noise_reduction: None,
                     sharpening: None,
                     geometry: None,
+                    lens_correction: None,
+                    perspective: None,
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
@@ -1660,6 +1774,8 @@ mod tests {
                 noise_reduction: None,
                 sharpening: None,
                 geometry: None,
+                lens_correction: None,
+                perspective: None,
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
@@ -2575,6 +2691,52 @@ mod tests {
             luminance: f32::NAN,
             color: 0.0,
         });
+        assert!(d.validate().is_err());
+    }
+    #[test]
+    fn lens_and_perspective_roundtrip_and_validation() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0]
+            .recipe
+            .options
+            .insert("render_profile".into(), "display-p3".into());
+        d.virtual_copies[0].recipe.lens_correction = Some(LensCorrection {
+            version: 1,
+            profile: Some("wide-light".into()),
+            distortion_k1: Some(0.0),
+            distortion_k2: Some(0.0),
+            distortion_k3: Some(0.0),
+            vignette_c0: Some(1.0),
+            vignette_c1: Some(0.0),
+            vignette_c2: Some(0.0),
+            ca_red: Some(0.0),
+            ca_blue: Some(0.0),
+        });
+        d.virtual_copies[0].recipe.perspective = Some(Perspective {
+            version: 1,
+            vertical: 0.2,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        });
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.virtual_copies[0].recipe, d.virtual_copies[0].recipe);
+        assert_eq!(
+            decoded.virtual_copies[0]
+                .recipe
+                .options
+                .get("render_profile"),
+            Some(&"display-p3".to_string())
+        );
+        d.virtual_copies[0]
+            .recipe
+            .lens_correction
+            .as_mut()
+            .unwrap()
+            .ca_red = Some(f32::NAN);
         assert!(d.validate().is_err());
     }
 }
