@@ -44,29 +44,19 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 1: Sidecar-Domain-Modell
 
-- [ ] **F-014** Regeln für Standardkopie, Umbenennen, Sortieren, Duplizieren,
-  Löschen und Wiederherstellen virtueller Kopien spezifizieren.
+(alle Punkte umgesetzt und verifiziert — 2026-08-17)
 
 ## Phase 2: Rezept, virtuelle Kopien und Migrationen
 
-- [ ] **F-019** Sidecar-Migrationen, unbekannte Felder, inkompatible Versionen
-  und Downgrade-Verhalten definieren.
-- [ ] **F-021** Atomare Schreibvorgänge, temporäre Dateien, Crash-Recovery und
-  parallele Schreibkonflikte implementieren und testen.
-- [ ] **F-023** Konfliktauflösung für extern veränderte Sidecars, verschobene
-  Originale, fehlende Artefakte und beschädigte JSON-Dateien implementieren.
+- [ ] **F-019** CLI `migrate_sidecar` (crates/lumina-cli/src/main.rs ~Z. 560) auf
+  `lumina_sidecar::migrate_sidecar_file` umstellen (`.bak`-Backup + Lock);
+  Verifikations-Hinweis: Library-Teil in `lumina-sidecar` ist verifiziert.
 
 ## Phase 3: Renderpipeline und Cache
 
-- [ ] **F-029** Sicherstellen, dass reine Crop-, UI- oder Ausgabeänderungen
-  keine unnötige RAW-Dekodierung oder AI-Inferenz auslösen.
-- [ ] **F-031** Determinismusregeln zwischen CPU, GPU und optionalen Backends
-  festlegen und durch Referenztests absichern.
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
-  Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen.
-- [ ] **F-086-N1** Test für partielle Vererbung von `.lumina/settings.json`
-  ergänzen: Kind-JSON mit nur einem gesetzten Feld erbt das andere Feld vom
-  Eltern-JSON (Code in `cache/disk.rs` implementiert das bereits korrekt).
+  Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
+  (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
 - [ ] **F-089** Gradationskurve mit Master- und getrennten RGB-Kanalkurven,
   monotoner Interpolation, Versionierung und Cache-Tests umsetzen.
 - [ ] **F-090** HSL/Farbmischer mit acht sRGB-Kanälen, Nachbargewichtung und
@@ -149,6 +139,8 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 
 ## Phase 8: Desktop-GUI
 
+- [ ] **F-100** UI-Konventionen für alle GUI-Arbeit verbindlich festlegen und
+  Lightroom-Desktop-Struktur, Regler- und Interaktionsregeln spezifizieren.
 - [ ] **F-088** Idle-Queue mit Opt-out für fehlende AI-Masken sowie Warnungen und
   `--update-masks`-Verhalten vor dem Export implementieren.
 - [ ] **F-061-N1** Roundtrip-Test für `set_mask_local_adjustment` ergänzen

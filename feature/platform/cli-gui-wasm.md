@@ -1,12 +1,14 @@
 # Plattformen und optionale Indizierung
 
-**Features:** F-006 Optionale DB, F-007 RAW-Import, F-010 CLI, GUI und WASM
+**Features:** F-006 Optionale DB, F-007 RAW-Import, F-010 CLI, GUI und WASM,
+F-100 Lightroom-UI-Konventionen
 
 ## Inhaltsverzeichnis
 
 - [Gemeinsame Grenze](#gemeinsame-grenze)
 - [CLI](#cli)
 - [Desktop-GUI](#desktop-gui)
+- [UI-Konventionen (F-100)](#ui-konventionen-f-100)
 - [WASM](#wasm)
 - [Optionale zentrale Indizierung](#optionale-zentrale-indizierung)
 - [Abnahme](#abnahme)
@@ -98,6 +100,82 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 
 Für v1 ist egui/eframe festgelegt. Tauri ist keine v1-Abhängigkeit und kann in
 einer späteren Architekturentscheidung erneut bewertet werden.
+
+## UI-Konventionen (F-100)
+
+Die Desktop-GUI folgt verbindlich den UI-Konventionen von **Lightroom Desktop**
+als Referenz. Diese Vorgaben beschreiben die Bedien- und Anordnungssemantik,
+nicht eine pixelgenaue Kopie der Adobe-Oberfläche. Abweichungen von den
+folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
+
+### Anordnung und Panelstruktur
+
+- Das Bearbeitungs- beziehungsweise Develop-Panel befindet sich auf der
+  rechten Seite. Seine Sektionen sind kollabierbar und heißen in der deutschen
+  UI **Grundtonung**, **Tonwertkurve**, **Farbe**, **Effekte**, **Details**,
+  **Optik**, **Geometrie** und **Maskierung**. Die englischen Lightroom-
+  Referenzbegriffe sind Basic, Tone Curve, Color, Effects, Detail, Optics,
+  Geometry und Masking.
+- Die Sektionen werden in dieser Reihenfolge angezeigt. Innerhalb der Sektionen
+  wird die Bearbeitungsreihenfolge der F-089–F-099-Unterstufen sichtbar und
+  verbindlich abgebildet: **globale Tonwerte** (Exposure, Contrast,
+  Highlights, Shadows, Whites, Blacks) → **Kurve** (F-089 Tone Curve) →
+  **HSL/Farbmischer** (F-090 HSL/Color Mixer) → **Color Grading** (F-091) →
+  **Präsenz** (F-094 Texture, Clarity, Dehaze) → **Dynamik/Sättigung** (F-092
+  Vibrance, Saturation) → **Schärfen** (F-095
+  Sharpening) → **Rauschreduzierung** (F-096 Noise Reduction) →
+  **Vignettierung/Körnung** (F-097 Vignette/Grain) →
+  **Objektivkorrektur** (F-098 Lens Correction) → **Perspektive** (F-099
+  Upright/Perspective) → **Crop/Zuschneiden** (F-093 Crop).
+- Diese visuelle Reihenfolge ist eine UI-Konvention und ändert nicht die
+  normative Renderreihenfolge der Pipeline, insbesondere die dort festgelegte
+  Reihenfolge von Rauschreduzierung und Schärfen.
+- Links nimmt Navigator und Vorschau den großen Arbeitsbereich ein. Am unteren
+  Rand befindet sich ein Filmstreifen mit Miniaturen als
+  Datei-Browser-Entsprechung. Diese beiden Bereiche sind beim Entwickeln
+  vorhanden; der Filmstreifen darf nicht durch eine reine Dateiliste ersetzt
+  werden.
+- Oben befinden sich die Modul-Leiste mit den Lightroom-Entsprechungen
+  **Bibliothek**, **Entwickeln** und **Exportieren** (Library, Develop,
+  Export) sowie das Histogramm. Das Histogramm bezieht sich auf den konkret
+  angezeigten Renderstand.
+
+### Regler und Standardinteraktionen
+
+- Jeder Bearbeitungsregler ist ein horizontaler Slider mit der Beschriftung
+  links und dem aktuellen Wert rechts. Die Wertebereichsanzeige ist am Regler
+  sichtbar.
+- Ein Doppelklick auf die Beschriftung setzt ausschließlich diesen Regler auf
+  seinen dokumentierten Standardwert zurück. Ein Doppelklick auf den Wert darf
+  nicht stattdessen das gesamte Rezept zurücksetzen.
+- Alt/Option-Scroll über einem Regler feinjustiert dessen Wert in kleineren
+  Schritten. Die normale Scroll-/Drag-Interaktion bleibt für die grobe
+  Einstellung erhalten.
+- Die Anzeige verwendet die Lightroom-konventionelle Skala, sofern die
+  jeweilige F-089–F-099-Spezifikation keine andere Domäne vorgibt. Für interne
+  Werte in `-1..=1` wird beispielsweise `-100..+100` angezeigt (etwa bei
+  Presence, HSL, Color Grading-Balance und Dynamik/Sättigung); Speicherung und
+  Pipelinevalidierung verwenden weiterhin die normativen internen Werte.
+- **Vorher/Nachher** (Before/After) ist als Umschaltaktion verfügbar und die
+  Standard-Tastenkombination ist `Y`. Der **Auto**-Button (Auto Tone) befindet
+  sich in der Sektion Grundtonung. Die Weißabgleich-Auswahl enthält eine
+  Pipette (White Balance Eyedropper), die einen Punkt aus Navigator oder
+  Vorschau übernimmt.
+
+### Maskierung
+
+Die Sektion **Maskierung** (Masking) enthält eine Liste der Masken und einen
+Button **Neu**. Nach dem Anlegen stehen die Werkzeuge **Pinsel**, **Verlauf**
+und **Radial** (Brush, Linear Gradient und Radial Gradient) zur Verfügung;
+ihre Prompt-/Koordinatensemantik muss F-079 und F-081 entsprechen.
+
+Die Auswahl einer Maske zeigt darunter im selben Panel deren lokale Regler,
+mindestens **Belichtung**, **Kontrast** sowie die jeweils unterstützten lokalen
+Tonwert-, Farb- und Präsenzregler. Lokale Regler erscheinen nicht in einem
+separaten, kontextlosen Dialog: Ihre Zugehörigkeit zur ausgewählten Maske muss
+im Panel sichtbar bleiben. Masken-Layer, Invertierung, Feathering, Blur und
+lokale Anpassungen werden entsprechend der virtuellen Kopie im deklarativen
+Rezept gespeichert.
 
 ## WASM
 

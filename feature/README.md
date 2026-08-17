@@ -61,14 +61,15 @@ Sidecars vollständig wiederherstellbar sein.
 ### Produktfunktionen
 
 - [`product/virtual-copies.md`](product/virtual-copies.md): virtuelle Kopien,
-  Identität, Rezepttrennung und geteilte Artefakte
+  Identität, Rezepttrennung, Standardkopie-Regeln (F-014) und geteilte Artefakte
 - [`product/ai-masks.md`](product/ai-masks.md): persistierte AI-Masken,
   Modellidentität, Status und lokale Anpassungen
 
 ### Plattformen
 
 - [`platform/cli-gui-wasm.md`](platform/cli-gui-wasm.md): CLI, Desktop-GUI,
-  WASM-Capabilities und optionale zentrale Indizierung
+  verbindliche Lightroom-UI-Konventionen (F-100), WASM-Capabilities und
+  optionale zentrale Indizierung
 
 ### Qualität
 
@@ -91,6 +92,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-010 | CLI, GUI und WASM | [Plattformen](platform/cli-gui-wasm.md) | hoch |
 | F-011 | Konflikt- und Releasequalität | [Qualität](quality/conflicts-and-acceptance.md) | hoch |
 | F-012 | Benutzergeführte Segmentierung | [AI-Masks](product/ai-masks.md) | hoch |
+| F-014 | Standardkopie-Regeln | [Virtual Copies](product/virtual-copies.md) | mittel |
 | F-089 | Gradationskurve | [Pipeline](architecture/pipeline.md) | mittel |
 | F-090 | HSL/Farbmischer | [Pipeline](architecture/pipeline.md) | mittel |
 | F-091 | Color Grading | [Pipeline](architecture/pipeline.md) | mittel |
@@ -102,6 +104,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-097 | Vignettierung und Körnung | [Pipeline](architecture/pipeline.md) | niedrig |
 | F-098 | Objektivkorrekturen | [Pipeline](architecture/pipeline.md) | hoch |
 | F-099 | Upright und Perspektive | [Pipeline](architecture/pipeline.md) | hoch |
+| F-100 | Lightroom-UI-Konventionen | [Plattformen](platform/cli-gui-wasm.md) | mittel |
 
 ## Arbeitsweise
 
