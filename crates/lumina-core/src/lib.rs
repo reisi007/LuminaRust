@@ -5,6 +5,9 @@ use lumina_sidecar::EditRecipe;
 use std::io::Cursor;
 use thiserror::Error;
 
+pub mod masks;
+pub use masks::{MaskError, MaskGraph, MaskPlane};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFileFormat {
     Png,

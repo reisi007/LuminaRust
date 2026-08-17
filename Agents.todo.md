@@ -151,8 +151,6 @@ außerhalb des Scopes.
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-044** Union, Intersect, Subtract und Invert als auswertbare Operatoren
-  auf dem bereits validierten Masken-DAG implementieren.
 - [ ] **F-047** Austauschbaren ONNX-Inferenzadapter mit BiRefNet als erstem
   automatischen Subject-Modell integrieren, ohne den WASM-kompatiblen Core zu
   belasten.

@@ -131,6 +131,19 @@ pub enum MaskStatus {
     Pending,
 }
 
+/// The operation performed by a mask definition. `Source` is the default so
+/// schema-1 definitions that predate operational masks remain readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MaskOperation {
+    #[default]
+    Source,
+    Union,
+    Intersect,
+    Subtract,
+    Invert,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaskDefinition {
     pub id: String,
@@ -149,6 +162,8 @@ pub struct MaskDefinition {
     pub generator_version: String,
     pub error_text: Option<String>,
     pub artifact: Option<ArtifactReference>,
+    #[serde(default)]
+    pub operation: MaskOperation,
     pub references: Vec<MaskReference>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
@@ -390,6 +405,21 @@ impl SidecarDocument {
                 if let Some(a) = &mask.artifact {
                     validate_artifact(a)?;
                 }
+                let arity_is_valid = match mask.operation {
+                    MaskOperation::Source => mask.references.is_empty(),
+                    MaskOperation::Invert => mask.references.len() == 1,
+                    MaskOperation::Subtract => mask.references.len() == 2,
+                    MaskOperation::Union | MaskOperation::Intersect => mask.references.len() >= 2,
+                };
+                if !arity_is_valid {
+                    return invalid(format!(
+                        "mask `{}/{}` operation `{}` has invalid input arity ({})",
+                        copy.id,
+                        mask.id,
+                        serde_json::to_string(&mask.operation).unwrap_or_default(),
+                        mask.references.len()
+                    ));
+                }
                 for reference in &mask.references {
                     validate_name("mask reference copy_id", &reference.copy_id)?;
                     validate_name("mask reference mask_id", &reference.mask_id)?;
@@ -624,6 +654,7 @@ mod tests {
             generator_version: "generator-1".into(),
             error_text: None,
             artifact: None,
+            operation: MaskOperation::Source,
             references: vec![],
             extras: Extras::new(),
         }
@@ -784,6 +815,29 @@ mod tests {
         assert!(out.contains("future_copy"));
         assert!(out.contains("\"future\": 42"));
     }
+
+    #[test]
+    fn schema_version_one_missing_operation_defaults_to_source() {
+        let mut document = SidecarDocument::new(source(), "pipeline-1");
+        document.virtual_copies[0].mask_library.push(mask("legacy"));
+        let mut value: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+        value["virtual_copies"][0]["mask_library"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("operation");
+
+        let legacy_json = serde_json::to_string(&value).unwrap();
+        let decoded = SidecarDocument::from_json(&legacy_json).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].mask_library[0].operation,
+            MaskOperation::Source
+        );
+        let roundtripped: Value = serde_json::from_str(&decoded.to_json().unwrap()).unwrap();
+        assert_eq!(
+            roundtripped["virtual_copies"][0]["mask_library"][0]["operation"],
+            "source"
+        );
+    }
     #[test]
     fn unsafe_paths_are_rejected() {
         for path in [
@@ -815,6 +869,8 @@ mod tests {
         let mut d = SidecarDocument::new(source(), "p");
         let mut a = mask("a");
         let mut b = mask("b");
+        a.operation = MaskOperation::Invert;
+        b.operation = MaskOperation::Invert;
         a.references.push(MaskReference {
             copy_id: "vc-original".into(),
             mask_id: "b".into(),
@@ -835,6 +891,7 @@ mod tests {
             .to_string()
             .contains("unknown mask"));
         d.virtual_copies[0].mask_library[0].references.clear();
+        d.virtual_copies[0].mask_library[0].operation = MaskOperation::Source;
         d.virtual_copies[0].mask_layers.push(MaskLayer {
             id: "layer".into(),
             mask: MaskReference {
@@ -861,6 +918,7 @@ mod tests {
             is_default: false,
             recipe: EditRecipe::default(),
             mask_library: vec![MaskDefinition {
+                operation: MaskOperation::Invert,
                 references: vec![MaskReference {
                     copy_id: "vc-original".into(),
                     mask_id: "source-mask".into(),
@@ -880,6 +938,7 @@ mod tests {
     fn cross_copy_mask_cycle_is_rejected() {
         let mut d = SidecarDocument::new(source(), "p");
         d.virtual_copies[0].mask_library.push(MaskDefinition {
+            operation: MaskOperation::Invert,
             references: vec![MaskReference {
                 copy_id: "vc-target".into(),
                 mask_id: "target-mask".into(),
@@ -893,6 +952,7 @@ mod tests {
             is_default: false,
             recipe: EditRecipe::default(),
             mask_library: vec![MaskDefinition {
+                operation: MaskOperation::Invert,
                 references: vec![MaskReference {
                     copy_id: "vc-original".into(),
                     mask_id: "source-mask".into(),
@@ -912,6 +972,7 @@ mod tests {
     fn direct_mask_self_reference_is_rejected() {
         let mut d = SidecarDocument::new(source(), "p");
         d.virtual_copies[0].mask_library.push(MaskDefinition {
+            operation: MaskOperation::Invert,
             references: vec![MaskReference {
                 copy_id: "vc-original".into(),
                 mask_id: "self".into(),
@@ -1031,6 +1092,7 @@ mod tests {
 
         let mut d = SidecarDocument::new(source(), "p");
         let mut referenced_mask = mask("referenced");
+        referenced_mask.operation = MaskOperation::Invert;
         referenced_mask.references.push(MaskReference {
             copy_id: "vc-original".into(),
             mask_id: "mask".into(),
@@ -1046,6 +1108,7 @@ mod tests {
 
         let mut d = SidecarDocument::new(source(), "p");
         let mut referenced_mask = mask("referenced");
+        referenced_mask.operation = MaskOperation::Invert;
         referenced_mask.references.push(MaskReference {
             copy_id: "vc-original".into(),
             mask_id: "mask".into(),

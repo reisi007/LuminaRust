@@ -52,6 +52,19 @@ Löschen der Quellkopie ungültig, werden Graphdefinitionen in die Zielbibliothe
 materialisiert. Identische binäre Payloads dürfen im `.zdata`-Container über
 ihren Content-Hash dedupliziert bleiben.
 
+### Auswertung
+
+Maskendefinitionen tragen in Schema 1 das optionale Feld `operation`; fehlt es,
+ist der serde-Default `source`. Eine Source-Maske hat keine Referenzen und wird
+mit einer bereitgestellten `uint16`-Fläche aus `.zdata` gespeist. `invert`
+benötigt genau eine Referenz, `union` und `intersect` mindestens zwei, und
+`subtract` genau zwei Referenzen (`a` zuerst, `b` danach). Alle Flächen müssen
+dieselbe Breite und Höhe besitzen. Pro Pixel gilt: Union ist `max`, Intersect
+ist `min`, Invert ist `65535 - value`, und Subtract ist
+`round(a * (1 - b / 65535))`, integer-sicher als
+`(a * (65535 - b) + 32767) / 65535` berechnet. Fehlende Payloads, Ziele und
+Zyklen sind Fehler; es gibt keine stillen Resizes oder leeren Fallbacks.
+
 ## Benutzergeführte Segmentierung
 
 Neben automatischer Subject-Segmentierung soll LuminaRust ein Objekt anhand
