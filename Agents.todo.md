@@ -77,10 +77,6 @@ Tests wird trotzdem umgesetzt.
   (crates/lumina-sidecar/src/lib.rs ~Z. 321-324) entfernen
   („legacy wrapper retained for source compatibility", nirgends verwendet;
   Verifikations-Befund B-2 aus F-089/F-090-Verifizierung).
-- [ ] **F-095** Lightroom-artiges Unsharp-Mask-Schärfen mit Luminanz-Maskierung
-  und skalierungsabhängigem Radius umsetzen.
-- [ ] **F-096** Manuelle Luminanz-/Farbrauschreduzierung vor dem Schärfen
-  umsetzen; KI-Denoise als spätere Option offenhalten.
 - [ ] **F-098** Manuelle Objektivkorrektur mit Radialmodell, Vignette und
   R-/B-Kanal-CA umsetzen; Lensfun nur als Post-MVP prüfen.
 - [ ] **F-099** Manuelle Upright-/Perspektivkorrektur als Homographie vor Crop
