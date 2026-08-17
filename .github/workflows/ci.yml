@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect Rust workspace
+    runs-on: ubuntu-latest
+    outputs:
+      has_cargo: ${{ steps.workspace.outputs.has_cargo }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect Cargo manifest
+        id: workspace
+        shell: bash
+        run: |
+          if [[ -f Cargo.toml ]]; then
+            echo "has_cargo=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_cargo=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  rust:
+    name: Rust checks
+    needs: detect
+    # The repository starts with architecture and feature documents. The Rust
+    # checks become active automatically once the Cargo workspace is present.
+    if: needs.detect.outputs.has_cargo == 'true'
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: "-D warnings"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  docs:
+    name: Documentation checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify required planning documents
+        run: |
+          test -f Agents.md
+          test -f Agents.todo.md
+          test -f feature/README.md
+          test -f feature/architecture/sidecar.md
+          test -f feature/architecture/pipeline.md
+          test -f feature/product/virtual-copies.md
+          test -f feature/product/ai-masks.md
+          test -f feature/platform/cli-gui-wasm.md
+          test -f feature/quality/conflicts-and-acceptance.md
+
+      - name: Validate workflow syntax
+        uses: raven-actions/actionlint@v2

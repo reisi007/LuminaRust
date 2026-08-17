@@ -1,0 +1,10 @@
+[package]
+name = "lumina-sidecar"
+version = "0.1.0"
+edition = "2021"
+description = "Typed, portable Lumina sidecar domain model"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

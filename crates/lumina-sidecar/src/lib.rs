@@ -1,0 +1,1008 @@
+//! Versioned, portable domain types for a Lumina sidecar.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
+
+pub const FORMAT: &str = "lumina-sidecar";
+pub const SCHEMA_VERSION: u32 = 1;
+pub type Extras = BTreeMap<String, Value>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecodeFingerprint {
+    pub decoder: String,
+    pub version: String,
+    pub parameters: BTreeMap<String, String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeometryFingerprint {
+    pub width: u32,
+    pub height: u32,
+    pub orientation: u8,
+    pub pixel_aspect_ratio: f32,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisFingerprint {
+    pub algorithm: String,
+    pub version: String,
+    pub input_fingerprint: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceFingerprint {
+    pub content_hash: String,
+    pub byte_length: u64,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceIdentity {
+    pub relative_name: String,
+    pub content_hash: String,
+    pub byte_length: u64,
+    pub modified_at: Option<String>,
+    pub raw_format: String,
+    pub orientation: u8,
+    pub decode_fingerprint: DecodeFingerprint,
+    pub geometry_fingerprint: GeometryFingerprint,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Photo {
+    pub source: SourceIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_fingerprint: Option<AnalysisFingerprint>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactReference {
+    pub relative_path: String,
+    pub format: String,
+    pub checksum: String,
+    pub width: u32,
+    pub height: u32,
+    pub channels: String,
+    pub data_version: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelIdentity {
+    pub name: String,
+    pub version: String,
+    pub hash: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Resolution {
+    pub width: u32,
+    pub height: u32,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Preprocessing {
+    pub name: String,
+    pub version: String,
+    pub parameters: BTreeMap<String, String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CoordinateSystem {
+    SourceOriented,
+    ModelInput,
+    Normalized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MaskStatus {
+    Valid,
+    Stale,
+    Missing,
+    Corrupt,
+    Pending,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaskDefinition {
+    pub id: String,
+    pub name: String,
+    pub source_fingerprint: SourceFingerprint,
+    pub decode_context: DecodeFingerprint,
+    pub geometry_context: GeometryFingerprint,
+    pub model: ModelIdentity,
+    pub inference_resolution: Resolution,
+    pub preprocessing: Preprocessing,
+    pub rescaling_method: String,
+    pub rescaling_parameters: BTreeMap<String, String>,
+    pub coordinate_system: CoordinateSystem,
+    pub status: MaskStatus,
+    pub created_at: String,
+    pub generator_version: String,
+    pub error_text: Option<String>,
+    pub artifact: Option<ArtifactReference>,
+    pub references: Vec<MaskReference>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaskReference {
+    pub copy_id: String,
+    pub mask_id: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaskLayer {
+    pub id: String,
+    pub mask: MaskReference,
+    pub inverted: bool,
+    pub feather: f32,
+    pub blur: f32,
+    pub density: f32,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditRecipe {
+    pub adjustments: BTreeMap<String, f64>,
+    pub options: BTreeMap<String, String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub id: String,
+    pub recipe: EditRecipe,
+    pub recorded_at: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Preset {
+    pub id: String,
+    pub name: String,
+    pub recipe: EditRecipe,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportRecord {
+    pub id: String,
+    pub relative_path: String,
+    pub format: String,
+    pub exported_at: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VirtualCopy {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+    pub recipe: EditRecipe,
+    pub mask_library: Vec<MaskDefinition>,
+    pub mask_layers: Vec<MaskLayer>,
+    pub history: Vec<HistoryEntry>,
+    pub export_records: Vec<ExportRecord>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SidecarDocument {
+    pub format: String,
+    pub schema_version: u32,
+    pub source: SourceIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_fingerprint: Option<AnalysisFingerprint>,
+    pub pipeline_version: String,
+    pub virtual_copies: Vec<VirtualCopy>,
+    pub presets: Vec<Preset>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum SidecarError {
+    #[error("invalid sidecar JSON: {0}")]
+    Json(String),
+    #[error("invalid sidecar: {0}")]
+    Invalid(String),
+}
+
+impl SidecarDocument {
+    pub fn new(source: SourceIdentity, pipeline_version: impl Into<String>) -> Self {
+        Self {
+            format: FORMAT.into(),
+            schema_version: SCHEMA_VERSION,
+            source,
+            analysis_fingerprint: None,
+            pipeline_version: pipeline_version.into(),
+            virtual_copies: vec![VirtualCopy {
+                id: "vc-original".into(),
+                name: "Original".into(),
+                is_default: true,
+                recipe: EditRecipe::default(),
+                mask_library: vec![],
+                mask_layers: vec![],
+                history: vec![],
+                export_records: vec![],
+                extras: Extras::new(),
+            }],
+            presets: vec![],
+            extras: Extras::new(),
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, SidecarError> {
+        self.validate()?;
+        serde_json::to_string_pretty(self).map_err(|e| SidecarError::Json(e.to_string()))
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, SidecarError> {
+        let document: Self =
+            serde_json::from_str(json).map_err(|e| SidecarError::Json(e.to_string()))?;
+        document.validate()?;
+        Ok(document)
+    }
+
+    pub fn validate(&self) -> Result<(), SidecarError> {
+        if self.format != FORMAT {
+            return invalid("format must be `lumina-sidecar`");
+        }
+        if self.schema_version != SCHEMA_VERSION {
+            return invalid("unsupported schema_version");
+        }
+        validate_name("pipeline_version", &self.pipeline_version)?;
+        validate_name("source.relative_name", &self.source.relative_name)?;
+        validate_relative_path("source.relative_name", &self.source.relative_name)?;
+        if !(1..=8).contains(&self.source.orientation) {
+            return invalid("source.orientation must be between 1 and 8");
+        }
+        if self.virtual_copies.is_empty() {
+            return invalid("at least one virtual copy is required");
+        }
+        let mut copy_ids = BTreeSet::new();
+        let mut defaults = 0;
+        for copy in &self.virtual_copies {
+            validate_name("virtual copy id", &copy.id)?;
+            validate_name("virtual copy name", &copy.name)?;
+            if !copy_ids.insert(&copy.id) {
+                return invalid(format!("duplicate virtual copy id `{}`", copy.id));
+            }
+            defaults += usize::from(copy.is_default);
+            let mut mask_ids = BTreeSet::new();
+            for mask in &copy.mask_library {
+                validate_name("mask id", &mask.id)?;
+                validate_name("mask name", &mask.name)?;
+                validate_name("mask rescaling_method", &mask.rescaling_method)?;
+                validate_name("mask generator_version", &mask.generator_version)?;
+                if !mask_ids.insert(&mask.id) {
+                    return invalid(format!(
+                        "duplicate mask id `{}` in copy `{}`",
+                        mask.id, copy.id
+                    ));
+                }
+                if let Some(a) = &mask.artifact {
+                    validate_artifact(a)?;
+                }
+                for reference in &mask.references {
+                    validate_name("mask reference copy_id", &reference.copy_id)?;
+                    validate_name("mask reference mask_id", &reference.mask_id)?;
+                }
+            }
+            for export in &copy.export_records {
+                validate_name("export id", &export.id)?;
+                validate_relative_path("export relative_path", &export.relative_path)?;
+                validate_name("export format", &export.format)?;
+            }
+            validate_unique_ids("mask layer", &copy.mask_layers, |layer| &layer.id)?;
+            validate_unique_ids("history entry", &copy.history, |entry| &entry.id)?;
+            validate_unique_ids("export record", &copy.export_records, |export| &export.id)?;
+            for layer in &copy.mask_layers {
+                validate_name("mask layer id", &layer.id)?;
+            }
+            for entry in &copy.history {
+                validate_name("history entry id", &entry.id)?;
+            }
+        }
+        validate_unique_ids("preset", &self.presets, |preset| &preset.id)?;
+        for preset in &self.presets {
+            validate_name("preset id", &preset.id)?;
+        }
+        for copy in &self.virtual_copies {
+            for layer in &copy.mask_layers {
+                let target = self
+                    .virtual_copies
+                    .iter()
+                    .find(|candidate| candidate.id == layer.mask.copy_id)
+                    .ok_or_else(|| {
+                        SidecarError::Invalid(format!(
+                            "mask layer `{}` references unknown copy `{}`",
+                            layer.id, layer.mask.copy_id
+                        ))
+                    })?;
+                if !target
+                    .mask_library
+                    .iter()
+                    .any(|mask| mask.id == layer.mask.mask_id)
+                {
+                    return invalid(format!(
+                        "mask layer `{}` references unknown mask `{}/{}`",
+                        layer.id, layer.mask.copy_id, layer.mask.mask_id
+                    ));
+                }
+            }
+        }
+        if defaults != 1 {
+            return invalid("exactly one default virtual copy is required");
+        }
+        if !self
+            .virtual_copies
+            .iter()
+            .any(|c| c.id == "vc-original" && c.is_default)
+        {
+            return invalid("`vc-original` must be the default virtual copy");
+        }
+        self.validate_mask_graph(&copy_ids)
+    }
+
+    fn validate_mask_graph(&self, copy_ids: &BTreeSet<&String>) -> Result<(), SidecarError> {
+        let mut nodes = BTreeSet::new();
+        let mut edges = BTreeMap::<(String, String), Vec<(String, String)>>::new();
+        for copy in &self.virtual_copies {
+            for mask in &copy.mask_library {
+                let node = (copy.id.clone(), mask.id.clone());
+                nodes.insert(node.clone());
+                for reference in &mask.references {
+                    edges
+                        .entry(node.clone())
+                        .or_default()
+                        .push((reference.copy_id.clone(), reference.mask_id.clone()));
+                }
+            }
+        }
+        for (from, targets) in &edges {
+            for target in targets {
+                if !copy_ids.contains(&target.0) || !nodes.contains(target) {
+                    return invalid(format!(
+                        "mask `{}/{}' references unknown mask `{}/{}`",
+                        from.0, from.1, target.0, target.1
+                    ));
+                }
+                if from == target {
+                    return invalid(format!("mask `{}/{}' references itself", from.0, from.1));
+                }
+            }
+        }
+        fn visit(
+            node: &(String, String),
+            edges: &BTreeMap<(String, String), Vec<(String, String)>>,
+            visiting: &mut BTreeSet<(String, String)>,
+            visited: &mut BTreeSet<(String, String)>,
+        ) -> Result<(), SidecarError> {
+            if visiting.contains(node) {
+                return invalid(format!(
+                    "mask graph contains a cycle at `{}/{}`",
+                    node.0, node.1
+                ));
+            }
+            if !visited.insert(node.clone()) {
+                return Ok(());
+            }
+            visiting.insert(node.clone());
+            if let Some(targets) = edges.get(node) {
+                for target in targets {
+                    visit(target, edges, visiting, visited)?;
+                }
+            }
+            visiting.remove(node);
+            Ok(())
+        }
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        for node in nodes {
+            visit(&node, &edges, &mut visiting, &mut visited)?;
+        }
+        Ok(())
+    }
+}
+
+fn invalid(message: impl Into<String>) -> Result<(), SidecarError> {
+    Err(SidecarError::Invalid(message.into()))
+}
+fn validate_name(field: &str, value: &str) -> Result<(), SidecarError> {
+    if value.trim().is_empty() {
+        invalid(format!("{field} must not be empty"))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_unique_ids<T>(
+    kind: &str,
+    values: &[T],
+    id: impl Fn(&T) -> &String,
+) -> Result<(), SidecarError> {
+    let mut ids = BTreeSet::new();
+    for value in values {
+        let value_id = id(value);
+        if !ids.insert(value_id) {
+            return invalid(format!("duplicate {kind} id `{value_id}`"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_relative_path(field: &str, value: &str) -> Result<(), SidecarError> {
+    if value.is_empty()
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.contains('\\')
+        || value.contains(':')
+        || value.starts_with("//")
+        || value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return invalid(format!("{field} must be a safe portable relative path"));
+    }
+    Ok(())
+}
+fn validate_artifact(a: &ArtifactReference) -> Result<(), SidecarError> {
+    validate_relative_path("artifact relative_path", &a.relative_path)?;
+    validate_name("artifact format", &a.format)?;
+    validate_name("artifact checksum", &a.checksum)?;
+    validate_name("artifact channels", &a.channels)?;
+    validate_name("artifact data_version", &a.data_version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn source() -> SourceIdentity {
+        SourceIdentity {
+            relative_name: "IMG_0001.ARW".into(),
+            content_hash: "sha256:x".into(),
+            byte_length: 42,
+            modified_at: None,
+            raw_format: "ARW".into(),
+            orientation: 1,
+            decode_fingerprint: DecodeFingerprint {
+                decoder: "test".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            geometry_fingerprint: GeometryFingerprint {
+                width: 10,
+                height: 20,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            extras: Extras::new(),
+        }
+    }
+    fn mask(id: &str) -> MaskDefinition {
+        MaskDefinition {
+            id: id.into(),
+            name: id.into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "sha256:x".into(),
+                byte_length: 42,
+                extras: Extras::new(),
+            },
+            decode_context: source().decode_fingerprint.clone(),
+            geometry_context: source().geometry_fingerprint.clone(),
+            model: ModelIdentity {
+                name: "model".into(),
+                version: "1".into(),
+                hash: "sha256:model".into(),
+                extras: Extras::new(),
+            },
+            inference_resolution: Resolution {
+                width: 10,
+                height: 20,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "standard".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "bilinear".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: MaskStatus::Valid,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            generator_version: "generator-1".into(),
+            error_text: None,
+            artifact: None,
+            references: vec![],
+            extras: Extras::new(),
+        }
+    }
+    #[test]
+    fn complete_roundtrip() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.analysis_fingerprint = Some(AnalysisFingerprint {
+            algorithm: "scene-analysis".into(),
+            version: "2.1".into(),
+            input_fingerprint: "sha256:analysis-input".into(),
+            extras: Extras::from([("analysis_extra".into(), Value::from(true))]),
+        });
+        d.extras
+            .insert("future_root".into(), Value::from("preserved"));
+
+        let mut source_mask = mask("a");
+        source_mask
+            .source_fingerprint
+            .extras
+            .insert("future_source_fingerprint".into(), Value::from(7));
+        source_mask
+            .decode_context
+            .parameters
+            .insert("quality".into(), "high".into());
+        source_mask.geometry_context.pixel_aspect_ratio = 1.25;
+        source_mask
+            .model
+            .extras
+            .insert("future_model".into(), Value::from("kept"));
+        source_mask.inference_resolution.width = 512;
+        source_mask
+            .preprocessing
+            .parameters
+            .insert("mean".into(), "0.5".into());
+        source_mask.rescaling_method = "lanczos".into();
+        source_mask
+            .rescaling_parameters
+            .insert("radius".into(), "3".into());
+        source_mask.coordinate_system = CoordinateSystem::Normalized;
+        source_mask.status = MaskStatus::Corrupt;
+        source_mask.created_at = "2026-02-03T04:05:06Z".into();
+        source_mask.generator_version = "segmenter-2.4".into();
+        source_mask.error_text = Some("model output checksum mismatch".into());
+        source_mask.artifact = Some(ArtifactReference {
+            relative_path: "masks/a.zdata".into(),
+            format: "zdata-mask".into(),
+            checksum: "sha256:artifact".into(),
+            width: 512,
+            height: 256,
+            channels: "f32".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        });
+        source_mask
+            .extras
+            .insert("future_mask".into(), Value::from("kept"));
+        d.virtual_copies[0].mask_library.push(source_mask);
+        d.virtual_copies.push(VirtualCopy {
+            id: "vc-bw".into(),
+            name: "B&W".into(),
+            is_default: false,
+            recipe: EditRecipe {
+                adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
+                options: BTreeMap::from([("profile".into(), "neutral".into())]),
+                extras: Extras::from([("future_recipe".into(), Value::from(42))]),
+            },
+            mask_library: vec![],
+            mask_layers: vec![MaskLayer {
+                id: "layer".into(),
+                mask: MaskReference {
+                    copy_id: "vc-original".into(),
+                    mask_id: "a".into(),
+                    extras: Extras::new(),
+                },
+                inverted: false,
+                feather: 0.0,
+                blur: 0.0,
+                density: 1.0,
+                extras: Extras::new(),
+            }],
+            history: vec![HistoryEntry {
+                id: "h".into(),
+                recipe: EditRecipe {
+                    adjustments: BTreeMap::from([("contrast".into(), -0.4)]),
+                    options: BTreeMap::from([("source".into(), "preset".into())]),
+                    extras: Extras::new(),
+                },
+                recorded_at: Some("2026-02-03T04:05:06Z".into()),
+                extras: Extras::from([("future_history".into(), Value::from(true))]),
+            }],
+            export_records: vec![ExportRecord {
+                id: "e".into(),
+                relative_path: "exports/out.jpg".into(),
+                format: "jpeg".into(),
+                exported_at: Some("2026-02-03T04:06:06Z".into()),
+                extras: Extras::from([("future_export".into(), Value::from("kept"))]),
+            }],
+            extras: Extras::from([("future_copy".into(), Value::from(true))]),
+        });
+        d.presets.push(Preset {
+            id: "preset-1".into(),
+            name: "Monochrome Contrast".into(),
+            recipe: EditRecipe {
+                adjustments: BTreeMap::from([("highlights".into(), -0.75)]),
+                options: BTreeMap::from([("curve".into(), "film".into())]),
+                extras: Extras::new(),
+            },
+            extras: Extras::new(),
+        });
+        let json = d.to_json().unwrap();
+        assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn empty_sidecar_roundtrip() {
+        let d = SidecarDocument::new(source(), "pipeline-1");
+        let json = d.to_json().unwrap();
+        assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn unknown_fields_roundtrip() {
+        let json = r#"{"format":"lumina-sidecar","schema_version":1,"pipeline_version":"p","source":{"relative_name":"x.raw","content_hash":"h","byte_length":1,"modified_at":null,"raw_format":"RAW","orientation":1,"decode_fingerprint":{"decoder":"d","version":"1","parameters":{}},"geometry_fingerprint":{"width":1,"height":1,"orientation":1,"pixel_aspect_ratio":1.0},"future":42},"virtual_copies":[{"id":"vc-original","name":"Original","is_default":true,"recipe":{"adjustments":{},"options":{}},"mask_library":[],"mask_layers":[],"history":[],"export_records":[],"future_copy":true}],"presets":[],"future_root":"kept"}"#;
+        let d = SidecarDocument::from_json(json).unwrap();
+        let out = d.to_json().unwrap();
+        assert!(out.contains("future_root"));
+        assert!(out.contains("future_copy"));
+        assert!(out.contains("\"future\": 42"));
+    }
+    #[test]
+    fn unsafe_paths_are_rejected() {
+        for path in [
+            "../outside",
+            "a/../../x",
+            "/tmp/x",
+            "C:\\x",
+            "C:/x",
+            "\\\\server\\share\\x",
+            "a\\b",
+            "a/./b",
+        ] {
+            let mut d = SidecarDocument::new(source(), "p");
+            d.source.relative_name = path.into();
+            assert!(d.validate().is_err(), "{path}");
+        }
+    }
+    #[test]
+    fn default_and_original_are_exact() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].id = "other".into();
+        assert!(d.validate().is_err());
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies.push(d.virtual_copies[0].clone());
+        assert!(d.validate().is_err());
+    }
+    #[test]
+    fn mask_cycles_and_invalid_targets_are_rejected() {
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut a = mask("a");
+        let mut b = mask("b");
+        a.references.push(MaskReference {
+            copy_id: "vc-original".into(),
+            mask_id: "b".into(),
+            extras: Extras::new(),
+        });
+        b.references.push(MaskReference {
+            copy_id: "vc-original".into(),
+            mask_id: "a".into(),
+            extras: Extras::new(),
+        });
+        d.virtual_copies[0].mask_library = vec![a, b];
+        let error = d.validate().unwrap_err().to_string();
+        assert!(error.contains("cycle"));
+        d.virtual_copies[0].mask_library[0].references[0].mask_id = "missing".into();
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("unknown mask"));
+        d.virtual_copies[0].mask_library[0].references.clear();
+        d.virtual_copies[0].mask_layers.push(MaskLayer {
+            id: "layer".into(),
+            mask: MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "missing".into(),
+                extras: Extras::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: Extras::new(),
+        });
+        assert!(d.validate().unwrap_err().to_string().contains("mask layer"));
+    }
+
+    #[test]
+    fn valid_cross_copy_mask_reference_is_accepted() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_library.push(mask("source-mask"));
+        d.virtual_copies.push(VirtualCopy {
+            id: "vc-target".into(),
+            name: "Target".into(),
+            is_default: false,
+            recipe: EditRecipe::default(),
+            mask_library: vec![MaskDefinition {
+                references: vec![MaskReference {
+                    copy_id: "vc-original".into(),
+                    mask_id: "source-mask".into(),
+                    extras: Extras::new(),
+                }],
+                ..mask("derived")
+            }],
+            mask_layers: vec![],
+            history: vec![],
+            export_records: vec![],
+            extras: Extras::new(),
+        });
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn cross_copy_mask_cycle_is_rejected() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_library.push(MaskDefinition {
+            references: vec![MaskReference {
+                copy_id: "vc-target".into(),
+                mask_id: "target-mask".into(),
+                extras: Extras::new(),
+            }],
+            ..mask("source-mask")
+        });
+        d.virtual_copies.push(VirtualCopy {
+            id: "vc-target".into(),
+            name: "Target".into(),
+            is_default: false,
+            recipe: EditRecipe::default(),
+            mask_library: vec![MaskDefinition {
+                references: vec![MaskReference {
+                    copy_id: "vc-original".into(),
+                    mask_id: "source-mask".into(),
+                    extras: Extras::new(),
+                }],
+                ..mask("target-mask")
+            }],
+            mask_layers: vec![],
+            history: vec![],
+            export_records: vec![],
+            extras: Extras::new(),
+        });
+        assert!(d.validate().unwrap_err().to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn direct_mask_self_reference_is_rejected() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_library.push(MaskDefinition {
+            references: vec![MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "self".into(),
+                extras: Extras::new(),
+            }],
+            ..mask("self")
+        });
+        let error = d.validate().unwrap_err().to_string();
+        assert!(error.contains("references itself"));
+    }
+
+    #[test]
+    fn mask_identity_fields_roundtrip() {
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut definition = mask("identity");
+        definition.rescaling_method = "lanczos".into();
+        definition
+            .rescaling_parameters
+            .insert("filter_radius".into(), "3".into());
+        definition.generator_version = "segmenter-2.4".into();
+        d.virtual_copies[0].mask_library.push(definition);
+        let json = d.to_json().unwrap();
+        assert!(json.contains("rescaling_method"));
+        assert!(json.contains("generator_version"));
+        assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn collection_ids_must_be_nonempty_and_unique() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.presets = vec![
+            Preset {
+                id: "preset".into(),
+                name: "One".into(),
+                recipe: EditRecipe::default(),
+                extras: Extras::new(),
+            },
+            Preset {
+                id: "preset".into(),
+                name: "Two".into(),
+                recipe: EditRecipe::default(),
+                extras: Extras::new(),
+            },
+        ];
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate preset id"));
+
+        d.presets.clear();
+        d.virtual_copies[0].mask_library.push(mask("layer-mask"));
+        let layer = MaskLayer {
+            id: "layer".into(),
+            mask: MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "layer-mask".into(),
+                extras: Extras::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: Extras::new(),
+        };
+        d.virtual_copies[0].mask_layers = vec![layer.clone(), layer];
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate mask layer id"));
+
+        d.virtual_copies[0].mask_layers.clear();
+        let history = HistoryEntry {
+            id: "history".into(),
+            recipe: EditRecipe::default(),
+            recorded_at: None,
+            extras: Extras::new(),
+        };
+        d.virtual_copies[0].history = vec![history.clone(), history];
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate history entry id"));
+
+        d.virtual_copies[0].history.clear();
+        let export = ExportRecord {
+            id: "export".into(),
+            relative_path: "exports/out.jpg".into(),
+            format: "jpeg".into(),
+            exported_at: None,
+            extras: Extras::new(),
+        };
+        d.virtual_copies[0].export_records = vec![export.clone(), export];
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate export record id"));
+    }
+
+    #[test]
+    fn ids_must_be_nonempty() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].id.clear();
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("virtual copy id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_library.push(mask("mask"));
+        d.virtual_copies[0].mask_library[0].id.clear();
+        assert!(d.validate().unwrap_err().to_string().contains("mask id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut referenced_mask = mask("referenced");
+        referenced_mask.references.push(MaskReference {
+            copy_id: "vc-original".into(),
+            mask_id: "mask".into(),
+            extras: Extras::new(),
+        });
+        referenced_mask.references[0].copy_id.clear();
+        d.virtual_copies[0].mask_library.push(referenced_mask);
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("mask reference copy_id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut referenced_mask = mask("referenced");
+        referenced_mask.references.push(MaskReference {
+            copy_id: "vc-original".into(),
+            mask_id: "mask".into(),
+            extras: Extras::new(),
+        });
+        referenced_mask.references[0].mask_id.clear();
+        d.virtual_copies[0].mask_library.push(referenced_mask);
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("mask reference mask_id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_layers.push(MaskLayer {
+            id: String::new(),
+            mask: MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "mask".into(),
+                extras: Extras::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: Extras::new(),
+        });
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("mask layer id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].history.push(HistoryEntry {
+            id: String::new(),
+            recipe: EditRecipe::default(),
+            recorded_at: None,
+            extras: Extras::new(),
+        });
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("history entry id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].export_records.push(ExportRecord {
+            id: String::new(),
+            relative_path: "exports/out.jpg".into(),
+            format: "jpeg".into(),
+            exported_at: None,
+            extras: Extras::new(),
+        });
+        assert!(d.validate().unwrap_err().to_string().contains("export id"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        d.presets.push(Preset {
+            id: String::new(),
+            name: "Preset".into(),
+            recipe: EditRecipe::default(),
+            extras: Extras::new(),
+        });
+        assert!(d.validate().unwrap_err().to_string().contains("preset id"));
+    }
+}

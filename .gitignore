@@ -1,0 +1,26 @@
+# Rust build output
+/target/
+
+# Local Rust tooling
+/.cargo/
+
+# IDE and editor files
+/.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Lumina local index and generated cache
+*.lumina-index.sqlite
+*.lumina-index.sqlite-*
+*.lumina-cache/
+.lumina/
+
+# OS files
+.DS_Store
+Thumbs.db
