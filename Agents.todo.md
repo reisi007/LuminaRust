@@ -40,16 +40,7 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 0: Zielzustand und Architektur
 
-- [ ] **F-005** Arbeitsfarbraum, Pipeline-Reihenfolge, Bit-Tiefen, Clipping,
-  Transferfunktionen und Farbprofilstrategie normativ spezifizieren.
-- [ ] **F-006** Native-, Desktop- und WASM-Capability-Matrix erstellen.
-- [ ] **F-007** RAW-Backend, ONNX-Backend, GUI-Framework und Lizenzbedingungen
-  bewerten und jeweils eine begründete Entscheidung treffen.
-- [ ] **F-008** Workspace-Struktur um ein verpflichtendes
-  `lumina-sidecar`-Modul und gegebenenfalls ein getrenntes optionales
-  Index-Modul ergänzen.
-- [ ] **F-009** ADR-Struktur und Entscheidungsworkflow für spätere Änderungen
-  an Schema, Pipeline und Plattformgrenzen einrichten.
+(alle Punkte umgesetzt und verifiziert — 2026-08-17)
 
 ## Phase 1: Sidecar-Domain-Modell
 
@@ -136,12 +127,8 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 
 ## Phase 8: Desktop-GUI
 
-- [ ] **F-058** Datei-Browser mit Sidecar-Status, Offline-Status,
-  Konfliktstatus und virtuellen Kopien implementieren.
 - [ ] **F-061** Maskenwerkzeuge für Auswahl, Benennung, Invertierung,
   Feathering, lokale Anpassungen, Speichern und Neuberechnung implementieren.
-- [ ] **F-063** GUI-Tests für Sidecar-Schreiben, Wiederöffnen, Kopien und
-  fehlende Maskenmodelle ergänzen.
 - [ ] **F-088** Idle-Queue mit Opt-out für fehlende AI-Masken sowie Warnungen und
   `--update-masks`-Verhalten vor dem Export implementieren.
 
