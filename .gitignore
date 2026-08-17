@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+/crates/lumina-gui/dist/
 
 # Local Rust tooling
 /.cargo/

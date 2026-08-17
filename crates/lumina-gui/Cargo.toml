@@ -1,0 +1,20 @@
+[package]
+name = "lumina-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Native and WASM Lumina raster preview GUI"
+
+[dependencies]
+blake3 = "1"
+eframe = { version = "0.31", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }
+lumina-core = { path = "../lumina-core" }
+lumina-sidecar = { path = "../lumina-sidecar" }
+thiserror = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = "0.15"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["console", "Document", "HtmlCanvasElement", "Window"] }

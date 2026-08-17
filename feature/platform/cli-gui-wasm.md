@@ -82,6 +82,25 @@ browserfähig.
 
 Eine Capability-Matrix dokumentiert native CLI, Desktop und Browser getrennt.
 
+### Erster visueller User-Test
+
+Das gemeinsame `lumina-gui`-Crate verwendet eframe nativ und als Trunk-WASM-
+App. Die reproduzierbaren MVP-Befehle sind:
+
+```bash
+cargo run -p lumina-gui
+cd crates/lumina-gui
+trunk serve
+trunk build --release
+```
+
+Die Oberfläche lädt PNG, JPEG und WebP nativ per Pfad oder auf beiden Plattformen
+per Drag-and-drop. Preview, Exposure (`-10..=10`) und Contrast (`-1..=1`) laufen
+über `lumina-core::ImageFrame` und `lumina-sidecar::EditRecipe`. Native Sidecars
+werden neben dem Original gespeichert; Browser-Dateispeichern ist im MVP noch
+nicht implementiert. RAW, ONNX, Masken, Cache und Mehrbild-Synchronisierung
+bleiben ausdrücklich offen.
+
 ## Optionale zentrale Indizierung
 
 Die DB darf nur Pfade, Quellhashes, Metadaten, Sidecarstatus, Jobstatus,

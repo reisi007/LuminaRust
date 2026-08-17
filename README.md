@@ -31,8 +31,9 @@ Das Repository befindet sich in der frühen Implementierungsphase. Der
 Workspace enthält einen portablen Rasterbild-MVP: PNG/JPEG/WebP werden über
 `lumina-core` dekodiert, mit Exposure/Contrast bearbeitet und exportiert.
 `lumina-sidecar` persistiert Rezepte atomar als JSON; `lumina-cli` bietet dafür
-`process` und `inspect`. RAW, ONNX, GUI, Maskenpayloads, Migrationen und Cache
-sind weiterhin offen. Die Feature-SOLL-Dokumentation bleibt vor jeder weiteren
+`process` und `inspect`. Der erste gemeinsame Desktop-/WASM-User-Test ist als
+`lumina-gui` verfügbar. RAW, ONNX, Maskenpayloads, Migrationen, Cache und
+Mehrbild-Synchronisierung sind weiterhin offen. Die Feature-SOLL-Dokumentation bleibt vor jeder weiteren
 Implementierung die verbindliche Zieldefinition.
 
 ## Dokumentation
@@ -126,6 +127,20 @@ cargo run -p lumina-cli -- process --input photo.png --output edited.webp \
   --exposure 0.5 --contrast 0.2
 cargo run -p lumina-cli -- inspect photo.png
 ```
+
+Der erste GUI-User-Test läuft nativ oder im Browser:
+
+```bash
+cargo run -p lumina-gui
+cd crates/lumina-gui
+trunk serve
+trunk build --release
+```
+
+Die native GUI liest PNG/JPEG/WebP über einen lokalen Pfad oder Drag-and-drop
+und speichert das Rezept als `<original>.lumina.json`. Im Browser werden Bilder
+über Drag-and-drop geladen; Browser-Dateispeichern ist im MVP noch nicht
+implementiert.
 
 RAW-Endungen werden ausdrücklich abgelehnt; dieser MVP macht kein RAW-Versprechen.
 
