@@ -199,6 +199,9 @@ pub struct EditRecipe {
     pub adjustments: BTreeMap<String, f64>,
     pub curves: Option<Curves>,
     pub hsl: Option<HslAdjustments>,
+    /// Pre-MVP schema decision: these optional fields are additive in schema v2;
+    /// absent values remain identity and require no migration.
+    pub color_grading: Option<ColorGrading>,
     pub options: BTreeMap<String, String>,
     pub auto_features: AutoFeatures,
     pub extras: Extras,
@@ -233,6 +236,12 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(hsl).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(color_grading) = &self.color_grading {
+            adjustment.insert(
+                "color_grading".into(),
+                serde_json::to_value(color_grading).map_err(serde::ser::Error::custom)?,
+            );
+        }
         root.insert("adjustments".into(), Value::Object(adjustment));
         root.insert(
             "options".into(),
@@ -262,12 +271,17 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut adjustments = BTreeMap::new();
         let mut curves = None;
         let mut hsl = None;
+        let mut color_grading = None;
         if let Some(Value::Object(mut object)) = root.remove("adjustments") {
             if let Some(value) = object.remove("curves") {
                 curves = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
             if let Some(value) = object.remove("hsl") {
                 hsl = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
+            if let Some(value) = object.remove("color_grading") {
+                color_grading =
+                    Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
             for (key, value) in object {
                 adjustments.insert(
@@ -293,6 +307,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             adjustments,
             curves,
             hsl,
+            color_grading,
             options,
             auto_features,
             extras: root.into_iter().collect(),
@@ -358,6 +373,21 @@ pub struct HslChannel {
     pub luminance: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ColorGradingRange {
+    pub hue_degrees: f32,
+    pub saturation: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColorGrading {
+    pub version: u8,
+    pub shadows: ColorGradingRange,
+    pub midtones: ColorGradingRange,
+    pub highlights: ColorGradingRange,
+    pub balance: f32,
+}
+
 fn default_recipe_version() -> String {
     "1".into()
 }
@@ -369,6 +399,7 @@ impl Default for EditRecipe {
             adjustments: BTreeMap::new(),
             curves: None,
             hsl: None,
+            color_grading: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),
@@ -1148,7 +1179,8 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         let (lo, hi) = match name.as_str() {
             "exposure" => (-10.0, 10.0),
             "wb_temperature" => (1500.0, 12000.0),
-            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint" => (-1.0, 1.0),
+            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
+            | "vibrance" | "saturation" => (-1.0, 1.0),
             _ => continue,
         };
         if !value.is_finite() || !(*value >= lo && *value <= hi) {
@@ -1190,6 +1222,26 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
                 if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
                     return invalid(format!("invalid hsl {name}.{field}"));
                 }
+            }
+        }
+    }
+    if let Some(c) = &a.color_grading {
+        if c.version != 1 {
+            return invalid("unsupported color_grading version");
+        }
+        if !c.balance.is_finite() || !(-1.0..=1.0).contains(&c.balance) {
+            return invalid("invalid color_grading balance");
+        }
+        for (name, range) in [
+            ("shadows", c.shadows),
+            ("midtones", c.midtones),
+            ("highlights", c.highlights),
+        ] {
+            if !range.hue_degrees.is_finite() || !(0.0..=360.0).contains(&range.hue_degrees) {
+                return invalid(format!("invalid color_grading {name}.hue_degrees"));
+            }
+            if !range.saturation.is_finite() || !(0.0..=1.0).contains(&range.saturation) {
+                return invalid(format!("invalid color_grading {name}.saturation"));
             }
         }
     }
@@ -1350,6 +1402,7 @@ mod tests {
                 adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
                 curves: None,
                 hsl: None,
+                color_grading: None,
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
@@ -1375,6 +1428,7 @@ mod tests {
                     adjustments: BTreeMap::from([("contrast".into(), -0.4)]),
                     curves: None,
                     hsl: None,
+                    color_grading: None,
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
@@ -1399,6 +1453,7 @@ mod tests {
                 adjustments: BTreeMap::from([("highlights".into(), -0.75)]),
                 curves: None,
                 hsl: None,
+                color_grading: None,
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
@@ -1971,6 +2026,32 @@ mod tests {
         let encoded = serde_json::to_value(&recipe).unwrap();
         assert_eq!(encoded["adjustments"]["exposure"], 1.5);
         assert!(encoded["adjustments"].get("curves").is_none());
+    }
+
+    #[test]
+    fn color_grading_roundtrips_as_nested_adjustment() {
+        let recipe = EditRecipe {
+            color_grading: Some(ColorGrading {
+                version: 1,
+                shadows: ColorGradingRange {
+                    hue_degrees: 360.0,
+                    saturation: 0.5,
+                },
+                midtones: ColorGradingRange {
+                    hue_degrees: 120.0,
+                    saturation: 0.25,
+                },
+                highlights: ColorGradingRange {
+                    hue_degrees: 240.0,
+                    saturation: 0.75,
+                },
+                balance: -0.2,
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        assert!(value["adjustments"]["color_grading"].is_object());
+        assert_eq!(recipe, serde_json::from_value(value).unwrap());
     }
 
     #[test]

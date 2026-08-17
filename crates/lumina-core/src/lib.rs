@@ -201,9 +201,8 @@ impl ImageFrame {
         for (key, value) in &recipe.adjustments {
             let (minimum, maximum) = match key.as_str() {
                 "exposure" => (-10.0, 10.0),
-                "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint" => {
-                    (-1.0, 1.0)
-                }
+                "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
+                | "vibrance" | "saturation" => (-1.0, 1.0),
                 "wb_temperature" => (1500.0, 12000.0),
                 _ => return Err(CoreError::UnsupportedAdjustment { key: key.clone() }),
             };
@@ -331,6 +330,16 @@ impl ImageFrame {
         if let Some(hsl) = &recipe.hsl {
             apply_hsl(&mut self.pixels, hsl)?;
         }
+        // F-092 deliberately follows HSL: vibrance is the selective operation,
+        // then global saturation scales the resulting HSL saturation.
+        apply_presence(
+            &mut self.pixels,
+            recipe.adjustments.get("vibrance"),
+            recipe.adjustments.get("saturation"),
+        );
+        if let Some(color_grading) = &recipe.color_grading {
+            apply_color_grading(&mut self.pixels, color_grading);
+        }
         Ok(())
     }
 }
@@ -395,6 +404,47 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
                         });
                     }
                 }
+            }
+        }
+    }
+
+    if let Some(c) = &recipe.color_grading {
+        if c.version != 1 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "color_grading.version".into(),
+                value: c.version as f64,
+                minimum: 1.0,
+                maximum: 1.0,
+            });
+        }
+        if !c.balance.is_finite() || !(-1.0..=1.0).contains(&c.balance) {
+            return Err(CoreError::InvalidAdjustment {
+                name: "color_grading.balance".into(),
+                value: c.balance as f64,
+                minimum: -1.0,
+                maximum: 1.0,
+            });
+        }
+        for (name, range) in [
+            ("shadows", c.shadows),
+            ("midtones", c.midtones),
+            ("highlights", c.highlights),
+        ] {
+            if !range.hue_degrees.is_finite() || !(0.0..=360.0).contains(&range.hue_degrees) {
+                return Err(CoreError::InvalidAdjustment {
+                    name: format!("color_grading.{name}.hue_degrees"),
+                    value: range.hue_degrees as f64,
+                    minimum: 0.0,
+                    maximum: 360.0,
+                });
+            }
+            if !range.saturation.is_finite() || !(0.0..=1.0).contains(&range.saturation) {
+                return Err(CoreError::InvalidAdjustment {
+                    name: format!("color_grading.{name}.saturation"),
+                    value: range.saturation as f64,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                });
             }
         }
     }
@@ -552,6 +602,89 @@ fn apply_hsl(pixels: &mut [u8], h: &lumina_sidecar::HslAdjustments) -> Result<()
     }
     Ok(())
 }
+
+fn apply_presence(pixels: &mut [u8], vibrance: Option<&f64>, saturation: Option<&f64>) {
+    if vibrance.is_none() && saturation.is_none() {
+        return;
+    }
+    let vibrance = vibrance.copied().unwrap_or(0.0) as f32;
+    let saturation = saturation.copied().unwrap_or(0.0) as f32;
+    for px in pixels.chunks_exact_mut(4) {
+        let (hue, mut sat, lightness) = rgb_to_hsl(
+            px[0] as f32 / 255.0,
+            px[1] as f32 / 255.0,
+            px[2] as f32 / 255.0,
+        );
+        if vibrance != 0.0 {
+            // Skin protection is 0 in the soft core [15°,55°], ramps linearly
+            // to 1 in [5°,15°] and [55°,65°], and is 1 outside those ramps.
+            let skin_protection = if !(5.0..=65.0).contains(&hue) {
+                1.0
+            } else if hue < 15.0 {
+                (15.0 - hue) / 10.0
+            } else if hue <= 55.0 {
+                0.0
+            } else {
+                (hue - 55.0) / 10.0
+            };
+            // The low-saturation factor protects already vivid colours. For a
+            // negative value, multiplying by sat also avoids a linear desaturator.
+            let protection = (1.0 - sat) * skin_protection;
+            let direction_weight = if vibrance >= 0.0 { 1.0 - sat } else { sat };
+            sat = (sat + vibrance * protection * direction_weight).clamp(0.0, 1.0);
+        }
+        sat = (sat * (1.0 + saturation)).clamp(0.0, 1.0);
+        let rgb = hsl_to_rgb(hue, sat, lightness);
+        px[0] = (rgb[0] * 255.0).round() as u8;
+        px[1] = (rgb[1] * 255.0).round() as u8;
+        px[2] = (rgb[2] * 255.0).round() as u8;
+    }
+}
+
+fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading) {
+    // Positive balance moves both transition points downward (0.15 max): the
+    // highlight region expands toward shadows, matching Lightroom's direction.
+    let shadow_edge = 0.65 - grading.balance * 0.15;
+    let highlight_edge = 0.35 - grading.balance * 0.15;
+    let smooth = |edge: f32, value: f32| {
+        let t = (value / edge).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    };
+    for px in pixels.chunks_exact_mut(4) {
+        let rgb = [
+            px[0] as f32 / 255.0,
+            px[1] as f32 / 255.0,
+            px[2] as f32 / 255.0,
+        ];
+        let luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        let shadow = smooth(shadow_edge, luminance);
+        let highlight = {
+            let t = ((luminance - highlight_edge) / (1.0 - highlight_edge)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let midtone = (1.0 - shadow - highlight).max(0.0);
+        let sum = shadow + midtone + highlight;
+        let weights = [shadow / sum, midtone / sum, highlight / sum];
+        let ranges = [grading.shadows, grading.midtones, grading.highlights];
+        let mut output = rgb;
+        for (weight, range) in weights.into_iter().zip(ranges) {
+            if range.saturation == 0.0 || weight == 0.0 {
+                continue;
+            }
+            // Tint is the fully saturated HSL colour at L=0.5. Mixing is
+            // channel-wise: x' = x + (tint - x) * weight * saturation.
+            let tint = hsl_to_rgb(range.hue_degrees.rem_euclid(360.0), 1.0, 0.5);
+            let amount = weight * range.saturation;
+            for channel in 0..3 {
+                output[channel] += (tint[channel] - output[channel]) * amount;
+            }
+        }
+        for channel in 0..3 {
+            px[channel] = (output[channel].clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+}
+
 fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
@@ -928,6 +1061,105 @@ mod tests {
             };
             assert!(matches!(
                 frame.apply_recipe(&recipe),
+                Err(CoreError::InvalidAdjustment { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn vibrance_and_saturation_preserve_alpha_and_have_identity() {
+        let original = ImageFrame::new(2, 1, vec![80, 140, 210, 7, 220, 80, 80, 19]).unwrap();
+        let mut identity = original.clone();
+        identity.apply_recipe(&recipe(&[])).unwrap();
+        assert_eq!(identity, original);
+        let mut adjusted = original.clone();
+        adjusted
+            .apply_recipe(&recipe(&[("vibrance", 0.5), ("saturation", 0.25)]))
+            .unwrap();
+        assert_eq!(&adjusted.pixels[3..4], &[7]);
+        assert_eq!(&adjusted.pixels[7..8], &[19]);
+        assert_ne!(&adjusted.pixels[..3], &original.pixels[..3]);
+    }
+
+    #[test]
+    fn color_grading_accepts_cyclic_hue_and_preserves_alpha() {
+        let range = |hue_degrees| lumina_sidecar::ColorGradingRange {
+            hue_degrees,
+            saturation: 0.7,
+        };
+        let grading = lumina_sidecar::ColorGrading {
+            version: 1,
+            shadows: range(360.0),
+            midtones: range(120.0),
+            highlights: range(240.0),
+            balance: 0.0,
+        };
+        let mut a = ImageFrame::new(1, 1, vec![30, 40, 50, 13]).unwrap();
+        let mut b = a.clone();
+        let mut zero = grading.clone();
+        zero.shadows.hue_degrees = 0.0;
+        a.apply_recipe(&EditRecipe {
+            color_grading: Some(grading),
+            ..Default::default()
+        })
+        .unwrap();
+        b.apply_recipe(&EditRecipe {
+            color_grading: Some(zero),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(a.pixels, b.pixels);
+        assert_eq!(a.pixels[3], 13);
+    }
+
+    #[test]
+    fn color_grading_rejects_invalid_fields() {
+        let base = lumina_sidecar::ColorGradingRange {
+            hue_degrees: 0.0,
+            saturation: 0.0,
+        };
+        for grading in [
+            lumina_sidecar::ColorGrading {
+                version: 2,
+                shadows: base,
+                midtones: base,
+                highlights: base,
+                balance: 0.0,
+            },
+            lumina_sidecar::ColorGrading {
+                version: 1,
+                shadows: lumina_sidecar::ColorGradingRange {
+                    hue_degrees: 361.0,
+                    ..base
+                },
+                midtones: base,
+                highlights: base,
+                balance: 0.0,
+            },
+            lumina_sidecar::ColorGrading {
+                version: 1,
+                shadows: lumina_sidecar::ColorGradingRange {
+                    saturation: 1.1,
+                    ..base
+                },
+                midtones: base,
+                highlights: base,
+                balance: 0.0,
+            },
+            lumina_sidecar::ColorGrading {
+                version: 1,
+                shadows: base,
+                midtones: base,
+                highlights: base,
+                balance: 1.1,
+            },
+        ] {
+            let mut frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+            assert!(matches!(
+                frame.apply_recipe(&EditRecipe {
+                    color_grading: Some(grading),
+                    ..Default::default()
+                }),
                 Err(CoreError::InvalidAdjustment { .. })
             ));
         }
