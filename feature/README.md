@@ -55,7 +55,8 @@ Sidecars vollständig wiederherstellbar sein.
 - [`architecture/sidecar.md`](architecture/sidecar.md): Sidecar-Bundle,
   Manifest, Persistenz, Migration und Dateisicherheit
 - [`architecture/pipeline.md`](architecture/pipeline.md): Renderpipeline,
-  Versionen, Farbraum, Render-Keys und Cache-Invalidierung
+  Versionen, Farbraum, Render-Keys, Cache-Invalidierung und
+  Bearbeitungsregler F-089–F-099
 
 ### Produktfunktionen
 
@@ -90,6 +91,17 @@ Sidecars vollständig wiederherstellbar sein.
 | F-010 | CLI, GUI und WASM | [Plattformen](platform/cli-gui-wasm.md) | hoch |
 | F-011 | Konflikt- und Releasequalität | [Qualität](quality/conflicts-and-acceptance.md) | hoch |
 | F-012 | Benutzergeführte Segmentierung | [AI-Masks](product/ai-masks.md) | hoch |
+| F-089 | Gradationskurve | [Pipeline](architecture/pipeline.md) | mittel |
+| F-090 | HSL/Farbmischer | [Pipeline](architecture/pipeline.md) | mittel |
+| F-091 | Color Grading | [Pipeline](architecture/pipeline.md) | mittel |
+| F-092 | Dynamik und Sättigung | [Pipeline](architecture/pipeline.md) | mittel |
+| F-093 | Zuschneiden und Drehen | [Pipeline](architecture/pipeline.md) | hoch |
+| F-094 | Präsenz | [Pipeline](architecture/pipeline.md) | mittel |
+| F-095 | Schärfen | [Pipeline](architecture/pipeline.md) | mittel |
+| F-096 | Rauschreduzierung | [Pipeline](architecture/pipeline.md) | mittel |
+| F-097 | Vignettierung und Körnung | [Pipeline](architecture/pipeline.md) | niedrig |
+| F-098 | Objektivkorrekturen | [Pipeline](architecture/pipeline.md) | hoch |
+| F-099 | Upright und Perspektive | [Pipeline](architecture/pipeline.md) | hoch |
 
 ## Arbeitsweise
 
@@ -126,6 +138,18 @@ Sidecars vollständig wiederherstellbar sein.
   Exposure ist ohne aktiviertes Auto-Tone ungültig.
 - Die optionale Reihenfolge lautet Source-Actions, Auto-WB/Auto-Tone, Preset,
   Masken, Matching.
+- Die normativen Bearbeitungsregler F-089–F-099 sind in
+  `architecture/pipeline.md` festgelegt. Der Raster-MVP verarbeitet sie im
+  sRGB-codierten RGBA8-Arbeitsraum; Rezept- und Pipelineversion werden getrennt
+  validiert.
+- Die Adjustment-Unterstufen lauten im MVP: globale Tonwerte, Presence,
+  Gradationskurve, HSL/Farbmischer, Dynamik/Sättigung, Color Grading,
+  Rauschreduzierung und Schärfen. Geometrisch gilt:
+  Objektivkorrektur → Perspektive → Crop → Rotation → Spiegelung.
+- HSL verwendet acht getrennte Zentren: Rot, Orange, Gelb, Grün, Cyan, Blau,
+  Violett und Magenta. Lensfun ist Post-MVP und erfordert Lizenz- sowie
+  Capability-Prüfung gemäß F-078; KI-Denoise und automatische Upright-Analyse
+  sind ebenfalls Post-MVP.
 - Auto-WB, Auto-Tone und Auto-Exposure persistieren Ergebnis und
   Analysefingerprint.
 - Der Raster-MVP misst sRGB-codierte RGBA8-RGB-Werte mit Rec.709-Gewichten,

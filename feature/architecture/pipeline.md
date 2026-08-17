@@ -19,6 +19,7 @@ angeglichen (Abweichungen wurden zugunsten des Codes korrigiert).
 - [Clipping (normativ)](#clipping-normativ)
 - [Farbprofilstrategie (normativ)](#farbprofilstrategie-normativ)
 - [Optionale Stufen und Adjustment-Semantik](#optionale-stufen-und-adjustment-semantik)
+- [Bearbeitungsregler](#bearbeitungsregler)
 - [Reproduzierbarkeit](#reproduzierbarkeit)
 - [Auto-Tone](#auto-tone)
 - [Exposure Matching](#exposure-matching)
@@ -168,6 +169,240 @@ Decode/Demosaic und vor Auto-Analyse. Das Original bleibt unverändert.
 Auto-WB, Auto-Tone und Auto-Exposure speichern ihr Ergebnis zusammen mit einem
 Analysefingerprint. Sie werden nur manuell, durch ein Preset oder bei
 ungültigem Fingerprint neu berechnet.
+
+## Bearbeitungsregler
+
+Dieser Abschnitt erweitert die Rezeptsemantik normativ. Alle Felder liegen in
+der jeweiligen virtuellen Kopie unter `recipe` und werden mit
+`recipe_schema_version` sowie der unabhängigen `pipeline_version` validiert.
+Die MVP-Version dieser Regler ist `1`; unbekannte oder außerhalb des
+angegebenen Bereichs liegende Werte werden abgelehnt, nicht still geclippt.
+Alle Berechnungen liefern weiterhin `Rgba8Srgb`; Zwischenwerte dürfen intern
+höhere Genauigkeit verwenden und werden erst am Ende der jeweiligen Operation
+auf `0..=1` begrenzt.
+
+Die top-level-Reihenfolge bleibt `Decode → SourceActions → AutoAnalysis →
+Adjustments → Masks → Crop → Output`. Die in diesem Abschnitt genannten
+Unterstufen innerhalb von `Adjustments` beziehungsweise `Crop` sind verbindlich
+und ändern dieses Format-Tupel nicht.
+
+### F-089 Gradationskurve
+
+**Ziel und Definition:** `recipe.adjustments.curves` enthält
+`version`, `master` und `channels`. Jede Kurve ist eine Liste
+`points: [{input, output}]` mit mindestens zwei und höchstens 32 Punkten.
+`input` und `output` sind endliche `f32`-Werte in `0..=1`; Punkte müssen nach
+`input` streng aufsteigend sein, Endpunkte `(0,0)` und `(1,1)` werden bei
+fehlenden Endpunkten nicht implizit ergänzt (die Validierung verlangt sie).
+`master` wirkt auf die Luminanz-/RGB-Kurve, `channels` enthält die getrennten
+Kurven `red`, `green` und `blue`; nicht gesetzte Kanäle sind Identität.
+
+Zwischen Stützpunkten wird eine monotone kubische Hermite-Interpolation mit
+begrenzt berechneten Tangenten verwendet. Sie ist gegenüber Catmull-Rom
+bevorzugt, weil sie bei monotonen Stützpunkten kein Überschwingen erzeugt.
+Ausgaben werden nach der Interpolation auf `0..=1` geclippt. Auto-Tone wird
+vor der Kurve berechnet und angewandt; die Kurve ist danach die letzte globale
+Tonwertoperation (vor HSL/Color-Grading nur gemäß den nachfolgenden
+Unterstufen). Die Kurve wird auf sRGB-codierten Werten angewandt, nicht auf
+linearisierten ProPhoto-Werten.
+
+**Platzierung, Cache und Abnahme:** In `Adjustments`, nach Auto-WB,
+Auto-Tone/Preset und globalem Tonwert, vor lokalen Masken. Die Kurvenstruktur,
+ihre Version und der wirksame Inhalt müssen im `recipe_hash` enthalten sein;
+eine Änderung invalidiert ab `adjustments` alle abhängigen Preview-/Export-
+Einträge, nicht Decode oder AI-Masken. Abnahme: JSON-Roundtrip, monotone
+Interpolation ohne Overshoot, Kanaltrennung, Endpunktvalidierung, Clipping
+und Cache-Miss werden getestet. MVP-Grenze: keine parametrische Kurve und keine
+lineare-Farbraum-Variante; spätere Pipelineversionen dürfen diese nur migriert
+einführen. Abhängigkeiten: F-029, F-031, F-036, F-039 und F-041.
+
+### F-090 HSL/Farbmischer
+
+`recipe.adjustments.hsl` enthält `version` und acht Kanalobjekte mit den
+Feldern `hue`, `saturation`, `luminance`. Die Kanäle heißen normativ `red`,
+`orange`, `yellow`, `green`, `cyan`, `blue`, `violet`, `magenta` (Zentren
+0°, 30°, 60°, 120°, 180°, 240°, 270°, 300°); `violet` und `magenta` sind
+also zwei getrennte, benachbarte Kanäle, keine doppelte Magenta-Kategorie.
+`hue` und `saturation` liegen in `-1..=1` (`hue` entspricht einer relativen
+Drehung von höchstens 30°), `luminance` in `-1..=1`.
+
+Die MVP-Transformation erfolgt im **sRGB-codierten** RGB-Raum nach
+Normalisierung, mit HSL-Konvertierung pro Pixel. Jeder Kanal verwendet eine
+zyklische, stückweise lineare Dreiecksgewichtung über die Hue-Abstände zum
+eigenen Zentrum und den beiden Nachbarzentren; die Beiträge werden normiert.
+Sättigung und Luminanz werden gewichtet addiert, Hue wird gewichtet gedreht,
+danach wird auf `0..=1` geclippt. Das ist bewusst keine lineare- oder
+ProPhoto-Farbverarbeitung.
+
+Die Stufe liegt in `Adjustments` nach globalem Tonwert und vor Color Grading,
+Masken und Crop. `recipe_hash` enthält alle acht Objekte und `version`;
+Änderungen invalidieren ab dieser Unterstufe. Abnahme: Kanalzentren und
+Nachbarübergänge, zyklische Hue-Grenzen, Wertevalidierung, neutrale Identität
+und Cache-Invalidierung. MVP-Grenzen: keine selektive Masken-HSL-Matrix und
+keine lineare HSL-Alternative. Abhängigkeiten: F-031, F-036, F-039, F-049.
+
+### F-091 Color Grading
+
+`recipe.adjustments.color_grading` enthält `version`, die Bereiche `shadows`,
+`midtones`, `highlights` mit `hue_degrees` in `0..360` und `saturation` in
+`0..=1`, sowie `balance` in `-1..=1`. Der Farbton ist ein Winkel (zyklisch,
+0° = Rot) im sRGB-HSL-Farbmodell; die Tönungsfarbe wird in RGB umgerechnet
+und mit der jeweiligen Sättigung gemischt.
+
+Die Bereichsgewichte sind weiche, überlappende Funktionen der sRGB-
+Luminanz: Schatten `smoothstep(0.65,0.0, L)`, Lichter
+`smoothstep(0.35,1.0,L)`, Mitteltöne `1 - shadow - highlight`, jeweils auf
+Summe 1 normiert. `balance` verschiebt die beiden Übergänge symmetrisch
+zwischen Schatten und Lichtern. Color Grading folgt HSL und globaler Kurve,
+liegt vor Masken und wird vor Crop ausgeführt. Damit ist die dokumentierte
+Zusammenwirkung: Auto-Tone → Kurve → HSL → Color Grading.
+
+`recipe_hash` berücksichtigt alle Werte und `version`; Änderungen invalidieren
+Preview/Export ab Color Grading, nicht Decode/Maskenartefakte. Abnahme:
+zyklische Hue-Werte, weiche Übergänge, Balance-Richtung, Identität bei
+Sättigung 0 und reproduzierbarer Cache-Miss. MVP-Grenzen: sRGB-HSL statt
+linearem oder perceptuellem Farbmodell, keine getrennte Blending-Methodik.
+Abhängigkeiten: F-031, F-036, F-039, F-049.
+
+### F-092 Dynamik und Sättigung
+
+`recipe.adjustments.vibrance` und `saturation` sind endliche Werte in
+`-1..=1`. `saturation` skaliert die HSL-Sättigung linear um den Faktor
+`1 + saturation` (sRGB-codiertes RGB, Clipping danach). `vibrance` erhöht oder
+senkt sie gewichtet: Schutzgewicht = Produkt aus geringer vorhandener
+Sättigung und einem Hautfarbenschutz (Hue-Bereich ungefähr 15°..55° mit
+weichen Rändern); bereits gesättigte Farben und geschützte Hauttöne werden
+höchstens proportional schwach verändert. Negative Vibrance wirkt ebenfalls
+gewichtet, nicht als zweiter linearer Sättigungsregler.
+
+Die Unterstufenreihenfolge ist `vibrance → saturation`, nach HSL und vor Color
+Grading, Masken und Crop. Werte, Schutzfunktion und `version` gehen in den
+`recipe_hash`; Änderungen invalidieren ab Adjustments. Abnahme: Identität bei
+0, Begrenzung, Schutz gesättigter Farben/Hauttöne und Cache-Invalidierung.
+MVP-Grenze: heuristischer HSL-Hautschutz; kein kameramodell- oder
+hauttonadaptives Lernen. Abhängigkeiten: F-031, F-036, F-090.
+
+### F-093 Zuschneiden und Drehen
+
+`recipe.geometry` enthält `version`, `crop` (`mode: "aspect"|"free"`, bei
+`aspect` `preset` aus `original`, `1:1`, `4:5`, `5:4`, `3:2`, `2:3`, `4:3`,
+`3:4`, `16:9`, `9:16`, bei `free` `x`, `y`, `width`, `height` in normierten
+Quellkoordinaten `0..=1`), `rotation_degrees` in `-180..=180` und
+`mirror_horizontal`/`mirror_vertical` als bool. Freie Rechtecke müssen eine
+positive Fläche besitzen; Presets werden auf die Bildgrenzen eingepasst.
+
+In der Crop-Stufe gilt intern: Objektivkorrektur → Perspektive → Crop →
+Rotation → Spiegelung. Rotation erfolgt um das Crop-Zentrum; Ausgabemaße und
+Seitenverhältnis werden deterministisch aus Transform und Outputvorgabe
+berechnet. Die finale F-041-Messdomäne liegt nach Crop und Geometrie, vor
+Outputprofil/Export. Geometrieparameter, `version` und resultierende
+`output_dimensions` gehören zum RenderKey: Decode, Auto-Analyse und Masken
+bleiben bei reiner Geometrieänderung cachebar, Preview/Export werden
+invalidiert. Abnahme: Presets, normiertes Rechteck, Drehung/Spiegelung,
+RenderKey-Trennung und F-041-Messbereich. MVP-Grenze: kein Auto-Crop; abhängig
+von F-029, F-039, F-041, F-098 und F-099.
+
+### F-094 Präsenz
+
+`recipe.adjustments.presence` enthält `version`, `texture`, `clarity` und
+`dehaze`, jeweils endlich in `-1..=1` (UI kann -100..+100 anzeigen). Texture
+ist lokaler Kontrast eines kleinen, skalenabhängigen Radius (feine Strukturen,
+MVP Radius 1..3 px); Clarity ist lokaler Mittenkontrast mit großem Radius
+(MVP 8..32 px). Beide verwenden eine deterministische Difference-of-Gaussians-
+Heuristik. Dehaze verwendet ein dunkelkanal-basiertes Atmosphärenmodell mit
+lokaler Transmission, begrenzt auf `0.05..=1`; negative Werte werden als
+umgekehrter, abgeschwächter Effekt definiert.
+
+Reihenfolge in `Adjustments`: Exposure → Contrast → Highlights/Shadows →
+Presence (Texture → Clarity → Dehaze) → Kurve/HSL gemäß den dort definierten
+Unterstufen; Alpha bleibt unverändert. `version` und alle Werte stehen im
+`recipe_hash`, Änderungen invalidieren ab Adjustments. Abnahme: Wertefehler,
+Radiusverhalten, deterministisches Clipping, Kontrast-Reihenfolge und Cache.
+MVP-Grenzen: Heuristiken statt Lightroom-identischer RAW-/Dehaze-Semantik,
+kein GPU-spezifischer Fallback. Abhängigkeiten: F-031, F-036, F-039, F-041.
+
+### F-095 Schärfen
+
+`recipe.adjustments.sharpening` enthält `version`, `amount` `0..=3`, `radius`
+`0.1..=10` (in Quellpixeln), `detail` `0..=1` und `masking` `0..=1`.
+MVP ist eine Unsharp-Mask: Luminanz, Gauß-Blur mit Radius, Differenzsignal
+und `amount`; `detail` mischt feinere und gröbere Differenzen. `masking` ist
+eine aus Luminanzgradienten erzeugte Kantenmaske: hohe Maskierung unterdrückt
+Flächen, Kanten bleiben wirksam. Radius wird bei Vorschau/Export proportional
+zur effektiven Bildskalierung umgerechnet.
+
+Schärfen liegt am Ende von `Adjustments`, nach Rauschreduzierung und vor
+Masks/Crop/Output. Werte, Version und effektive Skalierung sind im RenderKey/
+`recipe_hash`; Änderungen invalidieren ab Schärfen. Abnahme: Unsharp-Verhalten,
+Kantenmaske, Skalierung, Clipping und Cache. MVP-Grenzen: keine
+Ausgabe-Schärfung mit eigenem Profil und kein lokales Masken-Schärfen.
+Abhängigkeiten: F-031, F-036, F-096.
+
+### F-096 Rauschreduzierung
+
+`recipe.adjustments.noise_reduction` enthält `version`, `luminance` und
+`color`, jeweils `0..=1`; 0 ist Identität. Das MVP verwendet einen
+deterministischen, kantenbewussten lokalen Mittelwert (5x5-Fenster): Luminanz
+wird nach Ähnlichkeit der Luminanz gewichtet geglättet, Farbrauschen wird im
+Chromakanal stärker geglättet. Das ist bewusst ein einfaches, CPU/WASM-
+kompatibles Modell statt eines nicht reproduzierbaren KI-Verfahrens.
+
+Rauschreduzierung liegt in `Adjustments` vor Schärfen, Masken und Crop.
+Felder/Version gehen in den `recipe_hash`; Änderungen invalidieren ab dieser
+Unterstufe. Abnahme: 0-Identität, Kantenbewahrung, Kanaltrennung,
+Determinismus und Schärfen-Reihenfolge. KI-Denoise ist nur eine optionale
+spätere Erweiterung und wird hier nicht spezifiziert. Abhängigkeiten: F-031,
+F-036, F-095.
+
+### F-097 Vignettierung und Körnung (niedrige Priorität)
+
+`recipe.effects.vignette` enthält `version`, `amount` `-1..=1`, `midpoint`
+`0..=1`, `roundness` `-1..=1` und `feather` `0..=1`; der Effekt ist radial und
+wird vor Output angewandt. `recipe.effects.grain` enthält `version`, `amount`,
+`size` und `roughness`, jeweils `0..=1`, und `seed` als `u64`. Körnung ist
+prozedurales, kanalgekoppeltes Rauschen; der effektive Seed wird aus
+`seed` und dem RenderKey deterministisch abgeleitet. Beide Effektobjekte und
+Versionen stehen im RenderKey/`recipe_hash` und invalidieren Preview/Export.
+Abnahme: radiale Parameter, deterministische Wiederholung und Seed-Wechsel.
+MVP-Grenze: niedrige Priorität, kein filmspezifisches Kornmodell. Abhängigkeit:
+F-031.
+
+### F-098 Objektivkorrekturen
+
+`recipe.lens_correction` enthält `version`, `profile` (optional benannter,
+eingebauter Presetname), `distortion_k1`, `distortion_k2`, `distortion_k3` in
+`-1..=1`, `vignette_c0`, `vignette_c1`, `vignette_c2` in `-1..=1`, sowie
+`ca_red` und `ca_blue` in `-0.05..=0.05`; Grün ist Referenz. Die Verzeichnung
+ist ein normiertes radiales Polynom `r' = r*(1+k1*r²+k2*r⁴+k3*r⁶)`, die
+Vignette ein radiales Polynom, CA eine relative R-/B-Kanal-Skalierung.
+
+Die geometrische Korrektur liegt vor Perspektive und Crop; Vignette folgt der
+Geometriekorrektur, CA wird kanalweise unmittelbar vor dem Crop-Resampling
+angewandt, damit Farbsaumkorrektur nicht durch spätere Geometrie verstärkt
+wird. Alle Felder und `profile` gehen in den RenderKey. Abnahme: Polynom,
+Kanalreferenz, Preset-Roundtrip und gezielte Cache-Invalidierung. MVP-Grenze:
+manuelle Koeffizienten und einfache benannte Presets; Lensfun ist ausdrücklich
+Post-MVP. Für Lensfun sind LGPL-3.0/CC-BY-SA und F-078 zu prüfen; die native
+Dependency benötigt einen Capability-Matrix-Eintrag. Abhängigkeiten: F-031,
+F-037, F-078, F-093, F-099.
+
+### F-099 Upright und Perspektive
+
+`recipe.perspective` enthält `version`, `vertical`, `horizontal`, `rotation`,
+`scale`, `aspect_ratio`, `shift_x` und `shift_y`; alle sind endliche Werte,
+die Achsenkorrekturen und Rotation in `-1..=1`, `scale` in `0.1..=10`,
+`aspect_ratio` in `0.1..=10` und Verschiebungen in `-1..=1`. Die vier
+Eckpunkte der normierten Bildebene werden mit einer 3x3-Homographie auf die
+Ausgabeebene projiziert; bilineares Resampling und definierte Randfüllung
+(`transparent` wird im MVP zu Schwarz) sind verbindlich.
+
+Die manuelle Perspektive liegt nach F-098-Verzeichnung und vor F-093-Crop;
+die automatische Analyse stürzender Linien ist ausdrücklich Post-MVP. Alle
+Parameter, Homographie-/Pipelineversion und resultierenden Dimensionen
+gehören zum RenderKey; Geometrieänderungen invalidieren Preview/Export, nicht
+Decode oder AI-Artefakte. Abnahme: Identität, Eckpunktprojektion,
+Parametergrenzen, Zusammenspiel mit Objektivkorrektur/Crop und Cache.
+Abhängigkeiten: F-029, F-031, F-041, F-093, F-098.
 
 ## Reproduzierbarkeit
 
