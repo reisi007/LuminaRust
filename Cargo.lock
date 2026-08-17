@@ -1759,6 +1759,7 @@ dependencies = [
  "lumina-raw",
  "lumina-sidecar",
  "rfd",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "wasm-bindgen",

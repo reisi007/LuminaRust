@@ -9,9 +9,12 @@ use lumina_raw::RawError;
 use lumina_sidecar::{AnalysisFingerprint, EditRecipe, Preset};
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::{
-    ArtifactStatus, DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskStatus,
-    SidecarDocument, SourceIdentity, SourceStatus, source_status,
+    ArtifactStatus, CoordinateSystem, DecodeFingerprint, GeometryFingerprint, HistoryEntry,
+    MaskDefinition, MaskLayer, MaskOperation, MaskReference, MaskStatus, ModelIdentity,
+    Preprocessing, Resolution, SidecarDocument, SourceFingerprint, SourceIdentity, SourceStatus,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::Value;
 use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -53,6 +56,10 @@ pub struct LuminaApp {
     document: Option<SidecarDocument>,
     #[cfg(not(target_arch = "wasm32"))]
     virtual_copy_id: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    selected_mask_id: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    mask_name_input: String,
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
@@ -115,6 +122,9 @@ impl LuminaApp {
             document: None,
             #[cfg(not(target_arch = "wasm32"))]
             virtual_copy_id: "vc-original".into(),
+            #[cfg(not(target_arch = "wasm32"))]
+            selected_mask_id: None,
+            mask_name_input: String::new(),
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
                 ("exposure".into(), true),
@@ -166,14 +176,10 @@ impl LuminaApp {
                         let path = entry.path();
                         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                             if name.ends_with(".lumina.json") {
-                                if let Some(source_name) =
-                                    name.strip_suffix(".lumina.json")
-                                {
+                                if let Some(source_name) = name.strip_suffix(".lumina.json") {
                                     let source_path = directory.join(source_name);
                                     if !self.entries.iter().any(|e| e.path == source_path) {
-                                        if let Some(scanned) =
-                                            Self::scan_entry(&source_path)
-                                        {
+                                        if let Some(scanned) = Self::scan_entry(&source_path) {
                                             self.entries.push(scanned);
                                         }
                                     }
@@ -212,10 +218,11 @@ impl LuminaApp {
                     let bundle_root = path.parent().unwrap_or_else(|| Path::new("."));
                     for copy in &document.virtual_copies {
                         for mask in &copy.mask_library {
-                            let artifact_missing = mask.artifact.as_ref().map_or(false, |artifact| {
-                                lumina_sidecar::artifact_status(bundle_root, artifact)
-                                    == ArtifactStatus::Missing
-                            });
+                            let artifact_missing =
+                                mask.artifact.as_ref().map_or(false, |artifact| {
+                                    lumina_sidecar::artifact_status(bundle_root, artifact)
+                                        == ArtifactStatus::Missing
+                                });
                             if matches!(
                                 mask.status,
                                 MaskStatus::Missing
@@ -378,7 +385,273 @@ impl LuminaApp {
             .ok_or_else(|| GuiError::Io("Virtuelle Kopie nicht gefunden".into()))?;
         self.virtual_copy_id = copy.id.clone();
         self.recipe = copy.recipe.clone();
+        self.selected_mask_id = copy
+            .mask_layers
+            .first()
+            .map(|layer| layer.mask.mask_id.clone());
         self.render()
+    }
+
+    /// Select a mask from the active copy's library and make it the active layer.
+    /// The matte is only referenced; no payload is copied or modified.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn select_mask(&mut self, mask_id: &str) -> Result<(), GuiError> {
+        self.ensure_document_loaded()?;
+        let document = self.document.as_mut().expect("document was ensured");
+        let copy = document
+            .virtual_copies
+            .iter_mut()
+            .find(|copy| copy.id == self.virtual_copy_id)
+            .ok_or_else(|| GuiError::Io("Virtuelle Kopie nicht gefunden".into()))?;
+        if !copy.mask_library.iter().any(|mask| mask.id == mask_id) {
+            return Err(GuiError::Io("Maske nicht gefunden".into()));
+        }
+        if let Some(layer) = copy.mask_layers.first_mut() {
+            layer.mask = MaskReference {
+                copy_id: copy.id.clone(),
+                mask_id: mask_id.into(),
+                extras: BTreeMap::new(),
+            };
+        } else {
+            copy.mask_layers.push(MaskLayer {
+                id: "layer-1".into(),
+                mask: MaskReference {
+                    copy_id: copy.id.clone(),
+                    mask_id: mask_id.into(),
+                    extras: BTreeMap::new(),
+                },
+                inverted: false,
+                feather: 0.0,
+                blur: 0.0,
+                density: 1.0,
+                extras: BTreeMap::new(),
+            });
+        }
+        self.selected_mask_id = Some(mask_id.into());
+        self.render_key = None;
+        self.status = format!("Maske ausgewählt: {mask_id}");
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn selected_mask_id(&self) -> Option<&str> {
+        self.selected_mask_id.as_deref()
+    }
+
+    /// Create a pending library entry. Inference is deliberately not started here.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn create_mask(&mut self, name: impl Into<String>) -> Result<String, GuiError> {
+        self.ensure_document_loaded()?;
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io("Maskenname darf nicht leer sein".into()));
+        }
+        let id = format!("mask-{}", blake3::hash(name.as_bytes()).to_hex());
+        let frame = self
+            .original
+            .as_ref()
+            .ok_or_else(|| GuiError::Io("Kein Bild geladen".into()))?
+            .clone();
+        let source_hash = self
+            .source_bytes
+            .as_ref()
+            .map(|b| format!("blake3:{}", blake3::hash(b).to_hex()))
+            .unwrap_or_else(|| "blake3:unknown".into());
+        let source_byte_length = self.source_bytes.as_ref().map_or(0, |b| b.len() as u64);
+        let document = self.document.as_mut().expect("document was ensured");
+        let copy = document
+            .virtual_copies
+            .iter_mut()
+            .find(|copy| copy.id == self.virtual_copy_id)
+            .ok_or_else(|| GuiError::Io("Virtuelle Kopie nicht gefunden".into()))?;
+        if copy.mask_library.iter().any(|mask| mask.id == id) {
+            return Err(GuiError::Io(
+                "Eine Maske mit diesem Namen existiert bereits".into(),
+            ));
+        }
+        copy.mask_library.push(MaskDefinition {
+            id: id.clone(),
+            name,
+            source_fingerprint: SourceFingerprint {
+                content_hash: source_hash,
+                byte_length: source_byte_length,
+                extras: BTreeMap::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "pending".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width: frame.width,
+                height: frame.height,
+                orientation: self.raw_orientation,
+                pixel_aspect_ratio: 1.0,
+                extras: BTreeMap::new(),
+            },
+            model: ModelIdentity {
+                name: "unavailable".into(),
+                version: "pending".into(),
+                hash: "pending".into(),
+                extras: BTreeMap::new(),
+            },
+            inference_resolution: Resolution {
+                width: frame.width,
+                height: frame.height,
+                extras: BTreeMap::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "pending".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: MaskStatus::Pending,
+            created_at: "pending".into(),
+            generator_version: env!("CARGO_PKG_VERSION").into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Source,
+            references: vec![],
+            extras: BTreeMap::new(),
+        });
+        self.select_mask(&id)?;
+        self.status = "Maske angelegt; Neuberechnung ausdrücklich erforderlich".into();
+        Ok(id)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn rename_mask(&mut self, mask_id: &str, name: impl Into<String>) -> Result<(), GuiError> {
+        self.ensure_document_loaded()?;
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io("Maskenname darf nicht leer sein".into()));
+        }
+        let copy = self.active_copy_mut()?;
+        let mask = copy
+            .mask_library
+            .iter_mut()
+            .find(|m| m.id == mask_id)
+            .ok_or_else(|| GuiError::Io("Maske nicht gefunden".into()))?;
+        mask.name = name;
+        self.status = "Maske umbenannt; Sidecar speichern".into();
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_mask_inverted(&mut self, inverted: bool) -> Result<(), GuiError> {
+        let layer = self.active_layer_mut()?;
+        layer.inverted = inverted;
+        self.render_key = None;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_mask_feather(&mut self, feather: f32) -> Result<(), GuiError> {
+        if !feather.is_finite() || !(0.0..=1.0).contains(&feather) {
+            return Err(GuiError::Io(
+                "Feathering muss zwischen 0 und 1 liegen".into(),
+            ));
+        }
+        self.active_layer_mut()?.feather = feather;
+        self.render_key = None;
+        Ok(())
+    }
+
+    /// Store a local adjustment as declarative layer metadata. Applying it to pixels
+    /// requires the not-yet-implemented masked core pipeline; it is never baked in.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_mask_local_adjustment(&mut self, key: &str, value: f64) -> Result<(), GuiError> {
+        if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") || !value.is_finite()
+        {
+            return Err(GuiError::Io("Ungültige lokale Anpassung".into()));
+        }
+        self.active_layer_mut()?
+            .extras
+            .insert(format!("adjustment_{key}"), Value::from(value));
+        self.status =
+            "Lokale Maskenanpassung gespeichert (Pipeline-Unterstützung ausstehend)".into();
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn offer_mask_recalculation(&mut self) -> Result<bool, GuiError> {
+        let mask_id = self
+            .selected_mask_id
+            .clone()
+            .ok_or_else(|| GuiError::Io("Keine Maske ausgewählt".into()))?;
+        let mask = self
+            .active_copy_mut()?
+            .mask_library
+            .iter()
+            .find(|m| m.id == mask_id)
+            .ok_or_else(|| GuiError::Io("Maske nicht gefunden".into()))?;
+        let offered = !matches!(mask.status, MaskStatus::Valid);
+        self.status = if offered {
+            "Maske veraltet/nicht verfügbar; Neuberechnung starten?"
+        } else {
+            "Maske aktuell; keine Neuberechnung erforderlich"
+        }
+        .into();
+        Ok(offered)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn mark_mask_for_recalculation(&mut self) -> Result<(), GuiError> {
+        let mask_id = self
+            .selected_mask_id
+            .clone()
+            .ok_or_else(|| GuiError::Io("Keine Maske ausgewählt".into()))?;
+        let mask = self
+            .active_copy_mut()?
+            .mask_library
+            .iter_mut()
+            .find(|m| m.id == mask_id)
+            .ok_or_else(|| GuiError::Io("Maske nicht gefunden".into()))?;
+        mask.status = MaskStatus::Pending;
+        mask.error_text = Some("Explizite Neuberechnung angefordert".into());
+        self.status = "Neuberechnung angefordert; Jobsteuerung erforderlich".into();
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_document_loaded(&mut self) -> Result<(), GuiError> {
+        if self.document.is_none() {
+            let frame = self
+                .original
+                .as_ref()
+                .ok_or_else(|| GuiError::Io("Kein Bild geladen".into()))?
+                .clone();
+            self.document = Some(SidecarDocument::new(
+                self.source_identity(&frame),
+                "raster-mvp-1",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn active_copy_mut(&mut self) -> Result<&mut lumina_sidecar::VirtualCopy, GuiError> {
+        self.document
+            .as_mut()
+            .and_then(|d| {
+                d.virtual_copies
+                    .iter_mut()
+                    .find(|c| c.id == self.virtual_copy_id)
+            })
+            .ok_or_else(|| GuiError::Io("Virtuelle Kopie nicht gefunden".into()))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn active_layer_mut(&mut self) -> Result<&mut MaskLayer, GuiError> {
+        self.active_copy_mut()?
+            .mask_layers
+            .first_mut()
+            .ok_or_else(|| GuiError::Io("Keine Maske ausgewählt".into()))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -431,6 +704,7 @@ impl LuminaApp {
         {
             self.document = None;
             self.virtual_copy_id = "vc-original".into();
+            self.selected_mask_id = None;
         }
         self.original = Some(frame);
         self.recipe = EditRecipe::default();
@@ -894,7 +1168,7 @@ impl eframe::App for LuminaApp {
                     ui.label("Web: Bild per Drag-and-drop laden");
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(document) = &self.document {
+                if let Some(document) = self.document.clone() {
                     let copy_count = document.virtual_copies.len();
                     let copy_options: Vec<(String, String)> = document
                         .virtual_copies
@@ -935,6 +1209,80 @@ impl eframe::App for LuminaApp {
                         }
                     }
                     ui.label(format!("Masken: {} nicht verfügbar/aktuell", missing_masks));
+                    ui.separator();
+                    ui.heading("Maskenwerkzeuge");
+                    let mask_options: Vec<(String, String)> = document
+                        .virtual_copies
+                        .iter()
+                        .find(|copy| copy.id == self.virtual_copy_id)
+                        .map(|copy| {
+                            copy.mask_library
+                                .iter()
+                                .map(|mask| (mask.id.clone(), mask.name.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut selected_mask = self.selected_mask_id.clone().unwrap_or_default();
+                    egui::ComboBox::from_label("Maske auswählen")
+                        .selected_text(
+                            mask_options
+                                .iter()
+                                .find(|(id, _)| id == &selected_mask)
+                                .map(|(_, name)| name.as_str())
+                                .unwrap_or("Keine"),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (id, name) in &mask_options {
+                                ui.selectable_value(&mut selected_mask, id.clone(), name);
+                            }
+                        });
+                    if selected_mask != self.selected_mask_id.clone().unwrap_or_default()
+                        && !selected_mask.is_empty()
+                    {
+                        if let Err(error) = self.select_mask(&selected_mask) {
+                            self.show_error(error);
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut self.mask_name_input);
+                        if ui.button("Maske anlegen").clicked() {
+                            if let Err(error) = self.create_mask(self.mask_name_input.clone()) {
+                                self.show_error(error);
+                            } else {
+                                self.mask_name_input.clear();
+                            }
+                        }
+                    });
+                    if self.selected_mask_id.is_some() {
+                        let mut inverted = document
+                            .virtual_copies
+                            .iter()
+                            .find(|copy| copy.id == self.virtual_copy_id)
+                            .and_then(|copy| copy.mask_layers.first())
+                            .is_some_and(|layer| layer.inverted);
+                        if ui.checkbox(&mut inverted, "Invertieren").changed() {
+                            if let Err(error) = self.set_mask_inverted(inverted) {
+                                self.show_error(error);
+                            }
+                        }
+                        let mut feather = document
+                            .virtual_copies
+                            .iter()
+                            .find(|copy| copy.id == self.virtual_copy_id)
+                            .and_then(|copy| copy.mask_layers.first())
+                            .map_or(0.0, |layer| layer.feather);
+                        if ui
+                            .add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feathering"))
+                            .changed()
+                        {
+                            if let Err(error) = self.set_mask_feather(feather) {
+                                self.show_error(error);
+                            }
+                        }
+                        if ui.button("Neuberechnung anbieten").clicked() {
+                            let _ = self.offer_mask_recalculation();
+                        }
+                    }
                 }
                 let mut exposure = self
                     .recipe
@@ -1197,7 +1545,10 @@ mod tests {
         let sidecar = lumina_sidecar::sidecar_path_for(&source);
         assert!(sidecar.is_file(), "Sidecar muss geschrieben werden");
         let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
-        assert_eq!(document.virtual_copies[0].recipe.adjustments["exposure"], 1.5);
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            1.5
+        );
 
         let mut reopened = new_app();
         reopened.open_file(source.display().to_string());
@@ -1223,7 +1574,10 @@ mod tests {
             .virtual_copies
             .iter()
             .any(|copy| copy.id == "vc-2" && copy.name == "Kopie 2"));
-        assert_eq!(document.virtual_copies[0].recipe.adjustments["contrast"], 0.3);
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["contrast"],
+            0.3
+        );
 
         let mut reopened = new_app();
         reopened.open_file(source.display().to_string());
@@ -1245,7 +1599,11 @@ mod tests {
         app.duplicate_virtual_copy("vc-3", "Drei").unwrap();
         app.save_sidecar();
         app.set_directory(directory.path().display().to_string());
-        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        let entry = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "photo.png")
+            .unwrap();
         assert!(entry.has_sidecar);
         assert_eq!(entry.virtual_copies, 3);
         assert!(!entry.conflict);
@@ -1263,13 +1621,21 @@ mod tests {
         app.open_file(source.display().to_string());
         app.save_sidecar();
         app.set_directory(directory.path().display().to_string());
-        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        let entry = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "photo.png")
+            .unwrap();
         assert!(!entry.is_offline());
         assert!(!entry.conflict);
 
         std::fs::remove_file(&source).unwrap();
         app.set_directory(directory.path().display().to_string());
-        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        let entry = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "photo.png")
+            .unwrap();
         assert!(entry.is_offline());
         assert!(entry.conflict);
         assert_eq!(entry.source_status, SourceStatus::Missing);
@@ -1287,64 +1653,133 @@ mod tests {
         app.save_sidecar();
         let sidecar = lumina_sidecar::sidecar_path_for(&source);
         let mut document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
-        document.virtual_copies[0].mask_library.push(MaskDefinition {
-            id: "m1".into(),
-            name: "subject".into(),
-            source_fingerprint: SourceFingerprint {
-                content_hash: "blake3:x".into(),
-                byte_length: 1,
+        document.virtual_copies[0]
+            .mask_library
+            .push(MaskDefinition {
+                id: "m1".into(),
+                name: "subject".into(),
+                source_fingerprint: SourceFingerprint {
+                    content_hash: "blake3:x".into(),
+                    byte_length: 1,
+                    extras: BTreeMap::new(),
+                },
+                decode_context: DecodeFingerprint {
+                    decoder: "libraw".into(),
+                    version: "1".into(),
+                    parameters: BTreeMap::new(),
+                    extras: BTreeMap::new(),
+                },
+                geometry_context: GeometryFingerprint {
+                    width: 2,
+                    height: 1,
+                    orientation: 1,
+                    pixel_aspect_ratio: 1.0,
+                    extras: BTreeMap::new(),
+                },
+                model: ModelIdentity {
+                    name: "birefnet".into(),
+                    version: "1".into(),
+                    hash: "h".into(),
+                    extras: BTreeMap::new(),
+                },
+                inference_resolution: Resolution {
+                    width: 2,
+                    height: 1,
+                    extras: BTreeMap::new(),
+                },
+                preprocessing: Preprocessing {
+                    name: "std".into(),
+                    version: "1".into(),
+                    parameters: BTreeMap::new(),
+                    extras: BTreeMap::new(),
+                },
+                rescaling_method: "bilinear".into(),
+                rescaling_parameters: BTreeMap::new(),
+                coordinate_system: CoordinateSystem::SourceOriented,
+                status: MaskStatus::Missing,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                generator_version: "g".into(),
+                error_text: None,
+                artifact: None,
+                operation: MaskOperation::Source,
+                references: vec![],
                 extras: BTreeMap::new(),
-            },
-            decode_context: DecodeFingerprint {
-                decoder: "libraw".into(),
-                version: "1".into(),
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            geometry_context: GeometryFingerprint {
-                width: 2,
-                height: 1,
-                orientation: 1,
-                pixel_aspect_ratio: 1.0,
-                extras: BTreeMap::new(),
-            },
-            model: ModelIdentity {
-                name: "birefnet".into(),
-                version: "1".into(),
-                hash: "h".into(),
-                extras: BTreeMap::new(),
-            },
-            inference_resolution: Resolution {
-                width: 2,
-                height: 1,
-                extras: BTreeMap::new(),
-            },
-            preprocessing: Preprocessing {
-                name: "std".into(),
-                version: "1".into(),
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            rescaling_method: "bilinear".into(),
-            rescaling_parameters: BTreeMap::new(),
-            coordinate_system: CoordinateSystem::SourceOriented,
-            status: MaskStatus::Missing,
-            created_at: "2026-01-01T00:00:00Z".into(),
-            generator_version: "g".into(),
-            error_text: None,
-            artifact: None,
-            operation: MaskOperation::Source,
-            references: vec![],
-            extras: BTreeMap::new(),
-        });
+            });
         lumina_sidecar::save_sidecar(&sidecar, &document).unwrap();
         app.set_directory(directory.path().display().to_string());
-        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        let entry = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "photo.png")
+            .unwrap();
         assert_eq!(entry.missing_models, 1);
         assert_eq!(entry.has_sidecar, true);
 
         let reloaded = lumina_sidecar::load_sidecar(&sidecar).unwrap();
         assert_eq!(reloaded.virtual_copies[0].mask_library.len(), 1);
-        assert_eq!(reloaded.virtual_copies[0].mask_library[0].status, MaskStatus::Missing);
+        assert_eq!(
+            reloaded.virtual_copies[0].mask_library[0].status,
+            MaskStatus::Missing
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mask_selection_and_name_roundtrip_through_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        let id = app.create_mask("Subject").unwrap();
+        app.rename_mask(&id, "Main subject").unwrap();
+        app.save_sidecar();
+
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].mask_library[0].name,
+            "Main subject"
+        );
+        assert_eq!(document.virtual_copies[0].mask_layers[0].mask.mask_id, id);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mask_layer_parameters_are_non_destructive_and_persisted() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.create_mask("Subject").unwrap();
+        app.set_mask_inverted(true).unwrap();
+        app.set_mask_feather(0.25).unwrap();
+        app.save_sidecar();
+
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        let layer = &document.virtual_copies[0].mask_layers[0];
+        assert!(layer.inverted);
+        assert_eq!(layer.feather, 0.25);
+        assert_eq!(
+            document.virtual_copies[0].mask_library[0].status,
+            MaskStatus::Pending
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stale_mask_offers_recalculation_without_running_inference() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.create_mask("Subject").unwrap();
+        assert!(app.offer_mask_recalculation().unwrap());
+        assert!(app.status().contains("Neuberechnung"));
+        app.mark_mask_for_recalculation().unwrap();
+        assert!(app.status().contains("angefordert"));
     }
 }
