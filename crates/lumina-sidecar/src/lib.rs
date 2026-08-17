@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const FORMAT: &str = "lumina-sidecar";
@@ -232,10 +235,78 @@ pub struct SidecarDocument {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum SidecarError {
+    #[error("sidecar file is missing: {0}")]
+    Missing(String),
+    #[error("sidecar I/O failed while {operation} `{path}`: {message}")]
+    Io {
+        operation: String,
+        path: String,
+        message: String,
+    },
     #[error("invalid sidecar JSON: {0}")]
     Json(String),
     #[error("invalid sidecar: {0}")]
     Invalid(String),
+}
+
+/// Returns the sidecar path immediately next to `source`.
+pub fn sidecar_path_for(source: &Path) -> PathBuf {
+    let filename = source
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    source.with_file_name(format!("{filename}.lumina.json"))
+}
+
+pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {
+    let json = fs::read_to_string(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SidecarError::Missing(path.display().to_string())
+        } else {
+            io_error("reading", path, error)
+        }
+    })?;
+    SidecarDocument::from_json(&json)
+}
+
+/// Validates before writing and replaces the destination only after the complete
+/// temporary file has been flushed and synced. Output and sidecar are not a
+/// two-file transaction; crash recovery for that pair remains future work.
+pub fn save_sidecar(path: &Path, document: &SidecarDocument) -> Result<(), SidecarError> {
+    let json = document.to_json()?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let filename = path.file_name().map(|name| name.to_string_lossy());
+    let filename = filename.as_deref().unwrap_or("sidecar");
+    let mut temporary = tempfile::Builder::new()
+        .prefix(&format!(".{filename}.tmp-"))
+        .tempfile_in(parent)
+        .map_err(|error| io_error("creating temporary file", parent, error))?;
+    let temporary_path = temporary.path().to_path_buf();
+    let result = (|| {
+        temporary
+            .write_all(json.as_bytes())
+            .map_err(|error| io_error("writing temporary file", &temporary_path, error))?;
+        temporary
+            .flush()
+            .map_err(|error| io_error("flushing temporary file", &temporary_path, error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| io_error("syncing temporary file", &temporary_path, error))?;
+        temporary
+            .persist(path)
+            .map_err(|error| io_error("renaming temporary file", path, error.error))?;
+        Ok(())
+    })();
+    result
+}
+
+fn io_error(operation: &str, path: &Path, error: std::io::Error) -> SidecarError {
+    SidecarError::Io {
+        operation: operation.into(),
+        path: path.display().to_string(),
+        message: error.to_string(),
+    }
 }
 
 impl SidecarDocument {
@@ -667,6 +738,36 @@ mod tests {
         let d = SidecarDocument::new(source(), "pipeline-1");
         let json = d.to_json().unwrap();
         assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+    }
+
+    #[test]
+    fn sidecar_path_keeps_full_source_name() {
+        assert_eq!(
+            sidecar_path_for(Path::new("/photos/IMG_0001.ARW")),
+            PathBuf::from("/photos/IMG_0001.ARW.lumina.json")
+        );
+    }
+
+    #[test]
+    fn file_roundtrip_and_missing_case() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("photo.png");
+        let path = sidecar_path_for(&source_path);
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        save_sidecar(&path, &document).unwrap();
+        assert_eq!(load_sidecar(&path).unwrap(), document);
+        assert!(matches!(
+            load_sidecar(&directory.path().join("missing.json")),
+            Err(SidecarError::Missing(_))
+        ));
+    }
+
+    #[test]
+    fn corrupt_json_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.png.lumina.json");
+        std::fs::write(&path, b"{not-json").unwrap();
+        assert!(matches!(load_sidecar(&path), Err(SidecarError::Json(_))));
     }
 
     #[test]

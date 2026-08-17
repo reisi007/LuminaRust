@@ -28,9 +28,11 @@ Preview-Einstellungen.
 ## Projektstatus
 
 Das Repository befindet sich in der frühen Implementierungsphase. Der
-Cargo-Workspace und das erste `lumina-sidecar`-Domainmodell sind angelegt.
-Persistenzartefakte, Migrationen, Renderpipeline, RAW, ONNX, GUI und Cache sind
-noch offen. Die Feature-SOLL-Dokumentation bleibt vor jeder weiteren
+Workspace enthält einen portablen Rasterbild-MVP: PNG/JPEG/WebP werden über
+`lumina-core` dekodiert, mit Exposure/Contrast bearbeitet und exportiert.
+`lumina-sidecar` persistiert Rezepte atomar als JSON; `lumina-cli` bietet dafür
+`process` und `inspect`. RAW, ONNX, GUI, Maskenpayloads, Migrationen und Cache
+sind weiterhin offen. Die Feature-SOLL-Dokumentation bleibt vor jeder weiteren
 Implementierung die verbindliche Zieldefinition.
 
 ## Dokumentation
@@ -117,7 +119,15 @@ Subagent die Implementierung und Testabdeckung bestätigt hat.
 
 ## Nächster Schritt
 
-1. Offene Architekturentscheidungen in `Agents.todo.md` und `feature/README.md`
-   klären.
-2. Danach Rust-Toolchain und Cargo-Workspace einrichten.
-3. Mit `lumina-sidecar` und dem versionierten Domain-Modell beginnen.
+Der Raster-MVP kann beispielsweise so verwendet werden:
+
+```bash
+cargo run -p lumina-cli -- process --input photo.png --output edited.webp \
+  --exposure 0.5 --contrast 0.2
+cargo run -p lumina-cli -- inspect photo.png
+```
+
+RAW-Endungen werden ausdrücklich abgelehnt; dieser MVP macht kein RAW-Versprechen.
+
+Der Workspace und der vertikale Rasterbild-MVP sind vorhanden. Der nächste
+Schritt ist ein Desktop-/WASM-GUI-Grundgerüst mit einem ersten User-Test.

@@ -39,6 +39,14 @@ Die langfristige Struktur sieht `lumina-sidecar` als verpflichtendes Modul und
 
 ## CLI
 
+Der erste vertikale Raster-MVP stellt zusätzlich die direkt ausführbaren
+Befehle `process` und `inspect` bereit. `process` verarbeitet PNG, JPEG und
+WebP, liest optional ein `Preset`, lässt `--exposure` und `--contrast` die
+Presetwerte überschreiben und schreibt Export sowie Sidecar jeweils atomar. Diese beiden Einzeldatei-Writes bilden keine atomare Zwei-Dateien-Transaktion; ein Abbruch zwischen ihnen kann daher einen bereits geschriebenen Export ohne aktualisiertes Sidecar (oder umgekehrt) hinterlassen. `inspect`
+zeigt den JSON-Status und die virtuellen Kopien ohne GUI. RAW-Endungen werden
+mit einem sichtbaren Fehler abgelehnt, bis ein separates RAW-Backend festgelegt
+und implementiert ist.
+
 Die CLI soll mindestens `import`, `inspect`, `develop`, `render`, `export`,
 `batch`, `mask`, `reindex` und `validate` unterstützen. Einzel- und
 Batchverarbeitung arbeiten ohne GUI und ohne zentrale DB.

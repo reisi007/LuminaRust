@@ -1,0 +1,10 @@
+[package]
+name = "lumina-core"
+version = "0.1.0"
+edition = "2021"
+description = "Portable Lumina raster decoding and recipe rendering"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+lumina-sidecar = { path = "../lumina-sidecar" }
+thiserror = "2"

@@ -53,6 +53,11 @@ Source-Actions
   -> Match Total Exposure
 ```
 
+Im Raster-MVP sind `exposure` endliche Werte im Bereich `-10..=10` EV und
+`contrast` endliche Werte im Bereich `-1..=1`. Ungültige Werte und unbekannte
+Adjustment-Keys werden mit einem Fehler abgelehnt; sie werden nicht still
+geclippt oder ignoriert.
+
 Source-Actions wie nicht-destruktive Staubentfernung und spätere KI-
 Teil-Ersetzung werden als Rezeptoperationen gespeichert. Sie wirken nach
 Decode/Demosaic und vor Auto-Analyse. Das Original bleibt unverändert.
