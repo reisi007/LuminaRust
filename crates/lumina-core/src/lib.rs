@@ -9,6 +9,8 @@ pub mod cache;
 pub mod masks;
 pub mod pipeline;
 pub mod tone;
+#[cfg(not(target_arch = "wasm32"))]
+pub use cache::disk::{DiskCacheError, DiskFolderCache};
 pub use cache::{
     CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
     StaleTracker,

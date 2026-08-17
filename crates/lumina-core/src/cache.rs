@@ -1,11 +1,17 @@
 use crate::pipeline::RenderKey;
 use blake3::hash;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use thiserror::Error;
+
+/// On-disk half of the folder cache. Only available on targets with a file
+/// system so that the portable core keeps compiling for `wasm32`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod disk;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheStage {
@@ -16,10 +22,41 @@ pub enum CacheStage {
     Export,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The two preview resolutions the folder cache may hold per source and
+/// virtual copy. `Standard` is the default that is written when a source is
+/// left; `OneToOne` is the inherited, opt-in folder option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PreviewKind {
+    Standard,
+    OneToOne,
+}
+
+impl PreviewKind {
+    pub const ALL: [PreviewKind; 2] = [Self::Standard, Self::OneToOne];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::OneToOne => "one-to-one",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderCacheSettings {
+    #[serde(default = "default_standard_preview")]
     pub standard_preview: bool,
+    #[serde(default = "default_one_to_one_preview")]
     pub one_to_one_preview: bool,
+}
+
+fn default_standard_preview() -> bool {
+    FolderCacheSettings::default().standard_preview
+}
+
+fn default_one_to_one_preview() -> bool {
+    FolderCacheSettings::default().one_to_one_preview
 }
 
 impl Default for FolderCacheSettings {
@@ -31,12 +68,32 @@ impl Default for FolderCacheSettings {
     }
 }
 
+impl FolderCacheSettings {
+    /// Whether the effective folder options allow caching `kind`.
+    pub fn allows(&self, kind: PreviewKind) -> bool {
+        match kind {
+            PreviewKind::Standard => self.standard_preview,
+            PreviewKind::OneToOne => self.one_to_one_preview,
+        }
+    }
+}
+
+/// Cache identity of one cached preview: source file name plus virtual copy id.
+/// `NUL` separates both parts because it cannot occur in a file name, so no
+/// source/virtual-copy combination can collide with another one.
+pub fn preview_cache_key(source: &str, virtual_copy: &str) -> String {
+    format!("{source}\u{0}{virtual_copy}")
+}
+
 #[derive(Debug, Default)]
 pub struct FolderCache {
     entries: HashMap<String, Vec<u8>>,
 }
 
 impl FolderCache {
+    /// Folder options are inherited from parent folders; a folder that stores
+    /// its own `settings.json` overrides the inherited record completely. The
+    /// chain is ordered from the outermost parent to the folder itself.
     pub fn effective_settings(chain: &[FolderCacheSettings]) -> FolderCacheSettings {
         chain
             .iter()
