@@ -90,13 +90,9 @@ geschoben (Post-MVP via `libraw-wasm`, Feature `wasm-js`), die Architektur wird
 aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 `cfg(target_arch = "wasm32")`-Kapselung).
 
-- [ ] **F-036** Weißabgleich, lineare Datenrepräsentation, Belichtung,
-  Kontrast, Highlights, Shadows, Whites und Blacks implementieren.
-- [ ] **F-037** sRGB-, PNG-, JPEG- und WebP-Export mit Bit-Tiefe,
-  Qualitätswerten, Profilen, Metadaten und Dithering definieren.
-  **Produktentscheidung (2026-08-17):** Im Zweifel Formate einschränken —
-  MVP nur PNG + JPEG + WebP-lossless (image-Crate, keine native Dependency);
-  lossy WebP, 16-Bit, ICC/EXIF sind dokumentierte Post-MVP-Grenzen.
+- [ ] **F-036-N1** As-Shot-Weißabgleich anbinden: `RawMetadata.camera_white_balance`
+  (cam_mul `[f32;4]`) über eine Core-API an `apply_recipe` durchreichen (kein
+  stiller Fallback; ohne Kontext bleibt Identitäts-Semantik).
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
