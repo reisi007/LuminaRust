@@ -8,6 +8,7 @@ use lumina_sidecar::{
     load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint, DecodeFingerprint,
     GeometryFingerprint, HistoryEntry, Preset, SidecarDocument, SourceIdentity,
 };
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -26,6 +27,124 @@ struct Cli {
 enum Command {
     Process(ProcessArgs),
     Inspect(InspectArgs),
+    Import(FileArgs),
+    Develop(DevelopArgs),
+    Render(FileArgs),
+    Export(ExportArgs),
+    Batch(BatchArgs),
+    Mask(MaskArgs),
+    Reindex(IndexArgs),
+    Validate(IndexArgs),
+}
+
+#[derive(Debug, Args)]
+struct FileArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, default_value = "png")]
+    format: String,
+    #[arg(long, default_value_t = 90)]
+    quality: u8,
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    migrate: bool,
+    #[arg(long)]
+    force_render: bool,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct DevelopArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    exposure: Option<f64>,
+    #[arg(long)]
+    contrast: Option<f64>,
+    #[arg(long)]
+    update_masks: bool,
+    #[arg(long)]
+    migrate: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ExportArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    output: PathBuf,
+    #[arg(long, default_value = "png")]
+    format: String,
+    #[arg(long, default_value_t = 90)]
+    quality: u8,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    update_masks: bool,
+    #[arg(long)]
+    force_render: bool,
+    #[arg(long)]
+    migrate: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct BatchArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    output: PathBuf,
+    #[arg(long, default_value_t = 1)]
+    jobs: usize,
+    #[arg(long, default_value_t = 1)]
+    retry: u32,
+    #[arg(long)]
+    resume: bool,
+    #[arg(long)]
+    dry_run: bool,
+    #[arg(long)]
+    update_masks: bool,
+    #[arg(long)]
+    force_render: bool,
+    #[arg(long)]
+    json: bool,
+    #[arg(long, default_value = "png")]
+    format: String,
+    #[arg(long, default_value_t = 90)]
+    quality: u8,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct MaskArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    update_masks: bool,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct IndexArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    migrate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -84,10 +203,374 @@ fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Command::Process(args) => process(args),
         Command::Inspect(args) => inspect(args),
+        Command::Import(args) => import_file(args),
+        Command::Develop(args) => develop(args),
+        Command::Render(args) => render(args),
+        Command::Export(args) => export(args),
+        Command::Batch(args) => batch(args),
+        Command::Mask(args) => mask(args),
+        Command::Reindex(args) => reindex(args),
+        Command::Validate(args) => validate(args),
     }
 }
 
+fn import_file(args: FileArgs) -> Result<(), CliError> {
+    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let (frame, raw) = decode_input(&args.input, &bytes)?;
+    let path = sidecar_path_for(&args.input);
+    if args.migrate && path.exists() {
+        migrate_sidecar(&path)?;
+    } else if path.exists() {
+        load_sidecar(&path)?;
+    } else {
+        let document = SidecarDocument::new(
+            source_identity(&args.input, &bytes, &frame, raw.as_ref())?,
+            "raster-mvp-1",
+        );
+        save_sidecar(&path, &document)?;
+    }
+    emit(
+        args.json,
+        serde_json::json!({"command":"import", "input":args.input, "sidecar":path, "status":"ok"}),
+        "imported",
+    )
+}
+
+fn develop(args: DevelopArgs) -> Result<(), CliError> {
+    let path = sidecar_path_for(&args.input);
+    if args.migrate {
+        migrate_sidecar(&path)?;
+    }
+    let mut document = load_sidecar(&path)?;
+    let id = args.virtual_copy.as_deref().unwrap_or("vc-original");
+    if !document.virtual_copies.iter().any(|copy| copy.id == id) {
+        document.duplicate_virtual_copy("vc-original", id, id)?;
+    }
+    let copy = document
+        .virtual_copies
+        .iter_mut()
+        .find(|c| c.id == id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))?;
+    if let Some(value) = args.exposure {
+        copy.recipe.adjustments.insert("exposure".into(), value);
+    }
+    if let Some(value) = args.contrast {
+        copy.recipe.adjustments.insert("contrast".into(), value);
+    }
+    if args.update_masks {
+        copy.recipe
+            .options
+            .insert("update_masks".into(), "true".into());
+    }
+    save_sidecar(&path, &document)?;
+    emit(
+        args.json,
+        serde_json::json!({"command":"develop", "input":args.input, "virtual_copy":id, "status":"ok"}),
+        "developed",
+    )
+}
+
+fn render(args: FileArgs) -> Result<(), CliError> {
+    let output = args
+        .output
+        .clone()
+        .ok_or_else(|| CliError::Message("render requires --output".into()))?;
+    validate_format(&args.format)?;
+    validate_quality(args.quality)?;
+    if args.migrate {
+        migrate_sidecar(&sidecar_path_for(&args.input))?;
+    }
+    let output = output.with_extension(format_extension(&args.format));
+    process_selected(
+        ProcessArgs {
+            input: args.input.clone(),
+            output: output.clone(),
+            preset: None,
+            exposure: None,
+            contrast: None,
+            highlights: None,
+            shadows: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
+        },
+        args.virtual_copy.as_deref(),
+    )?;
+    emit(
+        args.json,
+        serde_json::json!({"command":"render", "output":output, "format":args.format, "status":"ok"}),
+        "rendered",
+    )
+}
+
+fn export(args: ExportArgs) -> Result<(), CliError> {
+    validate_format(&args.format)?;
+    validate_quality(args.quality)?;
+    if args.migrate {
+        migrate_sidecar(&sidecar_path_for(&args.input))?;
+    }
+    let output = args.output.with_extension(format_extension(&args.format));
+    process_selected(
+        ProcessArgs {
+            input: args.input.clone(),
+            output: output.clone(),
+            preset: None,
+            exposure: None,
+            contrast: None,
+            highlights: None,
+            shadows: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
+        },
+        args.virtual_copy.as_deref(),
+    )?;
+    emit(
+        args.json,
+        serde_json::json!({"command":"export", "output":output, "quality":args.quality, "status":"ok"}),
+        "exported",
+    )
+}
+
+fn mask(args: MaskArgs) -> Result<(), CliError> {
+    let path = sidecar_path_for(&args.input);
+    let mut document = load_sidecar(&path)?;
+    if args.update_masks {
+        let copies = if let Some(id) = args.virtual_copy.as_deref() {
+            document
+                .virtual_copies
+                .iter_mut()
+                .filter(|copy| copy.id == id)
+                .collect::<Vec<_>>()
+        } else {
+            document.virtual_copies.iter_mut().collect::<Vec<_>>()
+        };
+        if args.virtual_copy.is_some() && copies.is_empty() {
+            return Err(CliError::Message("unknown virtual copy".into()));
+        }
+        for copy in copies {
+            for mask in &mut copy.mask_library {
+                mask.status = lumina_sidecar::MaskStatus::Pending;
+            }
+        }
+        save_sidecar(&path, &document)?;
+    }
+    emit(
+        args.json,
+        serde_json::json!({"command":"mask", "input":args.input, "updated":args.update_masks, "status":"ok"}),
+        "mask status updated",
+    )
+}
+
+fn validate(args: IndexArgs) -> Result<(), CliError> {
+    let path = if args.input.extension().and_then(|e| e.to_str()) == Some("json") {
+        args.input
+    } else {
+        sidecar_path_for(&args.input)
+    };
+    if args.migrate {
+        migrate_sidecar(&path)?;
+    }
+    let document = load_sidecar(&path)?;
+    document.validate()?;
+    emit(
+        args.json,
+        serde_json::json!({"command":"validate", "sidecar":path, "status":"valid"}),
+        "valid",
+    )
+}
+
+fn reindex(args: IndexArgs) -> Result<(), CliError> {
+    let mut files = Vec::new();
+    collect_sidecars(&args.input, &mut files)?;
+    let mut valid = 0usize;
+    for path in files {
+        if load_sidecar(&path).is_ok() {
+            valid += 1;
+        }
+    }
+    emit(
+        args.json,
+        serde_json::json!({"command":"reindex", "input":args.input, "sidecars":valid, "status":"ok"}),
+        "reindexed",
+    )
+}
+
+fn batch(args: BatchArgs) -> Result<(), CliError> {
+    if args.jobs == 0 {
+        return Err(CliError::Message("--jobs must be greater than zero".into()));
+    }
+    validate_format(&args.format)?;
+    validate_quality(args.quality)?;
+    fs::create_dir_all(&args.output).map_err(|e| io_error(&args.output, e))?;
+    let mut inputs = Vec::new();
+    collect_images(&args.input, &mut inputs)?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(args.jobs)
+        .build()
+        .map_err(|e| CliError::Message(e.to_string()))?;
+    let results = pool.install(|| {
+        inputs
+            .par_iter()
+            .map(|input| batch_one(input, &args))
+            .collect::<Vec<_>>()
+    });
+    let failed = results.iter().filter(|r| r.is_err()).count();
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string(
+                &results
+                    .iter()
+                    .map(|r| match r {
+                        Ok(v) => serde_json::json!({"status":"ok","input":v}),
+                        Err(e) => serde_json::json!({"status":"failed","error":e.to_string()}),
+                    })
+                    .collect::<Vec<_>>()
+            )
+            .unwrap()
+        );
+    } else {
+        println!(
+            "batch: {} succeeded, {} failed",
+            results.len() - failed,
+            failed
+        );
+    }
+    if failed != 0 {
+        return Err(CliError::Message(format!("batch failed: {failed} item(s)")));
+    }
+    Ok(())
+}
+
+fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
+    let name = input
+        .file_name()
+        .ok_or_else(|| CliError::Message("input has no file name".into()))?;
+    let output = args
+        .output
+        .join(name)
+        .with_extension(format_extension(&args.format));
+    let status = args
+        .output
+        .join(format!("{}.status.json", name.to_string_lossy()));
+    if args.resume && status.exists() && output.is_file() {
+        let state = fs::read_to_string(&status).map_err(|e| io_error(&status, e))?;
+        if state.contains("\"status\":\"ok\"") {
+            return Ok(input.display().to_string());
+        }
+    }
+    if !args.dry_run {
+        if args.update_masks || args.force_render {
+            let sidecar = sidecar_path_for(input);
+            let mut document = load_sidecar(&sidecar)?;
+            let id = args.virtual_copy.as_deref().unwrap_or("vc-original");
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == id)
+                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))?;
+            if args.update_masks {
+                copy.recipe
+                    .options
+                    .insert("update_masks".into(), "true".into());
+            }
+            if args.force_render {
+                copy.recipe
+                    .options
+                    .insert("force_render".into(), "true".into());
+            }
+            save_sidecar(&sidecar, &document)?;
+        }
+        let mut last = None;
+        for _ in 0..=args.retry {
+            match process_selected(
+                ProcessArgs {
+                    input: input.to_path_buf(),
+                    output: output.clone(),
+                    preset: None,
+                    exposure: None,
+                    contrast: None,
+                    highlights: None,
+                    shadows: None,
+                    auto_tone: false,
+                    match_total_exposure: false,
+                    target_luminance: 0.5,
+                },
+                args.virtual_copy.as_deref(),
+            ) {
+                Ok(()) => {
+                    last = None;
+                    break;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        if let Some(e) = last {
+            return Err(e);
+        }
+    }
+    write_atomically(&status, serde_json::to_vec(&serde_json::json!({"input":input,"output":output,"status":if args.dry_run {"dry-run"} else {"ok"}})).unwrap().as_slice())?;
+    Ok(input.display().to_string())
+}
+
+fn collect_images(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    for entry in fs::read_dir(path).map_err(|e| io_error(path, e))? {
+        let entry = entry.map_err(|e| io_error(path, e))?;
+        let p = entry.path();
+        if p.is_dir() {
+            collect_images(&p, output)?;
+        } else if p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "webp" | "arw" | "cr2" | "cr3" | "dng" | "nef"
+                )
+            })
+            .unwrap_or(false)
+        {
+            output.push(p);
+        }
+    }
+    Ok(())
+}
+fn collect_sidecars(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    for entry in fs::read_dir(path).map_err(|e| io_error(path, e))? {
+        let entry = entry.map_err(|e| io_error(path, e))?;
+        let p = entry.path();
+        if p.is_dir() {
+            collect_sidecars(&p, output)?
+        } else if p.to_string_lossy().ends_with(".lumina.json") {
+            output.push(p)
+        }
+    }
+    Ok(())
+}
+fn emit(json: bool, value: serde_json::Value, text: &str) -> Result<(), CliError> {
+    if json {
+        println!("{}", value);
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
+fn migrate_sidecar(path: &Path) -> Result<(), CliError> {
+    let json = fs::read_to_string(path).map_err(|error| io_error(path, error))?;
+    let migrated = lumina_sidecar::migrate_json(&json)?;
+    if migrated != json {
+        write_atomically(path, migrated.as_bytes())?;
+    }
+    Ok(())
+}
+
 fn process(args: ProcessArgs) -> Result<(), CliError> {
+    process_selected(args, None)
+}
+
+fn process_selected(args: ProcessArgs, virtual_copy: Option<&str>) -> Result<(), CliError> {
     reject_same_path(&args.input, &args.output)?;
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
@@ -115,7 +598,17 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
             "invalid target-luminance: must be finite and in 0..=1".into(),
         ));
     }
-    let mut recipe = document.virtual_copies[0].recipe.clone();
+    let copy_index = virtual_copy
+        .map(|id| {
+            document
+                .virtual_copies
+                .iter()
+                .position(|copy| copy.id == id)
+                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}")))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let mut recipe = document.virtual_copies[copy_index].recipe.clone();
     let auto_requested = args.auto_tone;
     if auto_requested {
         recipe.auto_features.enable_auto_tone = true;
@@ -130,7 +623,7 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
             .analysis_fingerprint
             .as_ref()
             .filter(|f| f.input_fingerprint == fingerprint);
-        let (exposure, contrast, reused) = if let (Some(exposure), Some(contrast)) = (
+        let (exposure, contrast, _reused) = if let (Some(exposure), Some(contrast)) = (
             persisted.and(recipe.auto_features.auto_exposure),
             persisted.and(recipe.auto_features.auto_contrast),
         ) {
@@ -147,14 +640,6 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
             });
             (result.exposure, result.contrast, false)
         };
-        println!(
-            "auto-tone: {}",
-            if reused {
-                "reused"
-            } else {
-                "recomputed (stale or missing analysis)"
-            }
-        );
         recipe.adjustments.insert("exposure".into(), exposure);
         recipe.adjustments.insert("contrast".into(), contrast);
     }
@@ -200,7 +685,7 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
     let encoded = frame.encode(format)?;
     write_atomically(&args.output, &encoded)?;
 
-    let copy = &mut document.virtual_copies[0];
+    let copy = &mut document.virtual_copies[copy_index];
     copy.recipe = recipe.clone();
     copy.history.push(HistoryEntry {
         id: format!("h-{}", timestamp()),
@@ -209,11 +694,6 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
         extras: BTreeMap::new(),
     });
     save_sidecar(&sidecar_path, &document)?;
-    println!(
-        "processed {} -> {}",
-        args.input.display(),
-        args.output.display()
-    );
     Ok(())
 }
 
@@ -311,6 +791,31 @@ fn output_format(path: &Path) -> Result<ImageFileFormat, CliError> {
         extension => Err(CliError::Message(format!(
             "unsupported output extension `.{extension}`; use png, jpg, jpeg, or webp"
         ))),
+    }
+}
+
+fn validate_format(format: &str) -> Result<(), CliError> {
+    match format.to_ascii_lowercase().as_str() {
+        "png" | "jpg" | "jpeg" | "webp" => Ok(()),
+        _ => Err(CliError::Message(format!(
+            "unsupported format `{format}`; use png, jpg, jpeg, or webp"
+        ))),
+    }
+}
+
+fn format_extension(format: &str) -> &'static str {
+    match format.to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => "jpg",
+        "webp" => "webp",
+        _ => "png",
+    }
+}
+
+fn validate_quality(quality: u8) -> Result<(), CliError> {
+    if (1..=100).contains(&quality) {
+        Ok(())
+    } else {
+        Err(CliError::Message("quality must be in 1..=100".into()))
     }
 }
 

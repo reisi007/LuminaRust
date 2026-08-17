@@ -6,6 +6,7 @@ description = "Headless Lumina raster MVP"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+rayon = "1"
 blake3 = "1"
 lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }

@@ -40,17 +40,6 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 0: Zielzustand und Architektur
 
-- [ ] **F-001** Produktumfang für die erste Version verbindlich festlegen:
-  Katalogumfang, Import, Entwicklung, Export, virtuelle Kopien, Masken,
-  Historie und Offline-Status.
-- [ ] **F-002** Die Dokumente unter `feature/` als normative Featurequelle
-  gegen die ursprüngliche SRS prüfen und widersprüchliche Anforderungen
-  markieren oder korrigieren.
-- [ ] **F-003** Sidecar-first-Entscheidung als Architekturentscheidung
-  dokumentieren: Sidecar ist autoritativ, Datenbank bleibt optional und
-  wiederaufbaubar.
-- [ ] **F-004** Sidecar-Bundle, Dateinamensregeln, relative Artefaktpfade,
-  Atomic Writes und Recovery-Verhalten festlegen.
 - [ ] **F-005** Arbeitsfarbraum, Pipeline-Reihenfolge, Bit-Tiefen, Clipping,
   Transferfunktionen und Farbprofilstrategie normativ spezifizieren.
 - [ ] **F-006** Native-, Desktop- und WASM-Capability-Matrix erstellen.
@@ -64,51 +53,24 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Phase 1: Sidecar-Domain-Modell
 
-- [ ] **F-011** Quellidentität mit Content-Hash, Dateigröße, Änderungszeit,
-  Format, Orientierung und relevanten Decode-Parametern definieren.
-- [ ] **F-012** Vollständiges Sidecar-Schema für eine einzelne RAW-Datei
-  entwerfen und mit einem Beispiel dokumentieren.
 - [ ] **F-014** Regeln für Standardkopie, Umbenennen, Sortieren, Duplizieren,
   Löschen und Wiederherstellen virtueller Kopien spezifizieren.
-- [ ] **F-015** Rezeptmodell so definieren, dass jede virtuelle Kopie ein
-  selbständig auswertbares, nicht-destruktives Rezept besitzt.
-- [ ] **F-016** Rezept- und Pipelineversion getrennt modellieren.
 
 ## Phase 2: Rezept, virtuelle Kopien und Migrationen
 
-- [ ] **F-018** Einen großen Sidecar-Roundtrip mit realistischem Datenumfang
-  und Speicher-/Performancegrenzen ergänzen.
 - [ ] **F-019** Sidecar-Migrationen, unbekannte Felder, inkompatible Versionen
   und Downgrade-Verhalten definieren.
-- [ ] **F-020** Virtuelle-Kopien-Roundtrip-, Duplikations-, Umbenennungs- und
-  unabhängige-Rezept-Tests implementieren.
 - [ ] **F-021** Atomare Schreibvorgänge, temporäre Dateien, Crash-Recovery und
   parallele Schreibkonflikte implementieren und testen.
-- [ ] **F-022** Dokumentieren und testen, dass XMP in v1 nicht unterstützt wird;
-  einen späteren XMP-Adapter außerhalb des v1-Scopes planen.
 - [ ] **F-023** Konfliktauflösung für extern veränderte Sidecars, verschobene
   Originale, fehlende Artefakte und beschädigte JSON-Dateien implementieren.
 
 ## Phase 3: Renderpipeline und Cache
 
-- [ ] **F-024** Deklarative Pipeline mit stabiler Reihenfolge und expliziten
-  Eingangs-/Ausgangsformaten spezifizieren.
-- [ ] **F-025** Pipeline als gemeinsam verwendbare Core-API implementieren;
-  GUI und CLI dürfen keine eigene Pixelpipeline enthalten.
-- [ ] **F-026** `RenderKey` aus Quell-Hash, Decode-/Pipeline-Version,
-  Rezept-Hash, Masken-Hashes, Farbprofil, Zielgröße und Ausgabeformat bilden.
-- [ ] **F-027** Cache-Stufen für Decode, Preview, Histogramm, Masken und Export
-  sowie deren Invalidierungsabhängigkeiten dokumentieren.
-- [ ] **F-028** Cache mit atomaren Artefakten, Prüfsummen, Größenlimit,
-  Bereinigung und Abbruchverhalten implementieren.
 - [ ] **F-029** Sicherstellen, dass reine Crop-, UI- oder Ausgabeänderungen
   keine unnötige RAW-Dekodierung oder AI-Inferenz auslösen.
-- [ ] **F-030** Stale-Result-Erkennung für parallele Preview- und Exportjobs
-  implementieren.
 - [ ] **F-031** Determinismusregeln zwischen CPU, GPU und optionalen Backends
   festlegen und durch Referenztests absichern.
-- [ ] **F-084** Nicht-destruktive Source-Actions für Staubentfernung und
-  spätere KI-Teil-Ersetzung vor Auto-Analyse und Maskenanwendung modellieren.
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen.
 - [ ] **F-086** Ordner-Cache unter `.lumina/` mit geerbter `settings.json`,
@@ -118,30 +80,23 @@ keine dauerhafte Liste abgehakter Aufgaben.
 ## Phase 4: RAW-Verarbeitung
 
 Diese Phase ist ein verbindliches MVP-Gate. Der erste User-Test gilt erst als
-produktseitig vollständig, wenn native RAW-Decodierung, Orientierung und die
-minimalen RAW-Golden-Tests vorhanden sind. WASM bleibt für RAW ausdrücklich
-außerhalb des Scopes.
+produktseitig vollständig, wenn native RAW-Dekodierung, Orientierung und die
+minimalen RAW-Golden-Tests vorhanden sind. **MVP-Grenze (2026-08-17):** Das MVP
+umfasst CLI und native Desktop (inkl. RAW). Web/WASM-RAW ist aus dem MVP
+geschoben (Post-MVP via `libraw-wasm`, Feature `wasm-js`), die Architektur wird
+aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
+`cfg(target_arch = "wasm32")`-Kapselung).
 
-- [ ] **F-034** EXIF, Orientierung, Kamera-Farbmatrix und relevante Profile
-  extrahieren und persistierbar machen.
-- [ ] **F-035** Demosaicing-Strategie mit Qualitäts-, Speicher- und
-  Performancekriterien implementieren.
 - [ ] **F-036** Weißabgleich, lineare Datenrepräsentation, Belichtung,
   Kontrast, Highlights, Shadows, Whites und Blacks implementieren.
 - [ ] **F-037** sRGB-, PNG-, JPEG- und WebP-Export mit Bit-Tiefe,
   Qualitätswerten, Profilen, Metadaten und Dithering definieren.
-- [ ] **F-038** Echte RAW-Golden-Tests mit Referenzexporten sowie Tests für
-  fehlerhafte/teilweise lesbare Dateien ergänzen; CR3-Decode-, Orientation-
-  und Geometrie-Fixtures sind vorhanden und separat verifiziert.
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
 - [ ] **F-039** Eine explizite Histogramm-Repräsentation ergänzen; die aktuelle
   RGBA8-/Rec.709-Messdomäne, Gewichtung und Perzentilinterpolation sind für den
   Raster-MVP festgelegt.
-- [ ] **F-040** Automatische Highlights-/Shadows-Vorschläge und die vollständige
-  RAW-/Farbmanagement-Semantik ergänzen; manuelle Raster-MVP-Adjustments für
-  Exposure, Contrast, Highlights und Shadows sind vorhanden.
 - [ ] **F-041** `Match Total Exposure` auf den finalen sichtbaren Messbereich
   nach Crop, Geometrie und aktiven Masken erweitern; Epsilon-, Clipping- und
   Fallback-Schutz sind im aktuellen Raster-Messbereich vorhanden.
@@ -177,42 +132,18 @@ außerhalb des Scopes.
 
 ## Phase 7: CLI und Batch
 
-- [ ] **F-052** CLI-Befehle für `import`, `inspect`, `develop`, `render`,
-  `export`, `batch`, `mask`, `reindex` und `validate` definieren.
-- [ ] **F-053** Einzelbildverarbeitung mit Sidecar-Laden, virtuelle-Kopie-
-  Auswahl, Render-Key und Export implementieren.
-- [ ] **F-054** Batch-Verarbeitung mit Rayon, begrenztem Speicher, Resume,
-  Retry, Dry-Run und reproduzierbaren Exit-Codes implementieren.
-- [ ] **F-055** CLI-Optionen für `--update-masks`, `--migrate`,
-  `--force-render`, `--virtual-copy`, `--format`, `--quality` und
-  strukturierte Ausgabe testen.
-- [ ] **F-056** CLI-End-to-End-Tests für Sidecar-only-Betrieb ohne zentrale DB
-  ergänzen.
+(alle Punkte umgesetzt und verifiziert — 2026-08-17)
 
 ## Phase 8: Desktop-GUI
 
-- [ ] **F-057** egui/eframe-GUI-Grundgerüst und gemeinsame Jobsteuerung
-  implementieren.
 - [ ] **F-058** Datei-Browser mit Sidecar-Status, Offline-Status,
   Konfliktstatus und virtuellen Kopien implementieren.
-- [ ] **F-059** Vorschau und Histogramm an einen konkreten Renderstand koppeln;
-  veraltete Ergebnisse dürfen nicht sichtbar als aktuell erscheinen.
-- [ ] **F-060** Regler, Auto-Tone, Exposure Matching und Preset-Anwendung als
-  nicht-destruktive Rezeptänderungen implementieren.
 - [ ] **F-061** Maskenwerkzeuge für Auswahl, Benennung, Invertierung,
   Feathering, lokale Anpassungen, Speichern und Neuberechnung implementieren.
-- [ ] **F-062** Preset-Creator mit ausgewählten Feldern, Validierung,
-  Versionierung und virtueller-Kopie-Anwendung implementieren.
 - [ ] **F-063** GUI-Tests für Sidecar-Schreiben, Wiederöffnen, Kopien und
   fehlende Maskenmodelle ergänzen.
-- [ ] **F-087** Auswahlbasierte Mehrbildänderungen ohne dauerhafte
-  Gruppenverknüpfung implementieren; Maskenabsichten werden pro Zielbild als
-  `missing`/`pending` geführt.
 - [ ] **F-088** Idle-Queue mit Opt-out für fehlende AI-Masken sowie Warnungen und
   `--update-masks`-Verhalten vor dem Export implementieren.
-- [ ] **F-089** Preset-Dateien mit explizit auswählbaren Feldern, absoluter und
-  relativer Semantik sowie einem neuen History-Schritt beim Anwenden
-  implementieren.
 
 ## Phase 9: Optionale zentrale Indizierung
 

@@ -128,3 +128,43 @@ fn corrupt_raw_exits_non_zero_with_decode_error() {
             || String::from_utf8_lossy(&result.stderr).contains("LibRaw")
     );
 }
+
+#[test]
+fn sidecar_only_develop_reopens_and_creates_virtual_copy() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = write_png(&directory, "input.png");
+    assert!(cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    for (id, exposure) in [("vc-warm", "--exposure=1"), ("vc-cool", "--exposure=-1")] {
+        let result = cli()
+            .args([
+                "develop",
+                "--input",
+                input.to_str().unwrap(),
+                "--virtual-copy",
+                id,
+                exposure,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let document = lumina_sidecar::load_sidecar(&sidecar_path_for(&input)).unwrap();
+    assert_eq!(document.virtual_copies.len(), 3);
+    assert_eq!(
+        document.virtual_copies[1].recipe.adjustments["exposure"],
+        1.0
+    );
+    assert_eq!(
+        document.virtual_copies[2].recipe.adjustments["exposure"],
+        -1.0
+    );
+}

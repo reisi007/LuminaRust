@@ -1,13 +1,24 @@
 # Nicht-destruktive Renderpipeline
 
-**Features:** F-003 Nicht-destruktive Entwicklung, F-005 Cache und Render-Key,
-F-008 Auto-Tone und Exposure Matching
+**Features:** F-003 Nicht-destruktive Entwicklung, F-005 Arbeitsfarbraum,
+Pipeline-Reihenfolge, Bit-Tiefen, Clipping, Transferfunktionen und
+Farbprofilstrategie, F-008 Auto-Tone und Exposure Matching
+
+Dieses Dokument ist die **normative** Spezifikation der Renderpipeline. Die
+hier beschriebenen Stufen, Formate, Bit-Tiefen und Clipping-Regeln sind an die
+tatsächlich implementierte Pipeline in `crates/lumina-core/src/pipeline.rs`
+angeglichen (Abweichungen wurden zugunsten des Codes korrigiert).
 
 ## Inhaltsverzeichnis
 
 - [Ziel](#ziel)
 - [Pipeline-Reihenfolge](#pipeline-reihenfolge)
-- [Optionale Stufen](#optionale-stufen)
+- [Arbeitsfarbraum (normativ)](#arbeitsfarbraum-normativ)
+- [Bit-Tiefen (normativ)](#bit-tiefen-normativ)
+- [Transferfunktionen (normativ)](#transferfunktionen-normativ)
+- [Clipping (normativ)](#clipping-normativ)
+- [Farbprofilstrategie (normativ)](#farbprofilstrategie-normativ)
+- [Optionale Stufen und Adjustment-Semantik](#optionale-stufen-und-adjustment-semantik)
 - [Reproduzierbarkeit](#reproduzierbarkeit)
 - [Auto-Tone](#auto-tone)
 - [Exposure Matching](#exposure-matching)
@@ -22,25 +33,100 @@ Versionen erzeugt. GUI und CLI verwenden dieselbe Renderpipeline.
 
 ## Pipeline-Reihenfolge
 
+Die implementierte `Pipeline::default()` definiert die verbindliche
+Stufenreihenfolge. Jede Stufe besitzt ein `(Stufe, Eingabeformat,
+Ausgabeformat)`-Tupel; `Pipeline::validate()` stellt sicher, dass das
+Ausgabeformat einer Stufe dem Eingabeformat der folgenden entspricht:
+
 ```text
-Quelle identifizieren
-  -> RAW dekodieren und kalibrieren
-  -> linearen Arbeitsfarbraum herstellen
-  -> optionale Source-Actions
-  -> Weißabgleich und globale Tonwerte
-  -> Auto-Tone und optional Match Total Exposure
-  -> Farb- und lokale Anpassungen
-  -> Masken anwenden
-  -> Crop und Geometrie
-  -> Ausgabeprofil, Schärfung und Export
+Decode          EncodedSource  -> Rgba8Srgb
+SourceActions   Rgba8Srgb      -> Rgba8Srgb
+AutoAnalysis    Rgba8Srgb      -> Rgba8Srgb
+Adjustments     Rgba8Srgb      -> Rgba8Srgb
+Masks           Rgba8Srgb      -> Rgba8Srgb
+Crop            Rgba8Srgb      -> Rgba8Srgb
+Output          Rgba8Srgb      -> Output
 ```
 
-Arbeitsfarbraum, Transferfunktionen, Clipping, Bit-Tiefe, Farbprofile und
-Reihenfolge müssen vor mathematischer Implementierung normativ festgelegt
-werden. ProPhoto RGB und Rec.2020 dürfen nicht gleichzeitig als unbestimmte
-Arbeitsraumalternative verwendet werden.
+Die vollständige Pipeline verbleibt im Format `Rgba8Srgb` (sRGB-codiertes
+8-Bit-RGBA). Eine explizite Linearisierung in einen linearen Arbeitsraum
+erfolgt im aktuellen Raster-MVP **nicht**.
 
-## Optionale Stufen
+## Arbeitsfarbraum (normativ)
+
+- Der interne Arbeitsfarbraum des Raster-MVP ist **sRGB-codiertes RGBA8**
+  (`PipelineFormat::Rgba8Srgb`, je Kanal ein `u8` in `0..=255`, Alpha erhalten).
+- Das Enum `PipelineFormat` kennt zusätzlich `LinearProPhotoRgb`. Dieses ist
+  als Reservat für eine spätere, echte lineare ProPhoto-RGB-Verarbeitung
+  vorgesehen, wird aber von `Pipeline::default()` **nicht** verwendet — es
+  durchläuft aktuell keine Stufe. Eine Pipelinestufe ohne definierte
+  Reihenfolge, Versionierung und Tests ist unzulässig.
+- ProPhoto RGB und Rec.2020 dürfen nicht gleichzeitig als unbestimmte
+  Arbeitsraumalternative verwendet werden. Im aktuellen MVP ist der einzige
+  aktive Arbeitsraum sRGB.
+- HINWEIS zur SOLL-Abweichung: `feature/README.md` listet unter
+  „Festgelegte Entscheidungen“ weiterhin „lineares ProPhoto RGB“ als
+  Zielarbeitsraum. Die Implementierung liefert diesen Pfad noch nicht; die
+  normative Pipeline arbeitet in sRGB. Die ProPhoto-Linearisierung bleibt ein
+  dokumentiertes Ziel (reserviert über `LinearProPhotoRgb`), nicht der
+  implementierte Zustand.
+
+## Bit-Tiefen (normativ)
+
+- Die durchgehende Arbeits-Bit-Tiefe der Pipeline ist **8 Bit pro Kanal**
+  (RGBA8).
+- Der native RAW-Decoder (`lumina-raw`) unterstützt als Ausgabe **8 oder 16
+  Bit** je Kanal (`RawDecodeOptions::output_bits`, geprüft auf `8 | 16`).
+  Die dekodierten Rohdaten werden vor Eintritt in die Pipeline auf RGBA8
+  reduziert (16-Bit-Werte werden um 8 Bit nach rechts geschoben), sodass alle
+  nachfolgenden Stufen in RGBA8 arbeiten.
+- Exportformate (PNG, JPEG, WebP) sind 8-Bit-Container; tiefere Bit-Tiefen im
+  Export sind im Modell vorbereitet, aber im MVP nicht implementiert.
+
+## Transferfunktionen (normativ)
+
+- Der RAW-Decoder liefert bereits **sRGB-codierte** Pixeldaten
+  (`libraw_set_output_color(..., 1)`), ohne automatische Helligkeitsanpassung
+  (`no_auto_bright = 0` überlässt LibRaw die Entscheidung; Kamera-White-Balance
+  und -Matrix sind aktiv).
+- Eine zusätzliche Gamma-Dekodierung oder Linearisierung findet in der Pipeline
+  nicht statt: Die Werte in `Rgba8Srgb` sind sRGB-kodiert und werden als solche
+  additiv und multiplikativ bearbeitet.
+- Auto-Tone und Exposure Matching messen die **sRGB-kodierte** Helligkeit: Die
+  RGB-Kanäle werden auf `0..=1` normalisiert (Wert `/ 255`) und mit Rec.709
+  (`0.2126 / 0.7152 / 0.0722`) gewichtet. Alpha wird ignoriert.
+
+## Clipping (normativ)
+
+- Jeder Kanal wird nach multiplikativen/multiplikativen Operationen auf `0..=255`
+  begrenzt (`clamp(0.0, 255.0)` als `u8`). Alpha bleibt unverändert.
+- Die globalen Raster-Adjustments arbeiten auf dem normalisierten `x` in
+  `0..=1`; das Ergebnis wird zurück auf `0..=255` skaliert und begrenzt.
+- Ungültige Adjustment-Werte werden **nicht** still geclippt, sondern mit einem
+  Fehler abgelehnt:
+  - `exposure` endlich und in `-10..=10` EV
+  - `contrast`, `highlights`, `shadows` endlich und in `-1..=1`
+  - unbekannte Adjustment-Keys werden mit `UnsupportedAdjustment` abgelehnt
+- Auto-Tone und Exposure Matching sind explizit gegen Division durch null,
+  extreme Zielwerte und Clipping abgesichert (Epsilon-Schutz, Begrenzung auf
+  `-10..=10` EV).
+
+## Farbprofilstrategie (normativ)
+
+- **Ausgabeprofil:** Standard ist **sRGB**. Der `RenderKey` führt ein
+  `output_profile`-Feld (Zeichenkette); weitere Profile sind im Modell
+  vorbereitet, im MVP aber nicht implementiert.
+- **Quellprofile:** Der RAW-Decoder extrahiert Kamera-Matrix
+  (`camera_matrix`), Kamera-White-Balance (`camera_white_balance`),
+  Vor-Multiplikatoren (`pre_multipliers`) und ein optionales eingebettetes
+  ICC-Profil (`icc_profile`). Im MVP wird die sRGB-Ausgabe von LibRaw ohne
+  eigene zusätzliche Farbtransformation verwendet; eine proprietäre
+  Matrix-/Profilanwendung ist noch nicht in die Pipeline integriert.
+- **Persistenz von Farbkontext:** Decode-Version, Pipeline-Version und
+  `output_profile` gehören zum Render-Key, sodass ein Wechsel des
+  Farbkontexts gezielt invalidiert.
+
+## Optionale Stufen und Adjustment-Semantik
 
 Alle Stufen sind optional, sofern das Rezept sie nicht aktiviert. Die
 verbindliche Reihenfolge für aktivierte Entwicklungsfunktionen lautet:
@@ -99,7 +185,11 @@ output_dimensions
 output_format
 ```
 
-Ein Dateipfad oder Zeitstempel allein ist kein gültiger Render-Key.
+Ein Dateipfad oder Zeitstempel allein ist kein gültiger Render-Key. Der
+`RenderKey` wird deterministisch gehasht; `stage_digest` ermöglicht
+stufenspezifische Digests (decode / mask / histogram / render), sodass
+beispielsweise eine reine Ausgabegrößenänderung den Decode-Cache nicht
+invalidiert, wohl aber Preview und Export.
 
 ## Auto-Tone
 
@@ -152,7 +242,10 @@ Rezeptstand gehören.
 
 - CPU und CLI liefern für identische Eingaben reproduzierbare Ergebnisse mit
   dokumentierten Toleranzen.
-- Render-Keys unterscheiden alle relevanten Eingaben.
+- Render-Keys unterscheiden alle relevanten Eingaben (inklusive
+  Arbeitsfarbraum und `output_profile`).
 - Cache-Hit, Cache-Miss und gezielte Invalidierung sind getestet.
 - Auto-Tone und Exposure Matching besitzen Unit-, Property- und
   Referenzbildtests.
+- Die implementierte Stufenreihenfolge und die Formatverträglichkeit sind über
+  `Pipeline::validate()` abgesichert.

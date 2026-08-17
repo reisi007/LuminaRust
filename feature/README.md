@@ -115,7 +115,9 @@ Sidecars vollständig wiederherstellbar sein.
 - Maskenbibliotheken gehören zunächst zu virtuellen Kopien; Cross-Copy-
   Referenzen sind erlaubt und werden bei Löschung materialisiert.
 - RAW wird zunächst über einen gekapselten LibRaw-Adapter gelesen.
-- Der interne Arbeitsfarbraum ist lineares ProPhoto RGB.
+- Der interne Arbeitsfarbraum ist im Raster-MVP sRGB-codiertes RGBA8; ein
+  linearer ProPhoto-RGB-Arbeitsraum ist als Ziel reserviert (siehe
+  `architecture/pipeline.md`).
 - GUI-Technologie ist egui/eframe.
 - BiRefNet ist das erste automatische Subject-Modell; SAM 2 ist das erste
   interaktive Box-/Pinsel-Modell. Der ONNX-Adapter bleibt austauschbar.

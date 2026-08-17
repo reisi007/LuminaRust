@@ -2,17 +2,19 @@
 
 use eframe::egui;
 use lumina_core::{
-    match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig, ImageFrame,
+    analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
+    ImageFrame, RenderKey,
 };
 use lumina_raw::RawError;
+use lumina_sidecar::{AnalysisFingerprint, EditRecipe, Preset};
 #[cfg(not(target_arch = "wasm32"))]
-use lumina_sidecar::SidecarDocument;
-use lumina_sidecar::{AnalysisFingerprint, EditRecipe};
-#[cfg(not(target_arch = "wasm32"))]
-use lumina_sidecar::{DecodeFingerprint, GeometryFingerprint, SourceIdentity};
+use lumina_sidecar::{
+    ArtifactStatus, DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskStatus,
+    SidecarDocument, SourceIdentity, SourceStatus, source_status,
+};
 use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GuiError {
@@ -35,10 +37,56 @@ pub struct LuminaApp {
     source_name: String,
     #[cfg(not(target_arch = "wasm32"))]
     path: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    directory: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    entries: Vec<FileBrowserEntry>,
+    #[cfg(not(target_arch = "wasm32"))]
+    selected_entry: Option<usize>,
     recipe: EditRecipe,
     texture: Option<egui::TextureHandle>,
     status: String,
     error: Option<String>,
+    render_key: Option<RenderKey>,
+    tone_analysis: Option<lumina_core::ToneAnalysis>,
+    #[cfg(not(target_arch = "wasm32"))]
+    document: Option<SidecarDocument>,
+    #[cfg(not(target_arch = "wasm32"))]
+    virtual_copy_id: String,
+    preset_name: String,
+    preset_fields: BTreeMap<String, bool>,
+    preset_relative_exposure: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+struct FileBrowserEntry {
+    path: PathBuf,
+    name: String,
+    sidecar_path: PathBuf,
+    has_sidecar: bool,
+    source_status: SourceStatus,
+    conflict: bool,
+    virtual_copies: usize,
+    missing_models: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FileBrowserEntry {
+    fn status_label(&self) -> &'static str {
+        if self.conflict {
+            "Konflikt"
+        } else if matches!(self.source_status, SourceStatus::Missing) {
+            "Offline"
+        } else if self.has_sidecar {
+            "Sidecar"
+        } else {
+            "Ohne"
+        }
+    }
+    fn is_offline(&self) -> bool {
+        matches!(self.source_status, SourceStatus::Missing)
+    }
 }
 
 impl LuminaApp {
@@ -52,15 +100,129 @@ impl LuminaApp {
             source_name: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
             path: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            directory: ".".into(),
+            #[cfg(not(target_arch = "wasm32"))]
+            entries: Vec::new(),
+            selected_entry: None,
             recipe: EditRecipe::default(),
             texture: None,
             status: "Bereit für ein PNG, JPEG oder WebP".into(),
             error: None,
+            render_key: None,
+            tone_analysis: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            document: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            virtual_copy_id: "vc-original".into(),
+            preset_name: String::new(),
+            preset_fields: BTreeMap::from([
+                ("exposure".into(), true),
+                ("contrast".into(), true),
+                ("highlights".into(), false),
+                ("shadows".into(), false),
+            ]),
+            preset_relative_exposure: false,
         }
     }
 
     pub fn recipe(&self) -> &EditRecipe {
         &self.recipe
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_file(&mut self, path: impl Into<String>) {
+        self.path = path.into();
+        self.load_path();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_directory(&mut self, directory: impl Into<String>) {
+        self.directory = directory.into();
+        self.list_directory();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn list_directory(&mut self) {
+        let directory = std::path::PathBuf::from(self.directory.trim());
+        self.entries.clear();
+        match std::fs::read_dir(&directory) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if let Some(scanned) = Self::scan_entry(&entry.path()) {
+                        self.entries.push(scanned);
+                    }
+                }
+                self.entries.sort_by(|a, b| a.name.cmp(&b.name));
+                self.status = format!("{} Bilder im Verzeichnis", self.entries.len());
+            }
+            Err(error) => {
+                self.status = format!("Verzeichnis nicht lesbar: {error}");
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn entries(&self) -> &[FileBrowserEntry] {
+        &self.entries
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn scan_entry(path: &Path) -> Option<FileBrowserEntry> {
+        if !is_supported_image(path) {
+            return None;
+        }
+        let sidecar_path = lumina_sidecar::sidecar_path_for(path);
+        let has_sidecar = sidecar_path.is_file();
+        let mut virtual_copies = 0usize;
+        let mut missing_models = 0usize;
+        let source_status = if path.is_file() {
+            match lumina_sidecar::load_sidecar(&sidecar_path) {
+                Ok(document) => {
+                    virtual_copies = document.virtual_copies.len();
+                    let bundle_root = path.parent().unwrap_or_else(|| Path::new("."));
+                    for copy in &document.virtual_copies {
+                        for mask in &copy.mask_library {
+                            let artifact_missing = mask.artifact.as_ref().map_or(false, |artifact| {
+                                lumina_sidecar::artifact_status(bundle_root, artifact)
+                                    == ArtifactStatus::Missing
+                            });
+                            if matches!(
+                                mask.status,
+                                MaskStatus::Missing
+                                    | MaskStatus::Pending
+                                    | MaskStatus::Stale
+                                    | MaskStatus::Corrupt
+                            ) || artifact_missing
+                            {
+                                missing_models += 1;
+                            }
+                        }
+                    }
+                    lumina_sidecar::source_status(path, &document.source)
+                        .unwrap_or(SourceStatus::Unchanged)
+                }
+                Err(_) => SourceStatus::Unchanged,
+            }
+        } else {
+            SourceStatus::Missing
+        };
+        let conflict = has_sidecar && !matches!(source_status, SourceStatus::Unchanged);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        Some(FileBrowserEntry {
+            path: path.to_path_buf(),
+            name,
+            sidecar_path,
+            has_sidecar,
+            source_status,
+            conflict,
+            virtual_copies,
+            missing_models,
+        })
     }
     pub fn status(&self) -> &str {
         &self.status
@@ -70,6 +232,157 @@ impl LuminaApp {
     }
     pub fn preview(&self) -> Option<&ImageFrame> {
         self.preview.as_ref()
+    }
+    pub fn render_key(&self) -> Option<&RenderKey> {
+        self.render_key.as_ref()
+    }
+    pub fn tone_analysis(&self) -> Option<lumina_core::ToneAnalysis> {
+        self.tone_analysis
+    }
+
+    pub fn create_preset(&self, name: impl Into<String>) -> Result<Preset, GuiError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io("Presetname darf nicht leer sein".into()));
+        }
+        let mut recipe = EditRecipe::default();
+        for (field, selected) in &self.preset_fields {
+            if *selected {
+                if let Some(value) = self.recipe.adjustments.get(field) {
+                    recipe.adjustments.insert(field.clone(), *value);
+                }
+            }
+        }
+        if self.preset_relative_exposure {
+            if !self.recipe.auto_features.enable_auto_tone {
+                return Err(GuiError::Io(
+                    "Relative Exposure erfordert aktives Auto-Tone".into(),
+                ));
+            }
+            recipe
+                .options
+                .insert("exposure_semantics".into(), "relative".into());
+        } else {
+            recipe
+                .options
+                .insert("exposure_semantics".into(), "absolute".into());
+        }
+        Ok(Preset {
+            id: format!("preset-{}", blake3::hash(name.as_bytes()).to_hex()),
+            name,
+            recipe,
+            extras: BTreeMap::new(),
+        })
+    }
+
+    pub fn apply_preset(&mut self, preset: &Preset) -> Result<(), GuiError> {
+        if preset
+            .recipe
+            .options
+            .get("exposure_semantics")
+            .map(String::as_str)
+            == Some("relative")
+            && !self.recipe.auto_features.enable_auto_tone
+        {
+            return Err(GuiError::Io(
+                "Relative Exposure erfordert aktives Auto-Tone".into(),
+            ));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let previous = self.recipe.clone();
+        for (key, value) in &preset.recipe.adjustments {
+            let value = if key == "exposure"
+                && preset
+                    .recipe
+                    .options
+                    .get("exposure_semantics")
+                    .map(String::as_str)
+                    == Some("relative")
+            {
+                self.recipe.adjustments.get(key).copied().unwrap_or(0.0) + value
+            } else {
+                *value
+            };
+            self.recipe.adjustments.insert(key.clone(), value);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(document) = &mut self.document {
+            if let Some(copy) = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == self.virtual_copy_id)
+            {
+                let id = format!("history-{}", copy.history.len() + 1);
+                copy.history.push(HistoryEntry {
+                    id,
+                    recipe: previous,
+                    recorded_at: None,
+                    extras: BTreeMap::new(),
+                });
+            }
+        }
+        self.render()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn duplicate_virtual_copy(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Result<(), GuiError> {
+        let Some(document) = &mut self.document else {
+            return Err(GuiError::Io("Kein Sidecar geladen".into()));
+        };
+        document.duplicate_virtual_copy(&self.virtual_copy_id, id, name)?;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn select_virtual_copy(&mut self, id: &str) -> Result<(), GuiError> {
+        let Some(document) = &self.document else {
+            return Err(GuiError::Io("Kein Sidecar geladen".into()));
+        };
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == id)
+            .ok_or_else(|| GuiError::Io("Virtuelle Kopie nicht gefunden".into()))?;
+        self.virtual_copy_id = copy.id.clone();
+        self.recipe = copy.recipe.clone();
+        self.render()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_adjustment_to_selection(
+        paths: &[std::path::PathBuf],
+        key: &str,
+        value: f64,
+    ) -> Result<usize, GuiError> {
+        if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") {
+            return Err(GuiError::Io(format!("Unbekannte Anpassung: {key}")));
+        }
+        let mut changed = 0;
+        for path in paths {
+            let sidecar_path = lumina_sidecar::sidecar_path_for(path);
+            let mut document = lumina_sidecar::load_sidecar(&sidecar_path)?;
+            let Some(copy) = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.is_default)
+            else {
+                continue;
+            };
+            copy.recipe.adjustments.insert(key.into(), value);
+            copy.history.push(HistoryEntry {
+                id: format!("selection-{changed}"),
+                recipe: copy.recipe.clone(),
+                recorded_at: None,
+                extras: BTreeMap::new(),
+            });
+            lumina_sidecar::save_sidecar(&sidecar_path, &document)?;
+            changed += 1;
+        }
+        Ok(changed)
     }
 
     pub fn load_bytes(&mut self, bytes: Vec<u8>, name: impl Into<String>) -> Result<(), GuiError> {
@@ -85,6 +398,11 @@ impl LuminaApp {
         self.source_bytes = Some(bytes);
         self.source_is_raw = source_is_raw;
         self.raw_orientation = orientation;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.document = None;
+            self.virtual_copy_id = "vc-original".into();
+        }
         self.original = Some(frame);
         self.recipe = EditRecipe::default();
         self.error = None;
@@ -94,6 +412,9 @@ impl LuminaApp {
 
     pub fn set_adjustment(&mut self, name: &str, value: f64) {
         self.recipe.adjustments.insert(name.into(), value);
+        self.render_key = None;
+        self.tone_analysis = None;
+        self.status = "Änderung ausstehend".into();
         self.error = None;
     }
 
@@ -157,6 +478,57 @@ impl LuminaApp {
         };
         let mut preview = original.clone();
         preview.apply_recipe(&self.recipe)?;
+        let source_hash = self
+            .source_bytes
+            .as_ref()
+            .map(|bytes| format!("blake3:{}", blake3::hash(bytes).to_hex()))
+            .unwrap_or_else(|| "blake3:unknown".into());
+        let copy_id = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.virtual_copy_id.clone()
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                "vc-original".to_owned()
+            }
+        };
+        let mask_hashes = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.document
+                    .as_ref()
+                    .and_then(|d| {
+                        d.virtual_copies
+                            .iter()
+                            .find(|c| c.id == self.virtual_copy_id)
+                    })
+                    .map(|c| {
+                        c.mask_library
+                            .iter()
+                            .filter_map(|m| m.artifact.as_ref().map(|a| a.checksum.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Vec::new()
+            }
+        };
+        self.render_key = Some(RenderKey::new(
+            source_hash,
+            env!("CARGO_PKG_VERSION"),
+            "raster-mvp-1",
+            copy_id,
+            &self.recipe,
+            mask_hashes,
+            "sRGB",
+            preview.width,
+            preview.height,
+            "rgba8",
+        ));
+        self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
         self.error = None;
         self.status = "Vorschau aktuell".into();
@@ -233,6 +605,7 @@ impl LuminaApp {
                     lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&path))
                 {
                     let candidate = document.virtual_copies[0].recipe.clone();
+                    self.document = Some(document);
                     let config = AutoToneConfig {
                         target_luminance: candidate.auto_features.target_luminance,
                         ..Default::default()
@@ -272,9 +645,21 @@ impl LuminaApp {
             self.show_error("Kein Bild geladen");
             return;
         };
-        let document = SidecarDocument::new(self.source_identity(frame), "raster-mvp-1");
-        let mut document = document;
-        document.virtual_copies[0].recipe = self.recipe.clone();
+        let mut document = self
+            .document
+            .take()
+            .unwrap_or_else(|| SidecarDocument::new(self.source_identity(frame), "raster-mvp-1"));
+        document.source = self.source_identity(frame);
+        let Some(copy) = document
+            .virtual_copies
+            .iter_mut()
+            .find(|copy| copy.id == self.virtual_copy_id)
+        else {
+            self.show_error("Virtuelle Kopie nicht gefunden");
+            self.document = Some(document);
+            return;
+        };
+        copy.recipe = self.recipe.clone();
         if let Err(error) =
             lumina_sidecar::save_sidecar(&lumina_sidecar::sidecar_path_for(&path), &document)
         {
@@ -282,6 +667,9 @@ impl LuminaApp {
         } else {
             self.status = "Sidecar gespeichert".into();
         }
+        self.document = Some(document);
+        self.list_directory();
+        self.status = "Sidecar gespeichert".into();
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui) {
@@ -294,6 +682,50 @@ impl LuminaApp {
                 ui.label("Bild hierher ziehen oder einen Pfad laden");
             });
         }
+    }
+
+    fn draw_histogram(&self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.heading("Histogramm");
+        if let Some(analysis) = self.tone_analysis {
+            ui.label(format!(
+                "Mittel {:.3}  Median {:.3}",
+                analysis.mean, analysis.median
+            ));
+            ui.label(format!(
+                "P01 {:.3}  P99 {:.3}  ({} Samples)",
+                analysis.p01, analysis.p99, analysis.sample_count
+            ));
+            let width = ui.available_width().max(40.0);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 2.0, egui::Color32::from_gray(35));
+            let left = rect.left() + rect.width() * analysis.p01 as f32;
+            let right = rect.left() + rect.width() * analysis.p99 as f32;
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(left, rect.top()),
+                    egui::pos2(right.max(left + 1.0), rect.bottom()),
+                ),
+                2.0,
+                egui::Color32::LIGHT_GRAY,
+            );
+        } else {
+            ui.label("Nicht aktuell");
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_supported_image(path: &Path) -> bool {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png" | "jpg" | "jpeg" | "webp") => true,
+        _ => is_raw_name(&path.display().to_string()),
     }
 }
 
@@ -373,6 +805,42 @@ impl eframe::App for LuminaApp {
                 ui.colored_label(egui::Color32::RED, error);
             }
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        egui::SidePanel::left("browser")
+            .resizable(true)
+            .default_width(260.0)
+            .show(ctx, |ui| {
+                ui.heading("Datei-Browser");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.directory);
+                    if ui.button("Öffnen").clicked() {
+                        self.list_directory();
+                    }
+                });
+                if ui.button("Aktualisieren").clicked() {
+                    self.list_directory();
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut path_to_open = None;
+                    for entry in &self.entries {
+                        let selected = self.path == entry.path.display().to_string();
+                        let label = format!(
+                            "{}  [{}] Kopien:{} Masken:{}",
+                            entry.name,
+                            entry.status_label(),
+                            entry.virtual_copies,
+                            entry.missing_models
+                        );
+                        if ui.selectable_label(selected, label).clicked() {
+                            path_to_open = Some(entry.path.display().to_string());
+                        }
+                    }
+                    if let Some(path) = path_to_open {
+                        self.open_file(path);
+                    }
+                });
+            });
         egui::SidePanel::left("controls")
             .resizable(false)
             .show(ctx, |ui| {
@@ -395,6 +863,49 @@ impl eframe::App for LuminaApp {
                 #[cfg(target_arch = "wasm32")]
                 {
                     ui.label("Web: Bild per Drag-and-drop laden");
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(document) = &self.document {
+                    let copy_count = document.virtual_copies.len();
+                    let copy_options: Vec<(String, String)> = document
+                        .virtual_copies
+                        .iter()
+                        .map(|copy| (copy.id.clone(), copy.name.clone()))
+                        .collect();
+                    let missing_masks = document
+                        .virtual_copies
+                        .iter()
+                        .flat_map(|copy| &copy.mask_library)
+                        .filter(|mask| !matches!(mask.status, lumina_sidecar::MaskStatus::Valid))
+                        .count();
+                    let source_status = lumina_sidecar::source_status(
+                        std::path::Path::new(&self.path),
+                        &document.source,
+                    )
+                    .ok();
+                    ui.separator();
+                    ui.label(format!("Sidecar: {} Kopien", copy_count));
+                    if let Some(source_status) = source_status {
+                        ui.label(format!("Quelle: {:?}", source_status));
+                    }
+                    let mut selected = self.virtual_copy_id.clone();
+                    egui::ComboBox::from_label("Virtuelle Kopie")
+                        .selected_text(selected.clone())
+                        .show_ui(ui, |ui| {
+                            for (id, name) in &copy_options {
+                                ui.selectable_value(&mut selected, id.clone(), name);
+                            }
+                        });
+                    if selected != self.virtual_copy_id {
+                        let _ = self.select_virtual_copy(&selected);
+                    }
+                    if ui.button("Kopie duplizieren").clicked() {
+                        let id = format!("vc-{}", copy_count + 1);
+                        if let Err(error) = self.duplicate_virtual_copy(id, "Neue Kopie") {
+                            self.show_error(error);
+                        }
+                    }
+                    ui.label(format!("Masken: {} nicht verfügbar/aktuell", missing_masks));
                 }
                 let mut exposure = self
                     .recipe
@@ -444,6 +955,23 @@ impl eframe::App for LuminaApp {
                 if ui.button("Save Recipe / Sidecar").clicked() {
                     self.save_sidecar();
                 }
+                ui.separator();
+                ui.heading("Preset");
+                ui.text_edit_singleline(&mut self.preset_name);
+                for field in ["exposure", "contrast", "highlights", "shadows"] {
+                    let selected = self.preset_fields.entry(field.into()).or_insert(false);
+                    ui.checkbox(selected, field);
+                }
+                ui.checkbox(&mut self.preset_relative_exposure, "Exposure relativ");
+                if ui.button("Preset erstellen und anwenden").clicked() {
+                    match self
+                        .create_preset(self.preset_name.clone())
+                        .and_then(|preset| self.apply_preset(&preset))
+                    {
+                        Ok(()) => self.status = "Preset angewendet, neuer History-Schritt".into(),
+                        Err(error) => self.show_error(error),
+                    }
+                }
                 #[cfg(target_arch = "wasm32")]
                 {
                     ui.label("Browser-Dateispeichern ist im MVP noch nicht implementiert.");
@@ -452,6 +980,12 @@ impl eframe::App for LuminaApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.update_texture(ctx);
             self.draw_preview(ui);
+            self.draw_histogram(ui);
+            if let Some(key) = &self.render_key {
+                ui.label(format!("Renderstand: {}", &key.digest()[..12]));
+            } else {
+                ui.colored_label(egui::Color32::YELLOW, "Renderstand veraltet / ausstehend");
+            }
         });
     }
 }
@@ -484,7 +1018,11 @@ pub fn start() -> Result<(), wasm_bindgen::JsValue> {
 mod tests {
     use super::*;
     use lumina_core::ImageFileFormat;
-    fn app() -> LuminaApp {
+    use lumina_sidecar::{
+        CoordinateSystem, DecodeFingerprint, GeometryFingerprint, MaskDefinition, MaskOperation,
+        MaskStatus, ModelIdentity, Preprocessing, Resolution, SourceFingerprint, SourceStatus,
+    };
+    fn new_app() -> LuminaApp {
         LuminaApp::new(egui::Context::default())
     }
     fn png() -> Vec<u8> {
@@ -495,7 +1033,7 @@ mod tests {
     }
     #[test]
     fn recipe_change_and_render() {
-        let mut app = app();
+        let mut app = new_app();
         app.load_bytes(png(), "test.png").unwrap();
         app.set_adjustment("exposure", 1.0);
         app.render().unwrap();
@@ -504,7 +1042,7 @@ mod tests {
     }
     #[test]
     fn auto_and_matching_use_core_and_persist_recipe_state() {
-        let mut app = app();
+        let mut app = new_app();
         app.load_bytes(png(), "test.png").unwrap();
         app.auto_tone().unwrap();
         assert!(app.recipe().auto_features.enable_auto_tone);
@@ -514,7 +1052,7 @@ mod tests {
     }
     #[test]
     fn reset_restores_original_preview() {
-        let mut app = app();
+        let mut app = new_app();
         app.load_bytes(png(), "test.png").unwrap();
         app.set_adjustment("contrast", 1.0);
         app.render().unwrap();
@@ -522,9 +1060,33 @@ mod tests {
         assert!(app.recipe().adjustments.is_empty());
         assert_eq!(app.preview().unwrap().pixels[0], 10);
     }
+
+    #[test]
+    fn render_key_is_invalidated_until_render() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        assert!(app.render_key().is_some());
+        app.set_adjustment("exposure", 1.0);
+        assert!(app.render_key().is_none());
+        app.render().unwrap();
+        assert!(app.render_key().is_some());
+        assert_eq!(app.tone_analysis().unwrap().sample_count, 2);
+    }
+
+    #[test]
+    fn preset_requires_name_and_validates_relative_exposure() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        assert!(app.create_preset("").is_err());
+        app.preset_relative_exposure = true;
+        assert!(app.create_preset("relative").is_err());
+        app.recipe.auto_features.enable_auto_tone = true;
+        let preset = app.create_preset("relative").unwrap();
+        assert_eq!(preset.recipe.options["exposure_semantics"], "relative");
+    }
     #[test]
     fn decode_error_is_visible() {
-        let mut app = app();
+        let mut app = new_app();
         let result = app.load_bytes(vec![1, 2, 3], "bad.png");
         assert!(result.is_err());
         app.show_error(result.unwrap_err());
@@ -582,5 +1144,178 @@ mod tests {
     fn sidecar_decoder_identity_distinguishes_raw_from_raster() {
         assert_eq!(decoder_identity(true), "libraw");
         assert_eq!(decoder_identity(false), "image");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_png(path: &Path) {
+        let png = ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap();
+        std::fs::write(path, png).unwrap();
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gui_writes_sidecar_and_restores_recipe_on_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        app.save_sidecar();
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        assert!(sidecar.is_file(), "Sidecar muss geschrieben werden");
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(document.virtual_copies[0].recipe.adjustments["exposure"], 1.5);
+
+        let mut reopened = new_app();
+        reopened.open_file(source.display().to_string());
+        assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gui_persists_virtual_copies_across_save_and_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.set_adjustment("contrast", 0.3);
+        app.save_sidecar();
+        app.duplicate_virtual_copy("vc-2", "Kopie 2").unwrap();
+        app.save_sidecar();
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(document.virtual_copies.len(), 2);
+        assert!(document
+            .virtual_copies
+            .iter()
+            .any(|copy| copy.id == "vc-2" && copy.name == "Kopie 2"));
+        assert_eq!(document.virtual_copies[0].recipe.adjustments["contrast"], 0.3);
+
+        let mut reopened = new_app();
+        reopened.open_file(source.display().to_string());
+        assert_eq!(reopened.entries().len(), 1);
+        let reloaded = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(reloaded.virtual_copies.len(), 2);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn file_browser_index_reports_sidecar_and_copy_count() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.save_sidecar();
+        app.duplicate_virtual_copy("vc-2", "Zwei").unwrap();
+        app.duplicate_virtual_copy("vc-3", "Drei").unwrap();
+        app.save_sidecar();
+        app.set_directory(directory.path().display().to_string());
+        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        assert!(entry.has_sidecar);
+        assert_eq!(entry.virtual_copies, 3);
+        assert!(!entry.conflict);
+        assert!(!entry.is_offline());
+        assert_eq!(entry.status_label(), "Sidecar");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn file_browser_detects_offline_source_and_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.save_sidecar();
+        app.set_directory(directory.path().display().to_string());
+        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        assert!(!entry.is_offline());
+        assert!(!entry.conflict);
+
+        std::fs::remove_file(&source).unwrap();
+        app.set_directory(directory.path().display().to_string());
+        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        assert!(entry.is_offline());
+        assert!(entry.conflict);
+        assert_eq!(entry.source_status, SourceStatus::Missing);
+        assert_eq!(entry.status_label(), "Konflikt");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn file_browser_reports_missing_mask_models() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.open_file(source.display().to_string());
+        app.save_sidecar();
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let mut document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        document.virtual_copies[0].mask_library.push(MaskDefinition {
+            id: "m1".into(),
+            name: "subject".into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "blake3:x".into(),
+                byte_length: 1,
+                extras: BTreeMap::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "libraw".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width: 2,
+                height: 1,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: BTreeMap::new(),
+            },
+            model: ModelIdentity {
+                name: "birefnet".into(),
+                version: "1".into(),
+                hash: "h".into(),
+                extras: BTreeMap::new(),
+            },
+            inference_resolution: Resolution {
+                width: 2,
+                height: 1,
+                extras: BTreeMap::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "std".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            rescaling_method: "bilinear".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: MaskStatus::Missing,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Source,
+            references: vec![],
+            extras: BTreeMap::new(),
+        });
+        lumina_sidecar::save_sidecar(&sidecar, &document).unwrap();
+        app.set_directory(directory.path().display().to_string());
+        let entry = app.entries().iter().find(|e| e.name == "photo.png").unwrap();
+        assert_eq!(entry.missing_models, 1);
+        assert_eq!(entry.has_sidecar, true);
+
+        let reloaded = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(reloaded.virtual_copies[0].mask_library.len(), 1);
+        assert_eq!(reloaded.virtual_copies[0].mask_library[0].status, MaskStatus::Missing);
     }
 }

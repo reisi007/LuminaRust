@@ -5,9 +5,16 @@ use lumina_sidecar::EditRecipe;
 use std::io::Cursor;
 use thiserror::Error;
 
+pub mod cache;
 pub mod masks;
+pub mod pipeline;
 pub mod tone;
+pub use cache::{
+    CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
+    StaleTracker,
+};
 pub use masks::{MaskError, MaskGraph, MaskPlane};
+pub use pipeline::{Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use tone::{
     analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
     AutoToneResult, ToneAnalysis,
@@ -18,6 +25,51 @@ pub enum ImageFileFormat {
     Png,
     Jpeg,
     WebP,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitDepth {
+    Eight,
+    Sixteen,
+}
+
+impl Default for BitDepth {
+    fn default() -> Self {
+        Self::Eight
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportOptions {
+    pub format: ImageFileFormat,
+    pub bit_depth: BitDepth,
+    pub quality: u8,
+    pub dither: bool,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            format: ImageFileFormat::Png,
+            bit_depth: BitDepth::default(),
+            quality: 90,
+            dither: false,
+        }
+    }
+}
+
+impl ExportOptions {
+    pub fn validate(&self) -> Result<(), CoreError> {
+        if self.quality == 0 || self.quality > 100 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "quality".into(),
+                value: self.quality as f64,
+                minimum: 1.0,
+                maximum: 100.0,
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

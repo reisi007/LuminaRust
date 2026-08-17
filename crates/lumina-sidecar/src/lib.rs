@@ -15,6 +15,8 @@ pub use zdata::{load_zdata, save_zdata, zdata_path_for, MaskTile, ZDataContainer
 
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 1;
+pub const MAX_SIDECAR_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_VIRTUAL_COPIES: usize = 10_000;
 pub type Extras = BTreeMap<String, Value>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,14 +191,32 @@ pub struct MaskLayer {
     pub extras: Extras,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditRecipe {
+    #[serde(default = "default_recipe_version")]
+    pub recipe_version: String,
     pub adjustments: BTreeMap<String, f64>,
     pub options: BTreeMap<String, String>,
     #[serde(default)]
     pub auto_features: AutoFeatures,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
+}
+
+fn default_recipe_version() -> String {
+    "1".into()
+}
+
+impl Default for EditRecipe {
+    fn default() -> Self {
+        Self {
+            recipe_version: default_recipe_version(),
+            adjustments: BTreeMap::new(),
+            options: BTreeMap::new(),
+            auto_features: AutoFeatures::default(),
+            extras: Extras::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -286,6 +306,8 @@ pub struct SidecarDocument {
     pub analysis_fingerprint: Option<AnalysisFingerprint>,
     pub pipeline_version: String,
     pub virtual_copies: Vec<VirtualCopy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted_virtual_copies: Vec<VirtualCopy>,
     pub presets: Vec<Preset>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
@@ -305,6 +327,23 @@ pub enum SidecarError {
     Json(String),
     #[error("invalid sidecar: {0}")]
     Invalid(String),
+    #[error("sidecar changed concurrently: {0}")]
+    Conflict(String),
+    #[error("XMP is not supported by Lumina sidecar schema v1")]
+    XmpUnsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceStatus {
+    Unchanged,
+    SourceChanged,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactStatus {
+    Available,
+    Missing,
 }
 
 /// Returns the sidecar path immediately next to `source`.
@@ -354,9 +393,69 @@ pub fn save_sidecar(path: &Path, document: &SidecarDocument) -> Result<(), Sidec
         temporary
             .persist(path)
             .map_err(|error| io_error("renaming temporary file", path, error.error))?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| io_error("syncing sidecar directory", parent, error))?;
         Ok(())
     })();
     result
+}
+
+pub fn save_sidecar_if_unchanged(
+    path: &Path,
+    document: &SidecarDocument,
+    expected_revision: Option<&str>,
+) -> Result<String, SidecarError> {
+    if let Some(expected) = expected_revision {
+        if path.exists() {
+            let current = document_revision(&load_sidecar(path)?)?;
+            if current != expected {
+                return Err(SidecarError::Conflict(path.display().to_string()));
+            }
+        }
+    }
+    save_sidecar(path, document)?;
+    document_revision(document)
+}
+
+pub fn document_revision(document: &SidecarDocument) -> Result<String, SidecarError> {
+    let json = document.to_json()?;
+    Ok(blake3::hash(json.as_bytes()).to_hex().to_string())
+}
+
+pub fn source_status(path: &Path, source: &SourceIdentity) -> Result<SourceStatus, SidecarError> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SourceStatus::Missing)
+        }
+        Err(error) => return Err(io_error("reading source", path, error)),
+    };
+    let metadata =
+        fs::metadata(path).map_err(|error| io_error("reading source metadata", path, error))?;
+    let hash = format!("blake3:{}", blake3::hash(&bytes).to_hex());
+    if metadata.len() == source.byte_length && hash == source.content_hash {
+        Ok(SourceStatus::Unchanged)
+    } else {
+        Ok(SourceStatus::SourceChanged)
+    }
+}
+
+pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
+    bundle_root
+        .join(&artifact.relative_path)
+        .is_file()
+        .then_some(ArtifactStatus::Available)
+        .unwrap_or(ArtifactStatus::Missing)
+}
+
+pub fn xmp_supported() -> bool {
+    false
+}
+
+pub fn migrate_json(json: &str) -> Result<String, SidecarError> {
+    let document = SidecarDocument::from_json(json)?;
+    document.to_json()
 }
 
 fn io_error(operation: &str, path: &Path, error: std::io::Error) -> SidecarError {
@@ -386,6 +485,7 @@ impl SidecarDocument {
                 export_records: vec![],
                 extras: Extras::new(),
             }],
+            deleted_virtual_copies: vec![],
             presets: vec![],
             extras: Extras::new(),
         }
@@ -397,10 +497,98 @@ impl SidecarDocument {
     }
 
     pub fn from_json(json: &str) -> Result<Self, SidecarError> {
-        let document: Self =
+        if json.len() > MAX_SIDECAR_BYTES {
+            return Err(SidecarError::Invalid("sidecar exceeds size limit".into()));
+        }
+        let mut value: Value =
             serde_json::from_str(json).map_err(|e| SidecarError::Json(e.to_string()))?;
+        let version = value
+            .get("schema_version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| SidecarError::Invalid("missing schema_version".into()))?;
+        if version == 0 {
+            value["schema_version"] = Value::from(SCHEMA_VERSION);
+        } else if version != u64::from(SCHEMA_VERSION) {
+            return Err(SidecarError::Invalid("unsupported schema_version".into()));
+        }
+        let document: Self =
+            serde_json::from_value(value).map_err(|e| SidecarError::Json(e.to_string()))?;
         document.validate()?;
         Ok(document)
+    }
+
+    pub fn duplicate_virtual_copy(
+        &mut self,
+        source_id: &str,
+        new_id: impl Into<String>,
+        new_name: impl Into<String>,
+    ) -> Result<(), SidecarError> {
+        let mut copy = self
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == source_id)
+            .cloned()
+            .ok_or_else(|| SidecarError::Invalid(format!("unknown virtual copy `{source_id}`")))?;
+        copy.id = new_id.into();
+        copy.name = new_name.into();
+        copy.is_default = false;
+        if self
+            .virtual_copies
+            .iter()
+            .any(|candidate| candidate.id == copy.id)
+            || self
+                .deleted_virtual_copies
+                .iter()
+                .any(|candidate| candidate.id == copy.id)
+        {
+            return invalid(format!("duplicate virtual copy id `{}`", copy.id));
+        }
+        self.virtual_copies.push(copy);
+        self.validate()
+    }
+
+    pub fn rename_virtual_copy(
+        &mut self,
+        id: &str,
+        name: impl Into<String>,
+    ) -> Result<(), SidecarError> {
+        let copy = self
+            .virtual_copies
+            .iter_mut()
+            .find(|copy| copy.id == id)
+            .ok_or_else(|| SidecarError::Invalid(format!("unknown virtual copy `{id}`")))?;
+        copy.name = name.into();
+        self.validate()
+    }
+
+    pub fn sort_virtual_copies(&mut self) {
+        self.virtual_copies
+            .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    }
+
+    pub fn delete_virtual_copy(&mut self, id: &str) -> Result<(), SidecarError> {
+        if id == "vc-original" {
+            return invalid("the default virtual copy cannot be deleted");
+        }
+        let index = self
+            .virtual_copies
+            .iter()
+            .position(|copy| copy.id == id)
+            .ok_or_else(|| SidecarError::Invalid(format!("unknown virtual copy `{id}`")))?;
+        self.deleted_virtual_copies
+            .push(self.virtual_copies.remove(index));
+        self.validate()
+    }
+
+    pub fn restore_virtual_copy(&mut self, id: &str) -> Result<(), SidecarError> {
+        let index = self
+            .deleted_virtual_copies
+            .iter()
+            .position(|copy| copy.id == id)
+            .ok_or_else(|| SidecarError::Invalid(format!("unknown deleted virtual copy `{id}`")))?;
+        self.virtual_copies
+            .push(self.deleted_virtual_copies.remove(index));
+        self.validate()
     }
 
     pub fn validate(&self) -> Result<(), SidecarError> {
@@ -419,11 +607,15 @@ impl SidecarDocument {
         if self.virtual_copies.is_empty() {
             return invalid("at least one virtual copy is required");
         }
+        if self.virtual_copies.len() + self.deleted_virtual_copies.len() > MAX_VIRTUAL_COPIES {
+            return invalid("sidecar exceeds virtual copy limit");
+        }
         let mut copy_ids = BTreeSet::new();
         let mut defaults = 0;
         for copy in &self.virtual_copies {
             validate_name("virtual copy id", &copy.id)?;
             validate_name("virtual copy name", &copy.name)?;
+            validate_name("recipe_version", &copy.recipe.recipe_version)?;
             if !copy_ids.insert(&copy.id) {
                 return invalid(format!("duplicate virtual copy id `{}`", copy.id));
             }
@@ -476,6 +668,14 @@ impl SidecarDocument {
             }
             for entry in &copy.history {
                 validate_name("history entry id", &entry.id)?;
+            }
+        }
+        for copy in &self.deleted_virtual_copies {
+            validate_name("deleted virtual copy id", &copy.id)?;
+            validate_name("deleted virtual copy name", &copy.name)?;
+            validate_name("recipe_version", &copy.recipe.recipe_version)?;
+            if !copy_ids.insert(&copy.id) {
+                return invalid(format!("duplicate virtual copy id `{}`", copy.id));
             }
         }
         validate_unique_ids("preset", &self.presets, |preset| &preset.id)?;
@@ -756,6 +956,7 @@ mod tests {
             name: "B&W".into(),
             is_default: false,
             recipe: EditRecipe {
+                recipe_version: "1".into(),
                 adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
@@ -778,6 +979,7 @@ mod tests {
             history: vec![HistoryEntry {
                 id: "h".into(),
                 recipe: EditRecipe {
+                    recipe_version: "1".into(),
                     adjustments: BTreeMap::from([("contrast".into(), -0.4)]),
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
@@ -799,6 +1001,7 @@ mod tests {
             id: "preset-1".into(),
             name: "Monochrome Contrast".into(),
             recipe: EditRecipe {
+                recipe_version: "1".into(),
                 adjustments: BTreeMap::from([("highlights".into(), -0.75)]),
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
@@ -1236,5 +1439,119 @@ mod tests {
             extras: Extras::new(),
         });
         assert!(d.validate().unwrap_err().to_string().contains("preset id"));
+    }
+
+    #[test]
+    fn virtual_copy_lifecycle_preserves_independent_recipe() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("exposure".into(), 1.0);
+        d.duplicate_virtual_copy("vc-original", "vc-copy", "Copy")
+            .unwrap();
+        d.rename_virtual_copy("vc-copy", "Renamed").unwrap();
+        d.virtual_copies.swap(0, 1);
+        d.delete_virtual_copy("vc-copy").unwrap();
+        assert_eq!(d.virtual_copies.len(), 1);
+        d.restore_virtual_copy("vc-copy").unwrap();
+        assert_eq!(d.virtual_copies[1].name, "Renamed");
+        d.virtual_copies[1]
+            .recipe
+            .adjustments
+            .insert("exposure".into(), -1.0);
+        assert_ne!(
+            d.virtual_copies[0].recipe.adjustments["exposure"],
+            d.virtual_copies[1].recipe.adjustments["exposure"]
+        );
+        assert_eq!(
+            d,
+            SidecarDocument::from_json(&d.to_json().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn migration_unknown_fields_and_incompatible_version() {
+        let d = SidecarDocument::new(source(), "pipeline-1");
+        let mut value: Value = serde_json::from_str(&d.to_json().unwrap()).unwrap();
+        value["schema_version"] = Value::from(0);
+        value["virtual_copies"][0]["recipe"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recipe_version");
+        let migrated = migrate_json(&serde_json::to_string(&value).unwrap()).unwrap();
+        let decoded = SidecarDocument::from_json(&migrated).unwrap();
+        assert_eq!(decoded.virtual_copies[0].recipe.recipe_version, "1");
+        value["schema_version"] = Value::from(99);
+        assert!(SidecarDocument::from_json(&serde_json::to_string(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn atomic_compare_and_swap_and_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let d = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &d, None).unwrap();
+        let mut changed = d.clone();
+        changed.virtual_copies[0].name = "Changed".into();
+        assert!(save_sidecar_if_unchanged(&path, &changed, Some("wrong")).is_err());
+        save_sidecar_if_unchanged(&path, &changed, Some(&revision)).unwrap();
+        std::fs::write(
+            directory.path().join(".image.lumina.json.tmp-crash"),
+            b"partial",
+        )
+        .unwrap();
+        assert_eq!(
+            load_sidecar(&path).unwrap().virtual_copies[0].name,
+            "Changed"
+        );
+    }
+
+    #[test]
+    fn source_and_artifact_conflicts_are_visible() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("source.raw");
+        let bytes = b"source";
+        std::fs::write(&source_path, bytes).unwrap();
+        let mut identity = source();
+        identity.byte_length = bytes.len() as u64;
+        identity.content_hash = format!("blake3:{}", blake3::hash(bytes).to_hex());
+        assert_eq!(
+            source_status(&source_path, &identity).unwrap(),
+            SourceStatus::Unchanged
+        );
+        std::fs::write(&source_path, b"changed").unwrap();
+        assert_eq!(
+            source_status(&source_path, &identity).unwrap(),
+            SourceStatus::SourceChanged
+        );
+        std::fs::remove_file(&source_path).unwrap();
+        assert_eq!(
+            source_status(&source_path, &identity).unwrap(),
+            SourceStatus::Missing
+        );
+        let artifact = ArtifactReference {
+            relative_path: "masks/a.zdata".into(),
+            format: "zdata".into(),
+            checksum: "hash".into(),
+            width: 1,
+            height: 1,
+            channels: "u16".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        assert_eq!(
+            artifact_status(directory.path(), &artifact),
+            ArtifactStatus::Missing
+        );
+    }
+
+    #[test]
+    fn xmp_is_explicitly_unsupported() {
+        assert!(!xmp_supported());
+        assert!(matches!(
+            SidecarError::XmpUnsupported,
+            SidecarError::XmpUnsupported
+        ));
     }
 }

@@ -55,11 +55,18 @@ Auto-Tone, Preset, CLI-Overrides, Masken später, Matching am finalen Rasterbild
 RAW ist ein verbindlicher MVP-Bestandteil. Der native LibRaw-Adapter unterstützt
 CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2, CRW, PEF, SRW, 3FR, IIQ, RWL, MOS,
 ERF, KDC und X3F einschließlich EXIF-Orientierung und überführt sie in denselben
-Core-/CLI-/Desktop-Pfad. Browser/WASM unterstützt RAW nicht und meldet
-`UnsupportedPlatform`; lokale LibRaw-/Dateisystemlogik wird dort nicht gebaut.
-Der aktuelle Implementierungsstand enthält den Adapter, den gemeinsamen
+Core-/CLI-/Desktop-Pfad. Der aktuelle Implementierungsstand enthält den Adapter, den gemeinsamen
 CLI-/Desktop-Pfad und Fehler-/Capability-Tests. Ein echter Kamera-Golden-Test
 bleibt bis zur Bereitstellung einer lizenzgeeigneten Fixture offen.
+
+**MVP-Grenze (Stand 2026-08-17):** Das MVP umfasst **CLI und native Desktop**
+(auch RAW). Der **Web/WASM-Teil ist aus dem MVP geschoben** und wird später
+umgesetzt. Die Architektur bleibt aber bewusst kompatibel: `lumina-raw` kapselt
+den LibRaw-Zugriff hinter einem einheitlichen `decode_bytes`/`RawMetadata`-
+Vertrag, sodass ein späteres WASM-Backend (`libraw-wasm`, Emscripten/npm, Feature
+`wasm-js`) ohne API-Änderung andocken kann. WASM-spezifische Pfade sind bereits
+per `cfg(target_arch = "wasm32")` gekapselt; der native LibRaw-Adapter bleibt
+Default für CLI/Desktop.
 
 Die CLI soll mindestens `import`, `inspect`, `develop`, `render`, `export`,
 `batch`, `mask`, `reindex` und `validate` unterstützen. Einzel- und
@@ -94,6 +101,16 @@ Szenarien. Browser-Dateiimport, Speicherlimits, Export und GPU werden getrennt
 behandelt. Native RAW- und ONNX-Backends gelten nicht automatisch als
 browserfähig.
 
+**WASM-RAW-Backend (post-MVP, vorbereitet):** Für die spätere Browser-Anbindung
+ist `libraw-wasm` (Emscripten/npm) vorgesehen. Die Rust-Seite würde die JS-
+`LibRaw`-Klasse als `wasm-bindgen`-Extern deklarieren und `open`/`metadata`/
+`imageData` in `lumina-raw::decode_bytes` bzw. `RawMetadata` übersetzen. Das
+Backend ist hinter dem Feature `wasm-js` gekapselt und nur für
+`cfg(target_arch = "wasm32")` aktiv; der native Pfad bleibt Default für CLI/
+Desktop. Ein unabhängiger Verifizierungs-Agent prüft später, dass derselbe
+`decode_bytes`-Vertrag (Orientierung, Metadaten, 8/16-bit) in beiden Backends
+gilt. Im MVP ist WASM-RAW ausgeschaltet (`UnsupportedPlatform`).
+
 Eine Capability-Matrix dokumentiert native CLI, Desktop und Browser getrennt.
 
 ### Erster visueller User-Test
@@ -109,7 +126,8 @@ trunk build --release
 ```
 
 Die Oberfläche lädt PNG, JPEG und WebP sowie native RAW-Dateien per Pfad oder
-Drag-and-drop. Browser/WASM bleibt RAW-frei und weist diese Capability klar aus. Preview, Exposure
+Drag-and-drop. Browser/WASM bleibt im MVP RAW-frei und weist diese Capability
+klar aus (Post-MVP: `libraw-wasm`-Backend, Feature `wasm-js`). Preview, Exposure
 (`-10..=10`) und Contrast (`-1..=1`) laufen über `lumina-core::ImageFrame` und
 `lumina-sidecar::EditRecipe`. Native Sidecars werden neben dem Original
 gespeichert; Browser-Dateispeichern ist im MVP noch nicht implementiert. ONNX,

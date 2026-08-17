@@ -1,9 +1,59 @@
 //! LibRaw-backed RAW decoding. The native backend is deliberately absent from WASM.
 
 use lumina_core::ImageFrame;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DemosaicMethod {
+    LibRawDefault,
+    Linear,
+    Vng,
+    Ppg,
+    Ahd,
+    Dcb,
+    Dht,
+    Aahd,
+}
+
+impl Default for DemosaicMethod {
+    fn default() -> Self {
+        Self::LibRawDefault
+    }
+}
+
+impl DemosaicMethod {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn libraw_value(self) -> Option<i32> {
+        match self {
+            Self::LibRawDefault => None,
+            Self::Linear => Some(1),
+            Self::Vng => Some(2),
+            Self::Ppg => Some(3),
+            Self::Ahd => Some(4),
+            Self::Dcb => Some(11),
+            Self::Dht => Some(12),
+            Self::Aahd => Some(13),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawDecodeOptions {
+    pub demosaicing: DemosaicMethod,
+    pub output_bits: u8,
+}
+
+impl Default for RawDecodeOptions {
+    fn default() -> Self {
+        Self {
+            demosaicing: DemosaicMethod::LibRawDefault,
+            output_bits: 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RawMetadata {
     /// Visible output geometry; this is not necessarily the pre-orientation buffer geometry.
     pub width: u32,
@@ -16,6 +66,14 @@ pub struct RawMetadata {
     pub shutter: Option<f32>,
     pub aperture: Option<f32>,
     pub lens: Option<String>,
+    pub focal_length: Option<f32>,
+    pub timestamp: Option<i64>,
+    pub artist: Option<String>,
+    pub description: Option<String>,
+    pub camera_matrix: [[f32; 4]; 3],
+    pub camera_white_balance: [f32; 4],
+    pub pre_multipliers: [f32; 4],
+    pub icc_profile: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +129,23 @@ pub fn decode_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawImage, Raw
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native::decode_bytes(bytes, name.as_ref())
+        native::decode_bytes_with_options(bytes, name.as_ref(), &RawDecodeOptions::default())
+    }
+}
+
+pub fn decode_bytes_with_options(
+    bytes: &[u8],
+    name: impl AsRef<str>,
+    options: &RawDecodeOptions,
+) -> Result<RawImage, RawError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (bytes, name, options);
+        return Err(RawError::UnsupportedPlatform);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        native::decode_bytes_with_options(bytes, name.as_ref(), options)
     }
 }
 
@@ -132,9 +206,16 @@ mod native {
             .filter(|value| *value > 0.0)
     }
 
-    pub fn decode_bytes(bytes: &[u8], name: &str) -> Result<RawImage, RawError> {
+    pub fn decode_bytes_with_options(
+        bytes: &[u8],
+        name: &str,
+        options: &RawDecodeOptions,
+    ) -> Result<RawImage, RawError> {
         if bytes.is_empty() {
             return Err(RawError::InvalidData("empty input"));
+        }
+        if !matches!(options.output_bits, 8 | 16) {
+            return Err(RawError::InvalidData("output bit depth"));
         }
         let handle = Handle(unsafe { raw::libraw_init(raw::LIBRAW_OPTIONS_NONE) });
         if handle.0.is_null() {
@@ -152,9 +233,23 @@ mod native {
             1..=8 => data.sizes.flip as u8,
             _ => 1,
         };
+        let camera_matrix = data.color.rgb_cam;
+        let camera_white_balance = data.color.cam_mul;
+        let pre_multipliers = data.color.pre_mul;
+        let icc_profile = if data.color.profile.is_null() || data.color.profile_length == 0 {
+            None
+        } else {
+            Some(unsafe {
+                std::slice::from_raw_parts(
+                    data.color.profile.cast::<u8>(),
+                    data.color.profile_length as usize,
+                )
+                .to_vec()
+            })
+        };
         let metadata = RawMetadata {
-            width: data.sizes.width as u32,
-            height: data.sizes.height as u32,
+            width: 0,
+            height: 0,
             orientation,
             camera_make: text(&data.idata.make),
             camera_model: text(&data.idata.model),
@@ -162,14 +257,23 @@ mod native {
             shutter: positive(data.other.shutter),
             aperture: positive(data.other.aperture),
             lens: None,
+            focal_length: positive(data.other.focal_len),
+            timestamp: (data.other.timestamp != 0).then_some(data.other.timestamp as i64),
+            artist: text(&data.other.artist),
+            description: text(&data.other.desc),
+            camera_matrix,
+            camera_white_balance,
+            pre_multipliers,
+            icc_profile,
         };
-        if metadata.width == 0 || metadata.height == 0 {
-            return Err(RawError::InvalidData("image dimensions"));
-        }
-        // LibRaw performs demosaicing and sRGB conversion; exposure/contrast remain core work.
         unsafe {
             (*handle.0).params.user_flip = 0;
-            raw::libraw_set_output_bps(handle.0, 8);
+            if let Some(value) = options.demosaicing.libraw_value() {
+                raw::libraw_set_demosaic(handle.0, value);
+            }
+            (*handle.0).params.use_camera_wb = 1;
+            (*handle.0).params.use_camera_matrix = 1;
+            raw::libraw_set_output_bps(handle.0, options.output_bits as i32);
             raw::libraw_set_output_color(handle.0, 1);
             raw::libraw_set_no_auto_bright(handle.0, 0);
         }
@@ -188,20 +292,62 @@ mod native {
             return Err(error("creating processed image", image_error));
         }
         let image = unsafe { &*processed.0 };
-        if image.bits != 8 || !(image.colors == 3 || image.colors == 4) {
-            return Err(RawError::InvalidData("8-bit RGB processed image"));
+        if !(image.bits == 8 || image.bits == 16) || !(image.colors == 3 || image.colors == 4) {
+            return Err(RawError::InvalidData("RGB processed image"));
         }
-        let length = image.width as usize * image.height as usize * image.colors as usize;
-        let source = unsafe { std::slice::from_raw_parts(image.data.as_ptr(), length) };
-        let frame = orient(
-            source,
-            image.width as u32,
-            image.height as u32,
-            image.colors as usize,
-            orientation,
-        )?;
+        if image.width == 0 || image.height == 0 {
+            return Err(RawError::InvalidData("image dimensions"));
+        }
+        let frame = if image.bits == 8 {
+            let length = (image.width as usize)
+                .checked_mul(image.height as usize)
+                .and_then(|value| value.checked_mul(image.colors as usize))
+                .ok_or(RawError::InvalidData("image data length"))?;
+            if (image.data_size as usize) < length {
+                return Err(RawError::InvalidData("image data size"));
+            }
+            let source = unsafe { std::slice::from_raw_parts(image.data.as_ptr(), length) };
+            orient(
+                source,
+                image.width as u32,
+                image.height as u32,
+                image.colors as usize,
+                1,
+            )?
+        } else {
+            let length = (image.width as usize)
+                .checked_mul(image.height as usize)
+                .and_then(|value| value.checked_mul(image.colors as usize))
+                .ok_or(RawError::InvalidData("image data length"))?;
+            if (image.data_size as usize) < length.saturating_mul(2) {
+                return Err(RawError::InvalidData("image data size"));
+            }
+            let source =
+                unsafe { std::slice::from_raw_parts(image.data.as_ptr().cast::<u16>(), length) };
+            orient_16(
+                source,
+                image.width as u32,
+                image.height as u32,
+                image.colors as usize,
+                1,
+            )?
+        };
+        let mut metadata = metadata;
+        metadata.width = frame.width;
+        metadata.height = frame.height;
         let _ = name;
         Ok(RawImage { frame, metadata })
+    }
+
+    fn orient_16(
+        source: &[u16],
+        width: u32,
+        height: u32,
+        channels: usize,
+        orientation: u8,
+    ) -> Result<ImageFrame, RawError> {
+        let source_8: Vec<u8> = source.iter().map(|value| (value >> 8) as u8).collect();
+        orient(&source_8, width, height, channels, orientation)
     }
 
     fn orient(
@@ -277,6 +423,28 @@ mod tests {
             image.frame.pixels.len(),
             image.frame.width as usize * image.frame.height as usize * 4
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn aircraft_landscape_fixture_has_expected_geometry_and_metadata() {
+        let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
+        let image = decode_bytes(bytes, "aircraft-landscape.cr3").unwrap();
+        assert_eq!(image.metadata.orientation, 1);
+        assert_eq!((image.frame.width, image.frame.height), (6032, 4024));
+        assert_eq!((image.metadata.width, image.metadata.height), (6032, 4024));
+        assert_eq!(image.frame.pixels.len(), 6032 * 4024 * 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn aircraft_portrait_fixture_applies_exif_orientation() {
+        let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
+        let image = decode_bytes(bytes, "aircraft-portrait.cr3").unwrap();
+        assert_eq!(image.metadata.orientation, 5);
+        assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
+        assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
+        assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
     }
 
     #[cfg(target_arch = "wasm32")]

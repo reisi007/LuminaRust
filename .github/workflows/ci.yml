@@ -108,7 +108,10 @@ jobs:
           test -f feature/product/virtual-copies.md
           test -f feature/product/ai-masks.md
           test -f feature/platform/cli-gui-wasm.md
-          test -f feature/quality/conflicts-and-acceptance.md
+          test -f feature/platform/capability-matrix.md
+          test -f feature/decisions.md
+          test -f feature/architecture/pipeline.md
+          test -f docs/adr/README.md
 
       - name: Validate workflow syntax
         uses: raven-actions/actionlint@v2

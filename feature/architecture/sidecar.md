@@ -64,6 +64,13 @@ Das Zielmodell enthält mindestens:
 }
 ```
 
+Jede Rezeptinstanz enthält zusätzlich `recipe_version`; diese Version wird
+unabhängig von `pipeline_version` migriert. Virtuelle Kopien werden über ihre
+stabile ID identifiziert und können als archivierte Kopie gelöscht und später
+wiederhergestellt werden. Das JSON-Manifest ist die portable, browserlesbare
+Repräsentation; native Binärannahmen sind auf den optionalen `.zdata`-Payload
+beschränkt.
+
 Alle Felder benötigen definierte Einheiten, Wertebereiche, optionale Zustände
 und eine Migrationsstrategie, bevor das Schema eingefroren wird.
 
@@ -115,6 +122,8 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   Referenzen.
 - Ein Preset wird als einzelne `.lumina-preset.json`-Datei aus ausgewählten
   Rezeptfeldern erzeugt und ist kein vollständiges Bild-Sidecar.
+- XMP wird in v1 weder gelesen noch geschrieben. Ein späterer XMP-Adapter darf
+  keine Lumina-Sidecar-Daten als nichtautoritative Alternative behandeln.
 
 ## Migration und Konflikte
 
