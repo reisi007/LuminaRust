@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, SystemTime};
 use thiserror::Error;
 
 #[cfg(feature = "zdata")]
@@ -333,6 +335,24 @@ pub enum SidecarError {
     XmpUnsupported,
 }
 
+/// The result of cleaning up files left behind by an interrupted atomic write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryReport {
+    pub removed_temporary_files: usize,
+}
+
+struct WriteLock {
+    path: PathBuf,
+}
+
+impl Drop for WriteLock {
+    fn drop(&mut self) {
+        // A failed cleanup is deliberately ignored: the next writer can report
+        // the lock as stale, and the actual sidecar remains untouched.
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceStatus {
     Unchanged,
@@ -356,6 +376,10 @@ pub fn sidecar_path_for(source: &Path) -> PathBuf {
 }
 
 pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {
+    // A temporary file is never a sidecar.  Remove only files with the exact
+    // tempfile prefix used by save_sidecar; a partial file must not become a
+    // valid document after a crash.
+    recover_sidecar(path)?;
     let json = fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             SidecarError::Missing(path.display().to_string())
@@ -368,7 +392,7 @@ pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {
 
 /// Validates before writing and replaces the destination only after the complete
 /// temporary file has been flushed and synced. Output and sidecar are not a
-/// two-file transaction; crash recovery for that pair remains future work.
+/// two-file transaction (the architecture explicitly leaves that out of v1).
 pub fn save_sidecar(path: &Path, document: &SidecarDocument) -> Result<(), SidecarError> {
     let json = document.to_json()?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -406,13 +430,23 @@ pub fn save_sidecar_if_unchanged(
     document: &SidecarDocument,
     expected_revision: Option<&str>,
 ) -> Result<String, SidecarError> {
+    let _lock = acquire_write_lock(path)?;
     if let Some(expected) = expected_revision {
-        if path.exists() {
-            let current = document_revision(&load_sidecar(path)?)?;
-            if current != expected {
-                return Err(SidecarError::Conflict(path.display().to_string()));
-            }
+        if !path.exists() {
+            return Err(SidecarError::Conflict(format!(
+                "sidecar disappeared: `{}`",
+                path.display()
+            )));
         }
+        let current = document_revision(&load_sidecar(path)?)?;
+        if current != expected {
+            return Err(SidecarError::Conflict(path.display().to_string()));
+        }
+    } else if path.exists() {
+        return Err(SidecarError::Conflict(format!(
+            "sidecar already exists: `{}`; an expected revision is required",
+            path.display()
+        )));
     }
     save_sidecar(path, document)?;
     document_revision(document)
@@ -421,6 +455,68 @@ pub fn save_sidecar_if_unchanged(
 pub fn document_revision(document: &SidecarDocument) -> Result<String, SidecarError> {
     let json = document.to_json()?;
     Ok(blake3::hash(json.as_bytes()).to_hex().to_string())
+}
+
+/// Remove orphaned atomic-write temporaries.  The destination is never
+/// touched, and temporary contents are never parsed or promoted.
+pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let filename = path.file_name().map(|name| name.to_string_lossy());
+    // Keep the prefix narrow: unrelated temporary files must survive recovery.
+    let prefix = format!(".{}.tmp-", filename.as_deref().unwrap_or("sidecar"));
+    let entries = fs::read_dir(parent)
+        .map_err(|error| io_error("reading recovery directory", parent, error))?;
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry.map_err(|error| io_error("reading recovery entry", parent, error))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with(&prefix) && entry.path().is_file() {
+            fs::remove_file(entry.path()).map_err(|error| {
+                io_error("removing orphaned temporary file", &entry.path(), error)
+            })?;
+            removed += 1;
+        }
+    }
+    Ok(RecoveryReport {
+        removed_temporary_files: removed,
+    })
+}
+
+fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let filename = path.file_name().map(|name| name.to_string_lossy());
+    let lock_path = parent.join(format!(
+        ".{}.lock",
+        filename.as_deref().unwrap_or("sidecar")
+    ));
+    for _ in 0..100 {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => return Ok(WriteLock { path: lock_path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Crash recovery for a lock cannot identify a process portably;
+                // only reclaim locks that are clearly abandoned.
+                let stale = fs::metadata(&lock_path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|time| SystemTime::now().duration_since(time).ok())
+                    .is_some_and(|age| age > Duration::from_secs(30));
+                if stale {
+                    let _ = fs::remove_file(&lock_path);
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+            Err(error) => return Err(io_error("creating sidecar lock", &lock_path, error)),
+        }
+    }
+    Err(SidecarError::Conflict(format!(
+        "sidecar is locked: `{}`",
+        path.display()
+    )))
 }
 
 pub fn source_status(path: &Path, source: &SourceIdentity) -> Result<SourceStatus, SidecarError> {
@@ -442,11 +538,11 @@ pub fn source_status(path: &Path, source: &SourceIdentity) -> Result<SourceStatu
 }
 
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
-    bundle_root
-        .join(&artifact.relative_path)
-        .is_file()
-        .then_some(ArtifactStatus::Available)
-        .unwrap_or(ArtifactStatus::Missing)
+    if bundle_root.join(&artifact.relative_path).is_file() {
+        ArtifactStatus::Available
+    } else {
+        ArtifactStatus::Missing
+    }
 }
 
 pub fn xmp_supported() -> bool {
@@ -456,6 +552,47 @@ pub fn xmp_supported() -> bool {
 pub fn migrate_json(json: &str) -> Result<String, SidecarError> {
     let document = SidecarDocument::from_json(json)?;
     document.to_json()
+}
+
+/// Apply a pending migration only when the caller explicitly invokes this
+/// operation. The original is backed up before the atomically replaced result
+/// is installed. `migrate_json` remains a non-writing migration preview.
+pub fn migrate_sidecar_file(path: &Path) -> Result<bool, SidecarError> {
+    let _lock = acquire_write_lock(path)?;
+    let original =
+        fs::read(path).map_err(|error| io_error("reading sidecar for migration", path, error))?;
+    let migrated = migrate_json(
+        std::str::from_utf8(&original).map_err(|error| SidecarError::Json(error.to_string()))?,
+    )?;
+    if migrated.as_bytes() == original {
+        return Ok(false);
+    }
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+    atomic_write_bytes(&backup, &original)?;
+    atomic_write_bytes(path, migrated.as_bytes())?;
+    Ok(true)
+}
+
+fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<(), SidecarError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| io_error("creating migration temporary file", parent, error))?;
+    temporary
+        .write_all(bytes)
+        .map_err(|error| io_error("writing migration temporary file", temporary.path(), error))?;
+    temporary
+        .flush()
+        .map_err(|error| io_error("flushing migration temporary file", temporary.path(), error))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| io_error("syncing migration temporary file", temporary.path(), error))?;
+    temporary
+        .persist(path)
+        .map_err(|error| io_error("renaming migration temporary file", path, error.error))?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| io_error("syncing migration directory", parent, error))
 }
 
 fn io_error(operation: &str, path: &Path, error: std::io::Error) -> SidecarError {
@@ -509,7 +646,9 @@ impl SidecarDocument {
         if version == 0 {
             value["schema_version"] = Value::from(SCHEMA_VERSION);
         } else if version != u64::from(SCHEMA_VERSION) {
-            return Err(SidecarError::Invalid("unsupported schema_version".into()));
+            return Err(SidecarError::Invalid(format!(
+                "unsupported schema_version {version}; explicit migration is required"
+            )));
         }
         let document: Self =
             serde_json::from_value(value).map_err(|e| SidecarError::Json(e.to_string()))?;
@@ -1487,6 +1626,23 @@ mod tests {
     }
 
     #[test]
+    fn explicit_file_migration_creates_backup_and_rejects_newer_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let mut value: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+        value["schema_version"] = Value::from(0);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(migrate_sidecar_file(&path).unwrap());
+        assert!(path.with_file_name("image.lumina.json.bak").is_file());
+        assert_eq!(load_sidecar(&path).unwrap().schema_version, SCHEMA_VERSION);
+
+        value["schema_version"] = Value::from(99);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(migrate_sidecar_file(&path).is_err());
+    }
+
+    #[test]
     fn atomic_compare_and_swap_and_recovery() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("image.lumina.json");
@@ -1504,6 +1660,74 @@ mod tests {
         assert_eq!(
             load_sidecar(&path).unwrap().virtual_copies[0].name,
             "Changed"
+        );
+        assert!(!directory
+            .path()
+            .join(".image.lumina.json.tmp-crash")
+            .exists());
+    }
+
+    #[test]
+    fn recovery_never_promotes_partial_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        std::fs::write(
+            directory.path().join(".image.lumina.json.tmp-crash"),
+            b"{\"partial\": true}",
+        )
+        .unwrap();
+        assert!(matches!(load_sidecar(&path), Err(SidecarError::Missing(_))));
+        assert!(!directory
+            .path()
+            .join(".image.lumina.json.tmp-crash")
+            .exists());
+    }
+
+    #[test]
+    fn compare_and_swap_detects_external_change() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let mut external = document.clone();
+        external.virtual_copies[0].name = "Edited elsewhere".into();
+        save_sidecar(&path, &external).unwrap();
+        let mut local = document;
+        local.virtual_copies[0].name = "Local edit".into();
+        assert!(matches!(
+            save_sidecar_if_unchanged(&path, &local, Some(&revision)),
+            Err(SidecarError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn concurrent_compare_and_swap_allows_only_one_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let first_path = path.clone();
+        let first_revision = revision.clone();
+        let first = std::thread::spawn(move || {
+            let mut edited = document.clone();
+            edited.virtual_copies[0].name = "first".into();
+            save_sidecar_if_unchanged(&first_path, &edited, Some(&first_revision))
+        });
+        let second_path = path.clone();
+        let second_revision = revision;
+        let second = std::thread::spawn(move || {
+            let mut edited = SidecarDocument::new(source(), "pipeline-1");
+            edited.virtual_copies[0].name = "second".into();
+            save_sidecar_if_unchanged(&second_path, &edited, Some(&second_revision))
+        });
+        let results = [first.join().unwrap(), second.join().unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(SidecarError::Conflict(_))))
+                .count(),
+            1
         );
     }
 
