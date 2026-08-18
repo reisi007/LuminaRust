@@ -22,7 +22,9 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
   virtuelle Kopien
 - Autorität: fachlicher Zielzustand für Implementierungs- und
   Verifizierungs-Agenten
-- Codebestand: derzeit noch nicht initialisiert
+- Codebestand: Raster-MVP in Arbeit — `lumina-sidecar`, `lumina-core`, `lumina-raw`,
+  `lumina-cli` und `lumina-gui` vorhanden; Stand und offene Arbeit siehe
+  `Agents.todo.md` (Stand 2026-08-18)
 
 ## Leitbild
 
