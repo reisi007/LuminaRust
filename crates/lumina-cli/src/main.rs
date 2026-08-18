@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use lumina_core::{
-    match_total_exposure, render_frame, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
+    match_total_exposure_masked, render_frame, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
     ImageFileFormat, ImageFrame, MaskContext, MaskPlane, MaskPolicy, RenderContext,
 };
 use lumina_raw::{RawError, RawMetadata};
@@ -766,7 +766,19 @@ fn process_selected(
     if args.match_total_exposure {
         recipe.auto_features.match_total_exposure = true;
         recipe.auto_features.target_luminance = args.target_luminance;
-        let matching = match_total_exposure(&frame, args.target_luminance)?;
+        // F-041: measure the final visible domain — `frame` is the render
+        // result (already post crop/geometry) and `render_output.mask_layers`
+        // are the effective planes resampled to exactly these dimensions. The
+        // matching delta is weighted by the mask intersection; with no active
+        // layers the empty slice keeps the previous raster measurement
+        // bit-exactly. Until F-049 the layers do not modulate pixels, but the
+        // measurement-domain semantics is already active.
+        let mask_planes: Vec<MaskPlane> = render_output
+            .mask_layers
+            .iter()
+            .map(|layer| layer.plane.clone())
+            .collect();
+        let matching = match_total_exposure_masked(&frame, args.target_luminance, &mask_planes)?;
         recipe.auto_features.matched_exposure = Some(matching);
         let total_exposure = (recipe.adjustments.get("exposure").copied().unwrap_or(0.0)
             + matching)
@@ -1544,13 +1556,12 @@ mod tests {
     }
 
     #[test]
-    fn valid_mask_with_match_total_exposure_reaches_target_without_warning() {
+    fn valid_mask_with_match_total_exposure_measures_masked_domain() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("input.png");
         let output = directory.path().join("output.png");
-        // 8x8 bimodal gray frame (32 pixels of 200, 32 pixels of 60): the
-        // mean luminance is 130/255 ~= 0.51, so matching has real work to do
-        // against the 0.5 target.
+        // 8x8 bimodal gray frame: left half (pixels 0..32) is 200, right half
+        // (pixels 32..64) is 60. Unmasked mean = 130/255 ~= 0.51.
         let mut pixels = Vec::with_capacity(8 * 8 * 4);
         for index in 0..64 {
             let value = if index < 32 { 200u8 } else { 60u8 };
@@ -1562,10 +1573,12 @@ mod tests {
         write_sidecar_with_valid_layer(&input, &bytes, &frame);
 
         // Valid artifact plane for `subject` at frame resolution. F-042 does
-        // not modulate pixels yet (pixel modulation is F-049), so the plane
-        // exercises the valid-mask evaluation path without changing the
-        // measured frame; the measurement domain is the post-recipe frame
-        // (F-041 raster MVP).
+        // not modulate pixels yet (pixel modulation is F-049), but F-041
+        // already weights the measurement domain: the bright left half is
+        // fully masked (0), the dark right half fully visible (u16::MAX).
+        //   weighted mean: 60/255 ~= 0.2353
+        //   masked delta:  log2(0.5 / (60/255)) = log2(2.125) ~= 1.08746
+        //   unmasked delta: log2(0.5 / (130/255)) ~= -0.0280
         let tile = lumina_sidecar::MaskTile {
             mask_id: "subject".into(),
             tile_x: 0,
@@ -1577,6 +1590,7 @@ mod tests {
         let container = lumina_sidecar::ZDataContainer::new(vec![tile]).unwrap();
         lumina_sidecar::save_zdata(&lumina_sidecar::zdata_path_for(&input), &container).unwrap();
 
+        let unmasked = match_total_exposure_masked(&frame, 0.5, &[]).unwrap();
         let mut warnings = Vec::new();
         process_selected(
             ProcessArgs {
@@ -1601,22 +1615,42 @@ mod tests {
             "valid mask must not warn: {warnings:?}"
         );
 
-        // The exported frame reaches the target luminance within tolerance.
-        let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
-        let mean = lumina_core::analyze_tone(&rendered).mean;
-        assert!(
-            (mean - 0.5).abs() <= 0.02,
-            "post-match mean {mean} not within 0.02 of target 0.5"
-        );
-        // The matching result is persisted in the recipe's auto features:
-        // log2(0.5 / (130/255)) for the unchanged post-recipe frame.
+        // The persisted matching result follows the masked measurement domain
+        // and demonstrably differs from the unmasked result (F-041).
         let sidecar = load_sidecar(&sidecar_path_for(&input)).unwrap();
         let auto = &sidecar.virtual_copies[0].recipe.auto_features;
         assert!(auto.match_total_exposure);
         let matched = auto.matched_exposure.unwrap();
         assert!(
-            (matched - (-0.0280)).abs() < 0.001,
+            (matched - 1.08746).abs() < 0.001,
             "persisted matched exposure {matched}"
+        );
+        assert!(
+            (matched - unmasked).abs() > 1.0,
+            "masked delta {matched} must differ from unmasked {unmasked}"
+        );
+
+        // Applying the delta reaches the *masked* target: the visible (right)
+        // half of the exported frame (60 * 2^1.08746 = 60 * 2.125 = 127.5 ->
+        // 128, mean ~= 0.502) is within tolerance, while the masked-out left
+        // half clamps at 255 and must not be part of the target check.
+        let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
+        let visible_mean = rendered
+            .pixels
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(index, _)| *index >= 32)
+            .map(|(_, pixel)| {
+                (0.2126 * f64::from(pixel[0])
+                    + 0.7152 * f64::from(pixel[1])
+                    + 0.0722 * f64::from(pixel[2]))
+                    / 255.0
+            })
+            .sum::<f64>()
+            / 32.0;
+        assert!(
+            (visible_mean - 0.5).abs() <= 0.02,
+            "post-match visible mean {visible_mean} not within 0.02 of target 0.5"
         );
     }
 }

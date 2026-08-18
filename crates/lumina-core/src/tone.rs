@@ -1,3 +1,4 @@
+use crate::masks::MaskPlane;
 use crate::{CoreError, ImageFrame};
 
 /// Luminance is measured from RGBA8's encoded sRGB RGB channels, normalized to
@@ -133,6 +134,83 @@ pub fn suggest_auto_tone(
 }
 
 pub fn match_total_exposure(frame: &ImageFrame, target_luminance: f64) -> Result<f64, CoreError> {
+    validate_target_luminance(target_luminance)?;
+    Ok(matching_delta(analyze_tone(frame).mean, target_luminance))
+}
+
+/// Weighted measurement-domain variant of [`match_total_exposure`] (F-041).
+///
+/// Measures the final visible domain: `frame` is the render result AFTER
+/// crop/geometry (as delivered by [`crate::render_frame`]) and `mask_layers`
+/// are the effective mask planes already resampled to the frame dimensions.
+/// Every pixel receives the weight `w = ∏_layer plane_layer[pixel] / u16::MAX`
+/// (product over all active layers — the intersection: a pixel fully masked in
+/// any layer has weight 0 and is not part of the global visible measurement
+/// domain). The weighted mean uses Rec.709 luminance and ignores alpha, like
+/// [`analyze_tone`]. An empty `mask_layers` slice yields exactly the
+/// [`match_total_exposure`] result (delegation), so callers without active
+/// masks keep the raster semantics bit-exactly.
+///
+/// # Validation
+///
+/// Every plane must match the frame dimensions (`width == frame.width`,
+/// `height == frame.height`, `values.len() == width * height`); a mismatch is
+/// rejected with [`CoreError::InvalidMaskPlane`] before any pixel is touched —
+/// no silent fallback.
+///
+/// # Fallback (fully masked)
+///
+/// If the weight sum is at most the epsilon (`1e-6`, no visible pixel), the
+/// documented fallback is `Ok(0.0)` — an identity delta that performs no
+/// adjustment. This is consistent with the `sample_count == 0` path of
+/// [`suggest_auto_tone`] (exposure `0.0`). No NaN, no panic, no silent
+/// adjustment on an invisible image.
+pub fn match_total_exposure_masked(
+    frame: &ImageFrame,
+    target_luminance: f64,
+    mask_layers: &[MaskPlane],
+) -> Result<f64, CoreError> {
+    validate_target_luminance(target_luminance)?;
+    if mask_layers.is_empty() {
+        return Ok(matching_delta(analyze_tone(frame).mean, target_luminance));
+    }
+    let pixel_count = frame.width as usize * frame.height as usize;
+    for plane in mask_layers {
+        if plane.width != frame.width
+            || plane.height != frame.height
+            || plane.values.len() != pixel_count
+        {
+            return Err(CoreError::InvalidMaskPlane {
+                width: plane.width,
+                height: plane.height,
+                length: plane.values.len(),
+            });
+        }
+    }
+    let mut weighted_sum = 0.0;
+    let mut weight_sum = 0.0;
+    for index in 0..pixel_count {
+        let pixel = &frame.pixels[index * 4..index * 4 + 4];
+        let luminance = (0.2126 * f64::from(pixel[0])
+            + 0.7152 * f64::from(pixel[1])
+            + 0.0722 * f64::from(pixel[2]))
+            / 255.0;
+        let mut weight = 1.0;
+        for plane in mask_layers {
+            weight *= f64::from(plane.values[index]) / f64::from(u16::MAX);
+        }
+        weighted_sum += luminance * weight;
+        weight_sum += weight;
+    }
+    // All weights are non-negative, so a zero weight sum means every pixel is
+    // fully masked. The epsilon guard mirrors the existing matching semantics.
+    if weight_sum <= 1e-6 {
+        return Ok(0.0);
+    }
+    Ok(matching_delta(weighted_sum / weight_sum, target_luminance))
+}
+
+fn validate_target_luminance(target_luminance: f64) -> Result<(), CoreError> {
     if !target_luminance.is_finite() || !(0.0..=1.0).contains(&target_luminance) {
         return Err(CoreError::InvalidAdjustment {
             name: "target_luminance".into(),
@@ -141,16 +219,22 @@ pub fn match_total_exposure(frame: &ImageFrame, target_luminance: f64) -> Result
             maximum: 1.0,
         });
     }
-    let current = analyze_tone(frame).mean;
+    Ok(())
+}
+
+/// Shared delta logic of both matching entry points (F-041): identical
+/// epsilon (`1e-6`), finite guard and `-10..=10` clamping, so the plain and
+/// the masked variant protect identically.
+fn matching_delta(current: f64, target: f64) -> f64 {
     let epsilon = 1e-6;
-    let value = if target_luminance <= epsilon {
+    let value = if target <= epsilon {
         -10.0
     } else if current <= epsilon {
         10.0
     } else {
-        (target_luminance / current.max(epsilon)).log2()
+        (target / current.max(epsilon)).log2()
     };
-    Ok(finite(value).clamp(-10.0, 10.0))
+    finite(value).clamp(-10.0, 10.0)
 }
 
 /// Stable fingerprint for deciding whether persisted analysis belongs to this frame.
@@ -457,5 +541,215 @@ mod tests {
                 "matching exposure is not monotonic: {pair:?}"
             );
         }
+    }
+
+    // ---- F-041: weighted measurement domain ----
+
+    #[test]
+    fn masked_without_layers_is_identical_to_plain_matching() {
+        let frame = ImageFrame::new(
+            4,
+            1,
+            vec![
+                200, 200, 200, 255, 60, 60, 60, 255, 128, 128, 128, 0, 17, 129, 241, 128,
+            ],
+        )
+        .unwrap();
+        for target in [0.0, 0.01, 0.25, 0.5, 0.9, 1.0] {
+            assert_eq!(
+                match_total_exposure_masked(&frame, target, &[]).unwrap(),
+                match_total_exposure(&frame, target).unwrap(),
+                "target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn fully_masked_pixel_is_excluded_from_the_measurement() {
+        // 2x1 frame: pixel A = 200 (bright), pixel B = 60 (dark). The plane
+        // masks A fully (0) and keeps B fully visible (u16::MAX). The weighted
+        // mean is exactly the luminance of pixel B alone, so the result must be
+        // bit-identical to plain matching on the 1x1 frame [60]:
+        //   log2(0.5 / (60/255)) = log2(2.125) ≈ 1.08746  (for target 0.5)
+        let frame = ImageFrame::new(2, 1, vec![200, 200, 200, 255, 60, 60, 60, 255]).unwrap();
+        let plane = MaskPlane::new(2, 1, vec![0, u16::MAX]).unwrap();
+        let expected_frame = ImageFrame::new(1, 1, vec![60, 60, 60, 255]).unwrap();
+        for target in [0.01, 0.5, 0.99] {
+            assert_eq!(
+                match_total_exposure_masked(&frame, target, std::slice::from_ref(&plane)).unwrap(),
+                match_total_exposure(&expected_frame, target).unwrap(),
+                "target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_weight_half_counts_half() {
+        // 3x1 frame: A = 240 (fully masked, weight 0), B = 16 (weight 1.0),
+        // C = 128 (plane 32768 ≈ u16::MAX/2). u16::MAX is odd, so the exact
+        // weight is w = 32768/65535 ≈ 0.50000763 (a pixel with 32768 counts
+        // half, exactly the documented product semantics). Weighted mean:
+        //   (lum(16) * 1.0 + lum(128) * w) / (1.0 + w) ≈ 0.209151816123538
+        //   delta = log2(0.5 / mean) ≈ 1.2573775695277125
+        let frame = ImageFrame::new(
+            3,
+            1,
+            vec![240, 240, 240, 255, 16, 16, 16, 255, 128, 128, 128, 255],
+        )
+        .unwrap();
+        let plane = MaskPlane::new(3, 1, vec![0, u16::MAX, 32768]).unwrap();
+        let delta = match_total_exposure_masked(&frame, 0.5, &[plane]).unwrap();
+        let weight = 32768.0 / f64::from(u16::MAX);
+        assert!((weight - 0.5).abs() < 1e-5, "weight {weight} ~= half");
+        let luminance = |value: u8| {
+            (0.2126 * f64::from(value) + 0.7152 * f64::from(value) + 0.0722 * f64::from(value))
+                / 255.0
+        };
+        let expected_mean = (luminance(16) * 1.0 + luminance(128) * weight) / (1.0 + weight);
+        let implied_mean = 0.5 / 2.0_f64.powf(delta);
+        assert!(
+            (implied_mean - expected_mean).abs() < 1e-9,
+            "weighted mean {implied_mean} != expected {expected_mean} (delta {delta})"
+        );
+        assert!(
+            (delta - 1.2573775695277125).abs() < 1e-9,
+            "delta {delta} must be 1.2573775695277125"
+        );
+    }
+
+    #[test]
+    fn product_weights_intersect_layers() {
+        // Pixel A is fully masked in layer 1 (0) — it must be excluded even
+        // though layer 2 gives it full weight (u16::MAX): the product over the
+        // layers is the intersection. Only pixel B (60) remains visible.
+        let frame = ImageFrame::new(2, 1, vec![200, 200, 200, 255, 60, 60, 60, 255]).unwrap();
+        let layer1 = MaskPlane::new(2, 1, vec![0, u16::MAX]).unwrap();
+        let layer2 = MaskPlane::new(2, 1, vec![u16::MAX, u16::MAX]).unwrap();
+        let expected_frame = ImageFrame::new(1, 1, vec![60, 60, 60, 255]).unwrap();
+        assert_eq!(
+            match_total_exposure_masked(&frame, 0.5, &[layer1, layer2]).unwrap(),
+            match_total_exposure(&expected_frame, 0.5).unwrap()
+        );
+        // Layer order must not matter (multiplication is commutative).
+        let swapped = MaskPlane::new(2, 1, vec![u16::MAX, u16::MAX]).unwrap();
+        assert_eq!(
+            match_total_exposure_masked(
+                &frame,
+                0.5,
+                &[swapped, MaskPlane::new(2, 1, vec![0, u16::MAX]).unwrap()],
+            )
+            .unwrap(),
+            match_total_exposure(&expected_frame, 0.5).unwrap()
+        );
+    }
+
+    #[test]
+    fn fully_masked_frame_uses_documented_zero_delta_fallback() {
+        // Both pixels fully masked (0): no visible pixel. The documented
+        // fallback is delta 0.0 (identity, like the sample_count == 0 path of
+        // suggest_auto_tone) — finite, no panic, no silent NaN.
+        let frame = ImageFrame::new(2, 1, vec![200, 200, 200, 255, 60, 60, 60, 255]).unwrap();
+        let plane = MaskPlane::new(2, 1, vec![0, 0]).unwrap();
+        for target in [0.0, 0.5, 1.0] {
+            let delta =
+                match_total_exposure_masked(&frame, target, std::slice::from_ref(&plane)).unwrap();
+            assert_eq!(delta, 0.0, "target {target}");
+            assert!(delta.is_finite());
+        }
+        // Target validation still runs before the fallback.
+        assert!(matches!(
+            match_total_exposure_masked(&frame, f64::NAN, &[plane]),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn mismatched_plane_dimensions_are_rejected() {
+        let frame = ImageFrame::new(2, 1, vec![60; 8]).unwrap();
+        // Constructed directly because `MaskPlane::new` rejects invalid
+        // dimensions itself; the matching entry point must reject them too.
+        for plane in [
+            MaskPlane {
+                width: 1,
+                height: 1,
+                values: vec![0],
+            },
+            MaskPlane {
+                width: 2,
+                height: 2,
+                values: vec![0; 4],
+            },
+            MaskPlane {
+                width: 2,
+                height: 1,
+                values: vec![0],
+            },
+        ] {
+            let error = match_total_exposure_masked(&frame, 0.5, &[plane]).unwrap_err();
+            assert!(matches!(error, CoreError::InvalidMaskPlane { .. }));
+            assert!(error.to_string().contains("mask plane"));
+        }
+        // A valid plane passes.
+        let plane = MaskPlane::new(2, 1, vec![u16::MAX; 2]).unwrap();
+        assert!(match_total_exposure_masked(&frame, 0.5, &[plane]).is_ok());
+    }
+
+    #[test]
+    fn masked_matching_is_deterministic() {
+        let frame = ImageFrame::new(
+            3,
+            2,
+            vec![
+                3, 17, 91, 0, 42, 128, 211, 255, 255, 64, 7, 32, 99, 101, 203, 17, 180, 220, 12,
+                200, 71, 33, 88, 250,
+            ],
+        )
+        .unwrap();
+        let plane = MaskPlane::new(3, 2, vec![0, 65535, 32768, 65535, 0, 32768]).unwrap();
+        let reference =
+            match_total_exposure_masked(&frame, 0.63, std::slice::from_ref(&plane)).unwrap();
+        for _ in 0..8 {
+            assert_eq!(
+                match_total_exposure_masked(&frame, 0.63, std::slice::from_ref(&plane)).unwrap(),
+                reference
+            );
+        }
+    }
+
+    #[test]
+    fn measurement_uses_the_post_crop_frame() {
+        // 4x1 frame with the brightest pixel (255) at the right edge. A crop
+        // that removes the edge yields the 3x1 post-crop render result; the
+        // function measures exactly the frame it receives (the post-crop
+        // render output, F-041 measurement domain), not the decoded original.
+        //   post-crop mean: 64/255 ≈ 0.25098  -> delta ≈ log2(1.9922) ≈ 0.994
+        //   full mean:      111.75/255 ≈ 0.438 -> delta ≈ log2(1.1409) ≈ 0.190
+        let full = ImageFrame::new(
+            4,
+            1,
+            vec![
+                64, 64, 64, 255, 64, 64, 64, 255, 64, 64, 64, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
+        let post_crop = ImageFrame::new(
+            3,
+            1,
+            vec![64, 64, 64, 255, 64, 64, 64, 255, 64, 64, 64, 255],
+        )
+        .unwrap();
+        let target = 0.5;
+        assert_eq!(
+            match_total_exposure_masked(&post_crop, target, &[]).unwrap(),
+            match_total_exposure(&post_crop, target).unwrap()
+        );
+        // The bright edge would dominate the un-cropped measurement, so the
+        // deltas must differ clearly: the function measures the passed frame.
+        assert!(
+            (match_total_exposure_masked(&post_crop, target, &[]).unwrap()
+                - match_total_exposure(&full, target).unwrap())
+            .abs()
+                > 0.5
+        );
     }
 }

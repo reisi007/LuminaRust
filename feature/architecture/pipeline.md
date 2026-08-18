@@ -269,8 +269,9 @@ Source-Action-Mechanismus (Kontext-Artefakt, Kompositing mit 50 %-Schwellwert),
 die Masken-Evaluierung und -Validierung mit `MaskPolicy` sowie die
 CLI-/GUI-Verdrahtung (zdata-Planes, Warnungen). Offen sind F-042-N1
 (Persistenz/CLI-Command für Source-Actions), F-049 (Pixel-Modulation durch
-lokale Anpassungen), F-041 (Matching-Messbereich nach Crop/Masken) und die
-Geometrie-Ausrichtung von Masken.
+lokale Anpassungen) und die Geometrie-Ausrichtung von Masken. Der
+Matching-Messbereich nach Crop/Masken ist mit F-041 umgesetzt (siehe
+„Exposure Matching").
 
 **Status (F-085, behaviorale Tests):** Behaviorale Tests decken die
 Wechselwirkung von Source-Actions mit Auto-WB, Auto-Tone und Exposure Matching
@@ -603,17 +604,62 @@ liefert den oberen Exposure-Fallback und Weiß den unteren.
 Luminanz und berechnet `log2(target/current)` mit Epsilon, finite-Schutz und
 -10..=10-Begrenzung. Die Implementierung muss Schutz gegen
 Division durch null, extreme Zielwerte, Clipping und Maskeneinflüsse enthalten.
-Im aktuellen Raster-MVP messen Auto-Tone und Matching ausschließlich den
-dekodierten aktuellen Raster-Messbereich (alle RGBA-Pixel, Alpha ignoriert).
-Der spätere finale Messbereich ist davon getrennt: Er entsteht erst nach Crop,
-Geometrie und aktiven Masken und liegt vor Outputprofil und Export-
-Transferfunktion. Dieser finale Messbereich ist noch nicht implementiert;
-F-041 bleibt deshalb offen, bis Crop und Masken in dieser Pipeline tatsächlich
-verfügbar sind.
+Auto-Tone misst im Raster-MVP den dekodierten aktuellen Raster-Messbereich
+(alle RGBA-Pixel, Alpha ignoriert); `Match Total Exposure` misst dagegen den
+finalen sichtbaren Messbereich nach Crop, Geometrie und aktiven Masken
+(siehe F-041 unten), vor Outputprofil und Export-Transferfunktion.
 Die Raster-MVP-Reihenfolge lautet Source-Actions (noch nicht im CLI),
-Auto-Tone, Preset, CLI-Overrides, Masken später, danach Matching. Berechnete
+Auto-Tone, Preset, CLI-Overrides, danach Matching. Berechnete
 Auto-Werte und ein RGBA8-Analysefingerprint werden im Rezept persistiert und
 bei gültigem Fingerprint wiederverwendet.
+
+### F-041: Finaler sichtbarer Messbereich
+
+**Messbereich:** `Match Total Exposure` misst den finalen sichtbaren
+Messbereich = das Render-Ergebnis NACH Crop/Geometrie (aus `render_frame`),
+nicht das dekodierte Original. Im CLI ist der gemessene Frame bereits das
+post-Crop/Geometrie-Render-Ergebnis; F-041 schreibt das normativ fest und
+testet es. Im GUI wird die gerenderte Vorschau gemessen (derselbe Frame, der
+angezeigt wird).
+
+**Aktive Masken:** Liegen im Render-Ergebnis aktive Masken-Layer
+(`mask_layers`) vor, wird die Messung auf den maskierten sichtbaren Bereich
+beschränkt: Jedes Pixel erhält ein Gewicht
+`w = ∏_layer (plane_layer[pixel] / u16::MAX)` (Produkt über alle aktiven
+Layer — Schnittmenge: Ein Pixel, das in irgendeinem Layer vollständig
+maskiert ist (Gewicht 0), gehört nicht zum global sichtbaren Messbereich).
+Der Mittelwert wird gewichtet über die sichtbaren Pixel gebildet
+(Rec.709-Luminanz, Alpha weiterhin ignoriert). Ohne Masken (`None`/leer) ist
+das Resultat identisch zur bisherigen Raster-Messung
+(`match_total_exposure_masked` delegiert bei leerem Slice exakt an
+`match_total_exposure`).
+
+**Grenzen (ehrlich):** Lokale Anpassungen und die visuelle Pixel-Modulation
+durch Masken folgen mit F-049; bis dahin definiert F-041 die
+Messbereichs-Semantik (Gewichte = Schnittmenge der Ebenen), die ab F-049 mit
+der sichtbaren Modulation übereinstimmt. Die Geometrie-Ausrichtung von Masken
+bleibt dokumentierte Grenze (F-042).
+
+**Schutz:** Epsilon-, Clipping-, finite- und Fallback-Schutz der bisherigen
+Implementierung bleiben erhalten (Epsilon `1e-6`, Begrenzung `-10..=10` EV,
+finite-Wächter). Vollständig maskiertes Bild (kein sichtbares Pixel,
+Gewichtssumme ≤ Epsilon) → definierter Fallback: Delta `0.0` (Identität,
+kein Adjustmentschritt), konsistent zur `sample_count == 0`-Semantik von
+`suggest_auto_tone` (Exposure `0.0`) — kein NaN, kein Panic, kein stiller
+Fallback. Ein Dimensions-Mismatch zwischen Masken-Ebene und Frame wird mit
+`CoreError::InvalidMaskPlane` abgelehnt (kein stiller Fallback).
+
+**Status (F-041):** Implementiert sind der gewichtet-maskierte Messbereich in
+`lumina-core` (`match_total_exposure_masked`,
+`crates/lumina-core/src/tone.rs`, inklusive handgerechneter Unit-Tests), die
+normative Festschreibung von Crop/Geometrie im Messbereich sowie die
+CLI-/GUI-Verdrahtung: Das CLI misst das Render-Ergebnis mit den effektiven
+Ebenen aus `render_output.mask_layers`; die GUI misst die gerenderte Vorschau
+mit den Masken-Ebenen des letzten Renderings (wasm32: leeres Slice,
+dokumentierter Post-MVP-Zustand). `match_total_exposure` bleibt in Signatur
+und Verhalten unverändert (interne Delegation auf die gemeinsame
+Delta-Logik). Offen sind F-049 (Pixel-Modulation durch lokale Anpassungen)
+und F-042-N1 (Source-Actions-Persistenz).
 
 ## Cache und Invalidierung
 

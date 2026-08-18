@@ -23,8 +23,12 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
   0 Fehler; CI läuft grün — RUSTFLAGS=-D warnings bewusst aus CI entfernt,
   weil Vendor-libraw-sys-Build-Script-Warnungen sonst `cargo check` brechen;
   strikter Gate bleibt Clippy `-D warnings`).
+- **F-041** verifiziert erledigt und entfernt (Matching auf finalem sichtbarem
+  Messbereich: post-Crop/Geometrie normativ, Masken-Gewicht = Produkt der
+  Ebenen/u16::MAX, Fallback Delta 0.0 bei vollmaskiert; CLI/GUI verdrahtet;
+  8 Core-Tests, CLI-e2e umgestellt).
 
-Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4), F-041, F-043
+Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4), F-043
 (Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
@@ -125,11 +129,10 @@ F-036-N1 ist verifiziert erledigt und entfernt (As-Shot-WB-Kontext
 F-042 ist verifiziert erledigt und entfernt (Render-Einstiegspunkt
 `render_frame` in lumina-core; Source-Actions- und Masken-Stufe in der
 dokumentierten Reihenfolge; CLI/GUI nutzen dieselbe Renderpipeline; Status in
-pipeline.md F-042; Folgeaufgabe F-042-N1 in Phase 3).
+pipeline.md F-042; Folgeaufgabe F-042-N1 in Phase 3). F-041 ist verifiziert
+erledigt und entfernt (Matching-Messbereich nach Crop/Geometrie/aktiven
+Masken; Status in pipeline.md „Exposure Matching" F-041).
 
-- [ ] **F-041** `Match Total Exposure` auf den finalen sichtbaren Messbereich
-  nach Crop, Geometrie und aktiven Masken erweitern; Epsilon-, Clipping- und
-  Fallback-Schutz sind im aktuellen Raster-Messbereich vorhanden.
 - [ ] **F-043** Echte Property-Tests und Referenzbildtests für Auto-Tone und
   Exposure Matching ergänzen; deterministische Invariantentests sind vorhanden.
 

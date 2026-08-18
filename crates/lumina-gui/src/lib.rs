@@ -4,8 +4,9 @@ use eframe::egui;
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_core::MaskPolicy;
 use lumina_core::{
-    analyze_tone, match_total_exposure, render_frame, suggest_auto_tone, tone_fingerprint,
-    AutoToneConfig, ImageFrame, MaskContext, MaskPlane, OutputSpec, RenderContext, RenderKey,
+    analyze_tone, match_total_exposure_masked, render_frame, suggest_auto_tone, tone_fingerprint,
+    AutoToneConfig, ImageFrame, MaskContext, MaskLayerResult, MaskPlane, OutputSpec, RenderContext,
+    RenderKey,
 };
 use lumina_raw::RawError;
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,6 +127,11 @@ pub struct LuminaApp {
     error: Option<String>,
     render_key: Option<RenderKey>,
     tone_analysis: Option<lumina_core::ToneAnalysis>,
+    /// Effective mask layers of the last [`Self::render`] (F-041): the
+    /// measurement domain of `Match Total Exposure` is the rendered preview
+    /// weighted by these planes. Empty on wasm32 (no mask context, documented
+    /// post-MVP state) and whenever the render produced no layers.
+    render_mask_layers: Vec<MaskLayerResult>,
     #[cfg(not(target_arch = "wasm32"))]
     document: Option<SidecarDocument>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +198,7 @@ impl LuminaApp {
             error: None,
             render_key: None,
             tone_analysis: None,
+            render_mask_layers: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             document: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -843,7 +850,16 @@ impl LuminaApp {
         let Some(frame) = &self.preview else {
             return Ok(());
         };
-        let value = match_total_exposure(frame, target)?;
+        // F-041: measure the final visible domain — the rendered preview
+        // (post crop/geometry, same frame that is displayed) weighted by the
+        // effective mask planes of the last render. wasm32 renders without
+        // mask layers, so the empty slice keeps the raster measurement.
+        let mask_planes: Vec<MaskPlane> = self
+            .render_mask_layers
+            .iter()
+            .map(|layer| layer.plane.clone())
+            .collect();
+        let value = match_total_exposure_masked(frame, target, &mask_planes)?;
         let exposure = self
             .recipe
             .adjustments
@@ -958,6 +974,7 @@ impl LuminaApp {
         ));
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
+        self.render_mask_layers = output.mask_layers;
         self.error = None;
         self.status = if !mask_warnings.is_empty() {
             let layers: Vec<&str> = mask_warnings

@@ -28,8 +28,8 @@ pub use render::{
     SourceActionArtifact,
 };
 pub use tone::{
-    analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
-    AutoToneResult, ToneAnalysis,
+    analyze_tone, match_total_exposure, match_total_exposure_masked, suggest_auto_tone,
+    tone_fingerprint, AutoToneConfig, AutoToneResult, ToneAnalysis,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +130,12 @@ pub enum CoreError {
     InvalidAutoToneConfig(String),
     #[error("invalid source action: {0}")]
     InvalidSourceAction(String),
+    #[error("invalid mask plane dimensions {width}x{height} for {length} values")]
+    InvalidMaskPlane {
+        width: u32,
+        height: u32,
+        length: usize,
+    },
     #[error("mask `{copy_id}/{mask_id}` is unavailable (status {status})")]
     MaskUnavailable {
         copy_id: String,
