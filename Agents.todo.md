@@ -7,21 +7,13 @@ keine dauerhafte Liste abgehakter Aufgaben.
 
 ## Stand (2026-08-18)
 
-Aktueller Fortschritt seit dem letzten Stand (2026-08-17):
+Offene Arbeit und Abgrenzung — verifiziert abgeschlossene Aufgaben sind aus
+dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 
-- **F-089-N1** (Phase 3): verifiziert erledigt — Legacy-`Curve`-Wrapper aus
-  `lumina-sidecar` entfernt; keine Schema-/Verhaltensänderung.
-- **F-039** (Phase 5): verifiziert erledigt — explizite
-  `LuminanceHistogram`-Repräsentation in `lumina-core` (Rec.709/RGBA8-Messdomäne,
-  256 Bins, Quantile konsistent zu `analyze_tone`, serde + Digest für
-  `CacheStage::Histogram`); Status in `feature/architecture/pipeline.md`.
-- **F-072-N1** (Phase 11): verifiziert erledigt — Clippy läuft workspace-weit
-  mit `-D warnings` auf Exit 0 (`RenderKey::new`-Refactor auf `OutputSpec`,
-  `bool_assert_comparison`, `useless_conversion` sowie 8 durch die Build-Kaskade
-  maskierte Vorbefunde); Digest-Semantik des RenderKeys bit-identisch.
-- **Neu ergänzt:** F-072-N2 (vorbestehender wasm32-Fehler in `lumina-gui`).
-- **Nicht gestartet:** F-036-N1 war in Vorbereitung, wurde auf Anweisung nicht
-  delegiert; keine offenen Arbeitsbaum-Änderungen (main sauber).
+- **F-072-N2** neu ergänzt: vorbestehender wasm32-Fehler in `lumina-gui`
+  (dokumentierte Baseline aus Verifikation F-072-N1).
+- **F-036-N1** war in Vorbereitung, wurde auf Anweisung nicht delegiert; keine
+  offenen Arbeitsbaum-Änderungen (main sauber).
 
 Verbleibend bis MVP: F-036-N1, F-042, F-085, F-097 (Phase 3/4), F-041, F-043
 (Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078,
@@ -96,8 +88,6 @@ Tests wird trotzdem umgesetzt.
 
 ## Phase 3: Renderpipeline und Cache
 
-(Stand 2026-08-18: F-089-N1 verifiziert erledigt; F-085 und F-097 offen)
-
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
   (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
@@ -119,8 +109,6 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
   stiller Fallback; ohne Kontext bleibt Identitäts-Semantik).
 
 ## Phase 5: Auto-Tone und Exposure Matching
-
-(Stand 2026-08-18: F-039 verifiziert erledigt; F-041, F-042, F-043 offen)
 
 - [ ] **F-041** `Match Total Exposure` auf den finalen sichtbaren Messbereich
   nach Crop, Geometrie und aktiven Masken erweitern; Epsilon-, Clipping- und
@@ -185,9 +173,6 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
   Threads und GPU dokumentieren.
 
 ## Phase 11: Qualität, Performance und Release
-
-(Stand 2026-08-18: F-072-N1 verifiziert erledigt; F-072-N2 als Folgeaufgabe
-ergänzt; F-072, F-073…F-078 offen)
 
 - [ ] **F-072** CI für Formatierung, Clippy, Unit-, Integrations-, Golden-,
   Property- und CLI-Tests einrichten.
