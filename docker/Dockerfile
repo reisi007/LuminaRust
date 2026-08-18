@@ -64,11 +64,17 @@ FROM ubuntu:24.04
 # - libraw_r.so (installed below, plus its runtime deps: jpeg, lcms2, zlib);
 # - pkg-config for the vendored `libraw-sys` build script (`libraw_r.pc`);
 # - a C++ compiler: the libraw-sys build script compiles small probe programs
-#   to detect LibRaw struct members (`check_member`), so g++ is required.
+#   to detect LibRaw struct members (`check_member`), so g++ is required;
+# - curl/wget/ca-certificates: `dtolnay/rust-toolchain` downloads rustup and
+#   the Rust toolchain inside this container over HTTPS.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         g++ \
         make \
+        curl \
+        wget \
+        ca-certificates \
+        gzip \
         zlib1g \
         libjpeg-turbo8 \
         liblcms2-2 \
