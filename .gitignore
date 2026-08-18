@@ -22,6 +22,9 @@
 *.lumina-cache/
 .lumina/
 
+# CodeGraph local knowledge graph index (regenerable via `codegraph init`)
+.codegraph/
+
 # OS files
 .DS_Store
 Thumbs.db

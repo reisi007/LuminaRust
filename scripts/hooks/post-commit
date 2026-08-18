@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Post-commit hook: keep the local CodeGraph index in sync with git history.
+#
+# The hook is idempotent and fails softly:
+#   - if `codegraph` is not installed, it exits 0 without output;
+#   - on the first commit after enabling the hook it runs `codegraph init`
+#     (creates .codegraph/ and builds the full index);
+#   - on every later commit it runs `codegraph sync` (incremental update).
+#
+# Install:  ln -s ../../scripts/hooks/post-commit .git/hooks/post-commit
+# (relative symlink from .git/hooks/ to scripts/hooks/post-commit)
+
+set -u
+
+if ! command -v codegraph >/dev/null 2>&1; then
+  exit 0
+fi
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$root" || exit 0
+
+if [[ -d "$root/.codegraph" ]]; then
+  codegraph sync "$root" >/dev/null 2>&1 || true
+else
+  # First run: build the initial index. This can take a moment; the commit
+  # itself is already finished, so the hook only reports progress.
+  codegraph init "$root" >/dev/null 2>&1 || true
+fi
+
+exit 0
