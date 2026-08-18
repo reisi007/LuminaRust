@@ -128,6 +128,13 @@ F-036-N1 ist verifiziert erledigt und entfernt (As-Shot-WB-Kontext
 `apply_recipe_with_white_balance` in lumina-core; CLI/GUI reichen
 `RawMetadata.camera_white_balance` durch; Status in pipeline.md F-036).
 
+- [ ] **F-098** (niedrige Priorität) LibRaw-Version in die Decode-/Render-Identität
+  aufnehmen: CR3-Dimensionen unterscheiden sich zwischen LibRaw-Versionen
+  (0.21.x: 6160×4144, 0.22.x: 6032×4024); RenderKey/Decode-Fingerprint nutzt
+  bisher nur den statischen Decoder-Namen „libraw". Erkenntnis aus der
+  CI-Härtung (2026-08-18); bis dahin ist die Version über den gepinnten
+  CI-Container und die Homebrew-Version dokumentiert.
+
 ## Phase 5: Auto-Tone und Exposure Matching
 
 F-042 ist verifiziert erledigt und entfernt (Render-Einstiegspunkt

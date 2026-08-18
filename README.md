@@ -109,6 +109,14 @@ GitHub Actions liegt unter [`.github/workflows/ci.yml`](.github/workflows/ci.yml
 - Dokumentationsdateien werden bereits geprüft.
 - Der Rust-Job startet automatisch, sobald ein Root-`Cargo.toml` existiert.
 - Danach laufen `fmt`, `check`, `test` und `clippy` mit stabiler Toolchain.
+- Der Rust-Job läuft im Container
+  `ghcr.io/reisi007/luminarust/lumina-ci:latest` (LibRaw 0.22.2, identisch zur
+  lokalen Homebrew-Version; das Image baut
+  `.github/workflows/ci-libraw-image.yml` aus `docker/Dockerfile` und wird als
+  `<commit-sha>`-Tag immutabel veröffentlicht, die Version steht im
+  OCI-Label `lumina.libraw_version`). Dadurch dekodieren CI und lokale
+  Entwicklung RAW identisch — CR3-Dimensionen unterscheiden sich zwischen
+  LibRaw-Versionen.
 - Ein separater WASM-Job prüft `lumina-core` und `lumina-gui` für
   `wasm32-unknown-unknown`.
 - `actionlint` ist lokal bereits vorhanden und kann den Workflow prüfen.
@@ -160,6 +168,9 @@ Die lokalen Nutzer-Fixtures `sample-data/raw/aircraft-landscape.cr3` und
 `sample-data/raw/aircraft-portrait.cr3` sind für den Testlauf geeignet. Der
 echte Testlauf lautet zum Beispiel
 `LUMINA_RAW_FIXTURE="$PWD/sample-data/raw/aircraft-landscape.cr3" rustup run stable cargo test -p lumina-raw -- --ignored`.
+Die Golden-Dimensionen (6032×4024) gelten für LibRaw 0.22.2; die CI läuft
+deshalb im gepinnten `lumina-ci`-Container (LibRaw 0.22.2; siehe Abschnitt CI
+und `docker/Dockerfile`).
 Lens, Kamera-Farbmatrix und Profile bleiben bis zur Prüfung der konkreten
 LibRaw-Felder als F-034 offen; es werden keine Dummywerte verwendet.
 

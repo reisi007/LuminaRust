@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: read
+  # Used by the rust job to authenticate the GHCR container pull
+  # (`container.credentials`); the image is public, this only future-proofs
+  # the pull for private mirrors.
+  packages: read
 
 jobs:
   detect:
@@ -35,7 +39,18 @@ jobs:
     # The repository starts with architecture and feature documents. The Rust
     # checks become active automatically once the Cargo workspace is present.
     if: needs.detect.outputs.has_cargo == 'true'
+    # Runs inside the pinned-LibRaw image built by ci-libraw-image.yml
+    # (ghcr.io/reisi007/luminarust/lumina-ci:latest; the LibRaw version 0.22.2
+    # is recorded in the OCI label `lumina.libraw_version`). This gives the
+    # runner the same LibRaw version (0.22.2) as local Homebrew installs, so
+    # the RAW golden fixture dimensions are deterministic across environments
+    # (LibRaw 0.21.x decodes CR3 as 6160x4144, 0.22.x as 6032x4024).
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       CARGO_TERM_COLOR: always
       # NOTE: RUSTFLAGS="-D warnings" is intentionally NOT set here. It would
@@ -52,15 +67,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - name: Install system dependencies
-        # lumina-raw links against LibRaw via the vendored `libraw-sys` build
-        # script, which only supports pkg-config (`libraw_r.pc`). Homebrew
-        # (macOS) provides it via `libraw`; the ubuntu runner needs the
-        # system package.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libraw-dev
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
