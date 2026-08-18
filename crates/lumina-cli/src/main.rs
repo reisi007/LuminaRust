@@ -1474,4 +1474,149 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("layer-1"));
     }
+
+    // ---- F-085: history steps and mask × matching interplay ----
+    //
+    // Documented boundary (F-042-N1): the CLI still passes an empty
+    // source-action list (`source_actions: &[]` in `process_selected`).
+    // Source actions reach the CLI only with F-042-N1 (persistence +
+    // CLI command); no CLI source-action test is written yet.
+
+    #[test]
+    fn history_entry_stores_final_recipe_and_snapshot_reproduces_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
+        let bytes = frame.encode(ImageFileFormat::Png).unwrap();
+        fs::write(&input, &bytes).unwrap();
+        process(ProcessArgs {
+            input: input.clone(),
+            output: output.clone(),
+            preset: None,
+            exposure: Some(0.5),
+            contrast: Some(-0.2),
+            highlights: Some(0.1),
+            shadows: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
+        })
+        .unwrap();
+        assert!(output.is_file());
+
+        let sidecar = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let copy = &sidecar.virtual_copies[0];
+        // Exactly one new history entry; its recipe snapshot is the final
+        // recipe of the process run. `assert_eq` on EditRecipe covers all
+        // relevant fields (adjustments, auto_features, nested stages).
+        assert_eq!(copy.history.len(), 1);
+        let entry = &copy.history[0];
+        assert_eq!(entry.recipe, copy.recipe);
+        assert_eq!(entry.recipe.adjustments["exposure"], 0.5);
+        assert_eq!(entry.recipe.adjustments["contrast"], -0.2);
+        assert_eq!(entry.recipe.adjustments["highlights"], 0.1);
+        assert!(!entry.recipe.auto_features.enable_auto_tone);
+        assert!(!entry.recipe.auto_features.match_total_exposure);
+        assert!(entry.recorded_at.is_some());
+
+        // Snapshot reproducibility: applying the stored recipe alone to the
+        // original frame reproduces the process output byte-identically (PNG
+        // is lossless and the encoder is deterministic), plus a decoded-pixel
+        // cross-check.
+        let source = ImageFrame::decode(&fs::read(&input).unwrap()).unwrap();
+        let rendered = render_frame(
+            &source,
+            &RenderContext {
+                recipe: &entry.recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+            },
+        )
+        .unwrap();
+        let expected = fs::read(&output).unwrap();
+        assert_eq!(
+            rendered.frame.encode(ImageFileFormat::Png).unwrap(),
+            expected
+        );
+        assert_eq!(ImageFrame::decode(&expected).unwrap(), rendered.frame);
+    }
+
+    #[test]
+    fn valid_mask_with_match_total_exposure_reaches_target_without_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        // 8x8 bimodal gray frame (32 pixels of 200, 32 pixels of 60): the
+        // mean luminance is 130/255 ~= 0.51, so matching has real work to do
+        // against the 0.5 target.
+        let mut pixels = Vec::with_capacity(8 * 8 * 4);
+        for index in 0..64 {
+            let value = if index < 32 { 200u8 } else { 60u8 };
+            pixels.extend_from_slice(&[value, value, value, 255]);
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
+        let bytes = frame.encode(ImageFileFormat::Png).unwrap();
+        fs::write(&input, &bytes).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+
+        // Valid artifact plane for `subject` at frame resolution. F-042 does
+        // not modulate pixels yet (pixel modulation is F-049), so the plane
+        // exercises the valid-mask evaluation path without changing the
+        // measured frame; the measurement domain is the post-recipe frame
+        // (F-041 raster MVP).
+        let tile = lumina_sidecar::MaskTile {
+            mask_id: "subject".into(),
+            tile_x: 0,
+            tile_y: 0,
+            width: 8,
+            height: 8,
+            values: (0..64).map(|i| if i < 32 { 0 } else { 65535 }).collect(),
+        };
+        let container = lumina_sidecar::ZDataContainer::new(vec![tile]).unwrap();
+        lumina_sidecar::save_zdata(&lumina_sidecar::zdata_path_for(&input), &container).unwrap();
+
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output: output.clone(),
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: true,
+                target_luminance: 0.5,
+            },
+            None,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(output.is_file());
+        assert!(
+            warnings.is_empty(),
+            "valid mask must not warn: {warnings:?}"
+        );
+
+        // The exported frame reaches the target luminance within tolerance.
+        let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
+        let mean = lumina_core::analyze_tone(&rendered).mean;
+        assert!(
+            (mean - 0.5).abs() <= 0.02,
+            "post-match mean {mean} not within 0.02 of target 0.5"
+        );
+        // The matching result is persisted in the recipe's auto features:
+        // log2(0.5 / (130/255)) for the unchanged post-recipe frame.
+        let sidecar = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let auto = &sidecar.virtual_copies[0].recipe.auto_features;
+        assert!(auto.match_total_exposure);
+        let matched = auto.matched_exposure.unwrap();
+        assert!(
+            (matched - (-0.0280)).abs() < 0.001,
+            "persisted matched exposure {matched}"
+        );
+    }
 }

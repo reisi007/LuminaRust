@@ -18,8 +18,11 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
   `render_frame` in lumina-core; Source-Actions- und Masken-Stufe in der
   dokumentierten Reihenfolge; CLI und GUI nutzen dieselbe Renderpipeline;
   Folgeaufgabe F-042-N1 ergänzt).
+- **F-085** verifiziert erledigt und entfernt (behaviorale Tests: Source-Actions
+  × Auto-WB/Auto-Tone/Matching, Schwellwert-Grenzfälle, Nicht-Destruktion,
+  Determinismus, History-Reproduzierbarkeit, CLI-Interplay; 11 Tests).
 
-Verbleibend bis MVP: F-042-N1, F-085, F-097 (Phase 3/4), F-041, F-043
+Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4), F-041, F-043
 (Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078,
 F-072-N2). Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
@@ -98,9 +101,6 @@ Tests wird trotzdem umgesetzt.
   CLI-Command (Staubentfernung). Dokumentierte Folgeaufgabe aus F-042;
   bis dahin liefern CLI/GUI leere Source-Actions (Mechanismus ist aktiv und
   getestet).
-- [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
-  Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
-  (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
 - [ ] **F-097** (niedrige Priorität) Deterministische Vignettierung und Körnung
   mit RenderKey-abgeleitetem Seed umsetzen.
 

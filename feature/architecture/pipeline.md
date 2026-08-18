@@ -272,6 +272,18 @@ CLI-/GUI-Verdrahtung (zdata-Planes, Warnungen). Offen sind F-042-N1
 lokale Anpassungen), F-041 (Matching-Messbereich nach Crop/Masken) und die
 Geometrie-Ausrichtung von Masken.
 
+**Status (F-085, behaviorale Tests):** Behaviorale Tests decken die
+Wechselwirkung von Source-Actions mit Auto-WB, Auto-Tone und Exposure Matching
+ab: Die Reihenfolge SourceActions → Adjustments ist über differenzielle
+Ausgaben belegt (ersetztes vs. nicht ersetztes Pixel unter WB; Auto-Tone- und
+Matching-Messung auf dem Post-Action-Frame), ebenso die
+Schwellwert-Grenzfälle (32768/32767, 0, u16::MAX), Nicht-Destruktion von Frame
+und Artefakten, Determinismus und History-Reproduzierbarkeit (ein
+Rezept-Snapshot rendert byte-identisch erneut) sowie das CLI-Zusammenspiel aus
+History-Eintrag und gültiger Maske mit `--match-total-exposure`. Die
+CLI-Durchreichung von Source-Actions bleibt bis F-042-N1 offen (leere Liste,
+dokumentierte Grenze).
+
 ## Bearbeitungsregler
 
 Dieser Abschnitt erweitert die Rezeptsemantik normativ. Alle Felder liegen in
