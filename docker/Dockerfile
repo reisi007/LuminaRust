@@ -61,7 +61,10 @@ RUN set -eux; \
 FROM ubuntu:24.04
 
 # Runtime + cargo-build-time needs:
-# - libraw_r.so (installed below, plus its runtime deps: jpeg, lcms2, zlib);
+# - libraw_r.so (installed below) plus the *-dev packages: `libraw_r.pc`
+#   declares `Requires: lcms2`, and pkg-config must resolve lcms2.pc /
+#   libjpeg / zlib at cargo build time (the -dev packages pull the runtime
+#   libraries as dependencies);
 # - pkg-config for the vendored `libraw-sys` build script (`libraw_r.pc`);
 # - a C++ compiler: the libraw-sys build script compiles small probe programs
 #   to detect LibRaw struct members (`check_member`), so g++ is required;
@@ -75,9 +78,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wget \
         ca-certificates \
         gzip \
-        zlib1g \
-        libjpeg-turbo8 \
-        liblcms2-2 \
+        liblcms2-dev \
+        libjpeg-dev \
+        zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib /usr/local/lib
