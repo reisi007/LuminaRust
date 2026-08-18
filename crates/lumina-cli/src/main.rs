@@ -618,6 +618,7 @@ fn process_selected(args: ProcessArgs, virtual_copy: Option<&str>) -> Result<(),
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (mut frame, raw_metadata) = decode_input(&args.input, &bytes)?;
+    let wb = raw_metadata.as_ref().map(|m| m.camera_white_balance);
     let sidecar_path = sidecar_path_for(&args.input);
     let mut document = match load_sidecar(&sidecar_path) {
         Ok(document) => document,
@@ -710,7 +711,7 @@ fn process_selected(args: ProcessArgs, virtual_copy: Option<&str>) -> Result<(),
     if let Some(value) = args.shadows {
         recipe.adjustments.insert("shadows".into(), value);
     }
-    frame.apply_recipe(&recipe)?;
+    frame.apply_recipe_with_white_balance(&recipe, wb)?;
     if args.match_total_exposure {
         recipe.auto_features.match_total_exposure = true;
         recipe.auto_features.target_luminance = args.target_luminance;
@@ -720,10 +721,13 @@ fn process_selected(args: ProcessArgs, virtual_copy: Option<&str>) -> Result<(),
             + matching)
             .clamp(-10.0, 10.0);
         recipe.adjustments.insert("exposure".into(), total_exposure);
-        frame.apply_recipe(&lumina_sidecar::EditRecipe {
-            adjustments: BTreeMap::from([(String::from("exposure"), matching)]),
-            ..Default::default()
-        })?;
+        frame.apply_recipe_with_white_balance(
+            &lumina_sidecar::EditRecipe {
+                adjustments: BTreeMap::from([(String::from("exposure"), matching)]),
+                ..Default::default()
+            },
+            wb,
+        )?;
     }
     let encoded = frame.encode(format)?;
     write_atomically(&args.output, &encoded)?;

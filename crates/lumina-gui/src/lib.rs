@@ -109,6 +109,7 @@ pub struct LuminaApp {
     source_bytes: Option<Vec<u8>>,
     source_is_raw: bool,
     raw_orientation: u8,
+    camera_white_balance: Option<[f32; 4]>,
     source_name: String,
     #[cfg(not(target_arch = "wasm32"))]
     path: String,
@@ -174,6 +175,7 @@ impl LuminaApp {
             source_bytes: None,
             source_is_raw: false,
             raw_orientation: 1,
+            camera_white_balance: None,
             source_name: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
             path: String::new(),
@@ -770,16 +772,21 @@ impl LuminaApp {
     pub fn load_bytes(&mut self, bytes: Vec<u8>, name: impl Into<String>) -> Result<(), GuiError> {
         let name = name.into();
         let source_is_raw = is_raw_name(&name);
-        let (frame, orientation) = if source_is_raw {
+        let (frame, orientation, camera_white_balance) = if source_is_raw {
             let image = lumina_raw::decode_bytes(&bytes, &name)?;
-            (image.frame, image.metadata.orientation)
+            (
+                image.frame,
+                image.metadata.orientation,
+                Some(image.metadata.camera_white_balance),
+            )
         } else {
-            (ImageFrame::decode(&bytes)?, 1)
+            (ImageFrame::decode(&bytes)?, 1, None)
         };
         self.source_name = name;
         self.source_bytes = Some(bytes);
         self.source_is_raw = source_is_raw;
         self.raw_orientation = orientation;
+        self.camera_white_balance = camera_white_balance;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.document = None;
@@ -860,7 +867,7 @@ impl LuminaApp {
             return Ok(());
         };
         let mut preview = original.clone();
-        preview.apply_recipe(&self.recipe)?;
+        preview.apply_recipe_with_white_balance(&self.recipe, self.camera_white_balance)?;
         let source_hash = self
             .source_bytes
             .as_ref()

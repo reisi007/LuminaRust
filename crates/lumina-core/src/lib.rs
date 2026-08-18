@@ -301,7 +301,29 @@ impl ImageFrame {
     }
 
     pub fn apply_recipe(&mut self, recipe: &EditRecipe) -> Result<(), CoreError> {
-        self.apply_recipe_with_scale(recipe, 1.0)
+        self.apply_recipe_with_scale_and_white_balance(recipe, 1.0, None)
+    }
+
+    /// Applies adjustments with an explicit As-Shot white-balance context.
+    ///
+    /// `camera_white_balance` carries the RAW decoder's As-Shot gains
+    /// (`RawMetadata.camera_white_balance`, cam_mul) and is the explicit basis
+    /// that makes As-Shot rendering available at the core API.  Because the
+    /// decoder already applied those gains to the frame, they are **not**
+    /// applied again: a recipe without `wb_temperature`/`wb_tint` keeps the
+    /// identity semantics, and a recipe with those keys keeps the exact
+    /// deterministic sRGB approximation used by `apply_recipe`.  The context
+    /// is validated before any pixel mutation: `Some(gains)` requires all four
+    /// values to be finite and strictly greater than zero, otherwise
+    /// [`CoreError::InvalidAdjustment`] is returned and the frame is left
+    /// unchanged.  `None` keeps the previous identity semantics (this is what
+    /// [`Self::apply_recipe`] uses).
+    pub fn apply_recipe_with_white_balance(
+        &mut self,
+        recipe: &EditRecipe,
+        camera_white_balance: Option<[f32; 4]>,
+    ) -> Result<(), CoreError> {
+        self.apply_recipe_with_scale_and_white_balance(recipe, 1.0, camera_white_balance)
     }
 
     /// Applies adjustments at an explicit effective output scale.  Keeping the
@@ -312,6 +334,15 @@ impl ImageFrame {
         recipe: &EditRecipe,
         effective_scale: f32,
     ) -> Result<(), CoreError> {
+        self.apply_recipe_with_scale_and_white_balance(recipe, effective_scale, None)
+    }
+
+    fn apply_recipe_with_scale_and_white_balance(
+        &mut self,
+        recipe: &EditRecipe,
+        effective_scale: f32,
+        camera_white_balance: Option<[f32; 4]>,
+    ) -> Result<(), CoreError> {
         if !effective_scale.is_finite() || effective_scale <= 0.0 {
             return Err(CoreError::InvalidAdjustment {
                 name: "effective_scale".into(),
@@ -319,6 +350,18 @@ impl ImageFrame {
                 minimum: f32::MIN_POSITIVE as f64,
                 maximum: f32::MAX as f64,
             });
+        }
+        if let Some(gains) = camera_white_balance {
+            for gain in gains {
+                if !gain.is_finite() || gain <= 0.0 {
+                    return Err(CoreError::InvalidAdjustment {
+                        name: "camera_white_balance".into(),
+                        value: gain as f64,
+                        minimum: f32::MIN_POSITIVE as f64,
+                        maximum: f64::MAX,
+                    });
+                }
+            }
         }
         for (key, value) in &recipe.adjustments {
             let (minimum, maximum) = match key.as_str() {
@@ -1750,6 +1793,104 @@ mod tests {
             .apply_recipe(&recipe(&[("whites", 1.0), ("blacks", 1.0)]))
             .unwrap();
         assert!(edges.pixels[0] < 20 && edges.pixels[4] > 230);
+    }
+
+    #[test]
+    fn apply_recipe_with_white_balance_none_matches_apply_recipe() {
+        let pixel_data = vec![80, 100, 120, 9, 200, 60, 30, 200, 10, 250, 128, 77];
+        for r in [
+            recipe(&[("exposure", 0.5), ("contrast", 0.25)]),
+            recipe(&[
+                ("wb_temperature", 3000.0),
+                ("wb_tint", -0.5),
+                ("exposure", 0.5),
+            ]),
+        ] {
+            let mut with_context = ImageFrame::new(3, 1, pixel_data.clone()).unwrap();
+            let mut without = ImageFrame::new(3, 1, pixel_data.clone()).unwrap();
+            with_context
+                .apply_recipe_with_white_balance(&r, None)
+                .unwrap();
+            without.apply_recipe(&r).unwrap();
+            assert_eq!(with_context, without);
+        }
+    }
+
+    #[test]
+    fn as_shot_context_is_identity_without_wb_keys() {
+        let pixel_data = vec![80, 100, 120, 9, 200, 60, 30, 200, 10, 250, 128, 77];
+        let r = recipe(&[("exposure", 0.5), ("contrast", 0.25)]);
+        for gains in [[1.0, 1.0, 1.0, 1.0], [2.0, 1.0, 0.5, 1.0]] {
+            let mut with_context = ImageFrame::new(3, 1, pixel_data.clone()).unwrap();
+            with_context
+                .apply_recipe_with_white_balance(&r, Some(gains))
+                .unwrap();
+            let mut without = ImageFrame::new(3, 1, pixel_data.clone()).unwrap();
+            without.apply_recipe(&r).unwrap();
+            assert_eq!(
+                with_context, without,
+                "As-Shot gains must not be re-applied (decoder already applied them)"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_wb_anchors_unchanged_with_as_shot_context() {
+        let pixel_data = vec![80, 100, 120, 9, 200, 60, 30, 200, 10, 250, 128, 77];
+        let r = recipe(&[
+            ("wb_temperature", 3000.0),
+            ("wb_tint", -0.5),
+            ("exposure", 0.5),
+        ]);
+        let mut with_context = ImageFrame::new(3, 1, pixel_data.clone()).unwrap();
+        with_context
+            .apply_recipe_with_white_balance(&r, Some([2.0, 1.0, 0.5, 1.0]))
+            .unwrap();
+        let mut without = ImageFrame::new(3, 1, pixel_data.clone()).unwrap();
+        without.apply_recipe(&r).unwrap();
+        assert_eq!(
+            with_context, without,
+            "manual wb keys keep the deterministic sRGB approximation"
+        );
+    }
+
+    #[test]
+    fn invalid_camera_white_balance_rejected_without_mutation() {
+        let original = ImageFrame::new(2, 1, vec![80, 100, 120, 9, 200, 60, 30, 200]).unwrap();
+        let r = recipe(&[("wb_temperature", 3000.0)]);
+        for gains in [
+            [0.0, 1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0, 1.0],
+            [f32::NAN, 1.0, 1.0, 1.0],
+            [f32::INFINITY, 1.0, 1.0, 1.0],
+        ] {
+            let mut frame = original.clone();
+            let result = frame.apply_recipe_with_white_balance(&r, Some(gains));
+            assert!(
+                matches!(
+                    result,
+                    Err(CoreError::InvalidAdjustment { name, .. }) if name == "camera_white_balance"
+                ),
+                "expected InvalidAdjustment for gains {gains:?}"
+            );
+            assert_eq!(
+                frame, original,
+                "frame must stay byte-identical when gains {gains:?} are invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn wb_application_preserves_alpha_with_context() {
+        let mut frame = ImageFrame::new(1, 1, vec![80, 100, 120, 77]).unwrap();
+        frame
+            .apply_recipe_with_white_balance(
+                &recipe(&[("wb_temperature", 3000.0)]),
+                Some([2.0, 1.0, 0.5, 1.0]),
+            )
+            .unwrap();
+        assert_eq!(frame.pixels[3], 77);
+        assert_ne!(frame.pixels[0], 80);
     }
 
     #[test]

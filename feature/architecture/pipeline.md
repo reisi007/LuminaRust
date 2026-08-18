@@ -63,6 +63,20 @@ manuelle Werte überschreiben nicht stillschweigend persistierte Auto-Ergebnisse
 `0..=1` geclippt. Neue flache Schlüssel sind Bestandteil des bestehenden
 `recipe_hash` und invalidieren daher Preview/Export automatisch.
 
+**Status (F-036-N1):** Die Core-API
+`ImageFrame::apply_recipe_with_white_balance(recipe, camera_white_balance)` ist
+implementiert. `Some(gains)` ist die explizite As-Shot-Basis aus
+`RawMetadata.camera_white_balance`: Alle vier Werte müssen endlich und > 0
+sein, sonst wird die Anwendung mit `CoreError::InvalidAdjustment` abgelehnt
+(kein stiller Fallback, keine partielle Mutation). Ohne WB-Schlüssel bleibt die
+Identität — die Gains werden nicht erneut angewandt, da der RAW-Decoder As-Shot
+bereits auf den Frame angewendet hat (keine Doppel-Anwendung); mit WB-Schlüsseln
+gilt unverändert die deterministische sRGB-Näherung. CLI (`process_selected`)
+und GUI (`LuminaApp::load_bytes`/`render`) reichen
+`RawMetadata.camera_white_balance` durch; `apply_recipe` delegiert weiterhin
+ohne Kontext. Verbleibende Grenze: Die Auto-WB-Nutzung des Kontexts folgt mit
+F-042, ein linearer Weißabgleichspfad später.
+
 ## Ziel
 
 Vorschauen und Exporte werden immer aus dem unveränderten Original, der

@@ -12,10 +12,10 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 
 - **F-072-N2** neu ergänzt: vorbestehender wasm32-Fehler in `lumina-gui`
   (dokumentierte Baseline aus Verifikation F-072-N1).
-- **F-036-N1** war in Vorbereitung, wurde auf Anweisung nicht delegiert; keine
-  offenen Arbeitsbaum-Änderungen (main sauber).
+- **F-036-N1** verifiziert erledigt und entfernt (As-Shot-WB-Kontext,
+  Commit folgt); F-042 baut darauf auf.
 
-Verbleibend bis MVP: F-036-N1, F-042, F-085, F-097 (Phase 3/4), F-041, F-043
+Verbleibend bis MVP: F-042, F-085, F-097 (Phase 3/4), F-041, F-043
 (Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078,
 F-072-N2). Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
@@ -104,9 +104,9 @@ geschoben (Post-MVP via `libraw-wasm`, Feature `wasm-js`), die Architektur wird
 aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 `cfg(target_arch = "wasm32")`-Kapselung).
 
-- [ ] **F-036-N1** As-Shot-Weißabgleich anbinden: `RawMetadata.camera_white_balance`
-  (cam_mul `[f32;4]`) über eine Core-API an `apply_recipe` durchreichen (kein
-  stiller Fallback; ohne Kontext bleibt Identitäts-Semantik).
+F-036-N1 ist verifiziert erledigt und entfernt (As-Shot-WB-Kontext
+`apply_recipe_with_white_balance` in lumina-core; CLI/GUI reichen
+`RawMetadata.camera_white_balance` durch; Status in pipeline.md F-036).
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
