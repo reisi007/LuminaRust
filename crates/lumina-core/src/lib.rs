@@ -14,6 +14,8 @@ pub mod masks;
 pub mod pipeline;
 pub mod render;
 pub mod tone;
+#[cfg(test)]
+mod tone_props;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::disk::{DiskCacheError, DiskFolderCache};
 pub use cache::{

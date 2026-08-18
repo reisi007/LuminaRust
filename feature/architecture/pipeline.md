@@ -632,7 +632,11 @@ Der Mittelwert wird gewichtet über die sichtbaren Pixel gebildet
 (Rec.709-Luminanz, Alpha weiterhin ignoriert). Ohne Masken (`None`/leer) ist
 das Resultat identisch zur bisherigen Raster-Messung
 (`match_total_exposure_masked` delegiert bei leerem Slice exakt an
-`match_total_exposure`).
+`match_total_exposure`). Gleiches gilt, wenn ein nicht-leerer Satz von Ebenen
+vorliegt, deren **jede** vollständig `u16::MAX` ist (Maske ohne Wirkung):
+Auch dieser Fall delegiert bit-exakt an den ungemaskten Pfad
+(All-MAX-Fast-Path, siehe Status F-043) — dokumentierter Fast-Path, kein
+stiller Fallback.
 
 **Grenzen (ehrlich):** Lokale Anpassungen und die visuelle Pixel-Modulation
 durch Masken folgen mit F-049; bis dahin definiert F-041 die
@@ -660,6 +664,42 @@ dokumentierter Post-MVP-Zustand). `match_total_exposure` bleibt in Signatur
 und Verhalten unverändert (interne Delegation auf die gemeinsame
 Delta-Logik). Offen sind F-049 (Pixel-Modulation durch lokale Anpassungen)
 und F-042-N1 (Source-Actions-Persistenz).
+
+**All-MAX-Fast-Path (F-043, Semantik-Hinweis):** Liegen Masken-Layer vor,
+deren **jede** Ebene vollständig `u16::MAX` ist (jedes Pixelgewicht exakt
+`1.0`, die Maske hat keine Wirkung), delegiert `match_total_exposure_masked`
+bit-exakt an den ungemaskten Pfad (`matching_delta(analyze_tone(frame).mean,
+…)`, identisch zu `match_total_exposure`). Das ist ein dokumentierter
+Fast-Path, kein Fallback: Mathematisch sind beide Messungen identisch, aber
+die sortierte Summation in `analyze_tone` und die zeilenweise Summation der
+gewichteten Schleife können sich im letzten f64-Bit unterscheiden — erst die
+Delegation garantiert die bit-exakte Identität `All-MAX ≡ ungemaskt`. Die
+`InvalidMaskPlane`-Validierung läuft vor dem Fast-Path; eine
+dimensionsfehlerhafte All-MAX-Ebene wird weiterhin abgelehnt.
+
+**Status (F-043):** Echte Property- und Referenzbildtests für Auto-Tone und
+Exposure Matching sind umgesetzt:
+
+- **Property-Tests** (`crates/lumina-core/src/tone_props.rs`, proptest):
+  Invarianten für Wertebereiche/Endlichkeit, Monotonie in Helligkeit und
+  Zielwert, Schwarz-/Weiß-Fallbackpfade, Alpha-Ignoranz, Fingerprint-
+  Determinismus, `InvalidMaskPlane`-Ablehnung und die F-041-Maskensemantik
+  (leeres Slice bit-exakt ≡ ungemaskt, All-MAX-Ebenen bit-exakt ≡ ungemaskt
+  über den Fast-Path, 0/65535-Ebenen ≡ Messung auf dem sichtbaren Unterframe
+  mit dokumentierter 1e-9-Toleranz — zwei verschiedene f64-Summationspfade,
+  sortiert vs. zeilenweise). Fallzahlen: 64 Cases für die schweren
+  Frame-/Masken-Properties, 256 (proptest-Default) für die leichten; die
+  3 aufgenommenen Regression-Seeds (`proptest-regressions/tone_props.txt`)
+  sind eingecheckt und laufen grün.
+- **Referenzbildtests** (`crates/lumina-core/tests/reference_images.rs` +
+  `tests/fixtures/`): drei 8×8-PNG-Fixtures (`reference_gradient`,
+  `reference_checker`, `reference_zone`) mit programmatischer Provenance —
+  deterministisch aus dokumentierten Pixelfunktionen erzeugt, keine externen
+  Quellen, keine Lizenzpflicht (`tests/fixtures/README.md` dokumentiert die
+  exakten Formeln und die Regeneration). `analyze_tone`-Statistiken werden
+  gegen die geschlossenen Formeln mit 1e-9-Toleranz geprüft,
+  Auto-Tone-/Matching-Ergebnisse mit ±0.01; zusätzlich eine
+  Monotonie-Kontrolle über alle drei Fixtures.
 
 ## Cache und Invalidierung
 

@@ -53,6 +53,15 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install system dependencies
+        # lumina-raw links against LibRaw via the vendored `libraw-sys` build
+        # script, which only supports pkg-config (`libraw_r.pc`). Homebrew
+        # (macOS) provides it via `libraw`; the ubuntu runner needs the
+        # system package.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libraw-dev
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 

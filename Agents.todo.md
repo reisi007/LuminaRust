@@ -27,9 +27,13 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
   Messbereich: post-Crop/Geometrie normativ, Masken-Gewicht = Produkt der
   Ebenen/u16::MAX, Fallback Delta 0.0 bei vollmaskiert; CLI/GUI verdrahtet;
   8 Core-Tests, CLI-e2e umgestellt).
+- **F-043** verifiziert erledigt und entfernt (22 proptest-Properties für
+  Auto-Tone/Matching inkl. Regression-Seeds, 7 Referenzbildtests mit
+  programmatisch erzeugten Fixtures + Provenance-README; All-MAX-Short-Circuit
+  für bit-exakte Identität maskierter Messung; 250 Tests gesamt grün).
 
-Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4), F-043
-(Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078).
+Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4),
+Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 ## Inhaltsverzeichnis
@@ -131,10 +135,9 @@ F-042 ist verifiziert erledigt und entfernt (Render-Einstiegspunkt
 dokumentierten Reihenfolge; CLI/GUI nutzen dieselbe Renderpipeline; Status in
 pipeline.md F-042; Folgeaufgabe F-042-N1 in Phase 3). F-041 ist verifiziert
 erledigt und entfernt (Matching-Messbereich nach Crop/Geometrie/aktiven
-Masken; Status in pipeline.md „Exposure Matching" F-041).
-
-- [ ] **F-043** Echte Property-Tests und Referenzbildtests für Auto-Tone und
-  Exposure Matching ergänzen; deterministische Invariantentests sind vorhanden.
+Masken; Status in pipeline.md „Exposure Matching" F-041). F-043 ist
+verifiziert erledigt und entfernt (Property- und Referenzbildtests; Status in
+pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschlossen.**
 
 ## Phase 6: Persistente AI-Masken
 

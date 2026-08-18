@@ -151,6 +151,17 @@ pub fn match_total_exposure(frame: &ImageFrame, target_luminance: f64) -> Result
 /// [`match_total_exposure`] result (delegation), so callers without active
 /// masks keep the raster semantics bit-exactly.
 ///
+/// A non-empty `mask_layers` slice whose **every** plane is entirely
+/// `u16::MAX` (each pixel weight `w = 1.0`, the mask has no effect) is also
+/// delegated bit-exactly to the plain [`match_total_exposure`] path before the
+/// weighted loop runs. This is a documented fast path, not a fallback: the
+/// masked measurement and the plain measurement are mathematically identical
+/// here, but summing the sorted values inside [`analyze_tone`] versus summing
+/// in row-major order inside the weighted loop can differ in the last f64 bit,
+/// so only the delegation guarantees bit-exact identity (`All-MAX ≡
+/// unmasked`). The dimension validation below still runs first — a mismatched
+/// all-`u16::MAX` plane is rejected like any other invalid plane.
+///
 /// # Validation
 ///
 /// Every plane must match the frame dimensions (`width == frame.width`,
@@ -187,6 +198,19 @@ pub fn match_total_exposure_masked(
             });
         }
     }
+    // All-MAX fast path (documented above): a mask whose every plane is
+    // entirely u16::MAX has no effect — every pixel weight is exactly 1.0, so
+    // the weighted mean is the plain mean. Delegating bit-exactly to the plain
+    // path (identical `matching_delta(analyze_tone(frame).mean, ...)`) keeps
+    // `All-MAX ≡ unmasked` bit-exact, which the row-major weighted summation
+    // could not guarantee (f64 non-associativity vs. the sorted `analyze_tone`
+    // summation).
+    if mask_layers
+        .iter()
+        .all(|plane| plane.values.iter().all(|&value| value == u16::MAX))
+    {
+        return Ok(matching_delta(analyze_tone(frame).mean, target_luminance));
+    }
     let mut weighted_sum = 0.0;
     let mut weight_sum = 0.0;
     for index in 0..pixel_count {
@@ -207,7 +231,8 @@ pub fn match_total_exposure_masked(
     if weight_sum <= 1e-6 {
         return Ok(0.0);
     }
-    Ok(matching_delta(weighted_sum / weight_sum, target_luminance))
+    let internal_mean = weighted_sum / weight_sum;
+    Ok(matching_delta(internal_mean, target_luminance))
 }
 
 fn validate_target_luminance(target_luminance: f64) -> Result<(), CoreError> {
