@@ -38,7 +38,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
-      RUSTFLAGS: "-D warnings"
+      # NOTE: RUSTFLAGS="-D warnings" is intentionally NOT set here. It would
+      # promote warnings in the vendored `libraw-sys` build script (deprecated
+      # `gcc` crate alias under modern toolchains) to hard errors and break
+      # `cargo check`/`cargo test`. The strict lint gate is the dedicated
+      # Clippy step below, which runs `-D warnings` on workspace crates only.
 
     steps:
       - name: Checkout

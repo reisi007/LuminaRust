@@ -10,8 +10,6 @@ keine dauerhafte Liste abgehakter Aufgaben.
 Offene Arbeit und Abgrenzung — verifiziert abgeschlossene Aufgaben sind aus
 dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 
-- **F-072-N2** neu ergänzt: vorbestehender wasm32-Fehler in `lumina-gui`
-  (dokumentierte Baseline aus Verifikation F-072-N1).
 - **F-036-N1** verifiziert erledigt und entfernt (As-Shot-WB-Kontext,
   Commit folgt); F-042 baut darauf auf.
 - **F-042** verifiziert erledigt und entfernt (gemeinsamer Render-Einstiegspunkt
@@ -21,10 +19,14 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 - **F-085** verifiziert erledigt und entfernt (behaviorale Tests: Source-Actions
   × Auto-WB/Auto-Tone/Matching, Schwellwert-Grenzfälle, Nicht-Destruktion,
   Determinismus, History-Reproduzierbarkeit, CLI-Interplay; 11 Tests).
+- **F-072-N2** verifiziert erledigt und entfernt (wasm32-Check lumina-gui auf
+  0 Fehler; CI läuft grün — RUSTFLAGS=-D warnings bewusst aus CI entfernt,
+  weil Vendor-libraw-sys-Build-Script-Warnungen sonst `cargo check` brechen;
+  strikter Gate bleibt Clippy `-D warnings`).
 
 Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4), F-041, F-043
-(Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078,
-F-072-N2). Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
+(Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078).
+Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 ## Inhaltsverzeichnis
 
@@ -188,13 +190,12 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
 ## Phase 11: Qualität, Performance und Release
 
 - [ ] **F-072** CI für Formatierung, Clippy, Unit-, Integrations-, Golden-,
-  Property- und CLI-Tests einrichten.
-- [ ] **F-072-N2** Vorbestehenden wasm32-Fehler in lumina-gui beheben:
-  `LuminaApp::new()` setzt `mask_name_input: String::new()` ungated, das
-  Struct-Feld ist aber `#[cfg(not(target_arch = "wasm32"))]`-gated →
-  `error[E0560]` unter `cargo check -p lumina-gui --target
-  wasm32-unknown-unknown`. Entweder Konstruktor-Zeile gaten oder Feld für
-  wasm32 bereitstellen (Verifikation F-072-N1, dokumentierte Baseline).
+  Property- und CLI-Tests einrichten. (CI existiert und läuft grün: fmt,
+  check, test, zdata-Tests, Clippy `-D warnings`, wasm32-Checks für
+  lumina-core und lumina-gui mit 0 Fehlern. `RUSTFLAGS="-D warnings"` ist
+  bewusst NICHT gesetzt — Vendor-`libraw-sys`-Warnungen würden sonst
+  `cargo check`/`cargo test` brechen; der strikte Gate ist Clippy. Offen:
+  Golden-/Property-Tests folgen mit F-043/F-073.)
 - [ ] **F-073** Kleine versionierte Referenzbilder, RAW-Fixtures und Modelle
   einschließlich Lizenzinformationen bereitstellen.
 - [ ] **F-074** Benchmarks für Decode, Preview, Maskeninferenz, Cache-Hit und

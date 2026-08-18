@@ -198,6 +198,7 @@ impl LuminaApp {
             virtual_copy_id: "vc-original".into(),
             #[cfg(not(target_arch = "wasm32"))]
             selected_mask_id: None,
+            #[cfg(not(target_arch = "wasm32"))]
             mask_name_input: String::new(),
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
