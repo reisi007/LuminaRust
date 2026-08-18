@@ -3,7 +3,7 @@
 use eframe::egui;
 use lumina_core::{
     analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
-    ImageFrame, RenderKey,
+    ImageFrame, OutputSpec, RenderKey,
 };
 use lumina_raw::RawError;
 use lumina_sidecar::{AnalysisFingerprint, EditRecipe, Preset};
@@ -116,8 +116,6 @@ pub struct LuminaApp {
     directory: String,
     #[cfg(not(target_arch = "wasm32"))]
     entries: Vec<FileBrowserEntry>,
-    #[cfg(not(target_arch = "wasm32"))]
-    selected_entry: Option<usize>,
     recipe: EditRecipe,
     texture: Option<egui::TextureHandle>,
     status: String,
@@ -140,10 +138,9 @@ pub struct LuminaApp {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
-struct FileBrowserEntry {
+pub struct FileBrowserEntry {
     path: PathBuf,
     name: String,
-    sidecar_path: PathBuf,
     has_sidecar: bool,
     source_status: SourceStatus,
     conflict: bool,
@@ -156,7 +153,7 @@ impl FileBrowserEntry {
     fn status_label(&self) -> &'static str {
         if self.conflict {
             "Konflikt"
-        } else if matches!(self.source_status, SourceStatus::Missing) {
+        } else if self.is_offline() {
             "Offline"
         } else if self.has_sidecar {
             "Sidecar"
@@ -184,7 +181,6 @@ impl LuminaApp {
             directory: ".".into(),
             #[cfg(not(target_arch = "wasm32"))]
             entries: Vec::new(),
-            selected_entry: None,
             recipe: EditRecipe::default(),
             texture: None,
             status: "Bereit für ein PNG, JPEG oder WebP".into(),
@@ -292,11 +288,10 @@ impl LuminaApp {
                     let bundle_root = path.parent().unwrap_or_else(|| Path::new("."));
                     for copy in &document.virtual_copies {
                         for mask in &copy.mask_library {
-                            let artifact_missing =
-                                mask.artifact.as_ref().map_or(false, |artifact| {
-                                    lumina_sidecar::artifact_status(bundle_root, artifact)
-                                        == ArtifactStatus::Missing
-                                });
+                            let artifact_missing = mask.artifact.as_ref().is_some_and(|artifact| {
+                                lumina_sidecar::artifact_status(bundle_root, artifact)
+                                    == ArtifactStatus::Missing
+                            });
                             if matches!(
                                 mask.status,
                                 MaskStatus::Missing
@@ -326,7 +321,6 @@ impl LuminaApp {
         Some(FileBrowserEntry {
             path: path.to_path_buf(),
             name,
-            sidecar_path,
             has_sidecar,
             source_status,
             conflict,
@@ -912,10 +906,12 @@ impl LuminaApp {
             copy_id,
             &self.recipe,
             mask_hashes,
-            "sRGB",
-            preview.width,
-            preview.height,
-            "rgba8",
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: preview.width,
+                height: preview.height,
+                format: "rgba8".into(),
+            },
         ));
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
@@ -1894,7 +1890,7 @@ mod tests {
             .find(|e| e.name == "photo.png")
             .unwrap();
         assert_eq!(entry.missing_models, 1);
-        assert_eq!(entry.has_sidecar, true);
+        assert!(entry.has_sidecar);
 
         let reloaded = lumina_sidecar::load_sidecar(&sidecar).unwrap();
         assert_eq!(reloaded.virtual_copies[0].mask_library.len(), 1);

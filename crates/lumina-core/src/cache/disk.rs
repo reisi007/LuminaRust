@@ -214,7 +214,7 @@ mod tests {
                 one_to_one_preview: true,
             })
             .unwrap();
-        assert_eq!(cache.effective_settings().unwrap().one_to_one_preview, true);
+        assert!(cache.effective_settings().unwrap().one_to_one_preview);
         let child = path.join("child");
         fs::create_dir(&child).unwrap();
         let child_cache = DiskFolderCache::in_folder(&child).unwrap();

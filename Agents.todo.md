@@ -161,13 +161,12 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
 
 - [ ] **F-072** CI für Formatierung, Clippy, Unit-, Integrations-, Golden-,
   Property- und CLI-Tests einrichten.
-- [ ] **F-072-N1** Drei vorbestehende Clippy-Befunde beheben, die
-  `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-  blockieren: (1) `too_many_arguments` in
-  crates/lumina-core/src/pipeline.rs:104 (`RenderKey::new`), (2)
-  `bool_assert_comparison` in crates/lumina-core/src/cache/disk.rs:217, (3)
-  `useless_conversion` in crates/lumina-sidecar/src/lib.rs:2397. Nachweis:
-  identische Befunde auf unverändertem HEAD (Verifikation F-089-N1).
+- [ ] **F-072-N2** Vorbestehenden wasm32-Fehler in lumina-gui beheben:
+  `LuminaApp::new()` setzt `mask_name_input: String::new()` ungated, das
+  Struct-Feld ist aber `#[cfg(not(target_arch = "wasm32"))]`-gated →
+  `error[E0560]` unter `cargo check -p lumina-gui --target
+  wasm32-unknown-unknown`. Entweder Konstruktor-Zeile gaten oder Feld für
+  wasm32 bereitstellen (Verifikation F-072-N1, dokumentierte Baseline).
 - [ ] **F-073** Kleine versionierte Referenzbilder, RAW-Fixtures und Modelle
   einschließlich Lizenzinformationen bereitstellen.
 - [ ] **F-074** Benchmarks für Decode, Preview, Maskeninferenz, Cache-Hit und

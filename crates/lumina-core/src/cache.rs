@@ -266,7 +266,7 @@ impl StaleTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::RenderKey;
+    use crate::pipeline::{OutputSpec, RenderKey};
     use lumina_sidecar::EditRecipe;
     fn key() -> RenderKey {
         RenderKey::new(
@@ -276,10 +276,12 @@ mod tests {
             "vc",
             &EditRecipe::default(),
             vec![],
-            "srgb",
-            1,
-            1,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 1,
+                height: 1,
+                format: "png".into(),
+            },
         )
     }
     #[test]
@@ -303,7 +305,7 @@ mod tests {
         let stop = Cancellation::default();
         let first = key();
         let mut second = first.clone();
-        second.output_width = 2;
+        second.output.width = 2;
         cache
             .put(CacheStage::Decode, &first, vec![1], &stop)
             .unwrap();

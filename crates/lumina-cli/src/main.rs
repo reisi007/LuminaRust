@@ -356,7 +356,7 @@ fn preflight_masks(input: &Path, virtual_copy: Option<&str>, update: bool) -> Re
         .iter()
         .filter(|mask| {
             !matches!(mask.status, MaskStatus::Valid)
-                || mask.artifact.as_ref().map_or(true, |artifact| {
+                || mask.artifact.as_ref().is_none_or(|artifact| {
                     artifact_status(root, artifact) != ArtifactStatus::Available
                 })
         })

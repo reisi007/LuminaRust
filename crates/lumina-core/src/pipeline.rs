@@ -85,6 +85,15 @@ pub enum SourceAction {
     AiReplacement { artifact_hash: String },
 }
 
+/// Output parameters that participate in the render identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputSpec {
+    pub profile: String,
+    pub width: u32,
+    pub height: u32,
+    pub format: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderKey {
     pub source_content_hash: String,
@@ -94,10 +103,7 @@ pub struct RenderKey {
     pub recipe_hash: String,
     mask_recipe_hash: String,
     pub mask_artifact_hashes: Vec<String>,
-    pub output_profile: String,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub output_format: String,
+    pub output: OutputSpec,
 }
 
 impl RenderKey {
@@ -108,10 +114,7 @@ impl RenderKey {
         virtual_copy_id: impl Into<String>,
         recipe: &EditRecipe,
         mask_artifact_hashes: Vec<String>,
-        output_profile: impl Into<String>,
-        output_width: u32,
-        output_height: u32,
-        output_format: impl Into<String>,
+        output: OutputSpec,
     ) -> Self {
         let recipe_bytes = serde_json::to_vec(recipe).expect("EditRecipe is serializable");
         let recipe_hash = blake3::hash(&recipe_bytes).to_hex().to_string();
@@ -146,10 +149,7 @@ impl RenderKey {
             recipe_hash,
             mask_recipe_hash,
             mask_artifact_hashes,
-            output_profile: output_profile.into(),
-            output_width,
-            output_height,
-            output_format: output_format.into(),
+            output,
         }
     }
 
@@ -198,11 +198,11 @@ impl RenderKey {
             }
         }
         if matches!(scope, "render") {
-            hasher.update(self.output_profile.as_bytes());
+            hasher.update(self.output.profile.as_bytes());
             hasher.update(&[0]);
-            hasher.update(self.output_format.as_bytes());
-            hasher.update(&self.output_width.to_le_bytes());
-            hasher.update(&self.output_height.to_le_bytes());
+            hasher.update(self.output.format.as_bytes());
+            hasher.update(&self.output.width.to_le_bytes());
+            hasher.update(&self.output.height.to_le_bytes());
         }
         hasher.finalize().to_hex().to_string()
     }
@@ -229,13 +229,15 @@ mod tests {
             "vc",
             &recipe,
             vec!["mask".into()],
-            "sRGB",
-            10,
-            20,
-            "png",
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 10,
+                height: 20,
+                format: "png".into(),
+            },
         );
         let mut changed = key.clone();
-        changed.output_width += 1;
+        changed.output.width += 1;
         assert_ne!(key.digest(), changed.digest());
         changed = key.clone();
         changed.mask_artifact_hashes.push("other".into());
@@ -249,10 +251,12 @@ mod tests {
                 "vc",
                 &Default::default(),
                 vec!["mask".into()],
-                "sRGB",
-                10,
-                20,
-                "png"
+                OutputSpec {
+                    profile: "sRGB".into(),
+                    width: 10,
+                    height: 20,
+                    format: "png".into(),
+                },
             )
             .recipe_hash
         );
@@ -300,10 +304,12 @@ mod tests {
             "vc",
             &first_recipe,
             vec![],
-            "srgb",
-            100,
-            100,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 100,
+                height: 100,
+                format: "png".into(),
+            },
         );
         let second = RenderKey::new(
             "source",
@@ -312,10 +318,12 @@ mod tests {
             "vc",
             &second_recipe,
             vec![],
-            "srgb",
-            200,
-            200,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 200,
+                height: 200,
+                format: "png".into(),
+            },
         );
         assert_eq!(
             first.stage_digest(crate::cache::CacheStage::Decode),
@@ -348,10 +356,12 @@ mod tests {
             "vc",
             &base,
             vec![],
-            "srgb",
-            10,
-            20,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 10,
+                height: 20,
+                format: "png".into(),
+            },
         );
         let second = RenderKey::new(
             "source",
@@ -360,10 +370,12 @@ mod tests {
             "vc",
             &cropped,
             vec![],
-            "srgb",
-            20,
-            10,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 20,
+                height: 10,
+                format: "png".into(),
+            },
         );
         assert_eq!(
             first.stage_digest(crate::cache::CacheStage::Decode),
@@ -395,10 +407,12 @@ mod tests {
             "vc",
             &recipe,
             vec![],
-            "srgb",
-            100,
-            100,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 100,
+                height: 100,
+                format: "png".into(),
+            },
         );
         let large = RenderKey::new(
             "source",
@@ -407,10 +421,12 @@ mod tests {
             "vc",
             &recipe,
             vec![],
-            "srgb",
-            200,
-            200,
-            "png",
+            OutputSpec {
+                profile: "srgb".into(),
+                width: 200,
+                height: 200,
+                format: "png".into(),
+            },
         );
         assert_eq!(
             small.stage_digest(crate::cache::CacheStage::Decode),
@@ -452,8 +468,34 @@ mod tests {
             shift_x: 0.0,
             shift_y: 0.0,
         });
-        let a = RenderKey::new("s", "d", "p", "v", &base, vec![], "sRGB", 10, 10, "png");
-        let b = RenderKey::new("s", "d", "p", "v", &changed, vec![], "sRGB", 10, 10, "png");
+        let a = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &base,
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 10,
+                height: 10,
+                format: "png".into(),
+            },
+        );
+        let b = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &changed,
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 10,
+                height: 10,
+                format: "png".into(),
+            },
+        );
         assert_eq!(
             a.stage_digest(crate::cache::CacheStage::Decode),
             b.stage_digest(crate::cache::CacheStage::Decode)

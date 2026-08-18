@@ -4,8 +4,9 @@ use lumina_core::ImageFrame;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum DemosaicMethod {
+    #[default]
     LibRawDefault,
     Linear,
     Vng,
@@ -14,12 +15,6 @@ pub enum DemosaicMethod {
     Dcb,
     Dht,
     Aahd,
-}
-
-impl Default for DemosaicMethod {
-    fn default() -> Self {
-        Self::LibRawDefault
-    }
 }
 
 impl DemosaicMethod {

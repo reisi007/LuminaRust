@@ -21,7 +21,7 @@ pub use cache::{
 };
 pub use histogram::LuminanceHistogram;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
-pub use pipeline::{Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
+pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use tone::{
     analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
     AutoToneResult, ToneAnalysis,

@@ -2394,13 +2394,13 @@ mod tests {
             serde_json::to_value(document).unwrap()
         };
         let curve = |points: Vec<(f32, f32)>| {
-            Value::from(serde_json::json!({
+            serde_json::json!({
                 "version": 1,
                 "master": points.into_iter().map(|(input, output)| {
                     serde_json::json!({"input": input, "output": output})
                 }).collect::<Vec<_>>(),
                 "channels": {}
-            }))
+            })
         };
 
         let invalid_curves = [
