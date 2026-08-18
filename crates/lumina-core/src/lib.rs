@@ -12,6 +12,7 @@ pub mod cache;
 pub mod histogram;
 pub mod masks;
 pub mod pipeline;
+pub mod render;
 pub mod tone;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::disk::{DiskCacheError, DiskFolderCache};
@@ -22,6 +23,10 @@ pub use cache::{
 pub use histogram::LuminanceHistogram;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
+pub use render::{
+    render_frame, MaskContext, MaskLayerResult, MaskPolicy, RenderContext, RenderOutput,
+    SourceActionArtifact,
+};
 pub use tone::{
     analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
     AutoToneResult, ToneAnalysis,
@@ -123,6 +128,20 @@ pub enum CoreError {
     },
     #[error("invalid auto-tone configuration: {0}")]
     InvalidAutoToneConfig(String),
+    #[error("invalid source action: {0}")]
+    InvalidSourceAction(String),
+    #[error("mask `{copy_id}/{mask_id}` is unavailable (status {status})")]
+    MaskUnavailable {
+        copy_id: String,
+        mask_id: String,
+        status: String,
+    },
+    #[error("mask `{copy_id}/{mask_id}` could not be evaluated: {reason}")]
+    MaskEvaluation {
+        copy_id: String,
+        mask_id: String,
+        reason: String,
+    },
 }
 
 impl ImageFrame {

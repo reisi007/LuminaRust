@@ -14,8 +14,12 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
   (dokumentierte Baseline aus Verifikation F-072-N1).
 - **F-036-N1** verifiziert erledigt und entfernt (As-Shot-WB-Kontext,
   Commit folgt); F-042 baut darauf auf.
+- **F-042** verifiziert erledigt und entfernt (gemeinsamer Render-Einstiegspunkt
+  `render_frame` in lumina-core; Source-Actions- und Masken-Stufe in der
+  dokumentierten Reihenfolge; CLI und GUI nutzen dieselbe Renderpipeline;
+  Folgeaufgabe F-042-N1 ergänzt).
 
-Verbleibend bis MVP: F-042, F-085, F-097 (Phase 3/4), F-041, F-043
+Verbleibend bis MVP: F-042-N1, F-085, F-097 (Phase 3/4), F-041, F-043
 (Phase 5), Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078,
 F-072-N2). Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
@@ -88,6 +92,12 @@ Tests wird trotzdem umgesetzt.
 
 ## Phase 3: Renderpipeline und Cache
 
+- [ ] **F-042-N1** Source-Actions-Persistenz: additives Schema-Feld für
+  Source-Action-Rezeptoperationen (pre-MVP-Muster wie `color_grading`, leere
+  Default-Liste, keine Migration) + zdata-Artefaktformat für Repair-Regionen +
+  CLI-Command (Staubentfernung). Dokumentierte Folgeaufgabe aus F-042;
+  bis dahin liefern CLI/GUI leere Source-Actions (Mechanismus ist aktiv und
+  getestet).
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
   (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
@@ -110,11 +120,14 @@ F-036-N1 ist verifiziert erledigt und entfernt (As-Shot-WB-Kontext
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
+F-042 ist verifiziert erledigt und entfernt (Render-Einstiegspunkt
+`render_frame` in lumina-core; Source-Actions- und Masken-Stufe in der
+dokumentierten Reihenfolge; CLI/GUI nutzen dieselbe Renderpipeline; Status in
+pipeline.md F-042; Folgeaufgabe F-042-N1 in Phase 3).
+
 - [ ] **F-041** `Match Total Exposure` auf den finalen sichtbaren Messbereich
   nach Crop, Geometrie und aktiven Masken erweitern; Epsilon-, Clipping- und
   Fallback-Schutz sind im aktuellen Raster-Messbereich vorhanden.
-- [ ] **F-042** Auto-WB, Source-Actions und lokale Masken in die dokumentierte
-  Reihenfolge integrieren; die aktuelle Raster-Reihenfolge ist festgelegt.
 - [ ] **F-043** Echte Property-Tests und Referenzbildtests für Auto-Tone und
   Exposure Matching ergänzen; deterministische Invariantentests sind vorhanden.
 

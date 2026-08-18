@@ -1,18 +1,21 @@
 //! Shared eframe application for the native and browser MVP.
 
 use eframe::egui;
+#[cfg(not(target_arch = "wasm32"))]
+use lumina_core::MaskPolicy;
 use lumina_core::{
-    analyze_tone, match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
-    ImageFrame, OutputSpec, RenderKey,
+    analyze_tone, match_total_exposure, render_frame, suggest_auto_tone, tone_fingerprint,
+    AutoToneConfig, ImageFrame, MaskContext, MaskPlane, OutputSpec, RenderContext, RenderKey,
 };
 use lumina_raw::RawError;
-use lumina_sidecar::{AnalysisFingerprint, EditRecipe, Preset};
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::{
-    ArtifactStatus, CoordinateSystem, DecodeFingerprint, GeometryFingerprint, HistoryEntry,
-    MaskDefinition, MaskLayer, MaskOperation, MaskReference, MaskStatus, ModelIdentity,
-    Preprocessing, Resolution, SidecarDocument, SourceFingerprint, SourceIdentity, SourceStatus,
+    load_zdata, zdata_path_for, ArtifactStatus, CoordinateSystem, DecodeFingerprint,
+    GeometryFingerprint, HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskReference,
+    MaskStatus, ModelIdentity, Preprocessing, Resolution, SidecarDocument, SourceFingerprint,
+    SourceIdentity, SourceStatus,
 };
+use lumina_sidecar::{AnalysisFingerprint, EditRecipe, Preset};
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -866,8 +869,40 @@ impl LuminaApp {
             self.status = "Kein Bild geladen".into();
             return Ok(());
         };
-        let mut preview = original.clone();
-        preview.apply_recipe_with_white_balance(&self.recipe, self.camera_white_balance)?;
+        let render_key_source = original.clone();
+        // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
+        // (native only).  Missing or unreadable zdata is not a hard error:
+        // affected layers are reported through the `MaskPolicy::Warn` path.
+        #[cfg(not(target_arch = "wasm32"))]
+        let masks_context = {
+            let planes = self.load_mask_planes();
+            match &self.document {
+                Some(document) => document
+                    .virtual_copies
+                    .iter()
+                    .find(|c| c.id == self.virtual_copy_id)
+                    .map(|_| MaskContext {
+                        copies: &document.virtual_copies,
+                        active_copy_id: &self.virtual_copy_id,
+                        planes,
+                        policy: MaskPolicy::Warn,
+                    }),
+                None => None,
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let masks_context: Option<MaskContext<'_>> = None;
+        let output = render_frame(
+            &render_key_source,
+            &RenderContext {
+                recipe: &self.recipe,
+                camera_white_balance: self.camera_white_balance,
+                source_actions: &[],
+                masks: masks_context,
+            },
+        )?;
+        let preview = output.frame;
+        let mask_warnings = output.mask_warnings;
         let source_hash = self
             .source_bytes
             .as_ref()
@@ -923,52 +958,66 @@ impl LuminaApp {
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
         self.error = None;
-        self.status = if self.active_mask_needs_attention() {
-            "Warnung: Maske nicht verfügbar; sie wird in der Vorschau nicht angewendet".into()
+        self.status = if !mask_warnings.is_empty() {
+            let layers: Vec<&str> = mask_warnings
+                .iter()
+                .filter_map(|w| w.split('`').nth(1))
+                .collect();
+            if layers.is_empty() {
+                "Warnung: Maske nicht verfügbar; sie wird in der Vorschau nicht angewendet".into()
+            } else {
+                format!(
+                    "Warnung: Maske nicht verfügbar (Layer {}); sie wird in der Vorschau nicht angewendet",
+                    layers.join(", ")
+                )
+            }
         } else {
             "Vorschau aktuell".into()
         };
         Ok(())
     }
 
+    /// Loads mask artifact planes from the optional `.lumina.zdata` sidecar for
+    /// the active virtual copy (native only).  Missing/unreadable zdata yields
+    /// an empty map; affected layers are handled by the `MaskPolicy::Warn`
+    /// path in [`render_frame`].
     #[cfg(not(target_arch = "wasm32"))]
-    fn active_mask_needs_attention(&self) -> bool {
+    fn load_mask_planes(&self) -> BTreeMap<(String, String), MaskPlane> {
+        let mut planes = BTreeMap::new();
         let Some(document) = &self.document else {
-            return false;
+            return planes;
         };
         let Some(copy) = document
             .virtual_copies
             .iter()
             .find(|c| c.id == self.virtual_copy_id)
         else {
-            return false;
+            return planes;
         };
-        copy.mask_layers.iter().any(|layer| {
-            let Some(mask) = copy
-                .mask_library
-                .iter()
-                .find(|m| m.id == layer.mask.mask_id)
-            else {
-                return true;
-            };
-            if !matches!(mask.status, MaskStatus::Valid) {
-                return true;
+        let zdata_path = zdata_path_for(Path::new(&self.path));
+        if !zdata_path.exists() {
+            return planes;
+        }
+        let Ok(container) = load_zdata(&zdata_path) else {
+            return planes;
+        };
+        for mask in copy
+            .mask_library
+            .iter()
+            .filter(|m| matches!(m.status, MaskStatus::Valid))
+        {
+            if let Ok(tile) = container.tile(&mask.id, 0, 0) {
+                if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
+                    planes.insert((copy.id.clone(), mask.id.clone()), plane);
+                }
             }
-            let Some(artifact) = &mask.artifact else {
-                return true;
-            };
-            lumina_sidecar::artifact_status(
-                Path::new(&self.path)
-                    .parent()
-                    .unwrap_or_else(|| Path::new(".")),
-                artifact,
-            ) != ArtifactStatus::Available
-        })
+        }
+        planes
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn active_mask_needs_attention(&self) -> bool {
-        false
+    fn load_mask_planes(&self) -> BTreeMap<(String, String), MaskPlane> {
+        BTreeMap::new()
     }
 
     fn show_error(&mut self, error: impl ToString) {

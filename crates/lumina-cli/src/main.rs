@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use lumina_core::{
-    match_total_exposure, suggest_auto_tone, tone_fingerprint, AutoToneConfig, ImageFileFormat,
-    ImageFrame,
+    match_total_exposure, render_frame, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
+    ImageFileFormat, ImageFrame, MaskContext, MaskPlane, MaskPolicy, RenderContext,
 };
 use lumina_raw::{RawError, RawMetadata};
 use lumina_sidecar::{
@@ -282,6 +282,7 @@ fn render(args: FileArgs) -> Result<(), CliError> {
         migrate_sidecar(&sidecar_path_for(&args.input))?;
     }
     let output = output.with_extension(format_extension(&args.format));
+    let mut mask_warnings = Vec::new();
     process_selected(
         ProcessArgs {
             input: args.input.clone(),
@@ -296,10 +297,11 @@ fn render(args: FileArgs) -> Result<(), CliError> {
             target_luminance: 0.5,
         },
         args.virtual_copy.as_deref(),
+        &mut mask_warnings,
     )?;
     emit(
         args.json,
-        serde_json::json!({"command":"render", "output":output, "format":args.format, "status":"ok"}),
+        serde_json::json!({"command":"render", "output":output, "format":args.format, "status":"ok", "mask_warnings":mask_warnings}),
         "rendered",
     )
 }
@@ -315,6 +317,7 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
     // never pretend that an unavailable inference engine succeeded.
     preflight_masks(&args.input, args.virtual_copy.as_deref(), args.update_masks)?;
     let output = args.output.with_extension(format_extension(&args.format));
+    let mut mask_warnings = Vec::new();
     process_selected(
         ProcessArgs {
             input: args.input.clone(),
@@ -329,10 +332,11 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
             target_luminance: 0.5,
         },
         args.virtual_copy.as_deref(),
+        &mut mask_warnings,
     )?;
     emit(
         args.json,
-        serde_json::json!({"command":"export", "output":output, "quality":args.quality, "status":"ok"}),
+        serde_json::json!({"command":"export", "output":output, "quality":args.quality, "status":"ok", "mask_warnings":mask_warnings}),
         "exported",
     )
 }
@@ -541,6 +545,7 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
                     target_luminance: 0.5,
                 },
                 args.virtual_copy.as_deref(),
+                &mut Vec::new(),
             ) {
                 Ok(()) => {
                     last = None;
@@ -610,10 +615,14 @@ fn migrate_sidecar(path: &Path) -> Result<(), CliError> {
 }
 
 fn process(args: ProcessArgs) -> Result<(), CliError> {
-    process_selected(args, None)
+    process_selected(args, None, &mut Vec::new())
 }
 
-fn process_selected(args: ProcessArgs, virtual_copy: Option<&str>) -> Result<(), CliError> {
+fn process_selected(
+    args: ProcessArgs,
+    virtual_copy: Option<&str>,
+    mask_warnings_out: &mut Vec<String>,
+) -> Result<(), CliError> {
     reject_same_path(&args.input, &args.output)?;
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
@@ -711,7 +720,49 @@ fn process_selected(args: ProcessArgs, virtual_copy: Option<&str>) -> Result<(),
     if let Some(value) = args.shadows {
         recipe.adjustments.insert("shadows".into(), value);
     }
-    frame.apply_recipe_with_white_balance(&recipe, wb)?;
+    // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar.
+    // Missing or unreadable zdata is *not* a hard error: affected layers are
+    // skipped and reported via the `MaskPolicy::Warn` path.
+    let mut planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
+    let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
+    if zdata_path.exists() {
+        if let Ok(container) = lumina_sidecar::load_zdata(&zdata_path) {
+            let copy = &document.virtual_copies[copy_index];
+            for mask in copy
+                .mask_library
+                .iter()
+                .filter(|m| matches!(m.status, MaskStatus::Valid))
+            {
+                if let Ok(tile) = container.tile(&mask.id, 0, 0) {
+                    if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
+                        planes.insert((copy.id.clone(), mask.id.clone()), plane);
+                    }
+                }
+            }
+        }
+    }
+    // Main render via the shared entry point (SourceActions → Adjustments →
+    // Masks), with an empty source-action list until F-042-N1.
+    let active_copy = document.virtual_copies[copy_index].clone();
+    let render_output = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: wb,
+            source_actions: &[],
+            masks: Some(MaskContext {
+                copies: &document.virtual_copies,
+                active_copy_id: &active_copy.id,
+                planes,
+                policy: MaskPolicy::Warn,
+            }),
+        },
+    )?;
+    for warning in &render_output.mask_warnings {
+        eprintln!("warning: {warning}");
+    }
+    mask_warnings_out.extend(render_output.mask_warnings.iter().cloned());
+    frame = render_output.frame;
     if args.match_total_exposure {
         recipe.auto_features.match_total_exposure = true;
         recipe.auto_features.target_luminance = args.target_luminance;
@@ -1251,5 +1302,176 @@ mod tests {
         );
         assert_eq!(sidecar.virtual_copies[0].history.len(), 1);
         inspect(InspectArgs { input }).unwrap();
+    }
+
+    fn valid_mask_definition(
+        id: &str,
+        operation: lumina_sidecar::MaskOperation,
+        references: Vec<lumina_sidecar::MaskReference>,
+    ) -> lumina_sidecar::MaskDefinition {
+        use lumina_sidecar::{
+            CoordinateSystem, DecodeFingerprint, Extras, GeometryFingerprint, ModelIdentity,
+            Preprocessing, Resolution, SourceFingerprint,
+        };
+        lumina_sidecar::MaskDefinition {
+            id: id.into(),
+            name: id.into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "h".into(),
+                byte_length: 1,
+                extras: Extras::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "d".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width: 2,
+                height: 2,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            model: ModelIdentity {
+                name: "m".into(),
+                version: "1".into(),
+                hash: "h".into(),
+                extras: Extras::new(),
+            },
+            inference_resolution: Resolution {
+                width: 2,
+                height: 2,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "p".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: MaskStatus::Valid,
+            created_at: "now".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: None,
+            operation,
+            references,
+            extras: Extras::new(),
+        }
+    }
+
+    fn write_sidecar_with_valid_layer(
+        input: &Path,
+        bytes: &[u8],
+        frame: &ImageFrame,
+    ) -> lumina_sidecar::SidecarDocument {
+        let mut document = SidecarDocument::new(
+            source_identity(input, bytes, frame, None).unwrap(),
+            "raster-mvp-1",
+        );
+        let copy = &mut document.virtual_copies[0];
+        copy.mask_library = vec![valid_mask_definition(
+            "subject",
+            lumina_sidecar::MaskOperation::Source,
+            vec![],
+        )];
+        copy.mask_layers = vec![lumina_sidecar::MaskLayer {
+            id: "layer-1".into(),
+            mask: lumina_sidecar::MaskReference {
+                copy_id: copy.id.clone(),
+                mask_id: "subject".into(),
+                extras: BTreeMap::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: BTreeMap::new(),
+        }];
+        save_sidecar(&sidecar_path_for(input), &document).unwrap();
+        document
+    }
+
+    #[test]
+    fn render_with_valid_mask_zdata_has_no_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
+        let bytes = frame.encode(ImageFileFormat::Png).unwrap();
+        fs::write(&input, &bytes).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+
+        // Provide a 2x2 fully-filled artifact plane for `subject`.
+        let tile = lumina_sidecar::MaskTile {
+            mask_id: "subject".into(),
+            tile_x: 0,
+            tile_y: 0,
+            width: 2,
+            height: 2,
+            values: vec![65535; 4],
+        };
+        let container = lumina_sidecar::ZDataContainer::new(vec![tile]).unwrap();
+        lumina_sidecar::save_zdata(&lumina_sidecar::zdata_path_for(&input), &container).unwrap();
+
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output: output.clone(),
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+            },
+            None,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(output.is_file());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn render_with_missing_mask_zdata_warns_but_succeeds() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
+        let bytes = frame.encode(ImageFileFormat::Png).unwrap();
+        fs::write(&input, &bytes).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // No zdata file on purpose: the layer is reported as unavailable.
+
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output: output.clone(),
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+            },
+            None,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(output.is_file());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("layer-1"));
     }
 }

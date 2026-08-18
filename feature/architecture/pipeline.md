@@ -223,6 +223,55 @@ Auto-WB, Auto-Tone und Auto-Exposure speichern ihr Ergebnis zusammen mit einem
 Analysefingerprint. Sie werden nur manuell, durch ein Preset oder bei
 ungültigem Fingerprint neu berechnet.
 
+### Source-Actions und Masken im Raster-MVP (F-042)
+
+**Source-Actions:** Eine Source-Action ist im Raster-MVP ein
+kontext-übergebenes Artefakt
+`{ region: MaskPlane (u16, 0..=u16::MAX), replacement: ImageFrame (RGBA8) }`,
+wobei `region` und `replacement` identische Dimensionen besitzen müssen
+(andernfalls wird die Anwendung mit einem Renderfehler abgelehnt, kein stiller
+Fallback). Die Anwendung erfolgt nach Decode und VOR Auto-Analyse/
+Adjustments: `out = replacement` für Pixel mit `region >= 32768` (Schwellwert
+50 %), sonst bleibt die Quelle erhalten. Alpha wird bei ersetzten Pixeln aus
+`replacement` übernommen, sonst aus der Quelle. Keine Artefakte bedeuten
+Identität. **Offene Folgeaufgabe F-042-N1:** Persistenz als Rezeptoperation
+(additives Schema-Feld im Pre-MVP-Muster wie `color_grading`: leere
+Default-Liste, keine Migration nötig) und CLI-Command; das zdata-Artefaktformat
+für Repair-Regionen folgt dort. Bis dahin liefern CLI und GUI keine
+Source-Actions (leer), der Mechanismus ist aber im Renderpfad aktiv und
+getestet.
+
+**Masken-Stufe:** Die Stufe wertet die aktiven `mask_layers` der gewählten
+virtuellen Kopie aus: `MaskGraph`-Evaluierung pro Layer (inklusive der
+Graph-Operationen Union/Intersect/Subtract/Invert), Artefakt-Quelle je
+`MaskDefinition.status` nur bei `Valid`, sonst Meldung. Gültige Ebenen werden
+auf die aktuellen Framedimensionen bilinear resampelt; die Koordinaten-
+ausrichtung zwischen Maske und Frame ist eine dokumentierte Grenze
+(`geometry_context` wird noch nicht zur Ausrichtung genutzt). Pixel-Modulation
+durch lokale Anpassungen sowie die invert/feather/blur/density-Verarbeitung
+sind F-049 (`MaskLayer` hat keine lokalen Anpassungsfelder); F-042 liefert die
+effektiven Ebenen im Render-Ergebnis für F-049. **MaskPolicy:** `Strict`
+(fehlendes/ungültiges Artefakt → Renderfehler) vs. `Warn` (Layer wird
+übersprungen, Status im Ergebnis, Render läuft weiter — entspricht der
+Konfliktmatrix „Export trotzdem erlauben").
+
+**Einstiegspunkt:** Ein gemeinsamer Render-Einstiegspunkt in lumina-core
+(`render_frame`) führt die Reihenfolge
+`SourceActions → Adjustments (WB-Kontext VOR Tonwerten, inkl. Geometrie/Crop)
+→ Masks → Output` aus. Auto-Tone-Berechnung und Match Total Exposure bleiben
+Rezept-/Aufrufer-Orchestrierung (Fingerprint-Persistenz, F-041); der
+Einstiegspunkt wendet das (ggf. auto-getonte) Rezept an. GUI und CLI verwenden
+denselben Einstiegspunkt (SOLL: „GUI und CLI verwenden dieselbe
+Renderpipeline").
+
+**Status (F-042):** Implementiert sind der gemeinsame Einstiegspunkt, der
+Source-Action-Mechanismus (Kontext-Artefakt, Kompositing mit 50 %-Schwellwert),
+die Masken-Evaluierung und -Validierung mit `MaskPolicy` sowie die
+CLI-/GUI-Verdrahtung (zdata-Planes, Warnungen). Offen sind F-042-N1
+(Persistenz/CLI-Command für Source-Actions), F-049 (Pixel-Modulation durch
+lokale Anpassungen), F-041 (Matching-Messbereich nach Crop/Masken) und die
+Geometrie-Ausrichtung von Masken.
+
 ## Bearbeitungsregler
 
 Dieser Abschnitt erweitert die Rezeptsemantik normativ. Alle Felder liegen in

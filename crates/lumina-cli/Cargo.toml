@@ -10,7 +10,7 @@ rayon = "1"
 blake3 = "1"
 lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
-lumina-sidecar = { path = "../lumina-sidecar" }
+lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"

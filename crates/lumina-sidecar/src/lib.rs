@@ -10,9 +10,9 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
 
-#[cfg(feature = "zdata")]
+#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 mod zdata;
-#[cfg(feature = "zdata")]
+#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 pub use zdata::{load_zdata, save_zdata, zdata_path_for, MaskTile, ZDataContainer, ZDataError};
 
 pub const FORMAT: &str = "lumina-sidecar";
