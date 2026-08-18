@@ -76,10 +76,6 @@ Tests wird trotzdem umgesetzt.
 - [ ] **F-085** Source-Action-Operationen, ihre History-Schritte und ihre
   Auswirkung auf Auto-WB, Auto-Tone und Exposure Matching testen
   (Reihenfolge-Test verifiziert; behaviorale Tests folgen mit F-036/F-042).
-- [ ] **F-089-N1** Cleanup: ungenutzten Legacy-`Curve`-Wrapper
-  (crates/lumina-sidecar/src/lib.rs ~Z. 321-324) entfernen
-  („legacy wrapper retained for source compatibility", nirgends verwendet;
-  Verifikations-Befund B-2 aus F-089/F-090-Verifizierung).
 - [ ] **F-097** (niedrige Priorität) Deterministische Vignettierung und Körnung
   mit RenderKey-abgeleitetem Seed umsetzen.
 
@@ -168,6 +164,13 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
 
 - [ ] **F-072** CI für Formatierung, Clippy, Unit-, Integrations-, Golden-,
   Property- und CLI-Tests einrichten.
+- [ ] **F-072-N1** Drei vorbestehende Clippy-Befunde beheben, die
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  blockieren: (1) `too_many_arguments` in
+  crates/lumina-core/src/pipeline.rs:104 (`RenderKey::new`), (2)
+  `bool_assert_comparison` in crates/lumina-core/src/cache/disk.rs:217, (3)
+  `useless_conversion` in crates/lumina-sidecar/src/lib.rs:2397. Nachweis:
+  identische Befunde auf unverändertem HEAD (Verifikation F-089-N1).
 - [ ] **F-073** Kleine versionierte Referenzbilder, RAW-Fixtures und Modelle
   einschließlich Lizenzinformationen bereitstellen.
 - [ ] **F-074** Benchmarks für Decode, Preview, Maskeninferenz, Cache-Hit und

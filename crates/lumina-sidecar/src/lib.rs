@@ -411,11 +411,6 @@ pub struct CurveChannels {
     pub blue: Option<CurvePoints>,
 }
 pub type CurvePoints = Vec<CurvePoint>;
-/// Legacy wrapper retained for source compatibility; Curves itself uses lists.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Curve {
-    pub points: CurvePoints,
-}
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CurvePoint {
     pub input: f32,
