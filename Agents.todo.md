@@ -95,9 +95,6 @@ aber kompatibel gehalten (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
-- [ ] **F-039** Eine explizite Histogramm-Repräsentation ergänzen; die aktuelle
-  RGBA8-/Rec.709-Messdomäne, Gewichtung und Perzentilinterpolation sind für den
-  Raster-MVP festgelegt.
 - [ ] **F-041** `Match Total Exposure` auf den finalen sichtbaren Messbereich
   nach Crop, Geometrie und aktiven Masken erweitern; Epsilon-, Clipping- und
   Fallback-Schutz sind im aktuellen Raster-Messbereich vorhanden.

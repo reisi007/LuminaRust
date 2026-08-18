@@ -511,6 +511,17 @@ Ziel aus und bestimmt Kontrast aus der p01/p99-Spanne; Exposure ist auf
 -10..=10 EV und Contrast auf -1..=1 begrenzt. Leere Bilder liefern 0, Schwarz
 liefert den oberen Exposure-Fallback und Weiß den unteren.
 
+> **Implementierungsstatus (F-039, 2026-08-18):** Explizite
+> `LuminanceHistogram`-Repräsentation in `lumina-core` umgesetzt
+> (`crates/lumina-core/src/histogram.rs`). Die Messdomäne ist Rec.709 auf
+> sRGB-codierten RGBA8-Werten (Alpha ignoriert), über 256 Bins in `0..=1`.
+> Quantile werden per linearer Interpolation über die kumulative Verteilung
+> berechnet; die Konsistenz gegenüber `analyze_tone` ist für dicht besetzte
+> Histogramme mit ≤ 1/256 Toleranz dokumentiert und getestet (Mittelwert via
+> Bin-Zentren ≤ 1/512). Serde (Serialize/Deserialize) und ein stabiler
+> blake3-Digest (`digest()` über Bins + Dimensionen) machen die Repräsentation
+> direkt für `CacheStage::Histogram` nutzbar.
+
 ## Exposure Matching
 
 `Match Total Exposure` misst nach dem Auto-Schritt die definierte gewichtete

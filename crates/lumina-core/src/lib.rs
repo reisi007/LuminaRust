@@ -9,6 +9,7 @@ use std::io::Cursor;
 use thiserror::Error;
 
 pub mod cache;
+pub mod histogram;
 pub mod masks;
 pub mod pipeline;
 pub mod tone;
@@ -18,6 +19,7 @@ pub use cache::{
     CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
     StaleTracker,
 };
+pub use histogram::LuminanceHistogram;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use pipeline::{Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use tone::{
