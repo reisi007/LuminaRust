@@ -6,41 +6,62 @@
 # 0.22.x (6160x4144 vs 6032x4024); the lumina-raw golden fixture tests assert
 # exact dimensions, so the decode version must be deterministic.
 #
-# Built and published by .github/workflows/ci-libraw-image.yml to
-# ghcr.io/reisi007/luminarust/lumina-ci:libraw-0.22.2 (tag = LibRaw version).
+# Built and published by .github/workflows/ci-libraw-image.yml. Published
+# tags:
+#   - <commit-sha>: immutable per build — reproducible pull by SHA
+#   - latest:       moving alias referenced by ci.yml
+# The LibRaw version deliberately lives in the image metadata
+# (OCI label `lumina.libraw_version`) and as ARG below, NOT in the tag: a tag
+# identifies the image build (which also contains base OS, g++, pkg-config
+# and build flags), it does not version one of its inputs.
 #
 # The image deliberately does NOT contain a Rust toolchain: `dtolnay/rust-
 # toolchain` installs the current stable toolchain inside the job container.
+#
+# Build system note: LibRaw 0.22.2 has NO upstream CMake support (README.cmake:
+# cmake builds "not officially supported ... since 2014", moved to a separate
+# LibRaw-cmake repo) and the GitHub tag tarball ships no generated `configure`
+# script — the canonical build is Autotools: autoreconf + configure + make.
 
 FROM ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
-        cmake \
+        curl \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
         g++ \
-        git \
         make \
         zlib1g-dev \
         libjpeg-dev \
         liblcms2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin the exact LibRaw release tag. Keep in sync with the local Homebrew
-# `libraw` version used by developers (`brew info libraw`).
+# Pin the exact LibRaw release tag and the sha256 of its GitHub source
+# tarball. Keep the version in sync with the local Homebrew `libraw` used by
+# developers (`brew info libraw`).
 ARG LIBRAW_VERSION=0.22.2
-RUN git clone --depth 1 --branch "${LIBRAW_VERSION}" \
-        https://github.com/LibRaw/LibRaw.git /tmp/libraw \
-    && cmake -S /tmp/libraw -B /tmp/libraw/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-    && cmake --build /tmp/libraw/build -j"$(nproc)" \
-    && cmake --install /tmp/libraw/build \
-    && rm -rf /tmp/libraw
+ARG LIBRAW_SHA256=627928088300ecde6ca91ffd202e189203f04ad61ad12f0fe9dc57b9a7a0fb3c
+RUN set -eux; \
+    curl -fsSL -o /tmp/libraw.tar.gz \
+        "https://github.com/LibRaw/LibRaw/archive/refs/tags/${LIBRAW_VERSION}.tar.gz"; \
+    echo "${LIBRAW_SHA256}  /tmp/libraw.tar.gz" | sha256sum -c -; \
+    mkdir -p /tmp/libraw-src; \
+    tar -xzf /tmp/libraw.tar.gz -C /tmp/libraw-src --strip-components=1; \
+    rm /tmp/libraw.tar.gz \
+    && cd /tmp/libraw-src \
+    && autoreconf -fi \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /tmp/libraw-src
 
 FROM ubuntu:24.04
 
 # Runtime + cargo-build-time needs:
-# - libraw_r.so (installed below, with its runtime deps: jpeg, lcms2, zlib);
+# - libraw_r.so (installed below, plus its runtime deps: jpeg, lcms2, zlib);
 # - pkg-config for the vendored `libraw-sys` build script (`libraw_r.pc`);
 # - a C++ compiler: the libraw-sys build script compiles small probe programs
 #   to detect LibRaw struct members (`check_member`), so g++ is required.

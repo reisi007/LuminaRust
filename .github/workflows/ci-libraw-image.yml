@@ -5,8 +5,11 @@ name: CI image (LibRaw)
 # so the native LibRaw version is deterministic (0.22.2, same as Homebrew on
 # developer machines) without rebuilding LibRaw from source on every run.
 #
-# The image is rebuilt only when the Dockerfile or this workflow changes;
-# `workflow_dispatch` also allows a manual refresh.
+# Rebuilt only when the Dockerfile or this workflow changes; workflow_dispatch
+# allows a manual refresh. Published tags (GHCR names must be lowercase):
+#   - <commit-sha>: immutable per build — reproducible pull by SHA
+#   - latest:       moving alias that ci.yml references
+# The LibRaw version is recorded in the OCI label `lumina.libraw_version`.
 
 on:
   workflow_dispatch:
@@ -44,7 +47,13 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          # GHCR image names must be lowercase; keep in sync with ci.yml.
-          tags: ghcr.io/reisi007/luminarust/lumina-ci:libraw-0.22.2
+          tags: |
+            ghcr.io/reisi007/luminarust/lumina-ci:latest
+            ghcr.io/reisi007/luminarust/lumina-ci:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=LuminaRust CI image with pinned LibRaw 0.22.2 (autotools build)
+            lumina.libraw_version=0.22.2
           cache-from: type=gha
           cache-to: type=gha,mode=max
