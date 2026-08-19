@@ -1917,6 +1917,7 @@ dependencies = [
  "blake3",
  "clap",
  "lumina-core",
+ "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",
  "rayon",
@@ -1962,6 +1963,7 @@ name = "lumina-onnx"
 version = "0.1.0"
 dependencies = [
  "lumina-core",
+ "lumina-sidecar",
  "ort",
  "serde",
  "serde_json",

@@ -49,10 +49,20 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 - **F-080** verifiziert erledigt und entfernt (Modellfähigkeiten: 6 Flags im
   ONNX-Manifest, BiRefNet besitzt `subject_segmentation` als dokumentierte
   Erweiterung — Teil von F-047, unabhängig verifiziert 2026-08-19).
+- **F-048** verifiziert erledigt und entfernt (intelligente Masken-Lade-
+  entscheidung: `resolve_mask_planes` in lumina-core, `MaskInference`-Trait,
+  `ModelManifest::to_model_identity`, CLI-Verdrahtung — unabhängig verifiziert
+  2026-08-19).
+- **F-051** verifiziert erledigt und entfernt (Verhalten bei nicht verfügbarem
+  Modell: Cache-Fallback mit Warnung oder harter Fehler — integriert in F-048,
+  unabhängig verifiziert 2026-08-19).
+- **F-077** verifiziert erledigt und entfernt (19 Backup-/Recovery-/Konflikt-/
+  Datenverlusttests als Release-Gate in lumina-sidecar — unabhängig verifiziert
+  2026-08-19).
 
 Verbleibend bis MVP: F-097 (Phase 3/4), Phase 6 AI-Masken
-(F-048…F-051, F-079, F-081…F-083), F-101 MCP AI-Agent-Schnittstelle
-(Phase 7), Release-Gates (F-072, F-073, F-075, F-077, F-078).
+(F-049, F-050, F-079, F-081…F-083), F-101 MCP AI-Agent-Schnittstelle
+(Phase 7), Release-Gates (F-072, F-073, F-075, F-078).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
@@ -212,14 +222,10 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-048** Persistierte Masken bevorzugt laden; Neuberechnung nur bei
-  fehlender, veralteter oder ausdrücklich erneuerter Maske durchführen.
 - [ ] **F-049** Masken-Invertierung, Feathering, Blur und lokale Anpassungen
   nicht-destruktiv in der Pipeline anwenden.
 - [ ] **F-050** Tests für fehlende Artefakte, Modellwechsel, Quelländerung,
   falsche Prüfsumme und erneute Inferenz schreiben.
-- [ ] **F-051** Verhalten bei nicht verfügbarem Modell definieren: persistierte
-  Maske weiterverwenden, Neuberechnung anbieten und Fehler sichtbar machen.
 - [ ] **F-079** Promptfähige Maskenquellen für Box, Pinsel, Polygon, Ellipse und
   Verläufe in das Masken-DAG-Modell aufnehmen.
 - [ ] **F-081** Benutzergeführte Segmentierung für Rechteck- und Pinsel-Prompts
@@ -393,8 +399,6 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
   und umgesetzt.
 - [ ] **F-075** Speicherbudgets und Abbruchverhalten für große RAWs und Masken
   messen und absichern.
-- [ ] **F-077** Backup-, Recovery-, Sidecar-Konflikt- und Datenverlusttests als
-  Release-Gate einrichten.
 - [ ] **F-078** Lizenz-, Modell- und Distributionsprüfung vor dem ersten Release
   abschließen.
 

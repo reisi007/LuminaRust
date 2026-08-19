@@ -14,6 +14,13 @@ pub trait SubjectInference {
     /// The model manifest this backend was built from.
     fn manifest(&self) -> &ModelManifest;
 
+    /// Whether the model artifact/weights required for inference are present.
+    /// The default (`true`) suits backends without external weight files; a real
+    /// ONNX Runtime backend overrides this to check for the `.onnx` artifact.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Run subject inference for `image`, returning a matte at the source image
     /// resolution. Must never silently fall back on a missing or mismatched
     /// artifact — it returns [`OnnxError`] instead.
@@ -28,6 +35,10 @@ pub trait SubjectInference {
 /// the inference resolution — see [`StubBackend::generate_model_matte`].
 pub struct StubBackend {
     manifest: ModelManifest,
+    /// Whether the model weights/artifact required for inference are present.
+    /// The stub has no weights, so this is `true` by default; it can be flipped
+    /// to simulate an unavailable model (F-051) for testing.
+    available: bool,
 }
 
 impl StubBackend {
@@ -43,7 +54,22 @@ impl StubBackend {
                 actual_height: res.height,
             });
         }
-        Ok(Self { manifest })
+        Ok(Self {
+            manifest,
+            available: true,
+        })
+    }
+
+    /// Override the reported model availability. Used to simulate a missing
+    /// model (F-051) without a real weights file.
+    pub fn with_availability(mut self, available: bool) -> Self {
+        self.available = available;
+        self
+    }
+
+    /// Whether this backend can currently perform inference.
+    pub fn is_available(&self) -> bool {
+        self.available
     }
 
     /// Generate the model-resolution matte: a centered radial disk in normalized
@@ -90,6 +116,10 @@ impl SubjectInference for StubBackend {
         &self.manifest
     }
 
+    fn is_available(&self) -> bool {
+        self.available
+    }
+
     fn infer(&self, image: &ImageFrame) -> Result<MaskPlane, OnnxError> {
         if image.width == 0 || image.height == 0 {
             return Err(OnnxError::InvalidDimensions {
@@ -109,6 +139,24 @@ impl SubjectInference for StubBackend {
             self.manifest.input.resolution,
             (image.width, image.height),
         )
+    }
+}
+
+/// Bridge the native adapter to `lumina-core`'s platform-neutral
+/// [`lumina_core::MaskInference`] trait, mapping adapter errors to
+/// [`lumina_core::CoreError`] (no silent fallbacks). This is the surface the
+/// mask-loading decision layer (F-048 / F-051) consumes.
+impl lumina_core::MaskInference for StubBackend {
+    fn is_available(&self) -> bool {
+        self.available
+    }
+
+    fn infer(&self, frame: &ImageFrame) -> Result<MaskPlane, lumina_core::CoreError> {
+        <Self as SubjectInference>::infer(self, frame).map_err(|error| {
+            lumina_core::CoreError::MaskInference {
+                reason: error.to_string(),
+            }
+        })
     }
 }
 

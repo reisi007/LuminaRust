@@ -10,6 +10,7 @@ use thiserror::Error;
 
 pub mod cache;
 pub mod histogram;
+pub mod mask_loader;
 pub mod masks;
 pub mod pipeline;
 pub mod render;
@@ -23,6 +24,10 @@ pub use cache::{
     StaleTracker,
 };
 pub use histogram::LuminanceHistogram;
+pub use mask_loader::{
+    resolve_mask_planes, MaskInference, MaskLoadContext, MaskLoadOutcome, MaskLoadResult,
+    MaskResolvedFrom,
+};
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use render::{
@@ -150,6 +155,8 @@ pub enum CoreError {
         mask_id: String,
         reason: String,
     },
+    #[error("mask re-inference failed: {reason}")]
+    MaskInference { reason: String },
 }
 
 impl ImageFrame {

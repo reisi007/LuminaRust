@@ -1,15 +1,16 @@
 use clap::{Args, Parser, Subcommand};
 use lumina_core::{
-    match_total_exposure_masked, render_frame, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
-    ImageFileFormat, ImageFrame, MaskContext, MaskPlane, MaskPolicy, RenderContext,
-    SourceActionArtifact,
+    match_total_exposure_masked, render_frame, resolve_mask_planes, suggest_auto_tone,
+    tone_fingerprint, AutoToneConfig, ImageFileFormat, ImageFrame, MaskContext, MaskInference,
+    MaskLoadContext, MaskPlane, MaskPolicy, RenderContext, SourceActionArtifact,
 };
+use lumina_onnx::{birefnet_manifest, StubBackend};
 use lumina_raw::{RawError, RawMetadata};
 use lumina_sidecar::{
     append_repair_region, artifact_status, load_sidecar, load_zdata, save_sidecar,
     sidecar_path_for, AnalysisFingerprint, ArtifactStatus, DecodeFingerprint, EditRecipe,
-    GeometryFingerprint, HistoryEntry, MaskStatus, Preset, RepairRegionArtifact, SidecarDocument,
-    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceIdentity,
+    GeometryFingerprint, HistoryEntry, MaskOperation, MaskStatus, Preset, RepairRegionArtifact,
+    SidecarDocument, SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceIdentity,
     SOURCE_ACTION_VERSION,
 };
 use rayon::prelude::*;
@@ -957,27 +958,57 @@ fn process_selected(
     if let Some(value) = args.shadows {
         recipe.adjustments.insert("shadows".into(), value);
     }
-    // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar.
-    // Missing or unreadable zdata is *not* a hard error: affected layers are
-    // skipped and reported via the `MaskPolicy::Warn` path.
-    let mut planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
+    // --- F-048 / F-051: intelligent mask-loading decision layer ---
+    // Load every persisted source-mask plane from the optional `.lumina.zdata`
+    // bundle (regardless of status); the decision layer below validates
+    // identity and decides whether to use it, re-infer, or fall back.
+    let mut loaded_planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
     let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
     if zdata_path.exists() {
         if let Ok(container) = lumina_sidecar::load_zdata(&zdata_path) {
-            let copy = &document.virtual_copies[copy_index];
-            for mask in copy
-                .mask_library
-                .iter()
-                .filter(|m| matches!(m.status, MaskStatus::Valid))
-            {
-                if let Ok(tile) = container.tile(&mask.id, 0, 0) {
-                    if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
-                        planes.insert((copy.id.clone(), mask.id.clone()), plane);
+            for copy in &document.virtual_copies {
+                for mask in copy
+                    .mask_library
+                    .iter()
+                    .filter(|m| matches!(m.operation, MaskOperation::Source))
+                {
+                    if let Ok(tile) = container.tile(&mask.id, 0, 0) {
+                        if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
+                            loaded_planes.insert((copy.id.clone(), mask.id.clone()), plane);
+                        }
                     }
                 }
             }
         }
     }
+
+    // Wire the ONNX adapter (StubBackend / BiRefNet descriptor) when available.
+    // `None` means no inference engine is installed at all (F-051: the decision
+    // layer then relies on cached artifacts or fails clearly).
+    let manifest = birefnet_manifest();
+    let backend = StubBackend::new(manifest.clone()).ok();
+    let (inference, model_identity) = match &backend {
+        Some(backend) => (
+            Some(backend as &dyn MaskInference),
+            Some(manifest.to_model_identity()),
+        ),
+        None => (None, None),
+    };
+
+    let resolved = resolve_mask_planes(
+        MaskLoadContext {
+            copies: &document.virtual_copies,
+            active_copy_id: &document.virtual_copies[copy_index].id,
+            source_hash: &current_identity.content_hash,
+            decode_context: &current_identity.decode_fingerprint,
+            loaded_planes,
+            inference,
+            model_identity: model_identity.as_ref(),
+            refresh: false,
+            policy: MaskPolicy::Warn,
+        },
+        &frame,
+    )?;
     // Main render via the shared entry point (SourceActions → Adjustments →
     // Masks).  F-042-N1: the recipe's persisted source actions are resolved
     // from the `.lumina.zdata` bundle (missing or checksum-mismatched artifacts
@@ -991,13 +1022,18 @@ fn process_selected(
             camera_white_balance: wb,
             source_actions: &source_actions,
             masks: Some(MaskContext {
-                copies: &document.virtual_copies,
+                copies: &resolved.copies,
                 active_copy_id: &active_copy.id,
-                planes,
+                planes: resolved.planes,
                 policy: MaskPolicy::Warn,
             }),
         },
     )?;
+    // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
+    for warning in &resolved.warnings {
+        eprintln!("warning: {warning}");
+    }
+    mask_warnings_out.extend(resolved.warnings.iter().cloned());
     for warning in &render_output.mask_warnings {
         eprintln!("warning: {warning}");
     }
@@ -1560,25 +1596,26 @@ mod tests {
         id: &str,
         operation: lumina_sidecar::MaskOperation,
         references: Vec<lumina_sidecar::MaskReference>,
+        identity: &SourceIdentity,
+        width: u32,
+        height: u32,
     ) -> lumina_sidecar::MaskDefinition {
         use lumina_sidecar::{
-            CoordinateSystem, DecodeFingerprint, Extras, GeometryFingerprint, ModelIdentity,
-            Preprocessing, Resolution, SourceFingerprint,
+            CoordinateSystem, Extras, GeometryFingerprint, ModelIdentity, Preprocessing, Resolution,
         };
+        // Build a *confirmably valid* persisted mask: its source/decode/model
+        // identity matches the running source and the wired BiRefNet descriptor
+        // (F-048), and it carries an artifact reference. F-047's persisted
+        // masks always carry an `artifact`, so this mirrors real persistence.
         lumina_sidecar::MaskDefinition {
             id: id.into(),
             name: id.into(),
-            source_fingerprint: SourceFingerprint {
-                content_hash: "h".into(),
-                byte_length: 1,
+            source_fingerprint: lumina_sidecar::SourceFingerprint {
+                content_hash: identity.content_hash.clone(),
+                byte_length: identity.byte_length,
                 extras: Extras::new(),
             },
-            decode_context: DecodeFingerprint {
-                decoder: "d".into(),
-                version: "1".into(),
-                parameters: BTreeMap::new(),
-                extras: Extras::new(),
-            },
+            decode_context: identity.decode_fingerprint.clone(),
             geometry_context: GeometryFingerprint {
                 width: 2,
                 height: 2,
@@ -1587,14 +1624,14 @@ mod tests {
                 extras: Extras::new(),
             },
             model: ModelIdentity {
-                name: "m".into(),
-                version: "1".into(),
-                hash: "h".into(),
+                name: "BiRefNet".into(),
+                version: "1.0.0".into(),
+                hash: "pending-integration".into(),
                 extras: Extras::new(),
             },
             inference_resolution: Resolution {
-                width: 2,
-                height: 2,
+                width,
+                height,
                 extras: Extras::new(),
             },
             preprocessing: Preprocessing {
@@ -1610,7 +1647,16 @@ mod tests {
             created_at: "now".into(),
             generator_version: "g".into(),
             error_text: None,
-            artifact: None,
+            artifact: Some(lumina_sidecar::ArtifactReference {
+                relative_path: "x.zdata".into(),
+                format: "lumina-zdata".into(),
+                checksum: "c".into(),
+                width,
+                height,
+                channels: "u16".into(),
+                data_version: "1".into(),
+                extras: Extras::new(),
+            }),
             operation,
             references,
             extras: Extras::new(),
@@ -1622,15 +1668,16 @@ mod tests {
         bytes: &[u8],
         frame: &ImageFrame,
     ) -> lumina_sidecar::SidecarDocument {
-        let mut document = SidecarDocument::new(
-            source_identity(input, bytes, frame, None).unwrap(),
-            "raster-mvp-1",
-        );
+        let identity = source_identity(input, bytes, frame, None).unwrap();
+        let mut document = SidecarDocument::new(identity.clone(), "raster-mvp-1");
         let copy = &mut document.virtual_copies[0];
         copy.mask_library = vec![valid_mask_definition(
             "subject",
             lumina_sidecar::MaskOperation::Source,
             vec![],
+            &identity,
+            frame.width,
+            frame.height,
         )];
         copy.mask_layers = vec![lumina_sidecar::MaskLayer {
             id: "layer-1".into(),
@@ -1694,7 +1741,7 @@ mod tests {
     }
 
     #[test]
-    fn render_with_missing_mask_zdata_warns_but_succeeds() {
+    fn render_with_missing_mask_zdata_reinfers_and_succeeds() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("input.png");
         let output = directory.path().join("output.png");
@@ -1702,7 +1749,9 @@ mod tests {
         let bytes = frame.encode(ImageFileFormat::Png).unwrap();
         fs::write(&input, &bytes).unwrap();
         write_sidecar_with_valid_layer(&input, &bytes, &frame);
-        // No zdata file on purpose: the layer is reported as unavailable.
+        // No zdata file on purpose. With the inference model wired (F-048), the
+        // missing artifact is (re-)inferred rather than reported as a warning;
+        // the render succeeds with a produced mask.
 
         let mut warnings = Vec::new();
         process_selected(
@@ -1723,8 +1772,7 @@ mod tests {
         )
         .unwrap();
         assert!(output.is_file());
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("layer-1"));
+        assert!(warnings.is_empty());
     }
 
     // ---- F-085: history steps and mask × matching interplay ----

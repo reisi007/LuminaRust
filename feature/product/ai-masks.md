@@ -178,6 +178,18 @@ Wiederverwendung/Stale-Erkennung erfolgt in den Folge-Tasks. `lumina-onnx`
 hängt bewusst noch nicht von `lumina-sidecar` ab; die Modellidentität wird in
 F-048 auf das Sidecar-Modell abgebildet.
 
+**Status (F-048 / F-051, 2026-08-19):** Umgesetzt und unabhängig verifiziert.
+Die Masken-Ladeentscheidung (`lumina-core::mask_loader::resolve_mask_planes`)
+bildet `ModelIdentity` ↔ `ModelManifest` ab (`ModelManifest::to_model_identity`)
+und wählt pro erreichbarer Quell-Maske: gültiges persistiertes Artefakt laden
+(keine Re-Inferenz), sonst Re-Inferenz über `lumina-core::MaskInference`
+(StubBackend implementiert das Trait; `lumina-onnx` hängt nun von `lumina-sidecar`
+für die Identitätsabbildung). F-051 ist integriert: fehlendes/nicht verfügbares
+Modell → Cache-Nutzung mit Warnung bzw. harter Fehler bei fehlendem Cache. Die
+CLI reicht das Ergebnis an `stderr`/`mask_warnings` durch. Offen: Persistenz der
+Re-Inferenz-Ergebnisse zurück ins `.lumina.zdata`-Bundle (F-082) und die
+GUI-Capability-Anzeige.
+
 ## Abnahme
 
 - Eine gültige Matte wird nach Neustart ohne Modell-Download verwendet.

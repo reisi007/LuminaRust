@@ -1,0 +1,823 @@
+//! Intelligent mask-loading decision layer (F-048 / F-051).
+//!
+//! This module sits **above** the raw `.lumina.zdata` tile loader. Given the
+//! recipe's mask definitions, the already-loaded zdata planes, the current
+//! source identity and an optional re-inference backend, it decides for every
+//! reachable source mask whether to:
+//!
+//! * **use a confirmably valid persisted artifact** (preferred — no inference);
+//! * **re-infer via the ONNX adapter** because the artifact is missing,
+//!   outdated (source changed, model changed) or a refresh was requested;
+//! * **fall back to a cached (possibly stale) artifact** when the model is
+//!   unavailable (F-051: render still succeeds, but a warning is surfaced).
+//!
+//! When neither a cached artifact nor a model is available, it reports a clear
+//! error instead of silently serving a stale or empty mask (F-051).
+//!
+//! `lumina-core` never couples to a concrete model: the re-inference path is
+//! injected through the platform-neutral [`MaskInference`] trait, which the
+//! native `lumina-onnx` adapter implements.
+
+use crate::masks::MaskPlane;
+use crate::{CoreError, ImageFrame, MaskPolicy};
+use lumina_sidecar::{
+    DecodeFingerprint, MaskDefinition, MaskOperation, MaskReference, MaskStatus, ModelIdentity,
+    VirtualCopy,
+};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Re-inference surface for a subject mask.
+///
+/// Implemented by the ONNX adapter (`lumina-onnx`); `lumina-core` is never
+/// coupled to a concrete model or native dependency. The decision layer calls
+/// [`MaskInference::infer`] only when re-inference is actually required.
+pub trait MaskInference {
+    /// Whether the model artifact/weights required for inference are present.
+    /// A `false` result means re-inference is impossible, so the decision layer
+    /// must fall back to a cached artifact (F-051) or fail.
+    fn is_available(&self) -> bool;
+    /// Re-infer a subject matte from `frame`. Must never silently fall back on
+    /// a missing or mismatched artifact — it returns an error instead.
+    fn infer(&self, frame: &ImageFrame) -> Result<MaskPlane, CoreError>;
+}
+
+/// How a source mask was resolved by the decision layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskResolvedFrom {
+    /// A confirmably valid persisted artifact was loaded and used (no inference).
+    LoadedPersisted,
+    /// The model was available and the matte was (re-)inferred.
+    ReInferred,
+    /// No model was available; a cached (possibly stale) artifact was used.
+    CachedUnavailable,
+}
+
+/// Per-mask resolution outcome for diagnostics / surfacing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskLoadOutcome {
+    pub copy_id: String,
+    pub mask_id: String,
+    pub from: MaskResolvedFrom,
+}
+
+/// Inputs to the mask-loading decision layer.
+#[derive(Clone)]
+pub struct MaskLoadContext<'a> {
+    /// All virtual copies (the decision layer resolves cross-copy references).
+    pub copies: &'a [VirtualCopy],
+    /// The active virtual copy whose `mask_layers` drive reachability.
+    pub active_copy_id: &'a str,
+    /// Current source content hash (BLAKE3 `blake3:…` form).
+    pub source_hash: &'a str,
+    /// Current decode fingerprint of the source.
+    pub decode_context: &'a DecodeFingerprint,
+    /// Planes already loaded from the `.lumina.zdata` tile container, keyed by
+    /// `(copy_id, mask_id)`. The decision layer reads from here; it never
+    /// touches the filesystem.
+    pub loaded_planes: BTreeMap<(String, String), MaskPlane>,
+    /// Optional re-inference backend. `None` means no model is wired at all
+    /// (equivalent to "unavailable").
+    pub inference: Option<&'a dyn MaskInference>,
+    /// Identity of the configured model (only set when `inference` is `Some`).
+    /// Used to detect a model change against the persisted mask identity.
+    pub model_identity: Option<&'a ModelIdentity>,
+    /// Force re-inference even when a confirmably valid persisted mask exists.
+    pub refresh: bool,
+    /// How the subsequent render stage treats unresolved layers. The
+    /// decision layer itself always fails hard when no model **and** no cache
+    /// exist (F-051), independent of this policy.
+    pub policy: MaskPolicy,
+}
+
+/// Result of the mask-loading decision layer.
+#[derive(Debug, Clone)]
+pub struct MaskLoadResult {
+    /// Planes keyed by `(copy_id, mask_id)` for every resolved source mask.
+    pub planes: BTreeMap<(String, String), MaskPlane>,
+    /// Copies with statuses updated: every *resolved* (usable) mask is marked
+    /// `Valid`; unreachable or unresolved masks keep their previous status.
+    pub copies: Vec<VirtualCopy>,
+    /// Human-readable warnings (model-unavailable / cached-fallback, etc.).
+    pub warnings: Vec<String>,
+    /// `true` if at least one mask required the model but it was unavailable.
+    pub model_unavailable: bool,
+    /// Per-mask resolution outcomes (for diagnostics / surfacing).
+    pub outcomes: Vec<MaskLoadOutcome>,
+}
+
+/// Run the mask-loading decision layer (F-048 / F-051).
+///
+/// For every source mask reachable from the active copy's `mask_layers`, the
+/// function decides whether to load the persisted plane, re-infer via the model,
+/// or fall back to a cached (stale) plane. The returned [`MaskLoadResult`] is
+/// consumed directly by `render_frame` via [`crate::MaskContext`].
+///
+/// `frame` is only used if re-inference is required.
+pub fn resolve_mask_planes(
+    ctx: MaskLoadContext<'_>,
+    frame: &ImageFrame,
+) -> Result<MaskLoadResult, CoreError> {
+    let reachable = reachable_definitions(ctx.copies, ctx.active_copy_id);
+    let mut planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut model_unavailable = false;
+    let mut outcomes: Vec<MaskLoadOutcome> = Vec::new();
+    let mut resolved_sources: BTreeSet<(String, String)> = BTreeSet::new();
+
+    for key in &reachable {
+        let Some(definition) = find_definition(ctx.copies, &reference_from_key(key)) else {
+            continue;
+        };
+        // Only source masks carry their own plane; derived (union/invert/…)
+        // definitions are resolved in the blessing pass below.
+        if definition.operation != MaskOperation::Source {
+            continue;
+        }
+
+        let persisted = ctx.loaded_planes.get(key).cloned();
+        let artifact_present = persisted.is_some() && definition.artifact.is_some();
+        let source_ok = definition.source_fingerprint.content_hash == ctx.source_hash;
+        let decode_ok = decode_context_matches(&definition.decode_context, ctx.decode_context);
+        let identity_ok = model_identity_matches(&definition.model, ctx.model_identity);
+        let valid = definition.status == MaskStatus::Valid
+            && artifact_present
+            && source_ok
+            && decode_ok
+            && identity_ok;
+
+        if valid && !ctx.refresh {
+            // F-048 (1)(2): a confirmably valid persisted mask is preferred.
+            planes.insert(key.clone(), persisted.unwrap());
+            resolved_sources.insert(key.clone());
+            outcomes.push(MaskLoadOutcome {
+                copy_id: key.0.clone(),
+                mask_id: key.1.clone(),
+                from: MaskResolvedFrom::LoadedPersisted,
+            });
+            continue;
+        }
+
+        // The persisted artifact is missing, outdated, or a refresh was
+        // requested. Try re-inference first.
+        let model_present = ctx
+            .inference
+            .map(|backend| backend.is_available())
+            .unwrap_or(false);
+        if model_present {
+            // F-048 (3): re-infer via the ONNX adapter (covers refresh, stale
+            // source, changed model, and missing persisted artifact).
+            let plane =
+                ctx.inference
+                    .unwrap()
+                    .infer(frame)
+                    .map_err(|error| CoreError::MaskInference {
+                        reason: format!(
+                            "re-inference of mask `{}/{}` failed: {}",
+                            key.0, key.1, error
+                        ),
+                    })?;
+            planes.insert(key.clone(), plane);
+            resolved_sources.insert(key.clone());
+            outcomes.push(MaskLoadOutcome {
+                copy_id: key.0.clone(),
+                mask_id: key.1.clone(),
+                from: MaskResolvedFrom::ReInferred,
+            });
+            continue;
+        }
+
+        // F-051: the model is unavailable (no backend wired, or its weights are
+        // missing). Fall back to a cached artifact if one exists.
+        model_unavailable = true;
+        if let Some(plane) = persisted {
+            // F-051 (1): use the cached (possibly stale) artifact; mark it used.
+            planes.insert(key.clone(), plane);
+            resolved_sources.insert(key.clone());
+            outcomes.push(MaskLoadOutcome {
+                copy_id: key.0.clone(),
+                mask_id: key.1.clone(),
+                from: MaskResolvedFrom::CachedUnavailable,
+            });
+            warnings.push(format!(
+                "mask `{}/{}` used from cache because the inference model is unavailable \
+                 (persisted status {:?}); the result may be stale",
+                key.0, key.1, definition.status
+            ));
+            continue;
+        }
+
+        // F-051 (2): no cached artifact and no model — a clear hard error,
+        // never a silent fallback or an empty mask.
+        return Err(CoreError::MaskUnavailable {
+            copy_id: key.0.clone(),
+            mask_id: key.1.clone(),
+            status: "model-unavailable".into(),
+        });
+    }
+
+    // Blessing pass: a derived definition (union/invert/…) is usable only when
+    // every source mask in its dependency closure was resolved.
+    let mut blessed: BTreeSet<(String, String)> = resolved_sources.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for key in &reachable {
+            if blessed.contains(key) {
+                continue;
+            }
+            let Some(definition) = find_definition(ctx.copies, &reference_from_key(key)) else {
+                continue;
+            };
+            if definition.references.is_empty() {
+                continue;
+            }
+            let all_sources_blessed = definition.references.iter().all(|reference| {
+                blessed.contains(&(reference.copy_id.clone(), reference.mask_id.clone()))
+            });
+            if all_sources_blessed {
+                blessed.insert(key.clone());
+                changed = true;
+            }
+        }
+    }
+
+    // Clone the copies and mark every reachable, blessed mask as `Valid` so the
+    // downstream `render_frame` evaluation accepts it. The original sidecar is
+    // never mutated by this in-memory rewrite.
+    let mut copies: Vec<VirtualCopy> = ctx.copies.to_vec();
+    for copy in &mut copies {
+        for mask in &mut copy.mask_library {
+            let key = (copy.id.clone(), mask.id.clone());
+            if reachable.contains(&key) && blessed.contains(&key) {
+                mask.status = MaskStatus::Valid;
+            }
+        }
+    }
+
+    Ok(MaskLoadResult {
+        planes,
+        copies,
+        warnings,
+        model_unavailable,
+        outcomes,
+    })
+}
+
+/// All `(copy_id, mask_id)` definitions reachable from the active copy's
+/// `mask_layers`, following `references` recursively. The result is a DAG
+/// closure (the sidecar guarantees a cycle-free graph).
+fn reachable_definitions(
+    copies: &[VirtualCopy],
+    active_copy_id: &str,
+) -> BTreeSet<(String, String)> {
+    let Some(active) = copies.iter().find(|copy| copy.id == active_copy_id) else {
+        return BTreeSet::new();
+    };
+    let mut work: Vec<MaskReference> = active
+        .mask_layers
+        .iter()
+        .map(|layer| layer.mask.clone())
+        .collect();
+    let mut reachable = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    while let Some(reference) = work.pop() {
+        let key = (reference.copy_id.clone(), reference.mask_id.clone());
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if find_definition(copies, &reference).is_some() {
+            reachable.insert(key.clone());
+            if let Some(definition) = find_definition(copies, &reference) {
+                for reference in &definition.references {
+                    work.push(reference.clone());
+                }
+            }
+        }
+    }
+    reachable
+}
+
+/// Finds the `MaskDefinition` referenced by `reference` across all copies
+/// (mirrors `MaskGraph`'s `(copy_id, mask_id)` keying).
+fn find_definition<'a>(
+    copies: &'a [VirtualCopy],
+    reference: &MaskReference,
+) -> Option<&'a MaskDefinition> {
+    copies
+        .iter()
+        .find(|copy| copy.id == reference.copy_id)
+        .and_then(|copy| {
+            copy.mask_library
+                .iter()
+                .find(|mask| mask.id == reference.mask_id)
+        })
+}
+
+fn reference_from_key(key: &(String, String)) -> MaskReference {
+    MaskReference {
+        copy_id: key.0.clone(),
+        mask_id: key.1.clone(),
+        extras: Default::default(),
+    }
+}
+
+fn decode_context_matches(actual: &DecodeFingerprint, expected: &DecodeFingerprint) -> bool {
+    actual.decoder == expected.decoder
+        && actual.version == expected.version
+        && actual.parameters == expected.parameters
+}
+
+fn model_identity_matches(model: &ModelIdentity, configured: Option<&ModelIdentity>) -> bool {
+    match configured {
+        Some(configured) => {
+            model.name == configured.name
+                && model.version == configured.version
+                && model.hash == configured.hash
+        }
+        // No model is configured to compare against — nothing to invalidate on.
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::masks::MaskPlane;
+    use lumina_sidecar::{
+        ArtifactReference, CoordinateSystem, EditRecipe, Extras, GeometryFingerprint,
+        Preprocessing, Resolution, SourceFingerprint,
+    };
+    use std::collections::BTreeMap;
+
+    /// Deterministic test backend. `infer` always returns a uniform plane of
+    /// `value`, which lets a test distinguish a re-inferred plane from a
+    /// persisted one (a different `value`).
+    struct FakeInference {
+        available: bool,
+        value: u16,
+    }
+
+    impl MaskInference for FakeInference {
+        fn is_available(&self) -> bool {
+            self.available
+        }
+        fn infer(&self, _frame: &ImageFrame) -> Result<MaskPlane, CoreError> {
+            MaskPlane::new(4, 4, vec![self.value; 16]).map_err(|error| CoreError::MaskInference {
+                reason: error.to_string(),
+            })
+        }
+    }
+
+    const PERSISTED_VALUE: u16 = 32768;
+    const INFERRED_VALUE: u16 = 12345;
+
+    fn decode_context() -> DecodeFingerprint {
+        DecodeFingerprint {
+            decoder: "image".into(),
+            version: "1".into(),
+            parameters: BTreeMap::new(),
+            extras: Extras::new(),
+        }
+    }
+
+    fn model_identity() -> ModelIdentity {
+        ModelIdentity {
+            name: "BiRefNet".into(),
+            version: "1.0.0".into(),
+            hash: "h".into(),
+            extras: Extras::new(),
+        }
+    }
+
+    fn source_definition(
+        _copy_id: &str,
+        id: &str,
+        status: MaskStatus,
+        source_hash: &str,
+        model: ModelIdentity,
+        decode: DecodeFingerprint,
+        with_artifact: bool,
+    ) -> MaskDefinition {
+        MaskDefinition {
+            id: id.into(),
+            name: id.into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: source_hash.into(),
+                byte_length: 1,
+                extras: Extras::new(),
+            },
+            decode_context: decode,
+            geometry_context: GeometryFingerprint {
+                width: 4,
+                height: 4,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            model,
+            inference_resolution: Resolution {
+                width: 4,
+                height: 4,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "p".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status,
+            created_at: "now".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: with_artifact.then(|| ArtifactReference {
+                relative_path: "x.zdata".into(),
+                format: "lumina-zdata".into(),
+                checksum: "c".into(),
+                width: 4,
+                height: 4,
+                channels: "u16".into(),
+                data_version: "1".into(),
+                extras: Extras::new(),
+            }),
+            operation: MaskOperation::Source,
+            references: vec![],
+            extras: Extras::new(),
+        }
+    }
+
+    fn copy_with(copy_id: &str, definitions: Vec<MaskDefinition>) -> VirtualCopy {
+        VirtualCopy {
+            id: copy_id.into(),
+            name: copy_id.into(),
+            is_default: copy_id == "vc",
+            recipe: EditRecipe::default(),
+            mask_library: definitions,
+            mask_layers: vec![],
+            history: vec![],
+            export_records: vec![],
+            extras: Extras::new(),
+        }
+    }
+
+    fn layer_for(copy_id: &str, mask_id: &str) -> lumina_sidecar::MaskLayer {
+        use lumina_sidecar::MaskReference;
+        lumina_sidecar::MaskLayer {
+            id: format!("layer-{mask_id}"),
+            mask: MaskReference {
+                copy_id: copy_id.into(),
+                mask_id: mask_id.into(),
+                extras: Extras::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: Extras::new(),
+        }
+    }
+
+    fn frame() -> ImageFrame {
+        ImageFrame::new(4, 4, vec![100; 64]).unwrap()
+    }
+
+    /// Build a single active copy `vc` whose only layer references `subject`.
+    fn resolve_one(
+        definition: MaskDefinition,
+        loaded_plane: Option<u16>,
+        inference: Option<&dyn MaskInference>,
+        model_identity: Option<ModelIdentity>,
+        refresh: bool,
+        source_hash: &str,
+    ) -> Result<MaskLoadResult, CoreError> {
+        let mut copy = copy_with("vc", vec![definition]);
+        copy.mask_layers = vec![layer_for("vc", "subject")];
+        let loaded_planes = loaded_plane
+            .map(|value| {
+                BTreeMap::from([(
+                    ("vc".into(), "subject".into()),
+                    MaskPlane::new(4, 4, vec![value; 16]).unwrap(),
+                )])
+            })
+            .unwrap_or_default();
+        let model_ref = model_identity.as_ref();
+        resolve_mask_planes(
+            MaskLoadContext {
+                copies: &[copy],
+                active_copy_id: "vc",
+                source_hash,
+                decode_context: &decode_context(),
+                loaded_planes,
+                inference,
+                model_identity: model_ref,
+                refresh,
+                policy: MaskPolicy::Warn,
+            },
+            &frame(),
+        )
+    }
+
+    #[test]
+    fn valid_persisted_mask_is_preferred_without_reinference() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes.len(), 1);
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::LoadedPersisted);
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![PERSISTED_VALUE; 16]
+        );
+        assert!(!result.model_unavailable);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn refresh_forces_reinference_even_when_valid() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            true,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![INFERRED_VALUE; 16]
+        );
+    }
+
+    #[test]
+    fn stale_mask_is_reinferred_when_model_available() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Stale,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    #[test]
+    fn changed_source_is_reinferred_when_model_available() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "OLD-SRC",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        // Current source hash differs → persisted mask is not confirmable.
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "NEW-SRC",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    #[test]
+    fn changed_model_is_reinferred_when_available() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            // Persisted for a different model identity.
+            ModelIdentity {
+                name: "OldModel".into(),
+                version: "0.9".into(),
+                hash: "old".into(),
+                extras: Extras::new(),
+            },
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    #[test]
+    fn missing_persisted_plane_is_reinferred_when_model_available() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        // No loaded plane (artifact file missing) → re-infer.
+        let result = resolve_one(
+            definition,
+            None,
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    #[test]
+    fn model_unavailable_uses_cached_stale_mask_with_warning() {
+        // No model wired at all; a persisted (stale) plane exists.
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Stale,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result =
+            resolve_one(definition, Some(PERSISTED_VALUE), None, None, false, "src").unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::CachedUnavailable);
+        assert!(result.model_unavailable);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("model is unavailable"));
+        assert!(result.warnings[0].contains("stale"));
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![PERSISTED_VALUE; 16]
+        );
+    }
+
+    #[test]
+    fn model_unavailable_without_cache_is_a_hard_error() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Missing,
+            "src",
+            model_identity(),
+            decode_context(),
+            false,
+        );
+        // No model and no persisted plane → hard error, never a silent fallback.
+        let error = resolve_one(definition, None, None, None, false, "src").unwrap_err();
+        assert!(matches!(
+            error,
+            CoreError::MaskUnavailable {
+                ref copy_id,
+                ref mask_id,
+                ref status,
+            } if copy_id == "vc" && mask_id == "subject" && status == "model-unavailable"
+        ));
+    }
+
+    #[test]
+    fn model_unavailable_with_missing_plane_is_a_hard_error_even_if_status_valid() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        // Status says Valid, but the artifact cannot be loaded and no model is
+        // available. Validity cannot be confirmed → treated as missing → error.
+        let error = resolve_one(definition, None, None, None, false, "src").unwrap_err();
+        assert!(matches!(
+            error,
+            CoreError::MaskUnavailable {
+                ref status,
+                ..
+            } if status == "model-unavailable"
+        ));
+    }
+
+    #[test]
+    fn cross_copy_source_is_resolved() {
+        // Active copy `vc` references a source mask in `other`.
+        let source = source_definition(
+            "other",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let mut copy = copy_with("vc", vec![]);
+        copy.mask_layers = vec![layer_for("other", "subject")];
+        let other = copy_with("other", vec![source]);
+        let loaded_planes = BTreeMap::from([(
+            ("other".into(), "subject".into()),
+            MaskPlane::new(4, 4, vec![PERSISTED_VALUE; 16]).unwrap(),
+        )]);
+        let result = resolve_mask_planes(
+            MaskLoadContext {
+                copies: &[copy, other],
+                active_copy_id: "vc",
+                source_hash: "src",
+                decode_context: &decode_context(),
+                loaded_planes,
+                inference: Some(&FakeInference {
+                    available: true,
+                    value: INFERRED_VALUE,
+                }),
+                model_identity: Some(model_identity()).as_ref(),
+                refresh: false,
+                policy: MaskPolicy::Warn,
+            },
+            &frame(),
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::LoadedPersisted);
+        assert!(result
+            .planes
+            .contains_key(&("other".into(), "subject".into())));
+    }
+}

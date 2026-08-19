@@ -7,6 +7,7 @@
 
 use crate::OnnxError;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Channel layout of the model input tensor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +142,17 @@ impl ModelManifest {
     /// Validate the manifest (currently the capability invariant).
     pub fn validate(&self) -> Result<(), OnnxError> {
         self.capabilities.validate_for(&self.model_name)
+    }
+
+    /// Map this manifest's identity onto the sidecar [`ModelIdentity`] used by
+    /// the mask-loading decision layer (F-048 / F-051) for stale-detection.
+    pub fn to_model_identity(&self) -> lumina_sidecar::ModelIdentity {
+        lumina_sidecar::ModelIdentity {
+            name: self.model_name.clone(),
+            version: self.model_version.clone(),
+            hash: self.model_hash.clone(),
+            extras: BTreeMap::new(),
+        }
     }
 
     /// Serialize to JSON.

@@ -283,6 +283,26 @@ Liste); CLI und Renderpfad sind vollständig verdrahtet. Repair-Regionen werden
 im MVP 1:1 in Quellauflösung angewandt (keine Resampling-Semantik in F-042-N1);
 die Geometrie-Ausrichtung von Masken bleibt wie in F-042 dokumentiert offen.
 
+**Status (F-048 / F-051):** Über der bisherigen zdata-Tile-Auswertung liegt
+nun die intelligente Masken-Ladeentscheidung (`lumina-core::mask_loader`):
+`resolve_mask_planes` prüft für jede von der aktiven Kopie erreichbare
+Quell-Maske, ob ein **bestätigbar gültiges** persistiertes Artefakt vorliegt
+(Status `Valid`, Artefaktreferenz + geladene zdata-Ebene vorhanden,
+`source_fingerprint.content_hash`, `decode_context` und Modellidentität
+stimmen) — dann wird es ohne Re-Inferenz geladen. Ist es fehlend, veraltet
+(Quelle/Modell geändert) oder wird `--update-masks`/Refresh verlangt, erfolgt
+die Re-Inferenz über das injizierte `MaskInference`-Trait (StubBackend/BiRefNet).
+Eine Stale-Erkennung ist damit deterministisch und reproduzierbar; nie wird
+stillschweigend eine veraltete Maske serviert (kann Gültigkeit nicht bestätigt
+werden → gilt als fehlend). F-051: Ist kein Modell verfügbar, wird eine
+vorhandene (ggf. veraltete) Maske aus dem Cache genutzt und mit Warnung
+ausgegeben (`model_unavailable`); fehlt auch der Cache, ist dies ein harter
+Fehler (kein stiller Fallback). Die Entscheidung liegt vollständig in
+`lumina-core` und ist über `Option<&dyn MaskInference>` von `lumina-onnx`
+entkoppelt; die CLI reicht Warnungen/Fehler an `stderr`/`mask_warnings` durch.
+Offen bleiben die Persistenz der Re-Inferenz-Ergebnisse ins zdata-Bundle
+(siehe F-082) und die GUI-Capability-Anzeige.
+
 **Status (F-085, behaviorale Tests):** Behaviorale Tests decken die
 Wechselwirkung von Source-Actions mit Auto-WB, Auto-Tone und Exposure Matching
 ab: Die Reihenfolge SourceActions → Adjustments ist über differenzielle
