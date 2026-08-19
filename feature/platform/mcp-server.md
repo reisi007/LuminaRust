@@ -1,8 +1,9 @@
 # F-101 MCP AI-Agent-Schnittstelle
 
 **Feature:** F-101 MCP AI-Agent-Schnittstelle
-**Status:** Plan und Dokumentation (SOLL-Spezifikation), keine Implementierung
-**Letzter offener Punkt vor MVP-Erklärung**
+**Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, 8 Tools inkl.
+`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 17 Tests grün)
+**MVP-Erklärung:** letzter vor MVP offener Punkt ist geschlossen
 
 ## Inhaltsverzeichnis
 
@@ -267,7 +268,7 @@ für den AI-Agent-Feedback-Loop.
   ein Fluchtweg, kein Ersatz für den regulären Cache.
 - Rendering nutzt den bestehenden `render_frame`-Einstiegspunkt mit
   reduzierter Ausgabegröße: Das volle Bild wird gerendert und danach
-  auf `max_width` herunterskaliert (Bicubic-Resampling). Ein
+  auf `max_width` herunterskaliert (bilineares Downscaling). Ein
   Pipeline-Split (niedrige Auflösung als eigene Stufe) ist bewusst
   nicht vorgesehen, um die Pipeline-Validierung nicht zu komplex zu
   machen.

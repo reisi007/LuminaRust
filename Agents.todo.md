@@ -10,6 +10,12 @@ keine dauerhafte Liste abgehakter Aufgaben.
 Offene Arbeit und Abgrenzung — verifiziert abgeschlossene Aufgaben sind aus
 dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 
+- **LIZ-ENTSCHEIDUNG** Projektlizenz ist **offen**: Projekt ist aktuell
+  kommerziell (kein Open-Source-License) und die Lizenz wird **zur
+  MVP-Erklärung** festgelegt. Alle 7 Workspace-Crates tragen bewusst **kein**
+  `license`-Feld, keine `LICENSE`-Datei im Repo. Die provisorische MIT-Annahme
+  (historisch) wurde aus der Git-Historie entfernt. Optionen zur MVP-Entscheidung:
+  MIT / Apache-2.0 / Dual MIT+Apache-2.0 / MPL-2.0 / proprietär.
 - **F-036-N1** verifiziert erledigt und entfernt (As-Shot-WB-Kontext,
   Commit folgt); F-042 baut darauf auf.
 - **F-042** verifiziert erledigt und entfernt (gemeinsamer Render-Einstiegspunkt
@@ -222,8 +228,6 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-049** Masken-Invertierung, Feathering, Blur und lokale Anpassungen
-  nicht-destruktiv in der Pipeline anwenden.
 - [ ] **F-050** Tests für fehlende Artefakte, Modellwechsel, Quelländerung,
   falsche Prüfsumme und erneute Inferenz schreiben.
 - [ ] **F-079** Promptfähige Maskenquellen für Box, Pinsel, Polygon, Ellipse und
@@ -239,11 +243,12 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 (alle CLI/Batch-Punkte umgesetzt und verifiziert — 2026-08-17)
 
-- [ ] **F-101** MCP AI-Agent-Schnittstelle: Headless-Terminal-Server über
-  das Model Context Protocol, der AI-Agenten programmatischen Zugriff auf
-  LuminaRust-Bearbeitungen ermöglicht. Plan und Dokumentation, keine
-  Implementierung vor Klärung des SOLL-Zustands. **Letzter offener Punkt
-  vor MVP-Erklärung.**
+- [x] **F-101** MCP AI-Agent-Schnittstelle: umgesetzt und verifiziert
+  (`lumina-mcp` Crate, 8 Tools inkl. `lumina_analyze`, Agent-Skill
+  `docs/skills/lumina.md`; SOLL in `feature/platform/mcp-server.md`).
+  **Damit ist der letzte vor MVP offene Punkt geschlossen.**
+  Erweiterte CLI-Tools (`import`/`batch`/`reindex`/`dust_removal`) und
+  `lumina mcp` als CLI-Subcommand sind bewusst als Folgeauftrag offen.
 
   **Ziel:** Ein AI-Agent (z. B. Claude, Codex, lokales LLM mit
   MCP-Client) soll Bilddateien laden, Rezeptparameter ändern, Sidecars

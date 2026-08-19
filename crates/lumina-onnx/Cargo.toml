@@ -3,7 +3,6 @@ name = "lumina-onnx"
 version = "0.1.0"
 edition = "2021"
 description = "Native ONNX inference adapter for Lumina (BiRefNet subject model + exchangeable backend)"
-license = "MIT"
 publish = false
 
 [dependencies]

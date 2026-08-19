@@ -85,6 +85,9 @@ Sidecars vollständig wiederherstellbar sein.
 - [performance-benchmarks.md](quality/performance-benchmarks.md):
   Performance-Methodik, Benchmark-Klassen, Baselines, Budgets und
   semi-automatische Regressionserkennung (F-074)
+- [fixtures-licensing.md](quality/fixtures-licensing.md):
+  Fixture-Inventar, Modell- und Abhängigkeitslizenzen, Distributionsaudit und
+  Versionierungs-Policy (F-073, F-078)
 
 ## Feature-Matrix
 
