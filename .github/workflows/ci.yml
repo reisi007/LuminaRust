@@ -89,6 +89,60 @@ jobs:
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
 
+  bench:
+    name: Benchmarks (optional)
+    needs: detect
+    # Optional, NON-BLOCKING performance reporting. Core/Pipeline and Batch
+    # benchmarks are pure-Rust (deterministic synthetic fixtures); the LibRaw
+    # decode benches stay env-gated out of this fast set (see F-074 spec:
+    # "Decode ... gehören nicht in das schnelle CI-Set"). Runs the same
+    # pinned-LibRaw container as the rust job for environment consistency.
+    # CI uses compare.mjs --mode warn ONLY (never the hard gate), so noisy
+    # runners can never fail a merge. Budgets carry gate:true for a controlled
+    # local gate on the capture machine, but CI deliberately does not enforce
+    # it (CI-Runner-Rauschen-Regel). Bench steps are continue-on-error so the
+    # job never breaks the main merge checks.
+    if: needs.detect.outputs.has_cargo == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run benchmarks (release, modest sampling)
+        continue-on-error: true
+        run: cargo bench -p lumina-bench -- --sample-size 50 --warm-up-time 2
+
+      - name: Compare against baseline (warn mode, non-blocking)
+        continue-on-error: true
+        run: node scripts/perf/compare.mjs --mode warn --report-dir perf/results
+
+      - name: Upload performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: perf/results/
+          if-no-files-found: warn
+
   wasm:
     name: WASM checks
     needs: detect

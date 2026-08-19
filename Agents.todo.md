@@ -97,20 +97,32 @@ Commit wie das Feature behandelt.
 - [ ] **F-074-N3** Erste echte Benchmarks für die definierten Klassen
   (Core/Pipeline, Decode, Cache-Hit, Batch-Export) mit deterministischen
   synthetischen Fixtures und RAW-Gating über `LUMINA_RAW_FIXTURE`;
-  Baseline erfassen (`perf/baseline.json`).
-- [ ] **F-074-N4** Baseline-Analyse: Anteil je Pipeline-Stufe und Hotspots
-  messen, priorisierte Performance-Feature-IDs als neue offene Aufgaben
-  ableiten (Kopplung F-043 Korrektheit, F-075 Speicherbudgets).
-- [ ] **F-074-N5** Regression-Gate: Budgets für stabile Benchmarks kalibrieren
-  (`gate: true`), CI-`bench`-Job mit Report-Artefakt und gating-Subset;
-  Feature-Wachstums-Budget-Updates im selben Commit wie das Feature begründen.
+  Baseline erfassen (`perf/baseline.json`). (Implementiert; unabhängige
+  Verifizierung ausstehend — blockiert bis `lumina-sidecar` wieder kompiliert.)
+- [ ] **F-074-A1** Hotspot-Optimierung: `apply_recipe_with_white_balance`-
+  Adjustments-Kernel (WB + pro-Pixel-Regler) beschleunigen — ~91 % von
+  `render_frame` (interaktiver Pfad).
+- [ ] **F-074-A2** `decode/raw`-Durchsatz verbessern (LibRaw-Overhead,
+  Decode/Upload-Überlappung, Decodepuffer-Cache) — ~3,0–3,4× `render_frame`.
+- [ ] **F-074-A3** Auto-Tone-/Exposure-Match-Analyse-Kernel optimieren
+  (geteilte Histogramm/Perzentil-Statistik) — ~64 % von `render_frame`.
+- [ ] **F-074-A4** PNG-Export-Encode-Durchsatz verbessern (Δ `batch` −
+  `render_frame`) — ~56 % von `render_frame` / ~36 % von `batch`.
 
 Verifiziert erledigt und entfernt: **F-074-N1** (Methodik-SOLL-Dokument,
 ADR 0003, README-Matrix/-Link, decisions.md, ADR-Index — unabhängig
 verifiziert 2026-08-19) und **F-074-N2** (Setup-Gerüst ohne Messungen:
 `lumina-bench`-Workspace-Member, Konventionen, leere Baseline-/Budget-Stores,
 `compare.mjs`-Gerüst, CI-Kompilierbarkeits-Check — unabhängig verifiziert
-2026-08-19, keine Benchmarks/Timing). Aufsetzender Stand: N3…N5 offen.
+2026-08-19, keine Benchmarks/Timing). **F-074-N4** (Baseline-Analyse:
+Kostenverteilung je Pipeline-Stufe, Hotspot `apply_recipe` ~91 %, abgeleitete
+Performance-IDs F-074-A1…A4 — unabhängig verifiziert 2026-08-19) und
+**F-074-N5** (`scripts/perf/compare.mjs` report/warn/gate mit korrekten
+Exit-Codes, 30 deterministische `gate: true`-Benchmarks, optionaler nicht-
+blockierender CI-`bench`-Job im `warn`-Modus — unabhängig verifiziert
+2026-08-19). Aufsetzender Stand: N3 implementiert (unabhängige Verifizierung
+ausstehend, bis `lumina-sidecar` wieder kompiliert), A1…A4 als neue offene
+Hotspot-Tasks abgeleitet.
 
 ## Phase 0: Zielzustand und Architektur
 

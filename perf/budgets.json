@@ -1,4 +1,229 @@
 {
   "schema_version": 1,
-  "budgets": []
+  "budgets": [
+    {
+      "id": "core/render_frame__512",
+      "budget_ns": 14154444,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 7077222 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/render_frame__1024",
+      "budget_ns": 55108522,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 27554261 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/render_frame__2048",
+      "budget_ns": 213330084,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 106665042 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/apply_recipe_with_white_balance__512",
+      "budget_ns": 12930870,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6465435 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/apply_recipe_with_white_balance__1024",
+      "budget_ns": 50275938,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 25137969 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/apply_recipe_with_white_balance__2048",
+      "budget_ns": 194894708,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 97447354 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/mask_graph_eval__512",
+      "budget_ns": 13666,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6833 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/mask_graph_eval__1024",
+      "budget_ns": 48556,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 24278 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/mask_graph_eval__2048",
+      "budget_ns": 211542,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 105771 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/analyze_tone__512",
+      "budget_ns": 6670702,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 3335351 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/analyze_tone__1024",
+      "budget_ns": 32561666,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 16280833 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/analyze_tone__2048",
+      "budget_ns": 137967084,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 68983542 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/suggest_auto_tone__512",
+      "budget_ns": 6672092,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 3336046 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/suggest_auto_tone__1024",
+      "budget_ns": 32495904,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 16247952 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/suggest_auto_tone__2048",
+      "budget_ns": 137399210,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 68699605 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/match_total_exposure__512",
+      "budget_ns": 6684126,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 3342063 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/match_total_exposure__1024",
+      "budget_ns": 32695612,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 16347806 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/match_total_exposure__2048",
+      "budget_ns": 137424376,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 68712188 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/histogram__512",
+      "budget_ns": 353688,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 176844 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/histogram__1024",
+      "budget_ns": 1488666,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 744333 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/histogram__2048",
+      "budget_ns": 5524462,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 2762231 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_hit__512",
+      "budget_ns": 18,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 9 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_hit__1024",
+      "budget_ns": 18,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 9 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_hit__2048",
+      "budget_ns": 16,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 8 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_miss__512",
+      "budget_ns": 12,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_miss__1024",
+      "budget_ns": 12,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_miss__2048",
+      "budget_ns": 12,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "batch/render_export_png__512",
+      "budget_ns": 20002958,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 10001479 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "batch/render_export_png__1024",
+      "budget_ns": 83501522,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 41750761 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "batch/render_export_png__2048",
+      "budget_ns": 333542042,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 166771021 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "decode/raw__aircraft-landscape",
+      "budget_ns": 643784500,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "Env-gated decode benchmark; non-deterministic across machines and CI runners (LibRaw decode + fixture I/O, thermals). Kept gate:false to avoid false regressions on noisy runners; decode regression is tracked via report/warn only (see F-074-A2)."
+    },
+    {
+      "id": "decode/raw__aircraft-portrait",
+      "budget_ns": 721075666,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "Env-gated decode benchmark; non-deterministic across machines and CI runners (LibRaw decode + fixture I/O, thermals). Kept gate:false to avoid false regressions on noisy runners; decode regression is tracked via report/warn only (see F-074-A2)."
+    }
+  ]
 }
