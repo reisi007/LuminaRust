@@ -331,6 +331,23 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
   **Feature-Dokument (SOLL):** `feature/platform/mcp-server.md`
   (anzulegen vor Implementierungsbeginn).
 
+  **Erweiterter MVP-Scope (2026-08-19):**
+
+  - **Volle CLI-Abdeckung:** Jeder `lumina`-CLI-Befehl wird ein MCP-Tool
+    (`lumina_import`, `lumina_batch`, `lumina_reindex`,
+    `lumina_dust_removal` u.a.). Die ursprünglichen 7 Tools sind die
+    Mindestausstattung.
+  - **Vision-fähiger Agent:** `lumina_preview` liefert den Pfad zur
+    gerenderten Vorschau; ein vision-fähiger Agent kann das Bild direkt
+    analysieren. Zusätzlich: `lumina_analyze` liefert strukturierte
+    Bilddaten (Histogramm, Farbstatistiken) als JSON für Agents ohne
+    Vision-Fähigkeit.
+  - **Agent-Skill:** Ein OpenCode-Skill (`lumina.md`), der AI-Agenten
+    beibringt, wie sie mit LuminaRust arbeiten (Sidecar-Philosophie,
+    MCP-Tool-Referenz, Workflows, Best Practices).
+  - **Namensfindung:** Finale Produktname vor MVP-Release festlegen.
+    Brainstorm: `docs/naming-brainstorm.md`.
+
   **Status:** Plan und Dokumentation only. Keine Implementierung bis
   zum SOLL-Review.
 
