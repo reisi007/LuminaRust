@@ -1,0 +1,17 @@
+[package]
+name = "lumina-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP (Model Context Protocol) server exposing LuminaRust editing as agent tools"
+publish = false
+
+[dependencies]
+lumina-core = { path = "../lumina-core" }
+lumina-sidecar = { path = "../lumina-sidecar" }
+lumina-raw = { path = "../lumina-raw" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1959,6 +1959,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-mcp"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "lumina-core",
+ "lumina-raw",
+ "lumina-sidecar",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "lumina-onnx"
 version = "0.1.0"
 dependencies = [
