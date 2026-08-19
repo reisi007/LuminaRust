@@ -250,10 +250,13 @@ Graph-Operationen Union/Intersect/Subtract/Invert), Artefakt-Quelle je
 `MaskDefinition.status` nur bei `Valid`, sonst Meldung. Gültige Ebenen werden
 auf die aktuellen Framedimensionen bilinear resampelt; die Koordinaten-
 ausrichtung zwischen Maske und Frame ist eine dokumentierte Grenze
-(`geometry_context` wird noch nicht zur Ausrichtung genutzt). Pixel-Modulation
-durch lokale Anpassungen sowie die invert/feather/blur/density-Verarbeitung
-sind F-049 (`MaskLayer` hat keine lokalen Anpassungsfelder); F-042 liefert die
-effektiven Ebenen im Render-Ergebnis für F-049. **MaskPolicy:** `Strict`
+(`geometry_context` wird noch nicht zur Ausrichtung genutzt). Die
+invert/feather/blur/density-Pixel-Modulation ist mit F-049 umgesetzt:
+`MaskLayer` trägt `inverted`/`feather`/`blur`/`density`, und
+`modulate_mask_plane` (`crates/lumina-core/src/mask_modulation.rs`) wendet sie in
+`evaluate_layer` (nach Resample, vor Rückgabe) in der Reihenfolge
+invert → feather → blur → density an. F-042 liefert die effektiven Ebenen im
+Render-Ergebnis. **MaskPolicy:** `Strict`
 (fehlendes/ungültiges Artefakt → Renderfehler) vs. `Warn` (Layer wird
 übersprungen, Status im Ergebnis, Render läuft weiter — entspricht der
 Konfliktmatrix „Export trotzdem erlauben").
@@ -273,8 +276,8 @@ die Masken-Evaluierung und -Validierung mit `MaskPolicy`, die
 CLI-/GUI-Verdrahtung (zdata-Planes, Warnungen) sowie F-042-N1 (Persistenz als
 Rezeptoperation `source_actions`, zdata-Artefaktformat für Repair-Regionen und
 CLI-Command `dust-removal`; die CLI löst die Aktionen beim Rendern aus dem
-Bundle auf). Offen bleiben F-049 (Pixel-Modulation durch lokale Anpassungen) und
-die Geometrie-Ausrichtung von Masken. Der Matching-Messbereich nach Crop/Masken
+Bundle auf). Umgesetzt ist F-049 (Pixel-Modulation invert/feather/blur/density);
+offen bleibt die Geometrie-Ausrichtung von Masken. Der Matching-Messbereich nach Crop/Masken
 ist mit F-041 umgesetzt (siehe „Exposure Matching").
 
 **Restgrenze (ehrlich):** Die GUI reicht Source-Actions beim Rendern bisher
@@ -670,11 +673,10 @@ Auch dieser Fall delegiert bit-exakt an den ungemaskten Pfad
 (All-MAX-Fast-Path, siehe Status F-043) — dokumentierter Fast-Path, kein
 stiller Fallback.
 
-**Grenzen (ehrlich):** Lokale Anpassungen und die visuelle Pixel-Modulation
-durch Masken folgen mit F-049; bis dahin definiert F-041 die
-Messbereichs-Semantik (Gewichte = Schnittmenge der Ebenen), die ab F-049 mit
-der sichtbaren Modulation übereinstimmt. Die Geometrie-Ausrichtung von Masken
-bleibt dokumentierte Grenze (F-042).
+**Grenzen (ehrlich):** Die visuelle Pixel-Modulation durch Masken ist mit
+F-049 umgesetzt und stimmt mit der F-041-Messbereichs-Semantik überein
+(Gewichte = Schnittmenge der Ebenen). Offen bleibt die Geometrie-Ausrichtung
+von Masken (dokumentierte Grenze, F-042).
 
 **Schutz:** Epsilon-, Clipping-, finite- und Fallback-Schutz der bisherigen
 Implementierung bleiben erhalten (Epsilon `1e-6`, Begrenzung `-10..=10` EV,
@@ -694,8 +696,8 @@ Ebenen aus `render_output.mask_layers`; die GUI misst die gerenderte Vorschau
 mit den Masken-Ebenen des letzten Renderings (wasm32: leeres Slice,
 dokumentierter Post-MVP-Zustand). `match_total_exposure` bleibt in Signatur
 und Verhalten unverändert (interne Delegation auf die gemeinsame
-Delta-Logik). Offen ist F-049 (Pixel-Modulation durch lokale Anpassungen);
-F-042-N1 (Source-Actions-Persistenz) ist umgesetzt.
+Delta-Logik). F-049 (Pixel-Modulation invert/feather/blur/density) und
+F-042-N1 (Source-Actions-Persistenz) sind umgesetzt und verifiziert.
 
 **All-MAX-Fast-Path (F-043, Semantik-Hinweis):** Liegen Masken-Layer vor,
 deren **jede** Ebene vollständig `u16::MAX` ist (jedes Pixelgewicht exakt

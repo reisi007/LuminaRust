@@ -143,6 +143,16 @@ Masken-Layer-Daten gespeichert. Sie werden nicht in die Quellmatte gebrannt.
 So kann dieselbe Matte in mehreren virtuellen Kopien unterschiedlich genutzt
 werden.
 
+**Implementierungsstatus (F-049, umgesetzt und verifiziert):** Die Modulation
+wird nicht-destruktiv in `crates/lumina-core/src/mask_modulation.rs`
+(`modulate_mask_plane`) angewendet und in `evaluate_layer` (nach bilinearem
+Resample, vor Rückgabe) aufgerufen. Reihenfolge: `invert` (`u16::MAX - value`)
+→ `feather` (Box-Blur, Radius `feather·max(w,h)/2`) → `blur` (Box-Blur, Radius
+`blur·max(w,h)/4`) → `density` (Skalierung mit `density`, nur für `< 1.0`).
+Jede Stufe ist bei ihrem Identitätswert ein No-op; die Modulation verändert die
+persistierte Maske nicht. 9 Unit-Tests sichern Invert/Feather/Blur/Density und
+die Reihenfolge ab.
+
 ## Implementierungsstatus (F-047 / F-080)
 
 **Stand 2026-08-19 (F-047 Adapter-Crate `lumina-onnx` implementiert):**
