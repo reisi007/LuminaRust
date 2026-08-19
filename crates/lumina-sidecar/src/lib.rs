@@ -13,10 +13,18 @@ use thiserror::Error;
 #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 mod zdata;
 #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
-pub use zdata::{load_zdata, save_zdata, zdata_path_for, MaskTile, ZDataContainer, ZDataError};
+pub use zdata::{
+    append_repair_region, load_zdata, save_zdata, zdata_path_for, MaskTile, RecordKind,
+    RepairRegionArtifact, ZDataContainer, ZDataError,
+};
 
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
+
+/// F-042-N1: current schema version for a persisted source-action spec. This is
+/// independent of `SCHEMA_VERSION`; an unknown source-action `version` is
+/// rejected during validation rather than silently ignored.
+pub const SOURCE_ACTION_VERSION: u16 = 1;
 pub const MAX_SIDECAR_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_VIRTUAL_COPIES: usize = 10_000;
 pub type Extras = BTreeMap<String, Value>;
@@ -91,6 +99,40 @@ pub struct ArtifactReference {
     pub data_version: String,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
+}
+
+/// F-042-N1: reference to a repair-region artifact stored in the sidecar's
+/// `.lumina.zdata` bundle. `id` is the record id inside the bundle,
+/// `relative_path` is the portable (never absolute) bundle file name, and
+/// `checksum` is the BLAKE3 checksum of the artifact bytes. The existing
+/// `ArtifactReference` is intentionally *not* reused here: it has no record
+/// `id` field and carries mask-specific metadata (`channels`, `data_version`)
+/// that a repair region does not need.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceActionArtifactRef {
+    pub id: String,
+    pub relative_path: String,
+    pub checksum: String,
+}
+
+/// F-042-N1: the kind of a persisted source action. Mirrors the core
+/// `SourceAction` enum (`DustRemoval` | `AiReplacement`) at the recipe level so
+/// the persisted spec and the runtime artifact stay aligned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceActionKind {
+    DustRemoval,
+    AiReplacement,
+}
+
+/// F-042-N1: a persisted source-action recipe operation. This is an additive
+/// pre-MVP schema field: an absent `source_actions` key is interpreted as an
+/// empty list, requires no migration and does not change `schema_version`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceActionSpec {
+    pub version: u16,
+    pub kind: SourceActionKind,
+    pub artifact: SourceActionArtifactRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,6 +253,10 @@ pub struct EditRecipe {
     pub lens_correction: Option<LensCorrection>,
     /// Optional F-099 perspective model, additive in schema v2.
     pub perspective: Option<Perspective>,
+    /// Optional F-042-N1 source-action recipe operations (dust removal, AI
+    /// replacement). Additive in schema v2; absent is the empty list and
+    /// requires no migration.
+    pub source_actions: Vec<SourceActionSpec>,
     pub options: BTreeMap<String, String>,
     pub auto_features: AutoFeatures,
     pub extras: Extras,
@@ -287,6 +333,15 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(perspective).map_err(serde::ser::Error::custom)?,
             );
         }
+        // F-042-N1: `source_actions` is a top-level additive key (consistent
+        // with `geometry`/`lens_correction`/`perspective`), skipped entirely
+        // when empty so legacy documents without the key deserialize as empty.
+        if !self.source_actions.is_empty() {
+            root.insert(
+                "source_actions".into(),
+                serde_json::to_value(&self.source_actions).map_err(serde::ser::Error::custom)?,
+            );
+        }
         root.insert("adjustments".into(), Value::Object(adjustment));
         root.insert(
             "options".into(),
@@ -335,6 +390,13 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
+        // F-042-N1: an absent `source_actions` key is the empty list.
+        let source_actions = root
+            .remove("source_actions")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
         if let Some(Value::Object(mut object)) = root.remove("adjustments") {
             if let Some(value) = object.remove("curves") {
                 curves = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
@@ -387,6 +449,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             geometry,
             lens_correction,
             perspective,
+            source_actions,
             options,
             auto_features,
             extras: root.into_iter().collect(),
@@ -589,6 +652,7 @@ impl Default for EditRecipe {
             geometry: None,
             lens_correction: None,
             perspective: None,
+            source_actions: Vec::new(),
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),
@@ -1363,6 +1427,12 @@ fn validate_artifact(a: &ArtifactReference) -> Result<(), SidecarError> {
     validate_name("artifact data_version", &a.data_version)
 }
 
+fn validate_source_action_ref(a: &SourceActionArtifactRef) -> Result<(), SidecarError> {
+    validate_name("source_action id", &a.id)?;
+    validate_relative_path("source_action relative_path", &a.relative_path)?;
+    validate_name("source_action checksum", &a.checksum)
+}
+
 fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     for (name, value) in &a.adjustments {
         let (lo, hi) = match name.as_str() {
@@ -1544,6 +1614,12 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    for action in &a.source_actions {
+        if action.version != SOURCE_ACTION_VERSION {
+            return invalid("unsupported source_action version");
+        }
+        validate_source_action_ref(&action.artifact)?;
+    }
     Ok(())
 }
 fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
@@ -1708,6 +1784,7 @@ mod tests {
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
+                source_actions: Vec::new(),
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
@@ -1740,6 +1817,7 @@ mod tests {
                     geometry: None,
                     lens_correction: None,
                     perspective: None,
+                    source_actions: Vec::new(),
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
@@ -1771,6 +1849,7 @@ mod tests {
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
+                source_actions: Vec::new(),
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
@@ -2733,5 +2812,111 @@ mod tests {
             .unwrap()
             .ca_red = Some(f32::NAN);
         assert!(d.validate().is_err());
+    }
+
+    // ---- F-042-N1: source_actions recipe schema field ----
+
+    fn source_action_spec(version: u16, kind: SourceActionKind) -> SourceActionSpec {
+        SourceActionSpec {
+            version,
+            kind,
+            artifact: SourceActionArtifactRef {
+                id: "repair-1".into(),
+                relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+                checksum: "blake3:abc".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn source_actions_empty_list_roundtrips_and_is_absent_when_empty() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.source_actions = vec![];
+        let json = d.to_json().unwrap();
+        assert!(!json.contains("source_actions"));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert!(decoded.virtual_copies[0].recipe.source_actions.is_empty());
+    }
+
+    #[test]
+    fn source_actions_non_empty_roundtrip_preserves_fields() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.source_actions = vec![source_action_spec(
+            SOURCE_ACTION_VERSION,
+            SourceActionKind::DustRemoval,
+        )];
+        let json = d.to_json().unwrap();
+        assert!(json.contains("source_actions"));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.source_actions,
+            vec![source_action_spec(
+                SOURCE_ACTION_VERSION,
+                SourceActionKind::DustRemoval
+            )]
+        );
+    }
+
+    #[test]
+    fn source_actions_absent_key_is_empty_list() {
+        let json = r#"{"format":"lumina-sidecar","schema_version":2,"source":{"relative_name":"x","content_hash":"h","byte_length":1,"raw_format":"PNG","orientation":1,"decode_fingerprint":{"decoder":"d","version":"1","parameters":{}},"geometry_fingerprint":{"width":1,"height":1,"orientation":1,"pixel_aspect_ratio":1.0}},"pipeline_version":"p","presets":[],"virtual_copies":[{"id":"vc-original","name":"Original","is_default":true,"recipe":{},"mask_library":[],"mask_layers":[],"history":[],"export_records":[]}]}"#;
+        let doc = SidecarDocument::from_json(json).unwrap();
+        assert!(doc.virtual_copies[0].recipe.source_actions.is_empty());
+    }
+
+    #[test]
+    fn source_actions_unknown_kind_is_rejected() {
+        let json = r#"{"version":1,"kind":"explode","artifact":{"id":"r","relative_path":"a.zdata","checksum":"c"}}"#;
+        assert!(serde_json::from_str::<SourceActionSpec>(json).is_err());
+    }
+
+    #[test]
+    fn source_actions_bad_version_is_rejected() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.source_actions =
+            vec![source_action_spec(99, SourceActionKind::DustRemoval)];
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn source_actions_bad_artifact_ref_is_rejected() {
+        // empty id
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.source_actions = vec![SourceActionSpec {
+            version: SOURCE_ACTION_VERSION,
+            kind: SourceActionKind::AiReplacement,
+            artifact: SourceActionArtifactRef {
+                id: String::new(),
+                relative_path: "a.zdata".into(),
+                checksum: "c".into(),
+            },
+        }];
+        assert!(d.validate().is_err());
+
+        // absolute relative_path
+        let mut d2 = SidecarDocument::new(source(), "pipeline-1");
+        d2.virtual_copies[0].recipe.source_actions = vec![SourceActionSpec {
+            version: SOURCE_ACTION_VERSION,
+            kind: SourceActionKind::DustRemoval,
+            artifact: SourceActionArtifactRef {
+                id: "r".into(),
+                relative_path: "/abs/a.zdata".into(),
+                checksum: "c".into(),
+            },
+        }];
+        assert!(d2.validate().is_err());
+
+        // empty checksum
+        let mut d3 = SidecarDocument::new(source(), "pipeline-1");
+        d3.virtual_copies[0].recipe.source_actions = vec![SourceActionSpec {
+            version: SOURCE_ACTION_VERSION,
+            kind: SourceActionKind::DustRemoval,
+            artifact: SourceActionArtifactRef {
+                id: "r".into(),
+                relative_path: "a.zdata".into(),
+                checksum: String::new(),
+            },
+        }];
+        assert!(d3.validate().is_err());
     }
 }

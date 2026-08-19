@@ -1,5 +1,205 @@
 {
   "schema_version": 1,
-  "environment": null,
-  "benchmarks": []
+  "environment": {
+    "host": "MacBook-Pro-von-Florian.local",
+    "os": "Darwin",
+    "arch": "arm64",
+    "rustc": "1.97.1",
+    "libraw": "0.22.2",
+    "recorded_at": "2026-08-19T15:19:34.477Z"
+  },
+  "benchmarks": [
+    {
+      "id": "core/render_frame__512",
+      "median_ns": 7077222,
+      "p95_ns": 7554315,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame__1024",
+      "median_ns": 27554261,
+      "p95_ns": 27760244,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame__2048",
+      "median_ns": 106665042,
+      "p95_ns": 107577388,
+      "unit": "ns"
+    },
+    {
+      "id": "core/apply_recipe_with_white_balance__512",
+      "median_ns": 6465435,
+      "p95_ns": 10247067,
+      "unit": "ns"
+    },
+    {
+      "id": "core/apply_recipe_with_white_balance__1024",
+      "median_ns": 25137969,
+      "p95_ns": 25508409,
+      "unit": "ns"
+    },
+    {
+      "id": "core/apply_recipe_with_white_balance__2048",
+      "median_ns": 97447354,
+      "p95_ns": 98060919,
+      "unit": "ns"
+    },
+    {
+      "id": "core/mask_graph_eval__512",
+      "median_ns": 6833,
+      "p95_ns": 7780,
+      "unit": "ns"
+    },
+    {
+      "id": "core/mask_graph_eval__1024",
+      "median_ns": 24278,
+      "p95_ns": 24653,
+      "unit": "ns"
+    },
+    {
+      "id": "core/mask_graph_eval__2048",
+      "median_ns": 105771,
+      "p95_ns": 118092,
+      "unit": "ns"
+    },
+    {
+      "id": "core/analyze_tone__512",
+      "median_ns": 3335351,
+      "p95_ns": 3568090,
+      "unit": "ns"
+    },
+    {
+      "id": "core/analyze_tone__1024",
+      "median_ns": 16280833,
+      "p95_ns": 16784084,
+      "unit": "ns"
+    },
+    {
+      "id": "core/analyze_tone__2048",
+      "median_ns": 68983542,
+      "p95_ns": 71546071,
+      "unit": "ns"
+    },
+    {
+      "id": "core/suggest_auto_tone__512",
+      "median_ns": 3336046,
+      "p95_ns": 3379502,
+      "unit": "ns"
+    },
+    {
+      "id": "core/suggest_auto_tone__1024",
+      "median_ns": 16247952,
+      "p95_ns": 16416525,
+      "unit": "ns"
+    },
+    {
+      "id": "core/suggest_auto_tone__2048",
+      "median_ns": 68699605,
+      "p95_ns": 70052638,
+      "unit": "ns"
+    },
+    {
+      "id": "core/match_total_exposure__512",
+      "median_ns": 3342063,
+      "p95_ns": 3421564,
+      "unit": "ns"
+    },
+    {
+      "id": "core/match_total_exposure__1024",
+      "median_ns": 16347806,
+      "p95_ns": 16594903,
+      "unit": "ns"
+    },
+    {
+      "id": "core/match_total_exposure__2048",
+      "median_ns": 68712188,
+      "p95_ns": 69378809,
+      "unit": "ns"
+    },
+    {
+      "id": "core/histogram__512",
+      "median_ns": 176844,
+      "p95_ns": 177426,
+      "unit": "ns"
+    },
+    {
+      "id": "core/histogram__1024",
+      "median_ns": 744333,
+      "p95_ns": 888385,
+      "unit": "ns"
+    },
+    {
+      "id": "core/histogram__2048",
+      "median_ns": 2762231,
+      "p95_ns": 2795143,
+      "unit": "ns"
+    },
+    {
+      "id": "core/cache_hit__512",
+      "median_ns": 9,
+      "p95_ns": 9,
+      "unit": "ns"
+    },
+    {
+      "id": "core/cache_hit__1024",
+      "median_ns": 9,
+      "p95_ns": 9,
+      "unit": "ns"
+    },
+    {
+      "id": "core/cache_hit__2048",
+      "median_ns": 8,
+      "p95_ns": 8,
+      "unit": "ns"
+    },
+    {
+      "id": "core/cache_miss__512",
+      "median_ns": 6,
+      "p95_ns": 6,
+      "unit": "ns"
+    },
+    {
+      "id": "core/cache_miss__1024",
+      "median_ns": 6,
+      "p95_ns": 6,
+      "unit": "ns"
+    },
+    {
+      "id": "core/cache_miss__2048",
+      "median_ns": 6,
+      "p95_ns": 6,
+      "unit": "ns"
+    },
+    {
+      "id": "batch/render_export_png__512",
+      "median_ns": 10001479,
+      "p95_ns": 10224169,
+      "unit": "ns"
+    },
+    {
+      "id": "batch/render_export_png__1024",
+      "median_ns": 41750761,
+      "p95_ns": 42546072,
+      "unit": "ns"
+    },
+    {
+      "id": "batch/render_export_png__2048",
+      "median_ns": 166771021,
+      "p95_ns": 180583733,
+      "unit": "ns"
+    },
+    {
+      "id": "decode/raw__aircraft-landscape",
+      "median_ns": 321892250,
+      "p95_ns": 396411623,
+      "unit": "ns"
+    },
+    {
+      "id": "decode/raw__aircraft-portrait",
+      "median_ns": 360537833,
+      "p95_ns": 363204679,
+      "unit": "ns"
+    }
+  ]
 }

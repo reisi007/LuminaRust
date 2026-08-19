@@ -143,6 +143,41 @@ Masken-Layer-Daten gespeichert. Sie werden nicht in die Quellmatte gebrannt.
 So kann dieselbe Matte in mehreren virtuellen Kopien unterschiedlich genutzt
 werden.
 
+## Implementierungsstatus (F-047 / F-080)
+
+**Stand 2026-08-19 (F-047 Adapter-Crate `lumina-onnx` implementiert):**
+
+- Der austauschbare ONNX-Adapter existiert als native-only-Crate `lumina-onnx`
+  (spiegelt `lumina-raw`, nie im WASM-Build). Er entlastet `lumina-core` und
+  kapselt native Inferenz, Modellverwaltung und Maskenartefakte.
+- `ModelManifest` (serde) trägt Modellname, -version, -hash, Lizenz,
+  Eingabespezifikation (Auflösung, Kanal-Layout, Tensorname/-format) und
+  `ModelCapabilities`.
+- `ModelCapabilities` (F-080) bildet `box_prompt`, `point_prompt`,
+  `mask_prompt`, `class_detection` und `instance_segmentation` ab;
+  `subject_segmentation` ist die Basisfähigkeit. Mindestens eine Fähigkeit muss
+  gesetzt sein; unbekannte Felder werden abgelehnt (`deny_unknown_fields`).
+- BiRefNet-Deskriptor (`birefnet_manifest`): automatische Subject-Segmentierung,
+  ein RGB-Eingang → Alpha-Matte, keine Prompts (nur `subject_segmentation`,
+  übrige Fähigkeiten `false`), dokumentierte Inferenzauflösung 1024×1024,
+  Lizenz `Apache-2.0` (verifiziert, kein Download).
+- Austauschbare Oberfläche über das Trait `SubjectInference`
+  (`infer(&ImageFrame) -> Result<MaskPlane, OnnxError>`). Ein deterministischer
+  `StubBackend` (zentrierte radiale Matte, rein aus Eingabedimensionen, keine
+  Gewichte/Netz) ist die vollständige, getestete Standardoberfläche.
+- `OnnxError` (thiserror) kennt `UnsupportedModel`, `InferenceFailed`,
+  `InvalidDimensions`, `MissingModel` (keine stillen Fallbacks).
+- Reales ONNX-Runtime-Backend ist hinter dem nicht-default Feature `onnx-rt`
+  (`ort` v2.0.0-rc.13, in dieser Umgebung baubar) vorbereitet; die
+  numerische Validierung gegen echte Modellgewichte folgt in F-048/F-082.
+
+**Folgearbeit (F-048+):** Die Anbindung an Sidecar (Maskenidentität
+`ModelIdentity` ↔ `ModelManifest`), CLI (`mask`-Command, `--update-masks`) und
+GUI (Capability-Anzeige, Hintergrundberechnung) sowie die Persistenz/
+Wiederverwendung/Stale-Erkennung erfolgt in den Folge-Tasks. `lumina-onnx`
+hängt bewusst noch nicht von `lumina-sidecar` ab; die Modellidentität wird in
+F-048 auf das Sidecar-Modell abgebildet.
+
 ## Abnahme
 
 - Eine gültige Matte wird nach Neustart ohne Modell-Download verwendet.

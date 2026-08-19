@@ -16,7 +16,7 @@ Ergänzung zu `cli-gui-wasm.md` und zur `docs/adr/`-Entscheidung zum RAW-Backend
 | Auto-Tone / Match Total Exposure | ja | ja | ja (portabler Core) |
 | Virtuelle Kopien / Presets | ja | ja | gleiches Rezeptmodell (post-MVP UI) |
 | Sidecar schreiben (nativ, neben Original) | ja | ja | nein (Browser-Speichern offen) |
-| ONNX-Inferenz (BiRefNet/SAM2) | post-MVP | post-MVP | offen |
+| ONNX-Inferenz (BiRefNet/SAM2) | ja (MVP) | ja (MVP) | offen |
 | Persistente AI-Masken | post-MVP | post-MVP | offen |
 | Export (PNG/JPEG/WebP) | ja | ja | offen |
 | Optionale zentrale Indizierung (`lumina-index`) | post-MVP (optional) | post-MVP (optional) | offen |

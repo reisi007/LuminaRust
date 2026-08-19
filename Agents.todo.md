@@ -31,9 +31,28 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
   Auto-Tone/Matching inkl. Regression-Seeds, 7 Referenzbildtests mit
   programmatisch erzeugten Fixtures + Provenance-README; All-MAX-Short-Circuit
   für bit-exakte Identität maskierter Messung; 250 Tests gesamt grün).
+- **F-042-N1** verifiziert erledigt und entfernt (Source-Actions-Persistenz:
+  additives `source_actions`-Schema im Sidecar, zdata Repair-Region-Format mit
+  `RecordKind`-Diskriminator, CLI `dust-removal`-Command, Lückenschluss
+  `resolve_source_actions` in `process_selected`, e2e-Tests — unabhängig
+  verifiziert 2026-08-19).
+- **F-047** verifiziert erledigt und entfernt (lumina-onnx: SubjectInference-
+  Adapter, StubBackend, F-080 ModelManifest/ModelCapabilities mit
+  `deny_unknown_fields`, BiRefNet-Deskriptor, onnx-rt非默认, 26 Tests —
+  unabhängig verifiziert 2026-08-19).
+- **F-074-N3** verifiziert erledigt und entfernt (erste echte Benchmarks: 32
+  deterministische Fixtures, Baseline-Erfassung, `compare.mjs`
+  Bestandsvalidierung — unabhängig verifiziert 2026-08-19).
+- **F-076** verifiziert erledigt und entfernt (Rezept-/Sidecar-/Pipeline-
+  Migrationsstrategie: `docs/release-migration-strategy.md` — unabhängig
+  verifiziert 2026-08-19).
+- **F-080** verifiziert erledigt und entfernt (Modellfähigkeiten: 6 Flags im
+  ONNX-Manifest, BiRefNet besitzt `subject_segmentation` als dokumentierte
+  Erweiterung — Teil von F-047, unabhängig verifiziert 2026-08-19).
 
-Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4),
-Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078).
+Verbleibend bis MVP: F-097 (Phase 3/4), Phase 6 AI-Masken
+(F-048…F-051, F-079, F-081…F-083), F-101 MCP AI-Agent-Schnittstelle
+(Phase 7), Release-Gates (F-072, F-073, F-075, F-077, F-078).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
@@ -114,15 +133,15 @@ ADR 0003, README-Matrix/-Link, decisions.md, ADR-Index — unabhängig
 verifiziert 2026-08-19) und **F-074-N2** (Setup-Gerüst ohne Messungen:
 `lumina-bench`-Workspace-Member, Konventionen, leere Baseline-/Budget-Stores,
 `compare.mjs`-Gerüst, CI-Kompilierbarkeits-Check — unabhängig verifiziert
-2026-08-19, keine Benchmarks/Timing). **F-074-N4** (Baseline-Analyse:
-Kostenverteilung je Pipeline-Stufe, Hotspot `apply_recipe` ~91 %, abgeleitete
-Performance-IDs F-074-A1…A4 — unabhängig verifiziert 2026-08-19) und
-**F-074-N5** (`scripts/perf/compare.mjs` report/warn/gate mit korrekten
-Exit-Codes, 30 deterministische `gate: true`-Benchmarks, optionaler nicht-
-blockierender CI-`bench`-Job im `warn`-Modus — unabhängig verifiziert
-2026-08-19). Aufsetzender Stand: N3 implementiert (unabhängige Verifizierung
-ausstehend, bis `lumina-sidecar` wieder kompiliert), A1…A4 als neue offene
-Hotspot-Tasks abgeleitet.
+2026-08-19, keine Benchmarks/Timing). **F-074-N3** (erste echte Benchmarks,
+32 deterministische Fixtures, Baseline-Erfassung, `compare.mjs`
+Bestandsvalidierung — unabhängig verifiziert 2026-08-19). **F-074-N4**
+(Baseline-Analyse: Kostenverteilung je Pipeline-Stufe, Hotspot
+`apply_recipe` ~91 %, abgeleitete Performance-IDs F-074-A1…A4 — unabhängig
+verifiziert 2026-08-19) und **F-074-N5** (`scripts/perf/compare.mjs`
+report/warn/gate mit korrekten Exit-Codes, 30 deterministische `gate:
+true`-Benchmarks, optionaler nicht-blockierender CI-`bench`-Job im `warn`-Modus
+— unabhängig verifiziert 2026-08-19). Offene Hotspot-Tasks: A1…A4.
 
 ## Phase 0: Zielzustand und Architektur
 
@@ -156,12 +175,6 @@ Tests wird trotzdem umgesetzt.
 
 ## Phase 3: Renderpipeline und Cache
 
-- [ ] **F-042-N1** Source-Actions-Persistenz: additives Schema-Feld für
-  Source-Action-Rezeptoperationen (pre-MVP-Muster wie `color_grading`, leere
-  Default-Liste, keine Migration) + zdata-Artefaktformat für Repair-Regionen +
-  CLI-Command (Staubentfernung). Dokumentierte Folgeaufgabe aus F-042;
-  bis dahin liefern CLI/GUI leere Source-Actions (Mechanismus ist aktiv und
-  getestet).
 - [ ] **F-097** (niedrige Priorität) Deterministische Vignettierung und Körnung
   mit RenderKey-abgeleitetem Seed umsetzen.
 
@@ -199,9 +212,6 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-047** Austauschbaren ONNX-Inferenzadapter mit BiRefNet als erstem
-  automatischen Subject-Modell integrieren, ohne den WASM-kompatiblen Core zu
-  belasten.
 - [ ] **F-048** Persistierte Masken bevorzugt laden; Neuberechnung nur bei
   fehlender, veralteter oder ausdrücklich erneuerter Maske durchführen.
 - [ ] **F-049** Masken-Invertierung, Feathering, Blur und lokale Anpassungen
@@ -212,9 +222,6 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
   Maske weiterverwenden, Neuberechnung anbieten und Fehler sichtbar machen.
 - [ ] **F-079** Promptfähige Maskenquellen für Box, Pinsel, Polygon, Ellipse und
   Verläufe in das Masken-DAG-Modell aufnehmen.
-- [ ] **F-080** Modellfähigkeiten wie `box_prompt`, `point_prompt`,
-  `mask_prompt`, `class_detection` und `instance_segmentation` im ONNX-
-  Manifest und Adaptermodell abbilden.
 - [ ] **F-081** Benutzergeführte Segmentierung für Rechteck- und Pinsel-Prompts
   spezifizieren; Prompt-Transformationen und Koordinatensysteme persistieren.
 - [ ] **F-082** Einen ersten interaktiven Segmentierungsadapter, vorzugsweise
@@ -224,7 +231,108 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 ## Phase 7: CLI und Batch
 
-(alle Punkte umgesetzt und verifiziert — 2026-08-17)
+(alle CLI/Batch-Punkte umgesetzt und verifiziert — 2026-08-17)
+
+- [ ] **F-101** MCP AI-Agent-Schnittstelle: Headless-Terminal-Server über
+  das Model Context Protocol, der AI-Agenten programmatischen Zugriff auf
+  LuminaRust-Bearbeitungen ermöglicht. Plan und Dokumentation, keine
+  Implementierung vor Klärung des SOLL-Zustands. **Letzter offener Punkt
+  vor MVP-Erklärung.**
+
+  **Ziel:** Ein AI-Agent (z. B. Claude, Codex, lokales LLM mit
+  MCP-Client) soll Bilddateien laden, Rezeptparameter ändern, Sidecars
+  speichern und eine schnelle Vorschau erzeugen können — alles über
+  standardisierte MCP-Tools, ohne GUI und ohne manuelle CLI-Aufrufe.
+
+  **MCP-Transport:** stdio (stdin/stdout), lauffähig als eigenständiger
+  Prozess oder als Sidecar-Dependency von `lumina-cli`. Der Server
+  implementiert MCP-Protokollversion `2024-11-05` (oder aktuelle
+  Stable-Version). Kein HTTP/WebSocket im MVP — stdio reicht für
+  Agent-in-Terminal-Szenarien.
+
+  **Tool-Set (MVP):**
+
+  | Tool | Input | Output | Beschreibung |
+  | --- | --- | --- | --- |
+  | `lumina_load` | `{ path: string }` | `{ image_id, width, height, format, virtual_copies, sidecar_status }` | Lädt ein Bild (RAW, PNG, JPEG, WebP) und gibt dessen Metadaten zurück. Erzeugt oder erkennt Sidecar. |
+  | `lumina_edit` | `{ image_id, virtual_copy?, adjustments: { exposure?, contrast?, highlights?, shadows?, whites?, blacks?, wb_temperature?, wb_tint? } }` | `{ ok: true, recipe_hash }` | Setzt globale Tonwert-Regler im Rezept. Write-through auf Sidecar. |
+  | `lumina_get_recipe` | `{ image_id, virtual_copy? }` | `{ recipe: EditRecipe, recipe_hash }` | Liest das aktuelle Rezept einer virtuellen Kopie. |
+  | `lumina_save` | `{ image_id, output_path, format: "png"\|"jpeg"\|"webp", quality?: 1..=100 }` | `{ ok: true, bytes_written, path }` | Rendert und exportiert das Bild in das angegebene Format. |
+  | `lumina_preview` | `{ image_id, virtual_copy?, max_width?: u32 }` | `{ ok: true, preview_path, width, height, size_bytes }` | Erzeugt eine schnelle, verkleinerte Vorschau (Default max. 1024px breit) als PNG im temporären Verzeichnis. Dient als visueller Feedback-Loop für den Agenten. |
+  | `lumina_list_virtual_copies` | `{ image_id }` | `{ copies: [{ id, name, recipe_hash }] }` | Listet alle virtuellen Kopien eines Bildes. |
+  | `lumina_inspect` | `{ image_id }` | `{ source_path, sidecar_path, recipe_version, pipeline_version, virtual_copies, ai_masks }` | Zeigt den vollständigen Zustand eines geladenen Bildes. |
+
+  **Schnellvorschau (`lumina_preview`) — Schlüssel-Design:**
+
+  - Die Vorschau ist eine niedrige Auflösung (Default max. 1024px
+    Breite, konfigurierbar via `max_width`), die ohne Cache-Eintrag
+    erzeugt wird — bewusst ein Fluchtweg, kein Cache-Replace.
+  - Rendering nutzt den bestehenden `render_frame`-Einstiegspunkt mit
+    reduzierter Ausgabegröße (Resampling nach Pipeline, nicht als
+    separate Stufe).
+  - Die Vorschau wird als Datei im temporären System-Verzeichnis
+    geschrieben (z. B. `$TMPDIR/lumina-previews/`), mit `image_id` als
+    Dateinamen, und beim nächsten `lumina_preview`-Aufruf überschrieben.
+    Alternativ kann ein `preview_dir` im MCP-Server-Config gesetzt
+    werden.
+  - Der Agent kann die Vorschau als Datei lesen (Pfad im Output) und
+    sie z. B. über ein Vision-Modell analysieren lassen.
+  - Determinismus: Gleicher Rezeptstand + gleiche Quelle = gleiche
+    Vorschau-Bytes. Die Vorschau ist kein eigenständiges
+    Cache-Kontingent — sie wird bei jedem Aufruf frisch erzeugt.
+
+  **Architekturgrenzen:**
+
+  - Der MCP-Server darf keine eigene Bildverarbeitungslogik enthalten.
+    Alle Renderoperationen laufen über `render_frame` aus `lumina-core`.
+  - Der Server ist ein Opener/Wrapper um die bestehende `lumina-cli`-
+    Logik, kein zweites Backend.
+  - Sidecar-Schreiboperationen nutzen dieselben atomaren Write-Pfade
+    wie CLI und GUI.
+  - Kein eigenständiger Render-Cache für den MCP-Pfad — Vorschauen
+    sind explizit cache-frei; volle Exporte nutzen den gemeinsamen
+    Cache.
+  - Der Server ist single-image-scoped: `lumina_load` lädt ein Bild,
+    alle weiteren Operationen beziehen sich darauf. Wechsel erfordert
+    ein erneutes `lumina_load`. (Multi-Image ist Post-MVP.)
+  - Keine ONNX-/Masken-Inferenz über den MCP-Server im MVP — Masken
+    werden nur gelesen/angezeigt, nicht berechnet.
+
+  **Nicht-Ziele (Pre-MVP):**
+
+  - Kein HTTP/WebSocket-Transport.
+  - Keine Multi-Image-Parallelverarbeitung.
+  - Keine AI-Masken-Inferenz über MCP.
+  - Keine Preset-Verwaltung über MCP.
+  - Keine Batch-Befehle.
+  - Keine Authentifizierung (lokaler Prozess).
+
+  **Abhängigkeiten:**
+
+  - `render_frame` (F-042) — muß vorhanden und stabil sein.
+  - `EditRecipe` und Sidecar-Serialisierung — muß funktional sein.
+  - `ExportOptions` und `ImageFrame::encode` (F-037) — muß für
+    `lumina_save` funktionieren.
+  - `lumina-cli` als Referenz-Orchestrierung als Vorbild; der
+    MCP-Server ist eigenständiges Crate `lumina-mcp`.
+
+  **Test-Strategie (Pre-MVP — Plan):**
+
+  - Unit-Tests für Tool-Dispatch und JSON-Schema-Validierung.
+  - Integrationstest: `lumina_load` → `lumina_edit` → `lumina_preview`
+    → `lumina_save` als Roundtrip.
+  - Determinismus-Test: Zwei `lumina_preview`-Aufrufe mit gleichem
+    Rezept liefern identische Bytes.
+  - Fehlerpfadtests: ungültiger Pfad, fehlender Sidecar, falsches
+    Format, unzulässige Adjustment-Werte.
+  - MCP-Protokoll-Compliance: Tool-Liste, Schema-Validierung, Error-
+    Response-Format.
+
+  **Feature-Dokument (SOLL):** `feature/platform/mcp-server.md`
+  (anzulegen vor Implementierungsbeginn).
+
+  **Status:** Plan und Dokumentation only. Keine Implementierung bis
+  zum SOLL-Review.
 
 ## Phase 8: Desktop-GUI
 
@@ -268,8 +376,6 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
   und umgesetzt.
 - [ ] **F-075** Speicherbudgets und Abbruchverhalten für große RAWs und Masken
   messen und absichern.
-- [ ] **F-076** Rezept-, Sidecar- und Pipeline-Migrationsstrategie für Releases
-  dokumentieren.
 - [ ] **F-077** Backup-, Recovery-, Sidecar-Konflikt- und Datenverlusttests als
   Release-Gate einrichten.
 - [ ] **F-078** Lizenz-, Modell- und Distributionsprüfung vor dem ersten Release

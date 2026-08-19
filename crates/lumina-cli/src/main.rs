@@ -2,14 +2,18 @@ use clap::{Args, Parser, Subcommand};
 use lumina_core::{
     match_total_exposure_masked, render_frame, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
     ImageFileFormat, ImageFrame, MaskContext, MaskPlane, MaskPolicy, RenderContext,
+    SourceActionArtifact,
 };
 use lumina_raw::{RawError, RawMetadata};
 use lumina_sidecar::{
-    artifact_status, load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint,
-    ArtifactStatus, DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskStatus, Preset,
-    SidecarDocument, SourceIdentity,
+    append_repair_region, artifact_status, load_sidecar, load_zdata, save_sidecar,
+    sidecar_path_for, AnalysisFingerprint, ArtifactStatus, DecodeFingerprint, EditRecipe,
+    GeometryFingerprint, HistoryEntry, MaskStatus, Preset, RepairRegionArtifact, SidecarDocument,
+    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceIdentity,
+    SOURCE_ACTION_VERSION,
 };
 use rayon::prelude::*;
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -36,6 +40,7 @@ enum Command {
     Mask(MaskArgs),
     Reindex(IndexArgs),
     Validate(IndexArgs),
+    DustRemoval(DustRemovalArgs),
 }
 
 #[derive(Debug, Args)]
@@ -148,6 +153,46 @@ struct IndexArgs {
     migrate: bool,
 }
 
+/// F-042-N1: persist a dust-removal (or AI-replacement) repair region into the
+/// source's `.lumina.zdata` bundle and record it as a recipe source action.
+/// The original image is never modified.
+#[derive(Debug, Args)]
+struct DustRemovalArgs {
+    #[arg(long)]
+    input: PathBuf,
+    /// Path to a repair-region definition JSON (region plane + replacement image
+    /// path). See `RepairRegionInput` for the schema.
+    #[arg(long)]
+    repair_region: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    /// Optional path to render the frame with the action applied, so the effect
+    /// is verifiable headlessly. Never equals `--input`.
+    #[arg(long)]
+    render_out: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Repair-region definition consumed by the `dust-removal` command.  The
+/// `region_values` are little-endian `u16` (0..=u16::MAX); pixels `>= 32768`
+/// are replaced by the corresponding `replacement_path` RGBA8 pixel.  Region
+/// and replacement MUST share the source frame's dimensions.
+#[derive(Debug, Deserialize)]
+struct RepairRegionInput {
+    id: String,
+    #[serde(default = "default_source_action_kind")]
+    kind: SourceActionKind,
+    region_width: u32,
+    region_height: u32,
+    region_values: Vec<u16>,
+    replacement_path: PathBuf,
+}
+
+fn default_source_action_kind() -> SourceActionKind {
+    SourceActionKind::DustRemoval
+}
+
 #[derive(Debug, Args)]
 struct ProcessArgs {
     #[arg(long)]
@@ -212,6 +257,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Mask(args) => mask(args),
         Command::Reindex(args) => reindex(args),
         Command::Validate(args) => validate(args),
+        Command::DustRemoval(args) => dust_removal(args),
     }
 }
 
@@ -425,6 +471,197 @@ fn validate(args: IndexArgs) -> Result<(), CliError> {
         serde_json::json!({"command":"validate", "sidecar":path, "status":"valid"}),
         "valid",
     )
+}
+
+fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
+    // Never overwrite the original with the optional render output.
+    if let Some(output) = &args.render_out {
+        reject_same_path(&args.input, output)?;
+    }
+    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let (frame, _raw) = decode_input(&args.input, &bytes)?;
+
+    // Load and validate the repair-region definition.  Region and replacement
+    // must have identical dimensions; the region must also match the decoded
+    // source frame, because the MVP applies source actions at source resolution.
+    let definition: RepairRegionInput = {
+        let json = fs::read_to_string(&args.repair_region)
+            .map_err(|error| io_error(&args.repair_region, error))?;
+        serde_json::from_str(&json)
+            .map_err(|error| CliError::Message(format!("invalid repair-region JSON: {error}")))?
+    };
+    let replacement_bytes = fs::read(&definition.replacement_path)
+        .map_err(|error| io_error(&definition.replacement_path, error))?;
+    let replacement_frame = ImageFrame::decode(&replacement_bytes).map_err(|error| {
+        CliError::Message(format!("could not decode replacement image: {error}"))
+    })?;
+    if replacement_frame.width != definition.region_width
+        || replacement_frame.height != definition.region_height
+    {
+        return Err(CliError::Message(format!(
+            "replacement image {}x{} does not match region {}x{}",
+            replacement_frame.width,
+            replacement_frame.height,
+            definition.region_width,
+            definition.region_height
+        )));
+    }
+    let region = RepairRegionArtifact {
+        id: definition.id.clone(),
+        width: definition.region_width,
+        height: definition.region_height,
+        region: definition.region_values.clone(),
+        replacement: replacement_frame.pixels.clone(),
+    };
+    region
+        .validate()
+        .map_err(|error| CliError::Message(format!("invalid repair region: {error}")))?;
+    if region.width != frame.width || region.height != frame.height {
+        return Err(CliError::Message(format!(
+            "repair region {}x{} does not match source frame {}x{}; source actions apply at source resolution",
+            region.width, region.height, frame.width, frame.height
+        )));
+    }
+
+    // Persist the artifact bytes into the portable `.lumina.zdata` bundle,
+    // appended next to the source.  The recipe stores only a RELATIVE reference
+    // (the bundle file name), never an absolute path.
+    let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
+    let relative_path = zdata_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repair.zdata")
+        .to_string();
+    let checksum = region.checksum();
+    append_repair_region(&zdata_path, region).map_err(|error| {
+        CliError::Message(format!("could not write repair-region bundle: {error}"))
+    })?;
+
+    // Record the action spec in the active virtual copy's recipe.
+    let sidecar_path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&sidecar_path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_index = args
+        .virtual_copy
+        .as_deref()
+        .map(|id| {
+            document
+                .virtual_copies
+                .iter()
+                .position(|copy| copy.id == id)
+                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let spec = SourceActionSpec {
+        version: SOURCE_ACTION_VERSION,
+        kind: definition.kind,
+        artifact: SourceActionArtifactRef {
+            id: definition.id.clone(),
+            relative_path: relative_path.clone(),
+            checksum: checksum.clone(),
+        },
+    };
+    document.virtual_copies[copy_index]
+        .recipe
+        .source_actions
+        .push(spec);
+    document.validate()?;
+    save_sidecar(&sidecar_path, &document)?;
+
+    // Optional headless render so the effect is verifiable end-to-end.
+    if let Some(output) = &args.render_out {
+        let source_actions =
+            resolve_source_actions(&document.virtual_copies[copy_index].recipe, &zdata_path)?;
+        let rendered = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &document.virtual_copies[copy_index].recipe,
+                camera_white_balance: None,
+                source_actions: &source_actions,
+                masks: None,
+            },
+        )?;
+        let format = output_format(output)?;
+        write_atomically(output, &rendered.frame.encode(format)?)?;
+    }
+
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "dust-removal",
+            "input": args.input,
+            "virtual_copy": document.virtual_copies[copy_index].id,
+            "artifact_id": definition.id,
+            "bundle": relative_path,
+            "checksum": checksum,
+            "status": "ok"
+        }),
+        "dust removal recorded",
+    )
+}
+
+/// Resolves the recipe's persisted source actions into runtime artifacts by
+/// reading the `.lumina.zdata` bundle.  A missing bundle, a missing artifact id
+/// or a checksum mismatch against the recipe reference is a hard error — there
+/// is no silent fallback (reproducibility over convenience).
+fn resolve_source_actions(
+    recipe: &EditRecipe,
+    zdata_path: &Path,
+) -> Result<Vec<SourceActionArtifact>, CliError> {
+    if recipe.source_actions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let container = load_zdata(zdata_path).map_err(|error| {
+        CliError::Message(format!(
+            "could not read source-action bundle `{}`: {error}",
+            zdata_path.display()
+        ))
+    })?;
+    let mut artifacts = Vec::with_capacity(recipe.source_actions.len());
+    for spec in &recipe.source_actions {
+        let region = container
+            .repair_region(&spec.artifact.id)
+            .map_err(|error| {
+                CliError::Message(format!(
+                    "source action `{}` artifact missing from bundle: {error}",
+                    spec.artifact.id
+                ))
+            })?;
+        if region.checksum() != spec.artifact.checksum {
+            return Err(CliError::Message(format!(
+                "source action `{}` checksum mismatch: recipe and bundle disagree (stale or corrupted artifact)",
+                spec.artifact.id
+            )));
+        }
+        let mask_plane =
+            MaskPlane::new(region.width, region.height, region.region).map_err(|error| {
+                CliError::Message(format!(
+                    "source action `{}` has an invalid region plane: {error}",
+                    spec.artifact.id
+                ))
+            })?;
+        let replacement = ImageFrame::new(region.width, region.height, region.replacement)
+            .map_err(|error| {
+                CliError::Message(format!(
+                    "source action `{}` has an invalid replacement image: {error}",
+                    spec.artifact.id
+                ))
+            })?;
+        artifacts.push(SourceActionArtifact {
+            region: mask_plane,
+            replacement,
+        });
+    }
+    Ok(artifacts)
 }
 
 fn reindex(args: IndexArgs) -> Result<(), CliError> {
@@ -742,14 +979,17 @@ fn process_selected(
         }
     }
     // Main render via the shared entry point (SourceActions → Adjustments →
-    // Masks), with an empty source-action list until F-042-N1.
+    // Masks).  F-042-N1: the recipe's persisted source actions are resolved
+    // from the `.lumina.zdata` bundle (missing or checksum-mismatched artifacts
+    // are reported loudly, never silently dropped).
+    let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
     let active_copy = document.virtual_copies[copy_index].clone();
     let render_output = render_frame(
         &frame,
         &RenderContext {
             recipe: &recipe,
             camera_white_balance: wb,
-            source_actions: &[],
+            source_actions: &source_actions,
             masks: Some(MaskContext {
                 copies: &document.virtual_copies,
                 active_copy_id: &active_copy.id,

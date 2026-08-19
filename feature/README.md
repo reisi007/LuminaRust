@@ -74,6 +74,9 @@ Sidecars vollständig wiederherstellbar sein.
 - [`platform/cli-gui-wasm.md`](platform/cli-gui-wasm.md): CLI, Desktop-GUI,
   verbindliche Lightroom-UI-Konventionen (F-100), WASM-Capabilities und
   optionale zentrale Indizierung
+- [`platform/mcp-server.md`](platform/mcp-server.md): MCP AI-Agent-
+  Schnittstelle für programmatischen Bildzugriff, Rezept-Bearbeitung und
+  Schnellvorschau (F-101)
 
 ### Qualität
 
@@ -115,6 +118,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-098 | Objektivkorrekturen | [Pipeline](architecture/pipeline.md) | hoch |
 | F-099 | Upright und Perspektive | [Pipeline](architecture/pipeline.md) | hoch |
 | F-100 | Lightroom-UI-Konventionen | [Plattformen](platform/cli-gui-wasm.md) | mittel |
+| F-101 | MCP AI-Agent-Schnittstelle | [MCP Server](platform/mcp-server.md) | mittel |
 
 ## Arbeitsweise
 

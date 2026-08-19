@@ -17,5 +17,23 @@ lumina-raw = { path = "../lumina-raw", optional = true }
 default = []
 raw-bench = ["dep:lumina-raw"]
 
+[[bench]]
+name = "core"
+harness = false
+path = "bench/core.rs"
+
+[[bench]]
+name = "batch"
+harness = false
+path = "bench/batch.rs"
+
+# RAW decode benchmarks link LibRaw and are therefore kept behind the
+# `raw-bench` feature so the default harness stays lightweight (ADR 0003).
+[[bench]]
+name = "decode"
+harness = false
+path = "bench/decode.rs"
+required-features = ["raw-bench"]
+
 [dev-dependencies]
 criterion = "0.5"

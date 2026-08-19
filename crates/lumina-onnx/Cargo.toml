@@ -1,0 +1,27 @@
+[package]
+name = "lumina-onnx"
+version = "0.1.0"
+edition = "2021"
+description = "Native ONNX inference adapter for Lumina (BiRefNet subject model + exchangeable backend)"
+license = "MIT"
+publish = false
+
+[dependencies]
+lumina-core = { path = "../lumina-core" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Real ONNX Runtime backend. OPTIONAL and gated behind the non-default
+# `onnx-rt` feature so the default build/test stays green with no network
+# access. `ort` v2.0.0-rc.13 is fetchable and builds in this environment
+# (including its prebuilt-binary download); see README.md for the landing plan.
+[dependencies.ort]
+version = "=2.0.0-rc.13"
+optional = true
+
+[features]
+default = []
+# Enables the real ONNX Runtime (`ort`) backend. Requires network at build time
+# to fetch prebuilt ONNX Runtime binaries and a real `.onnx` artifact at runtime.
+onnx-rt = ["dep:ort"]

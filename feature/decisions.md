@@ -33,17 +33,38 @@ ADRs unter `docs/adr/` festgehalten (siehe `docs/adr/README.md`).
   (`wasm-bindgen`, `web-sys`) sind über `cfg(target_arch = "wasm32")`
   getrennt.
 
-## ONNX-Backend: native Inferenz, post-MVP
+## ONNX-Backend: native Inferenz (MVP)
 
 - **Entscheidung:** KI-Masken (BiRefNet als erstes automatisches Subject-Modell,
   SAM 2 als erstes interaktives Box-/Pinsel-Modell) werden über einen
-  **austauschbaren ONNX-Adapter** (`lumina-onnx`, post-MVP) angebunden.
+  **austauschbaren ONNX-Adapter** (`lumina-onnx`) angebunden.
 - Der ONNX-Adapter muss native Inferenz, Modellverwaltung und Maskenartefakte
   kapseln und darf den plattformneutralen `lumina-core` nicht belasten.
 - **Lizenz:** Die ONNX-Runtime und die Modelle (BiRefNet, SAM 2) sind vor
   Integration nach ihren jeweiligen Lizenzen zu prüfen und zu dokumentieren
   (F-078). Die Modellfähigkeit wird aus dem Modellmanifest gelesen, nicht aus
   dem Modellnamen erraten.
+
+### MVP-Umfang (2026-08-19)
+
+- **Änderung:** Die native ONNX-Inferenz ist per `Agents.todo.md` (Stand
+  2026-08-19, Phase 6) **in den MVP-Umfang aufgenommen** (F-047). Die
+  Entscheidung „post-MVP" aus der ursprünglichen Fassung wird hiermit für die
+  **native** Inferenz (CLI/Desktop) überschrieben; der Adapter bleibt
+  austauschbar (Trait `SubjectInference`, später echtes ORT- und SAM-2-Backend).
+- **WASM:** Die Browser-/WASM-Seite bleibt **offen** (post-MVP,
+  Feature `wasm-js`); `lumina-onnx` ist als native-only-Crate gekapselt
+  (spiegelt `lumina-raw`) und wird im MVP nicht im Browser gebaut.
+- **F-080:** Die Modellfähigkeiten `box_prompt`, `point_prompt`, `mask_prompt`,
+  `class_detection` und `instance_segmentation` sind im ONNX-Manifest
+  (`ModelCapabilities`, `lumina-onnx`) abgebildet; `subject_segmentation` ist
+  die Basisfähigkeit (BiRefNet). Mindestens eine Fähigkeit muss gesetzt sein.
+- **Real-Backend:** Die ONNX-Runtime (`ort`, v2.0.0-rc.13) ist in dieser Umgebung
+  **tatsächlich abruf- und baubar** (inklusive Prebuilt-Binary-Download) und
+  hinter dem nicht-default Feature `onnx-rt` eingebunden. Die numerische
+  Validierung gegen ein echtes BiRefNet-`.onnx`-Artefakt erfolgt später
+  (F-048/F-082), sobald Modellgewichte vorliegen; bis dahin ist der
+  deterministische `StubBackend` die vollständige, getestete Oberfläche.
 
 ## Performance-Benchmarking
 

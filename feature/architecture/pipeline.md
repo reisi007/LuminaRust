@@ -234,12 +234,15 @@ Fallback). Die Anwendung erfolgt nach Decode und VOR Auto-Analyse/
 Adjustments: `out = replacement` für Pixel mit `region >= 32768` (Schwellwert
 50 %), sonst bleibt die Quelle erhalten. Alpha wird bei ersetzten Pixeln aus
 `replacement` übernommen, sonst aus der Quelle. Keine Artefakte bedeuten
-Identität. **Offene Folgeaufgabe F-042-N1:** Persistenz als Rezeptoperation
-(additives Schema-Feld im Pre-MVP-Muster wie `color_grading`: leere
-Default-Liste, keine Migration nötig) und CLI-Command; das zdata-Artefaktformat
-für Repair-Regionen folgt dort. Bis dahin liefern CLI und GUI keine
-Source-Actions (leer), der Mechanismus ist aber im Renderpfad aktiv und
-getestet.
+Identität. **F-042-N1 (umgesetzt):** Persistenz als Rezeptoperation ist implementiert:
+das additive Schema-Feld `source_actions` im Pre-MVP-Muster (leere
+Default-Liste, keine Migration nötig), das zdata-Artefaktformat für
+Repair-Regionen (u16-Region + RGBA8-Ersatzbild im selben `.lumina.zdata`-Bundle,
+getrennt über einen `kind`-Diskriminator bei unverändertem Container-`VERSION`)
+und der CLI-Command `dust-removal` (Staubentfernung). Die CLI löst die
+Rezept-Aktionen beim Rendern/Entwickeln aus dem Bundle auf und reicht sie an
+`render_frame`; fehlende oder checksummenabweichende Artefakte brechen den
+Render hart ab (kein stiller Fallback).
 
 **Masken-Stufe:** Die Stufe wertet die aktiven `mask_layers` der gewählten
 virtuellen Kopie aus: `MaskGraph`-Evaluierung pro Layer (inklusive der
@@ -266,12 +269,19 @@ Renderpipeline").
 
 **Status (F-042):** Implementiert sind der gemeinsame Einstiegspunkt, der
 Source-Action-Mechanismus (Kontext-Artefakt, Kompositing mit 50 %-Schwellwert),
-die Masken-Evaluierung und -Validierung mit `MaskPolicy` sowie die
-CLI-/GUI-Verdrahtung (zdata-Planes, Warnungen). Offen sind F-042-N1
-(Persistenz/CLI-Command für Source-Actions), F-049 (Pixel-Modulation durch
-lokale Anpassungen) und die Geometrie-Ausrichtung von Masken. Der
-Matching-Messbereich nach Crop/Masken ist mit F-041 umgesetzt (siehe
-„Exposure Matching").
+die Masken-Evaluierung und -Validierung mit `MaskPolicy`, die
+CLI-/GUI-Verdrahtung (zdata-Planes, Warnungen) sowie F-042-N1 (Persistenz als
+Rezeptoperation `source_actions`, zdata-Artefaktformat für Repair-Regionen und
+CLI-Command `dust-removal`; die CLI löst die Aktionen beim Rendern aus dem
+Bundle auf). Offen bleiben F-049 (Pixel-Modulation durch lokale Anpassungen) und
+die Geometrie-Ausrichtung von Masken. Der Matching-Messbereich nach Crop/Masken
+ist mit F-041 umgesetzt (siehe „Exposure Matching").
+
+**Restgrenze (ehrlich):** Die GUI reicht Source-Actions beim Rendern bisher
+noch nicht aus dem `.lumina.zdata`-Bundle auf (sie liefert vorerst eine leere
+Liste); CLI und Renderpfad sind vollständig verdrahtet. Repair-Regionen werden
+im MVP 1:1 in Quellauflösung angewandt (keine Resampling-Semantik in F-042-N1);
+die Geometrie-Ausrichtung von Masken bleibt wie in F-042 dokumentiert offen.
 
 **Status (F-085, behaviorale Tests):** Behaviorale Tests decken die
 Wechselwirkung von Source-Actions mit Auto-WB, Auto-Tone und Exposure Matching
@@ -282,8 +292,9 @@ Schwellwert-Grenzfälle (32768/32767, 0, u16::MAX), Nicht-Destruktion von Frame
 und Artefakten, Determinismus und History-Reproduzierbarkeit (ein
 Rezept-Snapshot rendert byte-identisch erneut) sowie das CLI-Zusammenspiel aus
 History-Eintrag und gültiger Maske mit `--match-total-exposure`. Die
-CLI-Durchreichung von Source-Actions bleibt bis F-042-N1 offen (leere Liste,
-dokumentierte Grenze).
+CLI-Durchreichung von Source-Actions ist mit F-042-N1 geschlossen: `process`
+sowie `render`/`export` lösen `recipe.source_actions` beim Rendern aus dem
+`.lumina.zdata`-Bundle auf und reichen sie an `render_frame`.
 
 ## Bearbeitungsregler
 
@@ -608,8 +619,9 @@ Auto-Tone misst im Raster-MVP den dekodierten aktuellen Raster-Messbereich
 (alle RGBA-Pixel, Alpha ignoriert); `Match Total Exposure` misst dagegen den
 finalen sichtbaren Messbereich nach Crop, Geometrie und aktiven Masken
 (siehe F-041 unten), vor Outputprofil und Export-Transferfunktion.
-Die Raster-MVP-Reihenfolge lautet Source-Actions (noch nicht im CLI),
-Auto-Tone, Preset, CLI-Overrides, danach Matching. Berechnete
+Die Raster-MVP-Reihenfolge lautet Source-Actions (im CLI via F-042-N1
+persistiert und beim Rendern aus dem Bundle angewandt), Auto-Tone, Preset,
+CLI-Overrides, danach Matching. Berechnete
 Auto-Werte und ein RGBA8-Analysefingerprint werden im Rezept persistiert und
 bei gültigem Fingerprint wiederverwendet.
 
@@ -662,8 +674,8 @@ Ebenen aus `render_output.mask_layers`; die GUI misst die gerenderte Vorschau
 mit den Masken-Ebenen des letzten Renderings (wasm32: leeres Slice,
 dokumentierter Post-MVP-Zustand). `match_total_exposure` bleibt in Signatur
 und Verhalten unverändert (interne Delegation auf die gemeinsame
-Delta-Logik). Offen sind F-049 (Pixel-Modulation durch lokale Anpassungen)
-und F-042-N1 (Source-Actions-Persistenz).
+Delta-Logik). Offen ist F-049 (Pixel-Modulation durch lokale Anpassungen);
+F-042-N1 (Source-Actions-Persistenz) ist umgesetzt.
 
 **All-MAX-Fast-Path (F-043, Semantik-Hinweis):** Liegen Masken-Layer vor,
 deren **jede** Ebene vollständig `u16::MAX` ist (jedes Pixelgewicht exakt

@@ -49,12 +49,13 @@ Regeln:
   das schnelle CI-Set.
 - **Kein Netzwerk:** Kein Benchmark lädt Daten aus dem Netz.
 
-## Hinzufügen-Checkliste (ab F-074-N3)
+## Hinzufügen-Checkliste (ab F-074-N3 implementiert)
 
 Neue Benchmarks werden so angelegt:
 
 1. Neues `[[bench]]`-Target in `crates/lumina-bench/Cargo.toml` mit
-   `harness = false`.
+   `harness = false` (Raw-Decode-Benchmarks zusätzlich mit
+   `required-features = ["raw-bench"]`).
 2. Benchmark-Funktion als Criterion-Group implementieren
    (`criterion_group!`/`criterion_main!` bzw. `Criterion::bench_function`).
 3. Benchmark-ID gemäß ID-Schema vergeben und in `perf/budgets.json`
@@ -76,6 +77,24 @@ Neue Benchmarks werden so angelegt:
 
 ## Stand
 
-Stand 2026-08-19: Es existieren **noch keine Benchmarks** (F-074-N3
-ausstehend). Diese Datei beschreibt nur die Konventionen für die kommenden
-Benchmarks.
+Stand 2026-08-19 (F-074-N3 umgesetzt): Es existieren Benchmarks für die
+definierten Klassen Core/Pipeline, Decode (env-gated) und Batch/End-to-End.
+Alle synthetischen Fixtures werden deterministisch mit dem festen Seed
+`0x5EED` in `bench/common/mod.rs` erzeugt (Größen 512 / 1024 / 2048). Die
+RAW-Decode-Benchmarks sind über `LUMINA_RAW_FIXTURE` und das Feature
+`raw-bench` gegated.
+
+Registrierte Benchmark-IDs (jede in `perf/baseline.json` und
+`perf/budgets.json`):
+
+| Klasse | IDs |
+| --- | --- |
+| Core/Pipeline | `core/render_frame__<512\|1024\|2048>`, `core/apply_recipe_with_white_balance__<512\|1024\|2048>`, `core/mask_graph_eval__<512\|1024\|2048>`, `core/analyze_tone__<512\|1024\|2048>`, `core/suggest_auto_tone__<512\|1024\|2048>`, `core/match_total_exposure__<512\|1024\|2048>`, `core/histogram__<512\|1024\|2048>`, `core/cache_hit__<512\|1024\|2048>`, `core/cache_miss__<512\|1024\|2048>` |
+| Decode | `decode/raw__aircraft-landscape`, `decode/raw__aircraft-portrait` (env-gated) |
+| Batch/End-to-End | `batch/render_export_png__<512\|1024\|2048>` |
+
+Die tatsächlich gemessenen Mediane/P95 stehen in `perf/baseline.json`
+(Erfassung 2026-08-19, Umgebung eintragen). Budgets sind mit dem 2-fachen
+Median und `tolerance_ratio` 1.2 angelegt; `gate` ist `true` für 30
+Core/Batch-Benchmarks und `false` für 2 Decode-Benchmarks (F-074-N5
+kalibriert).
