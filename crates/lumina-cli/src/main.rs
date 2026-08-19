@@ -1004,7 +1004,15 @@ fn process_selected(
             loaded_planes,
             inference,
             model_identity: model_identity.as_ref(),
-            refresh: false,
+            // F-049: `--update-masks` is persisted into the active copy's recipe
+            // options by the develop/export/batch commands and reloaded here, so
+            // the refresh flag the decision layer needs is driven by the CLI
+            // flag (and survives the persisted sidecar).
+            refresh: document.virtual_copies[copy_index]
+                .recipe
+                .options
+                .get("update_masks")
+                .is_some_and(|value| value == "true"),
             policy: MaskPolicy::Warn,
         },
         &frame,

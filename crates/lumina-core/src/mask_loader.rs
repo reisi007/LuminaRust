@@ -820,4 +820,114 @@ mod tests {
             .planes
             .contains_key(&("other".into(), "subject".into())));
     }
+
+    #[test]
+    fn blessing_pass_resolves_source_and_derived_masks() {
+        // A source mask plus a derived (invert) mask referencing it. Both must
+        // be resolved by the decision layer when the source is reachable and
+        // valid: the source is loaded, and the derived mask is "blessed"
+        // (marked Valid) because its only dependency was resolved.
+        let source = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let derived = MaskDefinition {
+            id: "inverted".into(),
+            name: "inverted".into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "src".into(),
+                byte_length: 1,
+                extras: Extras::new(),
+            },
+            decode_context: decode_context(),
+            geometry_context: GeometryFingerprint {
+                width: 4,
+                height: 4,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            model: model_identity(),
+            inference_resolution: Resolution {
+                width: 4,
+                height: 4,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "p".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: MaskStatus::Valid,
+            created_at: "now".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Invert,
+            references: vec![MaskReference {
+                copy_id: "vc".into(),
+                mask_id: "subject".into(),
+                extras: Extras::new(),
+            }],
+            extras: Extras::new(),
+        };
+        let mut copy = copy_with("vc", vec![source, derived]);
+        copy.mask_layers = vec![layer_for("vc", "subject"), layer_for("vc", "inverted")];
+        let loaded_planes = BTreeMap::from([(
+            ("vc".into(), "subject".into()),
+            MaskPlane::new(4, 4, vec![PERSISTED_VALUE; 16]).unwrap(),
+        )]);
+        let result = resolve_mask_planes(
+            MaskLoadContext {
+                copies: &[copy],
+                active_copy_id: "vc",
+                source_hash: "src",
+                decode_context: &decode_context(),
+                loaded_planes,
+                inference: Some(&FakeInference {
+                    available: true,
+                    value: INFERRED_VALUE,
+                }),
+                model_identity: Some(model_identity()).as_ref(),
+                refresh: false,
+                policy: MaskPolicy::Warn,
+            },
+            &frame(),
+        )
+        .unwrap();
+
+        // The source plane is loaded and resolved.
+        assert!(result.planes.contains_key(&("vc".into(), "subject".into())));
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![PERSISTED_VALUE; 16]
+        );
+        // The source resolution is reported as loaded-from-persisted.
+        assert!(result
+            .outcomes
+            .iter()
+            .any(|o| o.mask_id == "subject" && o.from == MaskResolvedFrom::LoadedPersisted));
+        // The derived mask is blessed (no own plane, but marked Valid) so the
+        // downstream MaskGraph evaluation can resolve it.
+        let blessed = result
+            .copies
+            .iter()
+            .flat_map(|c| c.mask_library.iter())
+            .find(|m| m.id == "inverted")
+            .expect("derived mask present in result copies");
+        assert_eq!(blessed.status, MaskStatus::Valid);
+    }
 }

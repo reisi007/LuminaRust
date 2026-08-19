@@ -233,7 +233,11 @@ fn evaluate_layer(
             message,
         });
     }
-    Ok(resample_plane_bilinear(&plane, frame_width, frame_height))
+    let mut plane = resample_plane_bilinear(&plane, frame_width, frame_height);
+    // F-049: apply the per-layer modulation (invert → feather → blur → density)
+    // to the resolved, frame-sized plane before it weights the adjustments.
+    crate::mask_modulation::modulate_mask_plane(&mut plane, layer);
+    Ok(plane)
 }
 
 /// Finds the `MaskDefinition` referenced by `reference` across all copies

@@ -11,6 +11,7 @@ use thiserror::Error;
 pub mod cache;
 pub mod histogram;
 pub mod mask_loader;
+pub mod mask_modulation;
 pub mod masks;
 pub mod pipeline;
 pub mod render;
@@ -28,6 +29,7 @@ pub use mask_loader::{
     resolve_mask_planes, MaskInference, MaskLoadContext, MaskLoadOutcome, MaskLoadResult,
     MaskResolvedFrom,
 };
+pub use mask_modulation::modulate_mask_plane;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use render::{
