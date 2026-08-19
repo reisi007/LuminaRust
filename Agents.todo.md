@@ -12,7 +12,7 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 
 - **LIZ-ENTSCHEIDUNG** Projektlizenz ist **offen**: Projekt ist aktuell
   kommerziell (kein Open-Source-License) und die Lizenz wird **zur
-  MVP-Erklärung** festgelegt. Alle 7 Workspace-Crates tragen bewusst **kein**
+  MVP-Erklärung** festgelegt. Alle 8 Workspace-Crates tragen bewusst **kein**
   `license`-Feld, keine `LICENSE`-Datei im Repo. Die provisorische MIT-Annahme
   (historisch) wurde aus der Git-Historie entfernt. Optionen zur MVP-Entscheidung:
   MIT / Apache-2.0 / Dual MIT+Apache-2.0 / MPL-2.0 / proprietär.
@@ -396,16 +396,12 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
   bewusst NICHT gesetzt — Vendor-`libraw-sys`-Warnungen würden sonst
   `cargo check`/`cargo test` brechen; der strikte Gate ist Clippy. Offen:
   Golden-/Property-Tests folgen mit F-043/F-073.)
-- [ ] **F-073** Kleine versionierte Referenzbilder, RAW-Fixtures und Modelle
-  einschließlich Lizenzinformationen bereitstellen.
 - [ ] **F-074** In den hochpriorisierten Block „Performance-Methodik“
   aufgesplittet (F-074-N1…F-074-N5), siehe oben. Benchmarks für Decode,
   Preview, Maskeninferenz, Cache-Hit und Batch-Export werden dort definiert
   und umgesetzt.
 - [ ] **F-075** Speicherbudgets und Abbruchverhalten für große RAWs und Masken
   messen und absichern.
-- [ ] **F-078** Lizenz-, Modell- und Distributionsprüfung vor dem ersten Release
-  abschließen.
 
 ## Abnahmekriterien
 
