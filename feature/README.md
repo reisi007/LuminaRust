@@ -79,6 +79,9 @@ Sidecars vollständig wiederherstellbar sein.
 
 - [`quality/conflicts-and-acceptance.md`](quality/conflicts-and-acceptance.md):
   Konfliktmatrix, Abnahmeszenarien und Testanforderungen
+- [performance-benchmarks.md](quality/performance-benchmarks.md):
+  Performance-Methodik, Benchmark-Klassen, Baselines, Budgets und
+  semi-automatische Regressionserkennung (F-074)
 
 ## Feature-Matrix
 
@@ -94,6 +97,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-008 | Auto-Tone und Exposure Matching | [Pipeline](architecture/pipeline.md) | mittel |
 | F-036 | Weißabgleich und globale Tonwerte | [Pipeline](architecture/pipeline.md) | hoch |
 | F-037 | Bildexport | [Export](product/export.md) | mittel |
+| F-074 | Performance-Benchmarks | [Performance](quality/performance-benchmarks.md) | mittel |
 | F-009 | Presets | [Virtual Copies](product/virtual-copies.md) | mittel |
 | F-010 | CLI, GUI und WASM | [Plattformen](platform/cli-gui-wasm.md) | hoch |
 | F-011 | Konflikt- und Releasequalität | [Qualität](quality/conflicts-and-acceptance.md) | hoch |

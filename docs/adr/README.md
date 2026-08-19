@@ -25,3 +25,4 @@ die Architektur, Technologiewahl und organisatorische Grenzen.
 | --- | --- | --- | --- |
 | 0001 | Sidecar-first | akzeptiert | F-001 |
 | 0002 | RAW-Backend native LibRaw plus Post-MVP libraw-wasm | akzeptiert | F-007, F-010 |
+| 0003 | Performance-Benchmarking | akzeptiert | F-074, F-075 |

@@ -22,6 +22,9 @@
 *.lumina-cache/
 .lumina/
 
+# Benchmark reports and outputs
+/perf/results/
+
 # CodeGraph local knowledge graph index (regenerable via `codegraph init`)
 .codegraph/
 

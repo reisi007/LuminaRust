@@ -5,7 +5,7 @@ fortgeschritten. Erledigte Aufgaben werden nach bestandener unabhängiger
 Verifizierung und bestätigter Testabdeckung aus dieser Datei entfernt. Es gibt
 keine dauerhafte Liste abgehakter Aufgaben.
 
-## Stand (2026-08-18)
+## Stand (2026-08-19)
 
 Offene Arbeit und Abgrenzung — verifiziert abgeschlossene Aufgaben sind aus
 dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
@@ -36,10 +36,18 @@ Verbleibend bis MVP: F-042-N1, F-097 (Phase 3/4),
 Phase 6 AI-Masken (F-047…F-083), Release-Gates (F-072, F-073…F-078).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
+Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
+restlichen MVP-Gates eingeplant (2026-08-19): Methodik-Dokumentation
+(F-074-N1) und Setup-Gerüst ohne Messungen (F-074-N2) sind verifiziert
+erledigt und aus dieser Datei entfernt; erste Benchmarks (F-074-N3),
+Baseline-Analyse (F-074-N4) und Regression-Gate (F-074-N5) folgen in
+dieser Reihenfolge.
+
 ## Inhaltsverzeichnis
 
-- [Stand](#stand-2026-08-18)
+- [Stand](#stand-2026-08-19)
 - [Arbeitsregeln](#arbeitsregeln)
+- [Performance-Methodik (hohe Priorität)](#performance-methodik-hohe-priorität)
 - [Phase 0: Zielzustand und Architektur](#phase-0-zielzustand-und-architektur)
 - [Phase 1: Sidecar-Domain-Modell](#phase-1-sidecar-domain-modell)
 - [Phase 2: Rezept, virtuelle Kopien und Migrationen](#phase-2-rezept-virtuelle-kopien-und-migrationen)
@@ -72,6 +80,37 @@ Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
   bestätigen, bevor die Aufgabe aus dieser Datei entfernt wird.
 - Eine fehlgeschlagene Verifizierung lässt die Aufgabe offen und erzeugt eine
   konkrete Folgeaufgabe.
+
+## Performance-Methodik (hohe Priorität)
+
+Gegenstand ist F-074: Performance-Tests als messbare, reproduzierbare Methodik
+mit Baselines, Budgets und semi-automatischer Regressionserkennung
+(„erkennen und verhindern – außer wir nutzen bewusst mehr Features“).
+Normativ: `feature/quality/performance-benchmarks.md`, Entscheidung in
+`docs/adr/0003-performance-benchmarking.md`. Bewusste Nicht-Ziele in diesem
+Block: keine feingranularen WASM-Thresholds in CI (native Criterion-Messung
+ist Proxy für alle Archs), keine absoluten Laufzeitziele ohne
+Umgebungskontext, keine Benchmark-Tests/Timing vor F-074-N3.
+Feature-Wachstum wird als bewusste, dokumentierte Budget-Anpassung im selben
+Commit wie das Feature behandelt.
+
+- [ ] **F-074-N3** Erste echte Benchmarks für die definierten Klassen
+  (Core/Pipeline, Decode, Cache-Hit, Batch-Export) mit deterministischen
+  synthetischen Fixtures und RAW-Gating über `LUMINA_RAW_FIXTURE`;
+  Baseline erfassen (`perf/baseline.json`).
+- [ ] **F-074-N4** Baseline-Analyse: Anteil je Pipeline-Stufe und Hotspots
+  messen, priorisierte Performance-Feature-IDs als neue offene Aufgaben
+  ableiten (Kopplung F-043 Korrektheit, F-075 Speicherbudgets).
+- [ ] **F-074-N5** Regression-Gate: Budgets für stabile Benchmarks kalibrieren
+  (`gate: true`), CI-`bench`-Job mit Report-Artefakt und gating-Subset;
+  Feature-Wachstums-Budget-Updates im selben Commit wie das Feature begründen.
+
+Verifiziert erledigt und entfernt: **F-074-N1** (Methodik-SOLL-Dokument,
+ADR 0003, README-Matrix/-Link, decisions.md, ADR-Index — unabhängig
+verifiziert 2026-08-19) und **F-074-N2** (Setup-Gerüst ohne Messungen:
+`lumina-bench`-Workspace-Member, Konventionen, leere Baseline-/Budget-Stores,
+`compare.mjs`-Gerüst, CI-Kompilierbarkeits-Check — unabhängig verifiziert
+2026-08-19, keine Benchmarks/Timing). Aufsetzender Stand: N3…N5 offen.
 
 ## Phase 0: Zielzustand und Architektur
 
@@ -211,8 +250,10 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
   Golden-/Property-Tests folgen mit F-043/F-073.)
 - [ ] **F-073** Kleine versionierte Referenzbilder, RAW-Fixtures und Modelle
   einschließlich Lizenzinformationen bereitstellen.
-- [ ] **F-074** Benchmarks für Decode, Preview, Maskeninferenz, Cache-Hit und
-  Batch-Export definieren.
+- [ ] **F-074** In den hochpriorisierten Block „Performance-Methodik“
+  aufgesplittet (F-074-N1…F-074-N5), siehe oben. Benchmarks für Decode,
+  Preview, Maskeninferenz, Cache-Hit und Batch-Export werden dort definiert
+  und umgesetzt.
 - [ ] **F-075** Speicherbudgets und Abbruchverhalten für große RAWs und Masken
   messen und absichern.
 - [ ] **F-076** Rezept-, Sidecar- und Pipeline-Migrationsstrategie für Releases

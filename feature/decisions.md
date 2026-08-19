@@ -45,6 +45,25 @@ ADRs unter `docs/adr/` festgehalten (siehe `docs/adr/README.md`).
   (F-078). Die Modellfähigkeit wird aus dem Modellmanifest gelesen, nicht aus
   dem Modellnamen erraten.
 
+## Performance-Benchmarking
+
+- **Entscheidung (ADR 0003):** Performance wird mit **Criterion** als
+  einzigem nativen Timing-Harness im separaten Workspace-Crate
+  `crates/lumina-bench` gemessen. Die native Messung ist Proxy für alle Archs
+  (identische Core-Codepfade in `lumina-core`); Browser-WASM erhält später nur
+  grobe, nicht-gerichtete Smoke-Timings.
+- **Stores:** `perf/baseline.json` und `perf/budgets.json` sind committet und
+  versioniert. Das Vergleichsskript `scripts/perf/compare.mjs` kennt die Modi
+  `report` (immer, Exit 0), `warn` (Warnung bei budgetierter Überschreitung)
+  und `gate` (nur `gate: true`-Benchmarks, Exit 1 bei Verletzung).
+- **Gates:** Harte Gates gibt es erst nach Kalibrierung stabiler Benchmarks
+  (F-074-N5); Report und Warnung laufen immer. Verrauschte CI-Runner sind
+  kein alleiniger harter Gate.
+- **Feature-Wachstum:** Budget-Anpassungen sind bewusste Entscheidungen im
+  selben Commit wie das verursachende Feature und werden begründet.
+- Normatives SOLL-Dokument: `feature/quality/performance-benchmarks.md`
+  (F-074); Speicherbudgets folgen getrennt in F-075.
+
 ## Arbeitsweise
 
 - Lizenzbedingungen von RAW-Backends, ONNX-Runtime und Modellen werden vor

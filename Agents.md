@@ -223,6 +223,11 @@ Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
 - CLI-End-to-End-Tests inklusive Exit-Codes
 - native und, sofern betroffen, WASM-Build-/Smoke-Tests
 - Tests für fehlende Modelle, fehlende Maskenartefakte und veränderte Quellen
+- Performance-Methodik gemäß `feature/quality/performance-benchmarks.md`
+  (F-074): Benchmarks laufen gegen die committeten Baseline-/Budget-Stores
+  (`scripts/perf/compare.mjs`, Modi report/warn/gate); eine Budget-Anpassung
+  wegen bewusstem Feature-Wachstum wird im selben Commit wie das Feature
+  begründet
 
 AI-Modelle, RAW-Fixtures und Referenzbilder müssen reproduzierbar versioniert
 und lizenzrechtlich dokumentiert sein. Tests dürfen nicht von einem spontanen

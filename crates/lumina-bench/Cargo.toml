@@ -1,0 +1,21 @@
+[package]
+name = "lumina-bench"
+version = "0.1.0"
+edition = "2021"
+description = "Native-only benchmark harness for Lumina (methodology: feature/quality/performance-benchmarks.md, ADR 0003)"
+publish = false
+
+[dependencies]
+lumina-core = { path = "../lumina-core" }
+lumina-sidecar = { path = "../lumina-sidecar" }
+# Optional: enables RAW decode benchmarks against sample-data/raw fixtures.
+# Kept optional so the default harness build stays lightweight and does not
+# force LibRaw linking for non-decode benchmarks.
+lumina-raw = { path = "../lumina-raw", optional = true }
+
+[features]
+default = []
+raw-bench = ["dep:lumina-raw"]
+
+[dev-dependencies]
+criterion = "0.5"

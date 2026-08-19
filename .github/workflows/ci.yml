@@ -86,6 +86,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Check benchmark harness (all features)
+        run: cargo check -p lumina-bench --all-features
+
   wasm:
     name: WASM checks
     needs: detect
@@ -130,6 +133,8 @@ jobs:
           test -f feature/platform/capability-matrix.md
           test -f feature/decisions.md
           test -f feature/architecture/pipeline.md
+          test -f feature/quality/performance-benchmarks.md
+          test -f docs/adr/0003-performance-benchmarking.md
           test -f docs/adr/README.md
 
       - name: Validate workflow syntax
