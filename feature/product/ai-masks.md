@@ -200,6 +200,17 @@ CLI reicht das Ergebnis an `stderr`/`mask_warnings` durch. Offen: Persistenz der
 Re-Inferenz-Ergebnisse zurück ins `.lumina.zdata`-Bundle (F-082) und die
 GUI-Capability-Anzeige.
 
+**Status (F-050, 2026-08-20):** Umgesetzt und unabhängig verifiziert. Das
+Entscheidungsschicht-Modul `mask_loader.rs` besitzt nun eine vollständige
+Invalidierungs-/Re-Inferenz-Testmatrix (17 Tests): fehlende Artefakte,
+Modellwechsel, Quelländerung, Decode-Kontext-Änderung und `Corrupt`-Status
+lösen Re-Inferenz aus (bzw. Cache-Fallback mit Warnung, wenn kein Modell
+verfügbar); ein verfügbares, aber fehlschlagendes Modell führt zu einem harten
+Fehler ohne stillen Cache-Fallback; `refresh` erzwingt Re-Inferenz. Falsche
+Prüfsummen werden auf der zdata-Ebene (BLAKE3) abgewiesen
+(`ZDataError::Checksum`), sodass das Artefakt nicht in `loaded_planes` gelangt
+und vom Entscheidungslayer wie ein fehlendes Artefakt behandelt wird.
+
 ## Abnahme
 
 - Eine gültige Matte wird nach Neustart ohne Modell-Download verwendet.

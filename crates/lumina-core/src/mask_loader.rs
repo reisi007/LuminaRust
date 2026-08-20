@@ -368,6 +368,64 @@ mod tests {
         }
     }
 
+    /// Backend whose `infer` always fails, to assert that a failed re-inference
+    /// is surfaced as a hard error and never silently falls back to a cached
+    /// (stale) plane (F-051 / F-050: "keine stillen Fallbacks").
+    struct FailingInference {
+        available: bool,
+    }
+
+    impl MaskInference for FailingInference {
+        fn is_available(&self) -> bool {
+            self.available
+        }
+        fn infer(&self, _frame: &ImageFrame) -> Result<MaskPlane, CoreError> {
+            Err(CoreError::MaskInference {
+                reason: "simulated re-inference failure".into(),
+            })
+        }
+    }
+
+    /// Like [`resolve_one`] but lets the caller specify the *context's* decode
+    /// fingerprint independently of the definition's, so decode-context-change
+    /// scenarios can be exercised.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_single(
+        definition: MaskDefinition,
+        loaded_plane: Option<u16>,
+        inference: Option<&dyn MaskInference>,
+        model_identity: Option<ModelIdentity>,
+        refresh: bool,
+        source_hash: &str,
+        ctx_decode: DecodeFingerprint,
+    ) -> Result<MaskLoadResult, CoreError> {
+        let mut copy = copy_with("vc", vec![definition]);
+        copy.mask_layers = vec![layer_for("vc", "subject")];
+        let loaded_planes = loaded_plane
+            .map(|value| {
+                BTreeMap::from([(
+                    ("vc".into(), "subject".into()),
+                    MaskPlane::new(4, 4, vec![value; 16]).unwrap(),
+                )])
+            })
+            .unwrap_or_default();
+        let model_ref = model_identity.as_ref();
+        resolve_mask_planes(
+            MaskLoadContext {
+                copies: &[copy],
+                active_copy_id: "vc",
+                source_hash,
+                decode_context: &ctx_decode,
+                loaded_planes,
+                inference,
+                model_identity: model_ref,
+                refresh,
+                policy: MaskPolicy::Warn,
+            },
+            &frame(),
+        )
+    }
+
     const PERSISTED_VALUE: u16 = 32768;
     const INFERRED_VALUE: u16 = 12345;
 
@@ -929,5 +987,173 @@ mod tests {
             .find(|m| m.id == "inverted")
             .expect("derived mask present in result copies");
         assert_eq!(blessed.status, MaskStatus::Valid);
+    }
+
+    // --- F-050: comprehensive invalidation / re-inference coverage ----------
+
+    #[test]
+    fn decode_context_change_is_reinferred_when_model_available() {
+        // The persisted mask was decoded with a different LibRaw/decode
+        // fingerprint than the current source; it is therefore not confirmable
+        // and must be re-inferred rather than loaded.
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let mut ctx_decode = decode_context();
+        ctx_decode.version = "2".into();
+        let result = resolve_single(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+            ctx_decode,
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![INFERRED_VALUE; 16]
+        );
+    }
+
+    #[test]
+    fn decode_context_change_falls_back_to_cache_when_model_unavailable() {
+        // Decode context changed but no model is wired: the (possibly stale)
+        // cached plane is used with a warning (F-051), never a silent drop.
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let mut ctx_decode = decode_context();
+        ctx_decode.version = "2".into();
+        let result = resolve_single(
+            definition,
+            Some(PERSISTED_VALUE),
+            None,
+            None,
+            false,
+            "src",
+            ctx_decode,
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::CachedUnavailable);
+        assert!(result.model_unavailable);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("model is unavailable"));
+    }
+
+    #[test]
+    fn corrupt_status_is_reinferred_when_model_available() {
+        // A mask marked `Corrupt` is not confirmable; with a model it is
+        // re-inferred (no reuse of the corrupt artifact).
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Corrupt,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    #[test]
+    fn corrupt_status_falls_back_to_cache_when_model_unavailable() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Corrupt,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result =
+            resolve_one(definition, Some(PERSISTED_VALUE), None, None, false, "src").unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::CachedUnavailable);
+        assert!(result.model_unavailable);
+        assert!(result.warnings[0].contains("Corrupt"));
+    }
+
+    #[test]
+    fn inference_failure_is_hard_error_not_silent_fallback() {
+        // The mask is `Stale` (re-inference required) and a cached plane exists,
+        // but re-inference fails. F-051 forbids silently falling back to the
+        // stale cache — the failure is surfaced as a hard error.
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Stale,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let error = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FailingInference { available: true }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::MaskInference { .. }));
+    }
+
+    #[test]
+    fn inference_failure_without_cache_is_hard_error() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let error = resolve_one(
+            definition,
+            None,
+            Some(&FailingInference { available: true }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::MaskInference { .. }));
     }
 }

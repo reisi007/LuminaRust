@@ -62,13 +62,20 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 - **F-051** verifiziert erledigt und entfernt (Verhalten bei nicht verfügbarem
   Modell: Cache-Fallback mit Warnung oder harter Fehler — integriert in F-048,
   unabhängig verifiziert 2026-08-19).
+- **F-050** verifiziert erledigt und entfernt (umfassende Entscheidungsschicht-
+  Tests für Masken-Invalidierung und Re-Inferenz in `mask_loader.rs`:
+  fehlende Artefakte, Modellwechsel, Quelländerung, Decode-Kontext-Änderung,
+  `Corrupt`-Status und Inferrenz-Fehlschlag ohne stillen Cache-Fallback;
+  falsche Prüfsumme über die zdata-Ebene abgedeckt — unabhängig verifiziert
+  2026-08-20).
 - **F-077** verifiziert erledigt und entfernt (19 Backup-/Recovery-/Konflikt-/
   Datenverlusttests als Release-Gate in lumina-sidecar — unabhängig verifiziert
   2026-08-19).
 
 Verbleibend bis MVP: F-097 (Phase 3/4), Phase 6 AI-Masken
-(F-049, F-050, F-079, F-081…F-083), F-101 MCP AI-Agent-Schnittstelle
-(Phase 7), Release-Gates (F-072, F-073, F-075, F-078).
+(F-079, F-081…F-083 — F-049 und F-050 sind verifiziert erledigt),
+F-101 MCP AI-Agent-Schnittstelle (Phase 7, verifiziert erledigt),
+Release-Gates (F-072, F-073, F-075, F-078).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
@@ -228,8 +235,6 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-050** Tests für fehlende Artefakte, Modellwechsel, Quelländerung,
-  falsche Prüfsumme und erneute Inferenz schreiben.
 - [ ] **F-079** Promptfähige Maskenquellen für Box, Pinsel, Polygon, Ellipse und
   Verläufe in das Masken-DAG-Modell aufnehmen.
 - [ ] **F-081** Benutzergeführte Segmentierung für Rechteck- und Pinsel-Prompts
