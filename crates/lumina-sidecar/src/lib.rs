@@ -253,6 +253,11 @@ pub struct EditRecipe {
     pub lens_correction: Option<LensCorrection>,
     /// Optional F-099 perspective model, additive in schema v2.
     pub perspective: Option<Perspective>,
+    /// Optional F-097 stylistic effects (vignette + grain). Additive in schema
+    /// v2; absent is no effects and requires no migration. Serialized into the
+    /// root map (like `geometry`) so both effect objects flow into the
+    /// `recipe_hash`/`RenderKey` and invalidate preview/export.
+    pub effects: Option<Effects>,
     /// Optional F-042-N1 source-action recipe operations (dust removal, AI
     /// replacement). Additive in schema v2; absent is the empty list and
     /// requires no migration.
@@ -333,6 +338,12 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(perspective).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(effects) = &self.effects {
+            root.insert(
+                "effects".into(),
+                serde_json::to_value(effects).map_err(serde::ser::Error::custom)?,
+            );
+        }
         // F-042-N1: `source_actions` is a top-level additive key (consistent
         // with `geometry`/`lens_correction`/`perspective`), skipped entirely
         // when empty so legacy documents without the key deserialize as empty.
@@ -387,6 +398,11 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .map_err(serde::de::Error::custom)?;
         let perspective = root
             .remove("perspective")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let effects = root
+            .remove("effects")
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
@@ -449,6 +465,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             geometry,
             lens_correction,
             perspective,
+            effects,
             source_actions,
             options,
             auto_features,
@@ -596,6 +613,49 @@ pub struct Perspective {
     pub shift_y: f32,
 }
 
+/// F-097 Vignette: a deterministic radial edge-darkening (or -lightening) effect.
+/// See `feature/architecture/pipeline.md` for the SOLL ranges. The effect is
+/// applied as the LAST sub-stage of the `Adjustments` stage, to the RGB
+/// channels only; the alpha channel is never touched.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Vignette {
+    pub version: u8,
+    /// `-1..=1`: positive darkens the edges, negative lightens them, 0 is identity.
+    pub amount: f32,
+    /// `0..=1`: where the falloff begins (0 starts at the centre, 1 only at the edge).
+    pub midpoint: f32,
+    /// `-1..=1`: control of the elliptical aspect (1 = circular).
+    pub roundness: f32,
+    /// `0..=1`: transition softness (0 = sharp, 1 = very soft).
+    pub feather: f32,
+}
+
+/// F-097 Grain: deterministic, procedural, channel-coupled noise added to the
+/// RGB channels. The effective noise seed is derived deterministically from
+/// `seed` and the image dimensions, so the same seed reproduces the same grain
+/// and a different seed (or size) changes the result.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Grain {
+    pub version: u8,
+    /// `0..=1`: overall grain intensity (0 = identity).
+    pub amount: f32,
+    /// `0..=1`: grain spatial scale (0 = per-pixel, 1 = coarse blocks).
+    pub size: f32,
+    /// `0..=1`: texture variation (0 = smooth/low-frequency, 1 = raw per-cell).
+    pub roughness: f32,
+    /// `u64`: deterministic seed.
+    pub seed: u64,
+}
+
+/// F-097 container: both optional effect objects live under `recipe.effects`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Effects {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vignette: Option<Vignette>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grain: Option<Grain>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum Crop {
@@ -652,6 +712,7 @@ impl Default for EditRecipe {
             geometry: None,
             lens_correction: None,
             perspective: None,
+            effects: None,
             source_actions: Vec::new(),
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
@@ -1620,6 +1681,37 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         }
         validate_source_action_ref(&action.artifact)?;
     }
+    if let Some(e) = &a.effects {
+        if let Some(v) = &e.vignette {
+            if v.version != 1 {
+                return invalid("unsupported vignette version");
+            }
+            for (name, val, lo, hi) in [
+                ("amount", v.amount, -1.0, 1.0),
+                ("midpoint", v.midpoint, 0.0, 1.0),
+                ("roundness", v.roundness, -1.0, 1.0),
+                ("feather", v.feather, 0.0, 1.0),
+            ] {
+                if !val.is_finite() || !(lo..=hi).contains(&val) {
+                    return invalid(format!("invalid vignette {name}"));
+                }
+            }
+        }
+        if let Some(g) = &e.grain {
+            if g.version != 1 {
+                return invalid("unsupported grain version");
+            }
+            for (name, val, lo, hi) in [
+                ("amount", g.amount, 0.0, 1.0),
+                ("size", g.size, 0.0, 1.0),
+                ("roughness", g.roughness, 0.0, 1.0),
+            ] {
+                if !val.is_finite() || !(lo..=hi).contains(&val) {
+                    return invalid(format!("invalid grain {name}"));
+                }
+            }
+        }
+    }
     Ok(())
 }
 fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
@@ -1784,6 +1876,7 @@ mod tests {
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
+                effects: None,
                 source_actions: Vec::new(),
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
@@ -1817,6 +1910,7 @@ mod tests {
                     geometry: None,
                     lens_correction: None,
                     perspective: None,
+                    effects: None,
                     source_actions: Vec::new(),
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
@@ -1849,6 +1943,7 @@ mod tests {
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
+                effects: None,
                 source_actions: Vec::new(),
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
@@ -2764,6 +2859,132 @@ mod tests {
             version: 1,
             luminance: f32::NAN,
             color: 0.0,
+        });
+        assert!(d.validate().is_err());
+    }
+
+    // ---- F-097: effects (vignette + grain) recipe schema field ----
+
+    #[test]
+    fn effects_roundtrip_and_validate_ranges() {
+        let recipe = EditRecipe {
+            effects: Some(Effects {
+                vignette: Some(Vignette {
+                    version: 1,
+                    amount: -0.6,
+                    midpoint: 0.35,
+                    roundness: 0.8,
+                    feather: 0.2,
+                }),
+                grain: Some(Grain {
+                    version: 1,
+                    amount: 0.5,
+                    size: 0.75,
+                    roughness: 0.25,
+                    seed: 123456789,
+                }),
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        assert!(value["effects"]["vignette"].is_object());
+        assert!(value["effects"]["grain"].is_object());
+        // `effects` lives at the recipe root (like `geometry`), not inside
+        // `adjustments`.
+        assert!(value["adjustments"].is_object());
+        assert!(!value["adjustments"]
+            .as_object()
+            .unwrap()
+            .contains_key("effects"));
+        assert_eq!(recipe, serde_json::from_value(value).unwrap());
+
+        // Full sidecar roundtrip preserves the effects block.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.effects = Some(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: 0.4,
+                midpoint: 0.1,
+                roundness: -0.5,
+                feather: 0.9,
+            }),
+            grain: Some(Grain {
+                version: 1,
+                amount: 0.3,
+                size: 0.2,
+                roughness: 0.8,
+                seed: 42,
+            }),
+        });
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.virtual_copies[0].recipe, d.virtual_copies[0].recipe);
+    }
+
+    #[test]
+    fn effects_validation_rejects_invalid_values() {
+        // Invalid vignette version.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.effects = Some(Effects {
+            vignette: Some(Vignette {
+                version: 2,
+                amount: 0.0,
+                midpoint: 0.0,
+                roundness: 0.0,
+                feather: 0.0,
+            }),
+            grain: None,
+        });
+        assert!(d.validate().is_err());
+
+        // Out-of-range vignette amount.
+        d.virtual_copies[0].recipe.effects = Some(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: 2.0,
+                midpoint: 0.0,
+                roundness: 0.0,
+                feather: 0.0,
+            }),
+            grain: None,
+        });
+        assert!(d.validate().is_err());
+
+        // Out-of-range vignette midpoint (NaN).
+        d.virtual_copies[0].recipe.effects = Some(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: 0.0,
+                midpoint: f32::NAN,
+                roundness: 0.0,
+                feather: 0.0,
+            }),
+            grain: None,
+        });
+        assert!(d.validate().is_err());
+
+        // Out-of-range grain amount.
+        d.virtual_copies[0].recipe.effects = Some(Effects {
+            vignette: None,
+            grain: Some(Grain {
+                version: 1,
+                amount: -0.1,
+                size: 0.0,
+                roughness: 0.0,
+                seed: 1,
+            }),
+        });
+        assert!(d.validate().is_err());
+
+        // Out-of-range grain roughness.
+        d.virtual_copies[0].recipe.effects = Some(Effects {
+            vignette: None,
+            grain: Some(Grain {
+                version: 1,
+                amount: 0.0,
+                size: 1.5,
+                roughness: 0.0,
+                seed: 1,
+            }),
         });
         assert!(d.validate().is_err());
     }

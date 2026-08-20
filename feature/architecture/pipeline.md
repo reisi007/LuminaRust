@@ -548,6 +548,26 @@ Abnahme: radiale Parameter, deterministische Wiederholung und Seed-Wechsel.
 MVP-Grenze: niedrige Priorität, kein filmspezifisches Kornmodell. Abhängigkeit:
 F-031, F-093.
 
+**Implementierungsstatus (F-097, 2026-08-20):** Umgesetzt und unabhängig
+verifiziert. `recipe.effects` (`Effects { vignette: Option<Vignette>,
+grain: Option<Grain> }`) ist ein additives Schema-v2-Feld auf `EditRecipe`
+(`lumina-sidecar`), serde-mäßig im ROOT (wie `geometry`) abgelegt, sodass es
+automatisch in `recipe_hash`/`RenderKey` fließt. `Vignette` trägt
+`version`, `amount` `-1..=1`, `midpoint` `0..=1`, `roundness` `-1..=1`,
+`feather` `0..=1`; `Grain` trägt `version`, `amount`/`size`/`roughness`
+`0..=1` und `seed: u64`. Beide werden in `validate_nested_adjustments`
+(lumina-core) und `validate_adjustments` (lumina-sidecar) auf Wertebereiche
+geprüft (Version 1, finite). In `apply_recipe_with_scale_and_white_balance`
+werden sie als letzte Adjustment-Unterstufe NACH Schärfen und VOR `Ok(())`
+angewandt (RGB, Alpha unberührt): `apply_vignette` (radial,
+min/max-normalisiert, Center-Faktor 1.0, symmetrisch, `amount>0` dunkelt
+Rand/`amount<0` hellt auf) und `apply_grain` (deterministisches,
+kanalgekoppeltes Korn; effektiver Seed aus `seed` + Bilddimensionen via
+`grain_hash`; `amount==0` streng identisch). 13 neue Tests (11 lumina-core,
+2 lumina-sidecar) decken Identität, Vorzeichenverhalten, radiale Symmetrie,
+Determinismus, Seed-Wechsel, Kanalkopplung, Stufenreihenfolge und
+Validierungsablehnung ab.
+
 ### F-098 Objektivkorrekturen
 
 **Ziel:** Typische Objektivfehler im MVP manuell und ohne externe Profildaten

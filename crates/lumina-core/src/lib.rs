@@ -556,6 +556,16 @@ impl ImageFrame {
                 effective_scale,
             );
         }
+        // F-097: vignette + grain are the LAST sub-stage of `Adjustments`,
+        // after sharpening and before masks / crop. The pixel tuple is unchanged.
+        if let Some(effects) = &recipe.effects {
+            if let Some(vignette) = &effects.vignette {
+                apply_vignette(&mut self.pixels, self.width, self.height, vignette);
+            }
+            if let Some(grain) = &effects.grain {
+                apply_grain(&mut self.pixels, self.width, self.height, grain);
+            }
+        }
         Ok(())
     }
 }
@@ -1254,6 +1264,57 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
             }
         }
     }
+    if let Some(e) = &recipe.effects {
+        if let Some(v) = &e.vignette {
+            if v.version != 1 {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "effects.vignette.version".into(),
+                    value: v.version as f64,
+                    minimum: 1.0,
+                    maximum: 1.0,
+                });
+            }
+            for (name, value, lo, hi) in [
+                ("effects.vignette.amount", v.amount, -1.0_f32, 1.0_f32),
+                ("effects.vignette.midpoint", v.midpoint, 0.0_f32, 1.0_f32),
+                ("effects.vignette.roundness", v.roundness, -1.0_f32, 1.0_f32),
+                ("effects.vignette.feather", v.feather, 0.0_f32, 1.0_f32),
+            ] {
+                if !value.is_finite() || !(lo..=hi).contains(&value) {
+                    return Err(CoreError::InvalidAdjustment {
+                        name: name.into(),
+                        value: value as f64,
+                        minimum: lo as f64,
+                        maximum: hi as f64,
+                    });
+                }
+            }
+        }
+        if let Some(g) = &e.grain {
+            if g.version != 1 {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "effects.grain.version".into(),
+                    value: g.version as f64,
+                    minimum: 1.0,
+                    maximum: 1.0,
+                });
+            }
+            for (name, value, lo, hi) in [
+                ("effects.grain.amount", g.amount, 0.0_f32, 1.0_f32),
+                ("effects.grain.size", g.size, 0.0_f32, 1.0_f32),
+                ("effects.grain.roughness", g.roughness, 0.0_f32, 1.0_f32),
+            ] {
+                if !value.is_finite() || !(lo..=hi).contains(&value) {
+                    return Err(CoreError::InvalidAdjustment {
+                        name: name.into(),
+                        value: value as f64,
+                        minimum: lo as f64,
+                        maximum: hi as f64,
+                    });
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1703,6 +1764,134 @@ fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading
         }
         for channel in 0..3 {
             px[channel] = (output[channel].clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+}
+
+/// Smooth Hermite interpolation `t*t*(3-2t)` clamped to `[0,1]` over
+/// `[edge0, edge1]`. Used by the vignette transition.
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// F-097: deterministic radial vignette. Applied to the RGB channels only; the
+/// alpha channel (index 3) is never touched.
+///
+/// Invariants: `amount == 0` is an early-return identity; the centre pixel(s)
+/// of the image always keep factor `1.0` (normalised radius `0`); for positive
+/// `amount` the edges/corners are darkened and for negative `amount` they are
+/// lightened; the factor is symmetric under reflection through the centre and
+/// monotonic in the normalised radius. `midpoint` shifts where the falloff
+/// begins, `roundness` controls the elliptical aspect (1 = circular) and
+/// `feather` controls transition softness.
+fn apply_vignette(pixels: &mut [u8], width: u32, height: u32, v: &lumina_sidecar::Vignette) {
+    if v.amount == 0.0 {
+        return;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let cx = (width - 1) as f32 / 2.0;
+    let cy = (height - 1) as f32 / 2.0;
+    let half_w = ((width - 1) as f32 / 2.0).max(1.0);
+    let half_h = ((height - 1) as f32 / 2.0).max(1.0);
+    // `roundness == 1` is circular; lower values stretch the falloff along y
+    // (elliptical aspect).
+    let ry_scale = 1.0 + (1.0 - v.roundness) * 0.5;
+    // First pass: normalised radius per pixel, tracking the min/max so the
+    // centre pixel(s) always map to radius `0` (factor `1.0`) regardless of
+    // parity.
+    let mut radii = vec![0.0f32; w * h];
+    let mut r_min = f32::MAX;
+    let mut r_max = 0.0f32;
+    for y in 0..h {
+        for x in 0..w {
+            let dx = (x as f32 - cx) / half_w;
+            let dy = (y as f32 - cy) / half_h * ry_scale;
+            let r = (dx * dx + dy * dy).sqrt();
+            let idx = y * w + x;
+            radii[idx] = r;
+            r_min = r_min.min(r);
+            r_max = r_max.max(r);
+        }
+    }
+    let denom = (r_max - r_min).max(1e-6);
+    let feather_width = 0.15 + v.feather * 0.7;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            let rn = (radii[y * w + x] - r_min) / denom;
+            // `midpoint` shifts where the falloff begins (0 at the centre).
+            let t = ((rn - v.midpoint) / (1.0 - v.midpoint).max(1e-6)).clamp(0.0, 1.0);
+            let falloff = smoothstep(0.5 - feather_width / 2.0, 0.5 + feather_width / 2.0, t);
+            let factor = 1.0 - v.amount * falloff;
+            for c in 0..3 {
+                pixels[i + c] = (pixels[i + c] as f32 * factor).clamp(0.0, 255.0).round() as u8;
+            }
+        }
+    }
+}
+
+/// Deterministic, dependency-free integer hash producing a `u32`. Used to
+/// derive the per-cell grain noise.
+fn grain_hash(mut z: u32) -> u32 {
+    z = z.wrapping_add(0x9e3779b9);
+    z = (z ^ (z >> 16)).wrapping_mul(0x85ebca6b);
+    z = (z ^ (z >> 13)).wrapping_mul(0xc2b2ae35);
+    z ^= z >> 16;
+    z
+}
+
+/// F-097: deterministic procedural grain. One noise value is generated per
+/// spatial cell (size controls the cell scale) and the SAME value is added to
+/// the R, G and B channels of every pixel in that cell (channel-coupled).
+/// `roughness` blends between a smoothed low-frequency field and the raw
+/// per-cell noise. The effective seed is folded with the image dimensions, so
+/// the same `seed` on the same image reproduces identical grain while a
+/// different `seed` changes it. `amount == 0` is an early-return identity; the
+/// alpha channel is never touched and channels are clamped to `[0, 255]`.
+fn apply_grain(pixels: &mut [u8], width: u32, height: u32, g: &lumina_sidecar::Grain) {
+    if g.amount == 0.0 {
+        return;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    // Derive a dimension-aware seed (deterministic proxy for the RenderKey,
+    // which includes the image dimensions).
+    let mut seed_state = g.seed;
+    seed_state = seed_state.wrapping_add((width as u64) << 32);
+    seed_state = seed_state.wrapping_add(height as u64);
+    seed_state ^= seed_state >> 32;
+    seed_state = seed_state.wrapping_mul(0x9e3779b9);
+    let seed32 = grain_hash(seed_state as u32);
+    let cell = (1 + (g.size * 7.0).round() as usize).max(1);
+    let noise = |cx: u32, cy: u32| -> f32 {
+        let n = grain_hash(cx.wrapping_add(seed32)) ^ grain_hash(cy.wrapping_mul(0x85ebca6b));
+        (grain_hash(n) as f32 / u32::MAX as f32) * 2.0 - 1.0
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            let cx = (x / cell) as u32;
+            let cy = (y / cell) as u32;
+            let raw = noise(cx, cy);
+            // 3x3 neighbourhood average gives a smoothed, low-frequency field;
+            // `roughness` blends between it and the raw per-cell noise.
+            let mut sum = 0.0f32;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let ncx = (cx as i32 + dx).max(0) as u32;
+                    let ncy = (cy as i32 + dy).max(0) as u32;
+                    sum += noise(ncx, ncy);
+                }
+            }
+            let low = sum / 9.0;
+            let value = low * (1.0 - g.roughness) + raw * g.roughness;
+            let delta = (value * g.amount * 40.0).round() as i32;
+            for c in 0..3 {
+                let v = pixels[i + c] as i32 + delta;
+                pixels[i + c] = v.clamp(0, 255) as u8;
+            }
         }
     }
 }
@@ -3419,6 +3608,344 @@ mod tests {
                     radius: 0.01,
                     detail: 0.0,
                     masking: 0.0,
+                }),
+                ..Default::default()
+            },
+        ] {
+            let mut f = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+            assert!(f.apply_recipe(&bad).is_err());
+        }
+    }
+
+    #[test]
+    fn vignette_amount_zero_is_identity() {
+        let input = vec![120, 100, 80, 9, 40, 200, 30, 17, 255, 255, 255, 255];
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: Some(lumina_sidecar::Vignette {
+                    version: 1,
+                    amount: 0.0,
+                    midpoint: 0.5,
+                    roundness: 0.0,
+                    feather: 0.5,
+                }),
+                grain: None,
+            }),
+            ..Default::default()
+        };
+        let mut f = ImageFrame::new(3, 1, input.clone()).unwrap();
+        f.apply_recipe(&r).unwrap();
+        assert_eq!(f.pixels, input);
+    }
+
+    #[test]
+    fn vignette_darkens_edges_for_positive_amount() {
+        // Odd-sized image so the centre pixel sits exactly at normalised radius
+        // 0 and gets factor 1.0.
+        let input: Vec<u8> = (0..(5 * 5)).flat_map(|_| [128u8, 128, 128, 255]).collect();
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: Some(lumina_sidecar::Vignette {
+                    version: 1,
+                    amount: 1.0,
+                    midpoint: 0.0,
+                    roundness: 1.0,
+                    feather: 0.0,
+                }),
+                grain: None,
+            }),
+            ..Default::default()
+        };
+        let mut f = ImageFrame::new(5, 5, input.clone()).unwrap();
+        f.apply_recipe(&r).unwrap();
+        // Centre pixel is exactly 1.0 (unchanged).
+        let center = &f.pixels[((2 * 5 + 2) * 4)..((2 * 5 + 2) * 4 + 3)];
+        assert_eq!(center, &[128u8, 128, 128]);
+        // A corner pixel is strictly darker than the centre.
+        let corner = &f.pixels[0..3];
+        assert!(corner[0] < 128 && corner[1] < 128 && corner[2] < 128);
+        assert_eq!(f.pixels[3], 255);
+    }
+
+    #[test]
+    fn vignette_negative_amount_lightens_edges() {
+        let input: Vec<u8> = (0..(5 * 5)).flat_map(|_| [128u8, 128, 128, 255]).collect();
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: Some(lumina_sidecar::Vignette {
+                    version: 1,
+                    amount: -1.0,
+                    midpoint: 0.0,
+                    roundness: 1.0,
+                    feather: 0.0,
+                }),
+                grain: None,
+            }),
+            ..Default::default()
+        };
+        let mut f = ImageFrame::new(5, 5, input.clone()).unwrap();
+        f.apply_recipe(&r).unwrap();
+        let corner = &f.pixels[0..3];
+        assert!(corner[0] > 128 && corner[1] > 128 && corner[2] > 128);
+    }
+
+    #[test]
+    fn vignette_is_radially_symmetric() {
+        let input: Vec<u8> = (0..(7 * 5)).flat_map(|_| [128u8, 128, 128, 200]).collect();
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: Some(lumina_sidecar::Vignette {
+                    version: 1,
+                    amount: 0.8,
+                    midpoint: 0.3,
+                    roundness: 0.2,
+                    feather: 0.6,
+                }),
+                grain: None,
+            }),
+            ..Default::default()
+        };
+        let mut f = ImageFrame::new(7, 5, input.clone()).unwrap();
+        f.apply_recipe(&r).unwrap();
+        let w = 7usize;
+        let h = 5usize;
+        for y in 0..h {
+            for x in 0..w {
+                let mx = (w - 1) - x;
+                let my = (h - 1) - y;
+                let i = (y * w + x) * 4;
+                let j = (my * w + mx) * 4;
+                assert_eq!(&f.pixels[i..i + 3], &f.pixels[j..j + 3]);
+            }
+        }
+    }
+
+    #[test]
+    fn vignette_is_deterministic() {
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: Some(lumina_sidecar::Vignette {
+                    version: 1,
+                    amount: 0.6,
+                    midpoint: 0.2,
+                    roundness: -0.5,
+                    feather: 0.4,
+                }),
+                grain: None,
+            }),
+            ..Default::default()
+        };
+        let input: Vec<u8> = (0..(6 * 4)).flat_map(|_| [100u8, 150, 50, 255]).collect();
+        let mut a = ImageFrame::new(6, 4, input.clone()).unwrap();
+        a.apply_recipe(&r).unwrap();
+        let mut b = ImageFrame::new(6, 4, input).unwrap();
+        b.apply_recipe(&r).unwrap();
+        assert_eq!(a.pixels, b.pixels);
+    }
+
+    #[test]
+    fn grain_amount_zero_is_identity() {
+        let input = vec![120, 100, 80, 9, 40, 200, 30, 17];
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: None,
+                grain: Some(lumina_sidecar::Grain {
+                    version: 1,
+                    amount: 0.0,
+                    size: 0.5,
+                    roughness: 0.5,
+                    seed: 12345,
+                }),
+            }),
+            ..Default::default()
+        };
+        let mut f = ImageFrame::new(2, 1, input.clone()).unwrap();
+        f.apply_recipe(&r).unwrap();
+        assert_eq!(f.pixels, input);
+    }
+
+    #[test]
+    fn grain_is_deterministic_same_seed() {
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: None,
+                grain: Some(lumina_sidecar::Grain {
+                    version: 1,
+                    amount: 0.7,
+                    size: 0.4,
+                    roughness: 0.6,
+                    seed: 99,
+                }),
+            }),
+            ..Default::default()
+        };
+        let input: Vec<u8> = (0..(8 * 6)).flat_map(|_| [128u8, 128, 128, 255]).collect();
+        let mut a = ImageFrame::new(8, 6, input.clone()).unwrap();
+        a.apply_recipe(&r).unwrap();
+        let mut b = ImageFrame::new(8, 6, input).unwrap();
+        b.apply_recipe(&r).unwrap();
+        assert_eq!(a.pixels, b.pixels);
+    }
+
+    #[test]
+    fn grain_seed_change_changes_output() {
+        let grain = |seed: u64| lumina_sidecar::Grain {
+            version: 1,
+            amount: 0.8,
+            size: 0.5,
+            roughness: 0.5,
+            seed,
+        };
+        let input: Vec<u8> = (0..(8 * 6)).flat_map(|_| [128u8, 128, 128, 255]).collect();
+        let mut a = ImageFrame::new(8, 6, input.clone()).unwrap();
+        a.apply_recipe(&EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: None,
+                grain: Some(grain(1)),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut b = ImageFrame::new(8, 6, input).unwrap();
+        b.apply_recipe(&EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: None,
+                grain: Some(grain(2)),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_ne!(a.pixels, b.pixels);
+    }
+
+    #[test]
+    fn grain_preserves_alpha_and_is_channel_coupled() {
+        // Mid-gray values ensure no per-channel clamping, so the SAME noise delta
+        // must be applied to R, G and B; alpha must be untouched.
+        let input: Vec<u8> = (0..(8 * 6)).flat_map(|_| [128u8, 128, 128, 77]).collect();
+        let r = EditRecipe {
+            effects: Some(lumina_sidecar::Effects {
+                vignette: None,
+                grain: Some(lumina_sidecar::Grain {
+                    version: 1,
+                    amount: 0.9,
+                    size: 0.3,
+                    roughness: 0.7,
+                    seed: 7,
+                }),
+            }),
+            ..Default::default()
+        };
+        let mut f = ImageFrame::new(8, 6, input.clone()).unwrap();
+        f.apply_recipe(&r).unwrap();
+        for px in f.pixels.chunks_exact(4) {
+            assert_eq!(px[3], 77);
+            assert_eq!(
+                px[0] as i32 - input[0] as i32,
+                px[1] as i32 - input[1] as i32
+            );
+            assert_eq!(
+                px[1] as i32 - input[1] as i32,
+                px[2] as i32 - input[2] as i32
+            );
+        }
+    }
+
+    #[test]
+    fn effects_run_after_sharpening() {
+        // F-097 runs as the LAST sub-stage of `Adjustments` (after sharpening,
+        // before masks/crop). This exercises that ordering: starting from the
+        // same pixels, the same effects recipe is reproduced byte-for-byte
+        // (determinism), and the result is non-identity (the effects were
+        // applied). Re-applying from the *original* pixels (not the already
+        // modified ones) must match, since the effect is a pure function of the
+        // input pixels.
+        let input: Vec<u8> = (0..(5 * 5)).flat_map(|_| [128u8, 128, 128, 255]).collect();
+        let effects = lumina_sidecar::Effects {
+            vignette: Some(lumina_sidecar::Vignette {
+                version: 1,
+                amount: 0.5,
+                midpoint: 0.0,
+                roundness: 1.0,
+                feather: 0.0,
+            }),
+            grain: Some(lumina_sidecar::Grain {
+                version: 1,
+                amount: 0.3,
+                size: 0.5,
+                roughness: 0.5,
+                seed: 42,
+            }),
+        };
+        let run = |pixels: Vec<u8>| {
+            let mut f = ImageFrame::new(5, 5, pixels).unwrap();
+            f.apply_recipe(&EditRecipe {
+                effects: Some(effects.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+            f.pixels
+        };
+        let once = run(input.clone());
+        let again = run(input.clone());
+        // Deterministic: same original pixels -> same output.
+        assert_eq!(once, again);
+        // The combined effect is not identity.
+        assert_ne!(once, input);
+    }
+
+    #[test]
+    fn effects_validation_rejects_invalid_values() {
+        for bad in [
+            EditRecipe {
+                effects: Some(lumina_sidecar::Effects {
+                    vignette: Some(lumina_sidecar::Vignette {
+                        version: 2,
+                        amount: 0.0,
+                        midpoint: 0.0,
+                        roundness: 0.0,
+                        feather: 0.0,
+                    }),
+                    grain: None,
+                }),
+                ..Default::default()
+            },
+            EditRecipe {
+                effects: Some(lumina_sidecar::Effects {
+                    vignette: Some(lumina_sidecar::Vignette {
+                        version: 1,
+                        amount: 1.5,
+                        midpoint: 0.0,
+                        roundness: 0.0,
+                        feather: 0.0,
+                    }),
+                    grain: None,
+                }),
+                ..Default::default()
+            },
+            EditRecipe {
+                effects: Some(lumina_sidecar::Effects {
+                    vignette: Some(lumina_sidecar::Vignette {
+                        version: 1,
+                        amount: 0.0,
+                        midpoint: 0.0,
+                        roundness: 0.0,
+                        feather: -0.1,
+                    }),
+                    grain: None,
+                }),
+                ..Default::default()
+            },
+            EditRecipe {
+                effects: Some(lumina_sidecar::Effects {
+                    vignette: None,
+                    grain: Some(lumina_sidecar::Grain {
+                        version: 1,
+                        amount: 1.2,
+                        size: 0.0,
+                        roughness: 0.0,
+                        seed: 1,
+                    }),
                 }),
                 ..Default::default()
             },

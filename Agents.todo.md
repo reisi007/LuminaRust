@@ -68,14 +68,22 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
   `Corrupt`-Status und Inferrenz-Fehlschlag ohne stillen Cache-Fallback;
   falsche Prüfsumme über die zdata-Ebene abgedeckt — unabhängig verifiziert
   2026-08-20).
+- **F-097** verifiziert erledigt und entfernt (deterministische Vignettierung
+   und Körnung als `recipe.effects.{vignette,grain}`; radiale Vignette und
+   kanalgekoppeltes, seed-deterministisches Korn als letzte Adjustment-
+   Unterstufe nach Schärfen; fließt über die handgeschriebene `EditRecipe`-
+   Serialisierung automatisch in `recipe_hash`/`RenderKey`; Validierung der
+   Wertebereiche, Serde-Roundtrip- und Math-Tests — unabhängig verifiziert
+   2026-08-20).
 - **F-077** verifiziert erledigt und entfernt (19 Backup-/Recovery-/Konflikt-/
   Datenverlusttests als Release-Gate in lumina-sidecar — unabhängig verifiziert
   2026-08-19).
 
-Verbleibend bis MVP: F-097 (Phase 3/4), Phase 6 AI-Masken
+Verbleibend bis MVP: Phase 6 AI-Masken
 (F-079, F-081…F-083 — F-049 und F-050 sind verifiziert erledigt),
 F-101 MCP AI-Agent-Schnittstelle (Phase 7, verifiziert erledigt),
-Release-Gates (F-072, F-073, F-075, F-078).
+Release-Gates (F-072, F-073, F-075, F-078). F-097 (Vignette/Körnung) ist
+verifiziert erledigt.
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
@@ -197,9 +205,6 @@ Tests wird trotzdem umgesetzt.
   Migrationen laufen. Verifikations-Hinweis: Library-Teil ist verifiziert.
 
 ## Phase 3: Renderpipeline und Cache
-
-- [ ] **F-097** (niedrige Priorität) Deterministische Vignettierung und Körnung
-  mit RenderKey-abgeleitetem Seed umsetzen.
 
 ## Phase 4: RAW-Verarbeitung
 
