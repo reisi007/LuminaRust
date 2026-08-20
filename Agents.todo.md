@@ -94,9 +94,8 @@ F-101 MCP AI-Agent-Schnittstelle (Phase 7, verifiziert erledigt),
 Release-Gates (F-072, F-073, F-078). F-097 (Vignette/Körnung), F-102
 (LibRaw-Version in Decode-Identität) und F-075 (Speicherbudgets) sind
 verifiziert erledigt.
-F-098 (Objektivkorrekturen) ist als offene MVP-Aufgabe korrekt unter seiner
-normativen ID geführt (zuvor in diesem Plan mit der LibRaw-Version-Identity
-kollidiert).
+F-098 (Objektivkorrekturen) ist verifiziert erledigt (bereits implementiert,
+unabhängig verifiziert 2026-08-20).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
@@ -247,14 +246,16 @@ pipeline.md „Farbprofilstrategie"). **Hinweis:** Die ID F-098 war in diesem
 Plan zeitweise mit dieser Aufgabe belegt; F-098 ist die normative ID für
 **Objektivkorrekturen** (siehe unten) und wurde dafür zurückgegeben.
 
-- [ ] **F-098** (hoch) Objektivkorrekturen (lens corrections): geometrische,
-  tonale und kanalbezogene Korrektur über `recipe.lens_correction`
-  (Verzeichnung als radiales Polynom, Vignette-Polynom, CA R/B; Grün Referenz).
-  Normativ in `feature/architecture/pipeline.md` F-098. MVP-Grenze: manuelle
-  Koeffizienten und einfache benannte Presets; Lensfun ist ausdrücklich
-  Post-MVP (Lizenz F-078). Diese ID war in Agents.todo.md zeitweise mit der
-  LibRaw-Version-Identity überschrieben und wird hiermit korrekt als offene
-  Aufgabe geführt.
+F-098 ist verifiziert erledigt und entfernt (Objektivkorrekturen bereits
+implementiert: `LensCorrection` in `lumina-sidecar`, `validate_lens` /
+`apply_lens` (radiales Verzeichnungspolynom + Vignette) / `apply_ca`
+(R/B-Kanal-Skalierung) in `lumina-core`, integriert in `apply_geometry`
+(distortion → vignette → perspective → CA → crop); benannte Presets
+wide-light/tele-light/standard-neutral; `mask_recipe.lens_correction = None`
+schließt Geometrie aus dem Masken-Hash aus, `recipe_hash` invalidiert den
+RenderKey. Status in pipeline.md F-098 — unabhängig verifiziert 2026-08-20.
+Bekannte Testlücken (nicht blockierend): Preset-Koeffizienten und
+Grün-Referenz nicht pixel-explizit assertet; Lensfun bleibt Post-MVP (F-078).
 
 ## Phase 5: Auto-Tone und Exposure Matching
 

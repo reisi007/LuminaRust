@@ -331,7 +331,7 @@ mod native {
         let out_width = unsafe { &*handle.0 }.sizes.width as u64;
         let out_height = unsafe { &*handle.0 }.sizes.height as u64;
         let channels = 4u32; // final RGBA frame (3-channel LibRaw output is
-        // promoted to RGBA); using 4 keeps the guard conservative for 8-bit.
+                             // promoted to RGBA); using 4 keeps the guard conservative for 8-bit.
         let bytes_per_channel = options.output_bits as u32 / 8;
         lumina_core::memory::MemoryBudget::from_env()
             .check_decode(out_width, out_height, channels, bytes_per_channel)

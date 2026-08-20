@@ -603,6 +603,17 @@ Post-MVP. Für Lensfun sind LGPL-3.0/CC-BY-SA und F-078 zu prüfen; die native
 Dependency benötigt einen Capability-Matrix-Eintrag. Abhängigkeiten: F-031,
 F-037, F-078, F-099.
 
+**Status (F-098):** Implementiert und unabhängig verifiziert (2026-08-20).
+`LensCorrection` (additives Schema-v2-Feld) in `lumina-sidecar`;
+`validate_lens` (Wertebereiche exakt wie SOLL, Profil-Whitelist
+wide-light/tele-light/standard-neutral), `apply_lens` (Newton-Iteration des
+radialen Verzeichnungspolynoms + Vignette-Polynom, Grün-Referenz/RGB),
+`apply_ca` (R/B-Skalierung, Grün Referenz) in `lumina-core`; Integration in
+`apply_geometry` in der SOLL-Reihenfolge distortion → vignette → perspective →
+CA → crop. `mask_recipe.lens_correction = None` schließt Geometrie aus dem
+Masken-Hash aus; `recipe_hash` invalidiert den RenderKey. Lensfun bleibt
+Post-MVP.
+
 ### F-099 Upright und Perspektive
 
 **Ziel:** Perspektivische Verzerrungen manuell korrigieren und die resultierende
