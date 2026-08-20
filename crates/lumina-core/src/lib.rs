@@ -1,8 +1,8 @@
 //! Small, portable raster MVP shared by native CLI and future WASM clients.
 
 use image::{
-    codecs::jpeg::JpegEncoder, codecs::webp::WebPEncoder, ColorType, DynamicImage, ImageEncoder,
-    ImageFormat, RgbaImage,
+    codecs::jpeg::JpegEncoder, codecs::png::PngEncoder, codecs::webp::WebPEncoder, ColorType,
+    ImageEncoder,
 };
 use lumina_sidecar::EditRecipe;
 use std::io::Cursor;
@@ -318,35 +318,47 @@ impl ImageFrame {
 
     pub fn encode_with_options(&self, options: ExportOptions) -> Result<Vec<u8>, CoreError> {
         options.validate()?;
-        let mut pixels = self.pixels.clone();
+
+        // Only clone the pixel buffer when we must mutate it in place:
+        // stochastic dithering, or lossy WebP quantization. For plain
+        // PNG/JPEG/WebP-lossless export the original buffer is passed by
+        // reference straight to the encoder, avoiding a full 16 MB copy at
+        // 2048² (F-074-A4). The frame is already validated by `ImageFrame::new`,
+        // so `pixels_ref.len()` always matches `width * height * 4`.
+        let mut owned: Option<Vec<u8>> = None;
         if options.dither {
-            dither_rgba8(&mut pixels, options.seed);
+            let buf = owned.get_or_insert_with(|| self.pixels.clone());
+            dither_rgba8(buf, options.seed);
         }
         // image's portable WebP encoder is lossless-only. Quantizing before
         // VP8L encoding provides the documented quality-controlled lossy path
         // without adding a native dependency (quality 100 is lossless).
         if options.format == ImageFileFormat::WebP && options.quality < 100 {
+            let buf = owned.get_or_insert_with(|| self.pixels.clone());
             let step = ((101 - options.quality as u16) / 10).max(1) as u8;
-            for (index, value) in pixels.iter_mut().enumerate() {
+            for (index, value) in buf.iter_mut().enumerate() {
                 if index % 4 != 3 {
                     *value = (*value / step) * step;
                 }
             }
         }
+        let pixels_ref: &[u8] = match &owned {
+            Some(buf) => buf,
+            None => &self.pixels,
+        };
+
         let mut output = Cursor::new(Vec::new());
-        let rgba = RgbaImage::from_raw(self.width, self.height, pixels).ok_or(
-            CoreError::InvalidFrame {
-                width: self.width,
-                height: self.height,
-                length: self.pixels.len(),
-            },
-        )?;
         match options.format {
-            ImageFileFormat::Png => {
-                DynamicImage::ImageRgba8(rgba).write_to(&mut output, ImageFormat::Png)
-            }
+            ImageFileFormat::Png => PngEncoder::new(&mut output).write_image(
+                pixels_ref,
+                self.width,
+                self.height,
+                ColorType::Rgba8.into(),
+            ),
             ImageFileFormat::Jpeg => {
-                let rgb: Vec<u8> = rgba
+                // JPEG is RGB; drop the alpha channel. Build it directly from
+                // the (possibly mutated) buffer without an intermediate clone.
+                let rgb: Vec<u8> = pixels_ref
                     .chunks_exact(4)
                     .flat_map(|pixel| pixel[..3].iter().copied())
                     .collect();
@@ -358,7 +370,7 @@ impl ImageFrame {
                 )
             }
             ImageFileFormat::WebP => WebPEncoder::new_lossless(&mut output).write_image(
-                &rgba,
+                pixels_ref,
                 self.width,
                 self.height,
                 ColorType::Rgba8.into(),
@@ -2140,6 +2152,26 @@ mod tests {
             frame.encode_with_options(dithered).unwrap(),
             frame.encode_with_options(dithered).unwrap()
         );
+    }
+
+    #[test]
+    fn png_export_without_dither_is_deterministic_and_lossless() {
+        // Exercises the no-mutation (no-clone) encode path: dither=false must
+        // pass the original buffer by reference and still produce a valid,
+        // byte-deterministic, losslessly roundtripping PNG.
+        let frame = ImageFrame::new(4, 3, (0..48).map(|v| v as u8).collect()).unwrap();
+        let options = ExportOptions {
+            format: ImageFileFormat::Png,
+            dither: false,
+            ..ExportOptions::default()
+        };
+        let first = frame.encode_with_options(options).unwrap();
+        let second = frame.encode_with_options(options).unwrap();
+        assert_eq!(
+            first, second,
+            "PNG encode without dither must be deterministic"
+        );
+        assert_eq!(ImageFrame::decode(&first).unwrap(), frame);
     }
 
     #[test]
