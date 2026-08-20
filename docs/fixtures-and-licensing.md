@@ -3,7 +3,7 @@
 **Features:** F-073 (small versioned reference images, RAW fixtures & models) ·
 F-078 (license, model & distribution audit)
 **Status:** Implemented (documentation + audit). Not yet verified.
-**Authority:** [`feature/quality/fixtures-licensing.md`](feature/quality/fixtures-licensing.md)
+**Authority:** [`feature/quality/fixtures-licensing.md`](../feature/quality/fixtures-licensing.md)
 **Companion:** [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) (full crate table)
 
 This document inventories LuminaRust's test fixtures and ML models, records
@@ -139,7 +139,8 @@ Notes:
 | OFL-1.1 / Ubuntu-font-1.0 (egui fonts) | 1 crate (`epaint_default_fonts`) | ✅ | font attribution | bundle font license |
 | Apache-2.0 WITH LLVM-exception | ~6 | ✅ | none | bundle notice |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` (`r-efi`) | 2 | ✅ (under MIT/Apache) | only if compiled for `uefi` | never shipped → no action; otherwise comply under MIT |
-| **LibRaw (LGPL-2.1 / CDDL-1.0 / LibRaw Software License)** | native, linked | ⚠️ weak copyleft | **only real obligation** | see §4.4 |
+| **LibRaw (LGPL-2.1 / CDDL-1.0 / LibRaw Software License)** | native, linked | ⚠️ weak copyleft | **only real obligation (default build)** | see §4.4 |
+| **Lensfun (LGPL-3.0, DB CC-BY-SA-3.0)** | native, **dynamically** linked via `lumina-lensfun` → `pkg-config`, only when the `native` feature is enabled (default **off**) | ⚠️ weak copyleft | only when `native` feature enabled | dynamic link (obligation does not extend to whole work); ship license text + source offer for 0.3.4 + DB attribution; see `THIRD-PARTY-NOTICES.md` (Attribution obligations, #5) |
 
 ### 4.4 The single real obligation: LibRaw
 

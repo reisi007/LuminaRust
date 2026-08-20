@@ -36,7 +36,9 @@ Dieses Dokument erfasst:
 - committete RAW-Fixtures (`sample-data/raw/*.cr3`);
 - ML-Modelle (BiRefNet, SAM 2, ONNX Runtime) inkl. Lizenz;
 - die vollständige Rust-Abhängigkeitsmenge (Cargo-Metadata, default + all-features);
-- native C-Bibliothek LibRaw (über `vendor/libraw-sys`).
+- native C-Bibliothek LibRaw (über `vendor/libraw-sys`);
+- native C-Bibliothek Lensfun (über `crates/lumina-lensfun`, F-098-N1,
+  feature-gated `native`).
 
 Nicht Gegenstand: Golden-Image-Tests (deferred F-043/F-073), zentrale DB
 (es gibt in v1 keine).
@@ -79,20 +81,58 @@ generiert/CC0).
 
 ---
 
-## 4. Rohdaten-Provenance & Lizenz — ⚠️ OFFENE LÜCKE
+## 4. Rohdaten-Provenance & Lizenz — ✅ GELÖST (2026-08-20)
 
-**Befund:** Die beiden committeten `.cr3`-Fixtures in `sample-data/raw/` haben
-**keine dokumentierte Quelle, keinen Autor, keine Lizenz**. Kein `LICENSE`/`README`
-in `sample-data/`; der einführende Commit (`1e388bf`) nennt keine Provenance.
+**Befund (Stand 2026-08-20, Ermittlung siehe `sample-data/raw/README.md`):**
+Die beiden committeten `.cr3`-Fixtures in `sample-data/raw/` haben **keine
+explizite Lizenzgewährung** — weder im einführenden Commit `1e388bf` noch als
+separates `LICENSE`/`README`. Der Eigentümer ist jedoch **aus den Binär-Metadaten
+selbst ableitbar**: Beide Dateien tragen in EXIF `Artist`/`Copyright`
+`reisinger.pictures/Florian Reisinger` sowie `Owner Name: Florian Reisinger`; der
+einführende Commit `1e388bf` („Add tone controls and RAW sample fixtures“,
+2026-08-17, Author Florian Reisinger) bestätigt denselben Urheber. Damit ist der
+**Autor/Provenance teilweise belegt** — es fehlt weiterhin eine **explizite
+Lizenz** (das EXIF-`Copyright`-Feld ist keine Lizenzgewährung; es existiert kein
+IPTC/XMP-`License`/`Rights`-Feld).
+
+Ermittelte Metadaten (via `exiftool`):
+
+| Datei | Kamera | Objektiv | Aufnahme (EXIF) | Orientierung | Maße |
+| --- | --- | --- | --- | --- | --- |
+| `aircraft-landscape.cr3` | Canon EOS R1 | RF200-800mm F6.3-9 IS USM | 2026:08:14 20:16:49, 1/1000 s, ISO 1000, 800 mm | 1 (Horizontal) | 6032×4024 |
+| `aircraft-portrait.cr3` | Canon EOS R1 | RF200-800mm F6.3-9 IS USM | 2026:08:14 20:17:32, 1/1000 s, ISO 1250, 800 mm | 5 (Rotate 270 CW) | 4024×6032 |
 
 Das ist ein **Release-Blocker** (F-078): urheberrechtlich geschützte Kamera-RAWs
 ohne Lizenzgewährung zu distribuieren ist ein rechtliches Risiko — unabhängig
 von der (MIT) Rust-Code-Lizenz. Die `*_fixture_*`-Tests hängen hart an genau
 diesen Bytes.
 
-→ Empfohlene Maßnahme R1 (siehe §7): Provenance + Lizenz dokumentieren **oder**
-durch generierte/synthetische bzw. CC0-lizenzierte Fixtures ersetzen, bevor
-distribuiert wird.
+**Status (2026-08-20):** **GELÖST** — Autor/Provenance belegt (EXIF `Artist`/
+`Copyright`/`Owner Name` = reisinger.pictures/Florian Reisinger + Commit
+`1e388bf`) und **explizite Lizenzgewährung dokumentiert**: Der Projekteigentümer
+hat am 2026-08-20 eine **uneingeschränkte Nutzungs- und Distributionsgewährung
+für das LuminaRust-Projekt** erteilt (eingetragen im Provenienz-Block in
+`sample-data/raw/README.md`). R1 gilt damit als geschlossen (Verifikation
+durch unabhängigen Agenten steht im Rahmen der F-078-Abnahme aus).
+
+Ausgetragene Alternativen (nur noch relevant, falls die Gewährung
+zurückgezogen wird):
+1. Austausch gegen generierte/CC0-lizenzierte Fixtures (siehe unten, „Was ein
+   Austausch bedeuten würde").
+
+**Was ein Austausch bedeuten würde:** Betroffen sind die `lumina-raw`-Tests
+`aircraft_landscape_fixture_*` / `aircraft_portrait_fixture_*` (sie referenzieren
+die Dateien per `include_bytes!` fest verdrahtet) sowie die Decode-Benchmarks in
+`crates/lumina-bench/bench/decode.rs` (lesen das Verzeichnis via
+`LUMINA_RAW_FIXTURE`). Die Decode-Pipeline benötigt funktional nur RAW-Bytes;
+LuminaRust kann mit **einem** RAW-Fixture arbeiten. Das generierte Fixture müsste
+jedoch **beide Rollen** erfüllen (landscape-Orientierung 1 **und**
+portrait-Orientierung 5), d.h. entweder zwei generierte Dateien oder eine
+Test-Refaktorierung. Die `#[ignore]`-Test
+`optional_real_fixture_checks_decode_orientation_and_dimensions` bleibt
+unabhängig (eigene, separat lizenzierte RAW via Env-Var). Die Fixture-DATEIEN
+selbst wurden in diesem Schritt **nicht** verändert/entfernt — die Entscheidung
+liegt beim Build-Agenten/Eigentümer.
 
 ---
 
@@ -128,7 +168,8 @@ abgeglichen. Vollständige Tabelle: `THIRD-PARTY-NOTICES.md`.
   `uefi`**-Targets (transitiv über `getrandom`-UEFI-Backend); in keiner
   ausgelieferten macOS/Linux/Windows/WASM-Build kompiliert. Über die `OR`-Klausel
   unter MIT/Apache erfüllbar.
-- **Einzig reale Pflicht:** LibRaw (siehe §6.3).
+- **Einzig reale Pflicht (Default-Build):** LibRaw (siehe §6.3). Zusätzlich
+  **feature-gated** (nur bei aktiviertem `native`-Feature): Lensfun (siehe §6.5).
 
 ### 6.3 LibRaw (einzige reale Verpflichtung)
 
@@ -155,7 +196,30 @@ abgeglichen. Vollständige Tabelle: `THIRD-PARTY-NOTICES.md`.
 | MIT / Apache-2.0 / BSD / ISC / Zlib / 0BSD / CC0 / Unlicense / BSL | ✅ | keine | Notice bündeln |
 | Unicode-3.0, OFL-1.1/Ubuntu-Font, Apache-2.0+LLVM-exc | ✅ | keine (Attribution) | Notice/Font-Lizenz bündeln |
 | `r-efi` (LGPL-2.1-or-later, UEFI-only) | ✅ unter MIT/Apache | nur bei UEFI-Build | nicht ausgeliefert → keine Aktion |
-| **LibRaw** (LGPL/CDDL/LibRaw-SW) | ⚠️ schwach | **einzige Pflicht** | dynamisch linken + Notice/Quellangebot |
+| **LibRaw** (LGPL/CDDL/LibRaw-SW) | ⚠️ schwach | **einzige Pflicht** (Default) | dynamisch linken + Notice/Quellangebot |
+| **Lensfun** (LGPL-3.0, DB CC-BY-SA) | ⚠️ schwach | nur bei `native`-Feature | dynamisch linken (Feature `native`, Default aus) + Notice/Quellangebot + DB-Attribution; s. §6.5 |
+
+### 6.5 Lensfun (F-098-N1 / F-098-N4) — native, feature-gated
+
+`lumina-lensfun` (F-098-N1) ist ein dünner, sicherer Rust-Wrapper um die
+System-`liblensfun` für **automatische Objektivkorrektur** (Verzeichnung +
+Vignettierung), wenn in der installierten Datenbank ein passendes
+Kamera/Objektiv-Profil gefunden wird. Die Integration ist **Pre-MVP** (verifiziert
+2026-08-20, F-098-N1), die Distributions-Doku ist Teil von **F-098-N4** (S8) und
+zählt zur F-078-Abnahme.
+
+| Punkt | Befund |
+| --- | --- |
+| Rolle | Automatische Objektivkorrektur (Distortion + Vignetting); CA bleibt manuell (F-098-N1-MVP-Grenze) |
+| Integration | Pre-MVP (F-098-N1), verifiziert 2026-08-20 |
+| Feature-Gating | `native`-Feature im Crate `lumina-lensfun` — **Standard AUS**; Default-, WASM- und CI-Builds linken nichts und bleiben grün |
+| Linkart | **dynamisch** über `pkg-config` (`build.rs` → `cargo:rustc-link-lib=dylib=lensfun`), nur wenn `native` an |
+| Version (bewiesen) | **0.3.4** — `brew info lensfun` **und** `LF_VERSION_*` in `/opt/homebrew/include/lensfun/lensfun.h` (`LF_VERSION_MAJOR 0` / `_MINOR 3` / `_MICRO 4`) |
+| Bibliotheks-Lizenz | **LGPL-3.0-or-later** laut Projekt-FFI und Header-Text („version 2 … or (at your option) any later version“); Homebrew-Formel deklariert `LGPL-3.0-only AND GPL-3.0-only AND CC-BY-3.0 AND LicenseRef-Homebrew-public-domain` → **zu verifizieren** (exakte SPDX gegen upstream `COPYING`/`README`) |
+| Datenbank-Lizenz | Profil-DB (`/opt/homebrew/share/lensfun/version_1/*.xml`): **CC-BY-SA-3.0** laut Projektdoku/F-098-N4; Homebrew-Formel nennt nur `CC-BY-3.0` → **zu verifizieren** (SA vs. kein-SA gegen `lensfun-data`) |
+| Neue gebündelte Binaries | **Keine** — LuminaRust liest zur Laufzeit die **System**-Datenbank (kein vendored DB) |
+| Verpflichtung | Dynamisches Linken beibehalten (kein statisches Einbetten → würde LGPL aufs Gesamtwerk ausweiten); Lensfun-Lizenztext + Quellangebot für **0.3.4** + DB-Attribution im Release-Bundle |
+| Querverweis | `THIRD-PARTY-NOTICES.md` (Attribution obligations, Nr. 5) |
 
 ---
 
@@ -180,7 +244,7 @@ Quell-URL erfassen; Fixture-Seeds eingefroren.
 
 | ID | Schwere | Punkt | Maßnahme |
 | --- | --- | --- | --- |
-| **R1** | 🔴 Blocker | `.cr3`-Fixtures ohne dokumentierte Lizenz/Provenance (§4) | Provenance + Lizenz dokumentieren **oder** durch generierte/CC0-Fixtures ersetzen, bevor distribuiert wird |
+| **R1** | ✅ Gelöst (2026-08-20) | `.cr3`-Fixtures (§4): Autor aus EXIF + Commit belegt (Florian Reisinger / reisinger.pictures); **uneingeschränkte Nutzungs-/Distributionsgewährung für LuminaRust** am 2026-08-20 durch den Eigentümer erteilt und im Provenienz-Block (`sample-data/raw/README.md`) dokumentiert | Keine Aktion mehr; Verifikation der Doku im Rahmen der F-078-Abnahme |
 | **R2** | 🟠 Hoch | Alle 8 Workspace-Crates ohne `license`-Feld; Repo-Root ohne `LICENSE`/`NOTICE` — Projekt bewusst unlizenziert / kommerziell bis MVP | Lizenz bei MVP entscheiden (siehe `Agents.todo.md` LIZ-ENTSCHEIDUNG); dann `license` + Root-`LICENSE` konsistent ergänzen |
 | **R3** | 🟠 Hoch | LibRaw-Dynamik-Link-Verpflichtung (§6.3) | Dynamisches Linken beibehalten; LibRaw-Lizenz + Quellangebot für 0.22.2 im Release bündeln |
 | **R4** | 🟡 Mittel | `onnx-rt`-Pfad lädt ORT-Prebuilt-Binaries (Netz) | Bei Release-Freigabe ORT-Redistribution + Prebuilt-Terms prüfen, Pin `=2.0.0-rc.13` halten, Modell-Lizenzen/Hashes erfassen |
@@ -201,7 +265,7 @@ Targets nicht erreichbar.
 - [x] Vollständige Abhängigkeits-Lizenztabelle erstellt (`THIRD-PARTY-NOTICES.md`).
 - [x] Keine GPL/AGPL/SSPL gefunden; LibRaw als einzige Pflicht benannt.
 - [x] Versionierungs-Policy dokumentiert.
-- [ ] **R1** (RAW-Fixture-Lizenz) vor Release geschlossen.
+- [x] **R1** (RAW-Fixture-Lizenz) geschlossen (2026-08-20, Eigentümer-Gewährung in `sample-data/raw/README.md` dokumentiert).
 - [ ] **R2** (Workspace-Crate-Lizenzen + Root-LICENSE) umgesetzt.
 - [ ] **R3** (LibRaw-Notice im Release-Bundle) umgesetzt.
 

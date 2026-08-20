@@ -33,6 +33,7 @@ downstream project may comply by satisfying **any one** of the listed licenses.
 | Weak copyleft (`LGPL-2.1-or-later`) | ⚠️ Only `r-efi`, and **only for `uefi` targets** — never compiled for shipped desktop/WASM targets (see below) |
 | Strong copyleft (GPL / AGPL / SSPL / MPL / EPL) | ❌ **None found** in the entire dependency graph (default **and** all-features) |
 | Native C library with copyleft (LibRaw) | ⚠️ Linked **dynamically** via `vendor/libraw-sys` → system `libraw_r`. See obligations. |
+| Native C library with weak copyleft (Lensfun) | ⚠️ Linked **dynamically** via `lumina-lensfun` → `pkg-config`, **only** when the `native` feature is enabled (default **off** — not compiled into default/WASM/CI builds). Dynamic linking means LGPL obligations do **not** extend to the whole work. See obligations. |
 
 **Conclusion:** The Rust crate tree contains **no GPL/AGPL/SSPL/MPL/EPL**
 dependency. The only copyleft-licensed crate (`r-efi`, `MIT OR Apache-2.0 OR
@@ -40,7 +41,11 @@ LGPL-2.1-or-later`) is reachable exclusively under the `uefi` target (pulled in
 transitively by `getrandom`'s UEFI backend) and is therefore **not part of any
 shipped macOS / Linux / Windows / WASM build**. Even where it is compiled, its
 `OR` clause lets us comply under plain MIT or Apache-2.0. The single real
-distribution obligation is **LibRaw**, addressed under "Attribution obligations".
+distribution obligation for **default** builds is **LibRaw**, addressed under
+"Attribution obligations". **Lensfun** is a second, **feature-gated**
+(`native`, default off) obligation that applies only to builds that enable that
+feature and therefore link `liblensfun`; because it is linked **dynamically**,
+its LGPL obligations do not extend to the whole work. See obligations.
 
 ## Attribution obligations
 
@@ -74,6 +79,37 @@ obligations that MUST be honored in any distributed build:
 4. **Every MIT / BSD / Apache-2.0 crate** — include the copyright line and
    license text (full list below). Apache-2.0 additionally requires carrying
    `NOTICE` files if present.
+5. **Lensfun (native C library, linked via `lumina-lensfun` → `pkg-config`)** —
+   automatic lens correction (F-098-N1), feature-gated behind the `native`
+   feature (default **off**).
+   - **Library license:** the project FFI and the upstream header's "version 2 of
+     the License, or (at your option) any later version" wording indicate
+     **LGPL-3.0-or-later**; the Homebrew formula for the installed **0.3.4**
+     declares `LGPL-3.0-only AND GPL-3.0-only AND CC-BY-3.0 AND
+     LicenseRef-Homebrew-public-domain`. The exact SPDX (or-later vs `-only`,
+     and the GPL-3.0-only / Homebrew public-domain components) is **zu
+     verifizieren** against the upstream Lensfun `COPYING`/`README`.
+   - `lumina-lensfun` (the Rust wrapper, `crates/lumina-lensfun`) is a workspace
+     crate and currently declares **NO `license` field** (see R2 in
+     `feature/quality/fixtures-licensing.md`). Lensfun itself is **not** in the
+     crate table above — it is a native dependency resolved through `pkg-config`,
+     not a crate.
+   - `build.rs` emits `cargo:rustc-link-lib=dylib=lensfun` **only** when the
+     `native` feature is enabled; default, WASM and CI builds link nothing and
+     stay green. (Version **0.3.4** confirmed via `brew info lensfun` and the
+     `LF_VERSION_*` macros in `/opt/homebrew/include/lensfun/lensfun.h`.)
+   - **Obligation:** Keep the **dynamic-link** arrangement (do not statically
+     embed Lensfun into the binary, which would extend LGPL to the whole work);
+     ship Lensfun's license text and a written offer / pointer to Lensfun source
+     for the exact version used (**0.3.4**) in the release bundle.
+   - **Lensfun database (camera/lens profiles,
+     `/opt/homebrew/share/lensfun/version_1/*.xml`):** licensed **CC-BY-SA-3.0**
+     per the project documentation and the F-098-N4 task; the Homebrew formula
+     declares only `CC-BY-3.0`. The precise DB license (SA vs no-SA) is **zu
+     verifizieren** against the upstream `lensfun-data` repository. No new
+     bundled binaries are introduced — LuminaRust reads the **system** database at
+     runtime (no vendored DB). Database attribution must be included in the
+     release bundle.
 
 ## Complete crate license table (all-features resolve)
 
