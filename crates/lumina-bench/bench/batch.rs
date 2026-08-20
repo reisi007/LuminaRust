@@ -31,6 +31,8 @@ fn batch_benches(c: &mut Criterion) {
             camera_white_balance: None,
             source_actions: &[],
             masks: Some(mask_ctx),
+            #[cfg(feature = "lensfun")]
+            lensfun: None,
         };
 
         group.bench_function(format!("render_export_png__{size}"), |b| {

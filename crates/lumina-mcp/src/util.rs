@@ -134,6 +134,8 @@ pub fn render_copy(
             camera_white_balance,
             source_actions: &[],
             masks: None,
+            #[cfg(feature = "lensfun")]
+            lensfun: None,
         },
     )
     .map_err(map_core_error)?;

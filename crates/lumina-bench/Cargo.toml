@@ -16,6 +16,9 @@ lumina-raw = { path = "../lumina-raw", optional = true }
 [features]
 default = []
 raw-bench = ["dep:lumina-raw"]
+# F-098-N1: enables the Lensfun pipeline path in lumina-core for bench runs
+# with a real lens profile (default OFF; requires native liblensfun).
+lensfun = ["lumina-core/lensfun"]
 
 [[bench]]
 name = "core"

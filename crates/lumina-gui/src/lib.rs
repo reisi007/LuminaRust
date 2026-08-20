@@ -917,6 +917,8 @@ impl LuminaApp {
                 camera_white_balance: self.camera_white_balance,
                 source_actions: &[],
                 masks: masks_context,
+                #[cfg(feature = "lensfun")]
+                lensfun: None,
             },
         )?;
         let preview = output.frame;

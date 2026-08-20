@@ -589,6 +589,8 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
                 camera_white_balance: None,
                 source_actions: &source_actions,
                 masks: None,
+                #[cfg(feature = "lensfun")]
+                lensfun: None,
             },
         )?;
         let format = output_format(output)?;
@@ -1035,6 +1037,8 @@ fn process_selected(
                 planes: resolved.planes,
                 policy: MaskPolicy::Warn,
             }),
+            #[cfg(feature = "lensfun")]
+            lensfun: None,
         },
     )?;
     // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
@@ -1845,6 +1849,8 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 masks: None,
+                #[cfg(feature = "lensfun")]
+                lensfun: None,
             },
         )
         .unwrap();

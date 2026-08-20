@@ -191,12 +191,40 @@ impl ImageFrame {
     /// → rotation → mirroring. Coordinates for the crop are normalized on the
     /// perspective-transformed image. All resampling is inverse bilinear with
     /// black (zero RGBA) outside the source.
+    ///
+    /// When the `lensfun` feature is enabled, an optional [`lumina_lensfun::Corrector`]
+    /// overrides the manual distortion + vignette model per pixel (and is applied
+    /// even when the recipe carries no manual `LensCorrection`). Chromatic
+    /// aberration stays manual (recipe lens only), matching the F-098 MVP limit.
     pub fn apply_geometry(
         &mut self,
         geometry: Option<&lumina_sidecar::Geometry>,
         lens: Option<&lumina_sidecar::LensCorrection>,
         perspective: Option<&lumina_sidecar::Perspective>,
+        #[cfg(feature = "lensfun")] lensfun: Option<&lumina_lensfun::Corrector>,
     ) -> Result<(), CoreError> {
+        // Distortion + vignette: a Lensfun corrector overrides the manual model
+        // and is applied even when the recipe carries no manual `LensCorrection`
+        // (F-098-N1). Chromatic aberration stays manual (recipe lens only).
+        #[cfg(feature = "lensfun")]
+        let use_corrector = lensfun.is_some();
+        #[cfg(feature = "lensfun")]
+        if use_corrector {
+            if let Some(l) = lens {
+                validate_lens(l)?;
+            }
+            let manual = lens.unwrap_or(&EMPTY_LENS);
+            apply_lens(self, manual, lensfun);
+        } else if let Some(l) = lens {
+            validate_lens(l)?;
+            apply_lens(
+                self,
+                l,
+                #[cfg(feature = "lensfun")]
+                None,
+            );
+        }
+        #[cfg(not(feature = "lensfun"))]
         if let Some(l) = lens {
             validate_lens(l)?;
             apply_lens(self, l);
@@ -205,6 +233,8 @@ impl ImageFrame {
             validate_perspective(p)?;
             *self = apply_perspective(self, p);
         }
+        // CA stays manual (recipe lens only), applied after perspective like the
+        // original order (distortion → perspective → CA → crop).
         if let Some(l) = lens {
             apply_ca(self, l);
         }
@@ -745,7 +775,59 @@ fn sample(frame: &ImageFrame, x: f32, y: f32, ch: usize) -> f32 {
     (at(x0, y0) * (1. - fx) + at(x1, y0) * fx) * (1. - fy)
         + (at(x0, y1) * (1. - fx) + at(x1, y1) * fx) * fy
 }
-fn apply_lens(frame: &mut ImageFrame, l: &lumina_sidecar::LensCorrection) {
+/// Empty manual lens model used to drive [`apply_lens`] through the Lensfun
+/// corrector path when the recipe carries no manual `LensCorrection` (F-098-N1).
+#[cfg(feature = "lensfun")]
+const EMPTY_LENS: lumina_sidecar::LensCorrection = lumina_sidecar::LensCorrection {
+    version: 1,
+    profile: None,
+    distortion_k1: None,
+    distortion_k2: None,
+    distortion_k3: None,
+    vignette_c0: None,
+    vignette_c1: None,
+    vignette_c2: None,
+    ca_red: None,
+    ca_blue: None,
+};
+
+fn apply_lens(
+    frame: &mut ImageFrame,
+    l: &lumina_sidecar::LensCorrection,
+    #[cfg(feature = "lensfun")] lensfun: Option<&lumina_lensfun::Corrector>,
+) {
+    // F-098-N1: a Lensfun corrector (when present and non-identity) replaces the
+    // manual radial-distortion Newton iteration and the vignette polynomial with
+    // the database profile, per pixel. The corrector's geometry maps a
+    // destination (corrected) pixel `(x, y)` in `[0, width-1] × [0, height-1]`
+    // to the source (distorted) pixel to sample — the same pixel space
+    // `apply_lens` iterates over. Vignetting is applied via `color_gain` on the
+    // RGB channels only; the alpha channel is left untouched (same structure as
+    // the manual model).
+    #[cfg(feature = "lensfun")]
+    if let Some(corrector) = lensfun {
+        if !corrector.is_identity() {
+            let src = frame.clone();
+            for y in 0..frame.height {
+                for x in 0..frame.width {
+                    let (sx, sy) = corrector.geometry(x as f64, y as f64);
+                    let i = (y * frame.width + x) as usize * 4;
+                    let r = sample(&src, sx as f32, sy as f32, 0);
+                    let g = sample(&src, sx as f32, sy as f32, 1);
+                    let b = sample(&src, sx as f32, sy as f32, 2);
+                    let (cr, cg, cb) = corrector.color_gain(r, g, b, x as f64, y as f64);
+                    frame.pixels[i] = (cr).round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[i + 1] = (cg).round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[i + 2] = (cb).round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[i + 3] = sample(&src, sx as f32, sy as f32, 3)
+                        .round()
+                        .clamp(0.0, 255.0) as u8;
+                }
+            }
+            return;
+        }
+    }
+    // Manual model (unchanged behaviour).
     let c = lens_coefficients(l);
     let src = frame.clone();
     let (w, h) = (frame.width as f32, frame.height as f32);
@@ -2723,6 +2805,8 @@ mod tests {
                 }),
                 None,
                 None,
+                #[cfg(feature = "lensfun")]
+                None,
             )
             .unwrap();
         assert_eq!((frame.width, frame.height), (2, 2));
@@ -2774,7 +2858,15 @@ mod tests {
         ];
         let mut rendered = ImageFrame::new(2, 2, pixels.clone()).unwrap();
         let p = test_perspective();
-        rendered.apply_geometry(None, None, Some(&p)).unwrap();
+        rendered
+            .apply_geometry(
+                None,
+                None,
+                Some(&p),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         assert_eq!((rendered.width, rendered.height), (2, 2));
         assert_eq!(rendered.pixels, pixels);
         let domain = rendered
@@ -2789,7 +2881,15 @@ mod tests {
         let mut rendered = ImageFrame::new(2, 2, pixels).unwrap();
         let mut p = test_perspective();
         p.scale = 2.0;
-        rendered.apply_geometry(None, None, Some(&p)).unwrap();
+        rendered
+            .apply_geometry(
+                None,
+                None,
+                Some(&p),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         assert_eq!((rendered.width, rendered.height), (4, 4));
         assert_eq!(rendered.pixels[0], 10);
         assert_eq!(rendered.pixels[3 * 4], 20);
@@ -2810,14 +2910,30 @@ mod tests {
         let mut p = test_perspective();
         p.shift_x = 0.5;
         p.shift_y = -0.25;
-        shifted.apply_geometry(None, None, Some(&p)).unwrap();
+        shifted
+            .apply_geometry(
+                None,
+                None,
+                Some(&p),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         assert_eq!((shifted.width, shifted.height), (4, 2));
         assert_ne!(shifted.pixels, base.pixels);
 
         let mut rotated = base.clone();
         p = test_perspective();
         p.rotation = 1.0;
-        rotated.apply_geometry(None, None, Some(&p)).unwrap();
+        rotated
+            .apply_geometry(
+                None,
+                None,
+                Some(&p),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         assert!(rotated.width > base.width && rotated.height > base.height);
 
         for (vertical, horizontal) in [(0.5, 0.0), (0.0, 0.5), (-0.5, 0.0), (0.0, -0.5)] {
@@ -2825,7 +2941,15 @@ mod tests {
             p = test_perspective();
             p.vertical = vertical;
             p.horizontal = horizontal;
-            directional.apply_geometry(None, None, Some(&p)).unwrap();
+            directional
+                .apply_geometry(
+                    None,
+                    None,
+                    Some(&p),
+                    #[cfg(feature = "lensfun")]
+                    None,
+                )
+                .unwrap();
             assert!(directional.width >= base.width && directional.height >= base.height);
         }
     }
@@ -2865,7 +2989,13 @@ mod tests {
             .measurement_domain_with_perspective(Some(&geometry), Some(&lens), Some(&p))
             .unwrap();
         frame
-            .apply_geometry(Some(&geometry), Some(&lens), Some(&p))
+            .apply_geometry(
+                Some(&geometry),
+                Some(&lens),
+                Some(&p),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         assert_eq!(
             (frame.width, frame.height),
@@ -2894,8 +3024,22 @@ mod tests {
         explicit.distortion_k1 = Some(0.0);
         let mut a = source.clone();
         let mut b = source.clone();
-        a.apply_geometry(None, Some(&profile), None).unwrap();
-        b.apply_geometry(None, Some(&explicit), None).unwrap();
+        a.apply_geometry(
+            None,
+            Some(&profile),
+            None,
+            #[cfg(feature = "lensfun")]
+            None,
+        )
+        .unwrap();
+        b.apply_geometry(
+            None,
+            Some(&explicit),
+            None,
+            #[cfg(feature = "lensfun")]
+            None,
+        )
+        .unwrap();
         assert_ne!(a.pixels, b.pixels);
 
         for bad in [
@@ -2910,7 +3054,13 @@ mod tests {
         ] {
             assert!(source
                 .clone()
-                .apply_geometry(None, None, Some(&bad))
+                .apply_geometry(
+                    None,
+                    None,
+                    Some(&bad),
+                    #[cfg(feature = "lensfun")]
+                    None
+                )
                 .is_err());
         }
         let bad_lens = lumina_sidecar::LensCorrection {
@@ -2919,7 +3069,13 @@ mod tests {
         };
         assert!(source
             .clone()
-            .apply_geometry(None, Some(&bad_lens), None)
+            .apply_geometry(
+                None,
+                Some(&bad_lens),
+                None,
+                #[cfg(feature = "lensfun")]
+                None
+            )
             .is_err());
         let bad_ca = lumina_sidecar::LensCorrection {
             ca_red: Some(f32::NAN),
@@ -2927,7 +3083,13 @@ mod tests {
         };
         assert!(source
             .clone()
-            .apply_geometry(None, Some(&bad_ca), None)
+            .apply_geometry(
+                None,
+                Some(&bad_ca),
+                None,
+                #[cfg(feature = "lensfun")]
+                None
+            )
             .is_err());
     }
 
@@ -3006,7 +3168,13 @@ mod tests {
         let mut quarter =
             ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
         quarter
-            .apply_geometry(Some(&geometry(90.0)), None, None)
+            .apply_geometry(
+                Some(&geometry(90.0)),
+                None,
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         assert_eq!((quarter.width, quarter.height), (2, 2));
         assert_eq!(
@@ -3020,8 +3188,14 @@ mod tests {
         );
         let mut half =
             ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
-        half.apply_geometry(Some(&geometry(180.0)), None, None)
-            .unwrap();
+        half.apply_geometry(
+            Some(&geometry(180.0)),
+            None,
+            None,
+            #[cfg(feature = "lensfun")]
+            None,
+        )
+        .unwrap();
         assert_eq!((half.width, half.height), (2, 2));
         assert_eq!(
             half.pixels.iter().step_by(4).copied().collect::<Vec<_>>(),
@@ -3042,6 +3216,8 @@ mod tests {
                     mirror_vertical: false,
                 }),
                 None,
+                None,
+                #[cfg(feature = "lensfun")]
                 None,
             )
             .unwrap();
@@ -3064,7 +3240,13 @@ mod tests {
             || ImageFrame::new(2, 2, (1..=4).flat_map(|v| [v, 0, 0, 255]).collect()).unwrap();
         let mut horizontal = source();
         horizontal
-            .apply_geometry(Some(&geometry(true, false)), None, None)
+            .apply_geometry(
+                Some(&geometry(true, false)),
+                None,
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         assert_eq!(
             horizontal
@@ -3077,7 +3259,13 @@ mod tests {
         );
         let mut vertical = source();
         vertical
-            .apply_geometry(Some(&geometry(false, true)), None, None)
+            .apply_geometry(
+                Some(&geometry(false, true)),
+                None,
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         assert_eq!(
             vertical
@@ -3104,6 +3292,8 @@ mod tests {
                     mirror_vertical: false,
                 }),
                 None,
+                None,
+                #[cfg(feature = "lensfun")]
                 None,
             )
             .unwrap();

@@ -13,6 +13,11 @@ lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
 
+[features]
+# F-098-N1: enables the Lensfun pipeline path in lumina-core and pulls the
+# native liblensfun (default OFF; native-only, never used on wasm32).
+lensfun = ["lumina-core/lensfun"]
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
