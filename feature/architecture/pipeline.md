@@ -652,6 +652,24 @@ Bekannte Grenzen: per-pixel-FFI-Overhead (Benchmark/Optimierung als
 F-074-Folgeaufgabe), CA bewusst manuell, DB-Ladezyklus pro Render-Aufruf
 (MVP ok), Distance-Default 10,0 m (RawMetadata hat kein Distanzfeld),
 `lens_name` wird nicht befüllt (Body-Match statt falschem Lens-Match).
+**Thread-Sicherheit (lensfun 0.3.4):** Die Datenbank-/Suchpfade der
+Distro-/Release-Bibliothek sind nicht thread-safe — `GuessParameters` →
+`_lf_parse_lens_name` kompiliert global geteilte POSIX-Regexes lazy ohne
+Lock (`_lf_lens_regex_refs`/`regfree` im `lfLens`-Destruktor). Parallele
+DB-Loads/Suchen in einem Prozess racen auf demselben `regex_t` (UB; unter
+glibc als SIGSEGV beobachtet, macOS-libc toleranter; upstream nach 0.3.4
+auf `std::regex` umgestellt). Der Safe-Wrapper (`lumina-lensfun`)
+serialisiert DB-Anlage, Suche und Zerstörung hinter einem globalen Mutex;
+per-Corrector-`geometry`/`color_gain` bleiben lock-frei. Damit ist die API
+thread-safe nutzbar (Regressionstest `concurrent_db_load_and_search_is_safe`
+lädt 6 DBs + sucht parallel) und der CLI-`batch`-Pfad (rayon `.par_iter()`,
+pro Bild ein Corrector) läuft unter Linux nicht in die Race. Der CI-Fehler
+„SIGSEGV in 6 lumina-lensfun-native-Tests unter Ubuntu 24.04" (2026-08-20)
+wurde dadurch an der Wurzel behoben — kein `--test-threads=1`-Workaround.
+Grenze bleibt: die Serialisierung begrenzt den parallelen DB-Lade-/
+Suchdurchsatz (für MVP-Durchsatz irrelevant, da DB-Load pro Render-Aufruf
+ohnehin klein ist); ein gepatchtes/neueres lensfun würde den Lock entbehrlich
+machen (F-074-Folgeaufgabe, kein MVP-Blocker).
 
 ### F-099 Upright und Perspektive
 

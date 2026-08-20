@@ -10,6 +10,20 @@
 //! (`-llensfun`, performed by `build.rs` via `pkg-config`) and only happens
 //! when `native` is enabled.
 //!
+//! # Thread safety
+//!
+//! lensfun 0.3.4's database path is **not thread-safe**: lens/model name
+//! parsing compiles and uses process-global POSIX regexes without any lock
+//! (`GuessParameters` → `_lf_parse_lens_name`; a global `_lf_lens_regex_refs`
+//! counter triggers `regfree`), so concurrent database loads/searches from
+//! several threads race on the same `regex_t` (undefined behaviour — observed
+//! as SIGSEGV under glibc). The safe wrapper serializes database
+//! construction, search and destruction behind a global mutex
+//! ([`ffi::LENSFUN_GLOBAL_LOCK`]); per-corrector `geometry`/`color_gain` calls
+//! stay lock-free. Concurrent use of the public API across threads is safe;
+//! the crate's tests exercise exactly that (see
+//! [`tests::concurrent_db_load_and_search_is_safe`]).
+//!
 //! Licensing: Lensfun is LGPL-3.0 and its profile database CC-BY-SA. Because
 //! we link dynamically, the LGPL does not extend to the whole work; the
 //! license text and a source offer are shipped in the release bundle (see
@@ -44,6 +58,29 @@ mod ffi {
     #![allow(non_camel_case_types, non_snake_case, dead_code)]
 
     use std::os::raw::{c_char, c_float, c_int, c_void};
+    use std::sync::Mutex;
+
+    /// Serializes every call that touches lensfun 0.3.4's *process-global*
+    /// state.
+    ///
+    /// lensfun 0.3.4 keeps the lens/model name regexes as lazily compiled
+    /// global POSIX `regex_t`s guarded only by a plain `bool` and a global
+    /// `_lf_lens_regex_refs` counter (`GuessParameters` → `_lf_parse_lens_name`,
+    /// `lfLens` ctor/dtor). There is **no lock**: two threads concurrently
+    /// loading a database or running a search will race on `regcomp`/`regexec`/
+    /// `regfree` of the same `regex_t`, which is undefined behaviour (observed
+    /// as a SIGSEGV under glibc; upstream fixed this after 0.3.4 by switching
+    /// to `std::regex`). The safe wrapper therefore serializes database
+    /// construction, search and destruction. Per-corrector modifier calls
+    /// (`geometry`/`color_gain`) and `lf_modifier_destroy` touch no global
+    /// state and stay lock-free.
+    static LENSFUN_GLOBAL_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lensfun_global_lock() -> std::sync::MutexGuard<'static, ()> {
+        LENSFUN_GLOBAL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     // ---- modifier / correction flags (lfModifier flag bitmask) ----
     pub const LF_MODIFY_DISTORTION: c_int = 0x0000_0008;
@@ -198,7 +235,13 @@ mod ffi {
     impl LensfunDb {
         /// Load the system Lensfun database (via the standard search paths).
         /// Returns `None` if the library or database cannot be initialised.
+        ///
+        /// Thread safety: lensfun 0.3.4's database path is not thread-safe
+        /// (global lazy regex compilation, see `LENSFUN_GLOBAL_LOCK`); the
+        /// wrapper serializes it, so concurrent calls from several threads
+        /// are safe.
         pub fn load_system() -> Option<LensfunDb> {
+            let _guard = lensfun_global_lock();
             unsafe {
                 let db = lf_db_new();
                 if db.is_null() {
@@ -249,6 +292,10 @@ mod ffi {
 
     impl Drop for LensfunDb {
         fn drop(&mut self) {
+            // The database destructor deletes its `lfLens` objects, which
+            // decrements lensfun's global regex refcount (and may `regfree` the
+            // shared regexes) — must not race with a concurrent load/search.
+            let _guard = lensfun_global_lock();
             unsafe { lf_db_destroy(self.db) }
         }
     }
@@ -282,6 +329,10 @@ mod ffi {
             if width == 0 || height == 0 {
                 return None;
             }
+            // The search path compiles/uses lensfun's process-global regexes
+            // (`GuessParameters`) and must not run concurrently with another
+            // load/search/drop.
+            let _guard = lensfun_global_lock();
             unsafe {
                 use std::ffi::CString;
                 use std::ptr;
@@ -535,5 +586,45 @@ mod tests {
         let db = LensfunDb::load_system().expect("system lensfun db");
         assert!(Corrector::for_camera(&db, MAKE, MODEL, None, 0, 750, 18.0, 5.6, 10.0).is_none());
         assert!(Corrector::for_camera(&db, MAKE, MODEL, None, 1000, 0, 18.0, 5.6, 10.0).is_none());
+    }
+
+    #[test]
+    fn concurrent_db_load_and_search_is_safe() {
+        // Regression test: lensfun 0.3.4's database path is NOT thread-safe
+        // (global lazily compiled POSIX regexes + refcount without any lock —
+        // `GuessParameters`/`_lf_parse_lens_name`, `lfLens` ctor/dtor). With
+        // several threads loading a database and searching at the same time,
+        // the library races on `regcomp`/`regexec`/`regfree` of the same
+        // `regex_t`, which crashed the parallel test harness with a SIGSEGV
+        // under glibc (CI, Ubuntu 24.04) while macOS/Homebrew was unaffected.
+        // The safe wrapper serializes load/search/drop, so exercising the
+        // exact same concurrency must succeed. Without the wrapper lock this
+        // test crashes the whole test process on glibc.
+        let _db = LensfunDb::load_system().expect("system lensfun db");
+        let threads: Vec<_> = (0..6)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let db = LensfunDb::load_system().expect("per-thread lensfun db");
+                    let c = Corrector::for_camera(
+                        &db,
+                        MAKE,
+                        MODEL,
+                        Some(LENS),
+                        1000,
+                        750,
+                        18.0,
+                        5.6,
+                        10.0,
+                    )
+                    .expect("profile found");
+                    let _ = c.geometry(0.0, 0.0);
+                    drop(c);
+                    drop(db);
+                })
+            })
+            .collect();
+        for handle in threads {
+            handle.join().expect("lensfun worker thread must not panic");
+        }
     }
 }
