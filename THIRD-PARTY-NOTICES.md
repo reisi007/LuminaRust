@@ -82,13 +82,17 @@ obligations that MUST be honored in any distributed build:
 5. **Lensfun (native C library, linked via `lumina-lensfun` → `pkg-config`)** —
    automatic lens correction (F-098-N1), feature-gated behind the `native`
    feature (default **off**).
-   - **Library license:** the project FFI and the upstream header's "version 2 of
-     the License, or (at your option) any later version" wording indicate
-     **LGPL-3.0-or-later**; the Homebrew formula for the installed **0.3.4**
-     declares `LGPL-3.0-only AND GPL-3.0-only AND CC-BY-3.0 AND
-     LicenseRef-Homebrew-public-domain`. The exact SPDX (or-later vs `-only`,
-     and the GPL-3.0-only / Homebrew public-domain components) is **zu
-     verifizieren** against the upstream Lensfun `COPYING`/`README`.
+   - **Library license (verified 2026-08-20 against upstream):** the Lensfun
+     README at v0.3.4 (the installed version) states the libraries (`libs/`) are
+     licensed **LGPL-3.0** (scope: exactly version 3), the applications (`apps/`)
+     and the build system are **GPL-3.0** (not shipped by LuminaRust). The
+     installed `lensfun.h` header additionally carries the older LGPL-2.1
+     boilerplate sentence ("version 2 of the License, or (at your option) any
+     later version"); Fedora's SPDX expression for the package is consequently
+     `LGPL-3.0-only AND CC-BY-SA-3.0 AND LGPL-2.1-or-later AND GPL-3.0-only`.
+     For LuminaRust the relevant license of the linked library is
+     **LGPL-3.0-or-later (Sammelwerk-Hinweis, dynamic link)**, conservative
+     reading of both statements.
    - `lumina-lensfun` (the Rust wrapper, `crates/lumina-lensfun`) is a workspace
      crate and currently declares **NO `license` field** (see R2 in
      `feature/quality/fixtures-licensing.md`). Lensfun itself is **not** in the
@@ -104,12 +108,33 @@ obligations that MUST be honored in any distributed build:
      for the exact version used (**0.3.4**) in the release bundle.
    - **Lensfun database (camera/lens profiles,
      `/opt/homebrew/share/lensfun/version_1/*.xml`):** licensed **CC-BY-SA-3.0**
-     per the project documentation and the F-098-N4 task; the Homebrew formula
-     declares only `CC-BY-3.0`. The precise DB license (SA vs no-SA) is **zu
-     verifizieren** against the upstream `lensfun-data` repository. No new
-     bundled binaries are introduced — LuminaRust reads the **system** database at
-     runtime (no vendored DB). Database attribution must be included in the
-     release bundle.
+     (verified 2026-08-20 against upstream `data/COPYING.CC_BY-SA_3.0` in the
+     lensfun source archive and the README: "The lens database is licensed under
+     the Creative Commons Attribution-Share Alike 3.0 license"). The Homebrew
+     formula's shorter `CC-BY-3.0` is imprecise; the authoritative upstream
+     statement is CC-BY-SA-3.0. No new bundled binaries are introduced —
+     LuminaRust reads the **system** database at runtime (no vendored DB).
+     Database attribution must be included in the release bundle.
+6. **ML models (adapter manifests in `lumina-onnx`; weights are **not**
+   committed, `model_hash = "pending-integration"` until hash-pinned fixtures
+   land)** —
+   - **BiRefNet** (automatic subject segmentation): **MIT** (© 2024 ZhengPeng;
+     `github.com/ZhengPeng7/BiRefNet` `LICENSE` and HF model card
+     `ZhengPeng7/BiRefNet` `license: mit` — verified 2026-08-20). Earlier
+     "Apache-2.0" annotations in the manifest/docs were corrected.
+   - **SAM 2.1** (`sam2.1_hiera_*` promptable segmentation): **Apache-2.0 for
+     code and weights** (facebookresearch/sam2 `LICENSE`, HF model cards, Meta
+     announcement — verified 2026-08-20). Export path deliberately avoids the
+     `ultralytics` PyPI package (AGPL-3.0); ONNX comes from the Meta checkpoints
+     via the MIT-licensed Microsoft ORT export tooling or Apache-2.0
+     redistributed community artifacts.
+   - **ONNX Runtime** (`ort` 2.0.0-rc.13): **MIT OR Apache-2.0** (`ort`,
+     `ort-sys`); optional `onnx-rt` feature, not in default builds. ORT
+     prebuilt-binary redistribution terms to be re-checked before release
+     (R4).
+   - **Obligation:** bundle the respective license texts (MIT / Apache-2.0)
+     and the SAM 2.1 NOTICE (if present) with any distributed weights or
+     binaries.
 
 ## Complete crate license table (all-features resolve)
 

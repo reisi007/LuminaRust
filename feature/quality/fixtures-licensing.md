@@ -140,9 +140,20 @@ liegt beim Build-Agenten/Eigentümer.
 
 | Modell | Rolle | Lizenz | Status |
 | --- | --- | --- | --- |
-| **BiRefNet** (Zheng et al., arXiv:2401.03407) | erstes automatisches Subjekt-Modell | **Apache-2.0** (Literal in `manifest.rs`) | Gewichte *pending integration* (`model_hash = "pending-integration"`) |
-| **SAM 2** | erstes interaktives Box/Pinsel-Modell | **TBD** (bei Integration verifizieren) | nur geplant |
+| **BiRefNet** (Zheng et al., arXiv:2401.03407) | erstes automatisches Subjekt-Modell | **MIT** (GitHub `LICENSE` = MIT, Copyright (c) 2024 ZhengPeng; HF-Card `ZhengPeng7/BiRefNet` `license: mit` — verifiziert 2026-08-20, R6; Manifest korrigiert) | Gewichte *pending integration* (`model_hash = "pending-integration"`) |
+| **SAM 2.1** (`sam2.1_hiera_*`) | erstes interaktives Box/Pinsel-Modell (F-082) | **Apache-2.0** für Code **und** Gewichte (facebookresearch/sam2 `LICENSE`, HF-Model-Cards, Meta-Announcement „code and weights … permissive Apache 2.0" — verifiziert 2026-08-20, R6) | Adapter integriert (Commit `452d8a4`); Gewichte *pending integration* (`model_hash = "pending-integration"`) |
 | **ONNX Runtime** (`ort` 2.0.0-rc.13) | Inferenz-Runtime | **MIT** (ORT `MIT OR Apache-2.0`, `ort-sys` `MIT OR Apache-2.0`) | **optional**, Feature `onnx-rt`, nicht im Default-Build |
+
+**SAM-2-Export-Pfad (AGPL-Falle):** Die SAM-2.1-Gewichte sind Apache-2.0,
+aber der übliche Lade-/Inferenzweg über das PyPI-Paket **`ultralytics`
+ist AGPL-3.0** und würde als Abhängigkeit das Gesamtwerk betreffen.
+LuminaRust nutzt diesen Weg **nicht**: Der ONNX-Export erfolgt aus den
+Meta-Checkpoints (092824) über das Microsoft-ORT-Export-Tooling
+(`convert_to_onnx.py`, MIT) bzw. veröffentlichte Community-ONNX-Artefakte
+(Redistribution unter Apache-2.0); die Inferenz selbst läuft über
+`lumina-onnx`/`ort` (MIT), ohne `ultralytics`. Bei der Gewichts-Pinning-
+Folgearbeit (F-082-Nachlauf) ist ausschließlich der Apache-2.0-konforme
+Exportweg zulässig.
 
 - Es sind **keine Modellgewichte** committet; die Lizenzpflicht entsteht erst
   beim Bündeln der Gewichte (F-048).
@@ -248,8 +259,8 @@ Quell-URL erfassen; Fixture-Seeds eingefroren.
 | **R2** | 🟠 Hoch | Alle 9 Workspace-Crates ohne `license`-Feld; Repo-Root ohne `LICENSE`/`NOTICE` — Projekt bewusst unlizenziert / kommerziell bis MVP | Lizenz bei MVP entscheiden (siehe `Agents.todo.md`, Antworten des Eigentümers 2026-08-20 → LIZ interim proprietär); dann `license` + Root-`LICENSE` konsistent ergänzen |
 | **R3** | 🟠 Hoch | LibRaw-Dynamik-Link-Verpflichtung (§6.3) | Dynamisches Linken beibehalten; LibRaw-Lizenz + Quellangebot für 0.22.2 im Release bündeln |
 | **R4** | 🟡 Mittel | `onnx-rt`-Pfad lädt ORT-Prebuilt-Binaries (Netz) | Bei Release-Freigabe ORT-Redistribution + Prebuilt-Terms prüfen, Pin `=2.0.0-rc.13` halten, Modell-Lizenzen/Hashes erfassen |
-| **R5** | 🟡 Mittel | ADR 0002 nennt LibRaw „dual“; upstream ist **dreifach** (permissiv fehlt) | ADR 0002 um die dritte, permissive Option ergänzen |
-| **R6** | 🟡 Mittel | SAM-2-Lizenz ungeprüft; BiRefNet Apache-2.0 aus Manifest (nicht aus Gewichtsquelle) | Bei Integration (F-048/F-080) gegen tatsächliche Gewichtsquelle verifizieren und in §5 erfassen |
+| **R5** | ✅ Gelöst (2026-08-20) | ADR 0002 nannte LibRaw „dual"; upstream ist **dreifach** (permissiv fehlte) | ADR 0002 um die dritte, permissive Option (LibRaw Software License) ergänzt |
+| **R6** | ✅ Gelöst (2026-08-20) | SAM-2-Lizenz ungeprüft; BiRefNet „Apache-2.0" aus Manifest, nicht aus der Gewichtsquelle | Beide an der tatsächlichen Quelle verifiziert und in §5 erfasst: **SAM 2.1 = Apache-2.0** (Code + Gewichte, facebookresearch/sam2 `LICENSE` + Meta-Announcement), **BiRefNet = MIT** (GitHub `LICENSE` + HF-Card `license: mit`) — Manifest-`license`-Feld und Doku korrigiert (Commit folgt); AGPL-Falle via `ultralytics` in §5 dokumentiert |
 | **R7** | 🟢 Niedrig | `r-efi` trägt `LGPL-2.1-or-later`-Option | Keine Aktion: UEFI-only, nie ausgeliefert; bei UEFI-Build unter MIT/Apache erfüllen |
 
 Es existiert **keine** GPL/AGPL/SSPL/starke-Copyleft-Abhängigkeit im gesamten
@@ -261,7 +272,8 @@ Targets nicht erreichbar.
 ## 9. Abnahmekriterien (F-073 / F-078)
 
 - [x] Fixture-Inventar dokumentiert (synthetisch + RAW + Generierungsvertrag).
-- [x] Modell-Inventar mit Lizenzen dokumentiert (BiRefNet Apache-2.0, ORT MIT).
+- [x] Modell-Inventar mit Lizenzen dokumentiert (BiRefNet MIT, SAM 2.1
+  Apache-2.0, ORT MIT — jeweils an der tatsächlichen Quelle verifiziert, R6).
 - [x] Vollständige Abhängigkeits-Lizenztabelle erstellt (`THIRD-PARTY-NOTICES.md`).
 - [x] Keine GPL/AGPL/SSPL gefunden; LibRaw als einzige Pflicht benannt.
 - [x] Versionierungs-Policy dokumentiert.

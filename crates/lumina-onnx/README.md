@@ -28,9 +28,10 @@ to F-048.
 
 `birefnet_manifest()` describes BiRefNet: automatic subject segmentation from a
 single RGB input to an alpha matte, no prompts (`subject_segmentation` only),
-documented inference resolution 1024×1024, license `Apache-2.0`. The model hash
-is a placeholder (`pending-integration`) until real weights are provided in
-F-048.
+documented inference resolution 1024×1024, license `MIT` (verified 2026-08-20
+against GitHub `LICENSE` and the HF model card `ZhengPeng7/BiRefNet`). The
+model hash is a placeholder (`pending-integration`) until real weights are
+provided in F-048.
 
 ## Real ONNX Runtime backend (`onnx-rt`)
 

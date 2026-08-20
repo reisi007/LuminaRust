@@ -27,7 +27,10 @@ hinter dem Feature `wasm-js` gekapselt und nur für
 **Vertrag:** Derselbe `decode_bytes`-Vertrag (Orientierung, Metadaten,
 8/16-bit) gilt in beiden Backends.
 
-**Lizenz (LibRaw):** Dual-lizenziert unter LGPL-2.1 und CDDL-1.0.
+**Lizenz (LibRaw):** Dreifach-lizenziert unter LGPL-2.1-or-later, CDDL-1.0
+oder der permissiven **LibRaw Software License** („tri-license": der Nutzer
+wählt eine der drei Optionen — aktualisiert 2026-08-20, R5 in
+`feature/quality/fixtures-licensing.md`).
 `vendor/libraw-sys` (FFI-Bindings) steht unter MIT. Die gewählte LibRaw-
 Lizenz ist vor dem ersten Release (F-078) final zu prüfen.
 
@@ -46,8 +49,9 @@ Lizenz ist vor dem ersten Release (F-078) final zu prüfen.
   `lumina-core` bleibt plattformneutral.
 - WASM-RAW ist im MVP deaktiviert (`RawError::UnsupportedPlatform`); die
   Capability-Matrix weist dies klar aus.
-- Die Lizenzpflichten von LibRaw (LGPL-2.1 oder CDDL-1.0) sind vor dem
-  ersten Release final zu prüfen und zu dokumentieren.
+- Die Lizenzpflichten von LibRaw (LGPL-2.1-or-later, CDDL-1.0 oder LibRaw
+  Software License — die permissive Option vermeidet jede Copyleft-Wirkung)
+  sind vor dem ersten Release final zu prüfen und zu dokumentieren.
 - Ein unabhängiger Verifizierungs-Agent prüft später die Backend-Konsistenz.
 
 ## Verweise

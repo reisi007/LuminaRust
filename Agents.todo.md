@@ -66,12 +66,19 @@ mit Datum markiert.
    LuminaRust-Projekt** erteilt (2026-08-20); eingetragen im Provenienz-Block
    `sample-data/raw/README.md`, Status in `feature/quality/fixtures-licensing.md`
    §4/§8 aktualisiert. Verifikation der Doku im Rahmen der F-078-Abnahme.
-3. **Interaktives Segmentierungsmodell (F-082):** **SAM 2 bestätigt**
-   (2026-08-20). F-082/F-083 starten nach Abschluss der aktuellen
-   Umsetzungs-Batch (F-098-N2/N3/N4, F-074-A1…A4) mit der Apache-2.0-
-   Lizenzprüfung der tatsächlichen Gewichtsquelle und der ONNX-
-   Einbindung; die Projektlizenz (Frage 1) blockiert die Implementierung
-   nicht (Modell ist Apache-2.0, unabhängig von der Projektlizenz).
+3. **Interaktives Segmentierungsmodell (F-082):** **SAM 2 bestätigt und
+   umgesetzt** (2026-08-20). F-082/F-083 sind **verifiziert erledigt**
+   (Commit `452d8a4`, unabhängig BESTANDEN): SAM-2.1-Modellfamilie
+   `sam2.1_hiera_*` mit dynamischer Variantenwahl (DeviceProfile, Kernzahl-
+   Schwellen + Override), PromptMaskInference-Interface + Stub-Backend,
+   Prompt→Tensor-Kontrakt, 17 F-083-Tests. Lizenzprüfung an der tatsächlichen
+   Quelle abgeschlossen: **Code und Gewichte Apache-2.0**
+   (facebookresearch/sam2 `LICENSE`, HF-Model-Cards, Meta-Announcement;
+   Ultralytics-AGPL-Paketweg wird bewusst nicht genutzt — ONNX-Export via
+   ORT-Tooling aus Meta-Checkpoints). Die Projektlizenz (Frage 1) blockierte
+   die Implementierung nicht (Modell ist Apache-2.0, unabhängig von der
+   Projektlizenz). BiRefNet-Prüfung (R6) ergab: tatsächlich **MIT** (GitHub
+   `LICENSE` + HF-Card) — Manifest-/Doku-Korrektur 2026-08-20.
 4. **Produktname (F-101-F1):** **später entscheiden** (kein MVP-Blocker) —
    bleibt als offener Punkt dokumentiert (`docs/naming-brainstorm.md`).
 
@@ -142,11 +149,11 @@ ist Proxy für alle Archs), keine absoluten Laufzeitziele ohne
 Umgebungskontext. Feature-Wachstum wird als bewusste, dokumentierte
 Budget-Anpassung im selben Commit wie das Feature behandelt.
 
-- [ ] **F-074-A4** PNG-Export-Encode-Durchsatz verbessern (Δ `batch` −
-  `render_frame`) — ~56 % von `render_frame` / ~36 % von `batch`.
-  *(Implementierung läuft, 2026-08-20.)*
-
-Verifiziert erledigt und entfernt: F-074-N1 (Methodik-SOLL, ADR 0003),
+Verifiziert erledigt und entfernt: F-074-A4 (PNG-Export-Encode: direkter
+`PngEncoder` ohne 16-MB-Clone auf non-mutating Pfaden, byte-identisch,
+Commit `7045da7`; Dither ~46 % + DEFLATE ~52 % dominieren den Benchmark —
+kein Wandzeit-Gewinn dort, Speicherdruck eliminiert; Kompressions-Default
+bewusst unverändert), F-074-N1 (Methodik-SOLL, ADR 0003),
 F-074-N2 (Setup-Gerüst), F-074-N3 (erste echte Benchmarks: 32 deterministische
 Fixtures, Baseline-Erfassung, `compare.mjs`-Bestandsvalidierung), F-074-N4
 (Baseline-Analyse: Hotspot `apply_recipe` ~91 %, abgeleitete IDs A1…A4),
@@ -252,10 +259,13 @@ F-043 Property-/Referenzbildtests — jeweils verifiziert erledigt und entfernt)
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-082** Einen ersten interaktiven Segmentierungsadapter, vorzugsweise
-  SAM 2 nach Lizenz- und ONNX-Prüfung, auswählen und integrieren.
-- [ ] **F-083** Prompt-Roundtrip-, Modellfähigkeits-, Re-Run- und
-  nicht-unterstützter-Prompt-Tests ergänzen.
+F-082/F-083 sind verifiziert erledigt und entfernt (Commit `452d8a4`):
+SAM-2.1-Modellfamilie `sam2.1_hiera_*` (tiny/small/base_plus/large) mit
+dynamischer Variantenwahl über `DeviceProfile` (Kernzahl, override),
+`PromptMaskInference`-Interface + Stub-Backend, Prompt→Tensor-Kontrakt,
+17 F-083-Tests — unabhängig verifiziert, BESTANDEN (2026-08-20). Offene
+Folgearbeit (nicht MVP-blockierend): echter ORT-Pfad hinter `onnx-rt`,
+MaskGraph/CLI-Einbindung, hash-gepinnte ONNX-Fixtures.
 
 ## Phase 7: CLI und Batch
 
@@ -316,12 +326,18 @@ dead-code unter wasm32 (optional stilllegen).
 - [x] **F-078** Lizenz-/Modell-/Distributionsaudit: Belege in
   `THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` **unabhängig verifiziert
   (BESTANDEN, 2026-08-20)**; **Lensfun-LGPL-3.0-Eintrag ergänzt** (dynamisches
-  Linken, CC-BY-SA-Datenbank, Quellangebot im Release-Bundle — F-098-N1);
-  Pre-Release-Artefakte verbleiben offen (R3/R4): Lensfun-/LibRaw-Lizenztexte
-  + Quellangebot + Modell-Lizenzen (BiRefNet Apache-2.0, ONNX Runtime MIT,
-  SAM 2 bei F-082 zu verifizieren) im Release-Bundle mitliefern; R5
-  (ADR-0002-Dreifachlizenz) und Lensfun-SPDX-/DB-Lizenz-Detail vor Final-
-  Release klären.
+  Linken, CC-BY-SA-3.0-Datenbank, Quellangebot im Release-Bundle — F-098-N1)
+  und **SPDX-Auflösung nachgetragen** (2026-08-20): upstream README v0.3.4
+  bestätigt libs = LGPL-3.0, apps = GPL-3.0 (nicht ausgeliefert), DB =
+  CC-BY-SA-3.0; Fedora-Ausdruck `LGPL-3.0-only AND CC-BY-SA-3.0 AND
+  LGPL-2.1-or-later AND GPL-3.0-only`. **R5 geschlossen:** ADR 0002 nennt
+  nun die LibRaw-Dreifachlizenz inkl. permissiver Option. **R6 geschlossen:**
+  SAM-2-Code+Gewichte Apache-2.0 an der Quelle verifiziert; BiRefNet-Prüfung
+  ergab tatsächlich **MIT** (GitHub-LICENSE + HF-Card) — Manifest- und
+  Doku-Angaben korrigiert (2026-08-20). Pre-Release-Artefakte verbleiben
+  offen (R3/R4): Lensfun-/LibRaw-Lizenztexte + Quellangebot + Modell-
+  Lizenzen (BiRefNet MIT, SAM 2 Apache-2.0, ONNX Runtime MIT) im
+  Release-Bundle mitliefern.
 
 F-075 ist verifiziert erledigt und entfernt (`MemoryBudget` + `check_decode`/
 `check_mask` in `crates/lumina-core/src/memory.rs`; Verdrahtung in lumina-raw

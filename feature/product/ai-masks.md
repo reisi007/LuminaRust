@@ -179,6 +179,29 @@ Re-Run- und nicht-unterstützter-Prompt-Tests. Die Einbindung in
 `MaskGraph`/CLI/GUI ersetzt den geometrischen Fallback nur, wenn ein
 Modell verfügbar ist (kein stiller Fallback).
 
+**Implementierungsstatus (F-082 / F-083, 2026-08-20):** Umgesetzt und
+unabhängig verifiziert (BESTANDEN, Commit `452d8a4`). `lumina-onnx`
+enthält `Sam2Variant` + `sam2_1_manifest(s)`/`sam2_1_manifests()` (4 gültige
+Deskriptoren, Eingang 1024² RGB NCHW, Tensor-Name `images`, Fähigkeiten
+`box_prompt`/`point_prompt`/`mask_prompt`, `model_hash` = `pending-integration`
+bis hash-gepinnte ONNX-Fixtures committet sind), `DeviceProfile`
+(`detect()` via `available_parallelism` mit konservativem Fallback) +
+`select_variant` (Schwellen exakt wie oben, Override gewinnt, deterministisch),
+das Trait `PromptMaskInference` mit `SegmentationPrompt` /
+`PromptPoint` / `PointLabel` / `BoxPrompt` / `MaskPromptLogits` sowie
+`StubSam2Backend` (deterministische analytische Matte, keine Netze; ungültige
+Prompts → `OnnxError::InvalidPrompt`, kein stiller Fallback); der
+Prompt→Tensor-Kontrakt ist als Doc-Kommentar festgehalten. 17 neue
+F-083-Tests (Roundtrip/Determinismus inkl. über Instanzen, Fähigkeiten,
+Schwellen-Grenzfälle 3/4/7/8/15/16 + Override + Fallback, ungültige
+Prompts, Stub-Matte). Bekannte Grenzen: der echte ORT-/Netzpfad ist nur als
+struktureller Contract vorbereitet (folgt nach der LIZ-Entscheidung),
+MaskGraph/CLI/GUI-Einbindung steht noch aus, und die Modellgewichte sind
+weiterhin nicht committet (`pending-integration`, keine spontanen Downloads).
+Lizenznachweis: SAM 2.1 Code+Gewichte Apache-2.0 verifiziert; BiRefNet
+tatsächlich MIT (Manifest und Doku korrigiert) — siehe
+`feature/quality/fixtures-licensing.md` §5/§8 (R6).
+
 ## Status und Wiederverwendung
 
 - `valid`: Quelle, Modellkontext und Prüfsumme stimmen; Matte wird direkt
