@@ -11,34 +11,67 @@ Git-Historie.
 
 Offene Arbeit und Abgrenzung bis MVP:
 
-- **LIZ-ENTSCHEIDUNG (offen, MVP-Release-Gate):** Projektlizenz ist offen —
-  Projekt ist aktuell kommerziell (kein Open-Source-License); alle 8
-  Workspace-Crates tragen bewusst kein `license`-Feld, keine `LICENSE`-Datei
-  im Repo. Optionen zur MVP-Entscheidung: MIT / Apache-2.0 /
-  Dual MIT+Apache-2.0 / MPL-2.0 / proprietär. **Erweiterung durch Lensfun
-  (MVP):** Lensfun ist seit 2026-08-20 MVP-Teil (F-098-N1) — LGPL-3.0,
-  Datenbank CC-BY-SA, dynamisch gelinkt; die Lizenzentscheidung muss das
-  abdecken (F-078, F-098-N1).
+- **LIZ-ENTSCHEIDUNG (beantwortet 2026-08-20: interim proprietär, spätere
+  Entscheidung offen; MVP-Release-Gate):** Projekteigentümer hat entschieden,
+  die Wahl vorerst **nicht** zu treffen und den **proprietären/kommerziellen
+  Status** beizubehalten (kein `license`-Feld in den 8 Crates, keine
+  `LICENSE`-Datei). Sobald entschieden: MIT / Apache-2.0 / Dual
+  MIT+Apache-2.0 / MPL-2.0 — dann `license`-Felder + Root-`LICENSE`
+  ergänzen (F-073-R2). **Lensfun** (MVP-Teil seit F-098-N1, LGPL-3.0
+  dynamisch gelinkt, DB CC-BY-SA-3.0) ist in `THIRD-PARTY-NOTICES.md`
+  dokumentiert und gilt unabhängig von der späteren Wahl.
 - **F-098-N1** Lensfun-Integration als **Pre-MVP**-Bestandteil (Phase 3):
   **verifiziert erledigt** (2026-08-20) — Crate `lumina-lensfun` + lumina-core
   `lensfun`-Feature + Pipeline-Integration mit graceful fallback + Tests
-  (siehe Phase 3). Offene Folgeaufgaben: **F-098-N2** CLI-Verdrahtung,
-  **F-098-N3** CI-Container, **F-098-N4** Lizenz-Doku.
+  (siehe Phase 3). Folgeaufgaben: **F-098-N2** (CLI-Verdrahtung,
+  implementiert, Verifikation ausstehend), **F-098-N3** (CI-Container,
+  implementiert, Verifikation ausstehend), **F-098-N4** (Lizenz-Doku,
+  implementiert, Verifikation ausstehend).
 - **F-082 / F-083** SAM-2-Segmentierungsadapter + Prompt-Roundtrip-Tests
-  (Phase 6, nach Lizenz-/ONNX-Prüfung).
-- **F-073** Fixtures-Lizenzierung/Audit (Phase 11): Audit-Dokumente existieren
-  (`feature/quality/fixtures-licensing.md`, `docs/fixtures-and-licensing.md`);
-  R1-Blocker = Provenienz der committeten `.cr3`-Fixtures
-  (`sample-data/raw/aircraft-{landscape,portrait}.cr3`), R2 = LIZ-Entscheidung
-  (oben).
+  (Phase 6): **SAM 2 vom Eigentümer bestätigt** (2026-08-20); Start nach
+  Abschluss der aktuellen Batch (F-098-N2…N4, F-074-A1…A4) mit der
+  Apache-2.0-Lizenzprüfung der tatsächlichen Gewichtsquelle.
+- **F-073** Fixtures-Lizenzierung/Audit (Phase 11): Audit-Dokumente
+  existieren; **R1 geschlossen (2026-08-20)** — Autor via EXIF + Commit
+  belegt, uneingeschränkte Nutzungs-/Distributionsgewährung für LuminaRust
+  dokumentiert (`sample-data/raw/README.md`, §4/§8); **R2** = LIZ-
+  Entscheidung (oben, offen).
 - **F-078** Lizenz-/Modell-/Distributionsaudit (Phase 11): Audit-Dokumentation
-  abgeschlossen (`THIRD-PARTY-NOTICES.md`, `fixtures-licensing.md`), Beleg
+  abgeschlossen (`THIRD-PARTY-NOTICES.md`, `fixtures-licensing.md`, inkl.
+  **Lensfun-LGPL-3.0-Eintrag** seit 2026-08-20); Beleg
   LibRaw = einzige Pflicht-/Datenbank-Dependency, `ort`
   `=2.0.0-rc.13` optional hinter `onnx-rt`, ONNX Runtime MIT, BiRefNet
-  Apache-2.0; **unabhängige Verifizierung offen**; um den Lensfun-LGPL-Eintrag
-  zu ergänzen (hält das MVP-Gate).
+  Apache-2.0; **unabhängige Verifizierung offen** (hält das MVP-Gate bis
+  zur bestandenen Verifikation; R2-LIZ bleibt offen).
 - **F-072** CI-Gates: unabhängig verifiziert **bestanden** (2026-08-20) —
   verbleibender Aufwand nur Eintrag-Nachpflege (siehe Phase 11).
+
+## Antworten des Projekteigentümers (2026-08-20, interaktiv abgefragt)
+
+Alle vier Fragen wurden am 2026-08-20 beantwortet; die Ergebnisse sind in die
+betroffenen Feature-Dokumente übernommen. Noch offene Folgearbeit ist unten
+mit Datum markiert.
+
+1. **LIZ-Entscheidung — Projektlizenz:** **vorerst offen / proprietären
+   Status beibehalten.** Keine `LICENSE`-Datei, keine `license`-Felder;
+   interim ist das Projekt bewusst unlizenziert/kommerziell bis zur
+   endgültigen Entscheidung (F-073-R2/F-078 bleiben offen). Lensfun-Pflichten
+   (LGPL-3.0 dynamisch gelinkt → nur Sammelwerk-Hinweis; DB CC-BY-SA-3.0 →
+   Attribution) sind in `THIRD-PARTY-NOTICES.md` dokumentiert und gelten
+   unabhängig von der späteren Wahl.
+2. **Fixtures-Lizenzgewährung (F-073-R1):** **GELÖST** — Eigentümer hat eine
+   **uneingeschränkte Nutzungs- und Distributionsgewährung für das
+   LuminaRust-Projekt** erteilt (2026-08-20); eingetragen im Provenienz-Block
+   `sample-data/raw/README.md`, Status in `feature/quality/fixtures-licensing.md`
+   §4/§8 aktualisiert. Verifikation der Doku im Rahmen der F-078-Abnahme.
+3. **Interaktives Segmentierungsmodell (F-082):** **SAM 2 bestätigt**
+   (2026-08-20). F-082/F-083 starten nach Abschluss der aktuellen
+   Umsetzungs-Batch (F-098-N2/N3/N4, F-074-A1…A4) mit der Apache-2.0-
+   Lizenzprüfung der tatsächlichen Gewichtsquelle und der ONNX-
+   Einbindung; die Projektlizenz (Frage 1) blockiert die Implementierung
+   nicht (Modell ist Apache-2.0, unabhängig von der Projektlizenz).
+4. **Produktname (F-101-F1):** **später entscheiden** (kein MVP-Blocker) —
+   bleibt als offener Punkt dokumentiert (`docs/naming-brainstorm.md`).
 
 **Post-MVP (nicht MVP-blockierend):** F-019 (CLI `migrate_sidecar`), Phase 9
 Index (F-064…F-067), WASM-Browser (F-069…F-071), MCP-Erweiterungen
