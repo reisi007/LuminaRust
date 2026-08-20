@@ -98,6 +98,18 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 > Eltern-Vererbung, Preview-Ablage, Prune) liegt in `lumina-core`
 > (`DiskFolderCache`), WASM-gekapselt; siehe feature/architecture/pipeline.md.
 
+> **Implementierungsstatus (F-103, 2026-08-20):** Der horizontale MVP-Slice
+> der Desktop-GUI ist implementiert (egui/eframe: Laden per Pfad/Drag&Drop inkl.
+> nativer RAW-Dateien, Vorschau/Histogramm/Renderstand, Exposure/Contrast,
+> Auto-Tone/Matching, virtuelle Kopien, Presets, Maskenverwaltung,
+> Sidecar-Speichern; App-State-Tests grün). Die F-100-Konventionsvorgaben
+> (Modul-Leiste + Filmstreifen + Panelstruktur, Regler-Semantik,
+> Vorher/Nachher, WB-Pipette, Maskenwerkzeuge Pinsel/Verlauf/Radial,
+> Exportieren-Modul) sind **noch offen** und als F-103-N1…N6 in
+> `Agents.todo.md` (Phase 8) geplant; Browser-Dateispeichern, ONNX, Masken-
+> Inferenz, Cache-Synchronisierung und Mehrbild-Bearbeitung bleiben bewusst
+> Post-MVP.
+
 Für v1 ist egui/eframe festgelegt. Tauri ist keine v1-Abhängigkeit und kann in
 einer späteren Architekturentscheidung erneut bewertet werden.
 

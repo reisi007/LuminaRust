@@ -282,10 +282,71 @@ Agent-Skill `docs/skills/lumina.md`, SOLL `feature/platform/mcp-server.md` —
   Produktnamen-Entscheidung (`docs/naming-brainstorm.md`). Konzepte stehen im
   SOLL `feature/platform/mcp-server.md` (Abschnitt „Erweiterter MVP-Scope").
 
-## Phase 8: Desktop-GUI
+## Phase 8: Desktop-GUI (F-103, MVP)
 
-(UI-Konventionen F-100 sind spezifiziert, verifiziert und für jede GUI-Arbeit
-verbindlich — normativ in `feature/platform/cli-gui-wasm.md`)
+UI-Konventionen F-100 sind spezifiziert, verifiziert und für jede GUI-Arbeit
+verbindlich — normativ in `feature/platform/cli-gui-wasm.md` (Abschnitt
+F-100). SOLL für den MVP-Scope: ebenda Abschnitt „Desktop-GUI" und „Erster
+visueller User-Test" — `cargo run -p lumina-gui` lädt PNG/JPEG/WebP + native
+RAW per Pfad oder Drag-and-drop; Preview, Exposure (`-10..=10`), Contrast
+(`-1..=1`) über `ImageFrame` + `EditRecipe`; native Sidecars. Browser-
+Dateispeichern, ONNX, Masken-Inferenz, Cache und Mehrbild-Synchronisierung
+sind bewusst Post-MVP.
+
+**Ist-Stand (2026-08-20):** `lumina-gui` (egui/eframe, native + WASM-Start)
+hat bereits einen verifizierten horizontalen MVP-Slice: Datei-Browser links,
+Develop-Panel rechts, Preview + Histogramm + Renderstand-Anzeige zentral,
+Drag&Drop (Bytes + Pfad), Dateidialog, virtuelle Kopien (Auswahl/
+Duplizieren), Maskierungs-Untersektion (anlegen/auswählen/invertieren/
+feathern/Neuberechnung anbieten, lokale Belichtung/Kontrast), Exposure/
+Contrast/Auto-Tone/Match-Exposure/Reset/Render/Sidecar-Speichern, Presets
+(anlegen/anwenden, relative exposure), IdleQueue für Masken-Hintergrundjobs;
+App-State-Tests grün (`recipe_change_and_render`, `auto_and_matching`,
+`reset_restores_original_preview`, `render_key_invalidates_until_render`,
+`preset_requires_name_and_validates_relative_exposure`,
+`decode_error_is_visible` u. a.). Offen sind die F-100-Konventionslücken —
+als umsetzbare Aufgaben geführt:
+
+- [ ] **F-103-N1** F-100-Panelstruktur: Modul-Leiste oben (**Bibliothek**,
+  **Entwickeln**, **Exportieren**) + Histogramm; Develop-Panel rechts mit den
+  acht kollabierbaren Sektionen **Grundtonung, Tonwertkurve, Farbe, Effekte,
+  Details, Optik, Geometrie, Maskierung** in dieser Reihenfolge und mit der
+  normativen F-089…F-099-Reglerreihenfolge; Navigators/Vorschau links; unten
+  ein **Filmstreifen mit Miniaturen** (die linke Dateiliste ersetzt ihn
+  nicht). Abnahme: F-100-Checkliste „Anordnung und Panelstruktur" erfüllt,
+  Screenshots der drei Module.
+- [ ] **F-103-N2** Regler-Semantik F-100: horizontaler Slider, Beschriftung
+  links, Wert rechts, Wertebereich sichtbar; Doppelklick auf die Beschriftung
+  setzt NUR diesen Regler auf seinen Standardwert zurück (Doppelklick auf den
+  Wert darf nie das ganze Rezept zurücksetzen); Alt/Option-Scroll feinjustiert;
+  Lightroom-Skala (`-1..=1`-Domänen als `-100..+100` anzeigen: Presence, HSL,
+  Grading-Balance, Dynamik/Sättigung). Abnahme: Tests für Reset-Semantik
+  (nur ein Regler) + Anzeige-Skalierung.
+- [ ] **F-103-N3** Interaktionen: **Vorher/Nachher**-Umschalter (Standard-Taste
+  `Y`); **Auto**-Button in Grundtonung (Auto-Tone); **Weißabgleich-Auswahl mit
+  Pipette** (Punkt aus Vorschau/Navigator übernimmt WB; Core-F-036-N1-Pfade
+  nutzen). Abnahme: Tastaturbelegung Y; Pipette setzt das
+  `white_balance`-Rezeptfeld.
+- [ ] **F-103-N4** Maskierung: Werkzeuge **Pinsel, Verlauf, Radial** mit
+  Prompt-/Koordinatensemantik gemäß F-079/F-081; lokale Regler der
+  ausgewählten Maske im selben Panel (mind. Belichtung, Kontrast + unterstützte
+  lokale Tonwert-/Farb-/Präsenzregler, keine separaten Dialoge); Invertierung,
+  Feathering, Blur; Masken-Layer persistieren in der virtuellen Kopie.
+  Abnahme: Werkzeuge erzeugen persistierte MaskDefinition/MaskLayer im
+  Sidecar; bestehende lokale Regler-UIs in die Sektion integriert.
+- [ ] **F-103-N5** Exportieren-Modul: Exportziel/-format über die gemeinsame
+  Exportlogik (byte-identisch zum CLI-Export); ändert nur deklaratives
+  Rezept/Sidecar, Artefakt atomar geschrieben; F-086-Cache/1:1-Vorschau
+  nutzen. Abnahme: GUI-Export datei-identisch zum CLI-`export`; Modul in der
+  Leiste erreichbar.
+- [ ] **F-103-N6** Erster visueller User-Test: `cargo run -p lumina-gui` mit
+  PNG/JPEG/WebP + nativen RAW per Pfad und Drag&drop; Preview + Exposure/
+  Contrast ändern den Renderstand; Sidecar wird geschrieben und beim Neustart
+  wiederhergestellt; WASM (`trunk serve`/`trunk build --release`) bleibt
+  buildbar und weist RAW als nicht verfügbare Capability aus. Abnahme:
+  reproduzierbare Befehle aus cli-gui-wasm.md; unabhängiger Verifizierungs-
+  Agent bestätigt F-100-Checkliste + Tests (BESTANDEN). Letzter Schritt vor
+  Abschluss von Phase 8.
 
 ## Phase 9: Optionale zentrale Indizierung (Post-MVP)
 
