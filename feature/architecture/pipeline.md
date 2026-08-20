@@ -597,11 +597,30 @@ Die geometrische Korrektur liegt vor Perspektive und Crop; Vignette folgt der
 Geometriekorrektur, CA wird kanalweise unmittelbar vor dem Crop-Resampling
 angewandt, damit Farbsaumkorrektur nicht durch spätere Geometrie verstärkt
 wird. Alle Felder und `profile` gehen in den RenderKey. Abnahme: Polynom,
-Kanalreferenz, Preset-Roundtrip und gezielte Cache-Invalidierung. MVP-Grenze:
-manuelle Koeffizienten und einfache benannte Presets; Lensfun ist ausdrücklich
-Post-MVP. Für Lensfun sind LGPL-3.0/CC-BY-SA und F-078 zu prüfen; die native
-Dependency benötigt einen Capability-Matrix-Eintrag. Abhängigkeiten: F-031,
-F-037, F-078, F-099.
+Kanalreferenz, Preset-Roundtrip und gezielte Cache-Invalidierung.
+
+**Lensfun-Integration (MVP):** Zusätzlich zum manuellen Modell wird die
+Lensfun-Datenbank (Kamera-/Objektiv-Profile, CC-BY-SA) zur automatischen
+Korrektur genutzt, wenn ein passendes Profil für die aus den RAW-Metadaten
+(`camera_make`, `camera_model`, ggf. Objektivname) ermittelte Kamera/Objektiv
+gefunden wird. Lensfun liefert Geometrie-, Vignette- und CA-Korrektur und
+ersetzt das manuelle Modell, sofern ein Profil vorliegt (Priorität: Lensfun >
+manuelle Koeffizienten > Identität); sonst greift das manuelle Modell
+(graceful fallback).
+
+Architektur- und Lizenzgrenzen:
+- Lensfun ist eine **native C-Bibliothek unter LGPL-3.0** (Datenbank CC-BY-SA).
+  Sie wird **dynamisch** gelinkt (kein statisches Einbetten → keine
+  LGPL-Ausweitung auf das Gesamtwerk); Lensfun-Lizenztext + Quellangebot
+  müssen im Release gebündelt werden (F-078, analog LibRaw).
+- Lensfun ist **nicht WASM-fähig** → reine Desktop-/native-Capability. Die
+  native Bindung lebt in einem separaten, feature-gated Crate (`lumina-lensfun`),
+  damit `lumina-core` plattformneutral und WASM-kompatibel bleibt. Ohne Feature
+  (oder fehlende Lib/Profile) greift automatisch das manuelle Modell.
+- Ein Capability-Matrix-Eintrag (native/desktop: ja, WASM: nein) ist
+  erforderlich. Die Lensfun-Profil-Datenbank wird mit dem Release distribuiert.
+
+Abhängigkeiten: F-031, F-037, F-078, F-099.
 
 **Status (F-098):** Implementiert und unabhängig verifiziert (2026-08-20).
 `LensCorrection` (additives Schema-v2-Feld) in `lumina-sidecar`;
@@ -611,8 +630,10 @@ radialen Verzeichnungspolynoms + Vignette-Polynom, Grün-Referenz/RGB),
 `apply_ca` (R/B-Skalierung, Grün Referenz) in `lumina-core`; Integration in
 `apply_geometry` in der SOLL-Reihenfolge distortion → vignette → perspective →
 CA → crop. `mask_recipe.lens_correction = None` schließt Geometrie aus dem
-Masken-Hash aus; `recipe_hash` invalidiert den RenderKey. Lensfun bleibt
-Post-MVP.
+Masken-Hash aus; `recipe_hash` invalidiert den RenderKey. Lensfun-Integration
+ist seit 2026-08-20 MVP-Ziel (native, dynamisch gelinkte LGPL-3.0-Capability,
+Datenbank CC-BY-SA, nicht WASM-fähig; Umsetzung in `lumina-lensfun` +
+`lumina-core`-Feature, siehe Abschnitt oben).
 
 ### F-099 Upright und Perspektive
 
