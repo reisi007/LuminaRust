@@ -1917,6 +1917,7 @@ dependencies = [
  "blake3",
  "clap",
  "lumina-core",
+ "lumina-lensfun",
  "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",

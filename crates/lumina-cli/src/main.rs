@@ -6,6 +6,10 @@ use lumina_core::{
 };
 use lumina_onnx::{birefnet_manifest, StubBackend};
 use lumina_raw::{RawError, RawMetadata};
+// F-098-N2: the Lensfun corrector types are only available under the `lensfun`
+// feature (the `native` FFI bindings and `liblensfun` linkage are active then).
+#[cfg(feature = "lensfun")]
+use lumina_lensfun::{Corrector, LensfunDb};
 use lumina_sidecar::{
     append_repair_region, artifact_status, load_sidecar, load_zdata, save_sidecar,
     sidecar_path_for, AnalysisFingerprint, ArtifactStatus, DecodeFingerprint, EditRecipe,
@@ -589,6 +593,11 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
                 camera_white_balance: None,
                 source_actions: &source_actions,
                 masks: None,
+                // F-098-N2: `dust_removal` deliberately does not build a Lensfun
+                // corrector. The decoded `RawMetadata` is intentionally discarded
+                // here (`let (frame, _raw) = ...`) and the repair-region workflow
+                // is a headless, source-resolution verification render without the
+                // EXIF scope the corrector requires — `None` keeps the manual model.
                 #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
@@ -858,6 +867,62 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
     process_selected(args, None, &mut Vec::new())
 }
 
+/// Build a Lensfun lens corrector from decoded RAW metadata (EXIF) for use as
+/// `RenderContext.lensfun`.
+///
+/// Strict, documented fallback (no silent correction): `None` is returned unless
+/// the `lensfun` feature is enabled **and** all of `camera_make`, `camera_model`,
+/// `focal_length` and `aperture` are present and finite. When the system Lensfun
+/// database cannot be loaded, or no matching, non-identity profile is found,
+/// `None` is returned and the manual LuminaRust model (or identity) applies
+/// instead — never a guessed correction.
+///
+/// # Subject (focus) distance
+/// `RawMetadata` carries no subject-distance field, so a documented default of
+/// `10.0` (metres) is used. Lensfun vignetting/distortion calibration is in
+/// practice focus-distance-independent for the MVP profiles, and `lumina-lensfun`'s
+/// own reference tests use exactly this value, so it yields a matching,
+/// non-identity corrector for the `Nikon D40` example profile.
+///
+/// # Known limits (MVP)
+/// * The system Lensfun database is loaded once per call (no cross-render
+///   cache). Acceptable for the MVP, but repeated `process`/`render` invocations
+///   each re-load the DB.
+/// * `lens_name` is intentionally `None`: the camera body alone selects a lens
+///   profile instead of risking a spurious match on an EXIF lens string. (The
+///   LibRaw decode path in this build does not populate `RawMetadata.lens`.)
+/// * CA (transverse chromatic aberration) stays manual — documented F-098-N1
+///   limit.
+///
+/// The returned `(LensfunDb, Corrector)` keeps the database handle alive as long
+/// as the corrector is used: the modifier internally references lens data owned
+/// by the database, so the database must not be dropped before the corrector.
+#[cfg(feature = "lensfun")]
+fn build_lensfun_corrector(metadata: Option<&RawMetadata>) -> Option<(LensfunDb, Corrector)> {
+    let metadata = metadata?;
+    let make = metadata.camera_make.as_deref()?;
+    let model = metadata.camera_model.as_deref()?;
+    // Finite focal length and aperture are required; a missing/NaN value means
+    // we cannot build a meaningful corrector → fall back to `None` strictly.
+    let focal_length = metadata.focal_length.filter(|value| value.is_finite())?;
+    let aperture = metadata.aperture.filter(|value| value.is_finite())?;
+    let db = LensfunDb::load_system()?;
+    // `RawMetadata` has no subject distance, so use the documented 10.0 m default
+    // (see the function's doc comment / §"Subject (focus) distance").
+    let distance = 10.0_f32;
+    let corrector = db.for_camera(
+        make,
+        model,
+        None,
+        metadata.width,
+        metadata.height,
+        focal_length,
+        aperture,
+        distance,
+    )?;
+    Some((db, corrector))
+}
+
 fn process_selected(
     args: ProcessArgs,
     virtual_copy: Option<&str>,
@@ -868,6 +933,14 @@ fn process_selected(
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (mut frame, raw_metadata) = decode_input(&args.input, &bytes)?;
     let wb = raw_metadata.as_ref().map(|m| m.camera_white_balance);
+    // F-098-N2: build the Lensfun corrector from EXIF when the feature is on.
+    // The database handle and corrector are kept in two separate locals so the
+    // corrector (declared last) is dropped before the database handle — the
+    // modifier references lens data owned by the database.
+    #[cfg(feature = "lensfun")]
+    let (_lensfun_db, lensfun_corrector) = build_lensfun_corrector(raw_metadata.as_ref())
+        .map(|(db, corrector)| (Some(db), Some(corrector)))
+        .unwrap_or((None, None));
     let sidecar_path = sidecar_path_for(&args.input);
     let mut document = match load_sidecar(&sidecar_path) {
         Ok(document) => document,
@@ -1037,8 +1110,10 @@ fn process_selected(
                 planes: resolved.planes,
                 policy: MaskPolicy::Warn,
             }),
+            // F-098-N2: pass a Lensfun corrector when one was built from EXIF
+            // (otherwise `None` → manual LuminaRust model / identity fallback).
             #[cfg(feature = "lensfun")]
-            lensfun: None,
+            lensfun: lensfun_corrector.as_ref(),
         },
     )?;
     // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
@@ -1849,6 +1924,9 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 masks: None,
+                // F-098-N2: this is a synthetic, recipe-only render without RAW
+                // metadata/EXIF, so no Lensfun corrector can be built — `None`
+                // (manual model) is the correct, expected state here.
                 #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
@@ -1959,5 +2037,146 @@ mod tests {
             (visible_mean - 0.5).abs() <= 0.02,
             "post-match visible mean {visible_mean} not within 0.02 of target 0.5"
         );
+    }
+
+    // F-098-N2: feature-gated CLI→Lensfun wiring tests. These exercise the real
+    // system Lensfun database (like the `lumina-lensfun` native tests), so they
+    // only run under `--features lensfun` (the default build has no `liblensfun`
+    // and stays green).
+    #[cfg(feature = "lensfun")]
+    mod lensfun_wiring_tests {
+        use super::*;
+
+        // Build a `RawMetadata` from the minimal EXIF fields the CLI wiring
+        // inspects. All other fields are left at inert defaults — the wiring
+        // only reads make/model/focal_length/aperture/width/height.
+        fn make_metadata(
+            make: Option<&str>,
+            model: Option<&str>,
+            focal_length: Option<f32>,
+            aperture: Option<f32>,
+        ) -> RawMetadata {
+            RawMetadata {
+                width: 1000,
+                height: 750,
+                orientation: 1,
+                camera_make: make.map(str::to_string),
+                camera_model: model.map(str::to_string),
+                iso: None,
+                shutter: None,
+                aperture,
+                lens: None,
+                focal_length,
+                timestamp: None,
+                artist: None,
+                description: None,
+                camera_matrix: [[0.0; 4]; 3],
+                camera_white_balance: [1.0; 4],
+                pre_multipliers: [1.0; 4],
+                icc_profile: None,
+            }
+        }
+
+        // The same real camera the `lumina-lensfun` native tests use, so the
+        // installed profile database is guaranteed to contain a matching,
+        // non-identity profile (distortion + vignetting).
+        const MAKE: &str = "Nikon Corporation";
+        const MODEL: &str = "Nikon D40";
+
+        #[test]
+        fn real_camera_with_full_exif_yields_corrector() {
+            let metadata = make_metadata(Some(MAKE), Some(MODEL), Some(18.0), Some(5.6));
+            let (_db, corrector) = build_lensfun_corrector(Some(&metadata))
+                .expect("a Lensfun corrector for the known {MAKE} {MODEL} profile");
+            // The modifier references lens data owned by the DB; `_db` is dropped
+            // after `corrector`, so the handle stays alive while the corrector is used.
+            assert!(
+                !corrector.is_identity(),
+                "the resolved Nikon D40 profile must be a non-identity correction"
+            );
+        }
+
+        #[test]
+        fn missing_make_yields_none() {
+            let metadata = make_metadata(None, Some(MODEL), Some(18.0), Some(5.6));
+            assert!(build_lensfun_corrector(Some(&metadata)).is_none());
+        }
+
+        #[test]
+        fn missing_model_yields_none() {
+            let metadata = make_metadata(Some(MAKE), None, Some(18.0), Some(5.6));
+            assert!(build_lensfun_corrector(Some(&metadata)).is_none());
+        }
+
+        #[test]
+        fn missing_focal_length_yields_none() {
+            let metadata = make_metadata(Some(MAKE), Some(MODEL), None, Some(5.6));
+            assert!(build_lensfun_corrector(Some(&metadata)).is_none());
+        }
+
+        #[test]
+        fn missing_aperture_yields_none() {
+            let metadata = make_metadata(Some(MAKE), Some(MODEL), Some(18.0), None);
+            assert!(build_lensfun_corrector(Some(&metadata)).is_none());
+        }
+
+        #[test]
+        fn no_metadata_yields_none() {
+            assert!(build_lensfun_corrector(None).is_none());
+        }
+
+        #[test]
+        fn render_with_corrector_changes_pixels() {
+            // Smoke test: feeding a real Lensfun corrector through
+            // `RenderContext.lensfun` must actually alter the rendered pixels
+            // versus the manual/identity model (`None`).
+            //
+            // A *uniform* frame is invariant under lensfun: distortion only remaps
+            // positions (uniform → uniform) and the small vignette rounds back to
+            // the same 8-bit value. So we use a spatial gradient: distortion then
+            // moves different source positions under each destination pixel and the
+            // vignette brightens the corners, both of which change 8-bit values.
+            let metadata = make_metadata(Some(MAKE), Some(MODEL), Some(18.0), Some(5.6));
+            let (_db, corrector) = build_lensfun_corrector(Some(&metadata))
+                .expect("a Lensfun corrector for the known profile");
+            let width: u32 = 1000;
+            let height: u32 = 750;
+            let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+            for y in 0..height {
+                for x in 0..width {
+                    let value = ((x / 4 + y / 4) % 256) as u8;
+                    pixels.extend_from_slice(&[value, value, value, 255]);
+                }
+            }
+            let frame = ImageFrame::new(width, height, pixels).unwrap();
+            let recipe = lumina_sidecar::EditRecipe::default();
+
+            let rendered_none = render_frame(
+                &frame,
+                &RenderContext {
+                    recipe: &recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: None,
+                },
+            )
+            .unwrap();
+            let rendered_some = render_frame(
+                &frame,
+                &RenderContext {
+                    recipe: &recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: Some(&corrector),
+                },
+            )
+            .unwrap();
+            assert_ne!(
+                rendered_none.frame.pixels, rendered_some.frame.pixels,
+                "a Lensfun corrector must change the rendered pixels"
+            );
+        }
     }
 }
