@@ -19,10 +19,11 @@ Offene Arbeit und Abgrenzung bis MVP:
   (MVP):** Lensfun ist seit 2026-08-20 MVP-Teil (F-098-N1) — LGPL-3.0,
   Datenbank CC-BY-SA, dynamisch gelinkt; die Lizenzentscheidung muss das
   abdecken (F-078, F-098-N1).
-- **F-098-N1** Lensfun-Integration als **Pre-MVP**-Bestandteil (Phase 3, aktiv
-  in Bearbeitung). SOLL in `feature/architecture/pipeline.md` F-098 aktualisiert
-  (2026-08-20): native Capability, LGPL-3.0/dynamisch, CC-BY-SA-Datenbank,
-  graceful fallback auf das manuelle Modell.
+- **F-098-N1** Lensfun-Integration als **Pre-MVP**-Bestandteil (Phase 3):
+  **verifiziert erledigt** (2026-08-20) — Crate `lumina-lensfun` + lumina-core
+  `lensfun`-Feature + Pipeline-Integration mit graceful fallback + Tests
+  (siehe Phase 3). Offene Folgeaufgaben: **F-098-N2** CLI-Verdrahtung,
+  **F-098-N3** CI-Container, **F-098-N4** Lizenz-Doku.
 - **F-082 / F-083** SAM-2-Segmentierungsadapter + Prompt-Roundtrip-Tests
   (Phase 6, nach Lizenz-/ONNX-Prüfung).
 - **F-073** Fixtures-Lizenzierung/Audit (Phase 11): Audit-Dokumente existieren
@@ -54,6 +55,10 @@ durch F-098-N1 obsolet und bewusst entfernt.
   distortion → vignette → perspective → CA → crop; Presets; RenderKey) —
   unabhängig verifiziert 2026-08-20. Bekannte Testlücke (nicht blockierend):
   Preset-Koeffizienten und Grün-Referenz nicht pixel-explizit assertet.
+- **F-098-N1** Lensfun-Integration (Pre-MVP): Crate `lumina-lensfun`
+  (FFI + Safe Wrapper, 6 Native-Tests) + lumina-core `lensfun`-Feature +
+  Pipeline-Integration mit byte-identischem Fallback — unabhängig verifiziert
+  2026-08-20 (BESTANDEN). Folgeaufgaben F-098-N2…N4 offen (Phase 3).
 - **F-075** Speicherbudgets + Abbruch großer RAW/Masken; **F-102** LibRaw-
   Version in Decode-/Render-Identität; **F-097** Vignette/Körnung;
   **F-050** Masken-Entscheidungsschicht — verifiziert 2026-08-20.
@@ -151,28 +156,44 @@ v1→v2-Migrationspfad mit Tests wird trotzdem umgesetzt.
 
 ## Phase 3: Renderpipeline und Cache
 
-- [ ] **F-098-N1** Lensfun-Integration als **Pre-MVP**-Bestandteil (SOLL:
-  pipeline.md F-098, aktualisiert 2026-08-20).
-  Umfang:
-  - Neues natives Crate `crates/lumina-lensfun` (Workspace-Member, **nicht** in
-    den wasm32-Checks): FFI-Bindung an System-`liblensfun` via `pkg-config`
-    (dynamisch gelinkt, **LGPL-3.0**, Datenbank CC-BY-SA) + Safe Wrapper
-    (DB laden, Modifier für Kamera/Objektiv/Brennweite/Blende/Distanz finden,
-    Geometrie-/Farb-Mapping).
-  - `lumina-core`: optionales Feature `lensfun` (default **off**; Dependency
-    auf lumina-lensfun nur bei Feature → nativer Default-Build und wasm32
-    bleiben grün). `apply_geometry` nutzt den Modifier für Verzeichnung +
-    Vignette, wenn vorhanden (Priorität: Lensfun > manuelle Koeffizienten >
-    Identität; graceful fallback). CA bleibt im manuellen Modell
-    (dokumentierte MVP-Grenze).
-  - Verdrahtung CLI/RAW: `RawMetadata.camera_make`/`camera_model` reichen bis
-    zum Render-Aufruf; Modifier nur aufbauen, wenn Feature an + Profil
-    gefunden.
-  - Tests: Fallback-Pfad (Feature off), Profil-gestützte Korrektur mit echter
-    liblensfun (Feature on), Fehlerfälle; CI-Container (`ci-libraw-image.yml`)
-    um `liblensfun` erweitern.
-  Abnahme: Default-Build + wasm32 + gesamte Test-Suite grün; Feature-Build
-  grün; unabhängige Verifizierung durch `general`-Agenten.
+F-098-N1 (Lensfun-Integration als **Pre-MVP**-Bestandteil) ist verifiziert
+erledigt und entfernt: neues natives Crate `crates/lumina-lensfun`
+(Workspace-Member, nicht in wasm32-Checks; Feature `native` default off,
+ohne native leere Lib; build.rs linkt System-liblensfun dynamisch via
+pkg-config — LGPL-3.0, Datenbank CC-BY-SA, keine neuen Crates/bindgen/cc;
+handgeschriebenes `extern "C"`-FFI-Subset; Safe Wrapper `LensfunDb::load_system`
++ `Corrector::for_camera` (None = kein Profil/Identität → graceful fallback) +
+`geometry()`/`color_gain()`/`is_identity()`; 6 Native-Tests grün gegen die
+reale Profil-DB). `lumina-core`: Feature `lensfun = [dep:lumina-lensfun,
+lumina-lensfun/native]` default off (Default-Build + wasm32 bleiben grün);
+cfg-gatedes `RenderContext.lensfun`-Feld; `apply_geometry`/`apply_lens` nutzen
+per-Pixel Lensfun-Geometrie/Vignette bei nicht-identischem Corrector
+(Priorität Lensfun > manuell > Identität), sonst byte-identisches manuelles
+Modell (Test `lensfun_none_is_byte_identical_to_default_pipeline`); CA bleibt
+manuell (MVP-Grenze). Alle RenderContext-Konstruktionsstellen cfg-korrekt
+(cli/gui/mcp/bench deklarieren `lensfun`-Forwarding-Feature). Gates: fmt,
+check --workspace, wasm32 core+gui, Clippy workspace CI-Config + Feature
+`-D warnings`, Tests Default (204+7) + Feature (207+7) + lumina-lensfun
+(6) + lumina-cli (13+8) — alle grün; **unabhängig verifiziert 2026-08-20**
+(BESTANDEN; M1 per-pixel-FFI-Overhead ohne Benchmark, M3
+crop-factor-Offset-Hack dokumentiert; nicht blockierend). SOLL:
+pipeline.md F-098.
+
+Folgeaufgaben (offen, einzeln delegierbar):
+- [ ] **F-098-N2** (S6) Applikative CLI-Verdrahtung: in `lumina-cli` den
+  Corrector aus `RawMetadata.camera_make`/`camera_model` (+ Brennweite/Blende
+  sofern vorhanden) aufbauen und als `Some` in `RenderContext.lensfun` reichen
+  (Feature `lensfun` an); strikter Fallback ohne EXIF-Angaben; Smoke-Test,
+  dass ein reales Profil den Export verändert.
+- [ ] **F-098-N3** (S7) CI: `liblensfun-dev` in den pinned Container
+  (`ci-libraw-image.yml`) aufnehmen und Feature-Tests als separaten,
+  pro-Crate-Schritt mit synchronisierten Features führen (Hinweis M2:
+  nicht workspace-weit mit gemischten Features bauen);
+  `cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun`.
+- [ ] **F-098-N4** (S8) Lizenz-/Distributions-Doku: Lensfun-Eintrag in
+  `THIRD-PARTY-NOTICES.md` + `feature/quality/fixtures-licensing.md`
+  (LGPL-3.0, DB CC-BY-SA, dynamisch gelinkt, Quellangebot im Release-Bundle);
+  zählt zur F-078-Abnahme.
 
 ## Phase 4: RAW-Verarbeitung
 

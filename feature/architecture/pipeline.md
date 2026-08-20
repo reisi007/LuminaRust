@@ -634,6 +634,17 @@ Masken-Hash aus; `recipe_hash` invalidiert den RenderKey. Lensfun-Integration
 ist seit 2026-08-20 MVP-Ziel (native, dynamisch gelinkte LGPL-3.0-Capability,
 Datenbank CC-BY-SA, nicht WASM-fähig; Umsetzung in `lumina-lensfun` +
 `lumina-core`-Feature, siehe Abschnitt oben).
+**Lensfun-Capability und Pipeline-Integration sind implementiert und
+unabhängig verifiziert (2026-08-20, BESTANDEN):** `lumina-lensfun` (FFI +
+Safe Wrapper, 6 Native-Tests gegen die reale Profil-DB), lumina-core-Feature
+`lensfun` (default off, wasm32-neutral), per-Pixel-Verzeichnung/Vignette mit
+byte-identischem Fallback auf das manuelle Modell (Test
+`lensfun_none_is_byte_identical_to_default_pipeline`).
+Offen (einzeln delegiert, F-098-N2…N4): applikative CLI-Verdrahtung
+(EXIF→Corrector), CI-Container `liblensfun-dev` + Feature-Job, Lensfun-Lizenz-
+eintrag in `THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` (F-078).
+Bekannte Grenzen: per-pixel-FFI-Overhead (Benchmark/Optimierung als
+F-074-Folgeaufgabe), CA bewusst manuell, kein EXIF-Trigger bis F-098-N2.
 
 ### F-099 Upright und Perspektive
 
