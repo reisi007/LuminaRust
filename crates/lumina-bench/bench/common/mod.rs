@@ -144,6 +144,7 @@ fn mask_definition(
         artifact: None,
         operation,
         references,
+        prompt: None,
         extras: default_extras(),
     }
 }

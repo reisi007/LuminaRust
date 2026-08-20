@@ -111,6 +111,24 @@ Modellfähigkeiten, Modellhash und die verwendete Transformation. Die erzeugte
 Matte kann dadurch später explizit neu berechnet werden, ohne die Benutzer-
 auswahl zu verlieren.
 
+**Implementierungsstatus (F-079, 2026-08-20):** Umgesetzt und unabhängig
+verifiziert. Das Masken-DAG-Modell (`lumina-sidecar`) enthält nun
+`MaskPrompt` (Enum `box`/`brush`/`polygon`/`ellipse`/`gradient`) mit
+`PromptTransform` (`method` + `parameters`, Teil der Maskenidentität) auf
+jeder Variante sowie `MaskDefinition.prompt: Option<MaskPrompt>` als additives
+Schema-v2-Feld (`#[serde(default, skip_serializing_if = "Option::is_none")]`,
+keine Migration nötig). `validate_prompt` (in `SidecarDocument::validate`)
+weist ungültige Prompts zurück. In `lumina-core` erzeugt
+`rasterize_prompt` eine deterministische, modellfreie geometrische Matte je
+Prompttyp (Box-Rechteck, Ellipse, Polygon-Füllung, Gradient, Pinsel als
+Positive/Negative-Disks); `MaskGraph::evaluate_node` wertet eine Prompt-
+Quelle aus, indem sie eine geladene Ebene vorzieht, sonst geometrisch
+rasterisiert. Damit sind Prompt-Quellen heute ohne Modell auswertbar; die
+modellbasierte Segmentierung (SAM 2) folgt in F-082 und ersetzt den
+geometrischen Fallback, sofern ein Modell verfügbar ist. F-081
+(Prompt-Transformationen und Koordinatensysteme persistieren) ist mit
+abgedeckt.
+
 ## Status und Wiederverwendung
 
 - `valid`: Quelle, Modellkontext und Prüfsumme stimmen; Matte wird direkt

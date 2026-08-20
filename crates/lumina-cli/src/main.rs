@@ -1667,6 +1667,7 @@ mod tests {
             }),
             operation,
             references,
+            prompt: None,
             extras: Extras::new(),
         }
     }

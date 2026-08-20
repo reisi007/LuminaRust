@@ -211,6 +211,11 @@ pub struct MaskDefinition {
     #[serde(default)]
     pub operation: MaskOperation,
     pub references: Vec<MaskReference>,
+    /// Optional user-guided segmentation prompt (F-079). Absent (`None`) is the
+    /// legacy/auto mask behaviour and requires no migration. This is a real
+    /// field (not part of `extras`) and additive to the schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<MaskPrompt>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
 }
@@ -221,6 +226,97 @@ pub struct MaskReference {
     pub mask_id: String,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
+}
+
+/// A rectangle with all coordinates normalized to `0..=1` in source space
+/// (origin top-left). Used for the bounding-box / coarse object prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NormalizedRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// A 2D point normalized to `0..=1` in source space.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Point2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// The sign of a brush mark: painted as foreground (`Positive`) or erased as
+/// background (`Negative`). Mirrors the positive/negative prompt points a
+/// SAM-style model expects (F-079 / F-082).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrushMarkSign {
+    Positive,
+    Negative,
+}
+
+/// A single brush stamp: a normalized centre, a normalized radius and a sign.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BrushMark {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub sign: BrushMarkSign,
+}
+
+/// The prompt→model coordinate transformation stored as part of the mask
+/// identity, so a generated matte can be recomputed deterministically without
+/// losing the user's selection (F-079). `Default` is the identity/empty
+/// transformation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PromptTransform {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub method: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, String>,
+}
+
+/// A user-guided segmentation prompt source. All coordinates are normalized to
+/// `0..=1` in source space. This is a *source* mask node: it carries no
+/// references and, when no inferred (model) plane is loaded, is rasterized by a
+/// deterministic, model-free geometric rasterizer in `lumina-core`.
+///
+/// The stored `transformation` keeps the conversion (e.g. box → model coords,
+/// or brush → positive/negative points) as part of the mask identity so the
+/// same matte can be rebuilt later (F-079). No network/model code lives here;
+/// SAM 2 integration is F-082.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MaskPrompt {
+    /// Coarse object bounding box, transformed into the model coordinate system.
+    Box {
+        rect: NormalizedRect,
+        transformation: PromptTransform,
+    },
+    /// Brush mask used as a mask prompt or converted to positive/negative marks.
+    Brush {
+        marks: Vec<BrushMark>,
+        resolution: (u32, u32),
+        transformation: PromptTransform,
+    },
+    /// Polygon prompt expressed as normalized vertices (even-odd fill).
+    Polygon {
+        points: Vec<Point2>,
+        transformation: PromptTransform,
+    },
+    /// Ellipse prompt with normalized centre and radii.
+    Ellipse {
+        center: Point2,
+        radii: Point2,
+        transformation: PromptTransform,
+    },
+    /// Linear gradient prompt along `angle_deg`, mapping `start`→`end` (0..=1).
+    Gradient {
+        angle_deg: f32,
+        start: f32,
+        end: f32,
+        transformation: PromptTransform,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1293,6 +1389,7 @@ impl SidecarDocument {
                 if let Some(a) = &mask.artifact {
                     validate_artifact(a)?;
                 }
+                validate_prompt(&mask.prompt)?;
                 let arity_is_valid = match mask.operation {
                     MaskOperation::Source => mask.references.is_empty(),
                     MaskOperation::Invert => mask.references.len() == 1,
@@ -1486,6 +1583,83 @@ fn validate_artifact(a: &ArtifactReference) -> Result<(), SidecarError> {
     validate_name("artifact checksum", &a.checksum)?;
     validate_name("artifact channels", &a.channels)?;
     validate_name("artifact data_version", &a.data_version)
+}
+
+/// F-079: reject malformed prompt sources. Normalized coordinates must be
+/// finite and within `0..=1`; `width`/`height` and brush `radius` must be
+/// strictly positive; required point/mark lists must be non-empty.
+fn validate_prompt(prompt: &Option<MaskPrompt>) -> Result<(), SidecarError> {
+    let Some(prompt) = prompt else {
+        return Ok(());
+    };
+    let in_unit = |v: f32| v.is_finite() && (0.0..=1.0).contains(&v);
+    match prompt {
+        MaskPrompt::Box { rect, .. } => {
+            if !in_unit(rect.x)
+                || !in_unit(rect.y)
+                || !in_unit(rect.width)
+                || !in_unit(rect.height)
+                || rect.width <= 0.0
+                || rect.height <= 0.0
+            {
+                return invalid("prompt box must have finite normalized coordinates within 0..=1 with positive width/height");
+            }
+        }
+        MaskPrompt::Brush { marks, .. } => {
+            if marks.is_empty() {
+                return invalid("prompt brush must contain at least one mark");
+            }
+            for mark in marks {
+                if !in_unit(mark.x)
+                    || !in_unit(mark.y)
+                    || !in_unit(mark.radius)
+                    || mark.radius <= 0.0
+                {
+                    return invalid(
+                        "prompt brush marks must have finite normalized coordinates within 0..=1 with positive radius",
+                    );
+                }
+            }
+        }
+        MaskPrompt::Polygon { points, .. } => {
+            if points.is_empty() {
+                return invalid("prompt polygon must contain at least one point");
+            }
+            for point in points {
+                if !in_unit(point.x) || !in_unit(point.y) {
+                    return invalid(
+                        "prompt polygon points must have finite normalized coordinates within 0..=1",
+                    );
+                }
+            }
+        }
+        MaskPrompt::Ellipse { center, radii, .. } => {
+            if !in_unit(center.x)
+                || !in_unit(center.y)
+                || !in_unit(radii.x)
+                || !in_unit(radii.y)
+                || radii.x <= 0.0
+                || radii.y <= 0.0
+            {
+                return invalid(
+                    "prompt ellipse must have finite normalized coordinates within 0..=1 with positive radii",
+                );
+            }
+        }
+        MaskPrompt::Gradient {
+            angle_deg,
+            start,
+            end,
+            ..
+        } => {
+            if !angle_deg.is_finite() || !in_unit(*start) || !in_unit(*end) {
+                return invalid(
+                    "prompt gradient must have a finite angle and finite normalized start/end within 0..=1",
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_source_action_ref(a: &SourceActionArtifactRef) -> Result<(), SidecarError> {
@@ -1803,6 +1977,7 @@ mod tests {
             artifact: None,
             operation: MaskOperation::Source,
             references: vec![],
+            prompt: None,
             extras: Extras::new(),
         }
     }
@@ -3555,5 +3730,194 @@ mod tests {
             height: 2,
             values: vec![0, 1, 32768, 65535],
         }]
+    }
+
+    // =====================================================================
+    // F-079: prompt-capable mask sources in the mask DAG data model.
+    // =====================================================================
+
+    #[test]
+    fn mask_prompt_variants_serde_roundtrip() {
+        let cases: Vec<MaskPrompt> = vec![
+            MaskPrompt::Box {
+                rect: NormalizedRect {
+                    x: 0.1,
+                    y: 0.2,
+                    width: 0.5,
+                    height: 0.6,
+                },
+                transformation: PromptTransform::default(),
+            },
+            MaskPrompt::Brush {
+                marks: vec![BrushMark {
+                    x: 0.5,
+                    y: 0.5,
+                    radius: 0.2,
+                    sign: BrushMarkSign::Positive,
+                }],
+                resolution: (64, 64),
+                transformation: PromptTransform {
+                    method: "brush-to-points".into(),
+                    parameters: BTreeMap::from([("include_negatives".into(), "true".into())]),
+                },
+            },
+            MaskPrompt::Polygon {
+                points: vec![
+                    Point2 { x: 0.0, y: 0.0 },
+                    Point2 { x: 1.0, y: 0.0 },
+                    Point2 { x: 0.5, y: 1.0 },
+                ],
+                transformation: PromptTransform::default(),
+            },
+            MaskPrompt::Ellipse {
+                center: Point2 { x: 0.5, y: 0.5 },
+                radii: Point2 { x: 0.3, y: 0.4 },
+                transformation: PromptTransform::default(),
+            },
+            MaskPrompt::Gradient {
+                angle_deg: 45.0,
+                start: 0.0,
+                end: 1.0,
+                transformation: PromptTransform::default(),
+            },
+        ];
+        for original in &cases {
+            let json = serde_json::to_string(original).unwrap();
+            let decoded: MaskPrompt = serde_json::from_str(&json).unwrap();
+            assert_eq!(original, &decoded, "prompt roundtrip failed for {json}");
+        }
+    }
+
+    #[test]
+    fn mask_definition_with_prompt_roundtrips_through_document() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        let mut prompt_mask = mask("prompta");
+        prompt_mask.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            transformation: PromptTransform {
+                method: "normalize".into(),
+                parameters: BTreeMap::from([("scale".into(), "1".into())]),
+            },
+        });
+        d.virtual_copies[0].mask_library.push(prompt_mask);
+        let json = d.to_json().unwrap();
+        assert!(json.contains("prompt"));
+        assert!(json.contains("\"box\""));
+        // The prompt is stored as part of the mask identity (next to the node).
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(decoded, d);
+    }
+
+    #[test]
+    fn mask_prompt_out_of_range_is_rejected() {
+        // Box with a coordinate outside [0,1].
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut m = mask("bad");
+        m.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: -0.1,
+                y: 0.0,
+                width: 0.5,
+                height: 0.5,
+            },
+            transformation: PromptTransform::default(),
+        });
+        d.virtual_copies[0].mask_library.push(m);
+        assert!(d.validate().is_err());
+
+        // Box with a zero width.
+        let mut d2 = SidecarDocument::new(source(), "p");
+        let mut m2 = mask("bad2");
+        m2.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.1,
+                y: 0.1,
+                width: 0.0,
+                height: 0.5,
+            },
+            transformation: PromptTransform::default(),
+        });
+        d2.virtual_copies[0].mask_library.push(m2);
+        assert!(d2.validate().is_err());
+
+        // Polygon with an out-of-range point.
+        let mut d3 = SidecarDocument::new(source(), "p");
+        let mut m3 = mask("bad3");
+        m3.prompt = Some(MaskPrompt::Polygon {
+            points: vec![Point2 { x: 0.0, y: 0.0 }, Point2 { x: 2.0, y: 0.5 }],
+            transformation: PromptTransform::default(),
+        });
+        d3.virtual_copies[0].mask_library.push(m3);
+        assert!(d3.validate().is_err());
+
+        // Gradient with a finite-but-out-of-range end value.
+        let mut d4 = SidecarDocument::new(source(), "p");
+        let mut m4 = mask("bad4");
+        m4.prompt = Some(MaskPrompt::Gradient {
+            angle_deg: 0.0,
+            start: 0.0,
+            end: 1.5,
+            transformation: PromptTransform::default(),
+        });
+        d4.virtual_copies[0].mask_library.push(m4);
+        assert!(d4.validate().is_err());
+
+        // Brush with empty marks is rejected.
+        let mut d5 = SidecarDocument::new(source(), "p");
+        let mut m5 = mask("bad5");
+        m5.prompt = Some(MaskPrompt::Brush {
+            marks: vec![],
+            resolution: (512, 512),
+            transformation: PromptTransform::default(),
+        });
+        d5.virtual_copies[0].mask_library.push(m5);
+        assert!(d5.validate().is_err());
+
+        // Brush with a non-positive radius is rejected.
+        let mut d6 = SidecarDocument::new(source(), "p");
+        let mut m6 = mask("bad6");
+        m6.prompt = Some(MaskPrompt::Brush {
+            marks: vec![BrushMark {
+                x: 0.5,
+                y: 0.5,
+                radius: 0.0,
+                sign: BrushMarkSign::Positive,
+            }],
+            resolution: (512, 512),
+            transformation: PromptTransform::default(),
+        });
+        d6.virtual_copies[0].mask_library.push(m6);
+        assert!(d6.validate().is_err());
+
+        // Non-finite (NaN) coordinate is rejected.
+        let mut d7 = SidecarDocument::new(source(), "p");
+        let mut m7 = mask("bad7");
+        m7.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: f32::NAN,
+                y: 0.0,
+                width: 0.5,
+                height: 0.5,
+            },
+            transformation: PromptTransform::default(),
+        });
+        d7.virtual_copies[0].mask_library.push(m7);
+        assert!(d7.validate().is_err());
+
+        // Valid prompt is accepted.
+        let mut ok = SidecarDocument::new(source(), "p");
+        let mut good = mask("good");
+        good.prompt = Some(MaskPrompt::Ellipse {
+            center: Point2 { x: 0.5, y: 0.5 },
+            radii: Point2 { x: 0.3, y: 0.3 },
+            transformation: PromptTransform::default(),
+        });
+        ok.virtual_copies[0].mask_library.push(good);
+        assert!(ok.validate().is_ok());
     }
 }

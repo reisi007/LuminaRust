@@ -407,6 +407,7 @@ mod tests {
             artifact: None,
             operation,
             references,
+            prompt: None,
             extras: Extras::new(),
         }
     }

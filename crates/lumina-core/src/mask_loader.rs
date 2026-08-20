@@ -503,6 +503,7 @@ mod tests {
             }),
             operation: MaskOperation::Source,
             references: vec![],
+            prompt: None,
             extras: Extras::new(),
         }
     }
@@ -936,6 +937,7 @@ mod tests {
                 mask_id: "subject".into(),
                 extras: Extras::new(),
             }],
+            prompt: None,
             extras: Extras::new(),
         };
         let mut copy = copy_with("vc", vec![source, derived]);

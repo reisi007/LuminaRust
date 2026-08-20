@@ -1,6 +1,8 @@
 //! Portable evaluation of the validated sidecar mask DAG.
 
-use lumina_sidecar::{MaskDefinition, MaskOperation, MaskReference, VirtualCopy};
+use lumina_sidecar::{
+    BrushMarkSign, MaskDefinition, MaskOperation, MaskPrompt, MaskReference, VirtualCopy,
+};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -118,6 +120,19 @@ impl<'a> MaskGraph<'a> {
                             actual: count,
                         });
                     }
+                    // A prompt-source node can be evaluated without a model.
+                    // If an inferred (loaded) plane exists it takes precedence
+                    // (the matte can be recomputed and the prompt stays);
+                    // otherwise fall back to the deterministic, model-free
+                    // geometric rasterizer (F-079).
+                    if let Some(prompt) = &definition.prompt {
+                        if let Some(plane) = self.sources.get(&(key.0.clone(), key.1.clone())) {
+                            return Ok(plane.clone());
+                        }
+                        let width = definition.geometry_context.width;
+                        let height = definition.geometry_context.height;
+                        return rasterize_prompt(prompt, width, height);
+                    }
                     self.sources
                         .get(&(key.0.clone(), key.1.clone()))
                         .cloned()
@@ -210,12 +225,149 @@ fn ensure_dimensions(expected: &MaskPlane, actual: &MaskPlane) -> Result<(), Mas
     }
 }
 
+/// Deterministic, model-free geometric rasterization of a user-guided prompt
+/// source (F-079) into a `u16` mask plane at the requested dimensions.
+///
+/// The result is a pure function of the prompt and the dimensions: no RNG, no
+/// wall-clock, no address dependence, so two calls with identical inputs always
+/// produce byte-identical output. This is the geometric fallback matte used
+/// when no inferred (model) plane is loaded; SAM 2 / network inference is a
+/// separate concern (F-082).
+pub fn rasterize_prompt(
+    prompt: &MaskPrompt,
+    width: u32,
+    height: u32,
+) -> Result<MaskPlane, MaskError> {
+    let w = width as usize;
+    let h = height as usize;
+    let mut values = vec![0u16; w.saturating_mul(h)];
+    match prompt {
+        MaskPrompt::Box { rect, .. } => {
+            // Normalized [0,1] -> pixel; paint the inclusive rectangle interior
+            // (hard edges are fine and deterministic).
+            let x0 = (rect.x * width as f32).floor() as i64;
+            let y0 = (rect.y * height as f32).floor() as i64;
+            let x1 = ((rect.x + rect.width) * width as f32).ceil() as i64;
+            let y1 = ((rect.y + rect.height) * height as f32).ceil() as i64;
+            for y in y0.max(0)..y1.min(h as i64) {
+                for x in x0.max(0)..x1.min(w as i64) {
+                    values[y as usize * w + x as usize] = u16::MAX;
+                }
+            }
+        }
+        MaskPrompt::Ellipse { center, radii, .. } => {
+            for (y, row) in values.chunks_exact_mut(w).enumerate() {
+                let ny = (y as f32 + 0.5) / height as f32;
+                for (x, pixel) in row.iter_mut().enumerate() {
+                    let nx = (x as f32 + 0.5) / width as f32;
+                    let dx = (nx - center.x) / radii.x;
+                    let dy = (ny - center.y) / radii.y;
+                    if dx * dx + dy * dy <= 1.0 {
+                        *pixel = u16::MAX;
+                    }
+                }
+            }
+        }
+        MaskPrompt::Polygon { points, .. } => {
+            for (y, row) in values.chunks_exact_mut(w).enumerate() {
+                let ny = (y as f32 + 0.5) / height as f32;
+                for (x, pixel) in row.iter_mut().enumerate() {
+                    let nx = (x as f32 + 0.5) / width as f32;
+                    if point_in_polygon(nx, ny, points) {
+                        *pixel = u16::MAX;
+                    }
+                }
+            }
+        }
+        MaskPrompt::Gradient {
+            angle_deg,
+            start,
+            end,
+            ..
+        } => {
+            let rad = angle_deg.to_radians();
+            let (dx, dy) = (rad.cos(), rad.sin());
+            // Normalize the projection parameter `t` to [0,1] across the image
+            // using the four extreme pixel centres, so the outermost columns
+            // (or corners for diagonal angles) map exactly to `start`/`end`.
+            let mut s_min = f32::INFINITY;
+            let mut s_max = f32::NEG_INFINITY;
+            for (cx, cy) in [
+                (0.5 / width as f32, 0.5 / height as f32),
+                (1.0 - 0.5 / width as f32, 0.5 / height as f32),
+                (0.5 / width as f32, 1.0 - 0.5 / height as f32),
+                (1.0 - 0.5 / width as f32, 1.0 - 0.5 / height as f32),
+            ] {
+                let s = cx * dx + cy * dy;
+                s_min = s_min.min(s);
+                s_max = s_max.max(s);
+            }
+            let span = (s_max - s_min).max(f32::EPSILON);
+            for (y, row) in values.chunks_exact_mut(w).enumerate() {
+                let ny = (y as f32 + 0.5) / height as f32;
+                for (x, pixel) in row.iter_mut().enumerate() {
+                    let nx = (x as f32 + 0.5) / width as f32;
+                    let s = nx * dx + ny * dy;
+                    let t = ((s - s_min) / span).clamp(0.0, 1.0);
+                    let g = (start + t * (end - start)).clamp(0.0, 1.0);
+                    *pixel = (g * (u16::MAX as f32) + 0.5) as u16;
+                }
+            }
+        }
+        MaskPrompt::Brush { marks, .. } => {
+            // Start at zero; paint marks in order so later marks override
+            // earlier ones (a negative mark erases a positive one).
+            for (y, row) in values.chunks_exact_mut(w).enumerate() {
+                let ny = (y as f32 + 0.5) / height as f32;
+                for (x, pixel) in row.iter_mut().enumerate() {
+                    let nx = (x as f32 + 0.5) / width as f32;
+                    let mut value = 0u16;
+                    for mark in marks {
+                        let ddx = nx - mark.x;
+                        let ddy = ny - mark.y;
+                        if ddx * ddx + ddy * ddy <= mark.radius * mark.radius {
+                            value = if matches!(mark.sign, BrushMarkSign::Positive) {
+                                u16::MAX
+                            } else {
+                                0
+                            };
+                        }
+                    }
+                    *pixel = value;
+                }
+            }
+        }
+    }
+    MaskPlane::new(width, height, values)
+}
+
+/// Even-odd point-in-polygon test (classic PNPOLY), all coordinates
+/// normalized to `0..=1`.
+fn point_in_polygon(px: f32, py: f32, points: &[lumina_sidecar::Point2]) -> bool {
+    let mut inside = false;
+    let n = points.len();
+    if n < 3 {
+        return false;
+    }
+    for i in 0..n {
+        let j = if i == 0 { n - 1 } else { i - 1 };
+        let (xi, yi) = (points[i].x, points[i].y);
+        let (xj, yj) = (points[j].x, points[j].y);
+        let intersects = ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+        if intersects {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use lumina_sidecar::{
-        CoordinateSystem, DecodeFingerprint, Extras, GeometryFingerprint, MaskStatus,
-        ModelIdentity, Preprocessing, Resolution, SourceFingerprint,
+        BrushMark, BrushMarkSign, CoordinateSystem, DecodeFingerprint, Extras, GeometryFingerprint,
+        MaskPrompt, MaskStatus, ModelIdentity, NormalizedRect, Point2, Preprocessing,
+        PromptTransform, Resolution, SourceFingerprint,
     };
 
     fn definition(
@@ -271,6 +423,7 @@ mod tests {
             artifact: None,
             operation,
             references,
+            prompt: None,
             extras: Extras::new(),
         }
     }
@@ -518,5 +671,200 @@ mod tests {
             graph.evaluate(&reference("subtract")).unwrap().values,
             vec![0, u16::MAX]
         );
+    }
+
+    // =====================================================================
+    // F-079: deterministic geometric rasterization of prompt sources.
+    // =====================================================================
+
+    #[test]
+    fn rasterize_box_fills_rectangle_interior() {
+        let prompt = MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            transformation: PromptTransform::default(),
+        };
+        let plane = rasterize_prompt(&prompt, 4, 4).unwrap();
+        assert_eq!((plane.width, plane.height), (4, 4));
+        // Outside corners are zero.
+        assert_eq!(plane.values[0], 0);
+        assert_eq!(plane.values[15], 0);
+        // The central 2x2 block (x,y in {1,2}) is fully on.
+        for idx in [5, 6, 9, 10] {
+            assert_eq!(plane.values[idx], u16::MAX, "box interior at {idx}");
+        }
+    }
+
+    #[test]
+    fn rasterize_ellipse_fills_interior() {
+        let prompt = MaskPrompt::Ellipse {
+            center: Point2 { x: 0.5, y: 0.5 },
+            radii: Point2 { x: 0.4, y: 0.4 },
+            transformation: PromptTransform::default(),
+        };
+        let plane = rasterize_prompt(&prompt, 16, 16).unwrap();
+        // Centre pixel inside the ellipse.
+        assert_eq!(plane.values[8 * 16 + 8], u16::MAX);
+        // Far corner outside the ellipse.
+        assert_eq!(plane.values[0], 0);
+    }
+
+    #[test]
+    fn rasterize_polygon_fills_interior() {
+        let prompt = MaskPrompt::Polygon {
+            points: vec![
+                Point2 { x: 0.0, y: 1.0 },
+                Point2 { x: 1.0, y: 1.0 },
+                Point2 { x: 0.5, y: 0.0 },
+            ],
+            transformation: PromptTransform::default(),
+        };
+        let plane = rasterize_prompt(&prompt, 10, 10).unwrap();
+        // Bottom-left corner sits inside the upward triangle.
+        assert_eq!(plane.values[9 * 10], u16::MAX);
+        // Top-centre near the apex is outside.
+        assert_eq!(plane.values[5], 0);
+    }
+
+    #[test]
+    fn rasterize_gradient_is_monotonic_and_maps_endpoints() {
+        let prompt = MaskPrompt::Gradient {
+            angle_deg: 0.0,
+            start: 0.0,
+            end: 1.0,
+            transformation: PromptTransform::default(),
+        };
+        let width = 8u32;
+        let plane = rasterize_prompt(&prompt, width, 1).unwrap();
+        // Leftmost/rightmost columns map to the endpoints.
+        assert_eq!(plane.values[0], 0);
+        assert_eq!(plane.values[(width - 1) as usize], u16::MAX);
+        // Monotonic non-decreasing left to right.
+        for i in 1..width as usize {
+            assert!(
+                plane.values[i] >= plane.values[i - 1],
+                "gradient not monotonic at {i}: {} < {}",
+                plane.values[i],
+                plane.values[i - 1]
+            );
+        }
+        // Reversed gradient is monotonic non-increasing.
+        let reversed = MaskPrompt::Gradient {
+            angle_deg: 0.0,
+            start: 1.0,
+            end: 0.0,
+            transformation: PromptTransform::default(),
+        };
+        let plane = rasterize_prompt(&reversed, width, 1).unwrap();
+        assert_eq!(plane.values[0], u16::MAX);
+        assert_eq!(plane.values[(width - 1) as usize], 0);
+        for i in 1..width as usize {
+            assert!(plane.values[i] <= plane.values[i - 1]);
+        }
+    }
+
+    #[test]
+    fn rasterize_brush_paints_positive_and_erases_negative() {
+        let prompt = MaskPrompt::Brush {
+            marks: vec![
+                BrushMark {
+                    x: 0.5,
+                    y: 0.5,
+                    radius: 0.4,
+                    sign: BrushMarkSign::Positive,
+                },
+                BrushMark {
+                    x: 0.2,
+                    y: 0.5,
+                    radius: 0.2,
+                    sign: BrushMarkSign::Negative,
+                },
+            ],
+            resolution: (32, 32),
+            transformation: PromptTransform::default(),
+        };
+        let plane = rasterize_prompt(&prompt, 32, 32).unwrap();
+        // Centre is covered by the positive mark -> max.
+        assert_eq!(plane.values[16 * 32 + 16], u16::MAX);
+        // Far corner is untouched -> zero.
+        assert_eq!(plane.values[0], 0);
+        // A pixel near the negative mark (left side) is erased to zero even
+        // though it would be inside the large positive disk.
+        let negative_pixel = (16usize) * 32 + (6usize); // normalized x ~0.2
+        assert_eq!(plane.values[negative_pixel], 0);
+    }
+
+    #[test]
+    fn rasterize_prompt_is_deterministic() {
+        let prompt = MaskPrompt::Gradient {
+            angle_deg: 30.0,
+            start: 0.1,
+            end: 0.9,
+            transformation: PromptTransform::default(),
+        };
+        let a = rasterize_prompt(&prompt, 12, 7).unwrap();
+        let b = rasterize_prompt(&prompt, 12, 7).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.values, b.values);
+    }
+
+    #[test]
+    fn source_with_prompt_evaluates_geometric_matte_without_loaded_plane() {
+        // A Source node carrying a Box prompt must evaluate to the deterministic
+        // geometric matte even when no inferred (model) plane is loaded.
+        let mut def = definition("box-source", MaskOperation::Source, vec![]);
+        def.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            transformation: PromptTransform::default(),
+        });
+        // geometry_context in the test helper is 2x1, so the full-image box
+        // rasterizes to an all-max 2x1 plane.
+        let graph = graph(vec![def], &[]);
+        let plane = graph.evaluate(&reference("box-source")).unwrap();
+        assert_eq!(plane.values, vec![u16::MAX, u16::MAX]);
+    }
+
+    #[test]
+    fn source_with_prompt_and_loaded_plane_prefers_loaded_plane() {
+        // When an inferred (loaded) plane is present for a prompt node, it takes
+        // precedence: the matte can be recomputed and the user's prompt stays.
+        let mut def = definition("box-source", MaskOperation::Source, vec![]);
+        def.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            transformation: PromptTransform::default(),
+        });
+        let graph = graph(vec![def], &[("box-source", vec![7, 11])]);
+        assert_eq!(
+            graph.evaluate(&reference("box-source")).unwrap().values,
+            vec![7, 11]
+        );
+    }
+
+    #[test]
+    fn source_with_prompt_falls_back_when_no_loaded_plane() {
+        let mut def = definition("ellipse-source", MaskOperation::Source, vec![]);
+        def.prompt = Some(MaskPrompt::Ellipse {
+            center: Point2 { x: 0.5, y: 0.5 },
+            radii: Point2 { x: 0.5, y: 0.5 },
+            transformation: PromptTransform::default(),
+        });
+        let graph = graph(vec![def], &[]);
+        let plane = graph.evaluate(&reference("ellipse-source")).unwrap();
+        // Full-image ellipse -> all max.
+        assert_eq!(plane.values, vec![u16::MAX, u16::MAX]);
     }
 }

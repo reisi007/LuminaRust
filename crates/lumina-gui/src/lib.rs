@@ -601,6 +601,7 @@ impl LuminaApp {
             artifact: None,
             operation: MaskOperation::Source,
             references: vec![],
+            prompt: None,
             extras: BTreeMap::new(),
         });
         self.select_mask(&id)?;
@@ -1954,6 +1955,7 @@ mod tests {
                 artifact: None,
                 operation: MaskOperation::Source,
                 references: vec![],
+                prompt: None,
                 extras: BTreeMap::new(),
             });
         lumina_sidecar::save_sidecar(&sidecar, &document).unwrap();

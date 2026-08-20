@@ -78,9 +78,18 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 - **F-077** verifiziert erledigt und entfernt (19 Backup-/Recovery-/Konflikt-/
   Datenverlusttests als Release-Gate in lumina-sidecar — unabhängig verifiziert
   2026-08-19).
+- **F-079** verifiziert erledigt und entfernt (Promptfähige Maskenquellen im
+  Masken-DAG-Modell: `MaskPrompt`-Enum Box/Brush/Polygon/Ellipse/Gradient mit
+  `PromptTransform` (Teil der Maskenidentität) und `MaskDefinition.prompt`
+  (additives Schema-v2-Feld); validiert; deterministischer, modellfreier
+  geometrischer Rasterizer in `rasterize_prompt`; DAG wertet Prompt-Quellen
+  aus (geladene Ebene zuerst, sonst geometrisch) — unabhängig verifiziert
+  2026-08-20). **F-081 (Persistenz von Prompt-Transformationen und
+  Koordinatensystemen) ist mit abgedeckt** (`PromptTransform` + bestehendes
+  `coordinate_system` auf jeder Prompt-Variante).
 
 Verbleibend bis MVP: Phase 6 AI-Masken
-(F-079, F-081…F-083 — F-049 und F-050 sind verifiziert erledigt),
+(F-082, F-083 — F-049, F-050, F-079, F-081 sind verifiziert erledigt),
 F-101 MCP AI-Agent-Schnittstelle (Phase 7, verifiziert erledigt),
 Release-Gates (F-072, F-073, F-075, F-078). F-097 (Vignette/Körnung) ist
 verifiziert erledigt.
@@ -240,10 +249,6 @@ pipeline.md „Exposure Matching"). **Phase 5 ist damit vollständig abgeschloss
 
 ## Phase 6: Persistente AI-Masken
 
-- [ ] **F-079** Promptfähige Maskenquellen für Box, Pinsel, Polygon, Ellipse und
-  Verläufe in das Masken-DAG-Modell aufnehmen.
-- [ ] **F-081** Benutzergeführte Segmentierung für Rechteck- und Pinsel-Prompts
-  spezifizieren; Prompt-Transformationen und Koordinatensysteme persistieren.
 - [ ] **F-082** Einen ersten interaktiven Segmentierungsadapter, vorzugsweise
   SAM 2 nach Lizenz- und ONNX-Prüfung, auswählen und integrieren.
 - [ ] **F-083** Prompt-Roundtrip-, Modellfähigkeits-, Re-Run- und
