@@ -264,9 +264,14 @@ mod native {
         if handle.0.is_null() {
             return Err(RawError::InvalidData("LibRaw handle"));
         }
-        let mut input = bytes.to_vec();
+        // SAFETY: LibRaw's `open_buffer` reads the input bytes and never mutates
+        // them; `bytes` outlives this call (it is a function parameter dropped
+        // only after `handle`, whose `Drop` closes the decoder). Handing the
+        // const slice pointer to the `*mut c_void` FFI argument therefore lets us
+        // skip an otherwise redundant full-file copy of the RAW (F-074-A2) without
+        // giving LibRaw writable access to caller memory.
         let code = unsafe {
-            raw::libraw_open_buffer(handle.0, input.as_mut_ptr().cast::<c_void>(), input.len())
+            raw::libraw_open_buffer(handle.0, bytes.as_ptr() as *mut c_void, bytes.len())
         };
         if code != raw::LIBRAW_SUCCESS {
             return Err(error("opening input", code));
@@ -362,7 +367,11 @@ mod native {
                 return Err(RawError::InvalidData("image data size"));
             }
             let source = unsafe { std::slice::from_raw_parts(image.data.as_ptr(), length) };
-            orient(
+            // Orientation is pinned to `1` here on purpose: LibRaw's
+            // `dcraw_make_mem_image` already applies the EXIF orientation to the
+            // processed buffer (see `RawMetadata.orientation`), so the only
+            // remaining transformation is promoting RGB(A) -> RGBA8.
+            rgba_from_bytes(
                 source,
                 image.width as u32,
                 image.height as u32,
@@ -379,7 +388,7 @@ mod native {
             }
             let source =
                 unsafe { std::slice::from_raw_parts(image.data.as_ptr().cast::<u16>(), length) };
-            orient_16(
+            rgba_from_words(
                 source,
                 image.width as u32,
                 image.height as u32,
@@ -394,18 +403,15 @@ mod native {
         Ok(RawImage { frame, metadata })
     }
 
-    fn orient_16(
-        source: &[u16],
-        width: u32,
-        height: u32,
-        channels: usize,
-        orientation: u8,
-    ) -> Result<ImageFrame, RawError> {
-        let source_8: Vec<u8> = source.iter().map(|value| (value >> 8) as u8).collect();
-        orient(&source_8, width, height, channels, orientation)
-    }
-
-    fn orient(
+    /// Promotes a LibRaw 8-bit RGB(A) processed image to an RGBA8 `ImageFrame`,
+    /// applying the same EXIF-orientation permutation the previous `orient`
+    /// helper applied. Orientation `1` (no rotation/flip) is the hot path used
+    /// by the committed fixtures: it is a pure RGB -> RGBA promotion (opaque
+    /// alpha) with no per-pixel branch and no `slice::copy_from_slice` bounds
+    /// churn, which keeps the inner loop tight and vectorizable. The generic arm
+    /// reproduces the original per-pixel mapping exactly for the other
+    /// orientations.
+    fn rgba_from_bytes(
         source: &[u8],
         width: u32,
         height: u32,
@@ -417,23 +423,140 @@ mod native {
         } else {
             (width, height)
         };
-        let mut pixels = vec![0; out_width as usize * out_height as usize * 4];
-        for y in 0..out_height {
-            for x in 0..out_width {
-                let (sx, sy) = match orientation {
-                    2 => (width - 1 - x, y),
-                    3 => (width - 1 - x, height - 1 - y),
-                    4 => (x, height - 1 - y),
-                    5 => (y, x),
-                    6 => (y, height - 1 - x),
-                    7 => (width - 1 - y, height - 1 - x),
-                    8 => (width - 1 - y, x),
-                    _ => (x, y),
-                };
-                let source_offset = (sy * width + sx) as usize * channels;
-                let target_offset = (y * out_width + x) as usize * 4;
-                pixels[target_offset..target_offset + 3]
-                    .copy_from_slice(&source[source_offset..source_offset + 3]);
+        let mut pixels = vec![0u8; out_width as usize * out_height as usize * 4];
+
+        if orientation == 1 {
+            // Source and target share the same row-major layout; only the channel
+            // count changes (3 -> 4). The opaque-alpha branch is hoisted out of the
+            // pixel loop so the compiler can stream each row without per-pixel
+            // branching or slice bounds checks.
+            if channels == 4 {
+                for y in 0..out_height as usize {
+                    let row = y * out_width as usize * 4;
+                    let end = row + out_width as usize * 4;
+                    pixels[row..end].copy_from_slice(&source[row..end]);
+                }
+            } else {
+                for y in 0..out_height as usize {
+                    let s = y * out_width as usize * 3;
+                    let d = y * out_width as usize * 4;
+                    for x in 0..out_width as usize {
+                        let sc = s + x * 3;
+                        let dc = d + x * 4;
+                        pixels[dc] = source[sc];
+                        pixels[dc + 1] = source[sc + 1];
+                        pixels[dc + 2] = source[sc + 2];
+                        pixels[dc + 3] = 255;
+                    }
+                }
+            }
+        } else {
+            transform_rows(
+                &mut pixels,
+                source,
+                width,
+                height,
+                out_width,
+                out_height,
+                channels,
+                orientation,
+            );
+        }
+
+        ImageFrame::new(out_width, out_height, pixels)
+            .map_err(|_| RawError::InvalidData("RGBA frame"))
+    }
+
+    /// Promotes a LibRaw 16-bit RGB(A) processed image to an RGBA8 `ImageFrame`.
+    /// The high byte of each 16-bit sample becomes the 8-bit channel value,
+    /// matching the previous `orient_16` shift (`value >> 8`). The 16-bit source
+    /// is read directly, so no intermediate `u8` buffer is allocated (the old
+    /// `orient_16` collected a full `Vec<u8>` only to feed `orient`).
+    fn rgba_from_words(
+        source: &[u16],
+        width: u32,
+        height: u32,
+        channels: usize,
+        orientation: u8,
+    ) -> Result<ImageFrame, RawError> {
+        let (out_width, out_height) = if (5..=8).contains(&orientation) {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        let mut pixels = vec![0u8; out_width as usize * out_height as usize * 4];
+
+        if orientation == 1 {
+            if channels == 4 {
+                for y in 0..out_height as usize {
+                    let s = y * out_width as usize * 4;
+                    let d = y * out_width as usize * 4;
+                    for x in 0..out_width as usize {
+                        let sc = s + x * 4;
+                        let dc = d + x * 4;
+                        pixels[dc] = (source[sc] >> 8) as u8;
+                        pixels[dc + 1] = (source[sc + 1] >> 8) as u8;
+                        pixels[dc + 2] = (source[sc + 2] >> 8) as u8;
+                        pixels[dc + 3] = (source[sc + 3] >> 8) as u8;
+                    }
+                }
+            } else {
+                for y in 0..out_height as usize {
+                    let s = y * out_width as usize * 3;
+                    let d = y * out_width as usize * 4;
+                    for x in 0..out_width as usize {
+                        let sc = s + x * 3;
+                        let dc = d + x * 4;
+                        pixels[dc] = (source[sc] >> 8) as u8;
+                        pixels[dc + 1] = (source[sc + 1] >> 8) as u8;
+                        pixels[dc + 2] = (source[sc + 2] >> 8) as u8;
+                        pixels[dc + 3] = 255;
+                    }
+                }
+            }
+        } else {
+            for y in 0..out_height as usize {
+                for x in 0..out_width as usize {
+                    let (sx, sy) =
+                        oriented_source_xy(x as u32, y as u32, width, height, orientation);
+                    let source_offset = (sy as usize * width as usize + sx as usize) * channels;
+                    let target_offset = (y * out_width as usize + x) * 4;
+                    pixels[target_offset] = (source[source_offset] >> 8) as u8;
+                    pixels[target_offset + 1] = (source[source_offset + 1] >> 8) as u8;
+                    pixels[target_offset + 2] = (source[source_offset + 2] >> 8) as u8;
+                    pixels[target_offset + 3] = if channels == 4 {
+                        (source[source_offset + 3] >> 8) as u8
+                    } else {
+                        255
+                    };
+                }
+            }
+        }
+
+        ImageFrame::new(out_width, out_height, pixels)
+            .map_err(|_| RawError::InvalidData("RGBA frame"))
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn transform_rows(
+        pixels: &mut [u8],
+        source: &[u8],
+        width: u32,
+        height: u32,
+        out_width: u32,
+        out_height: u32,
+        channels: usize,
+        orientation: u8,
+    ) {
+        for y in 0..out_height as usize {
+            for x in 0..out_width as usize {
+                let (sx, sy) = oriented_source_xy(x as u32, y as u32, width, height, orientation);
+                let source_offset = (sy as usize * width as usize + sx as usize) * channels;
+                let target_offset = (y * out_width as usize + x) * 4;
+                pixels[target_offset] = source[source_offset];
+                pixels[target_offset + 1] = source[source_offset + 1];
+                pixels[target_offset + 2] = source[source_offset + 2];
                 pixels[target_offset + 3] = if channels == 4 {
                     source[source_offset + 3]
                 } else {
@@ -441,8 +564,118 @@ mod native {
                 };
             }
         }
-        ImageFrame::new(out_width, out_height, pixels)
-            .map_err(|_| RawError::InvalidData("RGBA frame"))
+    }
+
+    #[inline]
+    fn oriented_source_xy(x: u32, y: u32, width: u32, height: u32, orientation: u8) -> (u32, u32) {
+        match orientation {
+            2 => (width - 1 - x, y),
+            3 => (width - 1 - x, height - 1 - y),
+            4 => (x, height - 1 - y),
+            5 => (y, x),
+            6 => (y, height - 1 - x),
+            7 => (width - 1 - y, height - 1 - x),
+            8 => (width - 1 - y, x),
+            _ => (x, y),
+        }
+    }
+
+    #[cfg(test)]
+    mod conversion_tests {
+        use super::*;
+
+        /// Independent re-implementation of the original per-pixel orientation
+        /// mapping, used to prove the optimized converters emit byte-identical
+        /// output (F-074-A2: no semantic / output change).
+        fn reference_rgba(
+            source: &[u8],
+            width: u32,
+            height: u32,
+            channels: usize,
+            orientation: u8,
+        ) -> Vec<u8> {
+            let (out_w, out_h) = if (5..=8).contains(&orientation) {
+                (height, width)
+            } else {
+                (width, height)
+            };
+            let mut pixels = vec![0u8; out_w as usize * out_h as usize * 4];
+            for y in 0..out_h {
+                for x in 0..out_w {
+                    let (sx, sy) = match orientation {
+                        2 => (width - 1 - x, y),
+                        3 => (width - 1 - x, height - 1 - y),
+                        4 => (x, height - 1 - y),
+                        5 => (y, x),
+                        6 => (y, height - 1 - x),
+                        7 => (width - 1 - y, height - 1 - x),
+                        8 => (width - 1 - y, x),
+                        _ => (x, y),
+                    };
+                    let so = (sy * width + sx) as usize * channels;
+                    let to = (y * out_w + x) as usize * 4;
+                    pixels[to] = source[so];
+                    pixels[to + 1] = source[so + 1];
+                    pixels[to + 2] = source[so + 2];
+                    pixels[to + 3] = if channels == 4 { source[so + 3] } else { 255 };
+                }
+            }
+            pixels
+        }
+
+        fn synthetic(channels: usize, width: u32, height: u32) -> Vec<u8> {
+            let mut v = vec![0u8; width as usize * height as usize * channels];
+            for (i, b) in v.iter_mut().enumerate() {
+                *b = (i % 251) as u8;
+            }
+            v
+        }
+
+        #[test]
+        fn eight_bit_conversion_matches_reference_for_all_orientations() {
+            for &orientation in &[1u8, 2, 3, 4, 5, 6, 7, 8] {
+                for &channels in &[3usize, 4usize] {
+                    let (w, h) = (7u32, 5u32);
+                    let src = synthetic(channels, w, h);
+                    let frame = rgba_from_bytes(&src, w, h, channels, orientation).unwrap();
+                    let expected = reference_rgba(&src, w, h, channels, orientation);
+                    assert_eq!(
+                        frame.pixels, expected,
+                        "8-bit orientation {orientation}, channels {channels}"
+                    );
+                    let (ew, eh) = if (5..=8).contains(&orientation) {
+                        (h, w)
+                    } else {
+                        (w, h)
+                    };
+                    assert_eq!((frame.width, frame.height), (ew, eh));
+                }
+            }
+        }
+
+        #[test]
+        fn sixteen_bit_conversion_matches_reference() {
+            for &orientation in &[1u8, 5, 8] {
+                let (w, h) = (6u32, 4u32);
+                let mut src = vec![0u16; w as usize * h as usize * 3];
+                for (i, v) in src.iter_mut().enumerate() {
+                    *v = ((i % 1000) as u16) << 4;
+                }
+                let frame = rgba_from_words(&src, w, h, 3, orientation).unwrap();
+                let hi: Vec<u8> = src.iter().map(|v| (v >> 8) as u8).collect();
+                let expected = reference_rgba(&hi, w, h, 3, orientation);
+                assert_eq!(frame.pixels, expected, "16-bit orientation {orientation}");
+            }
+        }
+
+        #[test]
+        fn opaque_alpha_for_three_channel_source() {
+            // The committed fixtures decode as 3-channel RGB; the promoted RGBA
+            // frame must be fully opaque.
+            let src = synthetic(3, 4, 3);
+            let frame = rgba_from_bytes(&src, 4, 3, 3, 1).unwrap();
+            assert!(frame.pixels.iter().skip(3).step_by(4).all(|&a| a == 255));
+        }
     }
 }
 
