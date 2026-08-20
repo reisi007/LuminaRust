@@ -83,8 +83,21 @@ jobs:
       - name: Run native zdata tests
         run: cargo test -p lumina-sidecar --features zdata
 
+      # Clippy on workspace crates only, with `-D warnings`. We do NOT use
+      # `--all-features` here: the `lumina-onnx/onnx-rt` feature is OPTIONAL and
+      # network-gated (it pulls `ort`, whose `download-binaries` path transitively
+      # requires `native-tls` -> `openssl-sys`, and the pinned-LibRaw container has
+      # no `libssl-dev`). Building/`cargo clippy` with `onnx-rt` therefore needs
+      # OpenSSL dev headers plus internet access to fetch prebuilt ONNX Runtime
+      # binaries, which contradicts the design rule that the default CI build/test
+      # stays green with no network access (see crates/lumina-onnx/Cargo.toml).
+      # The `onnx-rt` code path is still lint-checked locally by developers who
+      # enable the feature; it is intentionally excluded from the required CI gate.
+      # We still enable the non-network, pure-Rust features so they are linted:
+      #   - lumina-sidecar/zdata (zstd-compressed binary sidecar)
+      #   - lumina-bench/raw-bench (LibRaw decode benchmarks)
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings
 
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
