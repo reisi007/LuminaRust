@@ -640,11 +640,18 @@ Safe Wrapper, 6 Native-Tests gegen die reale Profil-DB), lumina-core-Feature
 `lensfun` (default off, wasm32-neutral), per-Pixel-Verzeichnung/Vignette mit
 byte-identischem Fallback auf das manuelle Modell (Test
 `lensfun_none_is_byte_identical_to_default_pipeline`).
-Offen (einzeln delegiert, F-098-N2…N4): applikative CLI-Verdrahtung
-(EXIF→Corrector), CI-Container `liblensfun-dev` + Feature-Job, Lensfun-Lizenz-
-eintrag in `THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` (F-078).
+**Folgeaufgaben N2–N4 sind umgesetzt und unabhängig verifiziert
+(2026-08-20, Batch-Verifikation BESTANDEN):** N2 CLI-Verdrahtung
+(EXIF→Corrector via `build_lensfun_corrector`, strikter Fallback, 7 neue
+feature-gated Tests), N3 CI-Container (`liblensfun-dev` im gepinnten Image,
+Feature-Test-/Clippy-Steps mit synchronisierten Features, keine
+Misch-Feature-Builds), N4 Lensfun-Lizenz-Eintrag in
+`THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` (LGPL-3.0 dynamisch,
+DB CC-BY-SA, SPDX-Detail vor Final-Release zu verifizieren).
 Bekannte Grenzen: per-pixel-FFI-Overhead (Benchmark/Optimierung als
-F-074-Folgeaufgabe), CA bewusst manuell, kein EXIF-Trigger bis F-098-N2.
+F-074-Folgeaufgabe), CA bewusst manuell, DB-Ladezyklus pro Render-Aufruf
+(MVP ok), Distance-Default 10,0 m (RawMetadata hat kein Distanzfeld),
+`lens_name` wird nicht befüllt (Body-Match statt falschem Lens-Match).
 
 ### F-099 Upright und Perspektive
 
