@@ -190,6 +190,63 @@ pub const BIREFNET_INFERENCE_WIDTH: u32 = 1024;
 /// Inference resolution height for BiRefNet.
 pub const BIREFNET_INFERENCE_HEIGHT: u32 = 1024;
 
+/// Inference resolution width for the SAM 2.1 `hiera_*` model family.
+pub const SAM2_INFERENCE_WIDTH: u32 = 1024;
+/// Inference resolution height for the SAM 2.1 `hiera_*` model family.
+pub const SAM2_INFERENCE_HEIGHT: u32 = 1024;
+
+/// SAM 2.1 release version string used for every `sam2.1_hiera_*` descriptor.
+///
+/// The family is the Meta "SAM 2.1" release (checkpoint family `092824`,
+/// Apache-2.0). `model_hash` stays `pending-integration` until real,
+/// hash-pinned ONNX fixtures are committed (no spontaneous downloads — see
+/// `Agents.md`).
+pub const SAM2_RELEASE_VERSION: &str = "2.1.0";
+
+/// SAM 2.1 model-family variants (F-082).
+///
+/// The adapter selects one of these at runtime via [`select_variant`] /
+/// [`DeviceProfile`] so the same code path serves the whole `hiera_*` family.
+/// The exact `model_name` is persisted in the mask identity, keeping re-runs
+/// reproducible regardless of which device class ran the original inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sam2Variant {
+    /// `sam2.1_hiera_tiny` — lowest CPU load, fastest encoder (~38.9 M params).
+    Tiny,
+    /// `sam2.1_hiera_small` — small quality bump (~46.0 M params).
+    Small,
+    /// `sam2.1_hiera_base_plus` — Meta's standard balanced variant (~80.8 M).
+    BasePlus,
+    /// `sam2.1_hiera_large` — highest quality, high-end only (~224.4 M).
+    Large,
+}
+
+impl Sam2Variant {
+    /// All four variants, in ascending cost/quality order.
+    pub const ALL: [Sam2Variant; 4] = [
+        Sam2Variant::Tiny,
+        Sam2Variant::Small,
+        Sam2Variant::BasePlus,
+        Sam2Variant::Large,
+    ];
+
+    /// Exact `model_name` persisted in the mask identity.
+    pub fn model_name(self) -> &'static str {
+        match self {
+            Sam2Variant::Tiny => "sam2.1_hiera_tiny",
+            Sam2Variant::Small => "sam2.1_hiera_small",
+            Sam2Variant::BasePlus => "sam2.1_hiera_base_plus",
+            Sam2Variant::Large => "sam2.1_hiera_large",
+        }
+    }
+
+    /// Build the [`ModelManifest`] descriptor for this variant.
+    pub fn manifest(self) -> ModelManifest {
+        sam2_1_manifest(self)
+    }
+}
+
 /// BiRefNet descriptor: the first automatic subject model.
 ///
 /// - Automatic subject segmentation from a single RGB input to an alpha matte.
@@ -221,6 +278,127 @@ pub fn birefnet_manifest() -> ModelManifest {
             class_detection: false,
             instance_segmentation: false,
         },
+    }
+}
+
+/// SAM 2.1 descriptor for a single variant.
+///
+/// Every variant is an interactive segmentation model: it declares
+/// `box_prompt`, `point_prompt` and `mask_prompt` (the three new interactive
+/// capabilities) and **not** `subject_segmentation` (SAM 2 is prompted, not
+/// automatic). All four share the documented 1024x1024 RGB NCHW encoder
+/// contract with the image tensor named `images`.
+///
+/// `model_hash` is `pending-integration` (same placeholder format as
+/// BiRefNet) until real, hash-pinned ONNX fixtures are committed. License is
+/// `Apache-2.0` (facebookresearch/sam2, verified — no download in this
+/// iteration).
+pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
+    ModelManifest {
+        model_name: variant.model_name().into(),
+        model_version: SAM2_RELEASE_VERSION.into(),
+        model_hash: "pending-integration".into(),
+        license: "Apache-2.0".into(),
+        input: ModelInputSpec {
+            resolution: Resolution {
+                width: SAM2_INFERENCE_WIDTH,
+                height: SAM2_INFERENCE_HEIGHT,
+            },
+            channel_layout: ChannelLayout::Rgb,
+            tensor_name: "images".into(),
+            tensor_format: TensorFormat::Nchw,
+        },
+        capabilities: ModelCapabilities {
+            subject_segmentation: false,
+            box_prompt: true,
+            point_prompt: true,
+            mask_prompt: true,
+            class_detection: false,
+            instance_segmentation: false,
+        },
+    }
+}
+
+/// All four SAM 2.1 variant descriptors, in ascending cost/quality order.
+pub fn sam2_1_manifests() -> Vec<ModelManifest> {
+    Sam2Variant::ALL.iter().map(|v| v.manifest()).collect()
+}
+
+/// Device capability profile used to pick a SAM 2.1 family variant at runtime
+/// (F-082 dynamic variant selection).
+///
+/// The selected variant is **not** part of the mask identity; the identity
+/// persists the exact `model_name`/`model_hash` of the variant actually used,
+/// so re-runs are reproducible regardless of device class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceProfile {
+    /// Logical CPU cores reported by the host.
+    pub cores: u32,
+    /// Explicit variant override; wins over the core-count heuristic.
+    pub r#override: Option<Sam2Variant>,
+}
+
+impl DeviceProfile {
+    /// Build a profile from an explicit core count and optional override.
+    pub fn new(cores: u32, r#override: Option<Sam2Variant>) -> Self {
+        Self { cores, r#override }
+    }
+
+    /// Profile from a core count only (no override).
+    pub fn with_cores(cores: u32) -> Self {
+        Self {
+            cores,
+            r#override: None,
+        }
+    }
+
+    /// Profile with an explicit variant override (core count ignored).
+    pub fn with_override(variant: Sam2Variant) -> Self {
+        Self {
+            cores: 0,
+            r#override: Some(variant),
+        }
+    }
+
+    /// Detect the host profile via [`std::thread::available_parallelism`]
+    /// (no extra dependencies). On failure (cannot query the platform) it
+    /// returns a conservative `cores = 0` profile, which maps to `tiny`.
+    pub fn detect() -> Self {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(0);
+        Self {
+            cores,
+            r#override: None,
+        }
+    }
+
+    /// Select the SAM 2.1 variant for this profile (see [`select_variant`]).
+    pub fn select_variant(&self) -> Sam2Variant {
+        select_variant(self)
+    }
+}
+
+/// Select the SAM 2.1 variant for a [`DeviceProfile`] using the documented,
+/// deterministic thresholds (F-082 SOLL, start values, later benchmark-tuned):
+///
+/// | cores            | variant    |
+/// | ---------------- | ---------- |
+/// | `< 4`            | `tiny`     |
+/// | `4 ..= 7`        | `small`    |
+/// | `8 ..= 15`       | `base_plus`|
+/// | `>= 16`          | `large`    |
+///
+/// An explicit `override` always wins, independent of `cores`.
+pub fn select_variant(profile: &DeviceProfile) -> Sam2Variant {
+    if let Some(variant) = profile.r#override {
+        return variant;
+    }
+    match profile.cores {
+        0..=3 => Sam2Variant::Tiny,
+        4..=7 => Sam2Variant::Small,
+        8..=15 => Sam2Variant::BasePlus,
+        _ => Sam2Variant::Large,
     }
 }
 
@@ -316,5 +494,122 @@ mod tests {
             ..Default::default()
         };
         assert!(ok.validate().is_ok());
+    }
+
+    // F-083 #2 — every SAM 2.1 variant descriptor is well-formed.
+    #[test]
+    fn sam2_1_manifests_yield_four_valid_variants() {
+        let manifests = sam2_1_manifests();
+        assert_eq!(manifests.len(), 4);
+        let names: Vec<&str> = manifests.iter().map(|m| m.model_name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "sam2.1_hiera_tiny",
+                "sam2.1_hiera_small",
+                "sam2.1_hiera_base_plus",
+                "sam2.1_hiera_large",
+            ]
+        );
+        for m in &manifests {
+            // Three interactive capabilities declared.
+            assert!(m.capabilities.box_prompt);
+            assert!(m.capabilities.point_prompt);
+            assert!(m.capabilities.mask_prompt);
+            // Not automatic subject segmentation.
+            assert!(!m.capabilities.subject_segmentation);
+            // Valid input spec: 1024² RGB NCHW, encoder tensor named `images`.
+            assert_eq!(m.input.resolution.width, SAM2_INFERENCE_WIDTH);
+            assert_eq!(m.input.resolution.height, SAM2_INFERENCE_HEIGHT);
+            assert_eq!(m.input.channel_layout, ChannelLayout::Rgb);
+            assert_eq!(m.input.tensor_format, TensorFormat::Nchw);
+            assert_eq!(m.input.tensor_name, "images");
+            // model_hash uses the same placeholder format as BiRefNet.
+            assert_eq!(m.model_hash, "pending-integration");
+            assert_eq!(m.license, "Apache-2.0");
+            assert!(m.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn sam2_1_manifest_matches_variant_name() {
+        for v in Sam2Variant::ALL {
+            let m = sam2_1_manifest(v);
+            assert_eq!(m.model_name, v.model_name());
+            assert_eq!(m.model_version, SAM2_RELEASE_VERSION);
+        }
+    }
+
+    // F-083 #3 — deterministic variant selection with exact thresholds.
+    #[test]
+    fn select_variant_boundaries() {
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(3)),
+            Sam2Variant::Tiny
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(4)),
+            Sam2Variant::Small
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(7)),
+            Sam2Variant::Small
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(8)),
+            Sam2Variant::BasePlus
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(15)),
+            Sam2Variant::BasePlus
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(16)),
+            Sam2Variant::Large
+        );
+        // Above the top threshold still maps to large.
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(128)),
+            Sam2Variant::Large
+        );
+    }
+
+    #[test]
+    fn select_variant_override_wins() {
+        // Override beats the core-count heuristic at every threshold.
+        assert_eq!(
+            select_variant(&DeviceProfile::with_override(Sam2Variant::Large)),
+            Sam2Variant::Large
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::new(3, Some(Sam2Variant::Large))),
+            Sam2Variant::Large,
+            "override must win even on a tiny-core profile"
+        );
+        assert_eq!(
+            select_variant(&DeviceProfile::new(128, Some(Sam2Variant::Tiny))),
+            Sam2Variant::Tiny,
+            "override must win even on a high-core profile"
+        );
+    }
+
+    #[test]
+    fn select_variant_zero_cores_is_tiny_fallback() {
+        // The conservative fallback (cores == 0, as returned when
+        // available_parallelism cannot be queried) maps to tiny.
+        assert_eq!(
+            select_variant(&DeviceProfile::with_cores(0)),
+            Sam2Variant::Tiny
+        );
+    }
+
+    #[test]
+    fn detect_returns_a_valid_variant() {
+        // detect() must not panic and must yield one of the four variants.
+        let profile = DeviceProfile::detect();
+        let variant = profile.select_variant();
+        assert!(Sam2Variant::ALL.contains(&variant));
+        // The method and free function agree.
+        assert_eq!(profile.select_variant(), select_variant(&profile));
     }
 }
