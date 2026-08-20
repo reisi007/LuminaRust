@@ -1,0 +1,76 @@
+name: DIAG lensfun SEGV (temporary)
+
+# One-shot diagnostic workflow for the lumina-lensfun SIGSEGV that happens in
+# CI (ubuntu 24.04 container, lensfun 0.3.4, glib 2.80.0) but NOT on macOS
+# Homebrew lensfun 0.3.4. Deliberately temporary — remove after diagnosis.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  diag:
+    name: lensfun SEGV diagnosis
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install gdb (diagnostic only)
+        run: apt-get update && apt-get install -y --no-install-recommends gdb
+
+      - name: Environment
+        run: |
+          pkg-config --modversion lensfun glib-2.0
+          ls /usr/share/lensfun/version_1 | wc -l
+          ldconfig -p | grep -E "lensfun|glib-2.0" | head
+
+      - name: Build test binary
+        run: cargo test -p lumina-lensfun --features native --no-run
+
+      - name: Run all tests PARALLEL (default threads)
+        run: |
+          set +e
+          cargo test -p lumina-lensfun --features native -- --nocapture 2>&1
+          echo "PARALLEL exit=$?"
+
+      - name: Run all tests SERIAL (--test-threads=1)
+        run: |
+          set +e
+          cargo test -p lumina-lensfun --features native -- --test-threads=1 --nocapture 2>&1
+          echo "SERIAL exit=$?"
+
+      - name: Run each test individually
+        run: |
+          for t in system_database_loads real_profile_yields_corrector \
+                   real_profile_distortion_deviates_at_corner \
+                   real_profile_corrects_vignetting_by_brightening_corners \
+                   unknown_camera_yields_none zero_dimensions_yield_none; do
+            echo "===== TEST $t ====="
+            set +e
+            cargo test -p lumina-lensfun --features native -- --exact "tests::$t" --nocapture 2>&1
+            echo "exit=$?"
+          done
+
+      - name: gdb backtrace of crashing call
+        run: |
+          TESTBIN=$(ls target/debug/deps/lumina_lensfun-* | grep -vi '\.d$' | grep -v '\.dylib$' | head -1)
+          echo "binary: $TESTBIN"
+          set +e
+          gdb -batch -ex "set pagination off" -ex "set print thread-events off" \
+              -ex "run" -ex "info threads" -ex "thread apply all bt 15" \
+              --args "$TESTBIN" --test-threads=1 2>&1 | tail -60
+          echo "GDB exit=$?"
