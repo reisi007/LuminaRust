@@ -214,21 +214,9 @@ check --workspace, wasm32 core+gui, Clippy workspace CI-Config + Feature
 crop-factor-Offset-Hack dokumentiert; nicht blockierend). SOLL:
 pipeline.md F-098.
 
-Folgeaufgaben (offen, einzeln delegierbar):
-- [ ] **F-098-N2** (S6) Applikative CLI-Verdrahtung: in `lumina-cli` den
-  Corrector aus `RawMetadata.camera_make`/`camera_model` (+ Brennweite/Blende
-  sofern vorhanden) aufbauen und als `Some` in `RenderContext.lensfun` reichen
-  (Feature `lensfun` an); strikter Fallback ohne EXIF-Angaben; Smoke-Test,
-  dass ein reales Profil den Export verändert.
-- [ ] **F-098-N3** (S7) CI: `liblensfun-dev` in den pinned Container
-  (`ci-libraw-image.yml`) aufnehmen und Feature-Tests als separaten,
-  pro-Crate-Schritt mit synchronisierten Features führen (Hinweis M2:
-  nicht workspace-weit mit gemischten Features bauen);
-  `cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun`.
-- [ ] **F-098-N4** (S8) Lizenz-/Distributions-Doku: Lensfun-Eintrag in
-  `THIRD-PARTY-NOTICES.md` + `feature/quality/fixtures-licensing.md`
-  (LGPL-3.0, DB CC-BY-SA, dynamisch gelinkt, Quellangebot im Release-Bundle);
-  zählt zur F-078-Abnahme.
+Folgeaufgaben **F-098-N2 (CLI-Verdrahtung, `7922ac1`), F-098-N3
+(CI-Container, `e1bfed8`), F-098-N4 (Lizenz-Doku, `a72cb80`)** sind
+umgesetzt, unabhängig verifiziert (BESTANDEN, 2026-08-20) und entfernt.
 
 ## Phase 4: RAW-Verarbeitung
 

@@ -129,6 +129,56 @@ geometrischen Fallback, sofern ein Modell verfügbar ist. F-081
 (Prompt-Transformationen und Koordinatensysteme persistieren) ist mit
 abgedeckt.
 
+### F-082 — SAM-2.1-Modellfamilie und dynamische Variantenwahl (SOLL)
+
+**Entscheidung (2026-08-20, Eigentümer):** „SAM 2" ist das erste interaktive
+Segmentierungsmodell; **nicht** als fixe Variante, sondern als
+**Modellfamilie `sam2.1_hiera_*` mit dynamischer Variantenwahl** passend zur
+Geräteleistung. Lizenzprüfung abgeschlossen: **Code und Gewichte sind
+Apache-2.0** (facebookresearch/sam2 `LICENSE`, HF-Model-Cards, Meta-
+Announcement; R6 in `fixtures-licensing.md` verifiziert 2026-08-20).
+
+**Varianten** (alle ONNX, Eingang 1024×1024 RGB NCHW, Encoder einmal pro
+Bild → 256-d Embedding + High-Res-Features; Decoder je Prompt):
+
+| Variante | Params | SA-V J&F | Charakter |
+| --- | ---: | ---: | --- |
+| `sam2.1_hiera_tiny` | 38,9 M | 76,5 | geringste CPU-Last, schnellster Encoder |
+| `sam2.1_hiera_small` | 46,0 M | 76,6 | kleines Qualitäts-Plus |
+| `sam2.1_hiera_base_plus` | 80,8 M | 78,2 | Metas Standard-Variante, Balance |
+| `sam2.1_hiera_large` | 224,4 M | 79,5 | höchste Qualität, nur High-End |
+
+**Dynamische Auswahl:** Der Adapter wählt die Variante zur Laufzeit über ein
+`DeviceProfile` (Kernanzahl via `std::thread::available_parallelism`, optional
+durch explizite Nutzer-/Umgebungsvorgabe übersteuerbar). Dokumentierte
+Schwellen (Startwerte, später per Benchmark kalibrierbar): <4 Kerne → `tiny`;
+4–7 → `small`; 8–15 → `base_plus`; ≥16 → `large`. Die Wahl ist **deterministisch**
+und **nicht Teil der Maskenidentität** — die Identität persistiert die
+tatsächlich verwendete Variante (`model_name` = exakte Variante, `model_hash`
+= Artefakt-SHA256, siehe Maskenidentität), sodass Re-Runs unabhängig von der
+Geräteklasse reproduzierbar bleiben.
+
+**Artefakte:** ONNX-Export über das Microsoft-ORT-Export-Tooling
+(`convert_to_onnx.py`, MIT, auf ORT-Commit gepinnt) aus den Meta-Checkpoints
+(092824, Apache-2.0) ODER fertige, versionierte Community-ONNX-Artefakte
+(Redistribution Apache-2.0); `model_hash` bleibt `pending-integration`, bis
+lokale, hash-gepinnte Fixtures committet sind (keine spontanen Downloads in
+Tests, Agents.md). Prompt-Kontrakt: `point_coords` (absolute Pixel im
+1024²-Raum), `point_labels` (1 positiv / 0 negativ / −1 Padding / 2 Box-TL /
+3 Box-BR), `input_masks`/`has_input_masks` (Pinsel/Polygon), Ausgabe `masks`
+auf Originalgröße + `iou_predictions` + `low_res_masks` (4×-Upsampling);
+Matte: Logits → u16-Graustufe im `.lumina.zdata`.
+
+**Implementierungsumfang F-082:** `lumina-onnx` — `sam2_1_manifests()`
+(4 Varianten-Deskriptoren analog `birefnet_manifest()`, Fähigkeiten
+`box_prompt`/`point_prompt`/`mask_prompt`), `select_variant(DeviceProfile)`
+mit den Schwellen, SAM2-Backend mit interaktivem Prompt-Interface
+(Prompt → MaskPlane, Stub-basiert deterministisch für Tests; echter
+ORT-Pfad hinter `onnx-rt`). **F-083:** Prompt-Roundtrip-, Modellfähigkeits-,
+Re-Run- und nicht-unterstützter-Prompt-Tests. Die Einbindung in
+`MaskGraph`/CLI/GUI ersetzt den geometrischen Fallback nur, wenn ein
+Modell verfügbar ist (kein stiller Fallback).
+
 ## Status und Wiederverwendung
 
 - `valid`: Quelle, Modellkontext und Prüfsumme stimmen; Matte wird direkt
