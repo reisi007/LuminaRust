@@ -155,6 +155,14 @@ impl MemoryBudgetError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // `from_env` reads process-global environment variables; the two tests
+    // below set and remove `LUMINA_MAX_*` vars. A global lock serializes them
+    // so they never run concurrently: the unsynchronized env mutation is a
+    // data race that intermittently breaks `from_env_falls_back_to_default_on_
+    // missing_vars` (see F-075 "latente Flakiness in parallelen Tests").
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_budget_accepts_normal_sizes() {
@@ -212,13 +220,16 @@ mod tests {
     #[test]
     fn from_env_falls_back_to_default_on_missing_vars() {
         // No LUMINA_* vars are guaranteed in CI; the default must apply
-        // cleanly without panicking.
+        // cleanly without panicking. Serialized against `from_env_parses_
+        // valid_vars`, which sets the same env vars (see ENV_TEST_LOCK).
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let budget = MemoryBudget::from_env();
         assert_eq!(budget, MemoryBudget::default());
     }
 
     #[test]
     fn from_env_parses_valid_vars() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("LUMINA_MAX_RAW_PIXELS", "12345");
         std::env::set_var("LUMINA_MAX_MASK_PIXELS", "not-a-number");
         std::env::set_var("LUMINA_MAX_ALLOC_BYTES", "999");
