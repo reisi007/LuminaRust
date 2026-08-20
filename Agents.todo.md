@@ -142,23 +142,23 @@ ist Proxy für alle Archs), keine absoluten Laufzeitziele ohne
 Umgebungskontext. Feature-Wachstum wird als bewusste, dokumentierte
 Budget-Anpassung im selben Commit wie das Feature behandelt.
 
-- [ ] **F-074-A1** Hotspot-Optimierung: `apply_recipe_with_white_balance`-
-  Adjustments-Kernel (WB + pro-Pixel-Regler) beschleunigen — ~91 % von
-  `render_frame` (interaktiver Pfad).
-- [ ] **F-074-A2** `decode/raw`-Durchsatz verbessern (LibRaw-Overhead,
-  Decode/Upload-Überlappung, Decodepuffer-Cache) — ~3,0–3,4× `render_frame`.
-- [ ] **F-074-A3** Auto-Tone-/Exposure-Match-Analyse-Kernel optimieren
-  (geteilte Histogramm/Perzentil-Statistik) — ~64 % von `render_frame`.
 - [ ] **F-074-A4** PNG-Export-Encode-Durchsatz verbessern (Δ `batch` −
   `render_frame`) — ~56 % von `render_frame` / ~36 % von `batch`.
+  *(Implementierung läuft, 2026-08-20.)*
 
 Verifiziert erledigt und entfernt: F-074-N1 (Methodik-SOLL, ADR 0003),
 F-074-N2 (Setup-Gerüst), F-074-N3 (erste echte Benchmarks: 32 deterministische
 Fixtures, Baseline-Erfassung, `compare.mjs`-Bestandsvalidierung), F-074-N4
 (Baseline-Analyse: Hotspot `apply_recipe` ~91 %, abgeleitete IDs A1…A4),
 F-074-N5 (`scripts/perf/compare.mjs` report/warn/gate, optionaler
-nicht-blockierender CI-`bench`-Job im `warn`-Modus) — jeweils unabhängig
-verifiziert.
+nicht-blockierender CI-`bench`-Job im `warn`-Modus), F-074-A1
+(Adjustments-Kernel: per-Kanal-LUT-Fusion, −40 % auf dem Hotspot,
+byte-identisch über 128 Trigger-Kombinationen, Commit `8dacd3d`),
+F-074-A2 (Decode-Durchsatz: Kopie entfernt + RGBA-Fast-Path, −19,6 %/−18,5 %
+vs. Baseline, pixel-identisch, Commit `a03c272`), F-074-A3 (Auto-Tone-Kernel:
+Single-Pass-`mean_luminance` statt Voll-Sort, −95 % `match_total_exposure`,
+−22 % `analyze_tone`/`suggest_auto_tone`, wert-identisch, Commit `2253de5`) —
+jeweils unabhängig verifiziert (BESTANDEN).
 
 ## Phase 0: Zielzustand und Architektur
 
