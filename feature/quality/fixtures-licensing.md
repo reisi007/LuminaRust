@@ -245,7 +245,7 @@ Quell-URL erfassen; Fixture-Seeds eingefroren.
 | ID | Schwere | Punkt | Maßnahme |
 | --- | --- | --- | --- |
 | **R1** | ✅ Gelöst (2026-08-20) | `.cr3`-Fixtures (§4): Autor aus EXIF + Commit belegt (Florian Reisinger / reisinger.pictures); **uneingeschränkte Nutzungs-/Distributionsgewährung für LuminaRust** am 2026-08-20 durch den Eigentümer erteilt und im Provenienz-Block (`sample-data/raw/README.md`) dokumentiert | Keine Aktion mehr; Verifikation der Doku im Rahmen der F-078-Abnahme |
-| **R2** | 🟠 Hoch | Alle 8 Workspace-Crates ohne `license`-Feld; Repo-Root ohne `LICENSE`/`NOTICE` — Projekt bewusst unlizenziert / kommerziell bis MVP | Lizenz bei MVP entscheiden (siehe `Agents.todo.md` LIZ-ENTSCHEIDUNG); dann `license` + Root-`LICENSE` konsistent ergänzen |
+| **R2** | 🟠 Hoch | Alle 9 Workspace-Crates ohne `license`-Feld; Repo-Root ohne `LICENSE`/`NOTICE` — Projekt bewusst unlizenziert / kommerziell bis MVP | Lizenz bei MVP entscheiden (siehe `Agents.todo.md`, Antworten des Eigentümers 2026-08-20 → LIZ interim proprietär); dann `license` + Root-`LICENSE` konsistent ergänzen |
 | **R3** | 🟠 Hoch | LibRaw-Dynamik-Link-Verpflichtung (§6.3) | Dynamisches Linken beibehalten; LibRaw-Lizenz + Quellangebot für 0.22.2 im Release bündeln |
 | **R4** | 🟡 Mittel | `onnx-rt`-Pfad lädt ORT-Prebuilt-Binaries (Netz) | Bei Release-Freigabe ORT-Redistribution + Prebuilt-Terms prüfen, Pin `=2.0.0-rc.13` halten, Modell-Lizenzen/Hashes erfassen |
 | **R5** | 🟡 Mittel | ADR 0002 nennt LibRaw „dual“; upstream ist **dreifach** (permissiv fehlt) | ADR 0002 um die dritte, permissive Option ergänzen |

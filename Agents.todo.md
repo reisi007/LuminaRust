@@ -14,7 +14,7 @@ Offene Arbeit und Abgrenzung bis MVP:
 - **LIZ-ENTSCHEIDUNG (beantwortet 2026-08-20: interim proprietär, spätere
   Entscheidung offen; MVP-Release-Gate):** Projekteigentümer hat entschieden,
   die Wahl vorerst **nicht** zu treffen und den **proprietären/kommerziellen
-  Status** beizubehalten (kein `license`-Feld in den 8 Crates, keine
+  Status** beizubehalten (kein `license`-Feld in den 9 Crates, keine
   `LICENSE`-Datei). Sobald entschieden: MIT / Apache-2.0 / Dual
   MIT+Apache-2.0 / MPL-2.0 — dann `license`-Felder + Root-`LICENSE`
   ergänzen (F-073-R2). **Lensfun** (MVP-Teil seit F-098-N1, LGPL-3.0
@@ -41,8 +41,10 @@ Offene Arbeit und Abgrenzung bis MVP:
   **Lensfun-LGPL-3.0-Eintrag** seit 2026-08-20); Beleg
   LibRaw = einzige Pflicht-/Datenbank-Dependency, `ort`
   `=2.0.0-rc.13` optional hinter `onnx-rt`, ONNX Runtime MIT, BiRefNet
-  Apache-2.0; **unabhängige Verifizierung offen** (hält das MVP-Gate bis
-  zur bestandenen Verifikation; R2-LIZ bleibt offen).
+  Apache-2.0; **unabhängig verifiziert BESTANDEN (2026-08-20)** — Auflagen
+  (NOTICES-Vollständigkeit 480/480, stale EN-R1-Texte, Crates-Zahl) direkt
+  behoben. Offen bis Final-Release: R3/R4 (Bundle-Artefakte), R5 (ADR-0002-
+  Dreifachlizenz), Lensfun-SPDX/DB-Lizenz-Detail, R2-LIZ.
 - **F-072** CI-Gates: unabhängig verifiziert **bestanden** (2026-08-20) —
   verbleibender Aufwand nur Eintrag-Nachpflege (siehe Phase 11).
 
@@ -318,14 +320,20 @@ Docs-Check — unabhängig verifiziert 2026-08-20). Bewusste Ausnahme: das
 baubar); der Pfad wird lokal gelintet. Bekannte benigne Warnung: `load_mask_planes`
 dead-code unter wasm32 (optional stilllegen).
 
-- [ ] **F-073** Fixtures-Lizenzierung/Audit (R1: .cr3-Provenienz offen; R2:
-  LIZ-Entscheidung; Audit-Doku existiert).
-- [ ] **F-078** Lizenz-/Modell-/Distributionsaudit abschließen: Belege in
-  `THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` von unabhängigem Agenten
-  verifizieren lassen; **Lensfun-LGPL-3.0-Eintrag ergänzen** (dynamisches
+- [x] **F-073** Fixtures-Lizenzierung/Audit: **R1 geschlossen (2026-08-20)** —
+  Autor via EXIF + Commit belegt, uneingeschränkte Nutzungs-/Distributions-
+  gewährung für LuminaRust dokumentiert (`sample-data/raw/README.md`); R2
+  (LIZ) offen — interim proprietär (Eigentümer-Antwort 2026-08-20); Audit-Doku
+  existiert.
+- [x] **F-078** Lizenz-/Modell-/Distributionsaudit: Belege in
+  `THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` **unabhängig verifiziert
+  (BESTANDEN, 2026-08-20)**; **Lensfun-LGPL-3.0-Eintrag ergänzt** (dynamisches
   Linken, CC-BY-SA-Datenbank, Quellangebot im Release-Bundle — F-098-N1);
-  Pre-Release-Bundle: Lensfun-/LibRaw-Lizenztexte + Modell-Lizenzen
-  (BiRefNet Apache-2.0, ONNX Runtime MIT) mitliefern (R3/R4).
+  Pre-Release-Artefakte verbleiben offen (R3/R4): Lensfun-/LibRaw-Lizenztexte
+  + Quellangebot + Modell-Lizenzen (BiRefNet Apache-2.0, ONNX Runtime MIT,
+  SAM 2 bei F-082 zu verifizieren) im Release-Bundle mitliefern; R5
+  (ADR-0002-Dreifachlizenz) und Lensfun-SPDX-/DB-Lizenz-Detail vor Final-
+  Release klären.
 
 F-075 ist verifiziert erledigt und entfernt (`MemoryBudget` + `check_decode`/
 `check_mask` in `crates/lumina-core/src/memory.rs`; Verdrahtung in lumina-raw

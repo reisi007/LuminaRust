@@ -226,8 +226,6 @@ obligations that MUST be honored in any distributed build:
 | `is-terminal` | 0.4.17 | MIT |
 | `libraw-sys` | 0.1.1 | MIT |
 | `libredox` | 0.1.20 | MIT |
-| `lumina-onnx` | 0.1.0 | NO-LICENSE-FIELD |
-| `lumina-raw` | 0.1.0 | NO-LICENSE-FIELD |
 | `malloc_buf` | 0.0.6 | MIT |
 | `memoffset` | 0.9.1 | MIT |
 | `objc` | 0.2.7 | MIT |
@@ -560,6 +558,10 @@ obligations that MUST be honored in any distributed build:
 | `lumina-cli` | 0.1.0 | NO-LICENSE-FIELD |
 | `lumina-core` | 0.1.0 | NO-LICENSE-FIELD |
 | `lumina-gui` | 0.1.0 | NO-LICENSE-FIELD |
+| `lumina-lensfun` | 0.1.0 | NO-LICENSE-FIELD |
+| `lumina-mcp` | 0.1.0 | NO-LICENSE-FIELD |
+| `lumina-onnx` | 0.1.0 | NO-LICENSE-FIELD |
+| `lumina-raw` | 0.1.0 | NO-LICENSE-FIELD |
 | `lumina-sidecar` | 0.1.0 | NO-LICENSE-FIELD |
 | `icu_collections` | 2.3.0 | Unicode-3.0 |
 | `icu_locale_core` | 2.3.0 | Unicode-3.0 |

@@ -69,19 +69,20 @@ and carry an explicit license (prefer generated/CC0 to avoid the §3 gap).
 
 ---
 
-## 2. RAW fixture provenance & licensing — ⚠️ OPEN GAP
+## 2. RAW fixture provenance & licensing — ✅ RESOLVED (2026-08-20)
 
-**Finding:** The two committed `.cr3` fixtures in `sample-data/raw/` have **no
-documented source, author, or license**. There is no `LICENSE`/`README` in
-`sample-data/`, and the introducing commit (`1e388bf "Add tone controls and RAW
-sample fixtures"`) records no provenance.
+**Finding (as of 2026-08-20):** The two committed `.cr3` fixtures in
+`sample-data/raw/` are **the project owner's own photographs**. Provenance was
+established via EXIF (`Artist`/`Copyright`/`Owner Name` =
+`reisinger.pictures / Florian Reisinger`, Canon EOS R1, taken 2026-08-14) and
+the introducing commit (`1e388bf "Add tone controls and RAW sample fixtures"`).
+On 2026-08-20 the owner granted an **unrestricted usage and distribution
+grant for the LuminaRust project**; this is documented in the filled-in
+provenance block of `sample-data/raw/README.md` (§4 of
+`feature/quality/fixtures-licensing.md`, row **R1**). R1 is **resolved**; the
+grant remains recorded for the release bundle.
 
-This is a **release blocker** under F-078: distributing copyrighted camera
-RAW files without a license grant is a legal risk, independent of the (MIT)
-Rust code. The existing `*_fixture_*` tests hard-depend on these exact bytes, so
-the gap is concrete, not theoretical.
-
-See §7 (R1) for the recommended remediation.
+See §6 (R1) for the recorded resolution.
 
 ---
 
@@ -191,8 +192,8 @@ Policy:
 
 | ID | Severity | Item | Recommended action |
 | --- | --- | --- | --- |
-| **R1** | 🔴 Blocker | Committed `.cr3` fixtures (`aircraft-landscape`, `aircraft-portrait`) have **no documented license/provenance** (§2). | Document source + license, **or** replace with a generated/synthetic or CC0-licensed fixture before release. Do not distribute the current binaries until resolved. |
-| **R2** | 🟠 High | All 8 workspace crates declare **no `license` field** and the repo root has **no LICENSE file** — project is intentionally unlicensed / commercial-for-now pending the MVP license decision. | Decide project license at MVP (see `Agents.todo.md` LIZ-ENTSCHEIDUNG); then add `license` to all crates + root `LICENSE` consistent with that decision. |
+| **R1** | ✅ Resolved (2026-08-20) | Committed `.cr3` fixtures (`aircraft-landscape`, `aircraft-portrait`): author proven via EXIF + commit; **unrestricted usage/distribution grant for the LuminaRust project** given by the owner and documented in `sample-data/raw/README.md` (§2, §4 of `feature/quality/fixtures-licensing.md`). | No further action; keep the provenance block with the recorded grant in the release bundle. |
+| **R2** | 🟠 High | All 9 workspace crates declare **no `license` field** and the repo root has **no LICENSE file** — project is intentionally unlicensed / commercial-for-now pending the MVP license decision. | Decide project license at MVP (see `Agents.todo.md`, owner answers 2026-08-20 → LIZ interim proprietary); then add `license` to all crates + root `LICENSE` consistent with that decision. |
 | **R3** | 🟠 High | LibRaw dynamic-link obligation (§4.4). | Keep dynamic linking; ship LibRaw license + source offer for 0.22.2 in the release bundle/NOTICE. |
 | **R4** | 🟡 Medium | `onnx-rt` path downloads ONNX Runtime prebuilt binaries (network) and would bundle MIT-licensed ORT. | When enabling `onnx-rt` for a release, re-verify ORT/ONNX Runtime redistribution terms, keep `=2.0.0-rc.13` pin, and record model weight licenses/hashes. |
 | **R5** | 🟡 Medium | ADR 0002 says LibRaw is "dual" (LGPL/CDDL); upstream is **tri**-licensed (adds permissive LibRaw Software License). | Update ADR 0002 to record the third, permissive option and recommend relying on it. |
