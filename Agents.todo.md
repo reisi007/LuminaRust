@@ -406,8 +406,12 @@ F-075 ist verifiziert erledigt und entfernt (`MemoryBudget` + `check_decode`/
 (nativ, vor `dcraw_process`) und `rasterize_prompt` (vor Matten-Allokation);
 SOLL in `feature/quality/performance-benchmarks.md` F-075 — unabhängig
 verifiziert 2026-08-20). Bekannte Grenzen: `MemoryBudgetError::Overflow`-Pfad
-ungetestet (praktisch unerreichbar); `from_env`-Test mutiert Env unsynchronisiert
-(latente Flakiness in parallelen Tests).
+ungetestet (praktisch unerreichbar). Die vormals latente Flakiness der
+`from_env`-Tests durch unsynchronisierte Env-Mutation (`from_env_parses_
+valid_vars` setzte `LUMINA_MAX_*` parallel zu `from_env_falls_back_to_
+default_on_missing_vars`) ist mit Commit `4459851` behoben: ein prozessglobaler
+Mutex im `tests`-Modul serialisiert die beiden env-abhängigen Tests
+(unabhängig verifiziert, 60× Stress-Lauf flake-frei, 2026-08-20).
 
 ## Abnahmekriterien
 
