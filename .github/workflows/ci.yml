@@ -83,6 +83,16 @@ jobs:
       - name: Run native zdata tests
         run: cargo test -p lumina-sidecar --features zdata
 
+      - name: Run Lensfun feature tests
+        # liblensfun is now installed in the CI container (see docker/Dockerfile,
+        # ci-libraw-image.yml). This step covers the `lumina-lensfun` FFI
+        # (`native` feature) plus the `lumina-core` `lensfun` pipeline
+        # integration (byte-identical fallback + real distortion/vignette
+        # correction against the system Lensfun database). Per F-098-N3 / M2 we
+        # do NOT build the whole workspace with mixed features; the two crates
+        # are selected explicitly with their synchronized features.
+        run: cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun
+
       # Clippy on workspace crates only, with `-D warnings`. We do NOT use
       # `--all-features` here: the `lumina-onnx/onnx-rt` feature is OPTIONAL and
       # network-gated (it pulls `ort`, whose `download-binaries` path transitively
@@ -98,6 +108,13 @@ jobs:
       #   - lumina-bench/raw-bench (LibRaw decode benchmarks)
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings
+
+      # The workspace Clippy above enables only the zdata/raw-bench features,
+      # so the `lensfun`-gated code in `lumina-core` is not linted there. With
+      # `liblensfun-dev` present in the container we lint that path explicitly
+      # under `-D warnings`. Verified clean locally (liblensfun 0.3.4).
+      - name: Run Clippy (lensfun feature)
+        run: cargo clippy -p lumina-core --features lensfun -- -D warnings
 
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features

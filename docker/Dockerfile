@@ -70,6 +70,15 @@ FROM ubuntu:24.04
 #   to detect LibRaw struct members (`check_member`), so g++ is required;
 # - curl/wget/ca-certificates: `dtolnay/rust-toolchain` downloads rustup and
 #   the Rust toolchain inside this container over HTTPS.
+# - liblensfun-dev: `lumina-lensfun`'s `native` feature (and transitively
+#   `lumina-core`'s `lensfun` feature) links the system liblensfun via
+#   pkg-config at cargo build time, so the -dev package (lensfun.pc + headers,
+#   pulling libLensfun1 runtime transitively) must be present for the CI
+#   Lensfun feature tests (F-098-N3). We deliberately use the DISTRO Lensfun
+#   and introduce NO separate pinned Lensfun release tag: because this
+#   container image is itself pinned and only rebuilt when docker/Dockerfile
+#   changes, the Lensfun version is deterministic across CI runs (same as
+#   LibRaw 0.22.2 below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         g++ \
@@ -81,6 +90,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblcms2-dev \
         libjpeg-dev \
         zlib1g-dev \
+        liblensfun-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib /usr/local/lib

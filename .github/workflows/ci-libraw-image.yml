@@ -1,9 +1,12 @@
 name: CI image (LibRaw)
 
-# Builds the pinned-LibRaw CI image (docker/Dockerfile) and publishes it to
-# GHCR. The main CI workflow (ci.yml) runs its Rust job inside this container
-# so the native LibRaw version is deterministic (0.22.2, same as Homebrew on
-# developer machines) without rebuilding LibRaw from source on every run.
+# Builds the pinned CI image (docker/Dockerfile) — LibRaw 0.22.2 plus the
+# distro liblensfun — and publishes it to GHCR. The main CI workflow (ci.yml)
+# runs its Rust job inside this container so the native LibRaw version is
+# deterministic (0.22.2, same as Homebrew on developer machines) without
+# rebuilding LibRaw from source on every run. liblensfun is also installed
+# from the distro (no separate pin) so the `lumina-lensfun` / `lumina-core`
+# lensfun feature can be exercised in CI (F-098-N3).
 #
 # Rebuilt only when the Dockerfile or this workflow changes; workflow_dispatch
 # allows a manual refresh. Published tags (GHCR names must be lowercase):
@@ -53,7 +56,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.description=LuminaRust CI image with pinned LibRaw 0.22.2 (autotools build)
+            org.opencontainers.image.description=LuminaRust CI image with pinned LibRaw 0.22.2 and distro liblensfun (autotools build)
             lumina.libraw_version=0.22.2
           cache-from: type=gha
           cache-to: type=gha,mode=max
