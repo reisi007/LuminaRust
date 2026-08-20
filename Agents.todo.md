@@ -91,8 +91,9 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 Verbleibend bis MVP: Phase 6 AI-Masken
 (F-082, F-083 — F-049, F-050, F-079, F-081 sind verifiziert erledigt),
 F-101 MCP AI-Agent-Schnittstelle (Phase 7, verifiziert erledigt),
-Release-Gates (F-072, F-073, F-075, F-078). F-097 (Vignette/Körnung) und
-F-102 (LibRaw-Version in Decode-Identität) sind verifiziert erledigt.
+Release-Gates (F-072, F-073, F-078). F-097 (Vignette/Körnung), F-102
+(LibRaw-Version in Decode-Identität) und F-075 (Speicherbudgets) sind
+verifiziert erledigt.
 F-098 (Objektivkorrekturen) ist als offene MVP-Aufgabe korrekt unter seiner
 normativen ID geführt (zuvor in diesem Plan mit der LibRaw-Version-Identity
 kollidiert).
@@ -434,8 +435,13 @@ verbindlich — normativ in feature/platform/cli-gui-wasm.md)
   aufgesplittet (F-074-N1…F-074-N5), siehe oben. Benchmarks für Decode,
   Preview, Maskeninferenz, Cache-Hit und Batch-Export werden dort definiert
   und umgesetzt.
-- [ ] **F-075** Speicherbudgets und Abbruchverhalten für große RAWs und Masken
-  messen und absichern.
+F-075 ist verifiziert erledigt und entfernt (`MemoryBudget` + `check_decode`/
+`check_mask` in `crates/lumina-core/src/memory.rs`; Verdrahtung in lumina-raw
+(nativ, vor `dcraw_process`) und `rasterize_prompt` (vor Matten-Allokation);
+SOLL in `feature/quality/performance-benchmarks.md` F-075 — unabhängig
+verifiziert 2026-08-20). Bekannte Grenzen: `MemoryBudgetError::Overflow`-Pfad
+ungetestet (praktisch unerreichbar); `from_env`-Test mutiert Env unsynchronisiert
+(latente Flakiness in parallelen Tests).
 
 ## Abnahmekriterien
 

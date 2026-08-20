@@ -42,6 +42,8 @@ pub enum MaskError {
         actual_width: u32,
         actual_height: u32,
     },
+    #[error("mask rasterization of {required} pixels exceeds the memory budget limit {limit}")]
+    MemoryBudgetExceeded { required: u64, limit: u64 },
 }
 
 impl MaskPlane {
@@ -240,6 +242,14 @@ pub fn rasterize_prompt(
 ) -> Result<MaskPlane, MaskError> {
     let w = width as usize;
     let h = height as usize;
+    let budget = crate::memory::MemoryBudget::from_env();
+    let required = budget
+        .check_mask(width as u64, height as u64)
+        .map_err(|error| MaskError::MemoryBudgetExceeded {
+            required: error.required(),
+            limit: error.limit(),
+        })?;
+    let _ = required;
     let mut values = vec![0u16; w.saturating_mul(h)];
     match prompt {
         MaskPrompt::Box { rect, .. } => {

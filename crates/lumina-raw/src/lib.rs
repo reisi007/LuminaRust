@@ -93,6 +93,10 @@ pub enum RawError {
     InvalidData(&'static str),
     #[error("RAW input name is required for byte decoding")]
     MissingName,
+    #[error("memory budget exceeded: {source}")]
+    MemoryBudgetExceeded {
+        source: lumina_core::memory::MemoryBudgetError,
+    },
 }
 
 pub fn decode_file(path: impl AsRef<std::path::Path>) -> Result<RawImage, RawError> {
@@ -320,6 +324,18 @@ mod native {
         if code != raw::LIBRAW_SUCCESS {
             return Err(error("unpacking input", code));
         }
+        // Compute the output geometry without allocating the processed image
+        // buffer, then enforce the memory budget before the allocation-prone
+        // processing step (F-075).
+        let _ = unsafe { raw::libraw_adjust_sizes_info_only(handle.0) };
+        let out_width = unsafe { &*handle.0 }.sizes.width as u64;
+        let out_height = unsafe { &*handle.0 }.sizes.height as u64;
+        let channels = 4u32; // final RGBA frame (3-channel LibRaw output is
+        // promoted to RGBA); using 4 keeps the guard conservative for 8-bit.
+        let bytes_per_channel = options.output_bits as u32 / 8;
+        lumina_core::memory::MemoryBudget::from_env()
+            .check_decode(out_width, out_height, channels, bytes_per_channel)
+            .map_err(|source| RawError::MemoryBudgetExceeded { source })?;
         let code = unsafe { raw::libraw_dcraw_process(handle.0) };
         if code != raw::LIBRAW_SUCCESS {
             return Err(error("processing input", code));

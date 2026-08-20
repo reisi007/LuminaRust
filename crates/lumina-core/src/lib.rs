@@ -13,6 +13,7 @@ pub mod histogram;
 pub mod mask_loader;
 pub mod mask_modulation;
 pub mod masks;
+pub mod memory;
 pub mod pipeline;
 pub mod render;
 pub mod tone;
@@ -31,6 +32,7 @@ pub use mask_loader::{
 };
 pub use mask_modulation::modulate_mask_plane;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
+pub use memory::{MemoryBudget, MemoryBudgetError};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use render::{
     render_frame, MaskContext, MaskLayerResult, MaskPolicy, RenderContext, RenderOutput,

@@ -369,6 +369,42 @@ Die bestehenden `rust`/`wasm`/`docs`-Jobs bleiben unverändert. Feature-Wachstum
 wird als bewusste Budget-Anpassung im selben Commit wie das Feature behandelt
 (Begründung im `note`-Feld und im betroffenen Feature-Dokument).
 
+## F-075 Speicherbudgets und Abbruchverhalten
+
+**Ziel:** Große RAW-Dekodierungen und Masken-Allokationen dürfen LuminaRust
+nicht in einen OOM/Absturz zwingen. Vor der Allokation großer Puffer wird
+gegen ein konfigurierbares Speicherbudget geprüft; bei Überschreitung gibt es
+einen **klaren Fehler (Abbruch)**, kein stillschweigendes OOM.
+
+**Umsetzung (`crates/lumina-core/src/memory.rs`, plattformneutral):**
+`MemoryBudget { max_raw_pixels, max_mask_pixels, max_alloc_bytes }` mit
+begründeten Defaults (200 MP RAW, 100 MP Masken, ~2,4 GiB Single-Allocation-
+Cap). Konfigurierbar über `LUMINA_MAX_RAW_PIXELS` / `LUMINA_MAX_MASK_PIXELS` /
+`LUMINA_MAX_ALLOC_BYTES` via `MemoryBudget::from_env()` (Default-Fallback bei
+Fehlen/Ungültig). `check_decode(width, height, channels, bytes_per_channel)`
+und `check_mask(width, height)` berechnen die benötigten Bytes und liefern bei
+Überschreitung einen `MemoryBudgetError` (Overflow / RawPixelsExceeded /
+MaskPixelsExceeded / AllocExceeded).
+
+**Verdrahtung:**
+- `lumina-raw` (nativer Decode-Pfad): nach `libraw_unpack` wird via
+  `libraw_adjust_sizes_info_only` die Ausgabegeometrie ermittelt und vor dem
+  speicherintensiven `libraw_dcraw_process` gegen `check_decode` geprüft
+  (Kanäle = 4 für den finalen RGBA-Frame, bewusst konservativ); bei
+  Verstoß → `RawError::MemoryBudgetExceeded`.
+- `lumina-core` (`rasterize_prompt`): vor Allokation der u16-Masken-Matte wird
+  `check_mask` geprüft; bei Verstoß → `MaskError::MemoryBudgetExceeded`.
+
+**Messung:** Die Check-Funktionen liefern die benötigten Bytes zurück
+(`required`), sodass Caller die tatsächliche Allokationsgröße berichten können;
+eine Allocator-Instrumentierung ist nicht nötig.
+
+**Bekannte Grenzen:** Die Prüfung vor `dcraw_process` nutzt die von
+`adjust_sizes_info_only` ermittelte Ausgabegeometrie als Schätzgrundlage; sie
+ist konservativ sicher (lehnt eher ab, als OOM zuzulassen). Defaults sind
+Großschätzungen für Desktop-Nutzung, keine harten Obergrenzen für
+Mobile/Eingebettet.
+
 ### Bekannte Grenzen / Limitationen (F-074-N3 / N5)
 
 - **Decode-Gating:** Die Decode-Benchmarks hängen von LibRaw und den
