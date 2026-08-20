@@ -7,7 +7,7 @@ use lumina_onnx::{
 fn birefnet_has_subject_capability_and_no_prompts() {
     let m = birefnet_manifest();
     assert_eq!(m.model_name, "BiRefNet");
-    assert_eq!(m.license, "Apache-2.0");
+    assert_eq!(m.license, "MIT");
 
     let c: ModelCapabilities = m.capabilities;
     assert!(c.subject_segmentation);

@@ -252,15 +252,17 @@ impl Sam2Variant {
 /// - Automatic subject segmentation from a single RGB input to an alpha matte.
 /// - No prompts: only `subject_segmentation` is true.
 /// - Documented inference resolution 1024×1024 (square resize).
-/// - License `Apache-2.0` (BiRefNet by Zheng et al., arXiv:2401.03407 — verified,
-///   no download performed in this iteration). `model_hash` is a placeholder
-///   (`pending-integration`) until real weights are provided in F-048.
+/// - License `MIT` (BiRefNet by Zheng et al., arXiv:2401.03407 — verified
+///   2026-08-20 via GitHub `LICENSE` = MIT, Copyright (c) 2024 ZhengPeng, and the
+///   HF model card `ZhengPeng7/BiRefNet` (`license: mit`); no download performed
+///   in this iteration). `model_hash` is a placeholder (`pending-integration`)
+///   until real weights are provided in F-048.
 pub fn birefnet_manifest() -> ModelManifest {
     ModelManifest {
         model_name: "BiRefNet".into(),
         model_version: "1.0.0".into(),
         model_hash: "pending-integration".into(),
-        license: "Apache-2.0".into(),
+        license: "MIT".into(),
         input: ModelInputSpec {
             resolution: Resolution {
                 width: BIREFNET_INFERENCE_WIDTH,
