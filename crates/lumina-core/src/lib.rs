@@ -449,7 +449,13 @@ impl ImageFrame {
             }
         }
         validate_nested_adjustments(recipe)?;
-        if recipe.adjustments.contains_key("wb_temperature")
+        // White-balance gains are derived exactly as before (only when a WB key
+        // is present). They feed the fused channel-LUT kernel below, which
+        // composes WB + exposure + contrast + shadows + highlights + whites +
+        // blacks into a single pass via precomputed per-channel lookup tables
+        // (see `apply_channel_lut_adjustments`). The fusion is byte-identical to
+        // the previous per-pixel pass-by-pass implementation.
+        let wb_gains = if recipe.adjustments.contains_key("wb_temperature")
             || recipe.adjustments.contains_key("wb_tint")
         {
             let temperature = recipe
@@ -459,80 +465,31 @@ impl ImageFrame {
                 .unwrap_or(6500.0);
             let tint = recipe.adjustments.get("wb_tint").copied().unwrap_or(0.0);
             let warmth = (temperature - 6500.0) / 5500.0;
-            let gains = [1.0 - warmth * 0.35, 1.0 - tint * 0.20, 1.0 + warmth * 0.35];
-            for pixel in self.pixels.chunks_exact_mut(4) {
-                for (channel, gain) in pixel[..3].iter_mut().zip(gains) {
-                    *channel = ((*channel as f64 * gain).round()).clamp(0.0, 255.0) as u8;
-                }
-            }
-        }
-        if let Some(exposure) = recipe.adjustments.get("exposure") {
-            let multiplier = 2.0_f64.powf(*exposure);
-            for channel in self
-                .pixels
-                .chunks_exact_mut(4)
-                .flat_map(|pixel| &mut pixel[..3])
-            {
-                *channel = ((*channel as f64 * multiplier).round()).clamp(0.0, 255.0) as u8;
-            }
-        }
-        if let Some(contrast) = recipe.adjustments.get("contrast") {
-            // `contrast` is a linear S-curve strength: -1 is flat gray, 0 is
-            // unchanged, and 1 doubles distance from the midpoint (128).
-            let factor = 1.0 + *contrast;
-            for channel in self
-                .pixels
-                .chunks_exact_mut(4)
-                .flat_map(|pixel| &mut pixel[..3])
-            {
-                *channel =
-                    (((*channel as f64 - 128.0) * factor + 128.0).round()).clamp(0.0, 255.0) as u8;
-            }
-        }
-        if let Some(shadows) = recipe.adjustments.get("shadows") {
-            for channel in self
-                .pixels
-                .chunks_exact_mut(4)
-                .flat_map(|pixel| &mut pixel[..3])
-            {
-                let x = *channel as f64 / 255.0;
-                let weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
-                *channel = ((x + shadows * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
-        }
-        if let Some(highlights) = recipe.adjustments.get("highlights") {
-            for channel in self
-                .pixels
-                .chunks_exact_mut(4)
-                .flat_map(|pixel| &mut pixel[..3])
-            {
-                let x = *channel as f64 / 255.0;
-                let weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
-                *channel = ((x + highlights * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
-        }
-        if let Some(whites) = recipe.adjustments.get("whites") {
-            for channel in self
-                .pixels
-                .chunks_exact_mut(4)
-                .flat_map(|pixel| &mut pixel[..3])
-            {
-                let x = *channel as f64 / 255.0;
-                let weight = ((x - 0.5) / 0.5).max(0.0);
-                *channel = ((x + whites * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
-        }
-        if let Some(blacks) = recipe.adjustments.get("blacks") {
-            for channel in self
-                .pixels
-                .chunks_exact_mut(4)
-                .flat_map(|pixel| &mut pixel[..3])
-            {
-                let x = *channel as f64 / 255.0;
-                let weight = ((0.5 - x) / 0.5).max(0.0);
-                *channel = ((x - blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
-        }
+            Some([1.0 - warmth * 0.35, 1.0 - tint * 0.20, 1.0 + warmth * 0.35])
+        } else {
+            None
+        };
+        let exposure_multiplier = recipe
+            .adjustments
+            .get("exposure")
+            .map(|exposure| 2.0_f64.powf(*exposure));
+        let contrast_factor = recipe.adjustments.get("contrast").map(|c| 1.0 + *c);
+        let shadows = recipe.adjustments.get("shadows").copied();
+        let highlights = recipe.adjustments.get("highlights").copied();
+        let whites = recipe.adjustments.get("whites").copied();
+        let blacks = recipe.adjustments.get("blacks").copied();
+        apply_channel_lut_adjustments(
+            &mut self.pixels,
+            &ChannelLutParams {
+                wb_gains,
+                exposure_multiplier,
+                contrast_factor,
+                shadows,
+                highlights,
+                whites,
+                blacks,
+            },
+        );
         if let Some(presence) = &recipe.presence {
             apply_presence(&mut self.pixels, self.width, self.height, presence);
         }
@@ -599,6 +556,105 @@ impl ImageFrame {
             }
         }
         Ok(())
+    }
+}
+
+/// Fuses the per-channel scalar adjustment stages — white balance, followed by
+/// exposure, contrast, shadows, highlights, whites and blacks — into a single
+/// pass over the pixels using one precomputed 256-entry lookup table per channel.
+///
+/// Each stage is a pure per-channel function `u8 -> u8`: it only touches the
+/// channel it operates on, reading the rounded and clamped `u8` output of the
+/// preceding stage. Their sequential composition is therefore also a pure
+/// per-channel function, so computing one 256-entry table per channel once and
+/// applying it with three table lookups per pixel is **byte-identical** to the
+/// original pass-by-pass implementation, while moving all floating point work
+/// (the exact same `f64` formulas as the original) out of the hot pixel loop.
+///
+/// The intermediate values are exact integers in `[0, 255]` that are
+/// representable exactly by `f64`, so composing the stages in `f64` without
+/// re-casting to `u8` between them yields the same result as the original code
+/// that casts back to `u8` after every stage. This keeps the kernel fully
+/// Portable (no native/SIMD intrinsics) and therefore WASM-compatible.
+///
+/// Bundles the per-channel scalar adjustment parameters so the fused kernel keeps
+/// a small, clippy-clean signature while remaining easy to extend.
+struct ChannelLutParams {
+    wb_gains: Option<[f64; 3]>,
+    exposure_multiplier: Option<f64>,
+    contrast_factor: Option<f64>,
+    shadows: Option<f64>,
+    highlights: Option<f64>,
+    whites: Option<f64>,
+    blacks: Option<f64>,
+}
+
+fn apply_channel_lut_adjustments(pixels: &mut [u8], params: &ChannelLutParams) {
+    let ChannelLutParams {
+        wb_gains,
+        exposure_multiplier,
+        contrast_factor,
+        shadows,
+        highlights,
+        whites,
+        blacks,
+    } = params;
+    if wb_gains.is_none()
+        && exposure_multiplier.is_none()
+        && contrast_factor.is_none()
+        && shadows.is_none()
+        && highlights.is_none()
+        && whites.is_none()
+        && blacks.is_none()
+    {
+        return;
+    }
+
+    // Per-channel lookup tables: `lut[channel][value]` is the composed result for
+    // that channel at the given input byte. The table build runs the same `f64`
+    // math as the original per-pixel passes, but only 256 times per channel.
+    let mut lut = [[0u8; 256]; 3];
+    for (channel, lut_channel) in lut.iter_mut().enumerate() {
+        for input in 0u16..=255 {
+            let mut value = input as f64;
+            if let Some(gains) = wb_gains {
+                value = (value * gains[channel]).round().clamp(0.0, 255.0);
+            }
+            if let Some(multiplier) = exposure_multiplier {
+                value = (value * multiplier).round().clamp(0.0, 255.0);
+            }
+            if let Some(factor) = contrast_factor {
+                value = ((value - 128.0) * factor + 128.0).round().clamp(0.0, 255.0);
+            }
+            if let Some(amount) = shadows {
+                let x = value / 255.0;
+                let weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
+                value = ((x + amount * weight * 0.25).clamp(0.0, 1.0) * 255.0).round();
+            }
+            if let Some(amount) = highlights {
+                let x = value / 255.0;
+                let weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
+                value = ((x + amount * weight * 0.25).clamp(0.0, 1.0) * 255.0).round();
+            }
+            if let Some(amount) = whites {
+                let x = value / 255.0;
+                let weight = ((x - 0.5) / 0.5).max(0.0);
+                value = ((x + amount * weight * 0.25).clamp(0.0, 1.0) * 255.0).round();
+            }
+            if let Some(amount) = blacks {
+                let x = value / 255.0;
+                let weight = ((0.5 - x) / 0.5).max(0.0);
+                value = ((x - amount * weight * 0.25).clamp(0.0, 1.0) * 255.0).round();
+            }
+            lut_channel[input as usize] = value.clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    // Single fused pass: three table lookups per pixel, no floating point.
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[0] = lut[0][pixel[0] as usize];
+        pixel[1] = lut[1][pixel[1] as usize];
+        pixel[2] = lut[2][pixel[2] as usize];
     }
 }
 
@@ -4145,5 +4201,188 @@ mod tests {
             let mut f = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
             assert!(f.apply_recipe(&bad).is_err());
         }
+    }
+
+    /// Independent reimplementation of the original pass-by-pass channel
+    /// adjustments (pre-F-074-A1). Used only by the byte-identity property test
+    /// to prove the fused LUT kernel (`apply_channel_lut_adjustments`) produces
+    /// byte-identical output. Mirrors the original per-stage loops exactly
+    /// (same `f64` formulas, same per-channel application order).
+    fn reference_channel_lut_adjustments(pixels: &mut [u8], params: &ChannelLutParams) {
+        let ChannelLutParams {
+            wb_gains,
+            exposure_multiplier,
+            contrast_factor,
+            shadows,
+            highlights,
+            whites,
+            blacks,
+        } = params;
+        if let Some(gains) = wb_gains {
+            for pixel in pixels.chunks_exact_mut(4) {
+                for (channel, gain) in pixel[..3].iter_mut().zip(*gains) {
+                    *channel = ((*channel as f64 * gain).round()).clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        if let Some(multiplier) = exposure_multiplier {
+            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+                *channel = ((*channel as f64 * multiplier).round()).clamp(0.0, 255.0) as u8;
+            }
+        }
+        if let Some(factor) = contrast_factor {
+            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+                *channel =
+                    (((*channel as f64 - 128.0) * factor + 128.0).round()).clamp(0.0, 255.0) as u8;
+            }
+        }
+        if let Some(shadows) = shadows {
+            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+                let x = *channel as f64 / 255.0;
+                let weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
+                *channel = ((x + shadows * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+        if let Some(highlights) = highlights {
+            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+                let x = *channel as f64 / 255.0;
+                let weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
+                *channel = ((x + highlights * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+        if let Some(whites) = whites {
+            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+                let x = *channel as f64 / 255.0;
+                let weight = ((x - 0.5) / 0.5).max(0.0);
+                *channel = ((x + whites * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+        if let Some(blacks) = blacks {
+            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+                let x = *channel as f64 / 255.0;
+                let weight = ((0.5 - x) / 0.5).max(0.0);
+                *channel = ((x - blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+    }
+
+    #[test]
+    fn fused_channel_lut_kernel_is_byte_identical_to_reference() {
+        // Deterministic SplitMix64 so the property inputs are stable across runs.
+        let mut state = 0x5EED_u64;
+        let mut rng = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)) as u8
+        };
+
+        // Combinatorial trigger coverage: every one of the 8 channel triggers
+        // (wb_temperature / wb_tint share the WB gains) is independently
+        // present/absent => 2^7 = 128 combinations, including the all-off
+        // identity and the all-on case ("allen Reglern gleichzeitig"). The
+        // default recipe (= identity) is the all-off combination.
+        let mut total = 0usize;
+        for wb in [false, true] {
+            for exposure in [false, true] {
+                for contrast in [false, true] {
+                    for shadows_on in [false, true] {
+                        for highlights_on in [false, true] {
+                            for whites_on in [false, true] {
+                                for blacks_on in [false, true] {
+                                    let wb_gains = if wb {
+                                        Some([
+                                            1.0 - rng() as f64 / 1500.0,
+                                            1.0 - rng() as f64 / 2500.0,
+                                            1.0 + rng() as f64 / 1500.0,
+                                        ])
+                                    } else {
+                                        None
+                                    };
+                                    let exposure_multiplier = if exposure {
+                                        Some(2.0_f64.powf(rng() as f64 / 255.0 * 4.0 - 2.0))
+                                    } else {
+                                        None
+                                    };
+                                    let contrast_factor = if contrast {
+                                        Some(1.0 + (rng() as f64 / 255.0 * 2.0 - 1.0))
+                                    } else {
+                                        None
+                                    };
+                                    let shadows = if shadows_on {
+                                        Some(rng() as f64 / 255.0 * 2.0 - 1.0)
+                                    } else {
+                                        None
+                                    };
+                                    let highlights = if highlights_on {
+                                        Some(rng() as f64 / 255.0 * 2.0 - 1.0)
+                                    } else {
+                                        None
+                                    };
+                                    let whites = if whites_on {
+                                        Some(rng() as f64 / 255.0 * 2.0 - 1.0)
+                                    } else {
+                                        None
+                                    };
+                                    let blacks = if blacks_on {
+                                        Some(rng() as f64 / 255.0 * 2.0 - 1.0)
+                                    } else {
+                                        None
+                                    };
+
+                                    let params = ChannelLutParams {
+                                        wb_gains,
+                                        exposure_multiplier,
+                                        contrast_factor,
+                                        shadows,
+                                        highlights,
+                                        whites,
+                                        blacks,
+                                    };
+
+                                    let mut optimized = vec![0u8; 48 * 4];
+                                    let mut reference = vec![0u8; 48 * 4];
+                                    for pixel in optimized.chunks_exact_mut(4) {
+                                        pixel[0] = rng();
+                                        pixel[1] = rng();
+                                        pixel[2] = rng();
+                                        pixel[3] = 255;
+                                    }
+                                    reference.copy_from_slice(&optimized);
+
+                                    apply_channel_lut_adjustments(&mut optimized, &params);
+                                    reference_channel_lut_adjustments(&mut reference, &params);
+
+                                    assert_eq!(
+                                        optimized, reference,
+                                        "byte mismatch: wb={wb} exp={exposure} con={contrast} \
+                                         sh={shadows_on} hi={highlights_on} wh={whites_on} bl={blacks_on}"
+                                    );
+                                    total += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(total, 128);
+
+        // Explicit default-recipe identity: with no triggers the kernel leaves
+        // every byte untouched.
+        let identity = ChannelLutParams {
+            wb_gains: None,
+            exposure_multiplier: None,
+            contrast_factor: None,
+            shadows: None,
+            highlights: None,
+            whites: None,
+            blacks: None,
+        };
+        let mut frame = vec![10u8, 20, 30, 255, 200, 60, 30, 200];
+        let original = frame.clone();
+        apply_channel_lut_adjustments(&mut frame, &identity);
+        assert_eq!(frame, original);
     }
 }
