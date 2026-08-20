@@ -1242,7 +1242,11 @@ fn source_identity(
                 "image"
             }
             .into(),
-            version: env!("CARGO_PKG_VERSION").into(),
+            version: if raw_metadata.is_some() {
+                lumina_raw::libraw_decode_version()
+            } else {
+                env!("CARGO_PKG_VERSION").into()
+            },
             parameters: BTreeMap::from([(
                 "geometry".into(),
                 format!("{}x{}", frame.width, frame.height),

@@ -179,6 +179,20 @@ erfolgt im aktuellen Raster-MVP **nicht**.
 - **Persistenz von Farbkontext:** Decode-Version, Pipeline-Version und
   `output_profile` gehören zum Render-Key, sodass ein Wechsel des
   Farbkontexts gezielt invalidiert.
+- **Decode-Version-Identität (F-102):** Für den nativen LibRaw-Decoder
+  (`decoder == "libraw"`) trägt `DecodeFingerprint.version` bzw.
+  `RenderKey.decode_version` die **gelinkte LibRaw-Bibliotheksversion**
+  (über `lumina_raw::libraw_version()` / `libraw_decode_version()` aus
+  `crates/lumina-raw`), nicht die Anwendungsversion. Dadurch erkennt
+  LuminaRust einen LibRaw-Upgrade-Versionswechsel und invalidiert Caches und
+  persistierte Masken, statt sie stillschweigend wiederzuverwenden — CR3-
+  Dimensionen ändern sich z.B. zwischen LibRaw 0.21.x (6160×4144) und
+  0.22.x (6032×4024). Nicht-RAW-Decoder (`"image"`/raster) behalten die
+  Anwendungsversion. Auf WASM (kein nativer LibRaw) fällt die Version auf
+  `"unknown"` zurück. Bekannte Grenze: `libraw_version()` liefert das
+  Build-Suffix (z.B. `"0.22.2-Release"`); ein reiner Formatwechsel
+  (Release↔Debug bei gleicher Nummer) invalidiert aktuell unnötig und könnte
+  später auf das numerische Tripel normalisiert werden.
 
 ## Optionale Stufen und Adjustment-Semantik
 

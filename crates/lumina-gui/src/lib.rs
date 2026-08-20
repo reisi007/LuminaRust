@@ -961,7 +961,11 @@ impl LuminaApp {
         };
         self.render_key = Some(RenderKey::new(
             source_hash,
-            env!("CARGO_PKG_VERSION"),
+            if self.source_is_raw {
+                lumina_raw::libraw_decode_version()
+            } else {
+                env!("CARGO_PKG_VERSION").into()
+            },
             "raster-mvp-1",
             copy_id,
             &self.recipe,
@@ -1080,7 +1084,11 @@ impl LuminaApp {
             orientation: self.raw_orientation,
             decode_fingerprint: DecodeFingerprint {
                 decoder: decoder_identity(self.source_is_raw).into(),
-                version: env!("CARGO_PKG_VERSION").into(),
+                version: if self.source_is_raw {
+                    lumina_raw::libraw_decode_version()
+                } else {
+                    env!("CARGO_PKG_VERSION").into()
+                },
                 parameters: BTreeMap::new(),
                 extras: BTreeMap::new(),
             },

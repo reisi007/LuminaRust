@@ -144,6 +144,34 @@ pub fn decode_bytes_with_options(
     }
 }
 
+/// Returns the linked LibRaw version string (e.g. `"0.22.2"`) when native RAW
+/// decoding is available. On platforms without native LibRaw (WASM/browser)
+/// this returns `None`.
+///
+/// Including the linked decoder version in the decode identity lets LuminaRust
+/// detect when an upgraded LibRaw produces different output geometry or pixel
+/// values for the same source — CR3 dimensions, for example, changed between
+/// LibRaw 0.21.x (6160×4144) and 0.22.x (6032×4024) — so cached renders and
+/// masks are invalidated instead of silently reused.
+pub fn libraw_version() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        native::libraw_version()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// Decode-identity version string for the LibRaw decoder.
+///
+/// Falls back to `"unknown"` when no native LibRaw is linked (WASM), keeping
+/// the decoder identity stable for non-native targets.
+pub fn libraw_decode_version() -> String {
+    libraw_version().unwrap_or_else(|| "unknown".to_string())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
@@ -181,6 +209,22 @@ mod native {
             operation,
             code,
             message,
+        }
+    }
+
+    pub fn libraw_version() -> Option<String> {
+        let ptr = unsafe { raw::libraw_version() };
+        if ptr.is_null() {
+            return None;
+        }
+        let version = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        let version = version.trim();
+        if version.is_empty() {
+            None
+        } else {
+            Some(version.to_string())
         }
     }
 
@@ -449,5 +493,27 @@ mod tests {
             decode_bytes(b"raw", "x.cr2"),
             Err(RawError::UnsupportedPlatform)
         ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn libraw_version_is_present_and_well_formed() {
+        let version = libraw_version().expect("native LibRaw should report a version");
+        assert!(!version.is_empty(), "version must not be empty");
+        let parts = version.split('.').collect::<Vec<_>>();
+        assert!(
+            parts.len() >= 2,
+            "version should contain at least major.minor, got `{version}`"
+        );
+        assert!(
+            parts.iter().all(|part| !part.is_empty()),
+            "version parts must not be empty, got `{version}`"
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn libraw_version_is_none_on_wasm() {
+        assert!(libraw_version().is_none());
     }
 }

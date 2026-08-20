@@ -91,8 +91,11 @@ dieser Datei entfernt (siehe Git-Historie und Feature-Dokumente):
 Verbleibend bis MVP: Phase 6 AI-Masken
 (F-082, F-083 — F-049, F-050, F-079, F-081 sind verifiziert erledigt),
 F-101 MCP AI-Agent-Schnittstelle (Phase 7, verifiziert erledigt),
-Release-Gates (F-072, F-073, F-075, F-078). F-097 (Vignette/Körnung) ist
-verifiziert erledigt.
+Release-Gates (F-072, F-073, F-075, F-078). F-097 (Vignette/Körnung) und
+F-102 (LibRaw-Version in Decode-Identität) sind verifiziert erledigt.
+F-098 (Objektivkorrekturen) ist als offene MVP-Aufgabe korrekt unter seiner
+normativen ID geführt (zuvor in diesem Plan mit der LibRaw-Version-Identity
+kollidiert).
 Post-MVP: F-019, Phase 9 (F-064…F-067), WASM-Browser (F-069, F-070).
 
 Der Block **Performance-Methodik (F-074)** ist hochpriorisiert vor den
@@ -229,12 +232,28 @@ F-036-N1 ist verifiziert erledigt und entfernt (As-Shot-WB-Kontext
 `apply_recipe_with_white_balance` in lumina-core; CLI/GUI reichen
 `RawMetadata.camera_white_balance` durch; Status in pipeline.md F-036).
 
-- [ ] **F-098** (niedrige Priorität) LibRaw-Version in die Decode-/Render-Identität
-  aufnehmen: CR3-Dimensionen unterscheiden sich zwischen LibRaw-Versionen
-  (0.21.x: 6160×4144, 0.22.x: 6032×4024); RenderKey/Decode-Fingerprint nutzt
-  bisher nur den statischen Decoder-Namen „libraw". Erkenntnis aus der
-  CI-Härtung (2026-08-18); bis dahin ist die Version über den gepinnten
-  CI-Container und die Homebrew-Version dokumentiert.
+F-102 ist verifiziert erledigt und entfernt (LibRaw-Version in der Decode-/
+Render-Identität: `DecodeFingerprint.version` bzw. `RenderKey.decode_version`
+trägt bei Decoder `"libraw"` die gelinkte LibRaw-Version statt
+`CARGO_PKG_VERSION`; Nicht-RAW nutzt weiter die App-Version;
+`lumina_raw::libraw_version()` / `libraw_decode_version()` in
+`crates/lumina-raw`; verhindert stillschweigendes Cache-/Masken-Reuse bei
+LibRaw-Upgrade — CR3-Dimensionen ändern sich zwischen 0.21.x und 0.22.x.
+Bekannte Grenze: `libraw_version()` liefert das Build-Suffix, z.B.
+`"0.22.2-Release"`; ein reiner Formatwechsel (Release↔Debug) invalidiert
+unnötig — optional später auf das numerische Tripel normalisieren. Status in
+pipeline.md „Farbprofilstrategie"). **Hinweis:** Die ID F-098 war in diesem
+Plan zeitweise mit dieser Aufgabe belegt; F-098 ist die normative ID für
+**Objektivkorrekturen** (siehe unten) und wurde dafür zurückgegeben.
+
+- [ ] **F-098** (hoch) Objektivkorrekturen (lens corrections): geometrische,
+  tonale und kanalbezogene Korrektur über `recipe.lens_correction`
+  (Verzeichnung als radiales Polynom, Vignette-Polynom, CA R/B; Grün Referenz).
+  Normativ in `feature/architecture/pipeline.md` F-098. MVP-Grenze: manuelle
+  Koeffizienten und einfache benannte Presets; Lensfun ist ausdrücklich
+  Post-MVP (Lizenz F-078). Diese ID war in Agents.todo.md zeitweise mit der
+  LibRaw-Version-Identity überschrieben und wird hiermit korrekt als offene
+  Aufgabe geführt.
 
 ## Phase 5: Auto-Tone und Exposure Matching
 
