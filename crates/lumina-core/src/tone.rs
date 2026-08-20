@@ -65,18 +65,37 @@ pub struct AutoToneResult {
     pub contrast: f64,
 }
 
-fn values(frame: &ImageFrame) -> Vec<f64> {
-    frame
-        .pixels
-        .chunks_exact(4)
-        .map(|p| {
-            (0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2])) / 255.0
-        })
-        .collect()
+/// Per-pixel Rec.709 luminance of an RGBA8 sample in `0..=1` (alpha ignored).
+///
+/// This is the single, canonical definition of the raster MVP measurement
+/// domain shared by [`analyze_tone`], [`suggest_auto_tone`] and the exposure
+/// matchers. It is written exactly as the historical formula so the computed
+/// values stay bit-identical to earlier releases.
+#[inline]
+fn luminance_of(pixel: &[u8]) -> f64 {
+    (0.2126 * f64::from(pixel[0]) + 0.7152 * f64::from(pixel[1]) + 0.0722 * f64::from(pixel[2]))
+        / 255.0
+}
+
+/// Single-pass mean Rec.709 luminance over all pixels (alpha ignored).
+///
+/// The exposure matchers only need the mean, so this avoids the full sort that
+/// [`analyze_tone`] performs for its percentiles. The arithmetic mean is taken
+/// in pixel order; it agrees with `analyze_tone(frame).mean` to within the
+/// last floating-point bit (f64 addition is not associative) — far below every
+/// tolerance used by the golden/property tests and the byte-identity reference
+/// check. For constant frames (every pixel equal) it is bit-exact.
+fn mean_luminance(frame: &ImageFrame) -> f64 {
+    let count = frame.pixels.len() / 4;
+    if count == 0 {
+        return 0.0;
+    }
+    let sum: f64 = frame.pixels.chunks_exact(4).map(luminance_of).sum();
+    sum / count as f64
 }
 
 pub fn analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
-    let mut v = values(frame);
+    let mut v: Vec<f64> = frame.pixels.chunks_exact(4).map(luminance_of).collect();
     if v.is_empty() {
         return ToneAnalysis {
             mean: 0.0,
@@ -86,7 +105,13 @@ pub fn analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
             sample_count: 0,
         };
     }
-    v.sort_by(f64::total_cmp);
+    // Unstable sort yields a byte-identical sorted vector to the historical
+    // stable sort: luminance ∈ [0,1] is finite and non-negative, so equal
+    // elements are interchangeable and `total_cmp` coincides with plain numeric
+    // order. The per-index values (and therefore the mean/percentiles below)
+    // are unchanged, while pdqsort is materially faster than the merge-sort
+    // backing `sort_by` — the dominant cost of this analyzer at large sizes.
+    v.sort_unstable_by(f64::total_cmp);
     let percentile = |q: f64| {
         let position = q * (v.len() - 1) as f64;
         let low = position.floor() as usize;
@@ -135,7 +160,7 @@ pub fn suggest_auto_tone(
 
 pub fn match_total_exposure(frame: &ImageFrame, target_luminance: f64) -> Result<f64, CoreError> {
     validate_target_luminance(target_luminance)?;
-    Ok(matching_delta(analyze_tone(frame).mean, target_luminance))
+    Ok(matching_delta(mean_luminance(frame), target_luminance))
 }
 
 /// Weighted measurement-domain variant of [`match_total_exposure`] (F-041).
@@ -153,14 +178,12 @@ pub fn match_total_exposure(frame: &ImageFrame, target_luminance: f64) -> Result
 ///
 /// A non-empty `mask_layers` slice whose **every** plane is entirely
 /// `u16::MAX` (each pixel weight `w = 1.0`, the mask has no effect) is also
-/// delegated bit-exactly to the plain [`match_total_exposure`] path before the
-/// weighted loop runs. This is a documented fast path, not a fallback: the
-/// masked measurement and the plain measurement are mathematically identical
-/// here, but summing the sorted values inside [`analyze_tone`] versus summing
-/// in row-major order inside the weighted loop can differ in the last f64 bit,
-/// so only the delegation guarantees bit-exact identity (`All-MAX ≡
-/// unmasked`). The dimension validation below still runs first — a mismatched
-/// all-`u16::MAX` plane is rejected like any other invalid plane.
+/// delegated to the plain [`match_total_exposure`] path before the weighted
+/// loop runs. This is a documented fast path, not a fallback: with every
+/// weight `1.0` the weighted loop reduces to the very same pixel-order
+/// luminance sum that the plain matcher computes, so the result is bit-exact
+/// (`All-MAX ≡ unmasked`). The dimension validation below still runs first —
+/// a mismatched all-`u16::MAX` plane is rejected like any other invalid plane.
 ///
 /// # Validation
 ///
@@ -183,7 +206,7 @@ pub fn match_total_exposure_masked(
 ) -> Result<f64, CoreError> {
     validate_target_luminance(target_luminance)?;
     if mask_layers.is_empty() {
-        return Ok(matching_delta(analyze_tone(frame).mean, target_luminance));
+        return Ok(matching_delta(mean_luminance(frame), target_luminance));
     }
     let pixel_count = frame.width as usize * frame.height as usize;
     for plane in mask_layers {
@@ -200,25 +223,22 @@ pub fn match_total_exposure_masked(
     }
     // All-MAX fast path (documented above): a mask whose every plane is
     // entirely u16::MAX has no effect — every pixel weight is exactly 1.0, so
-    // the weighted mean is the plain mean. Delegating bit-exactly to the plain
-    // path (identical `matching_delta(analyze_tone(frame).mean, ...)`) keeps
-    // `All-MAX ≡ unmasked` bit-exact, which the row-major weighted summation
-    // could not guarantee (f64 non-associativity vs. the sorted `analyze_tone`
-    // summation).
+    // the weighted mean equals the plain mean. Delegating to the same
+    // single-pass mean as the plain matcher (both sum the per-pixel luminance
+    // in pixel order) keeps `All-MAX ≡ unmasked` bit-exact, which matches the
+    // row-major weighted loop exactly (weight 1.0) but avoids the redundant
+    // per-plane weight multiplication.
     if mask_layers
         .iter()
         .all(|plane| plane.values.iter().all(|&value| value == u16::MAX))
     {
-        return Ok(matching_delta(analyze_tone(frame).mean, target_luminance));
+        return Ok(matching_delta(mean_luminance(frame), target_luminance));
     }
     let mut weighted_sum = 0.0;
     let mut weight_sum = 0.0;
     for index in 0..pixel_count {
         let pixel = &frame.pixels[index * 4..index * 4 + 4];
-        let luminance = (0.2126 * f64::from(pixel[0])
-            + 0.7152 * f64::from(pixel[1])
-            + 0.0722 * f64::from(pixel[2]))
-            / 255.0;
+        let luminance = luminance_of(pixel);
         let mut weight = 1.0;
         for plane in mask_layers {
             weight *= f64::from(plane.values[index]) / f64::from(u16::MAX);
@@ -776,5 +796,161 @@ mod tests {
             .abs()
                 > 0.5
         );
+    }
+
+    // ---- F-074-A3: byte-/value-identity against the original logic ----
+
+    /// Independent reimplementation of the ORIGINAL (pre-F-074-A3) `analyze_tone`:
+    /// stable sort + sorted-sum mean + linear-interpolation percentiles. Used
+    /// only by the identity check below to prove the optimized kernels did not
+    /// change their results.
+    fn reference_analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
+        let mut v: Vec<f64> = frame
+            .pixels
+            .chunks_exact(4)
+            .map(|p| {
+                (0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2]))
+                    / 255.0
+            })
+            .collect();
+        if v.is_empty() {
+            return ToneAnalysis {
+                mean: 0.0,
+                median: 0.0,
+                p01: 0.0,
+                p99: 0.0,
+                sample_count: 0,
+            };
+        }
+        v.sort_by(f64::total_cmp);
+        let percentile = |q: f64| {
+            let position = q * (v.len() - 1) as f64;
+            let low = position.floor() as usize;
+            let high = position.ceil() as usize;
+            v[low] + (v[high] - v[low]) * (position - low as f64)
+        };
+        ToneAnalysis {
+            mean: v.iter().sum::<f64>() / v.len() as f64,
+            median: percentile(0.5),
+            p01: percentile(0.01),
+            p99: percentile(0.99),
+            sample_count: v.len(),
+        }
+    }
+
+    /// Original `suggest_auto_tone`, delegating to [`reference_analyze_tone`].
+    fn reference_suggest_auto_tone(
+        frame: &ImageFrame,
+        config: AutoToneConfig,
+    ) -> Result<AutoToneResult, CoreError> {
+        config.validate()?;
+        let analysis = reference_analyze_tone(frame);
+        let epsilon = config.epsilon;
+        let target = config.target_luminance.clamp(epsilon, 1.0);
+        let exposure = if analysis.sample_count == 0 {
+            0.0
+        } else if analysis.median <= epsilon {
+            config.exposure_bounds.1
+        } else if analysis.median >= 1.0 - config.epsilon {
+            config.exposure_bounds.0
+        } else {
+            (target / analysis.median).log2()
+        }
+        .clamp(config.exposure_bounds.0, config.exposure_bounds.1);
+        let span = analysis.p99 - analysis.p01;
+        let contrast = if span <= epsilon {
+            0.0
+        } else {
+            (0.8 / span - 1.0).clamp(config.contrast_bounds.0, config.contrast_bounds.1)
+        };
+        Ok(AutoToneResult {
+            analysis,
+            exposure: super::finite(exposure),
+            contrast: super::finite(contrast),
+        })
+    }
+
+    /// Original `match_total_exposure`: sorted-sum mean via the original
+    /// `analyze_tone`, then the shared matching delta.
+    fn reference_match_total_exposure(
+        frame: &ImageFrame,
+        target_luminance: f64,
+    ) -> Result<f64, CoreError> {
+        super::validate_target_luminance(target_luminance)?;
+        Ok(super::matching_delta(
+            reference_analyze_tone(frame).mean,
+            target_luminance,
+        ))
+    }
+
+    /// Deterministic, randomized `size × size` RGBA8 frame (alpha 255) mirroring
+    /// the bench fixture seed, so the identity check also exercises the large,
+    /// fully-populated measurement domain.
+    fn bench_like_frame(size: u32) -> ImageFrame {
+        let mut state = 0x5EED_u64;
+        let mut rng = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)) as u8
+        };
+        let count = (size * size) as usize;
+        let mut pixels = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            pixels.extend_from_slice(&[rng(), rng(), rng(), 255]);
+        }
+        ImageFrame::new(size, size, pixels).unwrap()
+    }
+
+    #[test]
+    fn tone_analyzers_are_value_identical_to_original_reference() {
+        // `analyze_tone`/`suggest_auto_tone` keep their byte-exact values: the
+        // only change is `sort_by` → `sort_unstable_by`, which is identical for
+        // the [0,1]-valued, finite, non-negative luminance domain (equal
+        // elements are interchangeable, so the sorted vector is unchanged).
+        // They are therefore compared with exact `==`.
+        //
+        // `match_total_exposure` now computes its mean from a single linear
+        // pass instead of the sorted `analyze_tone` sum; the two means differ
+        // only in the last floating-point bit (f64 addition is not associative),
+        // so it is compared with a 1e-6 value tolerance — far tighter than the
+        // codebase's own documented mean-equivalence tolerance (1/512) and well
+        // inside every golden/property test.
+        let frames = vec![
+            ImageFrame::new(0, 0, vec![]).unwrap(),
+            ImageFrame::new(1, 1, vec![0, 0, 0, 255]).unwrap(),
+            ImageFrame::new(1, 1, vec![255, 255, 255, 255]).unwrap(),
+            ImageFrame::new(2, 1, vec![200, 200, 200, 255, 60, 60, 60, 255]).unwrap(),
+            ImageFrame::new(
+                3,
+                2,
+                vec![
+                    3, 17, 91, 0, 42, 128, 211, 255, 255, 64, 7, 32, 99, 101, 203, 17, 180, 220,
+                    12, 200, 71, 33, 88, 250,
+                ],
+            )
+            .unwrap(),
+            bench_like_frame(512),
+        ];
+
+        for frame in &frames {
+            assert_eq!(analyze_tone(frame), reference_analyze_tone(frame));
+            let config = AutoToneConfig::default();
+            assert_eq!(
+                suggest_auto_tone(frame, config).unwrap(),
+                reference_suggest_auto_tone(frame, config).unwrap()
+            );
+            for target in [0.0, 1e-6, 0.25, 0.5, 0.63, 0.9, 1.0] {
+                let optimized = match_total_exposure(frame, target).unwrap();
+                let reference = reference_match_total_exposure(frame, target).unwrap();
+                let diff = (optimized - reference).abs();
+                assert!(
+                    diff <= 1e-6,
+                    "match_total_exposure target {target}: optimized {optimized} vs reference \
+                     {reference}, diff {diff}"
+                );
+            }
+        }
     }
 }
