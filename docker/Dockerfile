@@ -79,6 +79,12 @@ FROM ubuntu:24.04
 #   container image is itself pinned and only rebuilt when docker/Dockerfile
 #   changes, the Lensfun version is deterministic across CI runs (same as
 #   LibRaw 0.22.2 below).
+# - libglib2.0-dev: Ubuntu's `lensfun.pc` declares `Requires: glib-2.0`, so
+#   pkg-config must resolve `glib-2.0.pc` at cargo build time; the runtime
+#   package `libglib2.0-0` (pulled transitively by liblensfun1) does not ship
+#   the .pc file. Missing this caused the CI lensfun step to fail with
+#   "Package glib-2.0 was not found in the pkg-config search path"
+#   (2026-08-20) — fixed here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         g++ \
@@ -91,6 +97,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libjpeg-dev \
         zlib1g-dev \
         liblensfun-dev \
+        libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib /usr/local/lib
