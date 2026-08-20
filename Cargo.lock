@@ -1959,6 +1959,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-lensfun"
+version = "0.1.0"
+
+[[package]]
 name = "lumina-mcp"
 version = "0.1.0"
 dependencies = [
