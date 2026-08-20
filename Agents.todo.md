@@ -23,14 +23,15 @@ Offene Arbeit und Abgrenzung bis MVP:
 - **F-098-N1** Lensfun-Integration als **Pre-MVP**-Bestandteil (Phase 3):
   **verifiziert erledigt** (2026-08-20) — Crate `lumina-lensfun` + lumina-core
   `lensfun`-Feature + Pipeline-Integration mit graceful fallback + Tests
-  (siehe Phase 3). Folgeaufgaben: **F-098-N2** (CLI-Verdrahtung,
-  implementiert, Verifikation ausstehend), **F-098-N3** (CI-Container,
-  implementiert, Verifikation ausstehend), **F-098-N4** (Lizenz-Doku,
-  implementiert, Verifikation ausstehend).
-- **F-082 / F-083** SAM-2-Segmentierungsadapter + Prompt-Roundtrip-Tests
-  (Phase 6): **SAM 2 vom Eigentümer bestätigt** (2026-08-20); Start nach
-  Abschluss der aktuellen Batch (F-098-N2…N4, F-074-A1…A4) mit der
-  Apache-2.0-Lizenzprüfung der tatsächlichen Gewichtsquelle.
+  (siehe Phase 3). Folgeaufgaben **F-098-N2** (CLI-Verdrahtung, `7922ac1`),
+  **F-098-N3** (CI-Container, `e1bfed8`), **F-098-N4** (Lizenz-Doku,
+  `a72cb80`) ebenfalls **verifiziert erledigt** (2026-08-20) und entfernt.
+- **F-082 / F-083** SAM-2.1-Segmentierungsadapter + Prompt-Tests (Phase 6):
+  **verifiziert erledigt** (2026-08-20, `452d8a4`) — SAM-2.1-Modellfamilie
+  mit dynamischer Variantenwahl, `PromptMaskInference`-Interface, 17 Tests;
+  Lizenz an der Quelle geprüft (Code+Gewichte Apache-2.0; Ultralytics-AGPL-
+  Weg bewusst ausgeschlossen). Offene Folgearbeit: ORT-Pfad, MaskGraph/CLI-
+  Einbindung, hash-gepinnte ONNX-Fixtures.
 - **F-073** Fixtures-Lizenzierung/Audit (Phase 11): Audit-Dokumente
   existieren; **R1 geschlossen (2026-08-20)** — Autor via EXIF + Commit
   belegt, uneingeschränkte Nutzungs-/Distributionsgewährung für LuminaRust
