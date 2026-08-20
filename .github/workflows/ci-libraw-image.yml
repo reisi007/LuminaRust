@@ -25,6 +25,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # Allows the final step to dispatch ci.yml after the image was published, so
+  # the main CI run can never race the image build (see dispatch step below).
+  actions: write
 
 jobs:
   build:
@@ -60,3 +63,23 @@ jobs:
             lumina.libraw_version=0.22.2
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Ordering guarantee against the image/CI race: when this workflow is
+      # triggered by a push (i.e. a docker/Dockerfile or this workflow change
+      # landed on main), ci.yml does NOT run from the push itself (see its
+      # `paths-ignore` for docker/**). Instead we publish the image FIRST and
+      # then dispatch ci.yml, so the CI jobs always pull the freshly built
+      # `latest` image that contains liblensfun + pinned LibRaw 0.22.2.
+      # Manual `workflow_dispatch` refreshes of the image deliberately do not
+      # re-dispatch CI.
+      - name: Dispatch main CI after image publish
+        if: github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              ref: 'main',
+            })

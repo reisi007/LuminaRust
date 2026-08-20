@@ -3,7 +3,16 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # Dockerfile / image-workflow changes are NOT run via the push trigger:
+    # the CI image workflow (ci-libraw-image.yml) builds+publishes the image
+    # first and then dispatches this workflow, so the container jobs always
+    # pull the freshly built image (no image/CI race). Paths that are not
+    # docker/** still ride the push trigger directly.
+    paths-ignore:
+      - 'docker/**'
+      - '.github/workflows/ci-libraw-image.yml'
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -45,6 +54,9 @@ jobs:
     # runner the same LibRaw version (0.22.2) as local Homebrew installs, so
     # the RAW golden fixture dimensions are deterministic across environments
     # (LibRaw 0.21.x decodes CR3 as 6160x4144, 0.22.x as 6032x4024).
+    # Ordering: docker/** pushes are handled by the image workflow which
+    # dispatches this workflow only AFTER publishing the image, so `latest`
+    # always contains liblensfun + pinned LibRaw when this job runs.
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/reisi007/luminarust/lumina-ci:latest
