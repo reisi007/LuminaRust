@@ -1,8 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use lumina_core::{
-    match_total_exposure_masked, render_frame, resolve_mask_planes, suggest_auto_tone,
-    tone_fingerprint, AutoToneConfig, ImageFileFormat, ImageFrame, MaskContext, MaskInference,
-    MaskLoadContext, MaskPlane, MaskPolicy, RenderContext, SourceActionArtifact,
+    export_image, match_total_exposure_masked, render_frame, resolve_mask_planes,
+    suggest_auto_tone, tone_fingerprint, AutoToneConfig, ExportOptions, ImageFileFormat,
+    ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
+    SourceActionArtifact,
 };
 use lumina_onnx::{birefnet_manifest, StubBackend};
 use lumina_raw::{RawError, RawMetadata};
@@ -21,7 +22,6 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -347,6 +347,7 @@ fn render(args: FileArgs) -> Result<(), CliError> {
             match_total_exposure: false,
             target_luminance: 0.5,
         },
+        args.quality,
         args.virtual_copy.as_deref(),
         &mut mask_warnings,
     )?;
@@ -382,6 +383,7 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
             match_total_exposure: false,
             target_luminance: 0.5,
         },
+        args.quality,
         args.virtual_copy.as_deref(),
         &mut mask_warnings,
     )?;
@@ -793,6 +795,7 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
                     match_total_exposure: false,
                     target_luminance: 0.5,
                 },
+                args.quality,
                 args.virtual_copy.as_deref(),
                 &mut Vec::new(),
             ) {
@@ -864,7 +867,9 @@ fn migrate_sidecar(path: &Path) -> Result<(), CliError> {
 }
 
 fn process(args: ProcessArgs) -> Result<(), CliError> {
-    process_selected(args, None, &mut Vec::new())
+    // `process` has no explicit quality flag; it uses the shared default (90),
+    // which is identical to the historical `frame.encode(format)` output.
+    process_selected(args, 90, None, &mut Vec::new())
 }
 
 /// Build a Lensfun lens corrector from decoded RAW metadata (EXIF) for use as
@@ -925,13 +930,14 @@ fn build_lensfun_corrector(metadata: Option<&RawMetadata>) -> Option<(LensfunDb,
 
 fn process_selected(
     args: ProcessArgs,
+    quality: u8,
     virtual_copy: Option<&str>,
     mask_warnings_out: &mut Vec<String>,
 ) -> Result<(), CliError> {
     reject_same_path(&args.input, &args.output)?;
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
-    let (mut frame, raw_metadata) = decode_input(&args.input, &bytes)?;
+    let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
     let wb = raw_metadata.as_ref().map(|m| m.camera_white_balance);
     // F-098-N2: build the Lensfun corrector from EXIF when the feature is on.
     // The database handle and corrector are kept in two separate locals so the
@@ -1098,6 +1104,9 @@ fn process_selected(
     // are reported loudly, never silently dropped).
     let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
     let active_copy = document.virtual_copies[copy_index].clone();
+    // `resolved.planes` is owned by `MaskContext`, so clone once and reuse it for
+    // both the warning render and the final shared encode render below.
+    let mask_planes = resolved.planes.clone();
     let render_output = render_frame(
         &frame,
         &RenderContext {
@@ -1107,7 +1116,7 @@ fn process_selected(
             masks: Some(MaskContext {
                 copies: &resolved.copies,
                 active_copy_id: &active_copy.id,
-                planes: resolved.planes,
+                planes: mask_planes.clone(),
                 policy: MaskPolicy::Warn,
             }),
             // F-098-N2: pass a Lensfun corrector when one was built from EXIF
@@ -1125,37 +1134,60 @@ fn process_selected(
         eprintln!("warning: {warning}");
     }
     mask_warnings_out.extend(render_output.mask_warnings.iter().cloned());
-    frame = render_output.frame;
     if args.match_total_exposure {
         recipe.auto_features.match_total_exposure = true;
         recipe.auto_features.target_luminance = args.target_luminance;
-        // F-041: measure the final visible domain — `frame` is the render
-        // result (already post crop/geometry) and `render_output.mask_layers`
+        // F-041: measure the final visible domain — `render_output.frame` is the
+        // render result (already post crop/geometry) and `render_output.mask_layers`
         // are the effective planes resampled to exactly these dimensions. The
         // matching delta is weighted by the mask intersection; with no active
         // layers the empty slice keeps the previous raster measurement
         // bit-exactly. Until F-049 the layers do not modulate pixels, but the
-        // measurement-domain semantics is already active.
+        // measurement-domain semantics is already active. The matched exposure is
+        // folded back into `recipe` so the shared `export_image` path (below)
+        // renders the final pixels in a single pass.
         let mask_planes: Vec<MaskPlane> = render_output
             .mask_layers
             .iter()
             .map(|layer| layer.plane.clone())
             .collect();
-        let matching = match_total_exposure_masked(&frame, args.target_luminance, &mask_planes)?;
+        let matching =
+            match_total_exposure_masked(&render_output.frame, args.target_luminance, &mask_planes)?;
         recipe.auto_features.matched_exposure = Some(matching);
         let total_exposure = (recipe.adjustments.get("exposure").copied().unwrap_or(0.0)
             + matching)
             .clamp(-10.0, 10.0);
         recipe.adjustments.insert("exposure".into(), total_exposure);
-        frame.apply_recipe_with_white_balance(
-            &lumina_sidecar::EditRecipe {
-                adjustments: BTreeMap::from([(String::from("exposure"), matching)]),
-                ..Default::default()
-            },
-            wb,
-        )?;
     }
-    let encoded = frame.encode(format)?;
+    // Shared render + encode chain (byte-identical to the GUI export). The render
+    // context is rebuilt with the possibly updated `recipe` so `export_image`
+    // produces the final pixels in one pass. Quality is applied here (the MVP's
+    // historical `frame.encode(format)` used the default quality 90, so the
+    // default keeps the previous output bit-exact).
+    let options = ExportOptions {
+        format,
+        quality,
+        dither: false,
+        ..Default::default()
+    };
+    let encoded = export_image(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: wb,
+            source_actions: &source_actions,
+            masks: Some(MaskContext {
+                copies: &resolved.copies,
+                active_copy_id: &active_copy.id,
+                // Reuse the same planes captured for the warning render above.
+                planes: mask_planes.clone(),
+                policy: MaskPolicy::Warn,
+            }),
+            #[cfg(feature = "lensfun")]
+            lensfun: lensfun_corrector.as_ref(),
+        },
+        options,
+    )?;
     write_atomically(&args.output, &encoded)?;
 
     let copy = &mut document.virtual_copies[copy_index];
@@ -1251,28 +1283,25 @@ fn decode_input(path: &Path, bytes: &[u8]) -> Result<(ImageFrame, Option<RawMeta
 }
 
 fn output_format(path: &Path) -> Result<ImageFileFormat, CliError> {
-    match path
+    let extension = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => Ok(ImageFileFormat::Png),
-        "jpg" | "jpeg" => Ok(ImageFileFormat::Jpeg),
-        "webp" => Ok(ImageFileFormat::WebP),
-        extension => Err(CliError::Message(format!(
+        .to_ascii_lowercase();
+    ImageFileFormat::from_extension(&extension).ok_or_else(|| {
+        CliError::Message(format!(
             "unsupported output extension `.{extension}`; use png, jpg, jpeg, or webp"
-        ))),
-    }
+        ))
+    })
 }
 
 fn validate_format(format: &str) -> Result<(), CliError> {
-    match format.to_ascii_lowercase().as_str() {
-        "png" | "jpg" | "jpeg" | "webp" => Ok(()),
-        _ => Err(CliError::Message(format!(
+    if ImageFileFormat::from_extension(format).is_some() {
+        Ok(())
+    } else {
+        Err(CliError::Message(format!(
             "unsupported format `{format}`; use png, jpg, jpeg, or webp"
-        ))),
+        )))
     }
 }
 
@@ -1358,16 +1387,7 @@ fn io_error(path: &Path, error: std::io::Error) -> CliError {
 }
 
 fn reject_same_path(input: &Path, output: &Path) -> Result<(), CliError> {
-    let input = fs::canonicalize(input).map_err(|error| io_error(input, error))?;
-    let output = if output.exists() {
-        fs::canonicalize(output).map_err(|error| io_error(output, error))?
-    } else {
-        let parent = output.parent().unwrap_or_else(|| Path::new("."));
-        fs::canonicalize(parent)
-            .map(|parent| parent.join(output.file_name().unwrap_or_default()))
-            .map_err(|error| io_error(parent, error))?
-    };
-    if input == output {
+    if lumina_sidecar::paths_resolve_equal(input, output).map_err(|error| io_error(input, error))? {
         return Err(CliError::Message(
             "input and output resolve to the same path; refusing to overwrite the original".into(),
         ));
@@ -1376,33 +1396,10 @@ fn reject_same_path(input: &Path, output: &Path) -> Result<(), CliError> {
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| CliError::Message("output must have a valid file name".into()))?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(&format!(".{name}.tmp-"))
-        .tempfile_in(parent)
-        .map_err(|error| io_error(parent, error))?;
-    let temporary_path = temporary.path().to_path_buf();
-    let result = (|| {
-        temporary
-            .write_all(bytes)
-            .map_err(|error| io_error(&temporary_path, error))?;
-        temporary
-            .flush()
-            .map_err(|error| io_error(&temporary_path, error))?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|error| io_error(&temporary_path, error))?;
-        temporary
-            .persist(path)
-            .map_err(|error| io_error(path, error.error))?;
-        Ok(())
-    })();
-    result
+    // Delegate to the shared atomic-write helper in `lumina-sidecar` so the
+    // CLI and GUI use identical atomic-write semantics.
+    lumina_sidecar::write_atomically(path, bytes)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1824,6 +1821,7 @@ mod tests {
                 match_total_exposure: false,
                 target_luminance: 0.5,
             },
+            90,
             None,
             &mut warnings,
         )
@@ -1859,6 +1857,7 @@ mod tests {
                 match_total_exposure: false,
                 target_luminance: 0.5,
             },
+            90,
             None,
             &mut warnings,
         )
@@ -1990,6 +1989,7 @@ mod tests {
                 match_total_exposure: true,
                 target_luminance: 0.5,
             },
+            90,
             None,
             &mut warnings,
         )

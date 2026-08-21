@@ -98,20 +98,43 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 > Eltern-Vererbung, Preview-Ablage, Prune) liegt in `lumina-core`
 > (`DiskFolderCache`), WASM-gekapselt; siehe feature/architecture/pipeline.md.
 
-> **Implementierungsstatus (F-103, 2026-08-20):** Der horizontale MVP-Slice
-> der Desktop-GUI ist implementiert (egui/eframe: Laden per Pfad/Drag&Drop inkl.
-> nativer RAW-Dateien, Vorschau/Histogramm/Renderstand, Exposure/Contrast,
-> Auto-Tone/Matching, virtuelle Kopien, Presets, Maskenverwaltung,
-> Sidecar-Speichern; App-State-Tests grün). Die F-100-Konventionsvorgaben
-> (Modul-Leiste + Filmstreifen + Panelstruktur, Regler-Semantik,
-> Vorher/Nachher, WB-Pipette, Maskenwerkzeuge Pinsel/Verlauf/Radial,
-> Exportieren-Modul) sind **noch offen** und als F-103-N1…N6 in
-> `Agents.todo.md` (Phase 8) geplant; Browser-Dateispeichern, ONNX, Masken-
-> Inferenz, Cache-Synchronisierung und Mehrbild-Bearbeitung bleiben bewusst
-> Post-MVP.
+> **Implementierungsstatus (F-103, 2026-08-21):** Die Desktop-GUI (egui/eframe,
+> native Desktop als einzige MVP-GUI) erfüllt die F-100-Konventionen:
+> Modul-Leiste Library/Develop/Export, acht kollabierbare Develop-Sektionen in
+> normativer Reihenfolge, Navigator/Vorschau, Filmstreifen mit Thumbnails aus
+> dem Preview-Cache (Hintergrundgenerierung via IdleQueue), LR-dark-Theme mit
+> zentraler Palette und WCAG-Kontrasttests, i18n-Gerüst (englisch, 0 deutsche
+> UI-Literale), Regler-Semantik (Doppelklick-Einzelreset, Alt-Scroll-Feinjustierung,
+> -100..+100-Anzeige für -1..=1-Domänen), Before/After (`Y`), Auto-Tone-Button,
+> WB-Pipette, interaktive Maskenwerkzeuge Pinsel/Verlauf/Radial mit Overlay und
+> Sidecar-Persistenz (MaskPrompt Brush/Gradient/Ellipse gemäß F-079/F-081),
+> Exportieren-Modul über die gemeinsame `lumina_core::export_image`-Logik —
+> GUI-Export byte-identisch zum CLI-Export (getestet), Same-Path-Schutz,
+> atomarer Artefakt-Write. Unabhängig verifiziert BESTANDEN (2026-08-21);
+> App-State-Tests 43 grün. Offen: F-103-N6 (erster visueller User-Test),
+> F-103-N7 (Presence-/Vibrance/Saturation-Regler), F-103-N8 (CLI-Doppelrender),
+> F-103-N9 (kittest-Screenshot-Regressionen). Browser-Dateispeichern, ONNX,
+> Masken-Inferenz, Cache-Synchronisierung und Mehrbild-Bearbeitung bleiben
+> bewusst Post-MVP.
+
+> **Export-Determinismus (GUI ↔ CLI, 2026-08-21):** Die Desktop-GUI erzeugt über
+> das Export-Modul exakt denselben Bytestrom wie die CLI, weil beide den
+> gemeinsamen Pfad `lumina_core::export_image` (Render + Encode) nutzen. JPEG mit
+> fester Qualität wird über den `image`-Encoder als deterministisch behandelt
+> (gleiche Eingabe → gleiche Bytes); PNG dient in den GUI-Export-Tests als
+> primärer Byte-Vergleichsanker. Der Originalpfad wird beim Export nie
+> überschrieben (nicht-destruktiver Export).
 
 Für v1 ist egui/eframe festgelegt. Tauri ist keine v1-Abhängigkeit und kann in
 einer späteren Architekturentscheidung erneut bewertet werden.
+
+> **Produktentscheidung (2026-08-21, Projekteeigentümer):** Die **native
+> Desktop-App ist die einzige MVP-GUI.** Der WASM-/Trunk-Pfad bleibt buildbar
+> (CI-Check) und wird ausschließlich als dokumentierte Capability-Grenze
+> geführt; es findet keine Funktionsentwicklung für WASM statt (Post-MVP,
+> siehe WASM-Abschnitt). UI-Verifikation im MVP erfolgt nativ, z. B. über
+> Headless-Snapshot-Tests (`egui_kittest`); Browser-basierte Screenshot-Harnesses
+> (trunk serve + Playwright) sind Post-MVP-Optionen.
 
 ## UI-Konventionen (F-100)
 
@@ -119,6 +142,14 @@ Die Desktop-GUI folgt verbindlich den UI-Konventionen von **Lightroom Desktop**
 als Referenz. Diese Vorgaben beschreiben die Bedien- und Anordnungssemantik,
 nicht eine pixelgenaue Kopie der Adobe-Oberfläche. Abweichungen von den
 folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
+
+> **Produktentscheidung (2026-08-21, Projekteeigentümer):** Die GUI-Oberfläche
+> ist zum MVP **englischsprachig**; die deutschen Abschnittsnamen unten sind die
+> deutsche Referenzübersetzung und werden erst mit einer späteren Lokalisierung
+> aktiv. Die UI-Texte werden von Anfang an über ein i18n-Gerüst (zentrale
+> Übersetzungstabelle, keine im Code verteilten Literalen) verdrahtet, sodass
+> Deutsch als weitere Sprache ergänzt werden kann, ohne UI-Code anzufassen.
+> Panelanordnung, Reihenfolge und Semantik folgen unverändert dieser Sektion.
 
 ### Anordnung und Panelstruktur
 

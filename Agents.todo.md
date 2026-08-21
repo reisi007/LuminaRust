@@ -293,52 +293,45 @@ RAW per Pfad oder Drag-and-drop; Preview, Exposure (`-10..=10`), Contrast
 Dateispeichern, ONNX, Masken-Inferenz, Cache und Mehrbild-Synchronisierung
 sind bewusst Post-MVP.
 
-**Ist-Stand (2026-08-20):** `lumina-gui` (egui/eframe, native + WASM-Start)
-hat bereits einen verifizierten horizontalen MVP-Slice: Datei-Browser links,
-Develop-Panel rechts, Preview + Histogramm + Renderstand-Anzeige zentral,
-Drag&Drop (Bytes + Pfad), Dateidialog, virtuelle Kopien (Auswahl/
-Duplizieren), Maskierungs-Untersektion (anlegen/auswählen/invertieren/
-feathern/Neuberechnung anbieten, lokale Belichtung/Kontrast), Exposure/
-Contrast/Auto-Tone/Match-Exposure/Reset/Render/Sidecar-Speichern, Presets
-(anlegen/anwenden, relative exposure), IdleQueue für Masken-Hintergrundjobs;
-App-State-Tests grün (`recipe_change_and_render`, `auto_and_matching`,
-`reset_restores_original_preview`, `render_key_invalidates_until_render`,
-`preset_requires_name_and_validates_relative_exposure`,
-`decode_error_is_visible` u. a.). Offen sind die F-100-Konventionslücken —
-als umsetzbare Aufgaben geführt:
+**Ist-Stand (2026-08-21):** `lumina-gui` (egui/eframe) hat einen verifizierten
+MVP-Slice. **Umgesetzt und unabhängig verifiziert (BESTANDEN, 2026-08-21):**
+F-103-N1/N2/N3 (Modul-Leiste Library/Develop/Export, acht kollabierbare
+Develop-Sektionen in F-100-Reihenfolge, Filmstreifen mit Preview-Cache-
+Thumbnails, LR-dark-Theme mit zentraler Palette + WCAG-Kontrasttests,
+i18n-Gerüst englisch — 0 deutsche UI-Literale, Regler-Semantik Einzel-Reset/
+Alt-Scroll/Anzeigeskala, Before/After `Y`, Auto-Button, WB-Pipette),
+**F-103-N4** (interaktive Maskenwerkzeuge Pinsel/Verlauf/Radial auf der
+Vorschau, Overlay via `rasterize_prompt`, Persistenz als MaskPrompt/MaskLayer,
+lokale Regler im Panel), **F-103-N5** (Exportieren-Modul; gemeinsame
+`lumina_core::export_image`-Logik für CLI+GUI, byte-identisch getestet;
+Same-Path-Schutz; Original unverändert; atomarer Write via
+`write_atomically`), **F-103-M1** (i18n-Restliterale beseitigt).
+Offen: F-103-N6 (visueller User-Test), F-103-N7 (Presence-/Vibrance/Saturation-
+Regler), F-103-N8 (CLI-Doppelrender), F-103-N9 (kittest-Screenshot-
+Verifikation). Browser-Dateispeichern, ONNX, Masken-Inferenz, Cache-
+Synchronisierung und Mehrbild-Bearbeitung bleiben bewusst Post-MVP;
+WASM ist dokumentierte Capability-Grenze, keine MVP-GUI.
 
-- [ ] **F-103-N1** F-100-Panelstruktur: Modul-Leiste oben (**Bibliothek**,
-  **Entwickeln**, **Exportieren**) + Histogramm; Develop-Panel rechts mit den
-  acht kollabierbaren Sektionen **Grundtonung, Tonwertkurve, Farbe, Effekte,
-  Details, Optik, Geometrie, Maskierung** in dieser Reihenfolge und mit der
-  normativen F-089…F-099-Reglerreihenfolge; Navigators/Vorschau links; unten
-  ein **Filmstreifen mit Miniaturen** (die linke Dateiliste ersetzt ihn
-  nicht). Abnahme: F-100-Checkliste „Anordnung und Panelstruktur" erfüllt,
-  Screenshots der drei Module.
-- [ ] **F-103-N2** Regler-Semantik F-100: horizontaler Slider, Beschriftung
-  links, Wert rechts, Wertebereich sichtbar; Doppelklick auf die Beschriftung
-  setzt NUR diesen Regler auf seinen Standardwert zurück (Doppelklick auf den
-  Wert darf nie das ganze Rezept zurücksetzen); Alt/Option-Scroll feinjustiert;
-  Lightroom-Skala (`-1..=1`-Domänen als `-100..+100` anzeigen: Presence, HSL,
-  Grading-Balance, Dynamik/Sättigung). Abnahme: Tests für Reset-Semantik
-  (nur ein Regler) + Anzeige-Skalierung.
-- [ ] **F-103-N3** Interaktionen: **Vorher/Nachher**-Umschalter (Standard-Taste
-  `Y`); **Auto**-Button in Grundtonung (Auto-Tone); **Weißabgleich-Auswahl mit
-  Pipette** (Punkt aus Vorschau/Navigator übernimmt WB; Core-F-036-N1-Pfade
-  nutzen). Abnahme: Tastaturbelegung Y; Pipette setzt das
-  `white_balance`-Rezeptfeld.
-- [ ] **F-103-N4** Maskierung: Werkzeuge **Pinsel, Verlauf, Radial** mit
-  Prompt-/Koordinatensemantik gemäß F-079/F-081; lokale Regler der
-  ausgewählten Maske im selben Panel (mind. Belichtung, Kontrast + unterstützte
-  lokale Tonwert-/Farb-/Präsenzregler, keine separaten Dialoge); Invertierung,
-  Feathering, Blur; Masken-Layer persistieren in der virtuellen Kopie.
-  Abnahme: Werkzeuge erzeugen persistierte MaskDefinition/MaskLayer im
-  Sidecar; bestehende lokale Regler-UIs in die Sektion integriert.
-- [ ] **F-103-N5** Exportieren-Modul: Exportziel/-format über die gemeinsame
-  Exportlogik (byte-identisch zum CLI-Export); ändert nur deklaratives
-  Rezept/Sidecar, Artefakt atomar geschrieben; F-086-Cache/1:1-Vorschau
-  nutzen. Abnahme: GUI-Export datei-identisch zum CLI-`export`; Modul in der
-  Leiste erreichbar.
+- [ ] **F-103-N7** Fehlende Presence- und Dynamik/Sättigung-Regler ergänzen
+  (Befund Verifizierung 2026-08-21): Texture, Clarity, Dehaze (Presence,
+  F-094) sowie Vibrance, Saturation (F-092) als Regler in den Sektionen
+  Effects bzw. Color — sofern Rezeptfelder/Pipeline-Stufen existieren, sonst
+  dokumentierte „nicht verfügbar"-Kennzeichnung je Stufe. Ziel: normative
+  F-100-Reglerreihenfolge vollständig sichtbar.
+- [ ] **F-103-N8** Export-Render-Doppelarbeit in der CLI (Befund Verifizierung
+  2026-08-21, niedrig): `process_selected` rendert aktuell zweimal
+  (Warn-Render + `export_image`); ohne `match_total_exposure` ließe sich das
+  erste Render-Ergebnis wiederverwenden. Umsetzung gemäß F-074-Methodik
+  (byte-identischer Output nachweisen, Budget-Vergleich im selben Commit).
+- [ ] **F-103-N9** Automatisierte UI-Screenshot-Verifikation (Vorschlag
+  2026-08-21, angepasst 2026-08-21): Headless-Snapshot-Tests der **Desktop**-
+  GUI via `egui_kittest` (Golden-Screenshots der drei Module und
+  Develop-Sektionen, Pixel-Diff mit Toleranz, läuft in CI ohne Browser) als
+  verbindliche Regressionssicherung. Die Desktop-App ist die **einzige
+  MVP-GUI**; der WASM/trunk-Pfad wird ausschließlich dokumentiert (Capability-
+  Matrix) und ist Post-MVP — kein Playwright-/Browser-Harness im MVP.
+  Vision-gestützte Screenshot-Analyse (ui-review-Checkliste) als Ergänzung
+  möglich.
 - [ ] **F-103-N6** Erster visueller User-Test: `cargo run -p lumina-gui` mit
   PNG/JPEG/WebP + nativen RAW per Pfad und Drag&drop; Preview + Exposure/
   Contrast ändern den Renderstand; Sidecar wird geschrieben und beim Neustart

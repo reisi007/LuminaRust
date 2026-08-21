@@ -1021,6 +1021,57 @@ pub fn save_sidecar(path: &Path, document: &SidecarDocument) -> Result<(), Sidec
     result
 }
 
+/// Write `bytes` to `path` atomically: a temporary file is created in the same
+/// directory, fully written, flushed and synced, then renamed over the target.
+///
+/// Both the CLI and the GUI reuse this so the atomic-write semantics (and the
+/// `.{name}.tmp-*` naming) are identical everywhere; only the sidecar write
+/// additionally syncs the parent directory afterwards (see [`save_sidecar`]).
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SidecarError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let filename = path.file_name().map(|name| name.to_string_lossy());
+    let filename = filename.as_deref().unwrap_or("artifact");
+    let mut temporary = tempfile::Builder::new()
+        .prefix(&format!(".{filename}.tmp-"))
+        .tempfile_in(parent)
+        .map_err(|error| io_error("creating temporary file", parent, error))?;
+    let temporary_path = temporary.path().to_path_buf();
+    let result = (|| {
+        temporary
+            .write_all(bytes)
+            .map_err(|error| io_error("writing temporary file", &temporary_path, error))?;
+        temporary
+            .flush()
+            .map_err(|error| io_error("flushing temporary file", &temporary_path, error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| io_error("syncing temporary file", &temporary_path, error))?;
+        temporary
+            .persist(path)
+            .map_err(|error| io_error("renaming temporary file", path, error.error))?;
+        Ok(())
+    })();
+    result
+}
+
+/// Returns `true` if `input` and `output` resolve to the same file on disk.
+///
+/// Used by the export paths to reject an export that would overwrite the
+/// original source (the non-destructive guarantee). Existing paths are
+/// canonicalized directly; a not-yet-existing `output` is resolved against its
+/// parent directory so a write to the source's own name is still caught.
+pub fn paths_resolve_equal(input: &Path, output: &Path) -> std::io::Result<bool> {
+    let input = fs::canonicalize(input)?;
+    let output = if output.exists() {
+        fs::canonicalize(output)?
+    } else {
+        let parent = output.parent().unwrap_or_else(|| Path::new("."));
+        fs::canonicalize(parent)?.join(output.file_name().unwrap_or_default())
+    };
+    Ok(input == output)
+}
+
 pub fn save_sidecar_if_unchanged(
     path: &Path,
     document: &SidecarDocument,
@@ -3919,5 +3970,83 @@ mod tests {
         });
         ok.virtual_copies[0].mask_library.push(good);
         assert!(ok.validate().is_ok());
+    }
+
+    // ----- F-103-N5: `paths_resolve_equal` non-destructive export guard -----
+
+    #[test]
+    fn paths_resolve_equal_same_file_is_true() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, b"data").unwrap();
+        // Identical path resolves equal to itself.
+        assert!(paths_resolve_equal(&source, &source).unwrap());
+        // A second reference to the very same file also resolves equal.
+        let same = directory.path().join("photo.png");
+        assert!(paths_resolve_equal(&source, &same).unwrap());
+    }
+
+    #[test]
+    fn paths_resolve_equal_different_files_is_false() {
+        let directory = tempfile::tempdir().unwrap();
+        let a = directory.path().join("a.png");
+        let b = directory.path().join("b.png");
+        std::fs::write(&a, b"data-a").unwrap();
+        std::fs::write(&b, b"data-b").unwrap();
+        assert!(!paths_resolve_equal(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn paths_resolve_equal_missing_output_same_name_is_false() {
+        // A not-yet-existing export target that shares the source's file name but
+        // lives in a *different* directory resolves to a different location, so the
+        // non-destructive guard must NOT reject it (it is a legitimate export).
+        //
+        // This genuinely exercises the `!output.exists()` (missing) branch of
+        // `paths_resolve_equal`: `output` does not exist, so it is resolved against
+        // its parent directory and compared to the source's canonical path.
+        //
+        // Note: a truly *missing* output whose resolved path equals the source is
+        // impossible on a normal filesystem — if the resolved path named an existing
+        // file (the source) the `output` would `exists()` and take the other branch.
+        // The overwrite-rejection for the source's own name is therefore covered by
+        // `paths_resolve_equal_same_file_is_true` (the `exists()` branch), which is
+        // the realistic non-destructive contract: the original still occupies that
+        // path when an export targets it.
+        let directory = tempfile::tempdir().unwrap();
+        let source_dir = directory.path().join("src");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("photo.png");
+        std::fs::write(&source, b"data").unwrap();
+        // Output shares the file name but sits in the parent folder and does not
+        // exist yet — the missing branch is taken.
+        let missing = directory.path().join("photo.png");
+        assert!(!missing.exists());
+        assert!(!paths_resolve_equal(&source, &missing).unwrap());
+    }
+
+    #[test]
+    fn paths_resolve_equal_missing_output_other_name_is_false() {
+        // A not-yet-existing output with a different name in the same folder is
+        // a legitimate export target.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, b"data").unwrap();
+        let missing = directory.path().join("photo_export.png");
+        assert!(!paths_resolve_equal(&source, &missing).unwrap());
+    }
+
+    #[test]
+    fn paths_resolve_equal_different_directories_is_false() {
+        let parent = tempfile::tempdir().unwrap();
+        let d1 = parent.path().join("d1");
+        let d2 = parent.path().join("d2");
+        std::fs::create_dir_all(&d1).unwrap();
+        std::fs::create_dir_all(&d2).unwrap();
+        let source = d1.join("photo.png");
+        let other = d2.join("photo.png");
+        std::fs::write(&source, b"data").unwrap();
+        // Even with the same file name, different directories never resolve equal.
+        assert!(!paths_resolve_equal(&source, &other).unwrap());
     }
 }

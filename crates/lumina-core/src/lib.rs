@@ -50,6 +50,50 @@ pub enum ImageFileFormat {
     WebP,
 }
 
+impl ImageFileFormat {
+    /// Parse a file extension (without the leading dot) into an export format.
+    /// Recognises `png`, `jpg`, `jpeg` and `webp` (case-insensitive). Returns
+    /// `None` for anything else so callers can reject unknown formats loudly
+    /// instead of silently picking one.
+    pub fn from_extension(extension: &str) -> Option<ImageFileFormat> {
+        match extension.to_ascii_lowercase().as_str() {
+            "png" => Some(ImageFileFormat::Png),
+            "jpg" | "jpeg" => Some(ImageFileFormat::Jpeg),
+            "webp" => Some(ImageFileFormat::WebP),
+            _ => None,
+        }
+    }
+
+    /// Canonical file extension (without the leading dot) for this format.
+    /// `Jpeg` maps to `jpg` so saved files match the CLI's `format_extension`
+    /// convention and the byte-identical export contract.
+    pub fn default_extension(self) -> &'static str {
+        match self {
+            ImageFileFormat::Png => "png",
+            ImageFileFormat::Jpeg => "jpg",
+            ImageFileFormat::WebP => "webp",
+        }
+    }
+}
+
+/// Shared render + encode path used by both the CLI and the GUI export module.
+///
+/// Takes an already-decoded source frame, the full render context (recipe,
+/// white balance, source actions and masks) and the export options (format,
+/// quality, …) and returns the encoded artifact bytes. It performs **no**
+/// filesystem I/O so it stays platform-neutral and produces identical output
+/// for every caller — that is exactly what makes the GUI export byte-identical
+/// to the CLI export (F-103-N5): both feed the same frame, recipe and
+/// `ExportOptions` into this single function.
+pub fn export_image(
+    frame: &ImageFrame,
+    context: &RenderContext,
+    options: ExportOptions,
+) -> Result<Vec<u8>, CoreError> {
+    let rendered = render_frame(frame, context)?;
+    rendered.frame.encode_with_options(options)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BitDepth {
     #[default]
