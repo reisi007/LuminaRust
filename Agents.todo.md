@@ -305,19 +305,38 @@ Vorschau, Overlay via `rasterize_prompt`, Persistenz als MaskPrompt/MaskLayer,
 lokale Regler im Panel), **F-103-N5** (Exportieren-Modul; gemeinsame
 `lumina_core::export_image`-Logik für CLI+GUI, byte-identisch getestet;
 Same-Path-Schutz; Original unverändert; atomarer Write via
-`write_atomically`), **F-103-M1** (i18n-Restliterale beseitigt).
-Offen: F-103-N6 (visueller User-Test), F-103-N7 (Presence-/Vibrance/Saturation-
-Regler), F-103-N8 (CLI-Doppelrender), F-103-N9 (kittest-Screenshot-
-Verifikation). Browser-Dateispeichern, ONNX, Masken-Inferenz, Cache-
-Synchronisierung und Mehrbild-Bearbeitung bleiben bewusst Post-MVP;
-WASM ist dokumentierte Capability-Grenze, keine MVP-GUI.
+`write_atomically`), **F-103-M1** (i18n-Restliterale beseitigt),
+**F-103-N7** (Presence-Regler Texture/Clarity/Dehaze F-094 sowie
+Vibrance/Saturation F-092; beide als Regler in der Color-Sektion in F-100-
+Reihenfolge — Color Grading → Presence → Vibrance/Saturation — über bestehenden
+`set_adjustment`/Rezeptpfad; Pipeline-Stufen `apply_presence` und
+`apply_vibrance_and_saturation` vorhanden, daher keine „nicht verfügbar"-
+Kennzeichnung; GUI-Tests für Rezeptfelder/Domänen/Reset; Modul-Shortcuts
+G/D/E mit Textfeld-Fokus-Schutz).
+**F-103-N8** (CLI-Doppelrender im Nicht-Match-Pfad beseitigt, byte-identisch
+getestet), **F-103-N9** (kittest-Snapshot-Regressionen: 5 Goldens, `#[ignore]`+
+`UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots --
+--ignored`; Modul-Shortcuts G/D/E).
+Offen: F-103-N6 (visueller User-Test), F-103-N10 (Sektionsreihenfolgen-Entscheid). Browser-Dateispeichern, ONNX, Masken-
+Inferenz, Cache-Synchronisierung und Mehrbild-Bearbeitung bleiben bewusst
+Post-MVP; WASM ist dokumentierte Capability-Grenze, keine MVP-GUI.
 
-- [ ] **F-103-N7** Fehlende Presence- und Dynamik/Sättigung-Regler ergänzen
-  (Befund Verifizierung 2026-08-21): Texture, Clarity, Dehaze (Presence,
-  F-094) sowie Vibrance, Saturation (F-092) als Regler in den Sektionen
-  Effects bzw. Color — sofern Rezeptfelder/Pipeline-Stufen existieren, sonst
-  dokumentierte „nicht verfügbar"-Kennzeichnung je Stufe. Ziel: normative
-  F-100-Reglerreihenfolge vollständig sichtbar.
+- [ ] **F-103-N10** Sektionsreihenfolgen-Inkonsistenz klären (Befund
+  Verifizierung 2026-08-21, niedrig): Das SOLL (cli-gui-wasm.md F-100) listet
+  die Sektion „Effects" (Vignette/Grain) VOR „Detail" (Sharpening/Noise
+  Reduction), während die normative Reglerreihenfolge im selben Dokument
+  Sharpening → Noise Reduction → Vignette/Grain verlangt und Lightroom Classic
+  „Detail" vor „Effects" anordnet. Produktentscheidung nötig: entweder
+  Sektionsreihenfolge im SOLL korrigieren (Detail vor Effects, LR-Classic-
+  konform) oder Abweichung dokumentieren; danach GUI-Anordnung angleichen.
+- [ ] **F-103-N10** Sektionsreihenfolgen-Inkonsistenz klären (Befund
+  Verifizierung 2026-08-21, niedrig): Das SOLL (cli-gui-wasm.md F-100) listet
+  die Sektion „Effects" (Vignette/Grain) VOR „Detail" (Sharpening/Noise
+  Reduction), während die normative Reglerreihenfolge im selben Dokument
+  Sharpening → Noise Reduction → Vignette/Grain verlangt und Lightroom Classic
+  „Detail" vor „Effects" anordnet. Produktentscheidung nötig: entweder
+  Sektionsreihenfolge im SOLL korrigieren (Detail vor Effects, LR-Classic-
+  konform) oder Abweichung dokumentieren; danach GUI-Anordnung angleichen.
 - [ ] **F-103-N8** Export-Render-Doppelarbeit in der CLI (Befund Verifizierung
   2026-08-21, niedrig): `process_selected` rendert aktuell zweimal
   (Warn-Render + `export_image`); ohne `match_total_exposure` ließe sich das

@@ -1,0 +1,5 @@
+# egui_kittest writes these temporary comparison artifacts on every run.
+# Only the committed `<name>.png` goldens belong in version control.
+*.new.png
+*.diff.png
+*.old.png

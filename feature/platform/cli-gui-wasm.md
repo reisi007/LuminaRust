@@ -111,9 +111,14 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 > Exportieren-Modul über die gemeinsame `lumina_core::export_image`-Logik —
 > GUI-Export byte-identisch zum CLI-Export (getestet), Same-Path-Schutz,
 > atomarer Artefakt-Write. Unabhängig verifiziert BESTANDEN (2026-08-21);
-> App-State-Tests 43 grün. Offen: F-103-N6 (erster visueller User-Test),
-> F-103-N7 (Presence-/Vibrance/Saturation-Regler), F-103-N8 (CLI-Doppelrender),
-> F-103-N9 (kittest-Screenshot-Regressionen). Browser-Dateispeichern, ONNX,
+> App-State-Tests 43 grün. F-103-N7 (Presence-Regler Texture/Clarity/Dehaze
+> F-094 und Vibrance/Saturation F-092 in der Color-Sektion in F-100-Reihenfolge
+> Color Grading → Presence → Vibrance/Saturation, über bestehenden
+> set_adjustment-/Rezeptpfad; Pipeline-Stufen vorhanden) implementiert
+> (2026-08-21). Offen: F-103-N6 (erster visueller User-Test), F-103-N8
+> (CLI-Doppelrender). F-103-N9 (kittest-Screenshot-Regressionen) ist
+> umgesetzt (2026-08-21, siehe unten).
+> Browser-Dateispeichern, ONNX,
 > Masken-Inferenz, Cache-Synchronisierung und Mehrbild-Bearbeitung bleiben
 > bewusst Post-MVP.
 
@@ -135,6 +140,25 @@ einer späteren Architekturentscheidung erneut bewertet werden.
 > siehe WASM-Abschnitt). UI-Verifikation im MVP erfolgt nativ, z. B. über
 > Headless-Snapshot-Tests (`egui_kittest`); Browser-basierte Screenshot-Harnesses
 > (trunk serve + Playwright) sind Post-MVP-Optionen.
+
+> **F-103-N9 — UI-Snapshot-Regressionen (`egui_kittest`, 2026-08-21):** Die
+> Integrationstests unter `crates/lumina-gui/tests/kittest_snapshots.rs` rendern
+> die GUI headless über den wgpu-Backend und vergleichen den Frame gegen
+> committete Goldens unter `crates/lumina-gui/tests/snapshots/`. Die Tests sind
+> standardmäßig `#[ignore]` (headless GPU nötig), damit CI ohne GPU grün bleibt.
+> Goldens erzeugen/aktualisieren:
+> `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored`
+> Ein **roter Snapshot** bedeutet, dass der gerenderte Frame vom committeten
+> Golden abweicht — meist eine beabsichtigte UI-Änderung (Golden via
+> `UPDATE_SNAPSHOTS=true` refreshen) oder eine Regression (Diff unter
+> `tests/snapshots/<name>.diff.png` prüfen). Pro Zustand ein eigener Test:
+> `library_empty`, `library_with_image`, `develop_basic`,
+> `develop_sections_expanded`, `export_module`. Ein Masken-Werkzeug-Zustand
+> wurde bewusst weggelassen: ein aussagekräftiges Overlay braucht ein geladenes
+> Bild plus einen committierten Brush-Stroke, was `save_sidecar` (Disk-Schreiben)
+> triggert — ungeeignet für einen headless-regressionstest ohne
+> Filesystem-Seiteneffekte; ein nur „armierter“ (ohne Bild) Tool-Zustand ist
+> visuell nicht vom Develop-Grundzustand zu unterscheiden.
 
 ## UI-Konventionen (F-100)
 

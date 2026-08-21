@@ -1159,35 +1159,45 @@ fn process_selected(
             .clamp(-10.0, 10.0);
         recipe.adjustments.insert("exposure".into(), total_exposure);
     }
-    // Shared render + encode chain (byte-identical to the GUI export). The render
-    // context is rebuilt with the possibly updated `recipe` so `export_image`
-    // produces the final pixels in one pass. Quality is applied here (the MVP's
-    // historical `frame.encode(format)` used the default quality 90, so the
-    // default keeps the previous output bit-exact).
     let options = ExportOptions {
         format,
         quality,
         dither: false,
         ..Default::default()
     };
-    let encoded = export_image(
-        &frame,
-        &RenderContext {
-            recipe: &recipe,
-            camera_white_balance: wb,
-            source_actions: &source_actions,
-            masks: Some(MaskContext {
-                copies: &resolved.copies,
-                active_copy_id: &active_copy.id,
-                // Reuse the same planes captured for the warning render above.
-                planes: mask_planes.clone(),
-                policy: MaskPolicy::Warn,
-            }),
-            #[cfg(feature = "lensfun")]
-            lensfun: lensfun_corrector.as_ref(),
-        },
-        options,
-    )?;
+    // F-103-N8: the warning render above already produced the final pixels for
+    // the (unchanged) recipe. When total-exposure matching is OFF, no code path
+    // after that render mutates `recipe` (auto-tone, presets and CLI
+    // adjustments all run *before* the warning render), so `render_output.frame`
+    // is byte-identical to what `export_image` would re-render here. Reuse it
+    // and skip the duplicate full-pipeline render. When matching IS ON, the
+    // matched exposure is folded into `recipe` *after* the warning render, so
+    // the shared `export_image` path must re-render with the updated recipe to
+    // produce the final pixels (the matching still measures `render_output.frame`
+    // as the pre-match domain). Output stays byte-identical to the GUI export in
+    // both branches (the encode step is unchanged).
+    let encoded = if args.match_total_exposure {
+        export_image(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: wb,
+                source_actions: &source_actions,
+                masks: Some(MaskContext {
+                    copies: &resolved.copies,
+                    active_copy_id: &active_copy.id,
+                    // Reuse the same planes captured for the warning render above.
+                    planes: mask_planes.clone(),
+                    policy: MaskPolicy::Warn,
+                }),
+                #[cfg(feature = "lensfun")]
+                lensfun: lensfun_corrector.as_ref(),
+            },
+            options,
+        )?
+    } else {
+        render_output.frame.encode_with_options(options)?
+    };
     write_atomically(&args.output, &encoded)?;
 
     let copy = &mut document.virtual_copies[copy_index];
@@ -1937,6 +1947,143 @@ mod tests {
             expected
         );
         assert_eq!(ImageFrame::decode(&expected).unwrap(), rendered.frame);
+    }
+
+    // ---- F-103-N8: no-match export reuses the warning render (no duplicate) ----
+    #[test]
+    fn no_match_export_is_byte_identical_to_single_render() {
+        // The no-match export path must reuse the warning render instead of
+        // re-rendering through `export_image`. The produced file must stay
+        // byte-identical to a single `export_image` pass with the same final
+        // recipe — i.e. exactly the pre-optimization output (F-103-N8). This
+        // guards the optimization against any silent output drift.
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.webp");
+        // A non-uniform spatial gradient so exposure/contrast actually move
+        // pixels; a uniform frame can be invariant under 8-bit rounding.
+        let width: u32 = 16;
+        let height: u32 = 16;
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let value = ((x + y) % 256) as u8;
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let frame = ImageFrame::new(width, height, pixels).unwrap();
+        fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+
+        process(ProcessArgs {
+            input: input.clone(),
+            output: output.clone(),
+            preset: None,
+            exposure: Some(0.3),
+            contrast: Some(0.2),
+            highlights: Some(-0.1),
+            shadows: Some(0.1),
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
+        })
+        .unwrap();
+
+        let actual = fs::read(&output).unwrap();
+        // The final recipe persisted by `process` (incl. the CLI adjustments
+        // above) is the recipe `export_image` would have rendered.
+        let sidecar = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let final_recipe = sidecar.virtual_copies[0].recipe.clone();
+        let source = ImageFrame::decode(&fs::read(&input).unwrap()).unwrap();
+        // `process` always uses the default quality 90 and `dither: false`,
+        // matching the historical `frame.encode(format)` output.
+        let options = ExportOptions {
+            format: ImageFileFormat::WebP,
+            quality: 90,
+            dither: false,
+            ..Default::default()
+        };
+        let expected = export_image(
+            &source,
+            &RenderContext {
+                recipe: &final_recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                // No mask library in this test → empty mask context, which
+                // renders identically to `None` (see render.rs
+                // `no_layers_is_identical_to_no_mask_context`).
+                masks: None,
+                #[cfg(feature = "lensfun")]
+                lensfun: None,
+            },
+            options,
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn match_total_exposure_still_rerenders_with_matched_recipe() {
+        // Complementary guard to F-103-N8: when matching is ON the CLI must
+        // still re-render with the matched exposure (the output must differ
+        // from the *unmatched* single render, confirming the second render is
+        // not silently skipped).
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        let width: u32 = 16;
+        let height: u32 = 16;
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let value = ((x + y) % 256) as u8;
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let frame = ImageFrame::new(width, height, pixels).unwrap();
+        fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+
+        process(ProcessArgs {
+            input: input.clone(),
+            output: output.clone(),
+            preset: None,
+            exposure: None,
+            contrast: None,
+            highlights: None,
+            shadows: None,
+            auto_tone: false,
+            match_total_exposure: true,
+            target_luminance: 0.5,
+        })
+        .unwrap();
+        let matched = fs::read(&output).unwrap();
+        assert!(output.is_file());
+
+        // The unmatched single render (recipe without the matched exposure) must
+        // differ from the matched output, proving the second render actually ran.
+        let sidecar = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let mut unmatched_recipe = sidecar.virtual_copies[0].recipe.clone();
+        unmatched_recipe.adjustments.remove("exposure");
+        let source = ImageFrame::decode(&fs::read(&input).unwrap()).unwrap();
+        let options = ExportOptions {
+            format: ImageFileFormat::Png,
+            quality: 90,
+            dither: false,
+            ..Default::default()
+        };
+        let unmatched = export_image(
+            &source,
+            &RenderContext {
+                recipe: &unmatched_recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                #[cfg(feature = "lensfun")]
+                lensfun: None,
+            },
+            options,
+        )
+        .unwrap();
+        assert_ne!(matched, unmatched);
     }
 
     #[test]

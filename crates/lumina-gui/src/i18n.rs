@@ -20,8 +20,10 @@
 pub enum Str {
     // Module bar
     Library,
-    Develop,
     Export,
+    // Module bar labels with keyboard shortcut (`{}` is the key letter).
+    LibraryShortcut,
+    DevelopShortcut,
     ExportTarget,
     ExportFormatLabel,
     ExportQualityLabel,
@@ -95,6 +97,13 @@ pub enum Str {
     GradingMidtones,
     GradingHighlights,
     GradingBalance,
+
+    // Color — Presence (F-094) and Dynamics/Saturation (F-092)
+    Presence,
+    Texture,
+    Clarity,
+    Dehaze,
+    Vibrance,
 
     // Effects
     Vignette,
@@ -248,8 +257,9 @@ impl Str {
     pub fn t(self) -> &'static str {
         match self {
             Str::Library => "Library",
-            Str::Develop => "Develop",
             Str::Export => "Export",
+            Str::LibraryShortcut => "Library ({})",
+            Str::DevelopShortcut => "Develop ({})",
             Str::ExportTarget => "Export to",
             Str::ExportFormatLabel => "Format",
             Str::ExportQualityLabel => "Quality",
@@ -317,6 +327,12 @@ impl Str {
             Str::GradingMidtones => "Midtones",
             Str::GradingHighlights => "Highlights",
             Str::GradingBalance => "Balance",
+
+            Str::Presence => "Presence",
+            Str::Texture => "Texture",
+            Str::Clarity => "Clarity",
+            Str::Dehaze => "Dehaze",
+            Str::Vibrance => "Vibrance",
 
             Str::Vignette => "Vignette",
             Str::Amount => "Amount",

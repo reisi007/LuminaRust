@@ -28,7 +28,7 @@ use lumina_sidecar::{
 use lumina_sidecar::{
     AnalysisFingerprint, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves,
     EditRecipe, Effects, Geometry, Grain, HslAdjustments, HslChannel, LensCorrection,
-    NoiseReduction, Perspective, Preset, Sharpening, Vignette,
+    NoiseReduction, Perspective, Presence, Preset, Sharpening, Vignette,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::Value;
@@ -64,6 +64,29 @@ pub enum Module {
     Library,
     Develop,
     Export,
+}
+
+/// Maps a Lightroom-style module-switch keyboard shortcut to its target module.
+///
+/// This is a pure function so the mapping can be unit-tested without an
+/// [`egui::Context`]. The mapping mirrors Lightroom's module keys:
+///
+/// * `G` switches to `Library` (Grid).
+/// * `D` switches to `Develop`.
+/// * `E` is Lightroom's "Loupe" shortcut. Lumina has no separate Loupe module,
+///   so `E` is treated as an alias for `Library` (documented here so the alias
+///   is intentional and not a silent fallback).
+///
+/// Keys that are not module shortcuts — in particular the existing `Y`
+/// Before/After toggle and `Esc` eyedropper-cancel — return `None` and keep
+/// their own, separate handling.
+pub fn module_for_key(key: egui::Key) -> Option<Module> {
+    match key {
+        egui::Key::G => Some(Module::Library),
+        egui::Key::D => Some(Module::Develop),
+        egui::Key::E => Some(Module::Library),
+        _ => None,
+    }
 }
 
 /// Active interactive masking tool (F-103-N4). `None` means the preview accepts
@@ -257,6 +280,13 @@ impl FileBrowserEntry {
 }
 
 impl LuminaApp {
+    /// Set the active top-level module (Library / Develop / Export). Used by the
+    /// headless snapshot tests (F-103-N9) to render a specific module; this is a
+    /// pure state assignment with no recipe/sidecar side effects.
+    pub fn set_module(&mut self, module: Module) {
+        self.active_module = module;
+    }
+
     pub fn new(_ctx: egui::Context) -> Self {
         Self {
             original: None,
@@ -1179,6 +1209,28 @@ impl LuminaApp {
         self.error = None;
     }
 
+    /// Set a single Presence field (`texture`, `clarity` or `dehaze`). The value
+    /// is stored in the normative `-1..=1` domain (shown as `-100..+100`); the
+    /// sidecar validation is the source of truth for the domain, so out-of-range
+    /// values are stored as given and rejected on save rather than silently
+    /// clamped (no silent fallback).
+    pub fn set_presence(&mut self, field: &str, value: f64) {
+        let mut presence = self.recipe.presence.unwrap_or(Presence {
+            version: 1,
+            texture: 0.0,
+            clarity: 0.0,
+            dehaze: 0.0,
+        });
+        match field {
+            "texture" => presence.texture = value as f32,
+            "clarity" => presence.clarity = value as f32,
+            "dehaze" => presence.dehaze = value as f32,
+            _ => return,
+        }
+        self.recipe.presence = Some(presence);
+        self.mark_dirty();
+    }
+
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
         let Some(frame) = &self.original else {
             return Ok(());
@@ -1976,6 +2028,24 @@ impl LuminaApp {
         self.status = format!("Reset {key}");
     }
 
+    /// A small sample RGBA PNG for headless snapshot / integration tests
+    /// (F-103-N9). Pure helper with no app side effects; the bytes decode via
+    /// [`Self::load_bytes`].
+    pub fn sample_image_png() -> Vec<u8> {
+        ImageFrame::new(
+            4,
+            3,
+            vec![
+                20, 30, 40, 255, 200, 180, 160, 255, 255, 255, 255, 255, 10, 10, 10, 255, 50, 60,
+                70, 255, 90, 100, 110, 255, 120, 130, 140, 255, 200, 20, 20, 255, 1, 2, 3, 255, 80,
+                90, 100, 255, 150, 160, 170, 255, 240, 240, 240, 255,
+            ],
+        )
+        .expect("sample image dimensions are valid")
+        .encode(ImageFileFormat::Png)
+        .expect("sample image encodes to PNG")
+    }
+
     /// Toggle Before/After. Deliberately does not touch the recipe.
     pub fn toggle_before_after(&mut self) {
         self.before_after = !self.before_after;
@@ -2212,6 +2282,57 @@ impl LuminaApp {
                 self.recipe.color_grading = Some(cg);
                 self.mark_dirty();
             }
+
+            ui.separator();
+            // F-100 (F-094): Presence (Texture, Clarity, Dehaze) belongs to the
+            // Color section and is ordered *before* Vibrance/Saturation (F-092)
+            // and before Sharpening / Noise Reduction / Vignette. We render it as
+            // its own labeled group here — between Color Grading and Vibrance/
+            // Saturation — so the normative F-100 control order is visible.
+            // (F-103-N7 allowed either `draw_effects` above Vignette/Grain or an
+            // own group; the F-100 ordering requires it here, ahead of
+            // Vibrance/Saturation, hence this dedicated group.)
+            ui.label(Str::Presence.t());
+            let mut presence = self.recipe.presence.unwrap_or(Presence {
+                version: 1,
+                texture: 0.0,
+                clarity: 0.0,
+                dehaze: 0.0,
+            });
+            let mut changed_presence = false;
+            let spec = percent_spec(-1.0..=1.0, 0.0);
+            for (label, field) in [
+                (Str::Texture, &mut presence.texture),
+                (Str::Clarity, &mut presence.clarity),
+                (Str::Dehaze, &mut presence.dehaze),
+            ] {
+                if matches!(
+                    lr_slider(ui, label.t(), field, spec),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    changed_presence = true;
+                }
+            }
+            if changed_presence {
+                self.recipe.presence = Some(presence);
+                self.mark_dirty();
+            }
+
+            ui.separator();
+            // F-100 (F-092): Dynamics/Saturation — Vibrance then Saturation, both
+            // flat adjustments on the `-1..=1` domain shown as `-100..+100`.
+            self.adjustment_slider(
+                ui,
+                "vibrance",
+                Str::Vibrance.t(),
+                percent_spec(-1.0..=1.0, 0.0),
+            );
+            self.adjustment_slider(
+                ui,
+                "saturation",
+                Str::Saturation.t(),
+                percent_spec(-1.0..=1.0, 0.0),
+            );
         });
     }
 
@@ -3340,6 +3461,25 @@ impl eframe::App for LuminaApp {
             self.wb_pick_mode = false;
         }
 
+        // Module-switch shortcuts (`G` Library, `D` Develop, `E` Library alias).
+        // They are ignored while a widget wants keyboard input — e.g. a focused
+        // text field for mask/preset names — so they cannot hijack typing.
+        // Switching modules never mutates the recipe or sidecar.
+        if !ctx.wants_keyboard_input() {
+            if let Some(module) = ctx.input(|i| {
+                for key in [egui::Key::G, egui::Key::D, egui::Key::E] {
+                    if i.key_pressed(key) {
+                        if let Some(target) = module_for_key(key) {
+                            return Some(target);
+                        }
+                    }
+                }
+                None
+            }) {
+                self.active_module = module;
+            }
+        }
+
         // Consume idle tasks only while there is no interactive pointer input.
         // Thumbnails are generated here; mask inference is handed to the (still
         // missing) ONNX adapter and only records the hand-off point.
@@ -3384,16 +3524,17 @@ impl eframe::App for LuminaApp {
         });
 
         // Top: module bar (Library / Develop / Export) + the Before/After toggle,
-        // then the histogram of the currently displayed render state.
+        // then the histogram of the currently displayed render state. The module
+        // labels advertise their Lightroom keyboard shortcuts (`G`, `D`).
         egui::TopBottomPanel::top("modules").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (module, label) in [
-                    (Module::Library, Str::Library),
-                    (Module::Develop, Str::Develop),
-                    (Module::Export, Str::Export),
+                    (Module::Library, Str::LibraryShortcut.format_arg("G")),
+                    (Module::Develop, Str::DevelopShortcut.format_arg("D")),
+                    (Module::Export, Str::Export.t().to_string()),
                 ] {
                     if ui
-                        .selectable_label(self.active_module == module, label.t())
+                        .selectable_label(self.active_module == module, label)
                         .clicked()
                     {
                         self.active_module = module;
@@ -3576,6 +3717,37 @@ mod tests {
         app.reset();
         assert!(app.recipe().adjustments.is_empty());
         assert_eq!(app.preview().unwrap().pixels[0], 10);
+    }
+
+    #[test]
+    fn module_for_key_maps_lightroom_module_shortcuts() {
+        // `G` -> Library, `D` -> Develop, `E` -> Library (Loupe alias).
+        assert_eq!(module_for_key(egui::Key::G), Some(Module::Library));
+        assert_eq!(module_for_key(egui::Key::D), Some(Module::Develop));
+        assert_eq!(module_for_key(egui::Key::E), Some(Module::Library));
+        // Existing non-module shortcuts must not collide with the mapping.
+        assert_eq!(module_for_key(egui::Key::Y), None);
+        assert_eq!(module_for_key(egui::Key::Escape), None);
+        // Arbitrary other keys resolve to no module change.
+        assert_eq!(module_for_key(egui::Key::A), None);
+    }
+
+    #[test]
+    fn module_shortcut_switch_changes_module_without_mutating_recipe() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.active_module = Module::Library;
+        app.set_adjustment("exposure", 0.75);
+        let adjustments_before = app.recipe().adjustments.clone();
+
+        // Simulate the `D` shortcut resolving to its target module.
+        app.active_module = module_for_key(egui::Key::D).unwrap();
+
+        // Module changed...
+        assert_eq!(app.active_module, Module::Develop);
+        // ...but the recipe (and therefore any sidecar state) is untouched.
+        assert_eq!(app.recipe().adjustments, adjustments_before);
+        assert_eq!(app.recipe().adjustments["exposure"], 0.75);
     }
 
     #[test]
@@ -4021,6 +4193,89 @@ mod tests {
             crate::slider::to_display(2.5, crate::slider::DisplayScale::Identity),
             2.5
         );
+    }
+
+    // ---- F-103-N7: Presence + Vibrance/Saturation controls ----
+
+    #[test]
+    fn vibrance_and_saturation_write_correct_adjustment_keys_and_domain() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        // F-092 Dynamics/Saturation: flat adjustments on the `-1..=1` domain.
+        app.set_adjustment("vibrance", 0.5);
+        app.set_adjustment("saturation", -0.25);
+        assert_eq!(app.recipe().adjustments["vibrance"], 0.5);
+        assert_eq!(app.recipe().adjustments["saturation"], -0.25);
+        // Stored in the normative domain (pipeline/sidecar validate `-1..=1`).
+        assert!(((-1.0)..=1.0).contains(&app.recipe().adjustments["vibrance"]));
+        assert!(((-1.0)..=1.0).contains(&app.recipe().adjustments["saturation"]));
+        // The flat `saturation` adjustment is distinct from the HSL mixer's
+        // per-channel saturation storage.
+        assert!(app.recipe().hsl.is_none());
+    }
+
+    #[test]
+    fn presence_set_writes_recipe_fields_with_neutral_default_and_domain() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        // F-094 Presence: `texture` / `clarity` / `dehaze` on the `-1..=1`
+        // domain; the GUI initializes to the neutral 0.0 each.
+        app.set_presence("texture", 0.0);
+        app.set_presence("clarity", 0.0);
+        app.set_presence("dehaze", 0.0);
+        let p = app.recipe().presence.as_ref().unwrap();
+        assert_eq!((p.texture, p.clarity, p.dehaze), (0.0, 0.0, 0.0));
+
+        // A non-zero setting lands in the correct recipe field, in-domain.
+        app.set_presence("texture", 0.8);
+        app.set_presence("clarity", -0.5);
+        app.set_presence("dehaze", 0.3);
+        let p = app.recipe().presence.as_ref().unwrap();
+        assert_eq!(p.texture, 0.8);
+        assert_eq!(p.clarity, -0.5);
+        assert_eq!(p.dehaze, 0.3);
+        for v in [p.texture, p.clarity, p.dehaze] {
+            assert!((-1.0..=1.0).contains(&(v as f64)));
+        }
+
+        // Unknown field names are ignored, leaving the struct untouched.
+        let before = *app.recipe().presence.as_ref().unwrap();
+        app.set_presence("echo", 0.9);
+        assert_eq!(*app.recipe().presence.as_ref().unwrap(), before);
+    }
+
+    #[test]
+    fn presence_display_scaling_is_percent_for_internal_domain() {
+        // F-094 Presence shares the `-1..=1` -> `-100..+100` Lightroom scale.
+        let spec = crate::slider::percent_spec(-1.0..=1.0, 0.0);
+        assert_eq!(spec.scale, crate::slider::DisplayScale::Percent);
+        assert_eq!(
+            crate::slider::to_display(0.8, crate::slider::DisplayScale::Percent),
+            80.0
+        );
+        assert_eq!(
+            crate::slider::from_display(-50.0, crate::slider::DisplayScale::Percent),
+            -0.5
+        );
+    }
+
+    #[test]
+    fn single_control_reset_keeps_other_dynamics_and_presence() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        // Seed Dynamics and a Presence field, then reset only one of each.
+        app.set_adjustment("vibrance", 0.7);
+        app.set_adjustment("saturation", 0.4);
+        app.set_presence("clarity", 0.6);
+        // Resetting Vibrance must not touch Saturation or Presence.
+        app.reset_single_adjustment("vibrance");
+        assert_eq!(app.recipe().adjustments["vibrance"], 0.0);
+        assert_eq!(app.recipe().adjustments["saturation"], 0.4);
+        // Default for these flat keys is the documented neutral 0.0.
+        assert_eq!(LuminaApp::default_for_adjustment("vibrance"), 0.0);
+        assert_eq!(LuminaApp::default_for_adjustment("saturation"), 0.0);
+        // Presence neutral default is 0.0 per the GUI initializer.
+        assert_eq!(app.recipe().presence.as_ref().unwrap().clarity, 0.6);
     }
 
     // ---- F-103-N3: Before/After + white-balance eyedropper ----

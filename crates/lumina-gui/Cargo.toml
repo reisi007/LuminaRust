@@ -29,3 +29,5 @@ web-sys = { version = "0.3", features = ["console", "Document", "HtmlCanvasEleme
 
 [dev-dependencies]
 tempfile = "3"
+# F-103-N9: headless UI snapshot regression tests via egui_kittest.
+egui_kittest = { version = "0.31", features = ["wgpu", "snapshot", "eframe"] }
