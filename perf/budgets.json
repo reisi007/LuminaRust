@@ -224,6 +224,48 @@
       "tolerance_ratio": 1.2,
       "gate": false,
       "note": "Env-gated decode benchmark; non-deterministic across machines and CI runners (LibRaw decode + fixture I/O, thermals). Kept gate:false to avoid false regressions on noisy runners; decode regression is tracked via report/warn only (see F-074-A2)."
+    },
+    {
+      "id": "gpu/render_with_gpu__512",
+      "budget_ns": 3055246,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "F-074-N6 draft (GPU render path). Captured 2026-08-22 against baseline median_ns = 1527623 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode). Not wired into the hard gate yet."
+    },
+    {
+      "id": "gpu/render_with_gpu__1024",
+      "budget_ns": 3942294,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "F-074-N6 draft (GPU render path). Captured 2026-08-22 against baseline median_ns = 1971147 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode). Not wired into the hard gate yet."
+    },
+    {
+      "id": "gpu/render_with_gpu__2048",
+      "budget_ns": 10114028,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "F-074-N6 draft (GPU render path). Captured 2026-08-22 against baseline median_ns = 5057014 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode). Not wired into the hard gate yet."
+    },
+    {
+      "id": "gpu/update_uniforms__recipe",
+      "budget_ns": 10648,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "F-074-N6 draft (GPU uniform-upload microbenchmark, the queue.write_buffer path, fixed 2048 recipe). Captured 2026-08-22 against baseline median_ns = 5324 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until stabilised and independently calibrated, per F-074 methodology (new benchmarks start report-mode)."
+    },
+    {
+      "id": "gpu/cpu_vs_gpu__cpu__2048",
+      "budget_ns": 118851584,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "F-074-N6 draft (CPU adjustment path at 2048, identical math to the GPU fallback; measured back-to-back with the GPU path for a direct ratio). Captured 2026-08-22 against baseline median_ns = 59425792 ns, budget_ns = 2x. New benchmark: report-only (gate:false) until stabilised and independently calibrated, per F-074 methodology."
+    },
+    {
+      "id": "gpu/cpu_vs_gpu__gpu__2048",
+      "budget_ns": 10767622,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "F-074-N6 draft (GPU render path at 2048, measured back-to-back with the CPU path for a direct ratio). Captured 2026-08-22 against baseline median_ns = 5383811 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode)."
     }
   ]
 }

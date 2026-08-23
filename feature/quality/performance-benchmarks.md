@@ -369,6 +369,54 @@ Die bestehenden `rust`/`wasm`/`docs`-Jobs bleiben unverändert. Feature-Wachstum
 wird als bewusste Budget-Anpassung im selben Commit wie das Feature behandelt
 (Begründung im `note`-Feld und im betroffenen Feature-Dokument).
 
+### GPU-Bench (F-074-N6 Entwurf)
+
+Erweitert die F-074-Suite, damit **beide** Render-Pfade — CPU
+(`lumina-core`) und GPU (`lumina-gpu` / `GpuContext::render_with_gpu`) —
+gemessen werden. Implementiert in `crates/lumina-bench/bench/gpu.rs`
+(Criterion-Gruppe `gpu`, `harness = false`), abhängig vom `gpu`-Feature des
+`lumina-bench`-Crates (Standard-Feature, zieht `lumina-gpu` inkl. dessen
+Default-`gpu`-Feature = wgpu/Metal nach).
+
+- **`gpu/render_with_gpu__{512,1024,2048}`** — vollständiger GPU-Render auf
+  exakt denselben synthetischen Frames/Recipes wie `core.rs`
+  (`bench/common/mod.rs`, Seed `0x5EED`).
+- **`gpu/update_uniforms__recipe`** — Microbench des Uniform-Uploads
+  (`queue.write_buffer`-Pfad, fixe 2048-Recipe), isoliert vom Render-Pass.
+- **`gpu/cpu_vs_gpu__cpu__2048` / `gpu/cpu_vs_gpu__gpu__2048`** —
+  End-to-End-Vergleich @2048, beide Pfade back-to-back im selben Report
+  (CPU-Pfad = `ImageFrame::apply_recipe`, identisch zur GPU-Fallback-Mathematik),
+  damit das Verhältnis direkt ablesbar ist.
+
+**Adapter-Gating:** Der GPU-Kontext wird einmal pro Gruppe erzeugt
+(`GpuContext::new()`). Ist kein Adapter gebunden (z. B. headless CI ohne
+Metal/Vulkan, oder `gpu`-Feature aus), überspringt die gesamte Gruppe sauber mit
+der Meldung `GPU adapter unavailable - skipped equivalence check` — kein Panic,
+kein Netzwerk, keine erfundene Zahl. Liegt ein Metal-Adapter vor, läuft der echte
+Shader-Pfad; andernfalls misst `render_with_gpu` transparent den CPU-Fallback.
+
+**Budgets (Stand 2026-08-22):** Alle sechs GPU-IDs sind in `perf/budgets.json`
+mit `gate: false` registriert (report-only) — neue Benchmarks starten per
+F-074-Methodik im Report-Modus, bis der GPU-Pfad stabilisiert und unabhängig
+kalibriert ist. `budget_ns` ≈ 2× Median, `tolerance_ratio` 1.2. Eine Baseline
+(`perf/baseline.json`) für die GPU-IDs ist **noch nicht** erfasst; `compare.mjs`
+meldet im `report`/`warn`-Modus korrekt „KEINE BASELINE" (kein stiller Fallback).
+Erfasste Mediane (dieser M5-Pro-Lauf, ns):
+
+| Benchmark-ID | Median (ns) | Verhältnis GPU/CPU @2048 |
+| --- | ---: | ---: |
+| `gpu/render_with_gpu__512` | 1 527 623 | — |
+| `gpu/render_with_gpu__1024` | 1 971 147 | — |
+| `gpu/render_with_gpu__2048` | 5 057 014 | — |
+| `gpu/update_uniforms__recipe` | 5 324 | — |
+| `gpu/cpu_vs_gpu__cpu__2048` | 59 425 792 | — |
+| `gpu/cpu_vs_gpu__gpu__2048` | 5 383 811 | **~11,0× schneller** als CPU |
+
+Hinweis: Die GPU-Pipeline liest aktuell via `map_async` in einen CPU-Puffer zurück
+(siehe `TODO(PERF)` in `lumina-gpu/src/lib.rs`); dieser Copy ist in den
+GPU-Zahlen enthalten. Sobald der GPU-Pfad final ist, wird `gate: true` nach
+unabhängiger Kalibrierung aktiviert und die Baseline ergänzt.
+
 ## F-075 Speicherbudgets und Abbruchverhalten
 
 **Ziel:** Große RAW-Dekodierungen und Masken-Allokationen dürfen LuminaRust

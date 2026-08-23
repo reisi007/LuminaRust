@@ -20,6 +20,43 @@ use std::path::PathBuf;
 pub use error::McpError;
 pub use session::{ImageState, McpSession};
 
+/// Minimal stderr logger installed once (no-op if another logger is already
+/// registered). All MCP logging goes to stderr so it never corrupts the
+/// JSON-RPC stream on stdout. The level is driven by `LUMINA_MCP_LOG`
+/// (default `warn`; see `feature/platform/mcp-server.md`).
+struct StderrLogger {
+    level: log::LevelFilter,
+}
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= self.level
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[lumina-mcp][{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Initialises the stderr logger from `LUMINA_MCP_LOG`. Only installs when no
+/// logger has been set yet in this process.
+fn init_logger() {
+    use log::LevelFilter;
+    let level = match std::env::var("LUMINA_MCP_LOG").ok().as_deref() {
+        Some("error") => LevelFilter::Error,
+        Some("info") => LevelFilter::Info,
+        Some("debug") => LevelFilter::Debug,
+        _ => LevelFilter::Warn,
+    };
+    if log::set_boxed_logger(Box::new(StderrLogger { level })).is_ok() {
+        log::set_max_level(level);
+    }
+}
+
 /// Incoming JSON-RPC request (only the fields the server reads are declared).
 #[derive(Deserialize)]
 struct Request {
@@ -61,6 +98,7 @@ impl Server {
                 tmpdir.join("lumina-previews")
             });
         let _ = std::fs::create_dir_all(&preview_dir);
+        init_logger();
         Self {
             session: McpSession::default(),
             preview_dir,

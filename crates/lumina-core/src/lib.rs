@@ -174,7 +174,7 @@ pub enum CoreError {
     Encode(String),
     #[error("unsupported adjustment `{key}` in raster MVP")]
     UnsupportedAdjustment { key: String },
-    #[error("invalid {name}: must be finite and in {minimum}..={maximum}, got {value}")]
+    #[error("invalid {name}: must be finite and in {minimum:e}..={maximum:e}, got {value:e}")]
     InvalidAdjustment {
         name: String,
         value: f64,
@@ -207,6 +207,34 @@ pub enum CoreError {
     MaskInference { reason: String },
 }
 
+/// PERF-GUI-* (CPU quick-wins): iterate over each RGBA pixel of `pixels` (length
+/// must be a multiple of 4) with a per-pixel closure.
+///
+/// When the `parallel` feature is enabled the chunks are processed with
+/// `rayon::par_chunks_exact_mut(4)`; otherwise sequentially with
+/// `chunks_exact_mut(4)` (which LLVM can auto-vectorize). Every closure only
+/// touches its own 4-byte slice, so execution order is irrelevant and the result
+/// is bit-identical to a sequential pass. Use this only for order-independent
+/// per-pixel work (the adjustment passes read and write a single pixel).
+#[cfg(feature = "parallel")]
+pub(crate) fn for_each_rgba_mut<F>(pixels: &mut [u8], f: F)
+where
+    F: Fn(&mut [u8]) + Sync + Send,
+{
+    use rayon::prelude::*;
+    debug_assert_eq!(pixels.len() % 4, 0);
+    pixels.par_chunks_exact_mut(4).for_each(f);
+}
+
+#[cfg(not(feature = "parallel"))]
+pub(crate) fn for_each_rgba_mut<F>(pixels: &mut [u8], f: F)
+where
+    F: Fn(&mut [u8]),
+{
+    debug_assert_eq!(pixels.len() % 4, 0);
+    pixels.chunks_exact_mut(4).for_each(f);
+}
+
 impl ImageFrame {
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, CoreError> {
         let expected = width as usize * height as usize * 4;
@@ -229,6 +257,98 @@ impl ImageFrame {
             image::load_from_memory(bytes).map_err(|error| CoreError::Decode(error.to_string()))?;
         let rgba = image.to_rgba8();
         Self::new(rgba.width(), rgba.height(), rgba.into_raw())
+    }
+
+    /// PERF-GUI-3: bilinear downscale so the long edge is at most `max_dim`.
+    ///
+    /// Used by the GUI to render a fast draft preview at viewport resolution
+    /// instead of the full (e.g. 45 MP) source while a slider is dragged. The
+    /// result is always a multiple of 4 bytes and `image`-decoded identical for
+    /// `max_dim >= max(width, height)` (i.e. when no downscaling is needed).
+    pub fn downscale(&self, max_dim: u32) -> ImageFrame {
+        let long = self.width.max(self.height);
+        if max_dim == 0 || long <= max_dim {
+            return self.clone();
+        }
+        let scale = max_dim as f32 / long as f32;
+        let width = (self.width as f32 * scale).round().max(1.0) as u32;
+        let height = (self.height as f32 * scale).round().max(1.0) as u32;
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        for y in 0..height {
+            let sy = ((y as f32 + 0.5) / height as f32 * self.height as f32 - 0.5)
+                .clamp(0.0, self.height as f32 - 1.0);
+            let y0 = sy.floor() as u32;
+            let y1 = (y0 + 1).min(self.height - 1);
+            let fy = sy - y0 as f32;
+            for x in 0..width {
+                let sx = ((x as f32 + 0.5) / width as f32 * self.width as f32 - 0.5)
+                    .clamp(0.0, self.width as f32 - 1.0);
+                let x0 = sx.floor() as u32;
+                let x1 = (x0 + 1).min(self.width - 1);
+                let fx = sx - x0 as f32;
+                let at = |xx: u32, yy: u32| -> [u8; 4] {
+                    let base = (yy * self.width + xx) as usize * 4;
+                    [
+                        self.pixels[base],
+                        self.pixels[base + 1],
+                        self.pixels[base + 2],
+                        self.pixels[base + 3],
+                    ]
+                };
+                let top = at(x0, y0);
+                let top_r = top[0] as f32 * (1.0 - fx) + at(x1, y0)[0] as f32 * fx;
+                let top_g = top[1] as f32 * (1.0 - fx) + at(x1, y0)[1] as f32 * fx;
+                let top_b = top[2] as f32 * (1.0 - fx) + at(x1, y0)[2] as f32 * fx;
+                let top_a = top[3] as f32 * (1.0 - fx) + at(x1, y0)[3] as f32 * fx;
+                let bot = at(x0, y1);
+                let bot_r = bot[0] as f32 * (1.0 - fx) + at(x1, y1)[0] as f32 * fx;
+                let bot_g = bot[1] as f32 * (1.0 - fx) + at(x1, y1)[1] as f32 * fx;
+                let bot_b = bot[2] as f32 * (1.0 - fx) + at(x1, y1)[2] as f32 * fx;
+                let bot_a = bot[3] as f32 * (1.0 - fx) + at(x1, y1)[3] as f32 * fx;
+                let dst = (y * width + x) as usize * 4;
+                pixels[dst] = (top_r * (1.0 - fy) + bot_r * fy).round() as u8;
+                pixels[dst + 1] = (top_g * (1.0 - fy) + bot_g * fy).round() as u8;
+                pixels[dst + 2] = (top_b * (1.0 - fy) + bot_b * fy).round() as u8;
+                pixels[dst + 3] = (top_a * (1.0 - fy) + bot_a * fy).round() as u8;
+            }
+        }
+        ImageFrame {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    /// PERF-GUI-5: crop a rectangular region `(x, y, w, h)` (in source pixels,
+    /// clamped to the frame bounds) into a new frame. Used by the GUI to render
+    /// only the visible viewport bounding box when zoomed in (ROI). The cropped
+    /// frame keeps `image`-decoded byte order; the alpha channel is copied.
+    pub fn crop_region(
+        &self,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    ) -> Result<ImageFrame, CoreError> {
+        let x = x.min(self.width.saturating_sub(1));
+        let y = y.min(self.height.saturating_sub(1));
+        let w = w.min(self.width - x);
+        let h = h.min(self.height - y);
+        if w == 0 || h == 0 {
+            return Err(CoreError::InvalidFrame {
+                width: w,
+                height: h,
+                length: 0,
+            });
+        }
+        let mut pixels = vec![0u8; w as usize * h as usize * 4];
+        for dy in 0..h {
+            let src = ((y + dy) * self.width + x) as usize * 4;
+            let dst = (dy * w) as usize * 4;
+            pixels[dst..dst + w as usize * 4]
+                .copy_from_slice(&self.pixels[src..src + w as usize * 4]);
+        }
+        ImageFrame::new(w, h, pixels)
     }
 
     /// Apply the crop stage: distortion → vignette → perspective → CA → crop
@@ -550,7 +670,7 @@ impl ImageFrame {
             apply_presence(&mut self.pixels, self.width, self.height, presence);
         }
         if let Some(curves) = &recipe.curves {
-            for pixel in self.pixels.chunks_exact_mut(4) {
+            for_each_rgba_mut(&mut self.pixels, |pixel| {
                 let original = [
                     pixel[0] as f64 / 255.0,
                     pixel[1] as f64 / 255.0,
@@ -574,7 +694,7 @@ impl ImageFrame {
                     };
                     pixel[i] = (value.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8;
                 }
-            }
+            });
         }
         if let Some(hsl) = &recipe.hsl {
             apply_hsl(&mut self.pixels, hsl)?;
@@ -707,11 +827,13 @@ fn apply_channel_lut_adjustments(pixels: &mut [u8], params: &ChannelLutParams) {
     }
 
     // Single fused pass: three table lookups per pixel, no floating point.
-    for pixel in pixels.chunks_exact_mut(4) {
+    // `for_each_rgba_mut` keeps this auto-vectorizable (and parallel under the
+    // `parallel` feature) while staying bit-identical to a sequential loop.
+    for_each_rgba_mut(pixels, |pixel| {
         pixel[0] = lut[0][pixel[0] as usize];
         pixel[1] = lut[1][pixel[1] as usize];
         pixel[2] = lut[2][pixel[2] as usize];
-    }
+    });
 }
 
 fn validate_lens(l: &lumina_sidecar::LensCorrection) -> Result<(), CoreError> {
@@ -1610,7 +1732,7 @@ fn apply_hsl(pixels: &mut [u8], h: &lumina_sidecar::HslAdjustments) -> Result<()
     // through blue use the conventional Lightroom-like 60 degree sectors,
     // while violet and magenta remain distinct adjacent controls.
     const CENTERS: [f32; 8] = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0];
-    for px in pixels.chunks_exact_mut(4) {
+    for_each_rgba_mut(pixels, |px| {
         let (mut hue, mut sat, mut l) = rgb_to_hsl(
             px[0] as f32 / 255.0,
             px[1] as f32 / 255.0,
@@ -1644,25 +1766,24 @@ fn apply_hsl(pixels: &mut [u8], h: &lumina_sidecar::HslAdjustments) -> Result<()
             }
         });
         let weight_sum: f32 = weights.iter().sum();
-        if weight_sum <= f32::EPSILON {
-            continue;
-        }
-        for (i, channel) in channels.iter().enumerate() {
-            let w = weights[i] / weight_sum;
-            if let Some(channel) = channel {
-                dh += channel.hue * 30.0 * w;
-                ds += channel.saturation * w;
-                dl += channel.luminance * w;
+        if weight_sum > f32::EPSILON {
+            for (i, channel) in channels.iter().enumerate() {
+                let w = weights[i] / weight_sum;
+                if let Some(channel) = channel {
+                    dh += channel.hue * 30.0 * w;
+                    ds += channel.saturation * w;
+                    dl += channel.luminance * w;
+                }
             }
+            hue = (hue + dh).rem_euclid(360.0);
+            sat = (sat + ds).clamp(0.0, 1.0);
+            l = (l + dl).clamp(0.0, 1.0);
+            let rgb = hsl_to_rgb(hue, sat, l);
+            px[0] = (rgb[0] * 255.0).round() as u8;
+            px[1] = (rgb[1] * 255.0).round() as u8;
+            px[2] = (rgb[2] * 255.0).round() as u8;
         }
-        hue = (hue + dh).rem_euclid(360.0);
-        sat = (sat + ds).clamp(0.0, 1.0);
-        l = (l + dl).clamp(0.0, 1.0);
-        let rgb = hsl_to_rgb(hue, sat, l);
-        px[0] = (rgb[0] * 255.0).round() as u8;
-        px[1] = (rgb[1] * 255.0).round() as u8;
-        px[2] = (rgb[2] * 255.0).round() as u8;
-    }
+    });
     Ok(())
 }
 
@@ -1888,7 +2009,7 @@ fn apply_vibrance_and_saturation(
     }
     let vibrance = vibrance.copied().unwrap_or(0.0) as f32;
     let saturation = saturation.copied().unwrap_or(0.0) as f32;
-    for px in pixels.chunks_exact_mut(4) {
+    for_each_rgba_mut(pixels, |px| {
         let (hue, mut sat, lightness) = rgb_to_hsl(
             px[0] as f32 / 255.0,
             px[1] as f32 / 255.0,
@@ -1917,7 +2038,7 @@ fn apply_vibrance_and_saturation(
         px[0] = (rgb[0] * 255.0).round() as u8;
         px[1] = (rgb[1] * 255.0).round() as u8;
         px[2] = (rgb[2] * 255.0).round() as u8;
-    }
+    });
 }
 
 fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading) {
@@ -1929,7 +2050,7 @@ fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading
         let t = (value / edge).clamp(0.0, 1.0);
         1.0 - t * t * (3.0 - 2.0 * t)
     };
-    for px in pixels.chunks_exact_mut(4) {
+    for_each_rgba_mut(pixels, |px| {
         let rgb = [
             px[0] as f32 / 255.0,
             px[1] as f32 / 255.0,
@@ -1961,7 +2082,7 @@ fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading
         for channel in 0..3 {
             px[channel] = (output[channel].clamp(0.0, 1.0) * 255.0).round() as u8;
         }
-    }
+    });
 }
 
 /// Smooth Hermite interpolation `t*t*(3-2t)` clamped to `[0,1]` over

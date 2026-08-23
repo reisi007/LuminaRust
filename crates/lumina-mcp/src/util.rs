@@ -8,6 +8,8 @@ use lumina_core::{
 };
 use lumina_raw::RawMetadata;
 use lumina_sidecar::{DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity};
+#[cfg(feature = "gpu")]
+use lumina_gpu::GpuContext;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -122,6 +124,26 @@ pub fn recipe_hash(recipe: &EditRecipe) -> String {
 /// Renders a virtual copy from the decoded source frame using the shared
 /// `render_frame` entry point. No masks or source actions are applied in the
 /// MVP (see F-101 architecture boundaries).
+///
+/// When the `gpu` feature is enabled this prefers the GPU adapter (via
+/// [`render_best_effort`]) and falls back to the CPU pipeline when no adapter is
+/// available; the chosen backend is logged once at startup.
+#[cfg(feature = "gpu")]
+pub fn render_copy(
+    state: &ImageState,
+    copy: &lumina_sidecar::VirtualCopy,
+    camera_white_balance: Option<[f32; 4]>,
+) -> Result<ImageFrame, McpError> {
+    GPU_CTX.with(|cell| {
+        let ctx = cell.get_or_init(init_render_backend);
+        render_best_effort(ctx.as_ref(), &state.frame, &copy.recipe, camera_white_balance)
+    })
+}
+
+/// Renders a virtual copy from the decoded source frame using the shared
+/// `render_frame` entry point. No masks or source actions are applied in the
+/// MVP (see F-101 architecture boundaries).
+#[cfg(not(feature = "gpu"))]
 pub fn render_copy(
     state: &ImageState,
     copy: &lumina_sidecar::VirtualCopy,
@@ -140,6 +162,79 @@ pub fn render_copy(
     )
     .map_err(map_core_error)?;
     Ok(output.frame)
+}
+
+/// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
+/// otherwise the full platform-neutral CPU pipeline. Mirrors the `lumina-cli`
+/// routing: the GPU bootstrap stub applies the recipe only (mask/WB/source-
+/// action stages land with later shader subagents), so the CPU branch keeps the
+/// complete pipeline.
+#[cfg(feature = "gpu")]
+fn render_best_effort(
+    ctx: Option<&GpuContext>,
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    camera_white_balance: Option<[f32; 4]>,
+) -> Result<ImageFrame, McpError> {
+    match ctx {
+        Some(ctx) if ctx.is_available() => ctx
+            .render_with_gpu(frame, recipe)
+            .map(|rendered| rendered.to_image_frame())
+            .map_err(|error| McpError::Render(error.to_string())),
+        _ => {
+            let output = render_frame(
+                frame,
+                &RenderContext {
+                    recipe,
+                    camera_white_balance,
+                    source_actions: &[],
+                    masks: None,
+                    #[cfg(feature = "lensfun")]
+                    lensfun: None,
+                },
+            )
+            .map_err(map_core_error)?;
+            Ok(output.frame)
+        }
+    }
+}
+
+// Per-thread cache for the [`GpuContext`] (one adapter/device per worker
+// thread) and the once-per-process backend-selection log.
+#[cfg(feature = "gpu")]
+thread_local! {
+    static GPU_CTX: std::cell::OnceCell<Option<GpuContext>> = const { std::cell::OnceCell::new() };
+}
+
+/// Lazily creates a [`GpuContext`] and logs the backend selection exactly once
+/// per process. Returns `None` when GPU init fails or no adapter is available.
+#[cfg(feature = "gpu")]
+fn init_render_backend() -> Option<GpuContext> {
+    use std::sync::OnceLock;
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    let log_once = |message: &str| {
+        if LOGGED.set(()).is_ok() {
+            log::info!("{message}");
+        }
+    };
+    match GpuContext::new() {
+        Ok(ctx) => {
+            if ctx.is_available() {
+                if let Some(info) = ctx.adapter_info() {
+                    log_once(&format!("render backend: gpu ({info})"));
+                } else {
+                    log_once("render backend: gpu (unknown adapter)");
+                }
+            } else {
+                log_once("render backend: cpu");
+            }
+            Some(ctx)
+        }
+        Err(error) => {
+            log_once(&format!("render backend: cpu (gpu init failed: {error})"));
+            None
+        }
+    }
 }
 
 /// Maps a textual output-format argument to [`ImageFileFormat`].

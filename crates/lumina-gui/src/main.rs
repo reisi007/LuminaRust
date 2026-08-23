@@ -3,16 +3,53 @@
 extern "C" {}
 
 #[cfg(not(target_arch = "wasm32"))]
+mod logger;
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
+    logger::install_panic_hook();
+    let _level = logger::init_logging(log::LevelFilter::Trace);
+    let workdir = parse_workdir();
     eframe::run_native(
         "Lumina",
         eframe::NativeOptions::default(),
-        Box::new(|creation_context| {
-            Ok(Box::new(lumina_gui::LuminaApp::new(
-                creation_context.egui_ctx.clone(),
-            )))
+        Box::new(move |creation_context| {
+            let mut app = lumina_gui::LuminaApp::new(creation_context.egui_ctx.clone());
+            if let Some(dir) = workdir {
+                app.set_directory(dir);
+            }
+            Ok(Box::new(app))
         }),
     )
+}
+
+/// Parse an optional working-directory argument. The first positional,
+/// non-flag argument that resolves to an existing directory is treated as
+/// the initial workdir for the GUI (F-???-GUI-CLI: command-line workdir
+/// override). Flags (`-h`/`--help`, `-v`/`--version`, and any recognized
+/// long option) are ignored here so they don't accidentally bind.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_workdir() -> Option<String> {
+    let args = std::env::args().skip(1);
+    for arg in args {
+        if arg.starts_with('-') {
+            // Skip the value following a `--flag=value`-less long option's
+            // potential companion, but for simplicity only consume the next
+            // non-flag when this flag itself might take one. We don't define
+            // any value-taking flags today, so just continue.
+            continue;
+        }
+        let path = std::path::Path::new(&arg);
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().ok()?.join(path)
+        };
+        if candidate.is_dir() {
+            return Some(candidate.display().to_string());
+        }
+    }
+    None
 }
 
 #[cfg(target_arch = "wasm32")]

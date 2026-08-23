@@ -30,6 +30,18 @@ pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90, 0xd9);
 /// Hovered widget fill (lifted above `PANEL_LIGHT`).
 pub const HOVERED: egui::Color32 = egui::Color32::from_rgb(0x3c, 0x3c, 0x3c);
 
+// ----- Slider palette (centralized so the contrast tests can reason about them) -----
+
+/// Slider track, idle: a dim grey with enough contrast against `PANEL` to read
+/// as a control without shouting.
+pub const TRACK_IDLE: egui::Color32 = egui::Color32::from_gray(0x60);
+/// Slider track, hovered: a brighter grey so the row visibly wakes up.
+pub const TRACK_HOVER: egui::Color32 = egui::Color32::from_gray(0x90);
+/// Slider / control chrome when the surrounding UI is disabled (no image).
+pub const DISABLED: egui::Color32 = egui::Color32::from_gray(0x3a);
+/// 1px border on the white slider handle (keeps it crisp on the dark track).
+pub const HANDLE_BORDER: egui::Color32 = egui::Color32::from_gray(0x20);
+
 /// WCAG relative-luminance thresholds used by the contrast tests, with rationale.
 ///
 /// * AAA normal text: `7.0` — highest legibility for primary reading text.

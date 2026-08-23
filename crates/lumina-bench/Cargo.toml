@@ -8,13 +8,24 @@ publish = false
 [dependencies]
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
+# Optional: enables the GPU render-path benchmarks. Kept optional so a
+# `--no-default-features` build stays free of the wgpu/Metal native stack, but
+# enabled by default so `cargo bench` measures the GPU path natively (F-074-N6).
+# lumina-gpu's default `gpu` feature (wgpu + Metal) is pulled in transitively.
+lumina-gpu = { path = "../lumina-gpu", optional = true }
 # Optional: enables RAW decode benchmarks against sample-data/raw fixtures.
 # Kept optional so the default harness build stays lightweight and does not
 # force LibRaw linking for non-decode benchmarks.
 lumina-raw = { path = "../lumina-raw", optional = true }
 
 [features]
-default = []
+# F-074-N6: enables the GPU render-path benchmarks (`bench/gpu.rs`) by pulling
+# in the `lumina-gpu` crate (and its default `gpu` feature = wgpu + Metal). On
+# by default so `cargo bench` measures CPU *and* GPU paths natively. Disable
+# with `--no-default-features` for a GPU-free harness build (the `gpu` bench
+# target is then skipped via `required-features`).
+default = ["gpu"]
+gpu = ["dep:lumina-gpu"]
 raw-bench = ["dep:lumina-raw"]
 # F-098-N1: enables the Lensfun pipeline path in lumina-core for bench runs
 # with a real lens profile (default OFF; requires native liblensfun).
@@ -24,6 +35,14 @@ lensfun = ["lumina-core/lensfun"]
 name = "core"
 harness = false
 path = "bench/core.rs"
+
+# GPU render-path benchmarks (F-074-N6). Gated behind the `gpu` feature so a
+# GPU-free build (`--no-default-features`) does not try to compile/link wgpu.
+[[bench]]
+name = "gpu"
+harness = false
+path = "bench/gpu.rs"
+required-features = ["gpu"]
 
 [[bench]]
 name = "batch"

@@ -3,7 +3,7 @@ use lumina_core::{
     export_image, match_total_exposure_masked, render_frame, resolve_mask_planes,
     suggest_auto_tone, tone_fingerprint, AutoToneConfig, ExportOptions, ImageFileFormat,
     ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
-    SourceActionArtifact,
+    RenderOutput, SourceActionArtifact,
 };
 use lumina_onnx::{birefnet_manifest, StubBackend};
 use lumina_raw::{RawError, RawMetadata};
@@ -11,6 +11,15 @@ use lumina_raw::{RawError, RawMetadata};
 // feature (the `native` FFI bindings and `liblensfun` linkage are active then).
 #[cfg(feature = "lensfun")]
 use lumina_lensfun::{Corrector, LensfunDb};
+// GPU-first rendering path (wgpu/Metal). Optional capability: when the `gpu`
+// feature is on, render/export/batch prefer the GPU adapter and fall back to the
+// CPU pipeline when no adapter is present. Never compiled unless the feature is
+// enabled, so the default build stays CPU-only (per `Agents.md` capability
+// separation).
+#[cfg(feature = "gpu")]
+use lumina_gpu::{Frame, GpuContext};
+// Visible backend-selection logging (no silent fallback to CPU).
+use log::info;
 use lumina_sidecar::{
     append_repair_region, artifact_status, load_sidecar, load_zdata, save_sidecar,
     sidecar_path_for, AnalysisFingerprint, ArtifactStatus, DecodeFingerprint, EditRecipe,
@@ -25,6 +34,125 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+
+/// Minimal stderr logger installed once so the backend-selection `info!` is
+/// actually visible. It only installs when no other logger has been registered
+/// in this process (so an embedding application that installs its own is
+/// respected). Output goes to stderr and therefore never corrupts the
+/// `--json` payloads on stdout.
+struct StderrLogger {
+    level: log::LevelFilter,
+}
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= self.level
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[lumina][{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Installs the stderr logger once (no-op if another logger is already set).
+fn init_cli_logger() {
+    let level = log::LevelFilter::Info;
+    if log::set_boxed_logger(Box::new(StderrLogger { level })).is_ok() {
+        log::set_max_level(level);
+    }
+}
+
+/// Logs the chosen render backend exactly once per process so GPU-vs-CPU
+/// selection is always visible (Agents.md: no silent fallback).
+fn log_backend(message: &str) {
+    use std::sync::OnceLock;
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    if LOGGED.set(()).is_ok() {
+        info!("{message}");
+    }
+}
+
+/// Lazily creates a per-thread [`GpuContext`] (one adapter/device per worker
+/// thread in a batch) and logs the backend selection exactly once per process.
+/// Returns `None` when GPU init fails or no adapter is available.
+#[cfg(feature = "gpu")]
+fn init_render_backend() -> Option<GpuContext> {
+    match GpuContext::new() {
+        Ok(ctx) => {
+            if ctx.is_available() {
+                if let Some(info) = ctx.adapter_info() {
+                    log_backend(&format!("render backend: gpu ({info})"));
+                } else {
+                    log_backend("render backend: gpu (unknown adapter)");
+                }
+            } else {
+                log_backend("render backend: cpu");
+            }
+            Some(ctx)
+        }
+        Err(error) => {
+            log_backend(&format!("render backend: cpu (gpu init failed: {error})"));
+            None
+        }
+    }
+}
+
+// Per-thread cache for the [`GpuContext`], so the (potentially expensive)
+// adapter/device enumeration happens once per worker thread rather than per
+// image in a batch.
+#[cfg(feature = "gpu")]
+thread_local! {
+    static GPU_CTX: std::cell::OnceCell<Option<GpuContext>> = const { std::cell::OnceCell::new() };
+}
+
+/// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
+/// otherwise the full platform-neutral CPU pipeline.
+///
+/// The GPU bootstrap stub currently applies the recipe only (mask/WB/source-
+/// action stages land with later shader subagents), so the returned
+/// [`RenderOutput`] carries an empty mask result on the GPU path; the CPU branch
+/// runs the complete pipeline and stays byte-identical to the historical path.
+/// This is a documented bootstrap limitation, not a silent fallback — the chosen
+/// backend is logged once at startup.
+#[cfg(feature = "gpu")]
+fn render_best_effort(
+    ctx: Option<&GpuContext>,
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+) -> Result<RenderOutput, CliError> {
+    match ctx {
+        Some(ctx) if ctx.is_available() => {
+            let frame = ctx
+                .render_with_gpu(frame, recipe)
+                .map(Frame::to_image_frame)
+                .map_err(|error| CliError::Message(error.to_string()))?;
+            Ok(RenderOutput {
+                frame,
+                mask_layers: Vec::new(),
+                mask_warnings: Vec::new(),
+            })
+        }
+        _ => Ok(render_frame(frame, render_ctx)
+            .map_err(|error| CliError::Message(error.to_string()))?),
+    }
+}
+
+/// Non-GPU build: only the CPU pipeline exists, so this is a thin alias to
+/// [`render_frame`].
+#[cfg(not(feature = "gpu"))]
+fn render_best_effort(
+    _ctx: Option<()>,
+    frame: &ImageFrame,
+    _recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+) -> Result<RenderOutput, CliError> {
+    render_frame(frame, render_ctx).map_err(|error| CliError::Message(error.to_string()))
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "lumina", about = "Non-destructive raster image MVP")]
@@ -244,6 +372,7 @@ enum CliError {
 }
 
 fn main() {
+    init_cli_logger();
     if let Err(error) = run(Cli::parse()) {
         eprintln!("error: {error}");
         std::process::exit(1);
@@ -1107,24 +1236,35 @@ fn process_selected(
     // `resolved.planes` is owned by `MaskContext`, so clone once and reuse it for
     // both the warning render and the final shared encode render below.
     let mask_planes = resolved.planes.clone();
-    let render_output = render_frame(
-        &frame,
-        &RenderContext {
-            recipe: &recipe,
-            camera_white_balance: wb,
-            source_actions: &source_actions,
-            masks: Some(MaskContext {
-                copies: &resolved.copies,
-                active_copy_id: &active_copy.id,
-                planes: mask_planes.clone(),
-                policy: MaskPolicy::Warn,
-            }),
-            // F-098-N2: pass a Lensfun corrector when one was built from EXIF
-            // (otherwise `None` → manual LuminaRust model / identity fallback).
-            #[cfg(feature = "lensfun")]
-            lensfun: lensfun_corrector.as_ref(),
-        },
-    )?;
+    let render_ctx = RenderContext {
+        recipe: &recipe,
+        camera_white_balance: wb,
+        source_actions: &source_actions,
+        masks: Some(MaskContext {
+            copies: &resolved.copies,
+            active_copy_id: &active_copy.id,
+            planes: mask_planes.clone(),
+            policy: MaskPolicy::Warn,
+        }),
+        // F-098-N2: pass a Lensfun corrector when one was built from EXIF
+        // (otherwise `None` → manual LuminaRust model / identity fallback).
+        #[cfg(feature = "lensfun")]
+        lensfun: lensfun_corrector.as_ref(),
+    };
+    // Prefer the GPU when an adapter is bound; otherwise the full CPU pipeline.
+    // The chosen backend is logged once at startup (see `init_render_backend`).
+    // The GPU path currently mirrors the CPU recipe-application bootstrap stub;
+    // the complete mask/WB/source-action pipeline runs on the CPU branch.
+    #[cfg(feature = "gpu")]
+    let render_output = GPU_CTX.with(|cell| {
+        let ctx = cell.get_or_init(init_render_backend);
+        render_best_effort(ctx.as_ref(), &frame, &recipe, &render_ctx)
+    })?;
+    #[cfg(not(feature = "gpu"))]
+    let render_output = {
+        log_backend("render backend: cpu");
+        render_best_effort(None, &frame, &recipe, &render_ctx)?
+    };
     // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
     for warning in &resolved.warnings {
         eprintln!("warning: {warning}");

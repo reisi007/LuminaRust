@@ -53,6 +53,11 @@ pub enum Str {
     Masking,
     Navigator,
     Preview,
+    Zoom,
+    ZoomFit,
+    ZoomOneToOne,
+    ZoomTwoHundred,
+    ZoomFitWidth,
     Histogram,
     Filmstrip,
 
@@ -288,6 +293,11 @@ impl Str {
             Str::Masking => "Masking",
             Str::Navigator => "Navigator",
             Str::Preview => "Preview",
+            Str::Zoom => "Zoom",
+            Str::ZoomFit => "Fit",
+            Str::ZoomOneToOne => "1:1",
+            Str::ZoomTwoHundred => "200%",
+            Str::ZoomFitWidth => "Fit Width",
             Str::Histogram => "Histogram",
             Str::Filmstrip => "Filmstrip",
 

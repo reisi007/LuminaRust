@@ -36,9 +36,14 @@ use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
 use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{mpsc, Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 
 use filmstrip::{downscale_rgba, ThumbnailManager, THUMBNAIL_MAX_DIM};
 use i18n::Str;
+use log::{debug, error, info, trace, warn};
 use theme::apply_lightroom_dark;
 
 /// Work which may be performed when the GUI has no interactive input.
@@ -104,6 +109,21 @@ pub enum MaskTool {
     Radial,
 }
 
+/// Preview zoom behaviour (Lightroom-like). `Fit` is object-contain (the
+/// previous default); the absolute modes resolve to an effective scale derived
+/// from the pane each frame so they survive window resizes. `Custom` is set by
+/// scroll-wheel / `+/-` zoom and pins an explicit relative-to-fit multiplier
+/// that is no longer re-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZoomMode {
+    #[default]
+    Fit,
+    OneToOne,
+    TwoHundred,
+    FitWidth,
+    Custom,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct QueuedIdleTask {
     id: u64,
@@ -136,6 +156,12 @@ impl IdleQueue {
         self.tasks.is_empty()
     }
 
+    /// Maximum number of queued tasks before [`enqueue`](Self::enqueue) starts
+    /// dropping jobs.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Enqueue only explicit requests. Returns a stable cancellation handle.
     pub fn enqueue(&mut self, task: IdleTask, priority: u8) -> Option<u64> {
         if self.tasks.len() >= self.capacity {
@@ -164,6 +190,69 @@ impl IdleQueue {
         let task = self.tasks.remove(index);
         Some((task.id, task.task))
     }
+}
+
+/// A request to generate a filmstrip thumbnail for one source on the dedicated
+/// background thread pool.
+///
+/// The channel carrying these is **unbounded** (`std::sync::mpsc::channel`), so
+/// the pool never drops a job under load — the original bottleneck was the
+/// bounded `IdleQueue` (capacity 32) that silently dropped thumbnails and
+/// logged "thumbnail queue full; will retry ... on a later frame" while the UI
+/// froze generating them synchronously on the main thread (M5 Pro: unusable
+/// switching). Thumbnails are now decoded/downscaled/rendered on worker threads
+/// and the resulting pixels are uploaded to a texture on the main thread.
+#[cfg(not(target_arch = "wasm32"))]
+struct ThumbnailJob {
+    source: PathBuf,
+    name: String,
+}
+
+/// The rendered (downscaled + default-recipe-rendered) preview pixels produced
+/// by a [`ThumbnailJob`]. The worker computes the frame, caches the PNG to disk
+/// and sends the pixels; the texture itself is created on the main thread (it
+/// needs the `egui::Context`) from these pixels.
+#[cfg(not(target_arch = "wasm32"))]
+struct ThumbnailResult {
+    name: String,
+    frame: ImageFrame,
+}
+
+/// Decode + downscale + default-recipe-render a source on a background worker
+/// thread (PERF-FILMSTRIP). Returns the rendered frame so the main thread can
+/// build the `egui` texture (it needs the `Context`). It is a free function
+/// because it runs on a worker thread that cannot borrow `&mut Self`.
+#[cfg(not(target_arch = "wasm32"))]
+fn worker_thumbnail(job: ThumbnailJob) -> Option<ThumbnailResult> {
+    let bytes = std::fs::read(&job.source).ok()?;
+    let is_raw = is_raw_name(&job.name);
+    let frame = if is_raw {
+        lumina_raw::decode_bytes(&bytes, &job.name).ok()?.frame
+    } else {
+        ImageFrame::decode(&bytes).ok()?
+    };
+    let (small, w, h) =
+        downscale_rgba(&frame.pixels, frame.width, frame.height, THUMBNAIL_MAX_DIM);
+    let small_frame = ImageFrame::new(w, h, small).ok()?;
+    let context = RenderContext {
+        recipe: &EditRecipe::default(),
+        camera_white_balance: None,
+        source_actions: &[],
+        masks: None,
+        #[cfg(feature = "lensfun")]
+        lensfun: None,
+    };
+    let preview = render_frame(&small_frame, &context)
+        .map(|o| o.frame)
+        .unwrap_or(small_frame);
+    let png = preview.encode(ImageFileFormat::Png).ok()?;
+    if let Ok(cache) = DiskFolderCache::for_image(&job.source) {
+        let _ = cache.store_preview(&job.name, "vc-original", PreviewKind::Standard, &png);
+    }
+    Some(ThumbnailResult {
+        name: job.name,
+        frame: preview,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -234,6 +323,14 @@ pub struct LuminaApp {
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
     idle_queue: IdleQueue,
+    /// PERF-FILMSTRIP: dedicated background thread pool for filmstrip
+    /// thumbnails. `thumbnail_tx` enqueues jobs (unbounded mpsc, no capacity
+    /// gate); `thumbnail_rx` delivers rendered frames to be textured on the
+    /// main thread. Native-only (no threads on wasm).
+    #[cfg(not(target_arch = "wasm32"))]
+    thumbnail_tx: mpsc::Sender<ThumbnailJob>,
+    #[cfg(not(target_arch = "wasm32"))]
+    thumbnail_rx: mpsc::Receiver<ThumbnailResult>,
     /// Active top-level module (Library / Develop / Export).
     active_module: Module,
     /// Export module UI state (F-103-N5). The target path is chosen via a
@@ -247,6 +344,57 @@ pub struct LuminaApp {
     wb_pick_mode: bool,
     /// Generated filmstrip thumbnail textures.
     thumbnails: ThumbnailManager,
+    // ---- PERF-GUI-* (CPU interactivity quick-wins, no GPU) ----
+    /// True while the preview shows a low-resolution draft (rendered from
+    /// `draft_original` during a slider drag); cleared on the full render.
+    preview_is_draft: bool,
+    /// Source downscaled to draft resolution, cached on load so draft renders
+    /// never re-allocate during a slider drag (PERF-GUI-3 "zero alloc").
+    draft_original: Option<ImageFrame>,
+    /// Long-edge cap (px) for the cached draft source (viewport resolution).
+    draft_max_dim: u32,
+    /// Timestamp (egui `ctx.input(|i| i.time)`) of the last frame that still
+    /// had pending edits; drives the 150 ms idle debounce (PERF-GUI-3/4).
+    last_edit_time: f64,
+    /// Preview zoom factor (1.0 = fit). >1 zooms into the centre; the render
+    /// path crops to the visible source bounding box (ROI, PERF-GUI-5).
+    preview_zoom: f32,
+    /// Active zoom mode driving `preview_zoom` (see [`ZoomMode`]). Non-`Custom`
+    /// modes re-derive `preview_zoom` from the pane each frame (so they survive
+    /// resizes); `Custom` pins an explicit relative-to-fit multiplier.
+    zoom_mode: ZoomMode,
+    /// Screen-space pan offset (px) from the centred position, applied when the
+    /// preview is zoomed beyond fit so the image can be dragged (hand tool).
+    preview_pan: egui::Vec2,
+    /// Source ROI `(x, y, w, h)` of the currently displayed texture. `None`
+    /// means the whole frame. Pointer→source mapping accounts for this crop so
+    /// the WB eyedropper and mask tools stay accurate while zoomed/panned.
+    preview_roi: Option<[u32; 4]>,
+    /// Cached geometry from the last [`Self::draw_preview`] so the next frame's
+    /// [`Self::sync_zoom`] can derive absolute zoom modes correctly.
+    preview_fit_scale: f32,
+    preview_pane_w: f32,
+    preview_pane_h: f32,
+    preview_tex_w: f32,
+    preview_tex_h: f32,
+    /// Effective on-screen scale (screen px per source px) for the zoom readout.
+    preview_effective_scale: f32,
+    /// Whether the left thumbnail navigator rail is open.
+    navigator_open: bool,
+    /// PERF-GUI-7: receiver for a background RAW/raster decode. `Some` while a
+    /// decode is in flight on a worker thread; native-only (no threads on wasm).
+    #[cfg(not(target_arch = "wasm32"))]
+    decode_rx: Option<std::sync::mpsc::Receiver<DecodeResult>>,
+    /// True while an edit (slider drag, presence change, etc.) needs a
+    /// full-quality render. Drives the debounced full render after a pointer
+    /// drag settles (PERF-GUI-3/4). Cleared once the full render runs.
+    pending_full_render: bool,
+    /// Set once the directory-auto-load has begun a background decode, so
+    /// `list_directory` never re-triggers it every time the directory is
+    /// rescanned (the decode is async and `original` stays `None` until it
+    /// finishes). Left unset while no RAW entry exists, so a later scan of a
+    /// now-populated directory can still auto-load.
+    auto_load_attempted: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -279,15 +427,73 @@ impl FileBrowserEntry {
     }
 }
 
+/// PERF-GUI-7: result of a background RAW/raster decode. Carries the decoded
+/// frame plus the metadata needed to apply it on the main thread (and to load
+/// the matching sidecar). `Err` carries the (path, message) so the GUI can show
+/// the decode failure without blocking the worker thread.
+#[cfg(not(target_arch = "wasm32"))]
+struct DecodedFrame {
+    path: String,
+    name: String,
+    bytes: Vec<u8>,
+    frame: ImageFrame,
+    orientation: u8,
+    camera_white_balance: Option<[f32; 4]>,
+    source_is_raw: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type DecodeResult = Result<DecodedFrame, (String, String)>;
+
 impl LuminaApp {
     /// Set the active top-level module (Library / Develop / Export). Used by the
     /// headless snapshot tests (F-103-N9) to render a specific module; this is a
     /// pure state assignment with no recipe/sidecar side effects.
     pub fn set_module(&mut self, module: Module) {
+        trace!("GUI interaction: set_module {:?}", module);
         self.active_module = module;
     }
 
     pub fn new(_ctx: egui::Context) -> Self {
+        // PERF-FILMSTRIP: spin up the dedicated thumbnail thread pool. The pool
+        // size is the available parallelism clamped to [2, 8] (M5 Pro reports 12
+        // logical cores, so this lands at 8 workers; for small machines it never
+        // drops below 2). Workers share one (mutex-guarded) job receiver and
+        // send results back over an unbounded channel the main thread drains
+        // every frame via `poll_thumbnails`.
+        #[cfg(not(target_arch = "wasm32"))]
+        let (thumbnail_tx, thumbnail_rx) = {
+            let (job_tx, job_rx) = mpsc::channel::<ThumbnailJob>();
+            let (result_tx, result_rx) = mpsc::channel::<ThumbnailResult>();
+            let job_rx = Arc::new(Mutex::new(job_rx));
+            let pool_size = thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .clamp(2, 8);
+            for i in 0..pool_size {
+                let rx = Arc::clone(&job_rx);
+                let tx = result_tx.clone();
+                thread::spawn(move || {
+                    loop {
+                        let job = match rx
+                            .lock()
+                            .expect("thumbnail job receiver poisoned")
+                            .recv()
+                        {
+                            Ok(job) => job,
+                            Err(_) => break, // all senders gone → shut down
+                        };
+                        trace!("thumbnail worker {}: decoding {}", i, job.name);
+                        if let Some(result) = worker_thumbnail(job) {
+                            trace!("thumbnail worker {}: completed {}", i, result.name);
+                            let _ = tx.send(result);
+                        }
+                    }
+                });
+            }
+            info!("thumbnail thread pool started with {} workers", pool_size);
+            (job_tx, result_rx)
+        };
         Self {
             original: None,
             preview: None,
@@ -340,6 +546,10 @@ impl LuminaApp {
             ]),
             preset_relative_exposure: false,
             idle_queue: IdleQueue::new(32),
+            #[cfg(not(target_arch = "wasm32"))]
+            thumbnail_tx,
+            #[cfg(not(target_arch = "wasm32"))]
+            thumbnail_rx,
             active_module: Module::Develop,
             export_path: String::new(),
             export_format: ImageFileFormat::Png,
@@ -347,6 +557,27 @@ impl LuminaApp {
             before_after: false,
             wb_pick_mode: false,
             thumbnails: ThumbnailManager::new(),
+            preview_is_draft: false,
+            draft_original: None,
+            draft_max_dim: 1280,
+            last_edit_time: 0.0,
+            preview_zoom: 1.0,
+            zoom_mode: ZoomMode::Fit,
+            preview_pan: egui::Vec2::ZERO,
+            preview_roi: None,
+            preview_fit_scale: 1.0,
+            preview_pane_w: 800.0,
+            preview_pane_h: 600.0,
+            preview_tex_w: 1.0,
+            preview_tex_h: 1.0,
+            preview_effective_scale: 1.0,
+            // Navigator defaults to collapsed (hidden) and is revealed via the
+            // "Navigator" toggle button in the preview toolbar (Lightroom-like).
+            navigator_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            decode_rx: None,
+            pending_full_render: false,
+            auto_load_attempted: false,
         }
     }
 
@@ -356,24 +587,31 @@ impl LuminaApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_file(&mut self, path: impl Into<String>) {
-        self.path = path.into();
+        let p = path.into();
+        trace!("GUI interaction: open_file {}", p);
+        self.path = p;
         // Populate the file browser with the directory containing the opened file.
         if let Some(parent) = Path::new(&self.path).parent() {
             self.directory = parent.display().to_string();
         }
         self.list_directory();
-        self.load_path();
+        // PERF-GUI-7: decode off the main thread so switching files never
+        // blocks the UI; the decoded frame is delivered via `decode_rx` and
+        // applied in `update()`/`poll_decode()`.
+        self.begin_load_path(self.path.clone());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_directory(&mut self, directory: impl Into<String>) {
         self.directory = directory.into();
+        info!("directory set: {}", self.directory);
         self.list_directory();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn list_directory(&mut self) {
         let directory = std::path::PathBuf::from(self.directory.trim());
+        debug!("listing directory: {}", directory.display());
         self.entries.clear();
         match std::fs::read_dir(&directory) {
             Ok(dir_entries) => {
@@ -404,6 +642,42 @@ impl LuminaApp {
                 }
                 self.entries.sort_by(|a, b| a.name.cmp(&b.name));
                 self.status = Str::ImagesInDirectory.format_arg(&self.entries.len().to_string());
+                // PERF-GUI-6: when no specific file was requested (e.g. the user
+                // picked a directory, not a single image) and nothing is loaded
+                // yet, auto-load the first RAW entry so the Develop module shows
+                // an image immediately — no manual click required.
+                //
+                // Robustness guards:
+                // * `!self.auto_load_attempted` — run the auto-load at most once
+                //   per session so rescanning the directory never restarts a
+                //   decode that is already in flight.
+                // * `self.decode_rx.is_none()` — a decode is already pending
+                //   (async), so we must not start a second one; `original` stays
+                //   `None` until the in-flight decode's `finish_decode` runs.
+                // * `is_raw_name(&e.name)` — RAW-only, so jpg/png/webp never
+                //   enter the Develop preview.
+                // If no RAW entry exists yet we deliberately leave
+                // `auto_load_attempted` unset so a later, now-populated scan can
+                // still auto-load.
+                if !self.auto_load_attempted
+                    && self.path.is_empty()
+                    && self.original.is_none()
+                    && self.decode_rx.is_none()
+                {
+                    if let Some(first) = self
+                        .entries
+                        .iter()
+                        .find(|e| is_raw_name(&e.name))
+                        .map(|e| e.path.clone())
+                    {
+                        debug!(
+                            "auto-loading first raw entry after list_directory: {}",
+                            first.display()
+                        );
+                        self.begin_load_path(first.display().to_string());
+                        self.auto_load_attempted = true;
+                    }
+                }
             }
             Err(error) => {
                 self.status = Str::DirectoryNotReadable.format_arg(&error.to_string());
@@ -527,6 +801,7 @@ impl LuminaApp {
     }
 
     pub fn apply_preset(&mut self, preset: &Preset) -> Result<(), GuiError> {
+        trace!("GUI interaction: apply_preset {}", preset.name);
         if preset
             .recipe
             .options
@@ -1175,16 +1450,54 @@ impl LuminaApp {
         let source_is_raw = is_raw_name(&name);
         let (frame, orientation, camera_white_balance) = if source_is_raw {
             let image = lumina_raw::decode_bytes(&bytes, &name)?;
-            (
-                image.frame,
-                image.metadata.orientation,
-                Some(image.metadata.camera_white_balance),
-            )
+            let wb = image.metadata.camera_white_balance;
+            let camera_white_balance = if wb.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                warn!(
+                    "As-Shot white balance invalid {:?} for {} — dropping to None (recipe WB remains, image will load)",
+                    wb, name
+                );
+                None
+            } else {
+                Some(wb)
+            };
+            (image.frame, image.metadata.orientation, camera_white_balance)
         } else {
             (ImageFrame::decode(&bytes)?, 1, None)
         };
-        self.source_name = name;
-        self.source_bytes = Some(bytes);
+        // PERF-GUI-7: shared post-decode setup (also used by the async path).
+        self.apply_decoded_frame(
+            &frame,
+            orientation,
+            camera_white_balance,
+            &name,
+            &bytes,
+            source_is_raw,
+        );
+        if let Err(e) = self.render() {
+            error!("render after load failed for {}: {e}", self.source_name);
+            self.show_error(e);
+        }
+        Ok(())
+    }
+
+    /// PERF-GUI-7: shared post-decode setup used by both the synchronous
+    /// `load_bytes` (byte drops / tests) and the asynchronous `finish_decode`
+    /// (background file decode). Sets the source frame, clears the sidecar
+    /// document, resets the recipe and — crucially — caches the draft
+    /// (viewport-resolution) source once per load so draft renders during a
+    /// slider drag never re-allocate (PERF-GUI-3 "zero alloc during
+    /// interaction").
+    fn apply_decoded_frame(
+        &mut self,
+        frame: &ImageFrame,
+        orientation: u8,
+        camera_white_balance: Option<[f32; 4]>,
+        name: &str,
+        bytes: &[u8],
+        source_is_raw: bool,
+    ) {
+        self.source_name = name.to_string();
+        self.source_bytes = Some(bytes.to_vec());
         self.source_is_raw = source_is_raw;
         self.raw_orientation = orientation;
         self.camera_white_balance = camera_white_balance;
@@ -1194,17 +1507,27 @@ impl LuminaApp {
             self.virtual_copy_id = "vc-original".into();
             self.selected_mask_id = None;
         }
-        self.original = Some(frame);
+        self.original = Some(frame.clone());
         self.recipe = EditRecipe::default();
         self.error = None;
+        self.preview_is_draft = false;
+        // PERF-GUI-3: cache a downscaled source for fast draft renders.
+        self.draft_original = Some(frame.downscale(self.draft_max_dim));
         self.status = Str::Loaded.format_arg(&self.source_name);
-        self.render()
+        info!(
+            "loaded image {} (raw={}, camera_white_balance={:?})",
+            self.source_name, source_is_raw, self.camera_white_balance
+        );
     }
 
     pub fn set_adjustment(&mut self, name: &str, value: f64) {
+        trace!("GUI interaction: set_adjustment {}={} (before render)", name, value);
         self.recipe.adjustments.insert(name.into(), value);
         self.render_key = None;
         self.tone_analysis = None;
+        // Coalesce: the slider drag renders a draft live; the full render is
+        // deferred to pointer release (PERF-GUI-3/4).
+        self.pending_full_render = true;
         self.status = Str::ChangePending.t().into();
         self.error = None;
     }
@@ -1228,6 +1551,7 @@ impl LuminaApp {
             _ => return,
         }
         self.recipe.presence = Some(presence);
+        trace!("GUI interaction: set_presence {}={}", field, value);
         self.mark_dirty();
     }
 
@@ -1294,16 +1618,164 @@ impl LuminaApp {
     }
 
     pub fn render(&mut self) -> Result<(), GuiError> {
-        let Some(original) = &self.original else {
+        self.render_full([0, 0], None)
+    }
+
+    /// Full-resolution render of the committed source. Used on load, after a
+    /// slider drag settles (mouse-up / idle) and by every explicit re-render.
+    /// `viewport` is the preview pane size (used for ROI clamping / logging);
+    /// `roi` is an optional `(x, y, w, h)` crop (source pixels) when zoomed in.
+    pub fn render_full(
+        &mut self,
+        _viewport: [u32; 2],
+        roi: Option<[u32; 4]>,
+    ) -> Result<(), GuiError> {
+        let Some(original) = self.original.take() else {
             self.status = Str::NoImageLoaded.t().into();
             return Ok(());
         };
-        let render_key_source = original.clone();
+        // Derive the ROI from the zoom factor when no explicit crop was given
+        // (PERF-GUI-5); the full render always honours masks.
+        let roi = roi.or_else(|| Self::roi_from_zoom(original.width, original.height, self.preview_zoom));
+        self.preview_is_draft = false;
+        self.pending_full_render = false;
+        let result = self.render_from(&original, true, roi);
+        self.original = Some(original);
+        result
+    }
+
+    /// Cheap preview render used while a slider is being dragged: renders the
+    /// cached downscaled draft source (`draft_original`) at viewport resolution
+    /// instead of re-processing the full 45 MP original on every pointer tick.
+    /// Mask planes are skipped because they are full-resolution and would not
+    /// align with the downscaled source. Falls back to the full original when no
+    /// draft is cached yet. `viewport`/`roi` mirror [`Self::render_full`].
+    pub fn render_draft(
+        &mut self,
+        _viewport: [u32; 2],
+        roi: Option<[u32; 4]>,
+    ) -> Result<(), GuiError> {
+        // Take the pre-allocated draft source so `render_from` borrows a local
+        // value rather than `self` — zero allocation while dragging. Fall back to
+        // a clone of the full original only when no draft is cached yet.
+        let mut took_draft = true;
+        let source = if let Some(d) = self.draft_original.take() {
+            d
+        } else {
+            match &self.original {
+                Some(o) => {
+                    took_draft = false;
+                    o.clone()
+                }
+                None => {
+                    self.status = Str::NoImageLoaded.t().into();
+                    return Ok(());
+                }
+            }
+        };
+        let roi = roi.or_else(|| Self::roi_from_zoom(source.width, source.height, self.preview_zoom));
+        self.preview_is_draft = true;
+        let result = self.render_from(&source, false, roi);
+        if took_draft {
+            self.draft_original = Some(source);
+        }
+        result
+    }
+
+    /// Compute an ROI `(x, y, w, h)` centred on the source for a zoom factor
+    /// `> 1.0` (PERF-GUI-5). Returns `None` at fit/zoom-out so the whole frame is
+    /// rendered.
+    fn roi_from_zoom(w: u32, h: u32, zoom: f32) -> Option<[u32; 4]> {
+        if zoom <= 1.0 {
+            return None;
+        }
+        let zw = ((w as f64) / zoom as f64).round().max(1.0) as u32;
+        let zh = ((h as f64) / zoom as f64).round().max(1.0) as u32;
+        if zw >= w || zh >= h {
+            return None;
+        }
+        let x = ((w - zw) / 2) as u32;
+        let y = ((h - zh) / 2) as u32;
+        Some([x, y, zw, zh])
+    }
+
+    /// Switch the preview zoom mode. Non-`Custom` modes re-derive `preview_zoom`
+    /// from the current pane each frame (so they survive resizes); switching
+    /// always re-centres the pan and triggers a re-render so the ROI crop
+    /// matches the on-screen zoom.
+    pub fn set_zoom_mode(&mut self, mode: ZoomMode) {
+        trace!("GUI interaction: set_zoom_mode {:?}", mode);
+        self.zoom_mode = mode;
+        self.preview_pan = egui::Vec2::ZERO;
+        self.mark_dirty();
+    }
+
+    /// Scroll-wheel / keyboard continuous zoom (relative-to-fit multiplier).
+    /// Pins the mode to `Custom` so the next frame does not re-derive
+    /// `preview_zoom`.
+    pub fn zoom_step(&mut self, factor: f32) {
+        let next = (self.preview_zoom * factor).clamp(0.05, 32.0);
+        trace!(
+            "GUI interaction: zoom_step factor={:.3} -> {:.3}",
+            factor,
+            next
+        );
+        self.preview_zoom = next;
+        self.zoom_mode = ZoomMode::Custom;
+        self.mark_dirty();
+    }
+
+    /// Re-derive `preview_zoom` (and reset pan) for non-`Custom` modes using the
+    /// pane/texture dimensions cached by the previous [`Self::draw_preview`].
+    /// Called once per frame before the render logic so the ROI crop matches the
+    /// on-screen zoom even on the frame a mode button/shortcut is pressed.
+    fn sync_zoom(&mut self) {
+        use ZoomMode::*;
+        if self.zoom_mode == Custom {
+            return;
+        }
+        let fit = self.preview_fit_scale.max(1e-6);
+        let tw = self.preview_tex_w.max(1.0);
+        let _th = self.preview_tex_h.max(1.0);
+        self.preview_pan = egui::Vec2::ZERO;
+        self.preview_zoom = match self.zoom_mode {
+            Fit => 1.0,
+            OneToOne => 1.0 / fit,
+            TwoHundred => 2.0 / fit,
+            FitWidth => (self.preview_pane_w / tw) / fit,
+            Custom => 1.0,
+        };
+    }
+
+    /// Core render used by both [`Self::render_full`] and [`Self::render_draft`].
+    /// `with_masks` enables the sidecar mask planes (skipped for the draft,
+    /// whose source is downscaled and therefore misaligned with full-res masks).
+    /// `roi` optionally crops the source to the visible region before the render
+    /// (PERF-GUI-5).
+    fn render_from(
+        &mut self,
+        source: &ImageFrame,
+        with_masks: bool,
+        roi: Option<[u32; 4]>,
+    ) -> Result<(), GuiError> {
+        // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
+        // the full frame is never processed for a magnified view.
+        let cropped = match roi {
+            Some([x, y, w, h]) => match source.crop_region(x, y, w, h) {
+                Ok(f) => Some(f),
+                Err(_) => None,
+            },
+            None => None,
+        };
+        let source = match &cropped {
+            Some(f) => f,
+            None => source,
+        };
         // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
         // (native only).  Missing or unreadable zdata is not a hard error:
         // affected layers are reported through the `MaskPolicy::Warn` path.
         #[cfg(not(target_arch = "wasm32"))]
-        let masks_context = {
+        let masks_context = if with_masks {
             let planes = self.load_mask_planes();
             match &self.document {
                 Some(document) => document
@@ -1318,11 +1790,13 @@ impl LuminaApp {
                     }),
                 None => None,
             }
+        } else {
+            None
         };
         #[cfg(target_arch = "wasm32")]
         let masks_context: Option<MaskContext<'_>> = None;
         let output = render_frame(
-            &render_key_source,
+            source,
             &RenderContext {
                 recipe: &self.recipe,
                 camera_white_balance: self.camera_white_balance,
@@ -1392,6 +1866,9 @@ impl LuminaApp {
         ));
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
+        // Record the crop this texture represents so pointer→source mapping in
+        // `draw_preview` (WB eyedropper / mask tools) stays accurate when zoomed.
+        self.preview_roi = roi;
         self.render_mask_layers = output.mask_layers;
         self.error = None;
         self.status = if !mask_warnings.is_empty() {
@@ -1521,16 +1998,87 @@ impl LuminaApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn load_path(&mut self) {
-        let path = std::path::PathBuf::from(self.path.trim());
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                if let Err(error) = self.load_bytes(
+    // ---- PERF-GUI-7: asynchronous (off-main-thread) file decode ----
+    //
+    // `begin_load_path` starts a background decode and returns immediately so
+    // switching files never freezes the UI. The decoded frame is delivered via
+    // `decode_rx` and applied on the main thread by `poll_decode` (driven from
+    // `update`). `is_supported_image` keeps the RAW-only / raster filter.
+
+    /// Start a background decode of `path`. The previous preview stays on screen
+    /// until the decoded frame arrives; failures are surfaced via `show_error`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_load_path(&mut self, path: String) {
+        if path.trim().is_empty() {
+            return;
+        }
+        info!("decoding (background) {}", path);
+        self.status = format!("Decoding {}", Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or("image"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.decode_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result: DecodeResult = (|| {
+                let p = std::path::PathBuf::from(&path);
+                let bytes = std::fs::read(&p)
+                    .map_err(|e| (path.clone(), format!("{}: {}", p.display(), e)))?;
+                let name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image")
+                    .to_string();
+                let source_is_raw = is_raw_name(&name);
+                let (frame, orientation, camera_white_balance) = if source_is_raw {
+                    let image = lumina_raw::decode_bytes(&bytes, &name)
+                        .map_err(|e| (path.clone(), e.to_string()))?;
+                    let wb = image.metadata.camera_white_balance;
+                    let camera_white_balance = if wb.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                        warn!(
+                            "As-Shot white balance invalid {:?} for {} — dropping to None",
+                            wb, name
+                        );
+                        None
+                    } else {
+                        Some(wb)
+                    };
+                    (image.frame, image.metadata.orientation, camera_white_balance)
+                } else {
+                    (ImageFrame::decode(&bytes).map_err(|e| (path.clone(), e.to_string()))?, 1, None)
+                };
+                Ok(DecodedFrame {
+                    path,
+                    name,
                     bytes,
-                    path.file_name().and_then(|v| v.to_str()).unwrap_or("image"),
-                ) {
-                    self.show_error(error);
-                } else if let Ok(document) =
+                    frame,
+                    orientation,
+                    camera_white_balance,
+                    source_is_raw,
+                })
+            })();
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Apply a completed background decode: set the source, then restore the
+    /// sidecar recipe for that path (mirroring the old synchronous `load_path`).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_decode(&mut self, result: DecodeResult) {
+        match result {
+            Ok(frame) => {
+                self.path = frame.path.clone();
+                self.apply_decoded_frame(
+                    &frame.frame,
+                    frame.orientation,
+                    frame.camera_white_balance,
+                    &frame.name,
+                    &frame.bytes,
+                    frame.source_is_raw,
+                );
+                if let Err(e) = self.render() {
+                    error!("render after load failed for {}: {e}", self.source_name);
+                    self.show_error(e);
+                }
+                let path = std::path::PathBuf::from(self.path.trim());
+                if let Ok(document) =
                     lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&path))
                 {
                     let candidate = document.virtual_copies[0].recipe.clone();
@@ -1539,8 +2087,10 @@ impl LuminaApp {
                         target_luminance: candidate.auto_features.target_luminance,
                         ..Default::default()
                     };
-                    let fingerprint =
-                        tone_fingerprint(self.original.as_ref().expect("loaded frame"), config);
+                    let fingerprint = tone_fingerprint(
+                        self.original.as_ref().expect("loaded frame"),
+                        config,
+                    );
                     let valid = candidate
                         .auto_features
                         .analysis_fingerprint
@@ -1559,7 +2109,29 @@ impl LuminaApp {
                     }
                 }
             }
-            Err(error) => self.show_error(GuiError::Io(format!("{}: {}", path.display(), error))),
+            Err((path, message)) => {
+                self.path = path;
+                self.show_error(GuiError::Io(message));
+            }
+        }
+    }
+
+    /// Drain any completed background decode (PERF-GUI-7). Called every frame
+    /// from `update` so the UI stays responsive while decoding.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_decode(&mut self) {
+        let Some(rx) = &self.decode_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.decode_rx = None;
+                self.finish_decode(result);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.decode_rx = None;
+            }
         }
     }
 
@@ -1592,6 +2164,7 @@ impl LuminaApp {
         if let Err(error) =
             lumina_sidecar::save_sidecar(&lumina_sidecar::sidecar_path_for(&path), &document)
         {
+            error!("sidecar save failed for {}: {error}", path.display());
             self.show_error(error);
         } else {
             self.status = Str::SidecarSaved.t().into();
@@ -1757,6 +2330,7 @@ impl LuminaApp {
                 if path.as_os_str().is_empty() {
                     self.show_error(GuiError::Io("Choose an export target first".into()));
                 } else if let Err(error) = self.export_to(path) {
+                    error!("export failed to {}: {error}", self.export_path.trim());
                     self.show_error(error);
                 }
             }
@@ -1768,42 +2342,160 @@ impl LuminaApp {
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui) {
-        let available = ui.available_size();
-        if let Some(texture) = &self.texture {
+        // Clone the texture handle so the borrow of `self` does not outlive the
+        // block — several helpers below (`handle_mask_tool_drag`,
+        // `draw_mask_overlay`, `pick_white_balance_at`, `mark_dirty`) need
+        // `&mut self` and would otherwise conflict with `&self.texture`.
+        if let Some(texture) = self.texture.clone() {
+            // The preview pane is laid out somewhere inside the window, so its
+            // origin is not (0,0). `available_size()` returns only the
+            // dimensions, so building the draw rect relative to (0,0) places the
+            // image at the window origin instead of centering it in the pane,
+            // producing the misalignment/clipping seen in the screenshot.
+            //
+            // Use the true available rectangle (with the correct origin) and
+            // center the image inside it.
+            let pane = ui.available_rect_before_wrap();
             let size = texture.size();
             let (tw, th) = (size[0] as f32, size[1] as f32);
-            let scale = (available.x / tw).min(available.y / th).min(1.0);
-            let draw = egui::vec2(tw * scale, th * scale);
-            let rect = egui::Rect::from_min_max(
-                egui::pos2(
-                    ((available.x - draw.x) / 2.0).max(0.0),
-                    ((available.y - draw.y) / 2.0).max(0.0),
-                ),
-                egui::pos2(
-                    ((available.x + draw.x) / 2.0).min(available.x),
-                    ((available.y + draw.y) / 2.0).min(available.y),
-                ),
-            );
-            // A mask tool arms the preview for a drag gesture; otherwise it stays
-            // a plain click target (so the WB eyedropper still works).
+            // object-contain fit scale (not capped, so small images fill the
+            // pane / large images are downscaled, Lightroom-like).
+            let fit_scale = if tw > 0.0 && th > 0.0 {
+                (pane.width() / tw).min(pane.height() / th)
+            } else {
+                0.0
+            };
+            // Cache geometry so the next frame's sync_zoom() derives absolute
+            // zoom modes (100% / 200% / Fit Width) from the right fit scale.
+            self.preview_fit_scale = fit_scale;
+            self.preview_pane_w = pane.width();
+            self.preview_pane_h = pane.height();
+            self.preview_tex_w = tw;
+            self.preview_tex_h = th;
+
+            let mut scale = fit_scale * self.preview_zoom;
+            let mut draw = egui::vec2(tw * scale, th * scale);
+            let mut center = pane.center() + self.preview_pan;
+            let mut rect = egui::Rect::from_center_size(center, draw);
+
+            // Scroll-wheel zoom around the cursor (Lightroom-like). Only while
+            // the pointer hovers the preview so other scroll areas are
+            // unaffected.
+            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            let pointer = ui.input(|i| i.pointer.interact_pos());
+            if scroll != 0.0 {
+                if let Some(p) = pointer {
+                    if rect.contains(p) {
+                        let srect_w = rect.width().max(1e-6);
+                        let srect_h = rect.height().max(1e-6);
+                        let fx = ((p.x - rect.min.x) / srect_w).clamp(0.0, 1.0);
+                        let fy = ((p.y - rect.min.y) / srect_h).clamp(0.0, 1.0);
+                        let factor = if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 };
+                        self.preview_zoom = (self.preview_zoom * factor).clamp(0.05, 32.0);
+                        self.zoom_mode = ZoomMode::Custom;
+                        let new_scale = fit_scale * self.preview_zoom;
+                        let new_draw = egui::vec2(tw * new_scale, th * new_scale);
+                        let new_center =
+                            p - egui::vec2(fx * new_draw.x, fy * new_draw.y) + new_draw / 2.0;
+                        self.preview_pan = new_center - pane.center();
+                        // Recompute for the placement below.
+                        scale = new_scale;
+                        draw = new_draw;
+                        center = new_center;
+                        rect = egui::Rect::from_center_size(center, draw);
+                        self.mark_dirty();
+                    }
+                }
+            }
+
+            // Whether the (zoomed) image overflows the pane on either axis — only
+            // then is panning meaningful.
+            let pan_eligible = draw.x > pane.width() + 0.5 || draw.y > pane.height() + 0.5;
+
             #[cfg(not(target_arch = "wasm32"))]
-            let sense = if self.mask_tool != MaskTool::None {
+            let armed = self.mask_tool != MaskTool::None;
+            #[cfg(not(target_arch = "wasm32"))]
+            let pick = self.wb_pick_mode;
+            #[cfg(target_arch = "wasm32")]
+            let armed = false;
+            #[cfg(target_arch = "wasm32")]
+            let pick = false;
+
+            // A mask tool arms the preview for a drag gesture; the WB eyedropper
+            // keeps a plain click; otherwise a zoomed image drags to pan (hand
+            // tool). Pan never conflicts with an armed mask tool or the picker.
+            let sense = if armed {
+                egui::Sense::drag()
+            } else if pick {
+                egui::Sense::click()
+            } else if pan_eligible {
                 egui::Sense::drag()
             } else {
                 egui::Sense::click()
             };
-            #[cfg(target_arch = "wasm32")]
-            let sense = egui::Sense::click();
             let response = ui.allocate_rect(rect, sense);
-            ui.put(rect, egui::Image::from_texture(texture));
-            if self.wb_pick_mode && response.clicked() {
+
+            // Pan while zoomed (only when no mask tool and not picking).
+            if !armed && !pick && pan_eligible {
+                let delta = response.drag_delta();
+                if delta != egui::Vec2::ZERO {
+                    if response.drag_started() {
+                        self.zoom_mode = ZoomMode::Custom;
+                        trace!("GUI interaction: preview pan start");
+                    }
+                    center += delta;
+                }
+            }
+
+            // Clamp the centre so a zoomed image always covers the pane (no empty
+            // gutters) and a smaller-than-pane image stays centred (no panning).
+            //
+            // Order-independent guard: at fit the computed draw size can, by
+            // floating-point rounding, come out a few micro-pixels larger than
+            // the pane (`draw.x ≈ pane.width() + ε`), which would make
+            // `pane.left() + draw.x / 2.0` (the `clamp` *min*) larger than
+            // `pane.right() - draw.x / 2.0` (the `clamp` *max*) and panic
+            // `f32::clamp`. Swap the bounds when they invert instead of passing
+            // them through, and clamp against the corrected [lo, hi] so the
+            // centre is pinned to the pane centre (where `lo ≈ hi ≈ centre`).
+            if draw.x <= pane.width() {
+                center.x = pane.center().x;
+            } else {
+                let mut lo = pane.left() + draw.x / 2.0;
+                let mut hi = pane.right() - draw.x / 2.0;
+                if lo > hi {
+                    std::mem::swap(&mut lo, &mut hi);
+                }
+                center.x = center.x.clamp(lo, hi);
+            }
+            if draw.y <= pane.height() {
+                center.y = pane.center().y;
+            } else {
+                let mut lo = pane.top() + draw.y / 2.0;
+                let mut hi = pane.bottom() - draw.y / 2.0;
+                if lo > hi {
+                    std::mem::swap(&mut lo, &mut hi);
+                }
+                center.y = center.y.clamp(lo, hi);
+            }
+            self.preview_pan = center - pane.center();
+            let rect = egui::Rect::from_center_size(center, draw);
+            self.preview_effective_scale = scale;
+
+            ui.put(rect, egui::Image::from_texture(&texture));
+
+            if pick && response.clicked() {
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let nx = ((pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
-                    let ny = ((pos.y - rect.min.y) / rect.height()).clamp(0.0, 1.0);
+                    let (nx, ny) = Self::to_normalized(
+                        pos,
+                        rect,
+                        self.preview_roi,
+                        self.image_dims().unwrap_or((1, 1)),
+                    );
                     self.pick_white_balance_at(nx as f64, ny as f64);
                 }
             }
-            if self.wb_pick_mode {
+            if pick {
                 ui.painter().rect_stroke(
                     rect,
                     0.0,
@@ -1813,8 +2505,22 @@ impl LuminaApp {
             }
             #[cfg(not(target_arch = "wasm32"))]
             self.handle_mask_tool_drag(&response, rect);
+            // Mask overlay is painted over the full-frame rect (accounting for the
+            // current ROI crop) so it lines up with the zoomed/panned view.
             #[cfg(not(target_arch = "wasm32"))]
-            self.draw_mask_overlay(ui, rect);
+            {
+                let (full_w, full_h) = self.image_dims().unwrap_or((1, 1));
+                let roi = self.preview_roi.unwrap_or([0, 0, full_w, full_h]);
+                let from_min = egui::pos2(
+                    rect.min.x - roi[0] as f32 * scale,
+                    rect.min.y - roi[1] as f32 * scale,
+                );
+                let full_rect = egui::Rect::from_min_size(
+                    from_min,
+                    egui::vec2(full_w as f32 * scale, full_h as f32 * scale),
+                );
+                self.draw_mask_overlay(ui, full_rect);
+            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label(Str::NoImage.t());
@@ -1822,14 +2528,28 @@ impl LuminaApp {
         }
     }
 
-    /// Map a pointer position to normalized (0..=1) source coordinates using the
-    /// same image-rect mapping as the WB eyedropper: the displayed preview rect
-    /// maps 1:1 onto the source frame's normalized space (respecting the frame
-    /// dimensions after orientation), clamped to the image bounds.
+    /// Map a pointer position to normalized (0..=1) *full-frame* source
+    /// coordinates. The displayed rect may be only a zoomed/panned sub-crop of
+    /// the source (see [`Self::preview_roi`]); `roi`/`full` translate the local
+    /// rect fraction into absolute source space so the WB eyedropper and mask
+    /// tools stay accurate at any zoom/offset.
     #[cfg(not(target_arch = "wasm32"))]
-    fn to_normalized(pos: egui::Pos2, rect: egui::Rect) -> (f32, f32) {
-        let nx = ((pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
-        let ny = ((pos.y - rect.min.y) / rect.height()).clamp(0.0, 1.0);
+    fn to_normalized(
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        roi: Option<[u32; 4]>,
+        full: (u32, u32),
+    ) -> (f32, f32) {
+        // Guard the pointer→source division against a zero-width/height rect
+        // (e.g. a momentarily empty texture) so we never divide by zero and
+        // produce NaN/Infinity into the normalized coordinates.
+        let rw = rect.width().max(1e-6);
+        let rh = rect.height().max(1e-6);
+        let fx = ((pos.x - rect.min.x) / rw).clamp(0.0, 1.0);
+        let fy = ((pos.y - rect.min.y) / rh).clamp(0.0, 1.0);
+        let roi = roi.unwrap_or([0, 0, full.0, full.1]);
+        let nx = (roi[0] as f32 + fx * roi[2] as f32) / full.0 as f32;
+        let ny = (roi[1] as f32 + fy * roi[3] as f32) / full.1 as f32;
         (nx, ny)
     }
 
@@ -1842,7 +2562,12 @@ impl LuminaApp {
         let Some(pos) = response.interact_pointer_pos() else {
             return;
         };
-        let (nx, ny) = Self::to_normalized(pos, rect);
+        let (nx, ny) = Self::to_normalized(
+            pos,
+            rect,
+            self.preview_roi,
+            self.image_dims().unwrap_or((1, 1)),
+        );
         if response.drag_started() {
             self.drawing = true;
             self.drag_start = Some(Point2 { x: nx, y: ny });
@@ -1891,7 +2616,7 @@ impl LuminaApp {
     /// translucent tint over the source rect so the user sees exactly what the
     /// pipeline will evaluate.
     #[cfg(not(target_arch = "wasm32"))]
-    fn draw_mask_overlay(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+    fn draw_mask_overlay(&mut self, ui: &mut egui::Ui, full_rect: egui::Rect) {
         let Some(prompt) = self.current_overlay_prompt() else {
             return;
         };
@@ -1924,7 +2649,7 @@ impl LuminaApp {
                 .load_texture("lumina-mask-overlay", image, egui::TextureOptions::NEAREST);
         ui.painter().image(
             texture.id(),
-            rect,
+            full_rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
@@ -2009,6 +2734,9 @@ impl LuminaApp {
         self.render_key = None;
         self.tone_analysis = None;
         self.error = None;
+        // An edit occurred: a full-quality render will be needed (debounced on
+        // pointer release / idle, PERF-GUI-3/4).
+        self.pending_full_render = true;
     }
 
     /// Documented default for a flat adjustment key (identity is 0; WB Kelvin 6500).
@@ -2022,6 +2750,7 @@ impl LuminaApp {
     /// Reset exactly one flat adjustment to its documented default. Never resets
     /// the whole recipe (that is [`Self::reset`]).
     pub fn reset_single_adjustment(&mut self, key: &str) {
+        trace!("GUI interaction: reset_single_adjustment {}", key);
         let default = Self::default_for_adjustment(key);
         self.recipe.adjustments.insert(key.to_owned(), default);
         self.mark_dirty();
@@ -2049,6 +2778,7 @@ impl LuminaApp {
     /// Toggle Before/After. Deliberately does not touch the recipe.
     pub fn toggle_before_after(&mut self) {
         self.before_after = !self.before_after;
+        trace!("GUI interaction: toggle_before_after -> {}", self.before_after);
     }
 
     /// Derive a deterministic WB (temperature, tint) from a picked sRGB point so
@@ -2091,6 +2821,7 @@ impl LuminaApp {
     }
 
     fn pick_white_balance_at(&mut self, nx: f64, ny: f64) {
+        trace!("GUI interaction: pick_white_balance_at nx={:.4} ny={:.4}", nx, ny);
         let Some(frame) = &self.original else {
             return;
         };
@@ -2102,6 +2833,7 @@ impl LuminaApp {
         let g = px[1] as f64 / 255.0;
         let b = px[2] as f64 / 255.0;
         if let Err(e) = self.set_white_balance_from_point(r, g, b) {
+            error!("white balance pick failed at ({nx:.3},{ny:.3}): {e}");
             self.show_error(e);
         }
     }
@@ -2130,7 +2862,7 @@ impl LuminaApp {
                 ui,
                 "wb_temperature",
                 Str::Temperature.t(),
-                identity_spec(1500.0..=12000.0, 6500.0, 50.0),
+                identity_spec(1500.0..=12000.0, 6500.0, 50.0).unit(" K"),
             );
             self.adjustment_slider(ui, "wb_tint", Str::Tint.t(), percent_spec(-1.0..=1.0, 0.0));
             if self.wb_pick_mode {
@@ -3040,15 +3772,23 @@ impl LuminaApp {
     /// then the preset manager and the global render/save actions.  Every
     /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
     fn draw_develop_panel(&mut self, ui: &mut egui::Ui) {
-        self.draw_basic(ui);
-        self.draw_tone_curve(ui);
-        self.draw_color(ui);
-        self.draw_effects(ui);
-        self.draw_detail(ui);
-        self.draw_optics(ui);
-        self.draw_geometry(ui);
-        self.draw_masking(ui);
-        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+            // The eight adjustment sections are grayed and non-interactive until an
+            // image is loaded (F-100 disabled-while-empty behaviour).
+            let had_enabled = ui.is_enabled();
+            ui.set_enabled(self.original.is_some());
+            self.draw_basic(ui);
+            self.draw_tone_curve(ui);
+            self.draw_color(ui);
+            self.draw_effects(ui);
+            self.draw_detail(ui);
+            self.draw_optics(ui);
+            self.draw_geometry(ui);
+            self.draw_masking(ui);
+            ui.set_enabled(had_enabled);
+            ui.separator();
         ui.collapsing(Str::Preset.t(), |ui| {
             ui.text_edit_singleline(&mut self.preset_name);
             for field in ["exposure", "contrast", "highlights", "shadows"] {
@@ -3075,13 +3815,13 @@ impl LuminaApp {
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.path);
                 if ui.button(Str::Load.t()).clicked() {
-                    self.load_path();
+                    self.begin_load_path(self.path.clone());
                 }
             });
             if ui.button(Str::ChooseFile.t()).clicked() {
                 if let Some(path) = rfd::FileDialog::new().pick_file() {
                     self.path = path.display().to_string();
-                    self.load_path();
+                    self.begin_load_path(self.path.clone());
                 }
             }
         }
@@ -3108,6 +3848,7 @@ impl LuminaApp {
         if ui.button(Str::SaveRecipe.t()).clicked() {
             self.save_sidecar();
         }
+        });
     }
 
     /// Library-module sidecar / virtual-copy manager (native only).  Mask editing
@@ -3174,7 +3915,15 @@ impl LuminaApp {
     fn draw_filmstrip(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.heading(Str::Filmstrip.t());
         ui.label(Str::FilmstripHint.t());
-        let entries: Vec<FileBrowserEntry> = self.entries.clone();
+        // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
+        // filmstrip never shows jpg/png/webp/raster entries (those remain
+        // browseable in the Library file-browser via `is_supported_image`).
+        let entries: Vec<FileBrowserEntry> = self
+            .entries
+            .iter()
+            .filter(|e| is_raw_name(&e.name))
+            .cloned()
+            .collect();
         let mut open_target: Option<String> = None;
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -3193,6 +3942,7 @@ impl LuminaApp {
                         ui.put(rect, egui::Label::new(&entry.name));
                     }
                     if resp.clicked() {
+                        trace!("GUI interaction: filmstrip click {}", entry.path.display());
                         open_target = Some(entry.path.display().to_string());
                     }
                 }
@@ -3231,14 +3981,26 @@ impl LuminaApp {
                 }
             }
         }
-        self.thumbnails.mark_probed(&entry.name);
-        let _ = self.idle_queue.enqueue(
-            IdleTask::Thumbnail {
-                source: entry.path.clone(),
-                name: entry.name.clone(),
-            },
-            50,
-        );
+        // Cache miss: enqueue a background thumbnail job on the dedicated thread
+        // pool rather than the bounded `IdleQueue`. The channel is unbounded, so
+        // it never drops jobs under load and never logs "queue full". We mark the
+        // source probed *only after a successful send* so we never lose a job and
+        // never silently strand a thumbnail (retry happens next frame on failure).
+        match self.thumbnail_tx.send(ThumbnailJob {
+            source: entry.path.clone(),
+            name: entry.name.clone(),
+        }) {
+            Ok(()) => {
+                self.thumbnails.mark_probed(&entry.name);
+                debug!("enqueued thumbnail job for {}", entry.name);
+            }
+            Err(_) => {
+                debug!(
+                    "thumbnail channel closed; will retry {} on a later frame",
+                    entry.name
+                );
+            }
+        }
     }
 
     fn make_thumbnail_texture(
@@ -3253,59 +4015,130 @@ impl LuminaApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn generate_thumbnail(&mut self, ctx: &egui::Context, source: &Path, name: &str) {
-        let bytes = match std::fs::read(source) {
-            Ok(b) => b,
-            Err(e) => {
-                self.status = format!("Thumbnail failed: {e}");
-                return;
-            }
-        };
-        let is_raw = is_raw_name(name);
-        let frame = if is_raw {
-            match lumina_raw::decode_bytes(&bytes, name) {
-                Ok(img) => img.frame,
-                Err(e) => {
-                    self.status = format!("Thumbnail decode failed: {e}");
-                    return;
+    /// Central working area: a zoom toolbar (Lightroom-like Fit / 1:1 / 200% /
+    /// Fit Width + a live zoom readout and a collapsed-navigator reopen button),
+    /// then the rendered preview and the render-state label. Shared by the
+    /// Develop and Export modules.
+    fn draw_preview_area(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if !self.navigator_open {
+                    if ui.button(Str::Navigator.t()).clicked() {
+                        self.navigator_open = true;
+                        trace!("GUI interaction: navigator open");
+                    }
+                    ui.separator();
                 }
             }
+            ui.label(Str::Preview.t());
+            ui.separator();
+            self.zoom_toolbar(ui);
+        });
+        self.update_texture(ctx);
+        self.draw_preview(ui);
+        if let Some(key) = &self.render_key {
+            ui.label(format!(
+                "{}: {}",
+                Str::RenderStateCurrent.t(),
+                &key.digest()[..12]
+            ));
         } else {
-            match ImageFrame::decode(&bytes) {
-                Ok(f) => f,
-                Err(e) => {
-                    self.status = format!("Thumbnail decode failed: {e}");
-                    return;
+            ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
+        }
+    }
+
+    /// Lightroom-like zoom toolbar: absolute zoom modes (re-derived each frame
+    /// from the pane) plus a live zoom percentage readout. The active mode is
+    /// highlighted.
+    fn zoom_toolbar(&mut self, ui: &mut egui::Ui) {
+        let pct = (self.preview_effective_scale * 100.0) as i32;
+        ui.label(format!("{}: {}%", Str::Zoom.t(), pct));
+        if ui
+            .selectable_label(self.zoom_mode == ZoomMode::Fit, Str::ZoomFit.t())
+            .clicked()
+        {
+            self.set_zoom_mode(ZoomMode::Fit);
+        }
+        if ui
+            .selectable_label(self.zoom_mode == ZoomMode::OneToOne, Str::ZoomOneToOne.t())
+            .clicked()
+        {
+            self.set_zoom_mode(ZoomMode::OneToOne);
+        }
+        if ui
+            .selectable_label(self.zoom_mode == ZoomMode::TwoHundred, Str::ZoomTwoHundred.t())
+            .clicked()
+        {
+            self.set_zoom_mode(ZoomMode::TwoHundred);
+        }
+        if ui
+            .selectable_label(self.zoom_mode == ZoomMode::FitWidth, Str::ZoomFitWidth.t())
+            .clicked()
+        {
+            self.set_zoom_mode(ZoomMode::FitWidth);
+        }
+    }
+
+    /// Left thumbnail navigator rail (Lightroom-like). Reuses the filmstrip
+    /// [`Self::ensure_thumbnail`] / [`ThumbnailManager`] pipeline — no duplicate
+    /// thumbnail generation — shows a vertical scroll of directory entries,
+    /// highlights the active image and opens an entry on click.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_navigator(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading(Str::Navigator.t());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("‹").clicked() {
+                    self.navigator_open = false;
+                    trace!("GUI interaction: navigator collapse");
+                }
+            });
+        });
+        ui.separator();
+        ui.label(Str::FilmstripHint.t());
+        // RAW-only: mirror the filmstrip filter so the left navigator rail shows
+        // only RAW entries (jpg/png/webp are excluded from the Develop preview).
+        let entries: Vec<FileBrowserEntry> = self
+            .entries
+            .iter()
+            .filter(|e| is_raw_name(&e.name))
+            .cloned()
+            .collect();
+        let active_path = self.path.clone();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for entry in &entries {
+                // Reuse the filmstrip thumbnail pipeline (no duplicate
+                // generation): ensure_thumbnail populates the shared
+                // ThumbnailManager entry.
+                self.ensure_thumbnail(ctx, entry);
+                let tex = self.thumbnails.get(&entry.name).cloned();
+                let active = active_path == entry.path.display().to_string();
+                let (cell, resp) =
+                    ui.allocate_exact_size(egui::vec2(120.0, 90.0), egui::Sense::click());
+                if let Some(texture) = tex {
+                    ui.put(cell, egui::Image::from_texture(&texture).max_size(cell.size()));
+                } else {
+                    ui.painter().rect_filled(cell, 2.0, egui::Color32::from_gray(40));
+                    ui.put(cell, egui::Label::new(&entry.name));
+                }
+                if active {
+                    ui.painter().rect_stroke(
+                        cell,
+                        2.0_f32,
+                        egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
+                        egui::StrokeKind::Middle,
+                    );
+                }
+                if resp.clicked() {
+                    trace!(
+                        "GUI interaction: navigator open {}",
+                        entry.path.display()
+                    );
+                    self.open_file(entry.path.display().to_string());
                 }
             }
-        };
-        let (small, w, h) =
-            downscale_rgba(&frame.pixels, frame.width, frame.height, THUMBNAIL_MAX_DIM);
-        let small_frame = match ImageFrame::new(w, h, small) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let context = RenderContext {
-            recipe: &EditRecipe::default(),
-            camera_white_balance: None,
-            source_actions: &[],
-            masks: None,
-            #[cfg(feature = "lensfun")]
-            lensfun: None,
-        };
-        let preview = match render_frame(&small_frame, &context) {
-            Ok(o) => o.frame,
-            Err(_) => small_frame,
-        };
-        let png = match preview.encode(ImageFileFormat::Png) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        if let Ok(cache) = DiskFolderCache::for_image(source) {
-            let _ = cache.store_preview(name, "vc-original", PreviewKind::Standard, &png);
-        }
-        let tex = self.make_thumbnail_texture(ctx, &preview, name);
-        self.thumbnails.insert(name, tex);
+        });
     }
 }
 
@@ -3373,6 +4206,9 @@ fn hsl_channel_mut<'a>(hsl: &'a mut HslAdjustments, ch: &str) -> &'a mut HslChan
 
 #[cfg(not(target_arch = "wasm32"))]
 fn is_supported_image(path: &Path) -> bool {
+    // The file browser lists all editable formats; the filmstrip display applies
+    // its own RAW-only filter (see `draw_filmstrip`). v1: PNG/JPEG/WebP plus the
+    // RAW extensions.
     match path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -3445,6 +4281,8 @@ fn decoder_identity(source_is_raw: bool) -> &'static str {
     }
 }
 
+
+
 impl eframe::App for LuminaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the Lumina dark theme once per frame. `egui` only re-applies the
@@ -3481,8 +4319,9 @@ impl eframe::App for LuminaApp {
         }
 
         // Consume idle tasks only while there is no interactive pointer input.
-        // Thumbnails are generated here; mask inference is handed to the (still
-        // missing) ONNX adapter and only records the hand-off point.
+        // Only mask inference remains here; filmstrip thumbnails are produced by
+        // the dedicated background thread pool (handled just below, without a
+        // pointer gate, so switching the filmstrip never freezes).
         #[cfg(not(target_arch = "wasm32"))]
         if !ctx.input(|input| input.pointer.any_down()) {
             if let Some((_id, task)) = self.idle_queue.pop_next() {
@@ -3490,10 +4329,104 @@ impl eframe::App for LuminaApp {
                     IdleTask::MaskInference { mask_id } => {
                         self.status = Str::InferenceWaiting.format_arg(&mask_id);
                     }
-                    IdleTask::Thumbnail { source, name } => {
-                        self.generate_thumbnail(ctx, &source, &name);
+                    IdleTask::Thumbnail { .. } => {
+                        // Thumbnails are no longer enqueued on the idle queue
+                        // (the thread pool owns their generation); kept only for
+                        // an exhaustive match.
                     }
                 }
+            }
+        }
+
+        // Zoom shortcuts (Lightroom-like). Ignored while a widget wants keyboard
+        // input so they never hijack typing. These set the zoom mode / a custom
+        // multiplier; the actual `preview_zoom` is derived per-frame in
+        // `sync_zoom()` so the ROI crop matches the on-screen view.
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
+                self.zoom_step(1.2);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
+                self.zoom_step(1.0 / 1.2);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F)) {
+                self.set_zoom_mode(ZoomMode::Fit);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
+                self.set_zoom_mode(ZoomMode::Fit);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
+                self.set_zoom_mode(ZoomMode::OneToOne);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
+                self.set_zoom_mode(ZoomMode::TwoHundred);
+            }
+        }
+
+        // PERF-FILMSTRIP: drain completed thumbnails from the background pool and
+        // build their textures on the main thread. This runs every frame
+        // *regardless of pointer state* — thumbnails stream in while the user
+        // scrolls/clicks the filmstrip, so switching directories no longer blocks
+        // on a synchronous decode+render on the UI thread.
+        #[cfg(not(target_arch = "wasm32"))]
+        while let Ok(result) = self.thumbnail_rx.try_recv() {
+            let tex = self.make_thumbnail_texture(ctx, &result.frame, &result.name);
+            self.thumbnails.insert(&result.name, tex);
+            trace!("thumbnail ready: {}", result.name);
+            ctx.request_repaint();
+        }
+
+        // PERF-GUI-7: drain any completed background RAW/raster decode without
+        // blocking the UI (non-blocking `try_recv`). The decoded frame is applied
+        // on the main thread here, so a slow decode never freezes interaction.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_decode();
+
+        // Derive `preview_zoom` from the active mode using the geometry cached by
+        // the previous frame's `draw_preview`, so the render's ROI crop matches
+        // the on-screen zoom (even on the frame a mode button/shortcut fires).
+        self.sync_zoom();
+
+        // PERF-GUI-3/4: draft render while a pointer drag is in progress
+        // (coalesced: latest params overwrite, intermediate frames are dropped,
+        // a repaint is requested); a debounced full-quality render fires on
+        // mouse-up / idle (150 ms) so the final frame is computed once.
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
+        let now = ctx.input(|i| i.time);
+        if pointer_down
+            && self.pending_full_render
+            && self.original.is_some()
+            && self.render_key.is_none()
+        {
+            trace!("GUI render: draft render during pointer drag");
+            let viewport = [
+                ctx.screen_rect().width() as u32,
+                ctx.screen_rect().height() as u32,
+            ];
+            if let Err(e) = self.render_draft(viewport, None) {
+                self.show_error(e);
+            }
+            self.last_edit_time = now;
+            ctx.request_repaint();
+        } else if !pointer_down && self.pending_full_render {
+            // 150 ms debounce after the last edit before committing the full
+            // render. `last_edit_time == 0` (no drag recorded) routes to an
+            // immediate full render so non-drag edits are never stranded.
+            let elapsed = if self.last_edit_time > 0.0 {
+                now - self.last_edit_time
+            } else {
+                f64::MAX
+            };
+            if elapsed >= 0.150 {
+                trace!("GUI render: debounced full render after interaction");
+                let viewport = [
+                    ctx.screen_rect().width() as u32,
+                    ctx.screen_rect().height() as u32,
+                ];
+                if let Err(e) = self.render_full(viewport, None) {
+                    self.show_error(e);
+                }
+                self.last_edit_time = 0.0;
             }
         }
 
@@ -3507,7 +4440,7 @@ impl eframe::App for LuminaApp {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(path) = file.path {
                 self.path = path.display().to_string();
-                self.load_path();
+                self.begin_load_path(self.path.clone());
             }
         }
 
@@ -3558,6 +4491,19 @@ impl eframe::App for LuminaApp {
                 .show(ctx, |ui| self.draw_file_browser(ui));
         }
 
+        // Left: Lightroom-like thumbnail navigator rail (Develop / Export). The
+        // Library module keeps its text file-browser on the left instead, so the
+        // two never collide on the same side. It reuses the filmstrip
+        // ThumbnailManager (no duplicate generation) and highlights the active
+        // image.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.navigator_open && !matches!(self.active_module, Module::Library) {
+            egui::SidePanel::left("navigator")
+                .resizable(true)
+                .default_width(150.0)
+                .show(ctx, |ui| self.draw_navigator(ctx, ui));
+        }
+
         // Right: Develop controls (eight sections), the Library sidecar/copy
         // manager, or nothing extra for Export (placeholder shown centrally).
         egui::SidePanel::right("controls")
@@ -3601,48 +4547,16 @@ impl eframe::App for LuminaApp {
         // module is a clear capability hint.
         egui::CentralPanel::default().show(ctx, |ui| match self.active_module {
             Module::Export => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    ui.horizontal(|ui| {
-                        ui.label(Str::Navigator.t());
-                        ui.separator();
-                        ui.label(Str::Preview.t());
-                    });
-                    self.update_texture(ctx);
-                    self.draw_preview(ui);
-                    if let Some(key) = &self.render_key {
-                        ui.label(format!(
-                            "{}: {}",
-                            Str::RenderStateCurrent.t(),
-                            &key.digest()[..12]
-                        ));
-                    } else {
-                        ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
-                    }
-                }
                 #[cfg(target_arch = "wasm32")]
                 {
                     ui.centered_and_justified(|ui| ui.label(Str::NotAvailable.t()));
                 }
-            }
-            _ => {
-                ui.horizontal(|ui| {
-                    ui.label(Str::Navigator.t());
-                    ui.separator();
-                    ui.label(Str::Preview.t());
-                });
-                self.update_texture(ctx);
-                self.draw_preview(ui);
-                if let Some(key) = &self.render_key {
-                    ui.label(format!(
-                        "{}: {}",
-                        Str::RenderStateCurrent.t(),
-                        &key.digest()[..12]
-                    ));
-                } else {
-                    ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.draw_preview_area(ctx, ui);
                 }
             }
+            _ => self.draw_preview_area(ctx, ui),
         });
     }
 }
@@ -3682,6 +4596,23 @@ mod tests {
     };
     fn new_app() -> LuminaApp {
         LuminaApp::new(egui::Context::default())
+    }
+
+    /// Open a file and synchronously drain the background decode (PERF-GUI-7)
+    /// channel. The headless test harness has no `update()` event loop, so the
+    /// async `decode_rx` must be pumped here before asserting on the result.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_and_decode(app: &mut LuminaApp, path: impl Into<String>) {
+        app.open_file(path);
+        // Pump the background decode channel; yield so the worker thread is
+        // scheduled. Bounded so a genuine failure can't hang the suite.
+        for _ in 0..2000 {
+            app.poll_decode();
+            if app.original.is_some() || app.error().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
     fn png() -> Vec<u8> {
         ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
@@ -3835,6 +4766,20 @@ mod tests {
         assert_eq!(decoder_identity(false), "image");
     }
 
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn to_normalized_is_finite_for_zero_size_rect() {
+        // Regression guard for the division-by-zero / NaN protection in
+        // `to_normalized`: a momentarily empty preview rect (zero width/height)
+        // must not yield non-finite normalized coordinates, which would
+        // otherwise propagate into the recipe through the WB eyedropper / mask
+        // tool mapping.
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(0.0, 0.0));
+        let (nx, ny) = LuminaApp::to_normalized(egui::pos2(10.0, 20.0), rect, None, (100, 100));
+        assert!(nx.is_finite(), "nx must be finite, got {nx}");
+        assert!(ny.is_finite(), "ny must be finite, got {ny}");
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn save_png(path: &Path) {
         let png = ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
@@ -3851,7 +4796,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.set_adjustment("exposure", 1.5);
         app.save_sidecar();
         let sidecar = lumina_sidecar::sidecar_path_for(&source);
@@ -3863,7 +4808,7 @@ mod tests {
         );
 
         let mut reopened = new_app();
-        reopened.open_file(source.display().to_string());
+        open_and_decode(&mut reopened, source.display().to_string());
         assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
     }
 
@@ -3874,7 +4819,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.set_adjustment("contrast", 0.3);
         app.save_sidecar();
         app.duplicate_virtual_copy("vc-2", "Copy 2").unwrap();
@@ -3892,7 +4837,7 @@ mod tests {
         );
 
         let mut reopened = new_app();
-        reopened.open_file(source.display().to_string());
+        open_and_decode(&mut reopened, source.display().to_string());
         assert_eq!(reopened.entries().len(), 1);
         let reloaded = lumina_sidecar::load_sidecar(&sidecar).unwrap();
         assert_eq!(reloaded.virtual_copies.len(), 2);
@@ -3905,7 +4850,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.save_sidecar();
         app.duplicate_virtual_copy("vc-2", "Two").unwrap();
         app.duplicate_virtual_copy("vc-3", "Three").unwrap();
@@ -3930,7 +4875,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.save_sidecar();
         app.set_directory(directory.path().display().to_string());
         let entry = app
@@ -3961,7 +4906,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.save_sidecar();
         let sidecar = lumina_sidecar::sidecar_path_for(&source);
         let mut document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
@@ -4043,7 +4988,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         let id = app.create_mask("Subject").unwrap();
         app.rename_mask(&id, "Main subject").unwrap();
         app.save_sidecar();
@@ -4064,7 +5009,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.create_mask("Subject").unwrap();
         app.set_mask_inverted(true).unwrap();
         app.set_mask_feather(0.25).unwrap();
@@ -4088,7 +5033,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.create_mask("Subject").unwrap();
         assert!(app.offer_mask_recalculation().unwrap());
         assert!(app.status().contains("recalculation"));
@@ -4103,14 +5048,14 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.create_mask("Subject").unwrap();
         app.set_mask_local_adjustment("exposure", 1.25).unwrap();
         app.set_mask_local_adjustment("contrast", -0.35).unwrap();
         app.save_sidecar();
 
         let mut reopened = new_app();
-        reopened.open_file(source.display().to_string());
+        open_and_decode(&mut reopened, source.display().to_string());
         let layer = &reopened.document.as_ref().unwrap().virtual_copies[0].mask_layers[0];
         assert_eq!(layer.extras["adjustment_exposure"].as_f64(), Some(1.25));
         assert_eq!(layer.extras["adjustment_contrast"].as_f64(), Some(-0.35));
@@ -4373,7 +5318,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         let id = app.create_mask("Subject").unwrap();
         let marks = vec![
             BrushMark {
@@ -4424,7 +5369,7 @@ mod tests {
 
         // The prompt survives a reopen.
         let mut reopened = new_app();
-        reopened.open_file(source.display().to_string());
+        open_and_decode(&mut reopened, source.display().to_string());
         let reloaded = reopened.document.as_ref().unwrap();
         let reloaded_mask = reloaded.virtual_copies[0]
             .mask_library
@@ -4442,7 +5387,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.create_mask("Subject").unwrap();
         // An empty stroke is rejected by the commit path (returns Err, no write).
         let result = app.commit_brush_stroke(vec![]);
@@ -4558,7 +5503,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         let id = app.create_mask("Sky").unwrap();
         app.commit_gradient(Point2 { x: 0.1, y: 0.5 }, Point2 { x: 0.9, y: 0.5 })
             .unwrap();
@@ -4697,7 +5642,7 @@ mod tests {
         let source = directory.path().join("photo.png");
         save_png(&source);
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.set_adjustment("exposure", 0.3);
         let result = app.export_to(source.clone());
         assert!(result.is_err(), "exporting onto the source must fail");
@@ -4715,7 +5660,7 @@ mod tests {
         save_png(&source);
         let before = blake3::hash(&std::fs::read(&source).unwrap());
         let mut app = new_app();
-        app.open_file(source.display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
         app.set_adjustment("contrast", 0.4);
         app.render().unwrap();
         let out = directory.path().join("photo_out.png");

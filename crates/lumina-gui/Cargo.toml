@@ -12,11 +12,22 @@ lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
+log = "0.4"
+# GPU-first render path. Optional so wasm32 can omit it entirely (no wgpu/Metal
+# dependency); native desktop enables it via the `gpu` feature below.
+lumina-gpu = { path = "../lumina-gpu", optional = true }
 
 [features]
-# F-098-N1: enables the Lensfun pipeline path in lumina-core and pulls the
-# native liblensfun (default OFF; native-only, never used on wasm32).
+# All GUI features are ON by default for the native desktop (Tester-Wunsch).
+# F-098-N1: Lensfun pipeline (native liblensfun). For wasm32 use
+# `cargo build --target wasm32-unknown-unknown --no-default-features` to avoid
+# pulling the native C dependency (this also drops `lumina-gpu`).
+default = ["lensfun", "gpu"]
 lensfun = ["lumina-core/lensfun"]
+# GPU-first rendering via `lumina-gpu` (wgpu/Metal). Enabled by default on native
+# desktops; wasm32 builds use `--no-default-features` so the wgpu stack and its
+# native dependencies are never pulled.
+gpu = ["lumina-gpu"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"

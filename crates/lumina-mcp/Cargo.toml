@@ -12,11 +12,20 @@ lumina-raw = { path = "../lumina-raw" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 blake3 = "1"
+# Logging for backend selection + the `LUMINA_MCP_LOG` level filter.
+# `std` is required for `log::set_boxed_logger` (log 0.4 has no default features).
+log = { version = "0.4", features = ["std"] }
+# GPU-first rendering path (wgpu/Metal), optional capability. Enables
+# `GpuContext` routing in `util.rs`; degrades to the CPU pipeline otherwise.
+lumina-gpu = { path = "../lumina-gpu", optional = true }
 
 [features]
 # F-098-N1: enables the Lensfun pipeline path in lumina-core and pulls the
 # native liblensfun (default OFF).
 lensfun = ["lumina-core/lensfun"]
+# GPU-first rendering with CPU fallback (lumina-gpu, wgpu/Metal). The MCP render
+# choke point prefers the GPU adapter and falls back to the CPU pipeline.
+gpu = ["dep:lumina-gpu"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -15,12 +15,23 @@ lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 # F-098-N2: optional Lensfun dependency so the CLI can build a corrector from
 # EXIF metadata. Only compiled/linked when the `lensfun` feature is on.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
+# GPU-first rendering path (wgpu/Metal). Optional: when the `gpu` feature is
+# enabled, render/export/batch prefer the GPU adapter and fall back to the CPU
+# pipeline otherwise. Disabled by default so headless CI stays dependency-light.
+lumina-gpu = { path = "../lumina-gpu", optional = true }
+# Logging for visible backend selection (see `Agents.md` capability separation).
+# `std` is required for `log::set_boxed_logger` (log 0.4 has no default features).
+log = { version = "0.4", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 
 [features]
+# GPU-first rendering with CPU fallback (lumina-gpu, wgpu/Metal). Enables the
+# `GpuContext` routing in `main.rs`; the GPU path is an optional capability that
+# degrades to the CPU pipeline when no adapter is present.
+gpu = ["dep:lumina-gpu"]
 # F-098-N1/N2: enables the Lensfun pipeline path in lumina-core and the CLI
 # EXIF→Corrector wiring, and pulls the native liblensfun (default OFF; requires
 # the system library when enabled).
