@@ -1,0 +1,37 @@
+[package]
+name = "lumina-gpu"
+version = "0.1.0"
+edition = "2021"
+description = "GPU-first rendering path for Lumina (wgpu/Metal), with a CPU fallback"
+
+[dependencies]
+# Platform-neutral core provides the `ImageFrame` type and the CPU render
+# fallback (`ImageFrame::apply_recipe`), which `lumina-gpu` relies on whenever
+# no GPU adapter is available (or when the `gpu` feature is disabled). The core
+# crate stays free of any GPU/native dependency per `Agents.md`.
+lumina-core = { path = "../lumina-core" }
+lumina-sidecar = { path = "../lumina-sidecar" }
+thiserror = "2"
+# Logging for the bootstrap stubs (no-op unless a logger is installed).
+log = "0.4"
+# GPU backend dependencies. Optional + feature-gated so the crate still builds
+# (CPU-only) on targets without a native GPU stack such as `wasm32`, and so a
+# `--no-default-features` build stays dependency-light for headless CI.
+wgpu = { version = "24", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+
+[features]
+# Primary GPU path for native desktop (Metal on Apple Silicon, Vulkan/DX12
+# elsewhere). Enabled by default so a plain `cargo build -p lumina-gpu` pulls
+# in the wgpu stack and the adapter/device init below compiles. Disable it with
+# `--no-default-features` to get a pure-CPU build (e.g. for wasm32 consumers,
+# which instead omit the `lumina-gpu` dependency entirely).
+default = ["gpu"]
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+
+[dev-dependencies]
+# Used by the golden-image equivalence harness to report a blake3 content hash
+# of the CPU and GPU render outputs. Already resolved in the workspace lockfile
+# (consumed by lumina-core/cli/gui), so this adds no new transitive dependency.
+blake3 = "1"
