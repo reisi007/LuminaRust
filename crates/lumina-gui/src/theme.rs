@@ -115,7 +115,7 @@ pub fn apply_lightroom_dark(ctx: &egui::Context) {
     ]
     .into();
 
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 #[cfg(test)]
@@ -239,7 +239,7 @@ mod tests {
     fn apply_lightroom_dark_sets_the_palette() {
         let ctx = egui::Context::default();
         apply_lightroom_dark(&ctx);
-        let style = ctx.style();
+        let style = (*ctx.global_style()).clone();
         let visuals = &style.visuals;
 
         assert_eq!(visuals.window_fill, PANEL);

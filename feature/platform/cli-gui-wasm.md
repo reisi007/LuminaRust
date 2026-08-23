@@ -261,6 +261,22 @@ Desktop. Ein unabhängiger Verifizierungs-Agent prüft später, dass derselbe
 `decode_bytes`-Vertrag (Orientierung, Metadaten, 8/16-bit) in beiden Backends
 gilt. Im MVP ist WASM-RAW ausgeschaltet (`UnsupportedPlatform`).
 
+**WASM Drag-and-Drop (MVP-Capability, egui 0.36):** `egui 0.36` modelliert
+`DroppedFile` als trait object (`DroppedFileHandle = Arc<dyn DroppedFile>`).
+Auf **native** liefert `DroppedFile::bytes() -> Result<Vec<u8>, String>` den
+Inhalt synchron; der Pfad ist absolut und `LuminaApp` lädt via `load_bytes` bzw.
+`begin_load_path`. Auf **wasm32** existiert `bytes()` nicht — stattdessen
+`bytes_async() -> Future<Output = Result<Vec<u8>, String>>` (async, Browser-API)
+und `path()` ist nur relativ (Dateiname). Das synchrone `update()`-Loop kann
+dies nicht ohne `wasm_bindgen_futures::spawn_local`-Brücke bedienen; die Brücke
+ist im MVP **nicht verdrahtet**. Drag-and-drop auf WASM ist daher bewusst **nicht
+unterstützt**: ein Drop setzt `status`/`error` sichtbar ("Drag-and-drop on WASM
+requires async file reading — not yet implemented; use the file picker") und
+loggt `warn!`, statt still ignoriert zu werden (Agents.md: kein stiller Fallback).
+Siehe `crates/lumina-gui/src/lib.rs` Dropped-File-Handling `#[cfg(target_arch =
+"wasm32")]`. File-Picker bleibt der WASM-Importpfad (Post-MVP: async-Brücke
+nachrüsten, dann `bytes_async().await` → `load_bytes`).
+
 ### Capability-Matrix Native — `glow` vs `wgpu`/Metal (GUI-60FPS-1, M1)
 
 Der native Desktop nutzt bis auf Weiteres `eframe` mit dem **glow**-Renderer

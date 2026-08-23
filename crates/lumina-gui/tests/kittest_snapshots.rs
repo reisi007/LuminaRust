@@ -28,7 +28,13 @@ use lumina_gui::{LuminaApp, Module};
 /// requires a string literal).
 ///
 /// Collapsing-header labels of the Develop panel, in draw order.
+///
+/// Kept in sync with `LuminaApp::draw_develop_panel` (via `Str::*` in
+/// `crates/lumina-gui/src/i18n.rs`): `Presets` + `History` (top, collapsible)
+/// followed by the eight F-100 sections `Basic` … `Masking`.
 const DEVELOP_SECTIONS: &[&str] = &[
+    "Presets",
+    "History",
     "Basic",
     "Tone Curve",
     "Color",
@@ -37,7 +43,6 @@ const DEVELOP_SECTIONS: &[&str] = &[
     "Optics",
     "Geometry",
     "Masking",
-    "Preset",
 ];
 
 /// Create a headless harness running the Lumina app at a fixed window size.
@@ -57,19 +62,40 @@ fn load_sample(harness: &mut Harness<'_, LuminaApp>) {
         .expect("sample image loads");
 }
 
-/// Collapse every Develop section except the ones listed in `keep`. Egui's
-/// collapsing headers are open by default, so we simulate a real pointer click on
-/// each header label we want closed, then re-run the harness once.
+/// Expand exactly the Develop sections listed in `keep`.
+///
+/// egui 0.36 `CollapsingHeader` is **closed by default** (previously open), so
+/// the old "collapse everything except keep" logic kept all ten sections closed.
+/// The correct operation is now to *open* the keep-sections. Each `click()` is
+/// followed by a `harness.run()` so the click event is dispatched before the
+/// next query — bundling all clicks into a single final `run()` only scrolls the
+/// `ScrollArea` and the clicks never register (verified via diff of the two
+/// goldens: previously both showed all 9 sections collapsed).
 fn collapse_except(harness: &mut Harness<'_, LuminaApp>, keep: &[&str]) {
-    for section in DEVELOP_SECTIONS {
-        if keep.contains(section) {
-            continue;
-        }
-        if let Some(node) = harness.query_all_by_label(section).next() {
-            node.simulate_click();
+    // Ensure the first frame is laid out so `query_all_by_label` can find the
+    // headers (egui_kittest requires a `run()` before querying).
+    harness.run();
+    for section in keep {
+        // `DEVELOP_SECTIONS` is the authoritative label list; keep-entries must
+        // be a subset of it — a missing label is a test bug, not a silent skip.
+        assert!(
+            DEVELOP_SECTIONS.contains(section),
+            "unknown Develop section label {:?}; expected one of {:?}",
+            section,
+            DEVELOP_SECTIONS
+        );
+        let clicked = {
+            if let Some(node) = harness.query_all_by_label(section).next() {
+                node.click();
+                true
+            } else {
+                panic!("Develop section label not found in headed harness: {section:?}");
+            }
+        };
+        if clicked {
+            harness.run();
         }
     }
-    harness.run();
 }
 
 #[test]

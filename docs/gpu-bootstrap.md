@@ -124,6 +124,12 @@ fallback to the GPU DAG; the CPU path remains the fallback and the test oracle.
 
 ## Dual-Backend Native: `eframe` glow (present) vs `wgpu` (offscreen compute)
 
+> **Versionsstand (DEP-EGUI-WGPU-1, 2026-08-23):** `lumina-gui` baut auf
+> `eframe`/`egui` **0.36** (weiterhin **glow**-Renderer), `lumina-gpu` auf
+> `wgpu` **30**. Alle Aussagen in diesem Abschnitt (getrennte GPU-Kontexte,
+> kein Surface-Sharing, `egui_wgpu` als offener Follow-up
+> `GUI-WGPU-PRESENT-1`) sind durch das Upgrade **unverändert** gültig.
+
 The native GUI (`lumina-gui`) today renders its `egui` UI via `eframe` with the
 **glow** (GL) renderer (`eframe = { features = ["glow"] }`). `lumina-gpu` owns a
 **separate** `wgpu::Instance` (Metal on Apple Silicon, `Backends::METAL`) and its

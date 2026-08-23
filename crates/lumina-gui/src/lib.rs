@@ -2693,8 +2693,18 @@ impl LuminaApp {
 
             // Scroll-wheel zoom around the cursor (Lightroom-like). Only while
             // the pointer hovers the preview so other scroll areas are
-            // unaffected.
-            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            // unaffected. egui 0.36 removed `InputState::raw_scroll_delta`; the
+            // raw per-frame wheel delta is summed from the `MouseWheel` events.
+            let scroll = ui.input(|i| {
+                i.raw
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                        _ => None,
+                    })
+                    .sum::<f32>()
+            });
             let pointer = ui.input(|i| i.pointer.interact_pos());
             if scroll != 0.0 {
                 if let Some(p) = pointer {
@@ -5299,7 +5309,10 @@ fn decoder_identity(source_is_raw: bool) -> &'static str {
 }
 
 impl eframe::App for LuminaApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // eframe 0.36: `update(&mut self, ctx, frame)` was replaced by
+    // `ui(&mut self, ui, frame)`; the context is cloned off the root `Ui`.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let perf_t0 = if std::env::var("LUMINA_PERF_LOG").as_deref() == Ok("1") {
             Some(std::time::Instant::now())
         } else {
@@ -5308,7 +5321,7 @@ impl eframe::App for LuminaApp {
         // Apply the Lumina dark theme once per frame. `egui` only re-applies the
         // fields that changed, so this is cheap and keeps the Lightroom feeling
         // consistent across modules.
-        apply_lightroom_dark(ctx);
+        apply_lightroom_dark(&ctx);
 
         // Keyboard: `Y` toggles Before/After (which never mutates the recipe);
         // `Esc` cancels an armed white-balance eyedropper.
@@ -5323,7 +5336,7 @@ impl eframe::App for LuminaApp {
         // They are ignored while a widget wants keyboard input — e.g. a focused
         // text field for mask/preset names — so they cannot hijack typing.
         // Switching modules never mutates the recipe or sidecar.
-        if !ctx.wants_keyboard_input() {
+        if !ctx.egui_wants_keyboard_input() {
             if let Some(module) = ctx.input(|i| {
                 for key in [egui::Key::G, egui::Key::D, egui::Key::E] {
                     if i.key_pressed(key) {
@@ -5362,7 +5375,7 @@ impl eframe::App for LuminaApp {
         // input so they never hijack typing. These set the zoom mode / a custom
         // multiplier; the actual `preview_zoom` is derived per-frame in
         // `sync_zoom()` so the ROI crop matches the on-screen view.
-        if !ctx.wants_keyboard_input() {
+        if !ctx.egui_wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
                 self.zoom_step(1.2);
             }
@@ -5397,7 +5410,7 @@ impl eframe::App for LuminaApp {
             while let Ok(result) = self.thumbnail_rx.try_recv() {
                 match result.outcome {
                     ThumbnailOutcome::Ready(frame) => {
-                        let tex = self.make_thumbnail_texture(ctx, &frame, &result.key);
+                        let tex = self.make_thumbnail_texture(&ctx, &frame, &result.key);
                         self.thumbnails.insert(&result.key, tex);
                         trace!("thumbnail ready: {}", result.name);
                     }
@@ -5455,10 +5468,8 @@ impl eframe::App for LuminaApp {
                     }
                 }
             }
-            let viewport = [
-                ctx.screen_rect().width() as u32,
-                ctx.screen_rect().height() as u32,
-            ];
+            let screen = ctx.input(|i| i.viewport_rect());
+            let viewport = [screen.width() as u32, screen.height() as u32];
             if let Err(e) = self.render_draft(viewport, None) {
                 self.show_error(e);
             }
@@ -5475,10 +5486,8 @@ impl eframe::App for LuminaApp {
             };
             if elapsed >= 0.150 {
                 trace!("GUI render: debounced full render after interaction");
-                let viewport = [
-                    ctx.screen_rect().width() as u32,
-                    ctx.screen_rect().height() as u32,
-                ];
+                let screen = ctx.input(|i| i.viewport_rect());
+                let viewport = [screen.width() as u32, screen.height() as u32];
                 if let Err(e) = self.render_full(viewport, None) {
                     self.show_error(e);
                 }
@@ -5487,22 +5496,60 @@ impl eframe::App for LuminaApp {
         }
 
         // Dropped files (path or bytes) load a new source.
+        // egui 0.36: dropped files are trait objects (`DroppedFileHandle`);
+        // on native contents are read synchronously via `bytes() -> Result`,
+        // on wasm via `bytes_async() -> Future` (async) and a relative `path()`.
+        // See `feature/platform/cli-gui-wasm.md` Capability-Matrix § WASM.
+        #[cfg(not(target_arch = "wasm32"))]
         for file in ctx.input(|input| input.raw.dropped_files.clone()) {
-            if let Some(bytes) = file.bytes {
-                if let Err(error) = self.load_bytes(bytes.to_vec(), file.name) {
-                    self.show_error(error);
+            match file.bytes() {
+                Ok(bytes) => {
+                    let name = file
+                        .path()
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if let Err(error) = self.load_bytes(bytes, name) {
+                        self.show_error(error);
+                    }
+                }
+                Err(read_error) => {
+                    // No silent fallback: a dropped file that cannot be read is
+                    // surfaced as a visible error.
+                    log::warn!("dropped file could not be read: {read_error}");
+                    self.show_error(format!("dropped file unreadable: {read_error}"));
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(path) = file.path {
+            if !file.path().as_os_str().is_empty() {
                 // REVIEW-GUI-PATHDESYNC-1: no immediate `self.path` commit;
                 // `finish_decode` adopts the path after a successful decode.
-                self.begin_load_path(path.display().to_string());
+                self.begin_load_path(file.path().display().to_string());
             }
+        }
+        #[cfg(target_arch = "wasm32")]
+        for file in ctx.input(|input| input.raw.dropped_files.clone()) {
+            // Capability decision (MVP): WASM drag-and-drop is intentionally not
+            // supported. egui 0.36 exposes `DroppedFile::bytes_async()` (async)
+            // on wasm32 with only a relative `path()` (no absolute fs path); the
+            // synchronous `bytes()` used on native does not exist on wasm. Bridging
+            // the async read via `wasm_bindgen_futures::spawn_local` and wiring the
+            // result back into the synchronous `update()` loop is not yet
+            // implemented. The drop is therefore surfaced visibly instead of
+            // silently ignored (Agents.md: no silent fallbacks). File loading on
+            // WASM remains via the file picker; native drag-and-drop stays fully
+            // functional. See `feature/platform/cli-gui-wasm.md` § WASM.
+            let name = file.path().display().to_string();
+            let display = if name.is_empty() { "file" } else { &name };
+            log::warn!("WASM drag-and-drop not supported yet (requires bytes_async): {display}");
+            self.status = format!("Drop not supported on WASM yet: {display}");
+            self.error = Some(
+                "Drag-and-drop on WASM requires async file reading (DroppedFile::bytes_async) — not yet implemented; use the file picker"
+                    .into(),
+            );
         }
 
         // Top: brand + status/error.
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+        egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Lumina");
                 ui.separator();
@@ -5516,7 +5563,7 @@ impl eframe::App for LuminaApp {
         // Top: module bar (Library / Develop / Export) + the Before/After toggle,
         // then the histogram of the currently displayed render state. The module
         // labels advertise their Lightroom keyboard shortcuts (`G`, `D`).
-        egui::TopBottomPanel::top("modules").show(ctx, |ui| {
+        egui::Panel::top("modules").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (module, label) in [
                     (Module::Library, Str::LibraryShortcut.format_arg("G")),
@@ -5542,10 +5589,10 @@ impl eframe::App for LuminaApp {
         // left edge to the navigator/preview working area.
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_module == Module::Library {
-            egui::SidePanel::left("folders")
+            egui::Panel::left("folders")
                 .resizable(true)
-                .default_width(220.0)
-                .show(ctx, |ui| self.draw_folder_tree(ui));
+                .default_size(220.0)
+                .show(ui, |ui| self.draw_folder_tree(ui));
         }
 
         // Left: Lightroom-like thumbnail navigator rail (Develop / Export). The
@@ -5555,18 +5602,18 @@ impl eframe::App for LuminaApp {
         // image.
         #[cfg(not(target_arch = "wasm32"))]
         if self.navigator_open && !matches!(self.active_module, Module::Library) {
-            egui::SidePanel::left("navigator")
+            egui::Panel::left("navigator")
                 .resizable(true)
-                .default_width(150.0)
-                .show(ctx, |ui| self.draw_navigator(ctx, ui));
+                .default_size(150.0)
+                .show(ui, |ui| self.draw_navigator(&ctx, ui));
         }
 
         // Right: Develop controls (eight sections), the Library sidecar/copy
         // manager, or nothing extra for Export (placeholder shown centrally).
-        egui::SidePanel::right("controls")
+        egui::Panel::right("controls")
             .resizable(true)
-            .default_width(320.0)
-            .show(ctx, |ui| match self.active_module {
+            .default_size(320.0)
+            .show(ui, |ui| match self.active_module {
                 Module::Develop => self.draw_develop_panel(ui),
                 Module::Library => {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -5590,9 +5637,9 @@ impl eframe::App for LuminaApp {
         let show_filmstrip = matches!(self.active_module, Module::Library | Module::Develop);
         if show_filmstrip {
             #[cfg(not(target_arch = "wasm32"))]
-            egui::TopBottomPanel::bottom("filmstrip").show(ctx, |ui| self.draw_filmstrip(ctx, ui));
+            egui::Panel::bottom("filmstrip").show(ui, |ui| self.draw_filmstrip(&ctx, ui));
             #[cfg(target_arch = "wasm32")]
-            egui::TopBottomPanel::bottom("filmstrip").show(ctx, |ui| {
+            egui::Panel::bottom("filmstrip").show(ui, |ui| {
                 ui.heading(Str::Filmstrip.t());
                 ui.label(Str::NotAvailable.t());
             });
@@ -5602,7 +5649,7 @@ impl eframe::App for LuminaApp {
         // current render (what will be exported); the controls live in the
         // right-side Export panel. Under wasm32 (no file-system export) the
         // module is a clear capability hint.
-        egui::CentralPanel::default().show(ctx, |ui| match self.active_module {
+        egui::CentralPanel::default().show(ui, |ui| match self.active_module {
             Module::Export => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -5610,7 +5657,7 @@ impl eframe::App for LuminaApp {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.draw_preview_area(ctx, ui);
+                    self.draw_preview_area(&ctx, ui);
                 }
             }
             // Library: Lightroom-like grid view (folders tree left, RAW
@@ -5620,7 +5667,7 @@ impl eframe::App for LuminaApp {
             Module::Library => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.draw_library_grid(ctx, ui);
+                    self.draw_library_grid(&ctx, ui);
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -5628,7 +5675,7 @@ impl eframe::App for LuminaApp {
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
-            _ => self.draw_preview_area(ctx, ui),
+            _ => self.draw_preview_area(&ctx, ui),
             #[cfg(target_arch = "wasm32")]
             _ => self.draw_preview(ui),
         });
@@ -7047,23 +7094,27 @@ mod tests {
         // must match a rendered full preview (200×150), not a tiny placeholder.
         app.texture = Some(ctx.load_texture(
             "preview",
-            egui::ColorImage::new([200, 150], egui::Color32::BLACK),
+            egui::ColorImage::filled([200, 150], egui::Color32::BLACK),
             egui::TextureOptions::LINEAR,
         ));
 
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
         let pass = |app: &mut LuminaApp, events: Vec<egui::Event>, time: f64| {
-            let _ = ctx.run(
+            let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(time),
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.draw_preview(ui));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
                 },
             );
+            // No GPU renderer consumes the per-frame texture deltas in these
+            // headless tests; dropping them would trip epaint's
+            // "unapplied deltas" debug assertion.
+            output.textures_delta.clear();
         };
 
         // Pass 1: pointer-down inside the pane pans nothing yet.
@@ -7161,39 +7212,42 @@ mod tests {
         app.render().unwrap();
         app.texture = Some(ctx.load_texture(
             "preview",
-            egui::ColorImage::new([200, 150], egui::Color32::BLACK),
+            egui::ColorImage::filled([200, 150], egui::Color32::BLACK),
             egui::TextureOptions::LINEAR,
         ));
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
         let pointer = screen.center();
         // Warm-up so the preview widget exists and hit-testing sees the cursor.
-        let _ = ctx.run(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),
                 time: Some(0.9),
                 events: vec![egui::Event::PointerMoved(pointer)],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.draw_preview(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
             },
         );
+        output.textures_delta.clear();
         // Scroll-wheel zoom with the pointer hovering the preview.
-        let _ = ctx.run(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),
                 time: Some(1.0),
                 events: vec![egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, 120.0),
+                    phase: egui::TouchPhase::Move,
                     modifiers: Default::default(),
                 }],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.draw_preview(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
             },
         );
+        output.textures_delta.clear();
         assert!(app.preview_zoom > 1.0, "wheel must zoom in");
         assert_eq!(app.zoom_mode, ZoomMode::Custom);
         assert!(

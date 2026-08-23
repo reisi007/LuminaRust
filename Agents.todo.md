@@ -732,14 +732,20 @@ unabhängige Verifizierung `ses_fd02c06c`+`ses_fd027021` — BESTANDEN):**
   Hinweis: criterion-0.8-Ergebnisformate beim nächsten Baseline-Capture
   prüfen (BENCH-BASELINE-1); echte Action-Verifikation im CI-Lauf.
 
-Offen:
+**Verifiziert erledigt (2026-08-23, Implementierung `ses_fcfc1e1f`,
+unabhängige Verifizierung `ses_fcfbebdd` — BESTANDEN):**
+- **DEP-EGUI-WGPU-1** eframe/egui 0.31→0.36.1 (+egui_kittest 0.36.1) und
+  wgpu 24→30.0.1 + `cargo update`. Migration sauber (wgpu InstanceDescriptor,
+  PollType, MipmapFilterMode etc.; App::update→App::ui, Panel-API,
+  global_style, MouseWheel-Summe). Nacharbeit: kittest `collapse_except`
+  repariert (egui 0.36 default-zu, pro Klick `run()`, 10 Labels), Goldens
+  57K/60K differenziert; WASM-Drop jetzt warn+status statt still (cap
+  dok. in `cli-gui-wasm.md`); `lumina-gpu` dead_code `warn_unsupported_`
+  cfg-gated. Verifiziert: fmt clean, clippy workspace `-D warnings` 0,
+  wasm-gui check grün, gpu --no-default-features warnungsfrei,
+  gui 81 + kittest 5, sidecar-zdata 94, gpu 7, core-lensfun 217+7.
+  F1+F2 behoben.
 
-- [ ] **DEP-EGUI-WGPU-1** (gemeinsamer Migrationsschritt): eframe/egui
-      0.31→0.36 (+egui_kittest 0.36, kittest-Snapshots regenerieren) und
-      wgpu 24→30 in EINEM Batch — Feature-Kopplung glow/wgpu; danach
-      CPU-vs-GPU-Golden-Äquivalenz (`lumina-gpu` tests) neu verifizieren.
-      Nebeneffekt: letzte transitive thiserror-1-Instanz (via egui-wgpu)
-      verschwindet. Vorher GUI-WGPU-PRESENT-1 (egui_wgpu) mitdenken.
 - Bewusst gepinnt (kein Aktion ohne ADR): libraw-sys vendored
   `[patch.crates-io]` (macOS-C++-Fix), `ort =2.0.0-rc.13` (= neueste RC),
   LibRaw 0.22.2 + Ubuntu-24.04-lensfun-Distro-Pin (Determinismus;
@@ -751,7 +757,7 @@ Offen:
 
 ## Nächste Schritte vor manuellem Review (dokumentiert 2026-08-23)
 
-Kein neuer großer Batch nach dem laufenden DEP-EGUI-WGPU-1 — nur sauberer
+Kein neuer großer Batch nach DEP-EGUI-WGPU-1 (verifiziert) — nur sauberer
 Abschluss bis CI grün, dann manueller Review **F-103-N6**. Vor F-103-N6
 sinnvoll (klein, kein Architektur-Umbau, kein GPU-/Wgpu-Umbau):
 

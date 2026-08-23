@@ -173,7 +173,7 @@ pub fn create_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Nearest,
         min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     })
 }
@@ -388,8 +388,8 @@ pub fn create_overlay_pipeline(
     let layout = create_overlay_bind_group_layout(device);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lumina-gpu-overlay-pl"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lumina-gpu-overlay-shader"),
@@ -418,7 +418,7 @@ pub fn create_overlay_pipeline(
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         }),
     )

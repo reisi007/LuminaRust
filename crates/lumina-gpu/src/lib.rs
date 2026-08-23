@@ -239,6 +239,7 @@ pub fn log_cpu_routing_once(reasons: &[String], context: &str) {
 
 /// Warns once per unique reason set that the VRAM interactive path is rendering
 /// a recipe whose stages the GPU tone pass does not implement.
+#[cfg(feature = "gpu")]
 fn warn_unsupported_vram_once(reasons: &[String]) {
     use std::collections::BTreeSet;
     use std::sync::Mutex;
@@ -558,6 +559,7 @@ impl GpuContext {
                 label: Some("lumina-gpu-vram-tone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &v.output_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -572,6 +574,7 @@ impl GpuContext {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &bind, &[]);
@@ -678,6 +681,7 @@ impl GpuContext {
                 label: Some("lumina-gpu-overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &dest_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -692,6 +696,7 @@ impl GpuContext {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&overlay_pipe);
             pass.set_bind_group(0, &bind, &[]);
@@ -813,6 +818,7 @@ impl GpuContext {
                 label: Some("lumina-gpu-color-tone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -827,6 +833,7 @@ impl GpuContext {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -862,12 +869,19 @@ impl GpuContext {
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        resources.device.poll(wgpu::Maintain::Wait);
+        // wgpu 25+ removed `Maintain`; `Device::poll(PollType)` returns a
+        // `Result` and blocks until the mapped read is complete.
+        resources
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
         rx.recv()
             .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
             .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
         let row_bytes = (width * 4) as usize;
         let mut pixels = Vec::with_capacity(row_bytes * height as usize);
         for y in 0..height as usize {
@@ -1073,8 +1087,8 @@ fn build_pipeline(resources: &GpuResources) -> Result<PipelineState, GpuError> {
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lumina-gpu-pl"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lumina-gpu-shader"),
@@ -1102,7 +1116,7 @@ fn build_pipeline(resources: &GpuResources) -> Result<PipelineState, GpuError> {
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
     Ok(PipelineState {
@@ -1245,32 +1259,32 @@ fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> 
 /// are expected to treat either as "use the CPU fallback".
 #[cfg(feature = "gpu")]
 fn init_gpu_resources() -> Result<GpuResources, GpuError> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         // Metal is the primary backend on Apple Silicon (M5 Pro). Restricting
         // the backend list avoids pulling Vulkan/DX12/WGPU-GL on platforms where
         // they are unavailable and keeps adapter selection deterministic.
         backends: wgpu::Backends::METAL,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
-    // `request_adapter` returns `Option<Adapter>` (not a `Result`), so surface a
-    // descriptive error for the "no adapter" case.
+    // Since wgpu 25, `request_adapter` returns a `Result` with a descriptive
+    // error for the "no adapter" case.
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
-    .ok_or_else(|| GpuError::AdapterUnavailable("no Metal adapter found".into()))?;
+    .map_err(|_| GpuError::AdapterUnavailable("no Metal adapter found".into()))?;
 
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("lumina-gpu"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("lumina-gpu"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        trace: wgpu::Trace::Off,
+    }))
     .map_err(|err| GpuError::DeviceUnavailable(err.to_string()))?;
 
     Ok(GpuResources {
