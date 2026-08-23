@@ -620,12 +620,47 @@ Offen (nächste Batches):
       Tone-Stage; CPU bleibt Referenz). Nach GUI-60FPS-1.
 - [ ] **BENCH-BASELINE-1** Baseline-Capture 6 GPU-Benchmark-IDs
       `perf/baseline.json` → `gate:true` (aktuell report-only, F-074-N6 draft).
+
+### Generativ: Entfernen & Bildfläche erweitern (Wunsch Tester 2026-08-23, nur Doku)
+
+- [ ] **GEN-EXPAND-1** Optionaler generativer Modus „Entfernen + Erweitern“:
+      Objekte entfernen (inpainting) **und** das Bild über die ursprüngliche
+      Bildfläche hinaus erweitern (outpainting/canvas expansion > 100 %).
+      **Nur dokumentiert, Implementierung noch nicht begonnen.**
+  - **Info an Agenten, die daran arbeiten:** Nicht-destruktiv per
+    Sidecar-Rezept (neue versionierte Stufe, z. B. `GenerativeEdit`, mit
+    Modellname/-version/-hash, Prompt-/Maskenreferenz, Seed, Auflösung,
+    Prüfsumme des Ergebnisses als binäres Sidecar-Artefakt analog
+    AI-Masken — Identität + Veraltets-Erkennung wie bei Masken, Agents.md
+    „AI-Masken“). Original bleibt unverändert; Ergebnis ist ableitbares
+    Artefakt. Gültigkeit an Quelle + Modellkontext koppeln; kein stiller
+    Fallback — fehlendes Modell/Artefakt sichtbar melden. Capability-
+    Matrix beachten (lokales ONNX vs. Cloud-API getrennt dokumentieren;
+    Lizenz der Modelle vor Integration prüfen). Interaktion mit
+    Crop/Geometry klären (Expandiertes Canvas verschiebt
+    Koordinatensystem → Rezept-Koordinaten müssen das referenzieren).
+  - **Abhängigkeiten:** F-082/F-083 SAM-Adapter existiert; ONNX-Pfad
+    (`lumina-onnx`) als Heimat für lokale Inpainting/Outpainting-Modelle;
+    GUI-Flow (Prompt, Maske malen, Expand-Rahmen ziehen) nach
+    GUI-STAGE-1/GUI-WGPU-PRESENT-1.
 - [ ] **GUI-WGPU-PRESENT-1** Follow-up aus GUI-60FPS-1-Verifizierung:
       `egui_wgpu`-Migration oder Upload-Pfad finalisieren (derzeit Present
       unter glow CPU-seitig via `ColorImage`/`load_texture`; <16 ms gilt für
       Masken-Tile-Upload, nicht Preview-Present). `VramState` LRU/Pool
       (45 MP+) + `warn!` bei `GpuContext::new` Adapter-Fehler.
       Dokumentiert in `docs/gpu-bootstrap.md` (Dual-Backend glow vs wgpu).
+- [ ] **GUI-SCROLL-200-1 (hartes Kriterium, Tester 2026-08-23)** Flüssiges
+      Scrollen über Previews in einem Ordner mit **200 Bildern** — im Grid/
+      Filmstrip **und** in der Einzelansicht mit voller Auflösung; weniger
+      ist akzeptabel, aber ein Selling Point, wenn es auch im **Develop**-
+      Modul flüssig bleibt. Abnahmekriterien: Scrollen während laufender
+      Thumbnail-Jobs ohne Frame-Drops > 16 ms (Messung via
+      `LUMINA_PERF_LOG=1`); Virtualisierung des Grids (nur sichtbare Zellen
+      enqueuen); Priorisierung sichtbarer Thumbnails vor Off-Screen
+      (`TiledCache`-/Worker-Pool-Nutzung); Einzelansicht: Full-Res-Decode
+      asynchron + Progressive Vorschau (Draft-Pyramide), kein UI-Freeeze.
+      Basis: bestehender Worker-Pool (`available_parallelism`), DraftPyramid,
+      ROI-Rendering. Verwandt: PERF-GUI-3/5, GUI-60FPS-1.
 
 ### GUI-60FPS-1 (2026-08-23)
 
