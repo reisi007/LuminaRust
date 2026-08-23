@@ -206,7 +206,42 @@ These constants live in `tests/golden.rs` (`MAX_ABS_DIFF_TOLERANCE = 1`,
 - `default` (identity),
 - `exposure = 0.5`,
 - `contrast = -0.2`,
-- `wb_temperature = 5800`, `wb_tint = 0.05`.
+- `wb_temperature = 5800`, `wb_tint = 0.05`,
+- **GPU-unsupported (REVIEW-GPU-DIVERGENCE-1):** non-zero `vibrance`/`saturation`,
+  a curved tone master, an HSL channel shift, Presence clarity, a vignette
+  effect, and a recipe with SourceActions. For every one of these the GPU path
+  must CPU-route (see below) and produce byte-identical output to the CPU oracle.
+
+### Recipe validation & explicit CPU routing (REVIEW-GPU-DIVERGENCE-1)
+
+The GPU color/tone shader implements **white balance + the seven tone sliders
+only**. A recipe that uses any other pipeline stage must never be rendered by
+the shader — that would silently change pixels versus every CPU build.
+Therefore:
+
+- [`lumina_gpu::unsupported_gpu_stages`] lists the unsupported stages of a
+  recipe: any adjustment key outside the implemented set (including
+  vibrance/saturation, whose uniform fields exist but are not applied by the
+  shader), non-neutral Curves/HSL/Presence, Color Grading, Noise Reduction,
+  Sharpening, Effects, Geometry, Lens Correction, Perspective and non-empty
+  SourceActions.
+- `GpuContext::render_with_gpu` validates before rendering: with an adapter
+  bound and an unsupported recipe it **explicitly routes the render to the full
+  CPU pipeline** and logs once per unique reason set (`log::info!`, never per
+  frame). The GPU is an accelerator, never a semantic change (Agents.md: no
+  silent fallbacks).
+- The CLI routing layer (`render_best_effort` in `lumina-cli`) additionally
+  checks context-level features that exist only on the CPU path — source-action
+  artifacts, active-copy mask layers and a non-identity Lensfun corrector — and
+  CPU-routes with the same visible log when any are present.
+- The VRAM interactive preview path (`render_to_vram`) cannot CPU-route without
+  a readback; it warns once per reason set so a divergent interactive preview
+  is never silent.
+
+Not a divergence today: `RenderContext::camera_white_balance` is validated but
+never re-applied to pixels in `lumina-core` (the decoder has already applied
+the As-Shot gains), so it triggers no routing. If core semantics change, the
+validator must grow a corresponding check.
 
 ### GPU availability & headless CI
 
@@ -224,13 +259,13 @@ the real comparison wherever a GPU exists.
 
 ### No silent fallback (per `Agents.md`)
 
-The bootstrap's `render_with_gpu` still routes through the CPU pipeline (the GPU
-DAG is implemented by parallel subagents). That fallback must be **visible, not
-silent**: the harness prints a `[WARN]` noting the comparison is currently
-CPU-vs-CPU and that a genuine GPU/CPU divergence will be caught by the
-`maxAbsDiff ≤ 1` / `PSNR ≥ 45 dB` gates once the shader/tiling stages land. The
-production path must likewise surface any fallback loudly (log `warn!`, never
-swallow it) so staleness is always observable rather than hidden behind a
+Since REVIEW-GPU-DIVERGENCE-1, `render_with_gpu` validates the recipe and
+explicitly CPU-routes anything its tone stage cannot render (see "Recipe
+validation & explicit CPU routing" above); the harness prints an `[INFO]` noting
+this policy. Tone/WB-only recipes exercise the real GPU stage and are gated on
+the `maxAbsDiff ≤ 1` / `PSNR ≥ 45 dB` tolerances. Any future fallback or
+unimplemented-stage path must likewise surface loudly (log `info!`/`warn!`,
+never swallow it) so divergence is always observable rather than hidden behind a
 transparent CPU render.
 
 ## Verification (bootstrap)

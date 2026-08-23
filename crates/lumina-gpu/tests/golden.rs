@@ -44,8 +44,11 @@
 
 use blake3::Hasher;
 use lumina_core::{render_frame, ImageFrame, RenderContext};
-use lumina_gpu::GpuContext;
-use lumina_sidecar::EditRecipe;
+use lumina_gpu::{unsupported_gpu_stages, GpuContext};
+use lumina_sidecar::{
+    CurvePoint, Curves, EditRecipe, Effects, HslAdjustments, HslChannel, Presence,
+    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, Vignette, SOURCE_ACTION_VERSION,
+};
 use std::collections::BTreeMap;
 
 /// Tolerance policy (see `docs/gpu-bootstrap.md`).
@@ -113,6 +116,12 @@ fn noise_frame(width: u32, height: u32, seed: u64) -> ImageFrame {
 // ---------------------------------------------------------------------------
 
 /// The recipe basket exercised by the harness.
+///
+/// REVIEW-GPU-DIVERGENCE-1: the basket deliberately includes recipes whose
+/// stages the GPU tone stage does NOT implement (vibrance/saturation, curves,
+/// HSL, presence, effects, source actions). For those, `render_with_gpu` must
+/// route to the CPU pipeline instead of silently dropping the stage — the
+/// routing test below pins this byte-exactly.
 fn recipes() -> Vec<(&'static str, EditRecipe)> {
     vec![
         ("default", EditRecipe::default()),
@@ -140,6 +149,112 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
+        // --- unsupported by the GPU tone stage (must CPU-route) ---
+        (
+            "vibrance_saturation_unsupported",
+            EditRecipe {
+                adjustments: BTreeMap::from([
+                    ("vibrance".into(), 0.3),
+                    ("saturation".into(), -0.1),
+                ]),
+                ..Default::default()
+            },
+        ),
+        (
+            "curves_s_master_unsupported",
+            EditRecipe {
+                curves: Some(Curves {
+                    version: 1,
+                    master: vec![
+                        CurvePoint {
+                            input: 0.0,
+                            output: 0.0,
+                        },
+                        CurvePoint {
+                            input: 0.5,
+                            output: 0.4,
+                        },
+                        CurvePoint {
+                            input: 1.0,
+                            output: 1.0,
+                        },
+                    ],
+                    channels: Default::default(),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "hsl_red_shift_unsupported",
+            EditRecipe {
+                hsl: Some(HslAdjustments {
+                    version: 1,
+                    red: Some(HslChannel {
+                        hue: 0.1,
+                        saturation: 0.05,
+                        luminance: 0.0,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_clarity_unsupported",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.0,
+                    clarity: 0.25,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "vignette_effects_unsupported",
+            EditRecipe {
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: -0.4,
+                        midpoint: 0.6,
+                        roundness: 1.0,
+                        feather: 0.5,
+                    }),
+                    grain: None,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "source_actions_unsupported",
+            EditRecipe {
+                source_actions: vec![SourceActionSpec {
+                    version: SOURCE_ACTION_VERSION,
+                    kind: SourceActionKind::DustRemoval,
+                    artifact: SourceActionArtifactRef {
+                        id: "repair-1".into(),
+                        relative_path: "test.lumina.zdata".into(),
+                        checksum: "unused".into(),
+                    },
+                }],
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
+/// The subset of [`recipes`] the GPU tone stage cannot render (validator must
+/// flag each of them; the default/tone/WB recipes must stay unflagged).
+fn unsupported_recipe_names() -> &'static [&'static str] {
+    &[
+        "vibrance_saturation_unsupported",
+        "curves_s_master_unsupported",
+        "hsl_red_shift_unsupported",
+        "presence_clarity_unsupported",
+        "vignette_effects_unsupported",
+        "source_actions_unsupported",
     ]
 }
 
@@ -265,15 +380,14 @@ fn cpu_gpu_golden_equivalence() {
         return;
     }
 
-    // Bootstrap note: until the GPU DAG is wired, `render_with_gpu` routes
-    // through the CPU pipeline. Flag this loudly rather than hiding it — the
-    // comparison below is currently CPU-vs-CPU and becomes meaningful once the
-    // shader/tiling stages land.
+    // Bootstrap note: since REVIEW-GPU-DIVERGENCE-1 the GPU path validates the
+    // recipe and CPU-routes anything its tone stage cannot render, so every
+    // pair below is pixel-safe by construction; the tolerance gates still catch
+    // real GPU/CPU divergence on the supported (tone/WB) recipes.
     eprintln!(
-        "[WARN] lumina-gpu render_with_gpu still uses the CPU fallback in this \
-         bootstrap; equivalence is CPU-vs-CPU until the GPU DAG lands. A real \
-         GPU/CPU divergence would be caught by the maxAbsDiff<=1 / PSNR>=45dB \
-         gates below."
+        "[INFO] lumina-gpu routes GPU-unsupported recipes to the CPU pipeline \
+         (REVIEW-GPU-DIVERGENCE-1); tone/WB-only recipes exercise the real GPU \
+         stage and are gated on maxAbsDiff<=1 / PSNR>=45dB below."
     );
 
     let frames: Vec<(&'static str, ImageFrame)> = vec![
@@ -338,6 +452,208 @@ fn cpu_gpu_golden_equivalence() {
          (see per-pair report above; tolerances: maxAbsDiff<= {MAX_ABS_DIFF_TOLERANCE}, \
          PSNR>= {MIN_PSNR_DB} dB)"
     );
+}
+
+/// REVIEW-GPU-DIVERGENCE-1: recipes containing stages the GPU tone stage does
+/// not implement must never be rendered by the shader. `render_with_gpu` has
+/// to route them to the CPU pipeline so GPU-enabled builds stay pixel-safe.
+///
+/// This test runs even without a GPU adapter: with an adapter it proves the
+/// routing produces byte-identical output to the CPU oracle; without one the
+/// CPU fallback trivially matches (and the validator assertions still hold).
+#[test]
+fn unsupported_recipes_route_to_cpu_byte_identically() {
+    let frame = gradient_frame(64, 64);
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped routing check");
+            return;
+        }
+    };
+
+    for name in unsupported_recipe_names() {
+        let recipe = recipes()
+            .into_iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, r)| r)
+            .unwrap_or_else(|| panic!("recipe basket must contain {name}"));
+
+        // The validator must flag every unsupported recipe…
+        let reasons = unsupported_gpu_stages(&recipe);
+        assert!(
+            !reasons.is_empty(),
+            "{name} must be flagged as GPU-unsupported"
+        );
+
+        // …and the render must CPU-route to byte-identical pixels. A real
+        // divergence (shader dropping the stage) would show up here.
+        if !ctx.is_available() {
+            eprintln!("{SKIP_MESSAGE} - validator-only assertions for {name}");
+            continue;
+        }
+        let cpu = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("CPU oracle render failed for {name}: {error}"))
+        .frame;
+        let gpu = ctx
+            .render_with_gpu(&frame, &recipe)
+            .unwrap_or_else(|error| panic!("GPU render_with_gpu failed for {name}: {error}"));
+        let report = compare(&cpu.pixels, &gpu.pixels);
+        assert_eq!(
+            report.max_abs_diff,
+            [0, 0, 0, 0],
+            "{name}: CPU-routed GPU render must be byte-identical to the CPU \
+             oracle (got maxAbsDiff={:?}; reasons={reasons:?})",
+            report.max_abs_diff
+        );
+    }
+}
+
+/// Always-runs unit checks for [`unsupported_gpu_stages`]: supported recipes
+/// stay unflagged; neutral/identity nested objects do not trigger false
+/// positives; every unsupported stage produces its reason.
+#[test]
+fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
+    // Supported: default + tone/WB sliders only.
+    assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
+    assert!(unsupported_gpu_stages(&EditRecipe {
+        adjustments: BTreeMap::from([
+            ("exposure".into(), 1.0),
+            ("contrast".into(), -0.2),
+            ("highlights".into(), 0.1),
+            ("shadows".into(), -0.1),
+            ("whites".into(), 0.2),
+            ("blacks".into(), -0.2),
+            ("wb_temperature".into(), 5500.0),
+            ("wb_tint".into(), 0.05),
+        ]),
+        ..Default::default()
+    })
+    .is_empty());
+
+    // Neutral nested objects are NOT unsupported (identity semantics).
+    assert!(unsupported_gpu_stages(&EditRecipe {
+        curves: Some(Curves {
+            version: 1,
+            master: vec![
+                CurvePoint {
+                    input: 0.0,
+                    output: 0.0
+                },
+                CurvePoint {
+                    input: 1.0,
+                    output: 1.0
+                }
+            ],
+            channels: Default::default(),
+        }),
+        hsl: Some(HslAdjustments::default()),
+        presence: Some(Presence {
+            version: 1,
+            texture: 0.0,
+            clarity: 0.0,
+            dehaze: 0.0,
+        }),
+        ..Default::default()
+    })
+    .is_empty());
+
+    // Each unsupported stage is flagged with a recognisable reason.
+    let cases: Vec<(&str, EditRecipe)> = vec![
+        (
+            "vibrance",
+            EditRecipe {
+                adjustments: BTreeMap::from([("vibrance".into(), 0.2)]),
+                ..Default::default()
+            },
+        ),
+        (
+            "saturation",
+            EditRecipe {
+                adjustments: BTreeMap::from([("saturation".into(), -0.5)]),
+                ..Default::default()
+            },
+        ),
+        (
+            "curves",
+            EditRecipe {
+                curves: Some(Curves {
+                    version: 1,
+                    master: vec![CurvePoint {
+                        input: 0.5,
+                        output: 0.4,
+                    }],
+                    channels: Default::default(),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "hsl",
+            EditRecipe {
+                hsl: Some(HslAdjustments {
+                    version: 1,
+                    blue: Some(HslChannel {
+                        hue: -0.1,
+                        saturation: 0.0,
+                        luminance: 0.0,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.1,
+                    clarity: 0.0,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "effects",
+            EditRecipe {
+                effects: Some(Effects::default()),
+                ..Default::default()
+            },
+        ),
+        (
+            "source_actions",
+            EditRecipe {
+                source_actions: vec![SourceActionSpec {
+                    version: SOURCE_ACTION_VERSION,
+                    kind: SourceActionKind::DustRemoval,
+                    artifact: SourceActionArtifactRef {
+                        id: "r".into(),
+                        relative_path: "b.lumina.zdata".into(),
+                        checksum: "c".into(),
+                    },
+                }],
+                ..Default::default()
+            },
+        ),
+    ];
+    for (expected_reason, recipe) in cases {
+        let reasons = unsupported_gpu_stages(&recipe);
+        assert!(
+            reasons.iter().any(|r| r.contains(expected_reason)),
+            "expected a reason containing `{expected_reason}`, got {reasons:?}"
+        );
+    }
 }
 
 /// Always-runs sanity check: the CPU oracle must be deterministic across two

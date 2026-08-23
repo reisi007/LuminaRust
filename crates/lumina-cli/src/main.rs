@@ -19,7 +19,7 @@ use lumina_lensfun::{Corrector, LensfunDb};
 // enabled, so the default build stays CPU-only (per `Agents.md` capability
 // separation).
 #[cfg(feature = "gpu")]
-use lumina_gpu::{Frame, GpuContext};
+use lumina_gpu::{unsupported_gpu_stages, Frame, GpuContext};
 // Visible backend-selection logging (no silent fallback to CPU).
 use log::info;
 use lumina_sidecar::{
@@ -114,12 +114,14 @@ thread_local! {
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
 /// otherwise the full platform-neutral CPU pipeline.
 ///
-/// The GPU bootstrap stub currently applies the recipe only (mask/WB/source-
-/// action stages land with later shader subagents), so the returned
-/// [`RenderOutput`] carries an empty mask result on the GPU path; the CPU branch
-/// runs the complete pipeline and stays byte-identical to the historical path.
-/// This is a documented bootstrap limitation, not a silent fallback — the chosen
-/// backend is logged once at startup.
+/// REVIEW-GPU-DIVERGENCE-1: the GPU bootstrap stage implements only white
+/// balance + the seven tone sliders. Before routing to the GPU, the render is
+/// validated against **both** the recipe ([`unsupported_gpu_stages`]) and the
+/// render context (source actions, mask layers, Lensfun corrector — none of
+/// which exist on the GPU path). Any unsupported stage routes the whole render
+/// explicitly to the CPU pipeline with a once-per-reason-set log line, so
+/// GPU-enabled builds always produce the same pixels as CPU builds. The GPU is
+/// an accelerator, never a semantic change (Agents.md: no silent fallbacks).
 #[cfg(feature = "gpu")]
 fn render_best_effort(
     ctx: Option<&GpuContext>,
@@ -127,8 +129,30 @@ fn render_best_effort(
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
 ) -> Result<RenderOutput, CliError> {
+    // Context-level features the GPU path cannot reproduce at all.
+    let mut reasons = unsupported_gpu_stages(recipe);
+    if !render_ctx.source_actions.is_empty() {
+        reasons.push("source_actions (context artifacts)".into());
+    }
+    let has_mask_layers = render_ctx
+        .masks
+        .as_ref()
+        .and_then(|masks| {
+            masks
+                .copies
+                .iter()
+                .find(|copy| copy.id == masks.active_copy_id)
+        })
+        .is_some_and(|copy| !copy.mask_layers.is_empty());
+    if has_mask_layers {
+        reasons.push("masks (active copy has layers)".into());
+    }
+    if lensfun_corrector_active(render_ctx) {
+        reasons.push("lens_correction (Lensfun corrector)".into());
+    }
+
     match ctx {
-        Some(ctx) if ctx.is_available() => {
+        Some(ctx) if ctx.is_available() && reasons.is_empty() => {
             let frame = ctx
                 .render_with_gpu(frame, recipe)
                 .map(Frame::to_image_frame)
@@ -139,9 +163,30 @@ fn render_best_effort(
                 mask_warnings: Vec::new(),
             })
         }
-        _ => Ok(render_frame(frame, render_ctx)
-            .map_err(|error| CliError::Message(error.to_string()))?),
+        _ => {
+            if !reasons.is_empty() {
+                lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
+            }
+            Ok(render_frame(frame, render_ctx)
+                .map_err(|error| CliError::Message(error.to_string()))?)
+        }
     }
+}
+
+/// Whether the render context carries a non-identity Lensfun corrector (which
+/// changes pixels on the CPU path and therefore forces CPU rendering).
+#[cfg(all(feature = "gpu", feature = "lensfun"))]
+fn lensfun_corrector_active(render_ctx: &RenderContext<'_>) -> bool {
+    render_ctx
+        .lensfun
+        .map(|corrector| !corrector.0.is_identity())
+        .unwrap_or(false)
+}
+
+/// Non-Lensfun build: no corrector can exist, so this never blocks the GPU.
+#[cfg(all(feature = "gpu", not(feature = "lensfun")))]
+fn lensfun_corrector_active(_render_ctx: &RenderContext<'_>) -> bool {
+    false
 }
 
 /// Non-GPU build: only the CPU pipeline exists, so this is a thin alias to

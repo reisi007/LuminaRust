@@ -13,7 +13,16 @@
 //! is present (or the `gpu` feature is disabled). The shader mirrors the
 //! integer-rounded per-channel math of `lumina-core::apply_channel_lut_adjustments`,
 //! so the GPU and CPU outputs agree within the golden-image tolerance
-//! (maxAbsDiff ≤ 1, PSNR ≥ 45 dB). The public API is therefore stable and always
+//! (maxAbsDiff ≤ 1, PSNR ≥ 45 dB) for the stages the shader implements.
+//!
+//! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** The tone stage implements
+//! only WB + seven sliders. [`unsupported_gpu_stages`] lists any recipe stage the
+//! shader cannot render (Curves, HSL, Presence, Vibrance/Saturation, Effects,
+//! Geometry, SourceActions, …); `render_with_gpu` then explicitly routes the
+//! render to the full CPU pipeline and logs once per reason set — the GPU is an
+//! accelerator, never a semantic change.
+//!
+//! The public API is therefore stable and always
 //! returns a [`Frame`], which keeps the CPU and GPU return types identical for
 //! callers.
 //!
@@ -21,7 +30,7 @@
 //! the shader-stage design.
 
 use lumina_core::ImageFrame;
-use lumina_sidecar::EditRecipe;
+use lumina_sidecar::{CurvePoint, Curves, EditRecipe, HslAdjustments};
 use thiserror::Error;
 
 // Shader + tiling modules are scaffolded (empty) so parallel subagents can fill
@@ -90,6 +99,159 @@ pub enum GpuError {
     /// The GPU color/tone pass failed (e.g. buffer map, encoder or readback).
     #[error("GPU render failed: {0}")]
     RenderFailed(String),
+}
+
+// ---------------------------------------------------------------------------
+// Recipe-support validation (REVIEW-GPU-DIVERGENCE-1)
+// ---------------------------------------------------------------------------
+
+/// Adjustment keys the GPU color/tone stage actually implements.
+///
+/// This is the exact key set of `lumina-core::apply_channel_lut_adjustments`
+/// mirrored by the WGSL shader. Note that `vibrance`/`saturation` have uniform
+/// fields but are **not** applied by the shader yet, so they are deliberately
+/// absent here.
+const GPU_SUPPORTED_ADJUSTMENT_KEYS: [&str; 8] = [
+    "exposure",
+    "contrast",
+    "highlights",
+    "shadows",
+    "whites",
+    "blacks",
+    "wb_temperature",
+    "wb_tint",
+];
+
+/// Lists the recipe stages the current GPU color/tone stage cannot render.
+///
+/// An empty result means the GPU path produces pixels within the documented
+/// golden tolerance (maxAbsDiff ≤ 1, PSNR ≥ 45 dB) of the CPU oracle. A
+/// non-empty result means running the GPU path would **silently drop** those
+/// stages and produce different pixels than every CPU build — callers must
+/// route such renders to the CPU pipeline instead (Agents.md: no silent
+/// fallbacks).
+///
+/// Currently detected as unsupported:
+/// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] (in
+///   particular non-zero `vibrance`/`saturation`, whose uniform fields exist
+///   but are not applied by the shader);
+/// - non-neutral Curves, HSL, Presence;
+/// - Color Grading, Noise Reduction, Sharpening, Effects (vignette/grain);
+/// - Geometry / Lens Correction / Perspective;
+/// - non-empty SourceActions.
+///
+/// Not listed: `RenderContext::camera_white_balance`. In `lumina-core` the
+/// As-Shot gains are validated but never re-applied to pixels (the decoder has
+/// already applied them), so they cause no CPU/GPU divergence today. If that
+/// ever changes, this predicate must grow a corresponding check.
+pub fn unsupported_gpu_stages(recipe: &EditRecipe) -> Vec<String> {
+    let mut reasons = Vec::new();
+    for key in recipe.adjustments.keys() {
+        if !GPU_SUPPORTED_ADJUSTMENT_KEYS.contains(&key.as_str()) {
+            reasons.push(format!("adjustment `{key}` not implemented on GPU"));
+        }
+    }
+    if let Some(curves) = &recipe.curves {
+        if !curves_are_neutral(curves) {
+            reasons.push("curves".into());
+        }
+    }
+    if let Some(hsl) = &recipe.hsl {
+        if !hsl_is_neutral(hsl) {
+            reasons.push("hsl".into());
+        }
+    }
+    if let Some(presence) = &recipe.presence {
+        if presence.texture != 0.0 || presence.clarity != 0.0 || presence.dehaze != 0.0 {
+            reasons.push("presence".into());
+        }
+    }
+    for (active, name) in [
+        (recipe.color_grading.is_some(), "color_grading"),
+        (recipe.noise_reduction.is_some(), "noise_reduction"),
+        (recipe.sharpening.is_some(), "sharpening"),
+        (recipe.effects.is_some(), "effects"),
+        (recipe.geometry.is_some(), "geometry"),
+        (recipe.lens_correction.is_some(), "lens_correction"),
+        (recipe.perspective.is_some(), "perspective"),
+        (!recipe.source_actions.is_empty(), "source_actions"),
+    ] {
+        if active {
+            reasons.push(name.to_string());
+        }
+    }
+    reasons
+}
+
+/// A curve is neutral when its master is the identity (`input == output` for
+/// every point) and no per-channel curve exists — the CPU then leaves the
+/// pixel unchanged modulo rounding within the golden tolerance.
+fn curves_are_neutral(curves: &Curves) -> bool {
+    fn identity(points: &[CurvePoint]) -> bool {
+        points.iter().all(|p| (p.input - p.output).abs() <= 1e-6)
+    }
+    identity(&curves.master)
+        && curves.channels.red.is_none()
+        && curves.channels.green.is_none()
+        && curves.channels.blue.is_none()
+}
+
+/// HSL is neutral when every present channel carries all-zero hue/saturation/
+/// luminance (the CPU applies no visible change).
+fn hsl_is_neutral(hsl: &HslAdjustments) -> bool {
+    [
+        hsl.red,
+        hsl.orange,
+        hsl.yellow,
+        hsl.green,
+        hsl.cyan,
+        hsl.blue,
+        hsl.violet,
+        hsl.magenta,
+    ]
+    .iter()
+    .flatten()
+    .all(|c| c.hue == 0.0 && c.saturation == 0.0 && c.luminance == 0.0)
+}
+
+/// Logs a CPU-routing decision once per unique reason set (not per frame).
+///
+/// Keyed on the joined reasons so different recipes with the same unsupported
+/// stages log only once, while genuinely new divergences stay visible. Public
+/// so embedders (CLI/MCP routing layers) report their context-level reasons
+/// through the same deduplicated channel.
+pub fn log_cpu_routing_once(reasons: &[String], context: &str) {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static LOGGED: Mutex<Option<BTreeSet<String>>> = Mutex::new(None);
+    let key = reasons.join("; ");
+    let mut guard = LOGGED.lock().unwrap();
+    if guard
+        .get_or_insert_with(BTreeSet::new)
+        .insert(format!("{context}: {key}"))
+    {
+        log::info!(
+            "render backend: cpu (recipe uses GPU-unsupported stage(s): {key}); \
+             routed to the CPU pipeline to keep pixels identical"
+        );
+    }
+}
+
+/// Warns once per unique reason set that the VRAM interactive path is rendering
+/// a recipe whose stages the GPU tone pass does not implement.
+fn warn_unsupported_vram_once(reasons: &[String]) {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static WARNED: Mutex<Option<BTreeSet<String>>> = Mutex::new(None);
+    let key = reasons.join("; ");
+    let mut guard = WARNED.lock().unwrap();
+    if guard.get_or_insert_with(BTreeSet::new).insert(key.clone()) {
+        log::warn!(
+            "GPU VRAM preview renders only the tone stage; recipe uses \
+             GPU-unsupported stage(s): {key}. Interactive preview may diverge \
+             from the CPU reference until these stages land on GPU."
+        );
+    }
 }
 
 /// A live GPU rendering context.
@@ -320,6 +482,16 @@ impl GpuContext {
     /// overlay pass without ever mapping to CPU. Export/full-rebuild paths
     /// should use [`Self::render_with_gpu`] (which still reads back).
     pub fn render_to_vram(&self, frame: &ImageFrame, recipe: &EditRecipe) -> Result<(), GpuError> {
+        // REVIEW-GPU-DIVERGENCE-1: the VRAM hot path cannot CPU-route without a
+        // readback (that would defeat its purpose), so unsupported recipes are
+        // surfaced with a loud, once-per-reason-set warning instead of silently
+        // diverging. Interactive preview may then show tone-only pixels, but the
+        // divergence is never silent; export/full renders via
+        // `render_with_gpu` CPU-route correctly.
+        let unsupported = unsupported_gpu_stages(recipe);
+        if !unsupported.is_empty() {
+            warn_unsupported_vram_once(&unsupported);
+        }
         let Some(resources) = self.resources.as_ref() else {
             return Err(GpuError::AdapterUnavailable(
                 "no adapter for vram path".into(),
@@ -538,6 +710,15 @@ impl GpuContext {
     /// of `lumina-core::apply_channel_lut_adjustments`, so the output matches the
     /// CPU oracle within the golden-image tolerance (maxAbsDiff ≤ 1, PSNR ≥ 45 dB).
     ///
+    /// **Recipe validation (REVIEW-GPU-DIVERGENCE-1).** The shader only implements
+    /// white balance plus the seven tone sliders. When [`unsupported_gpu_stages`]
+    /// reports any unsupported stage (Curves, HSL, Presence, Vibrance/Saturation,
+    /// Color Grading, Noise Reduction, Sharpening, Effects, Geometry, Lens
+    /// Correction, Perspective, SourceActions), the render is **explicitly routed
+    /// to the full CPU pipeline** instead of silently producing divergent pixels.
+    /// The routing decision is logged once per unique reason set — the GPU is an
+    /// accelerator, never a semantic change (Agents.md: no silent fallbacks).
+    ///
     /// When no adapter is bound (or the `gpu` feature is disabled downstream) this
     /// transparently falls back to the CPU pipeline so the public API always
     /// returns a real [`Frame`].
@@ -553,6 +734,13 @@ impl GpuContext {
         let Some(resources) = self.resources.as_ref() else {
             return Self::render_cpu(frame, recipe);
         };
+        // REVIEW-GPU-DIVERGENCE-1: never let the GPU path drop recipe stages.
+        // Route to the CPU oracle loudly instead of rendering different pixels.
+        let unsupported = unsupported_gpu_stages(recipe);
+        if !unsupported.is_empty() {
+            log_cpu_routing_once(&unsupported, "render_with_gpu");
+            return Self::render_cpu(frame, recipe);
+        }
         self.ensure_pipeline()?;
         let guard = self.pipeline.lock().unwrap();
         let Some(pipeline) = guard.as_ref() else {
