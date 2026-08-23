@@ -943,9 +943,16 @@ struct WriteLock {
 
 impl Drop for WriteLock {
     fn drop(&mut self) {
-        // A failed cleanup is deliberately ignored: the next writer can report
-        // the lock as stale, and the actual sidecar remains untouched.
-        let _ = fs::remove_file(&self.path);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // A failed cleanup is deliberately ignored: the next writer can report
+            // the lock as stale, and the actual sidecar remains untouched.
+            let _ = fs::remove_file(&self.path);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // No filesystem on WASM; nothing to clean up (capability-separated).
+        }
     }
 }
 
@@ -1129,6 +1136,15 @@ pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
+fn acquire_write_lock(_path: &Path) -> Result<WriteLock, SidecarError> {
+    // WASM is capability-separated: no filesystem locking, single writer.
+    Ok(WriteLock {
+        path: PathBuf::from(".wasm-lock"),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().map(|name| name.to_string_lossy());
@@ -1136,7 +1152,8 @@ fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
         ".{}.lock",
         filename.as_deref().unwrap_or("sidecar")
     ));
-    for _ in 0..100 {
+    const STALE_THRESHOLD: Duration = Duration::from_secs(30);
+    for iteration in 0..100 {
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1145,16 +1162,79 @@ fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
             Ok(_) => return Ok(WriteLock { path: lock_path }),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Crash recovery for a lock cannot identify a process portably;
-                // only reclaim locks that are clearly abandoned.
+                // only reclaim locks that are clearly abandoned. The stale
+                // decision and the reclaim must be atomic: two processes must
+                // not both decide "stale" and have the second delete the fresh
+                // lock the first just created (TOCTOU lost update). We achieve
+                // atomicity via an atomic rename: the stale lock is moved aside
+                // to a unique reclaim path. Only the winner of the rename owns
+                // the old lock file and can decide whether it was genuinely
+                // stale; a fresh lock is restored instead of silently deleted,
+                // producing an explicit Conflict for the contender.
                 let stale = fs::metadata(&lock_path)
                     .and_then(|meta| meta.modified())
                     .ok()
                     .and_then(|time| SystemTime::now().duration_since(time).ok())
-                    .is_some_and(|age| age > Duration::from_secs(30));
-                if stale {
-                    let _ = fs::remove_file(&lock_path);
-                } else {
+                    .is_some_and(|age| age > STALE_THRESHOLD);
+                if !stale {
                     thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                // Generate a unique reclaim destination in the same directory so
+                // the rename stays on the same filesystem and remains atomic.
+                let reclaim_path = parent.join(format!(
+                    ".{}.lock.reclaim-{}-{}-{}",
+                    filename.as_deref().unwrap_or("sidecar"),
+                    std::process::id(),
+                    iteration,
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                ));
+                match fs::rename(&lock_path, &reclaim_path) {
+                    Ok(()) => {
+                        // We now own the old lock file at `reclaim_path`.
+                        // Verify it was genuinely stale at the instant of the
+                        // atomic rename (its mtime is preserved across rename).
+                        let reclaimed_stale = fs::metadata(&reclaim_path)
+                            .and_then(|meta| meta.modified())
+                            .ok()
+                            .and_then(|time| SystemTime::now().duration_since(time).ok())
+                            .is_some_and(|age| age > STALE_THRESHOLD);
+                        if reclaimed_stale {
+                            // Genuinely abandoned -> discard and retry creation.
+                            let _ = fs::remove_file(&reclaim_path);
+                            continue;
+                        } else {
+                            // We raced and stole a fresh lock. Restore it
+                            // instead of silently deleting it; the contender
+                            // must see an explicit Conflict, not a lost update.
+                            match fs::rename(&reclaim_path, &lock_path) {
+                                Ok(()) => {
+                                    thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                                Err(_) => {
+                                    // Another writer already created a new lock
+                                    // while we held the stolen fresh file.
+                                    // Discard the stolen copy and contend.
+                                    let _ = fs::remove_file(&reclaim_path);
+                                    thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        // Lock vanished between the stale check and the rename
+                        // (another reclaimer won). Retry creation immediately.
+                        continue;
+                    }
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
                 }
             }
             Err(error) => return Err(io_error("creating sidecar lock", &lock_path, error)),
@@ -4048,5 +4128,162 @@ mod tests {
         std::fs::write(&source, b"data").unwrap();
         // Even with the same file name, different directories never resolve equal.
         assert!(!paths_resolve_equal(&source, &other).unwrap());
+    }
+
+    // ----- REVIEW-SIDECAR-LOCK-1: atomic stale-lock reclaim (TOCTOU) -----
+
+    #[test]
+    fn stale_lock_reclaim_is_atomic_no_lost_update() {
+        use std::sync::{Arc, Barrier};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let lock_path = directory.path().join(".image.lumina.json.lock");
+        assert!(!lock_path.exists(), "lock must be released after save");
+        // Create a stale lock (mtime 60s ago) that both contenders will see.
+        {
+            let file = std::fs::File::create(&lock_path).unwrap();
+            let old = SystemTime::now() - Duration::from_secs(60);
+            file.set_modified(old).unwrap();
+        }
+        let barrier = Arc::new(Barrier::new(2));
+        let path1 = path.clone();
+        let rev1 = revision.clone();
+        let b1 = Arc::clone(&barrier);
+        let t1 = std::thread::spawn(move || {
+            b1.wait();
+            let mut edited = SidecarDocument::new(source(), "pipeline-1");
+            edited.virtual_copies[0].name = "first".into();
+            save_sidecar_if_unchanged(&path1, &edited, Some(&rev1))
+        });
+        let path2 = path.clone();
+        let rev2 = revision;
+        let b2 = Arc::clone(&barrier);
+        let t2 = std::thread::spawn(move || {
+            b2.wait();
+            let mut edited = SidecarDocument::new(source(), "pipeline-1");
+            edited.virtual_copies[0].name = "second".into();
+            save_sidecar_if_unchanged(&path2, &edited, Some(&rev2))
+        });
+        let r1 = t1.join().unwrap();
+        let r2 = t2.join().unwrap();
+        let successes = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
+        let conflicts = [&r1, &r2]
+            .iter()
+            .filter(|r| matches!(r, Err(SidecarError::Conflict(_))))
+            .count();
+        assert_eq!(
+            successes, 1,
+            "exactly one contender must win the atomic stale reclaim, got {r1:?} {r2:?}"
+        );
+        assert_eq!(
+            conflicts, 1,
+            "the loser must receive an explicit Conflict, not a silent lost update"
+        );
+        // No stale reclaim artifact must remain.
+        let reclaim_leftover = std::fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("reclaim"));
+        assert!(
+            !reclaim_leftover,
+            "no .reclaim temporary must survive after atomic reclaim"
+        );
+        // Sidecar must be one of the two valid outcomes, not corrupted.
+        let loaded = load_sidecar(&path).unwrap();
+        assert!(
+            loaded.virtual_copies[0].name == "first" || loaded.virtual_copies[0].name == "second"
+        );
+        // Lock must be released after the winner's WriteLock is dropped.
+        assert!(!lock_path.exists(), "lock must be cleaned up after winner");
+        // No absolute path leaked.
+        assert!(!loaded.source.relative_name.contains('/'));
+    }
+
+    #[test]
+    fn fresh_lock_is_not_stolen_and_yields_explicit_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let lock_path = directory.path().join(".image.lumina.json.lock");
+        // Create a fresh lock (mtime = now) – must NOT be reclaimed.
+        std::fs::File::create(&lock_path).unwrap();
+        let mut edited = SidecarDocument::new(source(), "pipeline-1");
+        edited.virtual_copies[0].name = "contender".into();
+        let result = save_sidecar_if_unchanged(&path, &edited, Some(&revision));
+        assert!(
+            matches!(result, Err(SidecarError::Conflict(_))),
+            "fresh lock must produce explicit Conflict, got {result:?}"
+        );
+        // Fresh lock must survive the failed reclaim attempt (not silently deleted).
+        assert!(
+            lock_path.exists(),
+            "fresh lock must not have been deleted by contender"
+        );
+        // Winner's sidecar is unchanged.
+        let loaded = load_sidecar(&path).unwrap();
+        assert_eq!(loaded.virtual_copies[0].name, "Original");
+        let _ = std::fs::remove_file(&lock_path);
+    }
+
+    #[test]
+    fn concurrent_fresh_lock_only_one_writer_wins() {
+        use std::sync::{Arc, Barrier};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let lock_path = directory.path().join(".image.lumina.json.lock");
+        // Hold a fresh lock in a background thread for ~300ms to simulate a
+        // concurrent writer that has not yet released its lock.
+        let holder_path = lock_path.clone();
+        let holder = std::thread::spawn(move || {
+            std::fs::File::create(&holder_path).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            let _ = std::fs::remove_file(&holder_path);
+        });
+        // Give holder a head start so its fresh lock is visible.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(lock_path.exists());
+        let barrier = Arc::new(Barrier::new(2));
+        let p1 = path.clone();
+        let r1 = revision.clone();
+        let b1 = Arc::clone(&barrier);
+        let t1 = std::thread::spawn(move || {
+            b1.wait();
+            let mut edited = SidecarDocument::new(source(), "pipeline-1");
+            edited.virtual_copies[0].name = "contender-a".into();
+            save_sidecar_if_unchanged(&p1, &edited, Some(&r1))
+        });
+        let p2 = path.clone();
+        let r2 = revision;
+        let b2 = Arc::clone(&barrier);
+        let t2 = std::thread::spawn(move || {
+            b2.wait();
+            let mut edited = SidecarDocument::new(source(), "pipeline-1");
+            edited.virtual_copies[0].name = "contender-b".into();
+            save_sidecar_if_unchanged(&p2, &edited, Some(&r2))
+        });
+        let a = t1.join().unwrap();
+        let b = t2.join().unwrap();
+        holder.join().unwrap();
+        // Both contenders raced against the holder's fresh lock; at least one
+        // must have seen an explicit Conflict. Neither may have silently stolen
+        // the fresh lock.
+        let conflicts = [&a, &b]
+            .iter()
+            .filter(|r| matches!(r, Err(SidecarError::Conflict(_))))
+            .count();
+        assert!(
+            conflicts >= 1,
+            "at least one contender must get Conflict against fresh lock, got {a:?} {b:?}"
+        );
+        // If one contender won after holder released, the sidecar is valid; if
+        // both lost, the original remains. No lost update: sidecar is never
+        // corrupted or partially written.
+        let loaded = load_sidecar(&path).unwrap();
+        assert!(loaded.validate().is_ok());
     }
 }

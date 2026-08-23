@@ -12,6 +12,7 @@ pub mod cache;
 pub mod histogram;
 pub mod mask_loader;
 pub mod mask_modulation;
+pub mod mask_tiles;
 pub mod masks;
 pub mod memory;
 pub mod pipeline;
@@ -389,7 +390,7 @@ impl ImageFrame {
         }
         if let Some(p) = perspective {
             validate_perspective(p)?;
-            *self = apply_perspective(self, p);
+            *self = apply_perspective(self, p)?;
         }
         // CA stays manual (recipe lens only), applied after perspective like the
         // original order (distortion → perspective → CA → crop).
@@ -949,20 +950,54 @@ fn perspective_dimensions(
     for x in [-1.0, 1.0] {
         for y in [-1.0, 1.0] {
             let d = m[2][0] * x + m[2][1] * y + m[2][2];
+            if !d.is_finite() || d.abs() < 1e-6 {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "perspective".into(),
+                    value: d as f64,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                });
+            }
             let q = [
                 (m[0][0] * x + m[0][1] * y + m[0][2]) / d,
                 (m[1][0] * x + m[1][1] * y + m[1][2]) / d,
             ];
+            if !q[0].is_finite() || !q[1].is_finite() {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "perspective".into(),
+                    value: q[0] as f64,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                });
+            }
             min[0] = min[0].min(q[0]);
             max[0] = max[0].max(q[0]);
             min[1] = min[1].min(q[1]);
             max[1] = max[1].max(q[1]);
         }
     }
-    Ok((
-        ((max[0] - min[0]) * w as f32 / 2.0).ceil().max(1.0) as u32,
-        ((max[1] - min[1]) * h as f32 / 2.0).ceil().max(1.0) as u32,
-    ))
+    let ow_f = ((max[0] - min[0]) * w as f32 / 2.0).ceil().max(1.0);
+    let oh_f = ((max[1] - min[1]) * h as f32 / 2.0).ceil().max(1.0);
+    if !ow_f.is_finite() || !oh_f.is_finite() {
+        return Err(CoreError::InvalidAdjustment {
+            name: "perspective".into(),
+            value: ow_f as f64,
+            minimum: 1.0,
+            maximum: 1_000_000.0,
+        });
+    }
+    let ow = ow_f as u32;
+    let oh = oh_f as u32;
+    // Bounding box limit + MemoryBudget guard (REVIEW-CORE-PERSP-1).
+    MemoryBudget::default()
+        .check_decode(ow as u64, oh as u64, 4, 1)
+        .map_err(|e| CoreError::InvalidAdjustment {
+            name: "perspective canvas too large".into(),
+            value: ow as f64 * oh as f64,
+            minimum: 0.0,
+            maximum: e.limit() as f64,
+        })?;
+    Ok((ow, oh))
 }
 
 // Presets are deliberately small and built in: wide-light (k1=0.12,k2=-0.04,k3=0.01,
@@ -1100,7 +1135,10 @@ fn apply_ca(frame: &mut ImageFrame, l: &lumina_sidecar::LensCorrection) {
         }
     }
 }
-fn apply_perspective(src: &ImageFrame, p: &lumina_sidecar::Perspective) -> ImageFrame {
+fn apply_perspective(
+    src: &ImageFrame,
+    p: &lumina_sidecar::Perspective,
+) -> Result<ImageFrame, CoreError> {
     if p.vertical == 0.
         && p.horizontal == 0.
         && p.rotation == 0.
@@ -1109,7 +1147,7 @@ fn apply_perspective(src: &ImageFrame, p: &lumina_sidecar::Perspective) -> Image
         && p.shift_x == 0.
         && p.shift_y == 0.
     {
-        return src.clone();
+        return Ok(src.clone());
     }
     let m = perspective_matrix(p);
     let mut min = [f32::INFINITY; 2];
@@ -1117,29 +1155,78 @@ fn apply_perspective(src: &ImageFrame, p: &lumina_sidecar::Perspective) -> Image
     for x in [-1.0, 1.0] {
         for y in [-1.0, 1.0] {
             let d = m[2][0] * x + m[2][1] * y + m[2][2];
+            if !d.is_finite() || d.abs() < 1e-6 {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "perspective".into(),
+                    value: d as f64,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                });
+            }
             let q = [
                 (m[0][0] * x + m[0][1] * y + m[0][2]) / d,
                 (m[1][0] * x + m[1][1] * y + m[1][2]) / d,
             ];
+            if !q[0].is_finite() || !q[1].is_finite() {
+                return Err(CoreError::InvalidAdjustment {
+                    name: "perspective".into(),
+                    value: q[0] as f64,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                });
+            }
             min[0] = min[0].min(q[0]);
             max[0] = max[0].max(q[0]);
             min[1] = min[1].min(q[1]);
             max[1] = max[1].max(q[1]);
         }
     }
-    let ow = ((max[0] - min[0]) * src.width as f32 / 2.0).ceil().max(1.0) as u32;
-    let oh = ((max[1] - min[1]) * src.height as f32 / 2.0)
+    let ow_f = ((max[0] - min[0]) * src.width as f32 / 2.0).ceil().max(1.0);
+    let oh_f = ((max[1] - min[1]) * src.height as f32 / 2.0)
         .ceil()
-        .max(1.0) as u32;
-    let mut out = ImageFrame::new(
-        ow.max(1),
-        oh.max(1),
-        vec![0; ow.max(1) as usize * oh.max(1) as usize * 4],
-    )
-    .unwrap();
+        .max(1.0);
+    if !ow_f.is_finite() || !oh_f.is_finite() {
+        return Err(CoreError::InvalidAdjustment {
+            name: "perspective".into(),
+            value: ow_f as f64,
+            minimum: 1.0,
+            maximum: 1_000_000.0,
+        });
+    }
+    let ow = ow_f as u32;
+    let oh = oh_f as u32;
+    MemoryBudget::default()
+        .check_decode(ow as u64, oh as u64, 4, 1)
+        .map_err(|e| CoreError::InvalidAdjustment {
+            name: "perspective canvas too large".into(),
+            value: ow as f64 * oh as f64,
+            minimum: 0.0,
+            maximum: e.limit() as f64,
+        })?;
+    let ow = ow.max(1);
+    let oh = oh.max(1);
+    let alloc_len = (ow as usize)
+        .checked_mul(oh as usize)
+        .and_then(|v| v.checked_mul(4))
+        .ok_or(CoreError::InvalidAdjustment {
+            name: "perspective canvas too large".into(),
+            value: ow as f64 * oh as f64,
+            minimum: 0.0,
+            maximum: MemoryBudget::default().max_alloc_bytes as f64,
+        })?;
+    // Guard already via MemoryBudget, but keep explicit overflow check.
+    let mut out = ImageFrame::new(ow, oh, vec![0; alloc_len]).unwrap();
     let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if !det.is_finite() || det.abs() < 1e-6 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "perspective".into(),
+            value: det as f64,
+            minimum: -1.0,
+            maximum: 1.0,
+        });
+    }
     let inv = |x: f32, y: f32| {
         let z = [x, y, 1.];
         let a = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * z[0]
@@ -1167,6 +1254,9 @@ fn apply_perspective(src: &ImageFrame, p: &lumina_sidecar::Perspective) -> Image
             let ny =
                 canvas_min_y + (y as f32 / (out.height.saturating_sub(1).max(1)) as f32) * range_y;
             let (sx, sy, sd) = inv(nx, ny);
+            if !sd.is_finite() || sd.abs() < 1e-6 {
+                continue;
+            }
             let sx = sx / sd;
             let sy = sy / sd;
             let px = (sx / 2. + 0.5) * (src.width - 1) as f32;
@@ -1177,7 +1267,7 @@ fn apply_perspective(src: &ImageFrame, p: &lumina_sidecar::Perspective) -> Image
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn crop_rect(
@@ -1707,7 +1797,9 @@ fn monotone_curve(curve: &[lumina_sidecar::CurvePoint], x: f32) -> f32 {
     let (m0, m1) = if d == 0.0 {
         (0.0, 0.0)
     } else {
-        (m0.clamp(0.0, 3.0 * d), m1.clamp(0.0, 3.0 * d))
+        let lo = 0.0f32.min(3.0 * d);
+        let hi = 0.0f32.max(3.0 * d);
+        (m0.clamp(lo, hi), m1.clamp(lo, hi))
     };
     let t2 = t * t;
     let t3 = t2 * t;

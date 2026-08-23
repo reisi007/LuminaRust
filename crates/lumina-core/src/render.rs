@@ -128,17 +128,26 @@ pub fn render_frame(
     apply_source_actions(&mut frame, context.source_actions)?;
     frame.apply_recipe_with_white_balance(context.recipe, context.camera_white_balance)?;
 
-    // F-098-N1: when a Lensfun corrector is supplied (feature-gated), apply the
-    // geometry/distortion/vignette stage through it. Without a corrector (or
-    // feature) the pipeline is byte-identical to the default path. CA and the
-    // recipe's perspective/crop/rotation are still honoured by `apply_geometry`.
+    // F-098-N1: geometry/distortion/vignette/perspective/crop/rotation are
+    // always applied; a Lensfun corrector (when present) overrides the manual
+    // distortion/vignette model, otherwise the manual model is used. No silent
+    // fallback when `lensfun` is None or the feature is off (REVIEW-CORE-GEO-1).
     #[cfg(feature = "lensfun")]
-    if let Some(LensfunCorrectorRef(corrector)) = context.lensfun {
+    {
+        let corrector = context.lensfun.map(|LensfunCorrectorRef(c)| c);
         frame.apply_geometry(
             context.recipe.geometry.as_ref(),
             context.recipe.lens_correction.as_ref(),
             context.recipe.perspective.as_ref(),
-            Some(corrector),
+            corrector,
+        )?;
+    }
+    #[cfg(not(feature = "lensfun"))]
+    {
+        frame.apply_geometry(
+            context.recipe.geometry.as_ref(),
+            context.recipe.lens_correction.as_ref(),
+            context.recipe.perspective.as_ref(),
         )?;
     }
 
