@@ -749,6 +749,44 @@ Offen:
   automatisch an (Beispiel `chunks_exact_to_as_chunks`). Lokal vor jedem
   Push `rustup update` + workspace-clippy laufen lassen.
 
+## Nächste Schritte vor manuellem Review (dokumentiert 2026-08-23)
+
+Kein neuer großer Batch nach dem laufenden DEP-EGUI-WGPU-1 — nur sauberer
+Abschluss bis CI grün, dann manueller Review **F-103-N6**. Vor F-103-N6
+sinnvoll (klein, kein Architektur-Umbau, kein GPU-/Wgpu-Umbau):
+
+**Sofort (läuft):**
+- DEP-EGUI-WGPU-1 Abschluss: Verifizierung `ses_fcfda1be…` abwarten,
+  vorbestehende `dead_code`-Warnung `warn_unsupported_vram_once`
+  (`cargo check -p lumina-gpu --no-default-features`) per neuer
+  Agents.md-Regel sauber fixen (cfg-Gating, kein `allow`), Commit/Push,
+  CI grün abwarten (Rust checks + WASM checks).
+
+**Danach vor F-103-N6 — kleine Stabilitäts-Fixes, die den manuellen Test
+aussagekräftig machen (jeweils 1–2 Dateien, kein Schema-Bruch):**
+- REVIEW-CORE-CURVE-1 (hoch, `lib.rs:1706` clamp min>max → Panic bei
+  fallender Kurve) — sortierte Grenzen, 5 Zeilen.
+- REVIEW-CORE-PERSP-1 (hoch, `lib.rs:946` Riesen-Canvas/OOM bei
+  Perspektive 1.0) — bbox cap + MemoryBudget, bewahrt bestehende Tests.
+- REVIEW-CORE-CROP-1 (mittel, `crop_rect` u32-Underflow) — saturating,
+  10 Zeilen.
+- REVIEW-GUI-DEBOUNCE-1 (mittel, debounced Vollrender strandet) —
+  `request_repaint_after` im Warte-Zweig.
+- REVIEW-GUI-MASKRENDER-1 (mittel, Mask-Layer-Edits triggern kein Render)
+  — über `mark_dirty()` routen.
+- REVIEW-GUI-DRAFTROI-1 (mittel, Draft-ROI in falschem Koordinatensystem)
+  — ROI mit Bezugssystem speichern.
+
+F-103-N6 selbst: `cargo run -p lumina-gui` (PNG/JPEG/WebP + RAW per Pfad/
+Drag&drop), Exposure/Contrast ändern, Sidecar-Roundtrip, WASM buildbar.
+Befunde als neue `GUI-*-1`-Tickets.
+
+**Erst nach manuellem Review (groß, eigener Batch je):** GPU-STAGE-1,
+BENCH-BASELINE-1, GUI-WGPU-PRESENT-1, REVIEW-RAW-ABI-1
+(Bindings-Neugenerierung + Bau-Offset-Asserts), REVIEW-CORE-GEO-1
+(Geometrie im Default-Build tot — braucht Golden-Erweiterung),
+REVIEW-SIDECAR-LOCK-1/TMP-1/CAS-1/ZDATA-1 (Lock/CAS-Redesign).
+
 ## Abnahmekriterien
 
 Die erste produktiv nutzbare Version muss mindestens Folgendes erfüllen:
