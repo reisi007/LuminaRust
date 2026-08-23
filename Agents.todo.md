@@ -715,6 +715,32 @@ Verifiziert: `cargo build -p lumina-core`/`--features lensfun`,
 lumina-bench/raw-bench" -- -D warnings` grün,
 `cargo test -p lumina-core` 207/210 passed (Tone-Message `0e0..=1e0` korrigiert).
 
+### Dependency-Audit 2026-08-23 (Read-only Audit `ses_fd042a2e3`, nur Doku)
+
+Kern-Stack aktuell (serde/clap/image/thiserror-2/log/tempfile/bytemuck/wasm-bindgen/zstd, rustc 1.98 = Stable). Offene Update-Tasks:
+
+- [ ] **DEP-CI-ACTIONS-1** (risikoarm) GitHub-Actions heben: checkout
+      v4→v7, setup-node v4→v7, upload-artifact v4→v7 (Changelog gegen
+      Artifact-Usage prüfen), github-script v7→v9, docker/* je eine
+      Major-Stufe; Lockfile-Bump via `cargo update` (serde/clap/rayon/
+      blake3/log/tempfile/wasm-bindgen/zstd innerhalb der Req).
+- [ ] **DEP-MINOR-1** (kleiner Aufwand, dev-deps/Randpfade): criterion
+      0.5→0.8 (nur lumina-bench), pollster 0.4→1.0, rfd 0.15→0.17.
+- [ ] **DEP-EGUI-WGPU-1** (gemeinsamer Migrationsschritt): eframe/egui
+      0.31→0.36 (+egui_kittest 0.36, kittest-Snapshots regenerieren) und
+      wgpu 24→30 in EINEM Batch — Feature-Kopplung glow/wgpu; danach
+      CPU-vs-GPU-Golden-Äquivalenz (`lumina-gpu` tests) neu verifizieren.
+      Nebeneffekt: letzte transitive thiserror-1-Instanz (via egui-wgpu)
+      verschwindet. Vorher GUI-WGPU-PRESENT-1 (egui_wgpu) mitdenken.
+- Bewusst gepinnt (kein Aktion ohne ADR): libraw-sys vendored
+  `[patch.crates-io]` (macOS-C++-Fix), `ort =2.0.0-rc.13` (= neueste RC),
+  LibRaw 0.22.2 + Ubuntu-24.04-lensfun-Distro-Pin (Determinismus;
+  Upgrade-Pfad skizziert: neuer Image-Tag parallel → Golden-Rebaseline
+  wegen CR3-Dimensionen → alter Tag erst dann entfernen).
+- Toolchain-Hinweis: CI fährt `@stable` → neue Clippy-Lints schlagen
+  automatisch an (Beispiel `chunks_exact_to_as_chunks`). Lokal vor jedem
+  Push `rustup update` + workspace-clippy laufen lassen.
+
 ## Abnahmekriterien
 
 Die erste produktiv nutzbare Version muss mindestens Folgendes erfüllen:
