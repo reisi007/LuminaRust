@@ -329,14 +329,6 @@ Post-MVP; WASM ist dokumentierte Capability-Grenze, keine MVP-GUI.
   „Detail" vor „Effects" anordnet. Produktentscheidung nötig: entweder
   Sektionsreihenfolge im SOLL korrigieren (Detail vor Effects, LR-Classic-
   konform) oder Abweichung dokumentieren; danach GUI-Anordnung angleichen.
-- [ ] **F-103-N10** Sektionsreihenfolgen-Inkonsistenz klären (Befund
-  Verifizierung 2026-08-21, niedrig): Das SOLL (cli-gui-wasm.md F-100) listet
-  die Sektion „Effects" (Vignette/Grain) VOR „Detail" (Sharpening/Noise
-  Reduction), während die normative Reglerreihenfolge im selben Dokument
-  Sharpening → Noise Reduction → Vignette/Grain verlangt und Lightroom Classic
-  „Detail" vor „Effects" anordnet. Produktentscheidung nötig: entweder
-  Sektionsreihenfolge im SOLL korrigieren (Detail vor Effects, LR-Classic-
-  konform) oder Abweichung dokumentieren; danach GUI-Anordnung angleichen.
 - [ ] **F-103-N8** Export-Render-Doppelarbeit in der CLI (Befund Verifizierung
   2026-08-21, niedrig): `process_selected` rendert aktuell zweimal
   (Warn-Render + `export_image`); ohne `match_total_exposure` ließe sich das
