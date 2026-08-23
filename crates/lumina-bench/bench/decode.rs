@@ -9,8 +9,9 @@
 //! no network, no implicit fallback. This mirrors the env-gating of the
 //! existing RAW tests in `conflicts-and-acceptance.md`.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use lumina_raw::decode_bytes;
+use std::hint::black_box;
 use std::path::Path;
 use std::time::Duration;
 

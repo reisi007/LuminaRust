@@ -19,7 +19,7 @@ log = "0.4"
 # `--no-default-features` build stays dependency-light for headless CI.
 wgpu = { version = "24", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
-pollster = { version = "0.4", optional = true }
+pollster = { version = "1.0", optional = true }
 
 [features]
 # Primary GPU path for native desktop (Metal on Apple Silicon, Vulkan/DX12

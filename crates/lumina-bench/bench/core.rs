@@ -11,12 +11,13 @@
 //! samples) so a full baseline capture stays tractable (see header docs in the
 //! bench file). Override via Criterion CLI flags if needed.
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use lumina_core::{
     analyze_tone, match_total_exposure, render_frame, suggest_auto_tone, AutoToneConfig,
     LuminanceHistogram, MaskContext, MaskGraph, MaskPolicy, RenderContext,
 };
 use lumina_sidecar::{Extras, MaskReference};
+use std::hint::black_box;
 use std::time::Duration;
 
 mod common;

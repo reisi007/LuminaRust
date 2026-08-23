@@ -25,8 +25,9 @@
 //! gated behind LuminaRust's `gpu` feature, the file only compiles when that
 //! feature is enabled (see `Cargo.toml`).
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use lumina_gpu::GpuContext;
+use std::hint::black_box;
 
 mod common;
 use common::{make_frame, make_recipe, SIZES};

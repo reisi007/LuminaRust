@@ -5,8 +5,9 @@
 //! models `N` identical exports of one source. Measured at 512 / 1024 / 2048
 //! (see `bench/common/mod.rs`).
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use lumina_core::{render_frame, ExportOptions, MaskContext, MaskPolicy, RenderContext};
+use std::hint::black_box;
 use std::time::Duration;
 
 mod common;

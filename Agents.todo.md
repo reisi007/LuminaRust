@@ -717,15 +717,23 @@ lumina-bench/raw-bench" -- -D warnings` grün,
 
 ### Dependency-Audit 2026-08-23 (Read-only Audit `ses_fd042a2e3`, nur Doku)
 
-Kern-Stack aktuell (serde/clap/image/thiserror-2/log/tempfile/bytemuck/wasm-bindgen/zstd, rustc 1.98 = Stable). Offene Update-Tasks:
+Kern-Stack aktuell (serde/clap/image/thiserror-2/log/tempfile/bytemuck/wasm-bindgen/zstd, rustc 1.98 = Stable).
 
-- [ ] **DEP-CI-ACTIONS-1** (risikoarm) GitHub-Actions heben: checkout
-      v4→v7, setup-node v4→v7, upload-artifact v4→v7 (Changelog gegen
-      Artifact-Usage prüfen), github-script v7→v9, docker/* je eine
-      Major-Stufe; Lockfile-Bump via `cargo update` (serde/clap/rayon/
-      blake3/log/tempfile/wasm-bindgen/zstd innerhalb der Req).
-- [ ] **DEP-MINOR-1** (kleiner Aufwand, dev-deps/Randpfade): criterion
-      0.5→0.8 (nur lumina-bench), pollster 0.4→1.0, rfd 0.15→0.17.
+**Verifiziert erledigt (2026-08-23, Implementierung `ses_fd034658`,
+unabhängige Verifizierung `ses_fd02c06c`+`ses_fd027021` — BESTANDEN):**
+- **DEP-CI-ACTIONS-1** Actions gehoben: checkout v4→v7, setup-node
+  v4→v7, upload-artifact v4→v7, github-script v7→v9, docker/* je eine
+  Major-Stufe; Lockfile-Bump via `cargo update` (keine Req-Änderungen,
+  gepinnte Deps unberührt — verifiziert).
+- **DEP-MINOR-1** criterion 0.5→0.8.2 (`std::hint::black_box`,
+  Budgets report-only), pollster 0.4→1.0.1, rfd 0.15→0.17.2.
+  Verifiziert: fmt clean, clippy workspace `-D warnings` 0, gui 81 /
+  core 217+7 / sidecar-zdata 94 / gpu 7, bench-Harness kompiliert.
+  Hinweis: criterion-0.8-Ergebnisformate beim nächsten Baseline-Capture
+  prüfen (BENCH-BASELINE-1); echte Action-Verifikation im CI-Lauf.
+
+Offen:
+
 - [ ] **DEP-EGUI-WGPU-1** (gemeinsamer Migrationsschritt): eframe/egui
       0.31→0.36 (+egui_kittest 0.36, kittest-Snapshots regenerieren) und
       wgpu 24→30 in EINEM Batch — Feature-Kopplung glow/wgpu; danach

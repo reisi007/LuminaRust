@@ -58,4 +58,4 @@ path = "bench/decode.rs"
 required-features = ["raw-bench"]
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
