@@ -1,9 +1,11 @@
 use clap::{Args, Parser, Subcommand};
+#[cfg(feature = "lensfun")]
+use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
     export_image, match_total_exposure_masked, render_frame, resolve_mask_planes,
     suggest_auto_tone, tone_fingerprint, AutoToneConfig, ExportOptions, ImageFileFormat,
-    ImageFrame, LensfunCorrectorRef, MaskContext, MaskInference, MaskLoadContext, MaskPlane,
-    MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
+    ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
+    RenderOutput, SourceActionArtifact,
 };
 use lumina_onnx::{birefnet_manifest, StubBackend};
 use lumina_raw::{RawError, RawMetadata};

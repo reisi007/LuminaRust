@@ -13,6 +13,7 @@ use lumina_sidecar::EditRecipe;
 /// + `bytemuck::{Pod, Zeroable}` so it can be uploaded directly into a
 /// `wgpu::Buffer` bound as a uniform. Padded to 64 bytes (16 × f32) to satisfy
 /// uniform-buffer alignment.
+#[allow(clippy::doc_lazy_continuation)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
@@ -131,7 +132,7 @@ pub const FP16_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub fn aligned_bytes_per_row(width: u32) -> u32 {
     let unpadded = width * 4;
     // Ceil to multiple of 256.
-    ((unpadded + 255) / 256) * 256
+    unpadded.div_ceil(256) * 256
 }
 
 /// Create the upload texture that carries the decoded source frame into the
