@@ -220,8 +220,10 @@ impl RepairRegionArtifact {
             ));
         }
         let region = raw[12..region_end]
-            .chunks_exact(2)
-            .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
             .collect();
         let replacement = raw[region_end..].to_vec();
         let artifact = RepairRegionArtifact {
@@ -563,8 +565,10 @@ impl ZDataContainer {
             return Err(ZDataError::Checksum(mask_id.into()));
         }
         let values = raw
-            .chunks_exact(2)
-            .map(|v| u16::from_le_bytes([v[0], v[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|v| u16::from_le_bytes(*v))
             .collect();
         Ok(MaskTile {
             mask_id: record.mask_id.clone(),
@@ -623,8 +627,10 @@ impl ZDataContainer {
             let spec = match record.kind {
                 RecordKind::MaskTile => {
                     let values = raw
-                        .chunks_exact(2)
-                        .map(|v| u16::from_le_bytes([v[0], v[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|v| u16::from_le_bytes(*v))
                         .collect();
                     RecordSpec::MaskTile(MaskTile {
                         mask_id: record.mask_id.clone(),
