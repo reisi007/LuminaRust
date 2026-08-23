@@ -127,6 +127,16 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
 
 ## Migration und Konflikte
 
+**Pre-Alpha-Entscheidung (2026-08-23, Produkteigentümer):** Solange LuminaRust
+in der **Pre-Alpha-Phase** ist, bleibt `schema_version` bei **1** und darf sich
+**inkompatibel ändern** (Feldtypen, Pflichtfelder, Semantik) **ohne
+Migrationspfad und ohne Versionsbump**. Migrations-, Backup- und
+Bestätigungsflows unten sind MVP-/Beta-Zielzustand, nicht Pre-Alpha-Pflicht.
+Ein Loader darf Sidecars, die nicht mehr zum aktuellen Schema passen, **laut
+ablehnen** (sichtbarer Fehler, Original unberührt) — kein stiller Fallback,
+keine stillschweigende Best-Effort-Interpretation. Alte Test-Sidecars werden
+in der Pre-Alpha neu erzeugt oder gelöscht, nicht migriert.
+
 Schema- und Pipelineversion werden getrennt behandelt. Ein altes Sidecar bleibt
 lesbar, solange keine inkompatible neue Funktion verwendet wird. Dann wird eine
 Migration angeboten; nach Bestätigung wird ein Backup geschrieben und atomar
