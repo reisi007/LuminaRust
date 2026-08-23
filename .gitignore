@@ -25,6 +25,9 @@
 # Benchmark reports and outputs
 /perf/results/
 
+# GUI dev log (redirect stderr during manual testing)
+gui.log
+
 # OS files
 .DS_Store
 Thumbs.db

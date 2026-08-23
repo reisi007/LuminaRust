@@ -425,6 +425,226 @@ default_on_missing_vars`) ist mit Commit `4459851` behoben: ein prozessglobaler
 Mutex im `tests`-Modul serialisiert die beiden env-abhängigen Tests
 (unabhängig verifiziert, 60× Stress-Lauf flake-frei, 2026-08-20).
 
+## Performance-Verfeinerung — Lightroom-artige interaktive Geschwindigkeit (Verifikation ausstehend)
+
+Ausgangslage (Nutzerbericht, M5 Pro, Debug-Build): Die GUI decodiert/lädt RAW
+über LibRaw-Decode + vollständige CPU-Pipeline **synchron im Main-Thread** bei
+jedem Regler-Eingriff; kein GPU-Pfad, kein VRAM-Cache, keine Pyramid-/Draft-
+Auflösung, erstes Bild wird nicht automatisch geladen. Dateiwechsel und
+Regler-Drags sind nicht mehr flüssig benutzbar. Die folgenden fünf Ticks sind
+als **offene, nicht erledigte** Verifikations-/Verfeinerungsaufgaben eingetragen
+– bewusst **kein** GPU-/Shader-Umbau in diesem Schritt. Verifiziert wird gegen
+`feature/architecture/pipeline.md`, `feature/quality/performance-benchmarks.md`,
+`feature/platform/cli-gui-wasm.md` sowie `crates/lumina-gui/src/lib.rs`.
+
+Querverweis: Die bestehende Hotspot-Ableitung **F-074-A1…A4** (Apply-Kernel,
+Decode-Durchsatz, Auto-Tone-Kernel, PNG-Encode) bleibt bestehen; diese fünf
+Ticks adressieren die **interaktive GUI-Latenz**, nicht die Batch-/Kernel-Ebene.
+
+- [ ] **PERF-GUI-1** DAG/Schritt-Trennung + demosaizierte Basiskachel cachen,
+      nur Color/Tone bei Exposure-Änderung invalidieren.
+  - **Verifikationsstatus:** Teilweise vorhanden. Die Pipeline ist bereits als
+    Stufenliste `Decode → SourceActions → AutoAnalysis → Adjustments → Masks →
+    Crop → Output` (`feature/architecture/pipeline.md` §Pipeline-Reihenfolge)
+    strukturiert; `RenderKey.stage_digest` kennt stufenspezifische Digests
+    (`decode`/`mask`/`histogram`/`render`, pipeline.md ~Z.711), sodass eine
+    reine Ausgabegrößenänderung den Decode-Cache nicht invalidiert. **Aber:**
+    keine GPU/VRAM, kein Schritt-Cache, und die GUI nullt bei jeder
+    Regleränderung den **gesamten** `render_key` (`lib.rs:1234` `set_adjustment`,
+    `lib.rs:2055` `mark_dirty`) statt nur der Color/Tone-Stufe.
+  - **Verfeinerung nötig:** Schritt-Caching/Invalidierung auf CPU-Ebene
+    (Demosaiced-Basis als `ImageFrame`/`Rgba8Srgb` im RAM halten, ggf.
+    Staging-Textur in VRAM) und Nutzung von `stage_digest`, sodass Exposure-/
+    Color-Änderungen nur die Adjustments-Stufe neu rendern. GPU/VRAM-Variante
+    ist langfristig und braucht Architekturentscheidung (ADR): `lumina-core`
+    darf laut `Agents.md` keine GPU-/GUI-Abhängigkeit erhalten.
+  - **Betroffene Module:** `lumina-core` (Render/Stufen/`RenderKey`),
+    `lumina-gui` (Invalidierungssteuerung), optional neu `lumina-gpu`
+    (langfristig).
+  - **Abnahmekriterien:** Bei Exposure-Drag wird nur die Adjustments-Stufe
+    neu berechnet (nachweisbar über `render_frame`-Stufen-Timing + Golden-
+    Identität zu F-043); Decode/Demosaic wird bei Regleränderung **nicht**
+    wiederholt; kein stillschweigender Fallback bei Cache-Miss.
+
+- [ ] **PERF-GUI-2** GPU-Uniforms für Reglerparameter (Fragment-Shader, UBOs).
+  - **Verifikationsstatus:** Nicht vorhanden. `lumina-core` ist plattformneutral
+    und enthält keinen GPU-Pfad (kein wgpu/GLSL/Shader/Uniform im Quellbaum,
+    per Grep über `crates/` verifiziert); `render_frame` läuft vollständig CPU/
+    RGBA8. Dies **kollidiert** mit der Architekturgrenze `Agents.md`
+    (`lumina-core` darf keine GPU-/native-Abhängigkeit annehmen) und mit der
+    WASM-Capability-Matrix (native Desktop ist die einzige MVP-GUI).
+  - **Verfeinerung nötig:** Neue Architekturentscheidung (ADR) +
+    optionaler `lumina-gpu`-Adapter hinter Feature-Flag; `lumina-core` bleibt
+    CPU-Referenz. **Nicht** im aktuellen Schritt umsetzen.
+  - **Betroffene Module:** `lumina-core` (Referenzpfad), neu `lumina-gpu`
+    (langfristig), `lumina-gui` (Backend-Auswahl).
+  - **Abnahmekriterien:** GPU-Pfad liefert byte-/wert-identisches Ergebnis zum
+    CPU-Pfad (F-043-Toleranzen); aktivierbar ohne `lumina-core`-API-Bruch;
+    WASM-Build bleibt ohne GPU-Capability grün.
+
+- [ ] **PERF-GUI-3** Draft-Modus & Auflösungspyramiden (Mipmaps,
+      Viewport-Auflösung beim Draggen, volle Auflösung erst bei Mouse-Up/
+      150 ms Idle).
+  - **Verifikationsstatus:** Nicht vorhanden. Keine Mipmaps/Pyramiden; die GUI
+    rendert synchron `render_frame` in voller Quellauflösung (`lib.rs:1325`
+    `render`, `lib.rs:1491` `update_texture` lädt `self.preview` 1:1 in die
+    egui-Textur). **Teil-Infrastruktur vorhanden:** `IdleQueue` existiert
+    (`lib.rs:117`), wird im `update`-Loop nur bei `!pointer.any_down()`
+    abgearbeitet (`lib.rs:3547`) – also ein Synchronisationspunkt für
+    „defer to idle", aber **nicht** an das Rendering gekoppelt.
+  - **Verfeinerung nötig:** Während des Drags eine herunterskalierte
+    Draft-Vorschau (z. B. halbe/viertel Auflösung) rendern, volle Auflösung
+    nach Mouse-Up bzw. 150 ms Idle (über bestehende `IdleQueue`/Repaint-Logik).
+    Erste, CPU-seitige Quick-Win-Variante ist mittelfristig machbar, ohne GPU.
+  - **Betroffene Module:** `lumina-gui` (Render-Steuerung, IdleQueue-Anbindung),
+    `lumina-core` (optionale Downscale-/Pyramiden-Hilfen).
+  - **Abnahmekriterien:** Drag zeigt flüssige Draft-Vorschau; nach Mouse-Up/
+    Idle wird volle Auflösung gerendert und mit dem Sidecar-Ergebnis
+    (F-043-Toleranz) abgeglichen; UI bleibt während des Drags bedienbar.
+
+- [ ] **PERF-GUI-4** Eingabe-Events zum Render-Loop bündeln (onMouseMove von
+      Render entkoppeln, display-synchroner Ticker, Frames droppen).
+  - **Verifikationsstatus:** Nicht vorhanden / inkonsistent. `set_adjustment`
+    (`lib.rs:1231`) mutiert das Rezept direkt aus dem egui-Slider-Callback und
+    setzt `render_key = None`, löst aber **keinen** eigenen Render-Ticker aus;
+    ein durchgehendes Render-Coalescing (Entkopplung Eingabe→Render,
+    Frame-Drop bei Überlast) existiert nicht. egui ist zwar display-synchron,
+    aber es gibt keinen expliziten, entkoppelten Render-Loop mit Eingabepuffer.
+  - **Verfeinerung nötig:** Eingabe-Events in eine Queue/Dirty-Flag bündeln und
+    einen einzigen, display-synchronen Render-Pass pro Frame fahren; bei
+    Überlast Frames droppen statt synchron zu blockieren. Passt zur
+    IdleQueue-/Repaint-Struktur der GUI.
+  - **Betroffene Module:** `lumina-gui` (Eingabe-Entkopplung, Ticker).
+  - **Abnahmekriterien:** Mehrere Regler-Events pro Frame erzeugen höchstens
+    einen Render-Pass; die UI friert beim Draggen nicht ein; keine
+    doppelten/konkurrierenden Renders.
+
+- [ ] **PERF-GUI-5** ROI-Rendering (bei Zoom nur Viewport-Kachel/Scissor
+      rendern).
+  - **Verifikationsstatus:** Nicht vorhanden. Es gibt kein ROI/Scissor/Tiling:
+    `render_frame` rendert das Gesamtbild, `draw_preview` (`lib.rs:1801`)
+    skaliert die Textur objektgerecht (`object-contain`) in den Pane; beim
+    Hineinzoomen wird die volle Textur weiter skaliert, nicht auf den
+    sichtbaren Ausschnitt in nativer Auflösung gerendert.
+  - **Verfeinerung nötig:** Bei Zoom/Pan nur den sichtbaren Viewport-Ausschnitt
+    (Scissor/ROI-Crop) in nativer Auflösung rendern; CPU-seitig machbar über
+    einen ROI-Crop vor `render_frame`, GPU-seitig später über Scissor-Region.
+    Keine Architekturkollision, mittel-/langfristig.
+  - **Betroffene Module:** `lumina-gui` (Viewport/Zoom-Logik, `draw_preview`),
+    `lumina-core` (ROI-Crop-Hilfe).
+  - **Abnahmekriterien:** Beim Hineinzoomen wird nur der sichtbare Bereich
+    gerendert; Pixelidentität zum vollen Render im Ausschnitt (F-043);
+    keine unnötige Ganzbild-Verarbeitung im Zoom.
+
+### Zusätzliche Todos aus manuellem Test (verwandt mit PERF-GUI-3)
+
+- [ ] **PERF-GUI-6** GUI lädt beim Öffnen eines Verzeichnisses automatisch das
+      erste RAW/Bild in den Develop-Modus.
+  - **Verifikationsstatus:** Offener Befund. `list_directory` (`lib.rs:386`)
+    füllt `self.entries`, lädt aber **nicht** automatisch den ersten Eintrag;
+    `open_file` lädt einen expliziten Pfad, wählt aber nichts automatisch aus.
+    „Erstes Bild nicht auto-geladen" ist damit reproduzierbar.
+  - **Verfeinerung nötig:** Nach `set_directory`/`list_directory` das erste
+    unterstützte `entries`-Element (oder ein definiertes Standardelement)
+    automatisch via `load_path`/`load_bytes` laden und in Develop zeigen;
+    Verzeichniswechsel entsprechend.
+  - **Betroffene Module:** `lumina-gui` (`list_directory`, `set_directory`,
+    `open_file`).
+  - **Abnahmekriterien:** Öffnen eines Bildverzeichnisses zeigt sofort eine
+    geladene Vorschau (erstes Bild) ohne manuellen Klick; reproduzierbar via
+    `cargo run -p lumina-gui`.
+
+- [ ] **PERF-GUI-7** Asynchroner RAW-Decode blockiert die UI beim Dateiwechsel
+      nicht.
+  - **Verifikationsstatus:** Offener Befund. `load_bytes` (`lib.rs:1186`)
+    ruft `lumina_raw::decode_bytes` **synchron im Main-Thread** auf
+    (`lib.rs:1190`); `load_path` (`lib.rs:1553`) ruft `load_bytes` synchron.
+    Die vorhandene `IdleQueue` (`lib.rs:117`) deckt nur Thumbnails/Masken-
+    Inferenz ab, nicht den Decode.
+  - **Verfeinerung nötig:** RAW-Decode auf einen Worker-Thread/Background-Job
+    auslagern (oder yielden), sodass Dateiwechsel die UI nicht einfrieren;
+    Ergebnis nach Decode in den Main-Thread zurückreichen und dann erst
+    rendern. `lumina-raw::decode_bytes` bleibt die Vertrags-Schnittstelle.
+  - **Betroffene Module:** `lumina-gui` (Decode-Offloading, IdleQueue-/Job-
+    Anbindung), `lumina-raw` (Vertrag, ggf. async-Hilfe).
+  - **Abnahmekriterien:** Dateiwechsel startet Decode im Hintergrund; die GUI
+    bleibt während des Decodes bedienbar (Filmstreifen/Regler reagieren);
+    nach Decode erscheint die Vorschau; keine Blockade des Main-Threads.
+
+### Umsetzungsstand 2026-08-22 (Session: GPU-first + Interaktivität)
+
+Teilweise umgesetzt (noch **nicht** abgehakt — Verifizierung durch unabhängigen
+Subagenten steht aus, siehe unten):
+
+- **PERF-GUI-1 (Teil):** Draft/Full-Split (`render_draft`/`render_full`/
+  `render_from` mit ROI-Crop) in `lumina-gui/src/lib.rs` vorhanden;
+  `draft_original` wird gecacht (Zero-Alloc beim Drag).
+- **PERF-GUI-2 (Gerüst):** `crates/lumina-gpu` neu (wgpu/Metal,
+  `GpuContext`, Uniforms 64 B `#[repr(C)]`, `bake_3d_lut` Identity-Stub,
+  FP16-Helfer, `TiledCache` 512² LRU, `DraftPyramid`); echter WGSL-Tone-Stage
+  implementiert und gegen CPU-Golden-Gates verifiziert
+  (`maxAbsDiff ≤ 1`, `PSNR ≥ 45 dB`; `cargo test -p lumina-gpu` 5 passed).
+  **Offen:** Masken-/WB-/SourceAction-Stufen auf GPU; Readback (`map_async`)
+  noch im Pfad — „Never read back to CPU" noch nicht erfüllt.
+- **PERF-GUI-3 (Implementiert):** Draft bei `pointer.any_down()` aus gecachtem
+  `draft_original`; Vollrender debounced 150 ms nach Loslassen.
+- **PERF-GUI-4 (Implementiert):** Coalescing via Dirty-Flag + `request_repaint`;
+  Zwischenframes werden gedroppt.
+- **PERF-GUI-5 (Implementiert, CPU):** ROI-Crop vor `render_frame`
+  (`preview_roi` für Pointer-Mapping gespeichert); GPU-Scissor offen.
+- **PERF-GUI-6 (Implementiert):** Auto-Load des ersten RAW nach
+  `list_directory` (mit Async-Decode-Drain im Headless-Test gehärtet).
+  **Tester meldete 2026-08-23 „wird nicht automatisch geladen"** → Re-Check im
+  Panic-Fix-Batch.
+- **PERF-GUI-7 (Implementiert):** `decode_bytes` via Worker-Thread + mpsc;
+  UI pollt non-blocking (Status „Decoding…").
+- **Neu PERF-GUI-8 (erledigt, verifiziert):** CPU↔GPU-Golden-Image-Harness
+  (`crates/lumina-gpu/tests/golden.rs`), Toleranzen dokumentiert in
+  `docs/gpu-bootstrap.md`; GPU-Benchmarks (`bench/gpu.rs`) messen beide Pfade:
+  @2048 CPU ≈ 59 ms vs. GPU ≈ 5,4 ms (~11×), Uniform-Upload ≈ 5 µs
+  (Budgets report-only in `perf/budgets.json`, F-074-N6 draft).
+- **Neu GUI-Features:** Thumbnail eigener Thread-Pool (mpsc +
+  `available_parallelism`, IdleQueue nur noch Maske), Zoomstufen
+  Fit/100 %/200 %/Fit-Width (+/−/1/F, Scroll-Zoom am Cursor, Pan),
+  linke Navigator-Leiste (RAW-only, aktives Bild markiert),
+  CLI/MCP GPU-first-Wiring mit sichtbarem Backend-Log
+  (`render backend: gpu (Apple M5 Pro …)`), `LUMINA_MCP_LOG` implementiert.
+
+### Neu aus manuellem Test 2026-08-23 (offen)
+
+- [ ] **GUI-CRASH-1** Release-Panic im Zoom/Pan-Pfad nach dem Debounce-
+      Vollrender: `f32 clamp "min > max": min = 444.9877, max = 444.98105`
+      (`gui.log` Zeile ~66178, Panic-Hook + Ringbuffer funktionieren). Ursache:
+      Rect-/Pos-Berechnung aus veraltetem Zoom-State wird invertiert
+      (Rundungsdifferenz). Fix: clamp-Reihenfolgen absichern
+      (`Rect::from_min_size` + `.max(0.0)`-Breiten, Epsilon-Guards),
+      Division durch 0 in `to_normalized` bei 0-Rect vermeiden.
+      In Arbeit (Fix-Batch läuft).
+- [ ] **GUI-FIT-1** „Fit" zeigt das Bild weiterhin kleiner als das Panel
+      (object-contain nutzt evtl. falsche verfügbare Fläche — Navigator/rechte
+      Leiste müssen VOR der Preview allokiert sein; kein `min(1.0)`-Cap im
+      Fit-Modus; Textur 5774×3849 muss voll ins zentrale Pane gemappt werden).
+      In Arbeit (Fix-Batch läuft).
+- [ ] **GUI-AUTOLOAD-1** Auto-Load des ersten RAW greift laut Tester nicht
+      (Log zeigt zwar `loaded image … cr3`, aber Nutzer-Erlebnis: kein Bild).
+      Verifizieren, ob Decode-Ergebnis im Update-Loop konsumiert wird
+      (`poll_decode`), bevor „kein Bild“ angezeigt wird. In Arbeit.
+- [ ] **GUI-RAWONLY-1** Nicht-RAWs erscheinen trotz Filter in Navigator/
+      Filmstrip → RAW-only-Filter direkt in beiden Draw-Loops erzwingen
+      (`is_raw_name(&e.name)`, unabhängig von `is_supported_image`, das für
+      Tests breiter ist). In Arbeit.
+- [ ] **GUI-60FPS-1** Flüssige 60 FPS bei Slider/Maske fehlen noch:
+      Readback (`map_async`) aus dem GPU-Pfad entfernen und direkt in die
+      egui-Textur/Swapchain rendern; Masken-Brush als R8/R16-Maskentextur im
+      VRAM + Overlay-Shader (nur geänderte 512²-Kachel neu zeichnen).
+      Nächster Batch nach Crash-Fix. Ziel: Slider-Drag < 16 ms Frame-Zeit.
+- [ ] **GPU-STAGE-1** Masken-/WB-/SourceAction-Stufen auf der GPU ergänzen
+      (derzeit rendert der GPU-Pfad diese Stufen noch nicht; CPU-Pfad bleibt
+      Referenz). Nach GUI-60FPS-1.
+- [ ] **BENCH-BASELINE-1** Nach Stabilisierung: Baseline-Capture für die 6
+      GPU-Benchmark-IDs in `perf/baseline.json` und Budgets auf `gate:true`
+      stellen (aktuell report-only, F-074-N6 draft).
+
 ## Abnahmekriterien
 
 Die erste produktiv nutzbare Version muss mindestens Folgendes erfüllen:
