@@ -208,6 +208,19 @@ impl IdleQueue {
 struct ThumbnailJob {
     source: PathBuf,
     name: String,
+    /// Stable thumbnail key (canonicalized absolute path) the result is filed
+    /// under — never the bare filename (REVIEW-GUI-THUMB-1).
+    key: String,
+}
+
+/// The outcome of a [`ThumbnailJob`]. A worker failure is always delivered as
+/// [`ThumbnailOutcome::Failed`] so the main thread can show a visible error and
+/// schedule a bounded retry instead of leaving a gray placeholder for the rest
+/// of the session (REVIEW-GUI-THUMB-2, no silent fallback).
+#[cfg(not(target_arch = "wasm32"))]
+enum ThumbnailOutcome {
+    Ready(ImageFrame),
+    Failed(String),
 }
 
 /// The rendered (downscaled + default-recipe-rendered) preview pixels produced
@@ -216,25 +229,27 @@ struct ThumbnailJob {
 /// needs the `egui::Context`) from these pixels.
 #[cfg(not(target_arch = "wasm32"))]
 struct ThumbnailResult {
+    key: String,
     name: String,
-    frame: ImageFrame,
+    outcome: ThumbnailOutcome,
 }
 
 /// Decode + downscale + default-recipe-render a source on a background worker
 /// thread (PERF-FILMSTRIP). Returns the rendered frame so the main thread can
-/// build the `egui` texture (it needs the `Context`). It is a free function
-/// because it runs on a worker thread that cannot borrow `&mut Self`.
+/// build the `egui` texture (it needs the `Context`). Errors are returned
+/// visibly to the worker caller, never swallowed into `None`.
 #[cfg(not(target_arch = "wasm32"))]
-fn worker_thumbnail(job: ThumbnailJob) -> Option<ThumbnailResult> {
-    let bytes = std::fs::read(&job.source).ok()?;
-    let is_raw = is_raw_name(&job.name);
-    let frame = if is_raw {
-        lumina_raw::decode_bytes(&bytes, &job.name).ok()?.frame
+fn decode_thumbnail_frame(source: &Path, name: &str) -> Result<ImageFrame, String> {
+    let bytes = std::fs::read(source).map_err(|error| format!("{}: {error}", source.display()))?;
+    let frame = if is_raw_name(name) {
+        lumina_raw::decode_bytes(&bytes, name)
+            .map_err(|error| error.to_string())?
+            .frame
     } else {
-        ImageFrame::decode(&bytes).ok()?
+        ImageFrame::decode(&bytes).map_err(|error| error.to_string())?
     };
     let (small, w, h) = downscale_rgba(&frame.pixels, frame.width, frame.height, THUMBNAIL_MAX_DIM);
-    let small_frame = ImageFrame::new(w, h, small).ok()?;
+    let small_frame = ImageFrame::new(w, h, small).map_err(|error| error.to_string())?;
     let context = RenderContext {
         recipe: &EditRecipe::default(),
         camera_white_balance: None,
@@ -242,17 +257,33 @@ fn worker_thumbnail(job: ThumbnailJob) -> Option<ThumbnailResult> {
         masks: None,
         lensfun: None,
     };
+    // Default-recipe render for display; a render failure falls back to the
+    // plain downscaled frame (documented display-only preview path).
     let preview = render_frame(&small_frame, &context)
         .map(|o| o.frame)
         .unwrap_or(small_frame);
-    let png = preview.encode(ImageFileFormat::Png).ok()?;
-    if let Ok(cache) = DiskFolderCache::for_image(&job.source) {
-        let _ = cache.store_preview(&job.name, "vc-original", PreviewKind::Standard, &png);
+    let png = preview
+        .encode(ImageFileFormat::Png)
+        .map_err(|error| error.to_string())?;
+    if let Ok(cache) = DiskFolderCache::for_image(source) {
+        let _ = cache.store_preview(name, "vc-original", PreviewKind::Standard, &png);
     }
-    Some(ThumbnailResult {
+    Ok(preview)
+}
+
+/// Worker entry point: never drops a job silently; failures travel back to the
+/// main thread as [`ThumbnailOutcome::Failed`] (REVIEW-GUI-THUMB-2).
+#[cfg(not(target_arch = "wasm32"))]
+fn worker_thumbnail(job: ThumbnailJob) -> ThumbnailResult {
+    let outcome = match decode_thumbnail_frame(&job.source, &job.name) {
+        Ok(frame) => ThumbnailOutcome::Ready(frame),
+        Err(message) => ThumbnailOutcome::Failed(message),
+    };
+    ThumbnailResult {
+        key: job.key,
         name: job.name,
-        frame: preview,
-    })
+        outcome,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -410,6 +441,20 @@ pub struct LuminaApp {
     /// finishes). Left unset while no RAW entry exists, so a later scan of a
     /// now-populated directory can still auto-load.
     auto_load_attempted: bool,
+    /// GUI-60FPS-1: optional GPU context for the native desktop. `None` on wasm
+    /// or when no adapter is bound (CPU fallback remains fully functional).
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    gpu: Option<lumina_gpu::GpuContext>,
+    /// GUI-60FPS-1 H1: persistent R16 mask plane (Vec<u16> u16-LE, row-major,
+    /// `width × height`) backing the interactive brush. Kept CPU-side so each
+    /// dirty 512² tile can be (re-)stamped incrementally via
+    /// `lumina_core::mask_tiles::stamp_brush_mark` and then uploaded with
+    /// `queue.write_texture` (`bytemuck::cast_slice` → `&[u8]`). Only dirty tiles
+    /// are uploaded per stroke (no whole-plane rewrite, no dummy zeros).
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    brush_mask_plane: Option<Vec<u16>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    brush_mask_plane_dims: Option<(u32, u32)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -417,11 +462,27 @@ pub struct LuminaApp {
 pub struct FileBrowserEntry {
     path: PathBuf,
     name: String,
+    /// Stable thumbnail key: canonicalized absolute path. Identical filenames
+    /// in different folders must never share a thumbnail cell
+    /// (REVIEW-GUI-THUMB-1).
+    thumb_key: String,
     has_sidecar: bool,
     source_status: SourceStatus,
     conflict: bool,
     virtual_copies: usize,
     missing_models: usize,
+}
+
+/// REVIEW-GUI-THUMB-1: stable thumbnail cache key. The canonicalized absolute
+/// path guarantees that the same filename in two folders maps to different
+/// entries; a canonicalize failure (e.g. a missing file) falls back to the
+/// lossy path string, which is still folder-scoped.
+#[cfg(not(target_arch = "wasm32"))]
+fn thumbnail_key(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -495,10 +556,12 @@ impl LuminaApp {
                             Err(_) => break, // all senders gone → shut down
                         };
                         trace!("thumbnail worker {}: decoding {}", i, job.name);
-                        if let Some(result) = worker_thumbnail(job) {
-                            trace!("thumbnail worker {}: completed {}", i, result.name);
-                            let _ = tx.send(result);
-                        }
+                        // Always reports back: failures arrive as
+                        // ThumbnailOutcome::Failed so the main thread can show
+                        // them and retry in a bounded way (REVIEW-GUI-THUMB-2).
+                        let result = worker_thumbnail(job);
+                        trace!("thumbnail worker {}: finished {}", i, result.name);
+                        let _ = tx.send(result);
                     }
                 });
             }
@@ -597,6 +660,12 @@ impl LuminaApp {
             decode_rx: None,
             pending_full_render: false,
             auto_load_attempted: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            gpu: lumina_gpu::GpuContext::new().ok(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            brush_mask_plane: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            brush_mask_plane_dims: None,
         }
     }
 
@@ -608,16 +677,22 @@ impl LuminaApp {
     pub fn open_file(&mut self, path: impl Into<String>) {
         let p = path.into();
         trace!("GUI interaction: open_file {}", p);
-        self.path = p;
+        // REVIEW-GUI-PATHDESYNC-1: `self.path` is NOT committed here. The decode
+        // runs asynchronously; adopting the new path before `finish_decode`
+        // would let Save Recipe / Export / mask fingerprints write the still-
+        // loaded image-A state under the new path B (phantom sidecar) — and on
+        // a failed decode the path would point at a file that never loaded.
+        // `finish_decode` commits the path only after a successful decode, so
+        // every write path stays consistent with original/document/recipe.
         // Populate the file browser with the directory containing the opened file.
-        if let Some(parent) = Path::new(&self.path).parent() {
+        if let Some(parent) = Path::new(&p).parent() {
             self.directory = parent.display().to_string();
         }
         self.list_directory();
         // PERF-GUI-7: decode off the main thread so switching files never
         // blocks the UI; the decoded frame is delivered via `decode_rx` and
         // applied in `update()`/`poll_decode()`.
-        self.begin_load_path(self.path.clone());
+        self.begin_load_path(p);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -631,6 +706,10 @@ impl LuminaApp {
     pub fn list_directory(&mut self) {
         let directory = std::path::PathBuf::from(self.directory.trim());
         debug!("listing directory: {}", directory.display());
+        // REVIEW-GUI-THUMB-1: drop cached thumbnails of a previous folder so
+        // they neither resurface nor accumulate unboundedly across a session.
+        self.thumbnails
+            .ensure_directory(&directory.to_string_lossy());
         self.entries.clear();
         match std::fs::read_dir(&directory) {
             Ok(dir_entries) => {
@@ -758,6 +837,7 @@ impl LuminaApp {
         Some(FileBrowserEntry {
             path: path.to_path_buf(),
             name,
+            thumb_key: thumbnail_key(path),
             has_sidecar,
             source_status,
             conflict,
@@ -1559,6 +1639,13 @@ impl LuminaApp {
         self.preview_is_draft = false;
         // PERF-GUI-3: cache a downscaled source for fast draft renders.
         self.draft_original = Some(frame.downscale(self.draft_max_dim));
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        {
+            // H1: invalidate the persistent R16 brush plane — a new source size needs
+            // a fresh zeroed plane; stale dimensions would mis-align tile uploads.
+            self.brush_mask_plane = None;
+            self.brush_mask_plane_dims = None;
+        }
         self.status = Str::Loaded.format_arg(&self.source_name);
         info!(
             "loaded image {} (raw={}, camera_white_balance={:?})",
@@ -1987,6 +2074,14 @@ impl LuminaApp {
     fn update_texture(&mut self, ctx: &egui::Context) {
         // Before/After shows the original (never the recipe) so the toggle can
         // never mutate the recipe — it only swaps which frame is displayed.
+        //
+        // GPU-60FPS-1 H1 present: with `eframe` glow (GL) the `wgpu` VRAM path
+        // (Metal) is a separate `Instance` whose `wgpu::Texture`s cannot be
+        // shared with the glow surface, so `copy_vram_to_texture` is offscreen-
+        // only. The preview is therefore always presented via the CPU
+        // `ColorImage`/`load_texture` upload (the `queue.write_texture` hot path
+        // is only for the R16 mask tiles). A future `egui_wgpu` renderer could
+        // present directly via `copy_vram_to_texture` and skip this upload.
         let frame = if self.before_after {
             self.original.as_ref()
         } else {
@@ -2169,8 +2264,13 @@ impl LuminaApp {
                 }
             }
             Err((path, message)) => {
-                self.path = path;
-                self.show_error(GuiError::Io(message));
+                // REVIEW-GUI-PATHDESYNC-1: a failed decode must NOT adopt the
+                // new path — original/document/recipe still belong to the
+                // previously loaded image, so writes would otherwise produce a
+                // phantom sidecar under a path that never loaded. Surface the
+                // failure visibly instead.
+                error!("background decode failed for {path}: {message}");
+                self.show_error(GuiError::Io(format!("{path}: {message}")));
             }
         }
     }
@@ -2642,6 +2742,8 @@ impl LuminaApp {
                         BrushMarkSign::Positive
                     },
                 });
+                #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+                self.gpu_upload_brush_tile(nx, ny);
             }
         } else if response.dragged() {
             self.drag_current = Some(Point2 { x: nx, y: ny });
@@ -2659,6 +2761,8 @@ impl LuminaApp {
                                 BrushMarkSign::Positive
                             },
                         });
+                        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+                        self.gpu_upload_brush_tile(nx, ny);
                     }
                 }
             }
@@ -2668,13 +2772,119 @@ impl LuminaApp {
         }
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn gpu_upload_brush_tile(&mut self, nx: f32, ny: f32) {
+        let Some(gpu) = self.gpu.as_ref() else {
+            return;
+        };
+        if !gpu.is_available() {
+            return;
+        }
+        let Ok((w, h)) = self.image_dims() else {
+            return;
+        };
+        // Ensure the persistent R16 plane exists and matches the current source dims.
+        let dims_changed = self.brush_mask_plane_dims != Some((w, h));
+        if dims_changed || self.brush_mask_plane.is_none() {
+            let len = (w as usize).saturating_mul(h as usize);
+            self.brush_mask_plane = Some(vec![0u16; len]);
+            self.brush_mask_plane_dims = Some((w, h));
+            // Also ensure VRAM mask texture is sized for this source; stale
+            // dimensions are handled lazily in `ensure_vram` at render time.
+            if let Err(e) = gpu.ensure_vram(w, h) {
+                warn!("gpu ensure_vram({}x{}) failed: {}", w, h, e);
+            }
+        }
+        let Some(plane) = self.brush_mask_plane.as_mut() else {
+            return;
+        };
+        let sign = if self.brush_eraser {
+            lumina_sidecar::BrushMarkSign::Negative
+        } else {
+            lumina_sidecar::BrushMarkSign::Positive
+        };
+        let tiles = lumina_gpu::tiling::dirty_tiles_for_brush_mark(nx, ny, self.brush_radius, w, h);
+        // Persistent plane: stamp once, then upload only dirty 512² tiles.
+        // `stamp_brush_mark` is the canonical per-pixel kernel from
+        // `lumina_core::mask_tiles` (byte-identical to `rasterize_prompt` Brush).
+        lumina_core::mask_tiles::stamp_brush_mark(plane, w, h, nx, ny, self.brush_radius, sign);
+        for tile in tiles {
+            let x0 = tile.tx * lumina_gpu::tiling::TILE_SIZE;
+            let y0 = tile.ty * lumina_gpu::tiling::TILE_SIZE;
+            let tw = (lumina_gpu::tiling::TILE_SIZE)
+                .min(w.saturating_sub(x0))
+                .max(1);
+            let th = (lumina_gpu::tiling::TILE_SIZE)
+                .min(h.saturating_sub(y0))
+                .max(1);
+            // Extract this tile's u16 row-major subregion from the persistent plane
+            // and upload as u8 LE bytes via `bytemuck::cast_slice` (no per-pixel copy).
+            let mut tile_u16 = Vec::with_capacity((tw * th) as usize);
+            for row in 0..th {
+                let src_y = y0 + row;
+                let src_start = (src_y * w + x0) as usize;
+                let src_end = src_start + tw as usize;
+                if src_end <= plane.len() {
+                    tile_u16.extend_from_slice(&plane[src_start..src_end]);
+                }
+            }
+            if tile_u16.len() != (tw * th) as usize {
+                warn!(
+                    "brush tile slice length mismatch {} vs {}x{}",
+                    tile_u16.len(),
+                    tw,
+                    th
+                );
+                continue;
+            }
+            let tile_bytes: &[u8] = bytemuck::cast_slice(&tile_u16);
+            if let Err(e) = gpu.upload_mask_tile(x0, y0, tw, th, tile_bytes) {
+                warn!(
+                    "gpu_upload_brush_tile upload failed at tile {}x{} ({}x{}): {}",
+                    x0, y0, tw, th, e
+                );
+            } else {
+                trace!(
+                    "gpu_upload_brush_tile stamped ({:.3},{:.3}) r={:.3} -> tile ({},{}) {}x{}",
+                    nx,
+                    ny,
+                    self.brush_radius,
+                    x0,
+                    y0,
+                    tw,
+                    th
+                );
+            }
+        }
+    }
+
     /// Draw the currently relevant mask as a translucent overlay on the preview:
     /// the in-progress drag (live) or the selected mask's saved prompt. The
     /// F-079 geometric rasterizer produces the matte; it is painted as a
     /// translucent tint over the source rect so the user sees exactly what the
     /// pipeline will evaluate.
+    ///
+    /// GPU-60FPS-1 H1 present fix: the VRAM mask tiles are uploaded
+    /// incrementally via `gpu_upload_brush_tile` (`queue.write_texture` per dirty
+    /// 512² tile, `bytemuck::cast_slice` from the persistent `Vec<u16>` plane).
+    /// With the current `eframe` **glow** (GL) backend the `wgpu` VRAM textures
+    /// live in a separate `wgpu::Instance` (Metal) and their `wgpu::Texture`
+    /// handles cannot be shared with the glow surface, so `copy_vram_to_texture`
+    /// is **offscreen only** and the on-screen overlay still needs the CPU
+    /// `rasterize_prompt` → `egui::ColorImage`/`ctx.load_texture` present path.
+    /// No early `return` here — the overlay is always painted so the GPU path
+    /// cannot silently hide it. A future `egui_wgpu` renderer would composite via
+    /// `copy_vram_to_texture` directly and skip this CPU fallback.
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_mask_overlay(&mut self, ui: &mut egui::Ui, full_rect: egui::Rect) {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        if self.gpu.as_ref().is_some_and(|g| g.is_available()) {
+            trace!(
+                "draw_mask_overlay: gpu vram resident — tiles already uploaded via queue.write_texture; \
+                 painting CPU fallback for glow present (copy_vram_to_texture is offscreen-only until egui_wgpu)"
+            );
+            // Fall through to CPU overlay for the glow backend.
+        }
         let Some(prompt) = self.current_overlay_prompt() else {
             return;
         };
@@ -3916,7 +4126,8 @@ impl LuminaApp {
                 ui.horizontal(|ui| {
                     for entry in chunk {
                         let selected = self.path == entry.path.display().to_string();
-                        let tex = self.thumbnails.get(&entry.name).cloned();
+                        let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                        let placeholder_label = self.thumbnail_placeholder_label(entry);
                         let (rect, resp) = ui.allocate_exact_size(
                             egui::vec2(CELL_W - 8.0, CELL_H - 8.0),
                             egui::Sense::click(),
@@ -3937,7 +4148,7 @@ impl LuminaApp {
                         } else {
                             ui.painter()
                                 .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
-                            ui.put(rect, egui::Label::new(&entry.name));
+                            ui.put(rect, egui::Label::new(placeholder_label));
                         }
                         if resp.double_clicked() {
                             trace!(
@@ -4166,8 +4377,10 @@ impl LuminaApp {
                     });
                     if ui.button(Str::ChooseFile.t()).clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
-                            self.path = path.display().to_string();
-                            self.begin_load_path(self.path.clone());
+                            // REVIEW-GUI-PATHDESYNC-1: no immediate
+                            // `self.path` commit; `finish_decode` adopts the
+                            // path after a successful decode.
+                            self.begin_load_path(path.display().to_string());
                         }
                     }
                 }
@@ -4274,7 +4487,8 @@ impl LuminaApp {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for entry in &entries {
-                    let tex = self.thumbnails.get(&entry.name).cloned();
+                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                    let placeholder_label = self.thumbnail_placeholder_label(entry);
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(110.0, 84.0), egui::Sense::click());
                     if let Some(texture) = tex {
@@ -4285,7 +4499,7 @@ impl LuminaApp {
                     } else {
                         ui.painter()
                             .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
-                        ui.put(rect, egui::Label::new(&entry.name));
+                        ui.put(rect, egui::Label::new(placeholder_label));
                     }
                     if resp.clicked() {
                         trace!("GUI interaction: filmstrip click {}", entry.path.display());
@@ -4304,10 +4518,13 @@ impl LuminaApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn ensure_thumbnail(&mut self, ctx: &egui::Context, entry: &FileBrowserEntry) {
-        if self.thumbnails.get(&entry.name).is_some() {
+        // Key is the canonicalized absolute path, never the bare filename
+        // (REVIEW-GUI-THUMB-1).
+        let key = entry.thumb_key.clone();
+        if self.thumbnails.get(&key).is_some() {
             return;
         }
-        if self.thumbnails.probed(&entry.name) {
+        if !self.thumbnails.needs_job(&key) {
             return;
         }
         if let Ok(cache) = DiskFolderCache::for_image(entry.path.as_path()) {
@@ -4318,34 +4535,57 @@ impl LuminaApp {
                 if let Ok(Some(bytes)) =
                     cache.load_preview(&entry.name, "vc-original", PreviewKind::Standard)
                 {
-                    if let Ok(frame) = ImageFrame::decode(&bytes) {
-                        let tex = self.make_thumbnail_texture(ctx, &frame, &entry.name);
-                        self.thumbnails.insert(&entry.name, tex);
-                        self.thumbnails.mark_probed(&entry.name);
-                        return;
+                    match ImageFrame::decode(&bytes) {
+                        Ok(frame) => {
+                            let tex = self.make_thumbnail_texture(ctx, &frame, &key);
+                            // insert marks the key probed *after* success only
+                            // (REVIEW-GUI-THUMB-2).
+                            self.thumbnails.insert(&key, tex);
+                            return;
+                        }
+                        Err(error) => {
+                            // A cached-but-corrupt preview is a visible error,
+                            // not a silent miss.
+                            self.thumbnails
+                                .mark_failed(&key, format!("cached preview unreadable: {error}"));
+                            return;
+                        }
                     }
                 }
             }
         }
         // Cache miss: enqueue a background thumbnail job on the dedicated thread
         // pool rather than the bounded `IdleQueue`. The channel is unbounded, so
-        // it never drops jobs under load and never logs "queue full". We mark the
-        // source probed *only after a successful send* so we never lose a job and
-        // never silently strand a thumbnail (retry happens next frame on failure).
+        // it never drops jobs under load. The key is marked in-flight (NOT
+        // probed) so a worker failure can retry in a bounded way and surface a
+        // visible error instead of a permanent gray cell (REVIEW-GUI-THUMB-2).
+        self.thumbnails.begin_job(&key);
         match self.thumbnail_tx.send(ThumbnailJob {
             source: entry.path.clone(),
             name: entry.name.clone(),
+            key,
         }) {
-            Ok(()) => {
-                self.thumbnails.mark_probed(&entry.name);
-                debug!("enqueued thumbnail job for {}", entry.name);
-            }
+            Ok(()) => debug!("enqueued thumbnail job for {}", entry.name),
             Err(_) => {
+                // Channel closed: release the in-flight slot so a later frame
+                // retries once the pool is back.
+                self.thumbnails.job_dispatch_failed(&entry.thumb_key);
                 debug!(
                     "thumbnail channel closed; will retry {} on a later frame",
                     entry.name
                 );
             }
+        }
+    }
+
+    /// Placeholder caption for a thumbnail cell: the filename, plus the visible
+    /// failure message once the retry budget is exhausted
+    /// (REVIEW-GUI-THUMB-2 — never a silent gray cell).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn thumbnail_placeholder_label(&self, entry: &FileBrowserEntry) -> String {
+        match self.thumbnails.failure(&entry.thumb_key) {
+            Some(message) => format!("{} ⚠ {}", entry.name, message),
+            None => entry.name.clone(),
         }
     }
 
@@ -4461,7 +4701,8 @@ impl LuminaApp {
                 // generation): ensure_thumbnail populates the shared
                 // ThumbnailManager entry.
                 self.ensure_thumbnail(ctx, entry);
-                let tex = self.thumbnails.get(&entry.name).cloned();
+                let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                let placeholder_label = self.thumbnail_placeholder_label(entry);
                 let active = active_path == entry.path.display().to_string();
                 let (cell, resp) =
                     ui.allocate_exact_size(egui::vec2(120.0, 90.0), egui::Sense::click());
@@ -4473,7 +4714,7 @@ impl LuminaApp {
                 } else {
                     ui.painter()
                         .rect_filled(cell, 2.0, egui::Color32::from_gray(40));
-                    ui.put(cell, egui::Label::new(&entry.name));
+                    ui.put(cell, egui::Label::new(placeholder_label));
                 }
                 if active {
                     ui.painter().rect_stroke(
@@ -4743,6 +4984,11 @@ fn decoder_identity(source_is_raw: bool) -> &'static str {
 
 impl eframe::App for LuminaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let perf_t0 = if std::env::var("LUMINA_PERF_LOG").as_deref() == Ok("1") {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         // Apply the Lumina dark theme once per frame. `egui` only re-applies the
         // fields that changed, so this is cheap and keeps the Lightroom feeling
         // consistent across modules.
@@ -4828,9 +5074,20 @@ impl eframe::App for LuminaApp {
         // on a synchronous decode+render on the UI thread.
         #[cfg(not(target_arch = "wasm32"))]
         while let Ok(result) = self.thumbnail_rx.try_recv() {
-            let tex = self.make_thumbnail_texture(ctx, &result.frame, &result.name);
-            self.thumbnails.insert(&result.name, tex);
-            trace!("thumbnail ready: {}", result.name);
+            match result.outcome {
+                ThumbnailOutcome::Ready(frame) => {
+                    let tex = self.make_thumbnail_texture(ctx, &frame, &result.key);
+                    self.thumbnails.insert(&result.key, tex);
+                    trace!("thumbnail ready: {}", result.name);
+                }
+                ThumbnailOutcome::Failed(message) => {
+                    // Visible failure state + bounded retry instead of a gray
+                    // placeholder for the rest of the session
+                    // (REVIEW-GUI-THUMB-2, no silent fallback).
+                    warn!("thumbnail failed for {}: {message}", result.name);
+                    self.thumbnails.mark_failed(&result.key, message);
+                }
+            }
             ctx.request_repaint();
         }
 
@@ -4849,6 +5106,10 @@ impl eframe::App for LuminaApp {
         // (coalesced: latest params overwrite, intermediate frames are dropped,
         // a repaint is requested); a debounced full-quality render fires on
         // mouse-up / idle (150 ms) so the final frame is computed once.
+        // GUI-60FPS-1: slider/mask hot path prefers the VRAM-resident GPU tone
+        // stage (`render_to_vram`, no `map_async` CPU readback). The CPU fallback
+        // remains fully functional when no adapter is bound or the `gpu` feature
+        // is off.
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let now = ctx.input(|i| i.time);
         if pointer_down
@@ -4857,6 +5118,20 @@ impl eframe::App for LuminaApp {
             && self.render_key.is_none()
         {
             trace!("GUI render: draft render during pointer drag");
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            {
+                if let Some(gpu) = self.gpu.as_ref() {
+                    if gpu.is_available() {
+                        if let Some(src) = self
+                            .draft_original
+                            .clone()
+                            .or_else(|| self.original.clone())
+                        {
+                            let _ = gpu.render_to_vram(&src, &self.recipe);
+                        }
+                    }
+                }
+            }
             let viewport = [
                 ctx.screen_rect().width() as u32,
                 ctx.screen_rect().height() as u32,
@@ -4897,8 +5172,9 @@ impl eframe::App for LuminaApp {
             }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(path) = file.path {
-                self.path = path.display().to_string();
-                self.begin_load_path(self.path.clone());
+                // REVIEW-GUI-PATHDESYNC-1: no immediate `self.path` commit;
+                // `finish_decode` adopts the path after a successful decode.
+                self.begin_load_path(path.display().to_string());
             }
         }
 
@@ -5028,6 +5304,15 @@ impl eframe::App for LuminaApp {
             }
             _ => self.draw_preview_area(ctx, ui),
         });
+        if let Some(t0) = perf_t0 {
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            log::info!(
+                "LUMINA_PERF frame={:.2}ms pointer_down={}",
+                ms,
+                ctx.input(|i| i.pointer.any_down())
+            );
+            eprintln!("LUMINA_PERF frame={:.2}ms", ms);
+        }
     }
 }
 
@@ -5691,6 +5976,112 @@ mod tests {
         assert_eq!(LuminaApp::default_for_adjustment("saturation"), 0.0);
         // Presence neutral default is 0.0 per the GUI initializer.
         assert_eq!(app.recipe().presence.as_ref().unwrap().clarity, 0.6);
+    }
+
+    // ---- REVIEW-GUI-THUMB-1 / THUMB-2 / PATHDESYNC-1 (headless) ----
+
+    /// REVIEW-GUI-THUMB-1: identical filenames in two folders must produce
+    /// distinct thumbnail keys so neither cell can show the other's image.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn thumbnail_keys_distinguish_same_filename_across_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let dir_a = root.path().join("album-a");
+        let dir_b = root.path().join("album-b");
+        std::fs::create_dir(&dir_a).unwrap();
+        std::fs::create_dir(&dir_b).unwrap();
+        let path_a = dir_a.join("IMG_0001.png");
+        let path_b = dir_b.join("IMG_0001.png");
+        save_png(&path_a);
+        save_png(&path_b);
+
+        let entry_a = LuminaApp::scan_entry(&path_a).unwrap();
+        let entry_b = LuminaApp::scan_entry(&path_b).unwrap();
+        assert_eq!(entry_a.name, entry_b.name, "fixture must share a filename");
+        assert_ne!(
+            entry_a.thumb_key, entry_b.thumb_key,
+            "same filename in two folders must not share a thumbnail key"
+        );
+        // Keys are stable across scans of the same file.
+        assert_eq!(
+            entry_a.thumb_key,
+            LuminaApp::scan_entry(&path_a).unwrap().thumb_key
+        );
+
+        // Manager-level: inserting under key A never satisfies lookups for B.
+        let ctx = egui::Context::default();
+        let mut manager = crate::filmstrip::ThumbnailManager::new();
+        let tex = ctx.load_texture(
+            "test",
+            egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255]),
+            egui::TextureOptions::LINEAR,
+        );
+        manager.insert(&entry_a.thumb_key, tex);
+        assert!(manager.get(&entry_a.thumb_key).is_some());
+        assert!(manager.get(&entry_b.thumb_key).is_none());
+    }
+
+    /// REVIEW-GUI-PATHDESYNC-1: `open_file` must not adopt the new path while
+    /// the asynchronous decode is running; `finish_decode` commits it on
+    /// success only.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_file_commits_path_only_after_successful_decode() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+
+        let mut app = new_app();
+        assert!(app.path.is_empty());
+        app.open_file(source.display().to_string());
+        // Decode is in flight: the path is NOT yet committed, so any Save /
+        // Export would operate on the previous (still consistent) state.
+        assert!(app.decode_rx.is_some(), "decode must run asynchronously");
+        assert_eq!(
+            app.path, "",
+            "path must not be adopted before decode success"
+        );
+
+        open_and_decode(&mut app, source.display().to_string());
+        assert_eq!(app.path, source.display().to_string());
+        assert!(app.error().is_none());
+    }
+
+    /// REVIEW-GUI-PATHDESYNC-1: a failed decode keeps the previously loaded
+    /// image/path pair intact and reports the failure visibly — no phantom
+    /// sidecar target, no silent fallback.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn failed_decode_keeps_previous_path_and_reports_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("good.png");
+        save_png(&source);
+
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let loaded_path = app.path.clone();
+        assert_eq!(loaded_path, source.display().to_string());
+
+        let missing = directory.path().join("missing.png");
+        app.open_file(missing.display().to_string());
+        let mut decoded_or_failed = false;
+        for _ in 0..2000 {
+            app.poll_decode();
+            if app.error().is_some() || app.decode_rx.is_none() {
+                decoded_or_failed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(decoded_or_failed, "failed decode must surface promptly");
+        assert!(
+            app.error().is_some(),
+            "decode failure must be reported visibly"
+        );
+        assert_eq!(
+            app.path, loaded_path,
+            "a failed decode must not adopt the new path"
+        );
     }
 
     // ---- F-103-N3: Before/After + white-balance eyedropper ----

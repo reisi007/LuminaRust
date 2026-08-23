@@ -178,8 +178,10 @@ pub fn create_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
     })
 }
 
-/// Create the RGBA8 render target the color/tone pass draws into. It is both a
-/// `RENDER_ATTACHMENT` (drawn to) and `COPY_SRC` (read back to the CPU `Frame`).
+/// Create the RGBA8 render target the color/tone pass draws into. It is a
+/// `RENDER_ATTACHMENT` (drawn to), `COPY_SRC` (read back to the CPU `Frame` for
+/// export/CLI paths) **and** `TEXTURE_BINDING` (sampled by the mask-overlay
+/// present pass, GUI-60FPS-1 — the tone result never has to leave VRAM).
 pub fn create_output_texture(
     device: &wgpu::Device,
     width: u32,
@@ -198,8 +200,281 @@ pub fn create_output_texture(
         dimension: wgpu::TextureDimension::D2,
         view_formats: &[],
         format: RGBA8_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
     })
+}
+
+/// Create the VRAM brush-mask texture (GUI-60FPS-1): one `u16` coverage value
+/// per source pixel (`R16Unorm`, matching the sidecar's uint16 mask tiles).
+/// Updated per dirty 512² tile via [`super::GpuContext::upload_mask_tile`]
+/// (`queue.write_texture` subregion) — never re-uploaded wholesale in the
+/// brush hot path.
+pub fn create_mask_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        view_formats: &[],
+        format: MASK_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    })
+}
+
+/// Mask coverage texture format: one `uint16` channel per pixel (identical
+/// value domain to `.lumina.zdata` mask tiles / `MaskPlane`).
+pub const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Unorm;
+
+/// Upload a single 512² (or edge-clipped) mask tile into the VRAM mask texture
+/// without touching any other tile. `tile_data` is little-endian `u16` coverage
+/// bytes, row-major, length `tile_w * tile_h * 2`. Only the dirty tile is
+/// written (GUI-60FPS-1 hot path).
+pub fn write_mask_tile(
+    queue: &wgpu::Queue,
+    mask_texture: &wgpu::Texture,
+    tile_x: u32,
+    tile_y: u32,
+    tile_w: u32,
+    tile_h: u32,
+    tile_data: &[u8],
+) {
+    debug_assert_eq!(tile_data.len(), (tile_w * tile_h * 2) as usize);
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: mask_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: tile_x,
+                y: tile_y,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        tile_data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(tile_w * 2),
+            rows_per_image: Some(tile_h),
+        },
+        wgpu::Extent3d {
+            width: tile_w,
+            height: tile_h,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// Uniform block for the mask-overlay present pass.
+///
+/// `color` is the overlay tint (RGB) with the blend strength in alpha
+/// (`0.0..=0.45` mirrors the CPU overlay). `#[repr(C)]` + Pod so it uploads
+/// directly; padded to 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct OverlayUniforms {
+    /// RGB tint + A = blend strength.
+    pub color: [f32; 4],
+}
+
+/// WGSL for the mask-overlay present pass (GUI-60FPS-1).
+///
+/// Draws a fullscreen triangle into an *external* target (egui screen area or
+/// swapchain view), sampling the tone-rendered image (VRAM-resident, no CPU
+/// readback) and the VRAM brush-mask texture, and mixes the accent tint over
+/// the image by `mask × strength`. This replaces any CPU composite of mask and
+/// preview on the GPU path.
+pub const MASK_OVERLAY_SRC: &str = r#"
+struct OverlayParams {
+  color_strength : vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> params : OverlayParams;
+@group(0) @binding(1) var color_tex : texture_2d<f32>;
+@group(0) @binding(2) var mask_tex : texture_2d<f32>;
+@group(0) @binding(3) var input_samp : sampler;
+
+struct VsOut {
+  @builtin(position) pos : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid : u32) -> VsOut {
+  var p = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>( 3.0, -1.0),
+    vec2<f32>(-1.0,  3.0)
+  );
+  var out : VsOut;
+  out.pos = vec4<f32>(p[vid], 0.0, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> {
+  let dims = vec2<f32>(textureDimensions(color_tex));
+  let uv = frag_coord.xy / dims;
+  let base = textureSampleLevel(color_tex, input_samp, uv, 0.0);
+  let mask = textureSampleLevel(mask_tex, input_samp, uv, 0.0);
+  let m = clamp(mask.r * params.color_strength.a, 0.0, 1.0);
+  let rgb = mix(base.rgb, params.color_strength.rgb, m);
+  return vec4<f32>(rgb, base.a);
+}
+"#;
+
+/// Bind group layout for [`MASK_OVERLAY_SRC`]: uniform (0), color texture (1),
+/// mask texture (2), sampler (3).
+pub fn create_overlay_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-overlay-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Build the mask-overlay render pipeline for the given *external* target
+/// format (the egui/swapchain surface format on the GUI side, or
+/// [`RGBA8_FORMAT`] in tests).
+pub fn create_overlay_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> Result<wgpu::RenderPipeline, super::GpuError> {
+    let layout = create_overlay_bind_group_layout(device);
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lumina-gpu-overlay-pl"),
+        bind_group_layouts: &[&layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lumina-gpu-overlay-shader"),
+        source: wgpu::ShaderSource::Wgsl(MASK_OVERLAY_SRC.into()),
+    });
+    Ok(
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("lumina-gpu-overlay-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        }),
+    )
+}
+
+/// Create the bind group for the overlay pass from its parts.
+#[allow(clippy::too_many_arguments)]
+pub fn create_overlay_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    color_view: &wgpu::TextureView,
+    mask_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-overlay-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(color_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(mask_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+/// Allocate the overlay uniform buffer ([`OverlayUniforms`], 16 bytes).
+pub fn create_overlay_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-overlay-uniforms"),
+        size: std::mem::size_of::<OverlayUniforms>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// Upload `uniforms` into the overlay uniform buffer via the queue.
+pub fn write_overlay_uniforms(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    uniforms: &OverlayUniforms,
+) {
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(uniforms));
 }
 
 /// Create the staging buffer the rendered RGBA8 target is copied into before

@@ -616,13 +616,32 @@ Subagenten steht aus, siehe unten):
 
 Offen (nächste Batches):
 
-- [ ] **GUI-60FPS-1** Flüssige 60 FPS bei Slider/Maske: Readback (`map_async`)
-      raus, direkt in egui-Textur/Swapchain; Masken-Brush als VRAM-Textur +
-      Overlay-Shader (nur geänderte 512²-Kachel). Ziel < 16 ms.
 - [ ] **GPU-STAGE-1** Masken-/WB-/SourceAction-Stufen auf GPU (derzeit nur
       Tone-Stage; CPU bleibt Referenz). Nach GUI-60FPS-1.
 - [ ] **BENCH-BASELINE-1** Baseline-Capture 6 GPU-Benchmark-IDs
       `perf/baseline.json` → `gate:true` (aktuell report-only, F-074-N6 draft).
+- [ ] **GUI-WGPU-PRESENT-1** Follow-up aus GUI-60FPS-1-Verifizierung:
+      `egui_wgpu`-Migration oder Upload-Pfad finalisieren (derzeit Present
+      unter glow CPU-seitig via `ColorImage`/`load_texture`; <16 ms gilt für
+      Masken-Tile-Upload, nicht Preview-Present). `VramState` LRU/Pool
+      (45 MP+) + `warn!` bei `GpuContext::new` Adapter-Fehler.
+      Dokumentiert in `docs/gpu-bootstrap.md` (Dual-Backend glow vs wgpu).
+
+### GUI-60FPS-1 (2026-08-23)
+
+**Verifiziert erledigt (Implementierung `ses_fd202100`/Fix `ses_fd1f88470`,
+unabhängige Verifizierung `ses_fd1ee2fe` — BESTANDEN):**
+- Hot-Path VRAM-resident ohne `map_async` (`render_to_vram`, Export-Readback
+  bewusst erhalten); Masken-Brush als persistente R16-Plane
+  (`stamp_brush_mark`) mit Dirty-512²-Kachel-Upload
+  (`dirty_tiles_for_brush_mark`, `bytemuck::cast_slice`), Overlay immer
+  gezeichnet; `LUMINA_PERF_LOG=1` Frame-/Render-Messung; Dual-Backend-Doku
+  (glow present vs wgpu offscreen) in `docs/gpu-bootstrap.md` +
+  `feature/platform/cli-gui-wasm.md`; neue Datei
+  `crates/lumina-core/src/mask_tiles.rs`.
+- Verifiziert: fmt clean, clippy workspace `-D warnings` 0, gui 54, gpu 5,
+  sidecar zdata 94, core wgpu-frei, `cargo check -p lumina-gpu
+  --no-default-features` grün.
 
 ### Lightroom-like UI (2026-08-23 beschlossen)
 
@@ -678,6 +697,340 @@ Die erste produktiv nutzbare Version muss mindestens Folgendes erfüllen:
 - Originaldateien bleiben byteweise unverändert.
 - Sidecar-, Migration-, Cache-, Masken- und virtuelle-Kopien-Tests sind durch
   einen unabhängigen Verifizierungs-Agenten bestätigt.
+
+## Review-Befunde Full-Repo-Review (2026-08-23, 8 parallele Subagenten)
+
+Erstes vollständiges Review des gesamten bestehenden Codes (alle 10 Crates,
+~35k Zeilen). Konsolidiert und dedupliziert; Verifizierungsbedarf je Befund im
+Eintrag genannt. Alle acht Teil-Reviews sind abgeschlossen.
+
+### Hoch (Release-blockierend, vor MVP zu beheben)
+
+- [ ] **REVIEW-CORE-GEO-1** Geometrie-Stufe ist im Default-Build tot
+  (hoch; Subagent-Befund, vom Orchestrator verifiziert): `render_frame`
+  wendet Crop/Rotation/Mirror/Perspektive ausschließlich unter
+  `#[cfg(feature = "lensfun")] if let Some(corrector)` an
+  (`crates/lumina-core/src/render.rs:133–143`); `apply_recipe*`
+  (lib.rs:579 ff.) enthält keine Geometrie, `export_image` ruft nur
+  `render_frame`. Im Default-Build (Feature off) und bei
+  `lensfun: None` (GUI übergibt immer `None`) wird `recipe.geometry`,
+  `recipe.perspective`, `recipe.lens_correction` stillschweigend
+  ignoriert — Verstoß gegen „keine stillen Fallbacks". Fix:
+  `apply_geometry` bedingungslos aufrufen (unterstützt bereits den
+  None-Corrector-Pfad) oder laut fehlschlagen; Golden-Tests um
+  Crop/Rotation erweitern.
+- [ ] **REVIEW-CORE-CURVE-1** Panik bei fallenden Kurvensegmenten
+  (hoch): `monotone_curve` (lumina-core/src/lib.rs:1706) clampt auf
+  `[0, 3d]` — bei absteigendem Segment (`d < 0`) panickt
+  `f32::clamp(min>max)` pro Pixel. Schema-valide Sidecar-Kurve mit
+  „Dip" = Renderer-Crash beim Öffnen. Fix: Clamp über sortierte
+  Grenzen oder nicht-monotone Ausgaben laut ablehnen.
+- [ ] **REVIEW-CORE-PERSP-1** Perspektive am Slider-Anschlag erzeugt
+  Riesen-Canvas/OOM (hoch): Homographie-Nenner `d ≈ 0` bei
+  `horizontal=1.0` → projizierte bbox ~10⁶× Bildgröße, `vec![0; ow*oh*4]`
+  ohne MemoryBudget (lib.rs:946–965, 1114–1137). Fix: bbox begrenzen,
+  `d≈0` laut ablehnen, Allokation über MemoryBudget.
+- [ ] **REVIEW-SIDECAR-LOCK-1** TOCTOU beim Reclaim verwaister
+  Write-Locks (hoch): Zwei Prozesse können gleichzeitig „stale"
+  entscheiden; der zweite löscht den frischen Lock des ersten
+  (`crates/lumina-sidecar/src/lib.rs:1146–1158`) → Lost Update ohne
+  Conflict. Fix: atomares Reclaim via rename/flock.
+- [ ] **REVIEW-GPU-DIVERGENCE-1** GPU-Pfad liefert still falsche Pixel
+  (hoch; zusammengeführt aus GPU- und CLI/MCP-Review):
+  `render_with_gpu` implementiert nur WB+7 Toneregler — Vibrance/
+  Saturation (trotz vorhandener Uniform-Felder), Curves, HSL, Presence,
+  Masks, WB-aus-Metadaten, SourceActions fehlen komplett; CLI/GUI
+  rendern mit aktivem GPU-Backend andere Bilder als CPU-Builds, ohne
+  Fehler/Warnung. Fix: Rezept validieren und bei nicht unterstützten
+  Stufen hart auf CPU verweigern/routen; Golden-Rezeptkorb erweitern.
+
+**Verifiziert erledigt (2026-08-23, Implementierung `ses_fd1f42935`,
+unabhängige Verifizierung `ses_fd1e0f491` — BESTANDEN):**
+- **REVIEW-GUI-THUMB-1** `thumbnail_key()` = canonicalisierter Pfad,
+  `ensure_directory()` leert nur bei Verzeichniswechsel, Grid/Filmstrip/
+  Navigator/Drain umgestellt.
+- **REVIEW-GUI-THUMB-2** `mark_probed` entfernt; probed nur bei Erfolg,
+  `Failed(message)` sichtbar (⚠) + Retry-Budget 3; Disk-Cache-Korrupt =
+  sichtbarer Fehler.
+- **REVIEW-GUI-PATHDESYNC-1** `self.path` wird erst in `finish_decode`
+  Ok-Zweig committet (open_file/ChooseFile/Drop nicht mehr); Err behält
+  konsistentes Bild A → kein Phantom-Sidecar, Fehler sichtbar.
+  Verifiziert: fmt clean, clippy `-p lumina-gui -D warnings` 0,
+  `cargo test -p lumina-gui` **62 passed** (+8 neue Tests).
+- [ ] **REVIEW-GUI-WASM-1** wasm32-Build von lumina-gui bricht
+  (hoch): `to_normalized`/`image_dims` sind cfg(not(wasm32)), werden
+  aber in `draw_preview` ungegate aufgerufen; `draw_preview_area`
+  ebenfalls (lib.rs:2594, 2547–2627, 5029). Verifiziert:
+  `cargo check --target wasm32-unknown-unknown --no-default-features -p
+  lumina-gui` schlägt fehl (4× E0599) — CI prüft das offenbar nicht.
+  Fix: Call-Sites gaten oder wasm-Stubs ergänzen; wasm32-Check für gui
+  ohne Default-Features in CI aufnehmen.
+- [ ] **REVIEW-GUI-ZOOMLOOP-1** Absolute Zoommodi speisen sich aus der
+  ROI-gecroppten Textur (hoch): `sync_zoom` leitet `preview_zoom` aus
+  `preview_fit_scale` ab, das pro Frame aus der **aktuellen** (bei
+  Zoom > 1 gecroppten) Textur berechnet wird → 200 %/100 %/Fit-Width
+  landen falsch bzw. oszillieren frameweise zwischen zwei Zuständen
+  (lib.rs:1784–1800, 2421–2432). Fix: Fit-Scale gegen ungeschnittene
+  Originalmaße cachen bzw. absolute Modi direkt aus Pane+Originalmaßen
+  berechnen.
+- [ ] **REVIEW-GUI-PANROI-1** ROI immer zentriert, Pan fließt nicht ein
+  (hoch): `roi_from_zoom` ignoriert `preview_pan`; bei Zoom > 1 sind
+  Bildränder/Ecken unerreichbar (bei 32× nur das Zentrum sichtbar)
+  (lib.rs:1740–1752, 2496–2539). Fix: sichtbaren Source-Rect aus
+  Pan-Offset + Zoom ablehnen.
+- [ ] **REVIEW-GUI-EXPORT-1** Same-Path-Schutz prüft vor
+  `with_extension` (hoch): Export-Ziel `/d/photo` + Format PNG →
+  schreibt exakt das geladene Original `/d/photo.png` voll
+  (lib.rs:2261–2281). Fix: Extension zuerst anwenden, dann
+  Canonical-Vergleich; zusätzlich Sidecar-/zdata-Ziele ablehnen
+  (siehe REVIEW-CLI-WRITE-1).
+- [ ] **REVIEW-RAW-ABI-1** Vendored `libraw-sys`-Structlayouts passen
+  nicht zur gelinkten LibRaw 0.22.2 (hoch; empirisch per Offset-Probes
+  verifiziert: `params` 1512 vs. real 5232, `color` 1888 vs. 5592,
+  `other` 150088 vs. 192680): `camera_matrix`/`camera_white_balance`/
+  EXIF-Felder lesen Garbage und werden ins Sidecar persistiert;
+  `color.profile` wird via `from_raw_parts` von potentiellem Wild-
+  Pointer kopiert (UB/Crash-Risiko); Schreibzugriffe auf
+  `params.user_flip`/`use_camera_wb` landen im Makernotes-Bereich —
+  user_flip/camera-WB werden still NICHT angewendet (Probe bestätigt:
+  `sizes.flip` bleibt trotz `user_flip=0`) und überschreiben hunderte
+  Bytes Live-State. Betrifft jeden nativen Decode
+  (lumina-raw/src/lib.rs:284–327). Fix: Bindings gegen 0.22.x
+  regenerieren oder nur Accessor-Funktionen nutzen;
+  statische Size/Offset-Asserts ins build.rs; `tests/sizes.rs` des
+  sys-Crates in CI ausführen (existiert, läuft aber nie).
+- [ ] **REVIEW-LENSFUN-VIGN-1** Corrector kollabiert Bild bei
+  Vignetting-only-Profilen (hoch): `lf_modifier_apply_geometry_
+  distortion` gibt bei fehlender Distortion-Kalibrierung `false`
+  zurück **ohne `res` zu schreiben**; `geometry()` ignoriert den
+  Returnwert → `(0.0, 0.0)` für jedes Pixel, `is_identity()` erkennt
+  es nicht (lumina-lensfun/src/lib.rs:386–436, 461–493). Trigger:
+  Kamera+Objektiv mit Vignetting-only-Eintrag (häufig) → korrigiertes
+  Bild einfarbig. Fix: Returnwert prüfen, bei `false` Koordinaten
+  unverändert durchreichen; Corrector nur mit LF_MODIFY_DISTORTION
+  geometrisch verwenden.
+
+### Mittel
+
+- [ ] **REVIEW-SIDECAR-TMP-1** `recover_sidecar` löscht Temp-Dateien
+  lebender Writer (mittel; lib.rs:1109–1130). Fix: mtime-Schwelle oder
+  Sweep unter Lock.
+- [ ] **REVIEW-SIDECAR-CAS-1** CAS (`save_sidecar_if_unchanged`) nicht
+  gegen Plain-`save_sidecar` serialisiert (mittel; lib.rs:1075–1100).
+  Fix: alle Writes über Lock oder Vertrag dokumentieren.
+- [ ] **REVIEW-SIDECAR-ZDATA-1** zdata Read-Modify-Write ohne Lock →
+  verlorene Repair-Regionen/Dangling Refs (mittel;
+  zdata.rs:688–699). Fix: `.zdata.lock` + Checksum-Verifikation beim
+  Laden.
+- [ ] **REVIEW-SIDECAR-STATUS-1** `artifact_status` prüft nur
+  `is_file()`, keine Checksum/Format/Auflösung (mittel;
+  lib.rs:1187–1193) → korrupte Artefakte gelten als Available.
+- [ ] **REVIEW-CORE-CROP-1** `crop_rect`: u32-Underflow/Empty-Crop durch
+  1e-6-Toleranz (mittel; lib.rs:1227–1246). Fix: x/y ≤ 1 explizit,
+  saturating_sub, pw/ph == 0 als Fehler.
+- [ ] **REVIEW-CORE-GEOMORDER-1** `apply_geometry` mutiert Frame vor
+  Validierung → Half-Transformed-State + Doppel-Anwendung bei Retry
+  (mittel; lib.rs:363–413). Fix: Validierung an den Anfang.
+- [ ] **REVIEW-CORE-EXPORTKEY-1** ExportOptions (quality/dither/seed/
+  bit_depth) fehlen in OutputSpec/RenderKey-Identität (mittel;
+  pipeline.rs:88–107) → Cache-Hits liefern falsche Qualität. Fix:
+  volle ExportOptions in den Digest.
+- [ ] **REVIEW-CORE-SRCACC-1** `source_actions` in keinem Cache-Digest
+  (mittel; cache.rs:162–210) → geänderte Repair-Artefakte servieren
+  alte Pixels. Fix: Artifact-Checksummen in RenderKey.
+- [ ] **REVIEW-CORE-DECODE-1** `ImageFrame::decode` unbegrenzte
+  Allokation, kein MemoryBudget (mittel; lib.rs:255–260). Fix:
+  Dimensionen vorab prüfen + `check_decode`.
+- [ ] **REVIEW-MASK-STRICT-1** MaskPolicy::Strict wird nirgends
+  verwendet (CLI setzt immer Warn) (mittel). Fix: Strict-Pfad ehrlich
+  verdrahten oder Policy entfernen.
+- [ ] **REVIEW-MASK-ZERO-1** `rasterize_prompt` panickt bei Breite 0
+  (`chunks_exact_mut(0)`) statt `MaskError` (mittel; masks.rs:269 ff.);
+  Sidecar-Validierung prüft width/height ≠ 0 nicht. Fix: Guard +
+  Validierung.
+- [ ] **REVIEW-MASK-BLUR-1** Feathering/Blur O(w·h·radius) — bei
+  feather ≈ 1.0 Minuten pro Render/Export (mittel;
+  mask_modulation.rs:61–96). Fix: Sliding-Window-Box-Blur O(w·h),
+  byte-identisch.
+- [ ] **REVIEW-GPU-TILEVER-1** `TiledCache` ohne Edit-Generation →
+  zwingend stale Tiles, sobald gradierte Tiles gecacht werden (mittel;
+  tiling.rs:34–99). Fix: Generation Counter in TileKey oder Contract
+  dokumentieren.
+- [ ] **REVIEW-GPU-LEVELS-1** Level-Berechnung inkonsistent:
+  `keys_for_viewport` ohne max_level-Clamp vs. `level_for_zoom`
+  (mittel; tiling.rs:108–133 vs 169–172).
+- [ ] **REVIEW-CLI-MASKFLAG-1** `update_masks`/`force_render` bleiben
+  ewig im Rezept → permanente Re-Inferenz trotz gültiger Maske
+  (mittel; lumina-cli/src/main.rs:443, 901, 1219, 1348; Verstoß gegen
+  Persistenz-Invariante). Fix: Option nach Konsum aus dem persistierten
+  Rezept entfernen.
+- [ ] **REVIEW-CLI-EXPORTMASK-1** `export --update-masks` bricht bei
+  stale Masks ab, batch/develop laufen weiter; Flag wird für Export gar
+  nicht durchgereicht (mittel; main.rs:492–526 vs 555, 1200, 1218).
+- [ ] **REVIEW-CLI-WRITE-1** Overwrite-Guards decken weder Sidecar-/
+  zdata-Ziele noch Hardlinks (Inode-Identität) ab (mittel;
+  main.rs:1067, 1544; lumina-mcp/src/tools/save.rs:33–44). Fix:
+  Zielpfade gegen `<input>.lumina.json/.zdata` prüfen + (dev,inode)-Vergleich.
+- [ ] **REVIEW-CLI-BATCHCOLLIDE-1** Batch schreibt alle Inputs
+  namensbasiert in ein Zielverzeichnis → Kollisionen überschreiben
+  still, beide melden „ok" (mittel; main.rs:874–881). Fix: Dubletten
+  vorab ablehnen oder Struktur spiegeln.
+- [ ] **REVIEW-MCP-QUALITY-1** `quality as u8` trunciert ohne
+  Validierung (256→0) (mittel; save.rs:47–52; analog preview.rs:31).
+  Fix: 1..=100 serverseitig erzwingen.
+- [ ] **REVIEW-MCP-SAVE-1** `lumina_save` nutzt `fs::write` statt
+  atomarem Write; Format/Extension ungeprüft (mittel; save.rs:66–68).
+- [ ] **REVIEW-MCP-SESSION-1** Ganzes, evtl. veraltetes In-Memory-
+  Document wird zurückgeschrieben → Lost Update; Load prüft
+  content_hash nicht (mittel; session.rs:36–59, edit.rs, load.rs:37).
+  Fix: `save_sidecar_if_unchanged` + Quell-Identitätsprüfung wie CLI.
+- [ ] **REVIEW-GUI-MASKGEO-1** Masken-Pinsel/Verlauf/Radial (und
+  WB-Pipette) ignorieren Crop/Rotation/Mirror des Rezepts → Markierungen
+  landen transformiert-falsch (mittel; lib.rs:2589–2669). Fix: inverse
+  Geometrie in `to_normalized` einrechnen oder Werkzeuge bei aktiver
+  Geometrie deaktivieren.
+- [ ] **REVIEW-GUI-SAVEMSG-1** Nach fehlgeschlagenem `save_sidecar`
+  steht trotzdem „Sidecar saved" im Status (mittel; lib.rs:2222–2233).
+- [ ] **REVIEW-GUI-VCSWITCH-1** Virtual-Copy-Wechsel verwirft ungespeicherte
+  Edits ohne Rückfrage; `history_selected`/Drag-State werden nicht
+  zurückgesetzt (überlappt REVIEW-5B3F930-5), Fehler wird verschluckt
+  (mittel; lib.rs:909–925, 4240).
+- [ ] **REVIEW-GUI-CURVE-1** Tone-Curve-Roundtrip clamppt Shadows-
+  Slider auf 0 → Regler springt sichtbar zurück (−50 % → −33 %→0)
+  (mittel; lib.rs:2981–3003). Fix: Deltas speichern statt geclampte
+  Outputs, oder UI-Hinweis.
+- [ ] **REVIEW-GUI-DEBOUNCE-1** Debounced Vollrender kann stranden:
+  im Wartefenster (< 150 ms) wird weder gerendert noch ein getaktetes
+  Repaint angefordert → Draft-Vorschau bleibt bis zur nächsten Eingabe
+  (mittel; lib.rs:4869–4889). Fix: `request_repaint_after` im
+  Warte-Zweig.
+- [ ] **REVIEW-GUI-MASKRENDER-1** Masken-Layer-Edits (Invert/Feather/
+  Blur/Density) setzen nur `render_key = None`, planen aber kein
+  Render → Vorschau bleibt dauerhaft alt (mittel; lib.rs:1077–1092,
+  1193–1211). Fix: über `mark_dirty()` routen.
+- [ ] **REVIEW-GUI-DRAFTROI-1** Draft-Render speichert ROI in
+  Draft-Pixel-Space, Pointer-Mapping teilt durch Volllösung →
+  WB-Pipette/Masken-Klicks falsch innerhalb des Debounce-Fensters
+  (mittel; lib.rs:1704–1735, 2595–2612). Fix: ROI mit Bezugssystem
+  speichern bzw. in Volllösungskoordinaten reskalieren.
+- [ ] **REVIEW-RAW-FLIP-1** `sizes.flip` (dcraw-Bitmaske) wird 1:1 als
+  EXIF-Orientation persistiert — falsche Codewelt (z. B. flip=5 ist
+  EXIF 8, nicht 5); Portrait-Fixture persistiert nachweislich falsch
+  (mittel; lumina-raw/src/lib.rs:280–283). Fix: explizit übersetzen
+  oder Rohwert unter eigenem Namen führen.
+- [ ] **REVIEW-ONNX-AVAIL-1** `<StubBackend as SubjectInference>::infer`
+  ignoriert `self.available` — „fehlendes" Modell liefert still Matte
+  (mittel; lumina-onnx/src/backend.rs:114–143 vs. SAM-Gate sam2.rs:277).
+- [ ] **REVIEW-ONNX-HASH-1** Modell-Hash wird nie gegen Manifest
+  geprüft (`path.exists()` genügt; Platzhalter „pending-integration")
+  → getauschte Gewichte laufen unter alter Identität in Masken-Sidecars
+  (mittel; ort_backend.rs:34–53). Fix: Hash beim Laden berechnen und
+  auf Mismatch stale-markieren.
+- [ ] **REVIEW-ONNX-PREPROC-1** ORT-Preprocessing nur [0,1] statt
+  ImageNet mean/std, Tensor-Namen hartcodiert statt aus Manifest,
+  Output-Shape ungeprüft (Fehler meldet dann 0/0-Dims) (mittel;
+  ort_backend.rs:66–95). Fix vor Integration echter Gewichte.
+
+### Niedrig (Backlog, nicht MVP-blockierend)
+
+- [ ] **REVIEW-SIDECAR-N1** Migration-Tempfile nutzt Crate-Default-Prefix
+  statt `.{name}.tmp-` → Recover-Sweep räumt nie auf (lib.rs:1241).
+- [ ] **REVIEW-SIDECAR-N2** schema_version 0 wird in `from_json` still
+  zu 1 normalisiert, divergiert vom Migrationspfad (lib.rs:1311).
+- [ ] **REVIEW-SIDECAR-N3** Unbekannte Adjustment-Keys und
+  MaskLayer.feather/blur/density sowie target_luminance ohne
+  Finite/Range-Validierung (lib.rs:1724, 320, 827).
+- [ ] **REVIEW-SIDECAR-N4** `delete_virtual_copy` mutiert vor
+  `validate()` → bei Fehler bleibt Rechenliste inkonsistent hängen
+  (lib.rs:1373).
+- [ ] **REVIEW-SIDECAR-N5** `load_sidecar` liest Datei komplett vor
+  Größenlimit (read_to_string) — `load_zdata` macht es richtig
+  (lib.rs:979).
+- [ ] **REVIEW-CORE-N1** Histogram-Stufen-Digest ohne OutputSpec
+  (pipeline.rs:160; latent, bis Vorschau-Histogramme gecacht werden).
+- [ ] **REVIEW-CORE-N2** `cdf_at(NaN)` gibt NaN zurück statt Fehler
+  (histogram.rs:155).
+- [ ] **REVIEW-CORE-N3** `AutoToneConfig.epsilon` bis 1.0 zulässig →
+  +10 EV auf fast jedem Bild; Zweige überlappen > 0.5 (tone.rs:36).
+- [ ] **REVIEW-CORE-N4** Messbereich-Domäne weicht bis 1 px vom
+  tatsächlichen Crop ab (ungerundet vs. gerundet; lib.rs:456 vs 1242).
+- [ ] **REVIEW-MASK-N1** MaskGraph ohne Memoization → handcrafted DAGs
+  exponentiell (masks.rs:95–203).
+- [ ] **REVIEW-MASK-N2** Density < 0 löscht Maske still, > 1 wirkungslos
+  (mask_modulation.rs:40).
+- [ ] **REVIEW-MASK-N3** `model_identity_matches(None) => true` segnet
+  fremdmodellierte Artefakte als valide ab (mask_loader.rs:330).
+- [ ] **REVIEW-CLI-N1** CLI lädt zdata-Tiles nur per `mask.id` statt
+  `(copy_id, mask_id)` → Kopien mit gleichen Masken-IDs teilen Matte
+  (main.rs:1186).
+- [ ] **REVIEW-CLI-N2** dust_removal hängt Artefakt an, bevor Sidecar/
+  Copy validiert sind → orphaned Bundles bei Fehlern (main.rs:674).
+- [ ] **REVIEW-CLI-N3** Batch-Resume per Substring-Match auf
+  Statusdatei (main.rs:885). Fix: JSON parsen.
+- [ ] **REVIEW-CLI-N4** reindex ignoriert korrupte Sidecars still, Exit 0
+  (main.rs:811).
+- [ ] **REVIEW-CLI-N5** collect_images folgt Symlink-Loops ohne Schutz
+  → Stack Overflow (main.rs:947).
+- [ ] **REVIEW-CLI-N6** Export geschrieben bevor Sidecar-Update; Fehler
+  → Exit 1 trotz existierendem Export (main.rs:1346).
+- [ ] **REVIEW-CLI-N7** import akzeptiert geänderte Quelle gegen
+  bestehendes Sidecar ohne Warnung (main.rs:400).
+- [ ] **REVIEW-MCP-N1** JSON-RPC-Codes: Parse-vs-Invalid-Request
+  konflatet; Tool-Fehler nicht als isError-Result (lib.rs:139).
+- [ ] **REVIEW-GPU-N1** golden.rs WARN-Text behauptet CPU-Fallback,
+  stimmt nicht mehr; GpuContext::init schluckt Fehler ohne Log;
+  Backends::METAL hardkodiert widerspricht Doc (golden.rs:268,
+  gpu/lib.rs:126, 718).
+- [ ] **REVIEW-GUI-N1** Save berechnet Fingerprint neu und löscht
+  Konfliktstatus still; GUI nutzt CAS (`save_sidecar_if_unchanged`)
+  nicht (lib.rs:2208–2224).
+- [ ] **REVIEW-GUI-N2** `finish_decode` stellt Rezept aus
+  `virtual_copies[0]` (positionell) wieder her, während
+  `virtual_copy_id` auf `"vc-original"` fixiert wird — verstoßt gegen
+  die ID-stabil-Regel bei umsortierten Sidecars (lib.rs:2128/2145,
+  1553). Fix: Copy per id/is_default suchen.
+- [ ] **REVIEW-GUI-N3** Dateiwechsel resettet Zoom/Pan/BeforeAfter/
+  WB-Pipette/History-Auswahl nicht → Bild B öffnet im 8×-Crop von
+  Bild A (lib.rs:1536–1567; überschneidet sich mit REVIEW-GUI-PANROI-1).
+- [ ] **REVIEW-GUI-N4** `IdleQueue::pop_next` ist LIFO statt
+  dokumentiertem FIFO bei gleichen Prioritäten (`max_by_key` wählt
+  letztes Maximum) (lib.rs:184–194).
+- [ ] **REVIEW-GUI-N5** `preview_is_draft` ist write-only: Histogramm/
+  Exposure-Matching messen still Drafts; Flag konsumieren oder Feld
+  entfernen (lib.rs:350, 1559, 1691, 1729).
+- [ ] **REVIEW-GUI-N6** Fehlgeschlagener ROI-Crop fällt still auf
+  Vollbild zurück, `preview_roi` wird aber trotzdem gesetzt (latent;
+  lib.rs:1815–1822).
+- [ ] **REVIEW-RAW-N1** Returncode von `libraw_adjust_sizes_info_only`
+  geschluckt — Budget-Gate könnte auf veralteten Maßen basieren
+  (lumina-raw/src/lib.rs:335).
+- [ ] **REVIEW-RAW-N2** `metadata.lens` ist immer `None`, obwohl Feld
+  existiert und Lensfun-Integration ihn braucht (lib.rs:307). Befüllen
+  oder Feld entfernen.
+- [ ] **REVIEW-ONNX-N1** SAM-Prompt-Typosystem kann dokumentierte
+  Labels −1/2/3 nicht ausdrücken; Koordinatenraum-Verantwortung
+  (Source- vs. 1024²-Modell-Space) implizit — vor ORT-Decoder klären
+  (sam2.rs:20–56).
+- [ ] **REVIEW-ONNX-N2** `ModelManifest::validate()` prüft nur
+  Capability-Invariante; leere Hash-/Lizenzstrings und Null-
+  Auflösungen passieren (manifest.rs:141).
+- [ ] **REVIEW-LENSFUN-N1** `lf_camera_crop_factor` hartkodiert Struct-
+  Offset `4*ptr_size` (aktuell korrekt gegen 0.3.4, aber ABI-Wette)
+  (lumina-lensfun/src/lib.rs:216–228). Fix: Shim-Funktion oder
+  Build-time-Offset-Asserts.
+
+### Arbeitsbaumänderungen während des Reviews (nicht verworfen, ungeprüft)
+
+Während des Reviews entstanden (laut Anweisung bewusst **behalten**, aber
+noch nicht reviewt/verifiziert — vor Übernahme prüfen):
+- `crates/lumina-core/src/mask_tiles.rs` (neu, 382 Zeilen) + Modul-Export
+  in lib.rs
+- `crates/lumina-gpu/src/tiling.rs`: `TILE_SIZE` verkettet auf
+  `mask_tiles::MASK_TILE_SIZE`
+- `crates/lumina-raw/tests/probe_flip.rs` (neu): diagnostischer Test aus
+  REVIEW-RAW-ABI-1/REVIEW-RAW-FLIP-1 (Offset-/flip-Probes) — belegt die
+  ABI-Befunde; vor Merge entweder als Regressionstest übernehmen oder
+  entfernen (Entscheidung offen).
 
 ## Festgelegte Produktentscheidungen
 

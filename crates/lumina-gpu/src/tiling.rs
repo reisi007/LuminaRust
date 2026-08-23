@@ -9,7 +9,10 @@ use std::collections::{HashMap, VecDeque};
 use wgpu::Texture;
 
 /// Tile edge length in source pixels at pyramid level 0 (full resolution).
-pub const TILE_SIZE: u32 = 512;
+///
+/// Kept identical to the platform-neutral [`lumina_core::mask_tiles::MASK_TILE_SIZE`]
+/// so CPU-side dirty bookkeeping and GPU tile addressing always agree.
+pub const TILE_SIZE: u32 = lumina_core::mask_tiles::MASK_TILE_SIZE;
 
 /// A normalized region of interest in source-pixel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,4 +173,53 @@ impl DraftPyramid {
         let zoom = zoom.max(1e-3);
         (((1.0 / zoom).max(1.0)).log2().floor().max(0.0) as u32).min(self.max_level)
     }
+}
+
+/// Compute which 512² mask tiles a normalized brush mark touches and which are dirty.
+///
+/// `mark` is in normalized `0..=1` source space with `radius` also normalized.
+/// Returns the set of `TileKey`s intersecting the mark's bounding square.
+pub fn dirty_tiles_for_brush_mark(
+    mark_x: f32,
+    mark_y: f32,
+    radius: f32,
+    image_width: u32,
+    image_height: u32,
+) -> Vec<TileKey> {
+    let rw = (radius * image_width as f32).ceil().max(1.0) as u32;
+    let rh = (radius * image_height as f32).ceil().max(1.0) as u32;
+    let cx = (mark_x * image_width as f32) as i32;
+    let cy = (mark_y * image_height as f32) as i32;
+    let x0 = (cx - rw as i32).max(0) as u32;
+    let y0 = (cy - rh as i32).max(0) as u32;
+    let x1 = ((cx + rw as i32).min(image_width as i32 - 1).max(0) as u32) + 1;
+    let y1 = ((cy + rh as i32).min(image_height as i32 - 1).max(0) as u32) + 1;
+    let tx0 = x0 / TILE_SIZE;
+    let ty0 = y0 / TILE_SIZE;
+    let tx1 = (x1 - 1) / TILE_SIZE;
+    let ty1 = (y1 - 1) / TILE_SIZE;
+    let mut out = Vec::new();
+    for ty in ty0..=ty1 {
+        for tx in tx0..=tx1 {
+            out.push(TileKey { level: 0, tx, ty });
+        }
+    }
+    out
+}
+
+/// Return the union of dirty tiles for a slice of brush marks.
+pub fn dirty_tiles_for_marks(
+    marks: &[(f32, f32, f32)],
+    image_width: u32,
+    image_height: u32,
+) -> Vec<TileKey> {
+    let mut seen = std::collections::BTreeSet::new();
+    for (x, y, r) in marks {
+        for k in dirty_tiles_for_brush_mark(*x, *y, *r, image_width, image_height) {
+            seen.insert((k.level, k.tx, k.ty));
+        }
+    }
+    seen.into_iter()
+        .map(|(level, tx, ty)| TileKey { level, tx, ty })
+        .collect()
 }

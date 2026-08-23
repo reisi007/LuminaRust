@@ -116,9 +116,71 @@ fallback to the GPU DAG; the CPU path remains the fallback and the test oracle.
 ## Feature wiring
 
 - `lumina-gpu` `gpu` feature (default on) pulls `wgpu`/`bytemuck`/`pollster`.
-- `lumina-gui` `gpu = ["lumina-gpu"]` (in default for native desktop; wasm32 uses
+- `lumina-gui` `gpu = ["lumina-gpu", "dep:bytemuck"]` (in default for native desktop; wasm32 uses
   `--no-default-features` so `lumina-gpu` is never compiled).
 - CLI/MCP can opt in with `--features lumina-gpu,gpu` once they consume it.
+- `lumina-gpu` is **optional and WASM-clean**: `--no-default-features` builds a pure-CPU crate,
+  and `wasm32` consumers omit `lumina-gpu` entirely (no `wgpu` dependency graph).
+
+## Dual-Backend Native: `eframe` glow (present) vs `wgpu` (offscreen compute)
+
+The native GUI (`lumina-gui`) today renders its `egui` UI via `eframe` with the
+**glow** (GL) renderer (`eframe = { features = ["glow"] }`). `lumina-gpu` owns a
+**separate** `wgpu::Instance` (Metal on Apple Silicon, `Backends::METAL`) and its
+`Device`/`Queue` pair. They are **not the same GPU context and do not share a
+surface** — a `wgpu::Texture` created from `lumina-gpu`'s Metal instance cannot be
+handed to the glow swapchain or to an egui texture that will be sampled by the GL
+renderer.
+
+| Plane | Owner | Backend | Surface / Context | Shareable with `eframe` glow? |
+|-------|-------|---------|-------------------|-------------------------------|
+| egui UI, preview `ColorImage` | `eframe` / `LuminaApp::update_texture` | **glow** (GL) | GL swapchain | — |
+| tone `output` + brush `mask` VRAM | `lumina-gpu::GpuContext::VramState` | **wgpu/Metal** | `wgpu::Instance::new(METAL)` | **No** |
+
+### Consequences (GUI-60FPS-1)
+
+- **Mask tiles** are correctly GPU-accelerated: the GUI keeps a persistent
+  `Vec<u16>` R16 mask plane CPU-side (`LuminaApp::brush_mask_plane`), stamps each
+  dirty 512² tile via `lumina_core::mask_tiles::stamp_brush_mark` and uploads only
+  that tile with `queue.write_texture` → `bytemuck::cast_slice(&Vec<u16>)` → `&[u8]`
+  (H1 fix, no `vec![0u8; tw*th*2]` dummy). Errors are `warn!`-logged, not `let _ =`d.
+- **`copy_vram_to_texture(dest: wgpu::Texture)` is offscreen only today.** It
+  composites `output` + `mask` via its overlay shader into a `wgpu::Texture`
+  destination, but that destination must come from the *same* Metal instance. It
+  **cannot present into the glow-backed egui/swapchain texture** and therefore
+  cannot be called from `draw_preview` under the current renderer. It remains
+  useful for offscreen/CLI renders and for its test (whether the overlay pipeline
+  builds).
+- **On-screen present stays `ColorImage`/`load_texture`.** The tone render path
+  (`render_to_vram` for interactive drafts, `render_with_gpu` for full frames) can
+  stay VRAM-resident for compute, but presenting still copies via the CPU staging
+  (`egui::ColorImage::from_rgba_unmultiplied` + `ctx.load_texture` in
+  `LuminaApp::update_texture`). This keeps `lumina-core` wgpu-free per `Agents.md`
+  while providing the interactive < 16 ms mask-tile hot path (no `map_async`
+  readback per brush stamp).
+- **Future option: `egui_wgpu`.** Switching `eframe` from `glow` to `wgpu`
+  (`eframe = { features = ["wgpu"] }`) would give `egui` a shared `wgpu::Device`/
+  surface and allow a single-pass present: `render_to_vram` → `copy_vram_to_texture`
+  → swapchain, eliminating the CPU staging. That switch is a documented follow-up
+  (`GUI-60FPS-1` roadmap) and is **not** done in this fix to avoid a renderer
+  migration in the same commit. Until it lands, `copy_vram_to_texture` stays
+  documented as offscreen-only and the GUI comments point to the upgrade path.
+
+### Roadmap: `VramState` → LRU tile pool
+
+`VramState` today holds one full-resolution `output` + `mask` texture (acceptable
+for interactive preview at viewport resolution; creation is `MemoryBudget`-gated).
+For 45 MP sources and multi-layer masks it will become a `TiledCache`/`DraftPyramid`
+LRU pool (512² tiles, generation-counted eviction, hot-set resident in VRAM) as
+planned in `tiling.rs`. This is the `M2` roadmap item and remains a non-blocking
+enhancement.
+
+### WASM
+
+`lumina-gpu` is absent on `wasm32` (`--no-default-features` or omitted dependency).
+No `wgpu` code is compiled for the browser; the capability matrix in
+`feature/platform/cli-gui-wasm.md` records `lumina-gpu` as WASM-unavailable. See
+that document for the full matrix.
 
 ## Equivalence verification (PERF-GUI-8)
 

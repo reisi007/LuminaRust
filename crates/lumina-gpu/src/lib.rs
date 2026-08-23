@@ -108,10 +108,43 @@ pub struct GpuContext {
     /// lazily from `render_with_gpu(&self)` without requiring `&mut self`.
     #[cfg(feature = "gpu")]
     pipeline: std::sync::Mutex<Option<PipelineState>>,
+    /// VRAM-resident interactive state (GPU-60FPS-1): output + mask textures and
+    /// overlay uniforms, kept resident across frames so slider drags and brush
+    /// strokes never read back to CPU. Lazily (re)created when dimensions change.
+    #[cfg(feature = "gpu")]
+    vram: std::sync::Mutex<Option<VramState>>,
     /// Last recipe pushed via [`GpuContext::update_uniforms`]. Used both to feed
     /// the uniform buffer (GPU path) and as the CPU-fallback recipe.
     #[cfg(feature = "gpu")]
     recipe: Option<EditRecipe>,
+}
+
+/// VRAM-resident interactive state for GUI-60FPS-1.
+///
+/// Currently holds the output (RGBA8 tone result) and the R16Unorm brush-mask
+/// textures at full source resolution. The mask is uploaded incrementally per
+/// dirty 512² tile via `queue.write_texture` from the GUI's persistent `Vec<u16>`
+/// plane (`bytemuck::cast_slice`).
+///
+/// Roadmap (M2): this single-slot cache will grow into an LRU tile pool
+/// (`TiledCache` 512², `DraftPyramid`) with eviction + generation counting so
+/// only hot tiles stay resident for >45 MP sources and multi-layer masks. Until
+/// then a full-resolution mask texture is acceptable for interactive preview
+/// (memory budget checked via `MemoryBudget` at creation). See `docs/gpu-bootstrap.md`
+/// § Dual-Backend & Roadmap.
+#[cfg(feature = "gpu")]
+struct VramState {
+    width: u32,
+    height: u32,
+    #[allow(dead_code)]
+    output: wgpu::Texture,
+    output_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    mask: wgpu::Texture,
+    mask_view: wgpu::TextureView,
+    mask_sampler: wgpu::Sampler,
+    overlay_uniform: wgpu::Buffer,
+    overlay_layout: wgpu::BindGroupLayout,
 }
 
 #[cfg(feature = "gpu")]
@@ -128,12 +161,14 @@ impl GpuContext {
             Ok(resources) => Ok(Self {
                 resources: Some(resources),
                 pipeline: std::sync::Mutex::new(None),
+                vram: std::sync::Mutex::new(None),
                 recipe: None,
             }),
             // Degrade gracefully to the CPU fallback rather than failing the app.
             Err(_err) => Ok(Self {
                 resources: None,
                 pipeline: std::sync::Mutex::new(None),
+                vram: std::sync::Mutex::new(None),
                 recipe: None,
             }),
         }
@@ -208,6 +243,289 @@ impl GpuContext {
                 shaders::write_uniforms(&resources.queue, &pipeline.uniform_buffer, &uniforms);
             }
         }
+        Ok(())
+    }
+
+    /// Whether frame-time perf logging is enabled (`LUMINA_PERF_LOG=1`).
+    pub fn perf_log_enabled() -> bool {
+        std::env::var("LUMINA_PERF_LOG").as_deref() == Ok("1")
+    }
+
+    /// Ensure the VRAM-resident interactive textures exist for `width`×`height`.
+    /// Lazily (re)creates `output` (RGBA8, tone result) + `mask` (R16Unorm,
+    /// brush coverage) textures and the overlay uniform/layout so the hot path
+    /// never allocates. No-op when no adapter is bound.
+    pub fn ensure_vram(&self, width: u32, height: u32) -> Result<(), GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Ok(());
+        };
+        let mut guard = self.vram.lock().unwrap();
+        if let Some(v) = guard.as_ref() {
+            if v.width == width && v.height == height {
+                return Ok(());
+            }
+        }
+        let output = shaders::create_output_texture(
+            &resources.device,
+            width,
+            height,
+            "lumina-gpu-vram-output",
+        );
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let mask =
+            shaders::create_mask_texture(&resources.device, width, height, "lumina-gpu-vram-mask");
+        let mask_view = mask.create_view(&wgpu::TextureViewDescriptor::default());
+        let mask_sampler = shaders::create_sampler(&resources.device, "lumina-gpu-vram-mask-samp");
+        let overlay_uniform = shaders::create_overlay_uniform_buffer(&resources.device);
+        let overlay_layout = shaders::create_overlay_bind_group_layout(&resources.device);
+        // Clear mask to zero so compositing is identity until a brush writes.
+        let zero_rows = vec![0u8; (width as usize) * (height as usize) * 2];
+        resources.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &mask,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &zero_rows,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 2),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        *guard = Some(VramState {
+            width,
+            height,
+            output,
+            output_view,
+            mask,
+            mask_view,
+            mask_sampler,
+            overlay_uniform,
+            overlay_layout,
+        });
+        Ok(())
+    }
+
+    /// Interactive tone render that stays VRAM-resident — no `map_async` readback.
+    ///
+    /// Renders the tone stage (`SHADER_SRC`) into the cached `output` VRAM
+    /// texture. Caller presents via [`Self::copy_vram_to_texture`] or the
+    /// overlay pass without ever mapping to CPU. Export/full-rebuild paths
+    /// should use [`Self::render_with_gpu`] (which still reads back).
+    pub fn render_to_vram(&self, frame: &ImageFrame, recipe: &EditRecipe) -> Result<(), GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Err(GpuError::AdapterUnavailable(
+                "no adapter for vram path".into(),
+            ));
+        };
+        self.ensure_pipeline()?;
+        self.ensure_vram(frame.width, frame.height)?;
+        let guard = self.pipeline.lock().unwrap();
+        let Some(pipeline) = guard.as_ref() else {
+            return Err(GpuError::RenderFailed("pipeline not built".into()));
+        };
+        let uniforms = shaders::Uniforms::from_recipe(recipe);
+        shaders::write_uniforms(&resources.queue, &pipeline.uniform_buffer, &uniforms);
+        let start = if Self::perf_log_enabled() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let input = shaders::create_input_texture(
+            &resources.device,
+            frame.width,
+            frame.height,
+            "lumina-gpu-vram-input",
+        );
+        resources.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &input,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &frame.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(frame.width * 4),
+                rows_per_image: Some(frame.height),
+            },
+            wgpu::Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let input_view = input.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = shaders::create_sampler(&resources.device, "lumina-gpu-vram-samp");
+        let bind = shaders::create_color_tone_bind_group(
+            &resources.device,
+            &pipeline.bind_group_layout,
+            &pipeline.uniform_buffer,
+            &input_view,
+            &sampler,
+        );
+        let vram = self.vram.lock().unwrap();
+        let Some(v) = vram.as_ref() else {
+            return Err(GpuError::RenderFailed("vram not ready".into()));
+        };
+        let mut enc = resources
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lumina-gpu-vram-encode"),
+            });
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("lumina-gpu-vram-tone"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &v.output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline.pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        resources.queue.submit(Some(enc.finish()));
+        if let Some(t0) = start {
+            log::info!(
+                "lumina perf: render_to_vram {}x{} {:.2} ms",
+                frame.width,
+                frame.height,
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+            if Self::perf_log_enabled() {
+                eprintln!(
+                    "LUMINA_PERF render_to_vram={:.2}ms {}x{}",
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    frame.width,
+                    frame.height
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Upload a single dirty 512² (or edge-clipped) mask tile into the VRAM mask
+    /// texture. `tile_data` is `u16` little-endian coverage, row-major.
+    pub fn upload_mask_tile(
+        &self,
+        tile_x: u32,
+        tile_y: u32,
+        tile_w: u32,
+        tile_h: u32,
+        tile_data: &[u8],
+    ) -> Result<(), GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Ok(());
+        };
+        let guard = self.vram.lock().unwrap();
+        let Some(v) = guard.as_ref() else {
+            return Err(GpuError::RenderFailed(
+                "vram not ready for mask upload".into(),
+            ));
+        };
+        shaders::write_mask_tile(
+            &resources.queue,
+            &v.mask,
+            tile_x,
+            tile_y,
+            tile_w,
+            tile_h,
+            tile_data,
+        );
+        Ok(())
+    }
+
+    /// GPU-GPU copy/overlay of the VRAM tone + mask textures into an
+    /// egui-managed `dest` texture (option b, risikoärmste Variante). No CPU
+    /// readback — the copy is `copy_texture_to_texture` / overlay render pass
+    /// directly on the queue. `dest` must be created with `TEXTURE_BINDING|
+    /// COPY_DST|RENDER_ATTACHMENT` and the same dimensions as the VRAM cache.
+    /// When no VRAM cache exists this is a no-op.
+    ///
+    /// ⚠️ Dual-backend limitation (M1): the current native GUI uses `eframe`
+    /// with the **glow** (GL) renderer, while `lumina-gpu` owns a separate
+    /// `wgpu::Instance` (Metal). A `wgpu::Texture` from that Metal instance
+    /// cannot be shared with the glow surface — `copy_vram_to_texture` is
+    /// therefore **offscreen only** today (tests / CLI offscreen render). The
+    /// on-screen present must stay `queue.write_texture` (mask tiles) +
+    /// `egui::ColorImage`/`ctx.load_texture` (preview) until `egui_wgpu` is
+    /// adopted. See `docs/gpu-bootstrap.md` § Dual-Backend and
+    /// `feature/platform/cli-gui-wasm.md` Capability-Matrix.
+    pub fn copy_vram_to_texture(&self, dest: &wgpu::Texture) -> Result<(), GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Ok(());
+        };
+        let mut guard = self.vram.lock().unwrap();
+        let Some(v) = guard.as_mut() else {
+            return Ok(());
+        };
+        // Overlay tint: Lumina accent blue with 0.45 strength matches CPU overlay.
+        let uniforms = shaders::OverlayUniforms {
+            color: [80.0 / 255.0, 160.0 / 255.0, 1.0, 0.45],
+        };
+        shaders::write_overlay_uniforms(&resources.queue, &v.overlay_uniform, &uniforms);
+        let dest_view = dest.create_view(&wgpu::TextureViewDescriptor::default());
+        let overlay_pipe = shaders::create_overlay_pipeline(&resources.device, dest.format())
+            .map_err(|e| GpuError::RenderFailed(e.to_string()))?;
+        let bind = shaders::create_overlay_bind_group(
+            &resources.device,
+            &v.overlay_layout,
+            &v.overlay_uniform,
+            &v.output_view,
+            &v.mask_view,
+            &v.mask_sampler,
+        );
+        let mut enc = resources
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lumina-gpu-overlay-present"),
+            });
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("lumina-gpu-overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &dest_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&overlay_pipe);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        resources.queue.submit(Some(enc.finish()));
         Ok(())
     }
 
@@ -468,6 +786,29 @@ impl GpuContext {
         let mut out = frame.clone();
         out.apply_recipe(recipe)?;
         Ok(Frame::from_image_frame(out))
+    }
+
+    pub fn perf_log_enabled() -> bool {
+        false
+    }
+    pub fn ensure_vram(&self, _w: u32, _h: u32) -> Result<(), GpuError> {
+        Ok(())
+    }
+    pub fn render_to_vram(&self, _f: &ImageFrame, _r: &EditRecipe) -> Result<(), GpuError> {
+        Ok(())
+    }
+    pub fn upload_mask_tile(
+        &self,
+        _x: u32,
+        _y: u32,
+        _w: u32,
+        _h: u32,
+        _d: &[u8],
+    ) -> Result<(), GpuError> {
+        Ok(())
+    }
+    pub fn copy_vram_to_texture(&self, _d: &()) -> Result<(), GpuError> {
+        Ok(())
     }
 }
 

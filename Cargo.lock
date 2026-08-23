@@ -2280,6 +2280,7 @@ name = "lumina-gui"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "bytemuck",
  "eframe",
  "egui_kittest",
  "log",
