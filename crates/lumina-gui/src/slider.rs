@@ -148,6 +148,7 @@ const SLIDER_MAX_W: f32 = 240.0;
 /// display units (used for keyboard nudging); `alt` enables the fine step.
 /// `slider_w` is the already-constrained track width (see [`lr_slider`]) so the
 /// widget never expands to fill its parent.
+#[allow(clippy::too_many_arguments)]
 fn draw_track(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -162,7 +163,7 @@ fn draw_track(
     let span = display_max - display_min;
     let desired = egui::vec2(slider_w.clamp(SLIDER_MIN_W, SLIDER_MAX_W), TRACK_HIT_HEIGHT);
     let (_, rect) = ui.allocate_space(desired);
-    let mut response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
 
     // Clicking the row focuses it so arrow keys can nudge the value.
     if response.clicked() && enabled {

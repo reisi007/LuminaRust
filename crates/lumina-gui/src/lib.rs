@@ -1746,8 +1746,8 @@ impl LuminaApp {
         if zw >= w || zh >= h {
             return None;
         }
-        let x = ((w - zw) / 2) as u32;
-        let y = ((h - zh) / 2) as u32;
+        let x = (w - zw) / 2;
+        let y = (h - zh) / 2;
         Some([x, y, zw, zh])
     }
 
@@ -1813,10 +1813,7 @@ impl LuminaApp {
         // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
         // the full frame is never processed for a magnified view.
         let cropped = match roi {
-            Some([x, y, w, h]) => match source.crop_region(x, y, w, h) {
-                Ok(f) => Some(f),
-                Err(_) => None,
-            },
+            Some([x, y, w, h]) => source.crop_region(x, y, w, h).ok(),
             None => None,
         };
         let source = match &cropped {
@@ -2055,7 +2052,6 @@ impl LuminaApp {
     // switching files never freezes the UI. The decoded frame is delivered via
     // `decode_rx` and applied on the main thread by `poll_decode` (driven from
     // `update`). `is_supported_image` keeps the RAW-only / raster filter.
-
     /// Start a background decode of `path`. The previous preview stays on screen
     /// until the decoded frame arrives; failures are surfaced via `show_error`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -4149,17 +4145,16 @@ impl LuminaApp {
                 ui.separator();
                 // The eight adjustment sections are grayed and non-interactive until an
                 // image is loaded (F-100 disabled-while-empty behaviour).
-                let had_enabled = ui.is_enabled();
-                ui.set_enabled(self.original.is_some());
-                self.draw_basic(ui);
-                self.draw_tone_curve(ui);
-                self.draw_color(ui);
-                self.draw_effects(ui);
-                self.draw_detail(ui);
-                self.draw_optics(ui);
-                self.draw_geometry(ui);
-                self.draw_masking(ui);
-                ui.set_enabled(had_enabled);
+                ui.add_enabled_ui(self.original.is_some(), |ui| {
+                    self.draw_basic(ui);
+                    self.draw_tone_curve(ui);
+                    self.draw_color(ui);
+                    self.draw_effects(ui);
+                    self.draw_detail(ui);
+                    self.draw_optics(ui);
+                    self.draw_geometry(ui);
+                    self.draw_masking(ui);
+                });
                 ui.separator();
                 #[cfg(not(target_arch = "wasm32"))]
                 {
