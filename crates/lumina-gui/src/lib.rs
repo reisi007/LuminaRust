@@ -403,11 +403,21 @@ pub struct LuminaApp {
     preview_roi: Option<[u32; 4]>,
     /// Cached geometry from the last [`Self::draw_preview`] so the next frame's
     /// [`Self::sync_zoom`] can derive absolute zoom modes correctly.
-    preview_fit_scale: f32,
+    ///
+    /// `preview_base_fit_scale` is the object-contain fit of the pane against
+    /// the **un-cropped source dimensions**, never against the currently
+    /// displayed texture: at zoom > 1 that texture is an ROI crop whose fit
+    /// scale depends on the zoom itself, so deriving absolute modes (100% /
+    /// 200% / Fit Width) from it oscillates frame-by-frame
+    /// (REVIEW-GUI-ZOOMLOOP-1).
+    preview_base_fit_scale: f32,
     preview_pane_w: f32,
     preview_pane_h: f32,
-    preview_tex_w: f32,
-    preview_tex_h: f32,
+    /// Un-cropped source dimensions backing the displayed texture (cached so
+    /// `sync_zoom` can compute Fit-Width and the base fit without borrowing
+    /// `self.original`).
+    preview_src_w: f32,
+    preview_src_h: f32,
     /// Effective on-screen scale (screen px per source px) for the zoom readout.
     preview_effective_scale: f32,
     /// Whether the left thumbnail navigator rail is open.
@@ -639,11 +649,11 @@ impl LuminaApp {
             zoom_mode: ZoomMode::Fit,
             preview_pan: egui::Vec2::ZERO,
             preview_roi: None,
-            preview_fit_scale: 1.0,
+            preview_base_fit_scale: 1.0,
             preview_pane_w: 800.0,
             preview_pane_h: 600.0,
-            preview_tex_w: 1.0,
-            preview_tex_h: 1.0,
+            preview_src_w: 1.0,
+            preview_src_h: 1.0,
             preview_effective_scale: 1.0,
             // Navigator defaults to collapsed (hidden) and is revealed via the
             // "Navigator" toggle button in the preview toolbar (Lightroom-like).
@@ -1771,10 +1781,19 @@ impl LuminaApp {
             self.status = Str::NoImageLoaded.t().into();
             return Ok(());
         };
-        // Derive the ROI from the zoom factor when no explicit crop was given
-        // (PERF-GUI-5); the full render always honours masks.
-        let roi =
-            roi.or_else(|| Self::roi_from_zoom(original.width, original.height, self.preview_zoom));
+        // Derive the ROI from the zoom factor and pan offset when no explicit
+        // crop was given (PERF-GUI-5, REVIEW-GUI-PANROI-1); the full render
+        // always honours masks.
+        let roi = roi.or_else(|| {
+            Self::roi_from_zoom(
+                original.width,
+                original.height,
+                self.preview_zoom,
+                self.preview_pan,
+                self.preview_pane_w,
+                self.preview_pane_h,
+            )
+        });
         self.preview_is_draft = false;
         self.pending_full_render = false;
         let result = self.render_from(&original, true, roi);
@@ -1811,8 +1830,16 @@ impl LuminaApp {
                 }
             }
         };
-        let roi =
-            roi.or_else(|| Self::roi_from_zoom(source.width, source.height, self.preview_zoom));
+        let roi = roi.or_else(|| {
+            Self::roi_from_zoom(
+                source.width,
+                source.height,
+                self.preview_zoom,
+                self.preview_pan,
+                self.preview_pane_w,
+                self.preview_pane_h,
+            )
+        });
         self.preview_is_draft = true;
         let result = self.render_from(&source, false, roi);
         if took_draft {
@@ -1821,20 +1848,52 @@ impl LuminaApp {
         result
     }
 
-    /// Compute an ROI `(x, y, w, h)` centred on the source for a zoom factor
-    /// `> 1.0` (PERF-GUI-5). Returns `None` at fit/zoom-out so the whole frame is
-    /// rendered.
-    fn roi_from_zoom(w: u32, h: u32, zoom: f32) -> Option<[u32; 4]> {
-        if zoom <= 1.0 {
+    /// Compute the source ROI `(x, y, w, h)` that is visible in the preview
+    /// pane for a zoom factor `> 1.0` (PERF-GUI-5, REVIEW-GUI-PANROI-1).
+    ///
+    /// The visible window follows the pan offset: the drawn image centre sits
+    /// at `pane.center() + pan`, so the source point currently behind the pane
+    /// centre is the image centre shifted by `-pan / scale` where
+    /// `scale = fit(w, h) * zoom` is the on-screen scale (screen points per
+    /// source pixel). The returned rect is that window expanded by
+    /// [`PREVIEW_ROI_MARGIN`] so the hand tool always has off-screen content
+    /// to drag without an immediate re-render, and it is clamped to the image
+    /// bounds — which is what makes borders/corners reachable at any zoom.
+    ///
+    /// Returns `None` at fit/zoom-out or when the window already covers the
+    /// whole frame, so the entire image is rendered.
+    fn roi_from_zoom(
+        w: u32,
+        h: u32,
+        zoom: f32,
+        pan: egui::Vec2,
+        pane_w: f32,
+        pane_h: f32,
+    ) -> Option<[u32; 4]> {
+        if zoom <= 1.0 || w == 0 || h == 0 {
             return None;
         }
-        let zw = ((w as f64) / zoom as f64).round().max(1.0) as u32;
-        let zh = ((h as f64) / zoom as f64).round().max(1.0) as u32;
-        if zw >= w || zh >= h {
+        let (w, h) = (f64::from(w), f64::from(h));
+        let (pane_w, pane_h) = (f64::from(pane_w), f64::from(pane_h));
+        let fit = (pane_w / w).min(pane_h / h);
+        if fit <= 0.0 {
             return None;
         }
-        let x = (w - zw) / 2;
-        let y = (h - zh) / 2;
+        let scale = f64::from(zoom) * fit;
+        // Visible window in source pixels, with margin for panning headroom.
+        let vw = pane_w / scale * PREVIEW_ROI_MARGIN;
+        let vh = pane_h / scale * PREVIEW_ROI_MARGIN;
+        if vw >= w || vh >= h {
+            return None;
+        }
+        let zw = (vw.floor() as u32).clamp(1, w as u32);
+        let zh = (vh.floor() as u32).clamp(1, h as u32);
+        // Source point under the pane centre (window centre), clamped so the
+        // window never leaves the frame.
+        let cx = w / 2.0 - f64::from(pan.x) / scale;
+        let cy = h / 2.0 - f64::from(pan.y) / scale;
+        let x = ((cx - vw / 2.0).floor() as i64).clamp(0, (w as u32 - zw) as i64) as u32;
+        let y = ((cy - vh / 2.0).floor() as i64).clamp(0, (h as u32 - zh) as i64) as u32;
         Some([x, y, zw, zh])
     }
 
@@ -1864,24 +1923,28 @@ impl LuminaApp {
         self.mark_dirty();
     }
 
-    /// Re-derive `preview_zoom` (and reset pan) for non-`Custom` modes using the
-    /// pane/texture dimensions cached by the previous [`Self::draw_preview`].
-    /// Called once per frame before the render logic so the ROI crop matches the
-    /// on-screen zoom even on the frame a mode button/shortcut is pressed.
+    /// Re-derive `preview_zoom` (and reset pan) for non-`Custom` modes using
+    /// the pane geometry and **un-cropped source dimensions** cached by the
+    /// previous [`Self::draw_preview`] (REVIEW-GUI-ZOOMLOOP-1: deriving from
+    /// the ROI-cropped texture's fit scale made 100%/200%/Fit-Width wrong and
+    /// oscillate frame-by-frame). Called once per frame before the render logic
+    /// so the ROI crop matches the on-screen zoom even on the frame a mode
+    /// button/shortcut is pressed.
     fn sync_zoom(&mut self) {
         use ZoomMode::*;
         if self.zoom_mode == Custom {
             return;
         }
-        let fit = self.preview_fit_scale.max(1e-6);
-        let tw = self.preview_tex_w.max(1.0);
-        let _th = self.preview_tex_h.max(1.0);
+        // Fit of the pane against the un-cropped source, not the current
+        // (possibly ROI-cropped) texture.
+        let fit = self.preview_base_fit_scale.max(1e-6);
+        let src_w = self.preview_src_w.max(1.0);
         self.preview_pan = egui::Vec2::ZERO;
         self.preview_zoom = match self.zoom_mode {
             Fit => 1.0,
             OneToOne => 1.0 / fit,
             TwoHundred => 2.0 / fit,
-            FitWidth => (self.preview_pane_w / tw) / fit,
+            FitWidth => (self.preview_pane_w / src_w) / fit,
             Custom => 1.0,
         };
     }
@@ -2340,6 +2403,68 @@ impl LuminaApp {
     // encode) and writes the artifact through the *same* `lumina_sidecar::
     // write_atomically` helper. No encode logic is duplicated in the GUI.
 
+    /// Resolve the effective export target and enforce the non-destructive
+    /// write guards (REVIEW-GUI-EXPORT-1). The format extension is applied
+    /// **first**, then the final path is checked against the loaded source and
+    /// its persistent artefacts (`<source>.lumina.json` sidecar and
+    /// `<source>.lumina.zdata` mask bundle) so an export can never overwrite
+    /// the original or its sidecar data — e.g. target `/d/photo` with format
+    /// PNG must be refused when `/d/photo.png` is the loaded source, which a
+    /// pre-extension check would miss. Pure helper, unit-tested headless.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_export_target(
+        source: &str,
+        output: PathBuf,
+        extension: &str,
+    ) -> Result<PathBuf, GuiError> {
+        let output = output.with_extension(extension);
+        if source.trim().is_empty() {
+            return Ok(output);
+        }
+        let source = Path::new(source);
+        let sidecar = lumina_sidecar::sidecar_path_for(source);
+        let zdata = lumina_sidecar::zdata_path_for(source);
+        // `zdata_path_for` requires the sidecar crate's `zdata` feature, which
+        // the GUI enables for every native target (this helper is
+        // `not(wasm32)`-gated together with the whole export module).
+        let protected: Vec<(&Path, &str)> = vec![
+            (source, "the original image"),
+            (sidecar.as_path(), "its sidecar"),
+            (zdata.as_path(), "its mask bundle"),
+        ];
+        for (protected_path, kind) in &protected {
+            if Self::paths_resolve_equal_symmetric(protected_path, &output)
+                .map_err(|error| GuiError::Io(error.to_string()))?
+            {
+                return Err(GuiError::Io(format!(
+                    "export target {} resolves to {}, {}; refusing to overwrite it",
+                    output.display(),
+                    kind,
+                    protected_path.display()
+                )));
+            }
+        }
+        Ok(output)
+    }
+
+    /// Same-path check that tolerates either side not existing yet
+    /// (`lumina_sidecar::paths_resolve_equal` canonicalizes its first argument,
+    /// which fails ENOENT for a sidecar/zdata artefact that was never written).
+    /// Existing paths are canonicalized directly; a missing path is resolved
+    /// against its parent directory so name collisions are still caught.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paths_resolve_equal_symmetric(a: &Path, b: &Path) -> std::io::Result<bool> {
+        let resolve = |path: &Path| -> std::io::Result<std::path::PathBuf> {
+            if path.exists() {
+                std::fs::canonicalize(path)
+            } else {
+                let parent = path.parent().unwrap_or_else(|| Path::new("."));
+                Ok(std::fs::canonicalize(parent)?.join(path.file_name().unwrap_or_default()))
+            }
+        };
+        Ok(resolve(a)? == resolve(b)?)
+    }
+
     /// Export the currently loaded image to `output` using the shared render +
     /// encode chain. The output file extension is forced to the format's
     /// canonical extension so the chosen format (not a typed extension) is
@@ -2357,20 +2482,15 @@ impl LuminaApp {
                 "No image loaded; open or drop an image first".into(),
             ));
         };
-        // Never overwrite the original source.
-        if !self.path.trim().is_empty() {
-            let source = Path::new(&self.path);
-            if lumina_sidecar::paths_resolve_equal(source, &output)
-                .map_err(|error| GuiError::Io(error.to_string()))?
-            {
-                return Err(GuiError::Io(
-                    "input and output resolve to the same path; refusing to overwrite the original"
-                        .into(),
-                ));
-            }
-        }
         let format = self.export_format;
         let quality = self.export_quality;
+        // Apply the format extension FIRST, then enforce the non-destructive
+        // write guards against the resolved target (REVIEW-GUI-EXPORT-1).
+        let output = Self::resolve_export_target(
+            &self.path,
+            output,
+            self.export_format.default_extension(),
+        )?;
         let options = ExportOptions {
             format,
             quality,
@@ -2378,7 +2498,6 @@ impl LuminaApp {
             ..Default::default()
         };
         options.validate().map_err(GuiError::Core)?;
-        let output = output.with_extension(format.default_extension());
         // Build the identical render context used by `render()` (what the user
         // currently sees) so the export matches the preview.
         let masks_context = {
@@ -2516,22 +2635,38 @@ impl LuminaApp {
             let pane = ui.available_rect_before_wrap();
             let size = texture.size();
             let (tw, th) = (size[0] as f32, size[1] as f32);
-            // object-contain fit scale (not capped, so small images fill the
-            // pane / large images are downscaled, Lightroom-like).
-            let fit_scale = if tw > 0.0 && th > 0.0 {
-                (pane.width() / tw).min(pane.height() / th)
-            } else {
-                0.0
-            };
+            // Un-cropped source dimensions backing the texture (the texture
+            // itself is an ROI crop at zoom > 1, so its own fit scale depends
+            // on the zoom and must never feed back into the zoom derivation —
+            // REVIEW-GUI-ZOOMLOOP-1).
+            let (src_w, src_h) = self
+                .original
+                .as_ref()
+                .map(|o| (o.width as f32, o.height as f32))
+                .or_else(|| {
+                    self.draft_original
+                        .as_ref()
+                        .map(|d| (d.width as f32, d.height as f32))
+                })
+                .unwrap_or((tw, th));
+            if src_w > 0.0 && src_h > 0.0 {
+                // Object-contain fit of the pane against the un-cropped source
+                // (not capped, so small images fill the pane / large images are
+                // downscaled, Lightroom-like).
+                self.preview_base_fit_scale = (pane.width() / src_w).min(pane.height() / src_h);
+                self.preview_src_w = src_w;
+                self.preview_src_h = src_h;
+            }
             // Cache geometry so the next frame's sync_zoom() derives absolute
-            // zoom modes (100% / 200% / Fit Width) from the right fit scale.
-            self.preview_fit_scale = fit_scale;
+            // zoom modes (100% / 200% / Fit Width) from stable, un-cropped
+            // values.
             self.preview_pane_w = pane.width();
             self.preview_pane_h = pane.height();
-            self.preview_tex_w = tw;
-            self.preview_tex_h = th;
 
-            let mut scale = fit_scale * self.preview_zoom;
+            // On-screen scale in screen points per SOURCE pixel. The
+            // ROI-cropped texture is drawn at this same scale; `roi_from_zoom`
+            // sizes the crop to fill the pane exactly at it.
+            let mut scale = self.preview_base_fit_scale * self.preview_zoom;
             let mut draw = egui::vec2(tw * scale, th * scale);
             let mut center = pane.center() + self.preview_pan;
             let mut rect = egui::Rect::from_center_size(center, draw);
@@ -2551,7 +2686,7 @@ impl LuminaApp {
                         let factor = if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 };
                         self.preview_zoom = (self.preview_zoom * factor).clamp(0.05, 32.0);
                         self.zoom_mode = ZoomMode::Custom;
-                        let new_scale = fit_scale * self.preview_zoom;
+                        let new_scale = self.preview_base_fit_scale * self.preview_zoom;
                         let new_draw = egui::vec2(tw * new_scale, th * new_scale);
                         let new_center =
                             p - egui::vec2(fx * new_draw.x, fy * new_draw.y) + new_draw / 2.0;
@@ -2602,6 +2737,16 @@ impl LuminaApp {
                         trace!("GUI interaction: preview pan start");
                     }
                     center += delta;
+                    // REVIEW-GUI-PANROI-1: a pan moves the visible window
+                    // inside the source, so the ROI-cropped texture must be
+                    // re-derived from the new offset. Marking dirty here arms
+                    // the PERF-GUI-3/4 hot path: while the pointer stays down
+                    // the next frame renders a cheap draft from the new pan
+                    // (coalesced to one draft per moved frame), and once the
+                    // pointer is released the debounced full render commits
+                    // the final ROI — including the clamped borders that
+                    // `preview_pan` alone could never reach before.
+                    self.mark_dirty();
                 }
             }
 
@@ -4888,6 +5033,13 @@ fn folder_label(root: &Path, path: &Path) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 const FOLDER_SCAN_DEPTH: usize = 3;
 
+/// How much larger than the strictly visible window the zoom ROI is rendered
+/// (REVIEW-GUI-PANROI-1): the extra border is panning headroom so the hand
+/// tool always has off-screen content to drag into view without waiting for a
+/// re-render. 1.0 would render exactly the visible window (no pan slack);
+/// larger values trade render cost for smoother panning.
+const PREVIEW_ROI_MARGIN: f64 = 1.3;
+
 /// Number of RAW files under `dir`, descending at most `remaining_depth`
 /// directory levels (depth 0 scans nothing). Pure read-only helper used by the
 /// Library folder tree.
@@ -6508,6 +6660,335 @@ mod tests {
         // No export artifact was created with the source's name.
         assert!(!source.with_extension("jpg").exists());
         assert!(source.is_file());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_rejects_extensionless_target_resolving_onto_source() {
+        // REVIEW-GUI-EXPORT-1 regression: the extension must be applied BEFORE
+        // the same-path check. Target `/d/photo` with format PNG resolves to
+        // `/d/photo.png`, which IS the loaded source — the old pre-extension
+        // guard compared `/d/photo` against `/d/photo.png` and let the export
+        // overwrite the original in full.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let before = blake3::hash(&std::fs::read(&source).unwrap());
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.export_format = ImageFileFormat::Png;
+
+        // Extensionless target that derives onto the source.
+        let result = app.export_to(directory.path().join("photo"));
+        assert!(
+            result.is_err(),
+            "extensionless target deriving onto the source must be refused"
+        );
+        // And onto the source's sidecar / zdata artefacts as well (pure-logic
+        // level, see `resolve_export_target_applies_extension_before_guard`;
+        // through `export_to` the format extension always lands on png/jpg/webp,
+        // so only the source collision itself is reachable end-to-end).
+
+        // The original is untouched and no stray artifacts appeared.
+        let after = blake3::hash(&std::fs::read(&source).unwrap());
+        assert_eq!(before, after, "original must remain byte-identical");
+        let entries: Vec<_> = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the source file may exist: {entries:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_export_target_applies_extension_before_guard() {
+        // Pure-logic coverage of the REVIEW-GUI-EXPORT-1 guard.
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        let source = dir.join("photo.png");
+        std::fs::write(&source, b"original").unwrap();
+
+        // Extensionless target + PNG derives exactly onto the source: refuse.
+        let err = LuminaApp::resolve_export_target(
+            &source.display().to_string(),
+            dir.join("photo"),
+            "png",
+        )
+        .expect_err("must refuse target that resolves onto the source");
+        assert!(err.to_string().contains("refusing"), "{err}");
+
+        // Same target with a different format is fine (different file).
+        let resolved = LuminaApp::resolve_export_target(
+            &source.display().to_string(),
+            dir.join("photo"),
+            "jpg",
+        )
+        .unwrap();
+        assert_eq!(resolved, dir.join("photo.jpg"));
+
+        // Sidecar and binary mask bundle targets are protected too.
+        for blocked_ext in ["lumina.json", "lumina.zdata"] {
+            // A typed-in full artefact name keeps its stem; simulate a target
+            // whose post-extension form equals the artefact by requesting the
+            // matching extension-less stem plus the artefact's own extension
+            // via an explicit path.
+            let artefact = dir.join(format!("photo.png.{blocked_ext}"));
+            std::fs::write(&artefact, b"artefact").unwrap();
+            let err = LuminaApp::resolve_export_target(
+                &source.display().to_string(),
+                artefact.clone(),
+                if blocked_ext.ends_with("json") {
+                    "json"
+                } else {
+                    "zdata"
+                },
+            )
+            .expect_err("must refuse target that resolves onto a persisted artefact");
+            assert!(err.to_string().contains("refusing"), "{err}");
+            assert_eq!(
+                std::fs::read(&artefact).unwrap(),
+                b"artefact",
+                "protected artefact must stay untouched"
+            );
+        }
+
+        // An unrelated target passes through with the extension applied.
+        let ok = LuminaApp::resolve_export_target(
+            &source.display().to_string(),
+            dir.join("export"),
+            "png",
+        )
+        .unwrap();
+        assert_eq!(ok, dir.join("export.png"));
+
+        // Empty source (nothing loaded) never blocks.
+        let ok = LuminaApp::resolve_export_target("  ", dir.join("out"), "png").unwrap();
+        assert_eq!(ok, dir.join("out.png"));
+    }
+
+    #[test]
+    fn roi_from_zoom_follows_pan_and_reaches_borders() {
+        use super::{LuminaApp, PREVIEW_ROI_MARGIN};
+        // Landscape 4000×3000 source in an 800×600 pane: fit = 0.2.
+        let (w, h) = (4000_u32, 3000_u32);
+        let (pw, ph) = (800.0_f32, 600.0_f32);
+
+        // Fit/zoom-out renders the whole frame.
+        assert_eq!(
+            LuminaApp::roi_from_zoom(w, h, 1.0, egui::Vec2::ZERO, pw, ph),
+            None
+        );
+        assert_eq!(
+            LuminaApp::roi_from_zoom(w, h, 0.5, egui::Vec2::ZERO, pw, ph),
+            None
+        );
+
+        // Centered pan at 4×: ROI is centred and covers the visible window
+        // (pane / (fit·zoom)) plus panning margin on every side.
+        let roi = LuminaApp::roi_from_zoom(w, h, 4.0, egui::Vec2::ZERO, pw, ph).unwrap();
+        let scale = 0.2_f64 * 4.0;
+        let window_w = (800.0_f64 / scale) * PREVIEW_ROI_MARGIN;
+        let window_h = (600.0_f64 / scale) * PREVIEW_ROI_MARGIN;
+        assert_eq!(roi[2] as f64, window_w.floor());
+        assert_eq!(roi[3] as f64, window_h.floor());
+        assert!((roi[0] as f64 - (4000.0 - window_w) / 2.0).abs() <= 1.0);
+        assert!((roi[1] as f64 - (3000.0 - window_h) / 2.0).abs() <= 1.0);
+
+        // Dragging the image right/up (negative pan delta) moves the window
+        // towards the bottom-right; far enough it clamps against that border
+        // so the corner becomes reachable (REVIEW-GUI-PANROI-1).
+        let br = LuminaApp::roi_from_zoom(w, h, 4.0, egui::vec2(-1200.0, -1200.0), pw, ph)
+            .expect("panned ROI");
+        assert_eq!(br[0] + br[2], w, "right border reachable");
+        assert_eq!(br[1] + br[3], h, "bottom border reachable");
+
+        // Dragging left/down clamps against the top-left border.
+        let tl = LuminaApp::roi_from_zoom(w, h, 4.0, egui::vec2(1200.0, 1200.0), pw, ph).unwrap();
+        assert_eq!(tl[0], 0, "left border reachable");
+        assert_eq!(tl[1], 0, "top border reachable");
+
+        // Extreme zoom stays inside bounds and never returns an empty rect.
+        let roi =
+            LuminaApp::roi_from_zoom(w, h, 32.0, egui::vec2(12345.0, -9999.0), pw, ph).unwrap();
+        assert!(roi[2] >= 1 && roi[3] >= 1);
+        assert!(roi[0] + roi[2] <= w && roi[1] + roi[3] <= h);
+
+        // At fit-like zoom the window would cover the whole frame: whole-frame
+        // render instead of a degenerate crop.
+        assert_eq!(
+            LuminaApp::roi_from_zoom(w, h, 1.01, egui::Vec2::ZERO, pw, ph),
+            None
+        );
+    }
+
+    /// REVIEW-GUI-PANROI-1 follow-up: the hand tool must drive the ROI
+    /// re-render pipeline. A pan drag invalidates the render key and sets
+    /// `pending_full_render`, so the PERF-GUI-3/4 hot path renders a cheap
+    /// draft from the new offset while the pointer stays down, and the
+    /// debounced full render honours the FINAL pan (borders reachable).
+    #[test]
+    fn pan_drag_schedules_draft_and_final_roi_render() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        // 200×150 source in an ~800×600 pane → base fit 4.0; at zoom 2 the
+        // drawn image overflows the pane, so panning is eligible.
+        app.load_bytes(
+            ImageFrame::new(200, 150, [128_u8, 128, 128, 255].repeat(200 * 150))
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap(),
+            "pan.png",
+        )
+        .unwrap();
+        app.render().unwrap();
+        // Viewport state as cached by previous frames of `draw_preview`.
+        app.preview_zoom = 2.0;
+        app.zoom_mode = ZoomMode::Custom;
+        app.preview_base_fit_scale = 4.0;
+        app.preview_src_w = 200.0;
+        app.preview_src_h = 150.0;
+        // `draw_preview` needs an existing preview texture to draw at all; it
+        // derives the on-screen draw size from the texture dimensions, so it
+        // must match a rendered full preview (200×150), not a tiny placeholder.
+        app.texture = Some(ctx.load_texture(
+            "preview",
+            egui::ColorImage::new([200, 150], egui::Color32::BLACK),
+            egui::TextureOptions::LINEAR,
+        ));
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let pass = |app: &mut LuminaApp, events: Vec<egui::Event>, time: f64| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.draw_preview(ui));
+                },
+            );
+        };
+
+        // Pass 1: pointer-down inside the pane pans nothing yet.
+        let start = screen.center();
+        // Warm-up pass so the preview widget exists before the press is
+        // hit-tested (egui registers interactions one frame after layout).
+        pass(&mut app, vec![egui::Event::PointerMoved(start)], 0.9);
+        pass(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+            1.0,
+        );
+        assert!(!app.pending_full_render, "press alone must not re-render");
+
+        // Pass 2: drag right — the pan changes, so a re-render must be armed.
+        pass(
+            &mut app,
+            vec![egui::Event::PointerMoved(start + egui::vec2(60.0, 0.0))],
+            1.1,
+        );
+        assert!(app.preview_pan.x > 0.0, "drag must move the pan");
+        assert_eq!(app.zoom_mode, ZoomMode::Custom);
+        assert!(
+            app.pending_full_render,
+            "pan change must schedule the full re-render"
+        );
+        assert!(
+            app.render_key.is_none(),
+            "pan change must invalidate the render key so the draft hot path fires"
+        );
+
+        // Pass 3: pointer release — the pending full render survives until the
+        // debounce commits it with the FINAL pan offset.
+        pass(
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: start + egui::vec2(60.0, 0.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            1.2,
+        );
+        assert!(
+            app.pending_full_render,
+            "released pan must still await its full render"
+        );
+
+        // The debounced full render consumes the pending flag and derives the
+        // ROI from the post-drag pan.
+        let (pw, ph) = (app.preview_pane_w, app.preview_pane_h);
+        let pan = app.preview_pan;
+        app.render_full([800, 600], None).unwrap();
+        assert!(!app.pending_full_render);
+        assert_eq!(
+            app.preview_roi,
+            LuminaApp::roi_from_zoom(
+                app.original.as_ref().map(|o| o.width).unwrap_or_default(),
+                app.original.as_ref().map(|o| o.height).unwrap_or_default(),
+                2.0,
+                pan,
+                pw,
+                ph,
+            ),
+            "full render must crop exactly the panned visible window"
+        );
+    }
+
+    #[test]
+    fn sync_zoom_derives_absolute_modes_from_uncropped_source_fit() {
+        // REVIEW-GUI-ZOOMLOOP-1 regression: absolute zoom modes must derive
+        // from the fit of the pane against the UN-CROPPED source dimensions,
+        // never from the currently displayed (ROI-cropped) texture — otherwise
+        // 100%/200%/Fit-Width oscillate frame-by-frame once zoom > 1.
+        let mut app = new_app();
+        // 4000×3000 source in an 800×600 pane → base fit 0.2.
+        app.preview_base_fit_scale = 0.2;
+        app.preview_src_w = 4000.0;
+        app.preview_src_h = 3000.0;
+        app.preview_pane_w = 800.0;
+        app.preview_pane_h = 600.0;
+
+        // One-to-one: one source pixel per screen point → 1/fit.
+        app.zoom_mode = ZoomMode::OneToOne;
+        app.preview_zoom = 42.0; // stale value from a previous frame must not matter
+        app.sync_zoom();
+        assert!((app.preview_zoom - 5.0).abs() < 1e-5);
+
+        // 200% likewise: 2/fit.
+        app.zoom_mode = ZoomMode::TwoHundred;
+        app.sync_zoom();
+        assert!((app.preview_zoom - 10.0).abs() < 1e-5);
+
+        // Fit-width: pane/source ratio relative to base fit (width-limited
+        // here, so identical to fit).
+        app.zoom_mode = ZoomMode::FitWidth;
+        app.sync_zoom();
+        assert!((app.preview_zoom - 1.0).abs() < 1e-5);
+
+        // Stability across frames: re-deriving after a simulated render (the
+        // texture changed, the cached base geometry did not) yields the exact
+        // same value — no oscillation.
+        app.zoom_mode = ZoomMode::OneToOne;
+        app.sync_zoom();
+        let first = app.preview_zoom;
+        app.preview_base_fit_scale = 0.2; // unchanged by draw_preview by design
+        app.sync_zoom();
+        assert_eq!(app.preview_zoom, first);
     }
 
     #[test]
