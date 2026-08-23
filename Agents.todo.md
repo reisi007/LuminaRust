@@ -7,6 +7,18 @@ keine dauerhafte Liste abgehakter Aufgaben. Verifiziert Erledigtes steht unten
 als kompakte Kurzliste; die Details liegen in den Feature-Dokumenten und der
 Git-Historie.
 
+## Offene Meta-Tasks
+
+- [ ] **TODO-STRUCTURE-1** `Agents.todo.md` neu strukturieren: alle verbleibenden
+      „Verifiziert erledigt"-Blöcke entfernen (noch 10 Treffer, z. B.
+      Phase-3/4/5/6/7-Kurzvermerke, „Neu aus manuellem Test 2026-08-23",
+      `Dependency-Audit` DEP-CI-ACTIONS-1/DEP-MINOR-1/DEP-EGUI-WGPU-1
+      Sub-Bullets, Review-Befunde verifizierte Unterblöcke GPU-DIVERGENCE/WASM/
+      THUMB). Datei auf offene `[ ]`-Tasks + bewusst gepinnte Entscheidungen
+      (gepinntes libraw-sys / `ort`-RC / LibRaw-Pin) reduzieren; doppelte
+      Statusvermerke zusammenführen. Nach Erledigung fallen die 10 erfassten
+      Einträge weg. Kein Code-Change, nur Doku.
+
 ## Stand (2026-08-20)
 
 Offene Arbeit und Abgrenzung bis MVP:
