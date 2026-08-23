@@ -664,57 +664,6 @@ Offen (nächste Batches):
   ggf. später heben); Live-Messung mit 200 RAWs manuell beim nächsten
   Test (`slow_frame=true` darf bei Scroll-Frames nicht auftreten).
 
-### GUI-60FPS-1 (2026-08-23)
-
-**Verifiziert erledigt (Implementierung `ses_fd202100`/Fix `ses_fd1f88470`,
-unabhängige Verifizierung `ses_fd1ee2fe` — BESTANDEN):**
-- Hot-Path VRAM-resident ohne `map_async` (`render_to_vram`, Export-Readback
-  bewusst erhalten); Masken-Brush als persistente R16-Plane
-  (`stamp_brush_mark`) mit Dirty-512²-Kachel-Upload
-  (`dirty_tiles_for_brush_mark`, `bytemuck::cast_slice`), Overlay immer
-  gezeichnet; `LUMINA_PERF_LOG=1` Frame-/Render-Messung; Dual-Backend-Doku
-  (glow present vs wgpu offscreen) in `docs/gpu-bootstrap.md` +
-  `feature/platform/cli-gui-wasm.md`; neue Datei
-  `crates/lumina-core/src/mask_tiles.rs`.
-- Verifiziert: fmt clean, clippy workspace `-D warnings` 0, gui 54, gpu 5,
-  sidecar zdata 94, core wgpu-frei, `cargo check -p lumina-gpu
-  --no-default-features` grün.
-
-### Lightroom-like UI (2026-08-23 beschlossen)
-
-**Verifiziert erledigt (2026-08-23, Subagent `ses_fd28c399…`, unabhängige
-Verifizierung):**
-- **GUI-LR-RIGHT-1** Rechtes Panel: Crop-Thumbnail (120 px Head,
-  `Geometry.crop` Free-Overlay, `crop_overlay_rect`), Presets-Sektion
-  (`document.presets`, Hover/Apply, Create konsolidiert; `Str::PresetsSection`),
-  History-Sektion (reverse-chronologisch, `restore_history()` nicht-destruktiv).
-- **GUI-LR-LIBRARY-1** Library: linker Ordnerbaum (`SidePanel::left "folders"`,
-  Root `$HOME`/grandparent, `BTreeSet`/`BTreeMap` lazy `read_dir`,
-  RAW-Counts `FOLDER_SCAN_DEPTH=3`, `set_directory`), zentriertes
-  Thumbnail-Grid (`ensure_thumbnail`, Doppelklick → `open_file` + Develop).
-- Verifiziert: `cargo build -p lumina-gui` grün,
-  `cargo clippy -p lumina-gui` clean,
-  `cargo test -p lumina-gui` **54 passed** (+4: `library_root_prefers_home…`,
-  `crop_overlay_rect…`, `history_restore…`, `to_normalized…`),
-  `cargo fmt -- --check` clean; `Str` `Folders/History/NoHistory/NoPresets/
-  HistoryEntryMissing`.
-
-Offen: kittest Snapshots für Library-Layout brauchen GPU-Regenerierung
-(`--ignored`); Crop-Overlay ignoriert Rotation/Mirroring (display-only).
-
-### CI-Green 2026-08-23
-
-**Verifiziert erledigt:** `lensfun` Feature-Unification (E0063): `RenderContext.lensfun`
-via `LensfunCorrectorRef<'a>` immer vorhanden (cfg-aware newtype
-`#[derive(Debug,Clone,Copy)]` in `render.rs`, `lensfun: None,`-Gates entfernt,
-`Some`/`as_ref` → `LensfunCorrectorRef` + `None`-Fallback, `LensfunCorrectorRef`
-re-export). Betrifft `lumina-core`, `lumina-cli`, `lumina-mcp`, `lumina-bench`,
-`lumina-gpu/tests/golden.rs`; `lumina-gui` bleibt `default=["lensfun","gpu"]`.
-Verifiziert: `cargo build -p lumina-core`/`--features lensfun`,
-`cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,
-lumina-bench/raw-bench" -- -D warnings` grün,
-`cargo test -p lumina-core` 207/210 passed (Tone-Message `0e0..=1e0` korrigiert).
-
 ### Dependency-Audit 2026-08-23 (Read-only Audit `ses_fd042a2e3`, nur Doku)
 
 Kern-Stack aktuell (serde/clap/image/thiserror-2/log/tempfile/bytemuck/wasm-bindgen/zstd, rustc 1.98 = Stable).
