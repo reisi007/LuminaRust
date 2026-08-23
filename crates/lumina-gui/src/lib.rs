@@ -4,6 +4,7 @@ mod filmstrip;
 mod i18n;
 mod slider;
 mod theme;
+mod viewport;
 
 use eframe::egui;
 #[cfg(not(target_arch = "wasm32"))]
@@ -465,6 +466,16 @@ pub struct LuminaApp {
     brush_mask_plane: Option<Vec<u16>>,
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
     brush_mask_plane_dims: Option<(u32, u32)>,
+    /// GUI-SCROLL-200-1: per-frame diagnostic counters for `LUMINA_PERF_LOG=1`.
+    /// `frame_thumb_enqueued` counts worker jobs enqueued (or cached previews
+    /// loaded) this frame, `frame_thumbs_ready` counts worker results applied.
+    /// Both are reset at the start of [`Self::update`]; a scroll spike while
+    /// thumbnail jobs run shows up as large values in the same frame that
+    /// exceeds the 16.7 ms budget.
+    #[cfg(not(target_arch = "wasm32"))]
+    frame_thumb_enqueued: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    frame_thumbs_ready: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -510,6 +521,11 @@ impl FileBrowserEntry {
     }
     fn is_offline(&self) -> bool {
         matches!(self.source_status, SourceStatus::Missing)
+    }
+    /// Stable thumbnail key (canonicalized absolute path). Read-only access for
+    /// headless scheduling tests/diagnostics (GUI-SCROLL-200-1).
+    pub fn thumb_key(&self) -> &str {
+        &self.thumb_key
     }
 }
 
@@ -676,6 +692,10 @@ impl LuminaApp {
             brush_mask_plane: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             brush_mask_plane_dims: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            frame_thumb_enqueued: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            frame_thumbs_ready: 0,
         }
     }
 
@@ -4251,79 +4271,108 @@ impl LuminaApp {
     /// Develop (Loupe).
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_library_grid(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let raw_entries: Vec<FileBrowserEntry> = self
+        // GUI-SCROLL-200-1: index-based view over the RAW entries. Only the
+        // visible rows are laid out (show_rows) and only the buffered window's
+        // thumbnails are ensured per frame — never an O(n) loop over all
+        // entries.
+        let raw_indices: Vec<usize> = self
             .entries
             .iter()
-            .filter(|entry| is_raw_name(&entry.name))
-            .cloned()
+            .enumerate()
+            .filter(|(_, entry)| is_raw_name(&entry.name))
+            .map(|(i, _)| i)
             .collect();
-        if raw_entries.is_empty() {
+        if raw_indices.is_empty() {
             ui.heading(Str::Library.t());
             ui.label(Str::ReadyForImage.t());
             return;
         }
         const CELL_W: f32 = 132.0;
         const CELL_H: f32 = 100.0;
+        const CELL_INNER_W: f32 = CELL_W - 8.0;
+        const CELL_INNER_H: f32 = CELL_H - 8.0;
         let cols = ((ui.available_width() / CELL_W).floor() as usize).max(1);
-        let mut open_target: Option<String> = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for chunk in raw_entries.chunks(cols) {
-                ui.horizontal(|ui| {
-                    for entry in chunk {
-                        let selected = self.path == entry.path.display().to_string();
-                        let tex = self.thumbnails.get(&entry.thumb_key).cloned();
-                        let placeholder_label = self.thumbnail_placeholder_label(entry);
-                        let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(CELL_W - 8.0, CELL_H - 8.0),
-                            egui::Sense::click(),
-                        );
-                        if selected {
-                            ui.painter().rect_stroke(
-                                rect.expand(2.0),
-                                3.0,
-                                egui::Stroke::new(2.0_f32, ui.visuals().selection.bg_fill),
-                                egui::StrokeKind::Outside,
-                            );
+        let count = raw_indices.len();
+        let total_rows = count.div_ceil(cols);
+        // The closure returns the laid-out row window so scheduling below runs
+        // with the exact visible range.
+        let visible_rows = {
+            egui::ScrollArea::vertical()
+                .show_rows(
+                    ui,
+                    CELL_INNER_H,
+                    total_rows,
+                    |ui, rows: std::ops::Range<usize>| {
+                        for row in rows.clone() {
+                            let row_start = row * cols;
+                            let row_end = (row_start + cols).min(count);
+                            ui.horizontal(|ui| {
+                                for &entry_idx in &raw_indices[row_start..row_end] {
+                                    let entry = self.entries[entry_idx].clone();
+                                    let selected = self.path == entry.path.display().to_string();
+                                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                                    let placeholder_label =
+                                        self.thumbnail_placeholder_label(&entry);
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        egui::vec2(CELL_INNER_W, CELL_INNER_H),
+                                        egui::Sense::click(),
+                                    );
+                                    if selected {
+                                        ui.painter().rect_stroke(
+                                            rect.expand(2.0),
+                                            3.0,
+                                            egui::Stroke::new(
+                                                2.0_f32,
+                                                ui.visuals().selection.bg_fill,
+                                            ),
+                                            egui::StrokeKind::Outside,
+                                        );
+                                    }
+                                    if let Some(texture) = tex {
+                                        ui.put(
+                                            rect,
+                                            egui::Image::from_texture(&texture)
+                                                .max_size(rect.size()),
+                                        );
+                                    } else {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            2.0,
+                                            egui::Color32::from_gray(40),
+                                        );
+                                        ui.put(rect, egui::Label::new(placeholder_label));
+                                    }
+                                    if resp.double_clicked() {
+                                        trace!(
+                                            "GUI interaction: library grid open {}",
+                                            entry.path.display()
+                                        );
+                                        self.open_file(entry.path.display().to_string());
+                                        self.active_module = Module::Develop;
+                                    }
+                                    // Sidecar/copy status on hover (kept from the former
+                                    // text file-browser).
+                                    resp.on_hover_text(format!(
+                                        "{}\n[{}] {}:{} {}:{}",
+                                        entry.name,
+                                        entry.status_label(),
+                                        Str::Copies.t(),
+                                        entry.virtual_copies,
+                                        Str::Masking.t(),
+                                        entry.missing_models
+                                    ));
+                                }
+                            });
                         }
-                        if let Some(texture) = tex {
-                            ui.put(
-                                rect,
-                                egui::Image::from_texture(&texture).max_size(rect.size()),
-                            );
-                        } else {
-                            ui.painter()
-                                .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
-                            ui.put(rect, egui::Label::new(placeholder_label));
-                        }
-                        if resp.double_clicked() {
-                            trace!(
-                                "GUI interaction: library grid open {}",
-                                entry.path.display()
-                            );
-                            open_target = Some(entry.path.display().to_string());
-                        }
-                        // Sidecar/copy status on hover (kept from the former
-                        // text file-browser).
-                        resp.on_hover_text(format!(
-                            "{}\n[{}] {}:{} {}:{}",
-                            entry.name,
-                            entry.status_label(),
-                            Str::Copies.t(),
-                            entry.virtual_copies,
-                            Str::Masking.t(),
-                            entry.missing_models
-                        ));
-                    }
-                });
-            }
-        });
-        for entry in &raw_entries {
-            self.ensure_thumbnail(ctx, entry);
-        }
-        if let Some(target) = open_target {
-            self.open_file(target);
-            self.active_module = Module::Develop;
-        }
+                        rows
+                    },
+                )
+                .inner
+        };
+        // GUI-SCROLL-200-1: schedule thumbnail work only for the visible
+        // window (+ buffer), then a bounded nearest-first off-screen prefetch.
+        let window = visible_rows.start * cols..(visible_rows.end * cols).min(count);
+        self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
     }
 
     /// Display-only crop/histogram thumbnail at the top of the right Develop
@@ -4622,55 +4671,149 @@ impl LuminaApp {
         // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
         // filmstrip never shows jpg/png/webp/raster entries (those remain
         // browseable in the Library file-browser via `is_supported_image`).
-        let entries: Vec<FileBrowserEntry> = self
+        let raw_indices: Vec<usize> = self
             .entries
             .iter()
-            .filter(|e| is_raw_name(&e.name))
-            .cloned()
+            .enumerate()
+            .filter(|(_, e)| is_raw_name(&e.name))
+            .map(|(i, _)| i)
             .collect();
-        let mut open_target: Option<String> = None;
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for entry in &entries {
-                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
-                    let placeholder_label = self.thumbnail_placeholder_label(entry);
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(110.0, 84.0), egui::Sense::click());
-                    if let Some(texture) = tex {
-                        ui.put(
-                            rect,
-                            egui::Image::from_texture(&texture).max_size(rect.size()),
-                        );
-                    } else {
-                        ui.painter()
-                            .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
-                        ui.put(rect, egui::Label::new(placeholder_label));
+        let count = raw_indices.len();
+        // GUI-SCROLL-200-1: fixed-size cells let us lay out only the visible
+        // window (+ a small buffer). Off-screen cells are never allocated,
+        // painted or probed for thumbnails on this frame.
+        const CELL_W: f32 = 110.0;
+        const CELL_H: f32 = 84.0;
+        let step = CELL_W + ui.spacing().item_spacing.x;
+        // The closure returns the visible window it laid out so thumbnail
+        // scheduling below runs *after* drawing with no extra state.
+        let visible = {
+            egui::ScrollArea::horizontal()
+                .show_viewport(ui, |ui, viewport| {
+                    ui.set_height(CELL_H);
+                    let visible = viewport::visible_cell_range(
+                        viewport.left(),
+                        viewport.width(),
+                        step,
+                        count,
+                    );
+                    // Leading spacer positions the first *drawn* cell at its
+                    // absolute content position; `set_width` keeps the
+                    // scrollbar proportional to the full strip even though
+                    // only the window is laid out.
+                    let buffered = viewport::buffered_range(
+                        visible.clone(),
+                        count,
+                        viewport::VISIBLE_BUFFER_CELLS,
+                    );
+                    if buffered.start > 0 {
+                        ui.add_space(buffered.start as f32 * step);
                     }
-                    if resp.clicked() {
-                        trace!("GUI interaction: filmstrip click {}", entry.path.display());
-                        open_target = Some(entry.path.display().to_string());
+                    for i in buffered.clone() {
+                        let entry = self.entries[raw_indices[i]].clone();
+                        let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                        let placeholder_label = self.thumbnail_placeholder_label(&entry);
+                        let (rect, resp) = ui
+                            .allocate_exact_size(egui::vec2(CELL_W, CELL_H), egui::Sense::click());
+                        if let Some(texture) = tex {
+                            ui.put(
+                                rect,
+                                egui::Image::from_texture(&texture).max_size(rect.size()),
+                            );
+                        } else {
+                            ui.painter()
+                                .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+                            ui.put(rect, egui::Label::new(placeholder_label));
+                        }
+                        if resp.clicked() {
+                            trace!("GUI interaction: filmstrip click {}", entry.path.display());
+                            self.open_file(entry.path.display().to_string());
+                        }
                     }
-                }
-            });
-        });
-        if let Some(target) = open_target {
-            self.open_file(target);
+                    let total_width = (count as f32 * step - ui.spacing().item_spacing.x).max(0.0);
+                    ui.set_width(total_width);
+                    visible
+                })
+                .inner
+        };
+        // GUI-SCROLL-200-1: visible-first thumbnail scheduling (see
+        // `ensure_thumbnail_priority`). No O(n) per-frame loop anymore.
+        self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, visible);
+    }
+
+    /// GUI-SCROLL-200-1: visible-first thumbnail scheduling.
+    ///
+    /// Enqueues thumbnail work for the entries in `visible_window` (widened by
+    /// [`viewport::VISIBLE_BUFFER_CELLS`]) first and unconditionally; then
+    /// touches at most [`viewport::PREFETCH_BUDGET_PER_FRAME`] off-screen
+    /// entries, nearest to the window first ([`viewport::prefetch_order`]).
+    /// Entries that already have a texture or an in-flight job are skipped for
+    /// free (`ThumbnailManager::needs_job`) and never consume budget.
+    ///
+    /// This ordering *is* the job priority mechanism: the worker pool drains
+    /// the unbounded FIFO channel in order, so a visible cell's job is always
+    /// enqueued — and therefore started — before any prefetched off-screen
+    /// job of the same frame. Off-screen work is additionally rate-limited to
+    /// keep the worst-case per-frame disk-cache probes bounded.
+    ///
+    /// Returns how many worker jobs were enqueued / cached previews loaded
+    /// this call (fed into the `LUMINA_PERF_LOG` counters).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_thumbnail_priority(
+        &mut self,
+        ctx: &egui::Context,
+        raw_indices: &[usize],
+        visible_window: std::ops::Range<usize>,
+    ) -> usize {
+        let count = raw_indices.len();
+        let buffered =
+            viewport::buffered_range(visible_window, count, viewport::VISIBLE_BUFFER_CELLS);
+        let mut enqueued = 0;
+        // Pass 1: the buffered visible window — always fully ensured, no cap.
+        for i in buffered.clone() {
+            let entry = self.entries[raw_indices[i]].clone();
+            if self.ensure_thumbnail(ctx, &entry) {
+                enqueued += 1;
+            }
         }
-        for entry in &entries {
-            self.ensure_thumbnail(ctx, entry);
+        // Pass 2: bounded nearest-first off-screen prefetch.
+        let mut budget = viewport::PREFETCH_BUDGET_PER_FRAME;
+        for i in viewport::prefetch_order(count, buffered) {
+            if budget == 0 {
+                break;
+            }
+            let key = &self.entries[raw_indices[i]].thumb_key;
+            // Free check: skips cells with a texture / in-flight job without
+            // any disk IO. Only real candidates consume the per-frame budget.
+            if !self.thumbnails.needs_job(key) {
+                continue;
+            }
+            budget -= 1;
+            let entry = self.entries[raw_indices[i]].clone();
+            if self.ensure_thumbnail(ctx, &entry) {
+                enqueued += 1;
+            }
         }
+        enqueued
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn ensure_thumbnail(&mut self, ctx: &egui::Context, entry: &FileBrowserEntry) {
+    /// Ensure a thumbnail exists for `entry`.
+    ///
+    /// Returns `true` when this call did potentially expensive work: enqueued a
+    /// background worker job or synchronously loaded/inserted a cached preview
+    /// from the disk cache. Callers feed this into the `LUMINA_PERF_LOG`
+    /// frame counters (GUI-SCROLL-200-1). `false` means the call was cheap
+    /// (texture already present, job in flight, retry budget exhausted).
+    fn ensure_thumbnail(&mut self, ctx: &egui::Context, entry: &FileBrowserEntry) -> bool {
         // Key is the canonicalized absolute path, never the bare filename
         // (REVIEW-GUI-THUMB-1).
         let key = entry.thumb_key.clone();
         if self.thumbnails.get(&key).is_some() {
-            return;
+            return false;
         }
         if !self.thumbnails.needs_job(&key) {
-            return;
+            return false;
         }
         if let Ok(cache) = DiskFolderCache::for_image(entry.path.as_path()) {
             // Use the headless-testable cache probe; on a hit, load and display
@@ -4686,14 +4829,14 @@ impl LuminaApp {
                             // insert marks the key probed *after* success only
                             // (REVIEW-GUI-THUMB-2).
                             self.thumbnails.insert(&key, tex);
-                            return;
+                            return true;
                         }
                         Err(error) => {
                             // A cached-but-corrupt preview is a visible error,
                             // not a silent miss.
                             self.thumbnails
                                 .mark_failed(&key, format!("cached preview unreadable: {error}"));
-                            return;
+                            return true;
                         }
                     }
                 }
@@ -4710,7 +4853,10 @@ impl LuminaApp {
             name: entry.name.clone(),
             key,
         }) {
-            Ok(()) => debug!("enqueued thumbnail job for {}", entry.name),
+            Ok(()) => {
+                debug!("enqueued thumbnail job for {}", entry.name);
+                true
+            }
             Err(_) => {
                 // Channel closed: release the in-flight slot so a later frame
                 // retries once the pool is back.
@@ -4719,6 +4865,7 @@ impl LuminaApp {
                     "thumbnail channel closed; will retry {} on a later frame",
                     entry.name
                 );
+                false
             }
         }
     }
@@ -4833,48 +4980,62 @@ impl LuminaApp {
         ui.label(Str::FilmstripHint.t());
         // RAW-only: mirror the filmstrip filter so the left navigator rail shows
         // only RAW entries (jpg/png/webp are excluded from the Develop preview).
-        let entries: Vec<FileBrowserEntry> = self
+        // GUI-SCROLL-200-1: index view + `show_rows` — one fixed-height row per
+        // entry, only the visible window is laid out and scheduled.
+        let raw_indices: Vec<usize> = self
             .entries
             .iter()
-            .filter(|e| is_raw_name(&e.name))
-            .cloned()
+            .enumerate()
+            .filter(|(_, e)| is_raw_name(&e.name))
+            .map(|(i, _)| i)
             .collect();
+        let count = raw_indices.len();
+        const CELL_W: f32 = 120.0;
+        const CELL_H: f32 = 90.0;
         let active_path = self.path.clone();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for entry in &entries {
-                // Reuse the filmstrip thumbnail pipeline (no duplicate
-                // generation): ensure_thumbnail populates the shared
-                // ThumbnailManager entry.
-                self.ensure_thumbnail(ctx, entry);
-                let tex = self.thumbnails.get(&entry.thumb_key).cloned();
-                let placeholder_label = self.thumbnail_placeholder_label(entry);
-                let active = active_path == entry.path.display().to_string();
-                let (cell, resp) =
-                    ui.allocate_exact_size(egui::vec2(120.0, 90.0), egui::Sense::click());
-                if let Some(texture) = tex {
-                    ui.put(
-                        cell,
-                        egui::Image::from_texture(&texture).max_size(cell.size()),
-                    );
-                } else {
-                    ui.painter()
-                        .rect_filled(cell, 2.0, egui::Color32::from_gray(40));
-                    ui.put(cell, egui::Label::new(placeholder_label));
+        let visible_rows = egui::ScrollArea::vertical()
+            .show_rows(ui, CELL_H, count, |ui, rows: std::ops::Range<usize>| {
+                for i in rows.clone() {
+                    // Reuse the filmstrip thumbnail pipeline (no duplicate
+                    // generation): ensure_thumbnail populates the shared
+                    // ThumbnailManager entry.
+                    let entry = self.entries[raw_indices[i]].clone();
+                    self.ensure_thumbnail(ctx, &entry);
+                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                    let placeholder_label = self.thumbnail_placeholder_label(&entry);
+                    let active = active_path == entry.path.display().to_string();
+                    let (cell, resp) =
+                        ui.allocate_exact_size(egui::vec2(CELL_W, CELL_H), egui::Sense::click());
+                    if let Some(texture) = tex {
+                        ui.put(
+                            cell,
+                            egui::Image::from_texture(&texture).max_size(cell.size()),
+                        );
+                    } else {
+                        ui.painter()
+                            .rect_filled(cell, 2.0, egui::Color32::from_gray(40));
+                        ui.put(cell, egui::Label::new(placeholder_label));
+                    }
+                    if active {
+                        ui.painter().rect_stroke(
+                            cell,
+                            2.0_f32,
+                            egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                    if resp.clicked() {
+                        trace!("GUI interaction: navigator open {}", entry.path.display());
+                        self.open_file(entry.path.display().to_string());
+                    }
                 }
-                if active {
-                    ui.painter().rect_stroke(
-                        cell,
-                        2.0_f32,
-                        egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
-                        egui::StrokeKind::Middle,
-                    );
-                }
-                if resp.clicked() {
-                    trace!("GUI interaction: navigator open {}", entry.path.display());
-                    self.open_file(entry.path.display().to_string());
-                }
-            }
-        });
+                rows
+            })
+            .inner;
+        // GUI-SCROLL-200-1: visible-first scheduling + bounded prefetch for the
+        // rail as well; show_rows covers the drawing side.
+        let window = visible_rows.start..visible_rows.end.min(count);
+        self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
     }
 }
 
@@ -5225,22 +5386,29 @@ impl eframe::App for LuminaApp {
         // scrolls/clicks the filmstrip, so switching directories no longer blocks
         // on a synchronous decode+render on the UI thread.
         #[cfg(not(target_arch = "wasm32"))]
-        while let Ok(result) = self.thumbnail_rx.try_recv() {
-            match result.outcome {
-                ThumbnailOutcome::Ready(frame) => {
-                    let tex = self.make_thumbnail_texture(ctx, &frame, &result.key);
-                    self.thumbnails.insert(&result.key, tex);
-                    trace!("thumbnail ready: {}", result.name);
+        {
+            // GUI-SCROLL-200-1: reset the per-frame diagnostic counters before
+            // any thumbnail work of this frame runs.
+            self.frame_thumb_enqueued = 0;
+            self.frame_thumbs_ready = 0;
+            while let Ok(result) = self.thumbnail_rx.try_recv() {
+                match result.outcome {
+                    ThumbnailOutcome::Ready(frame) => {
+                        let tex = self.make_thumbnail_texture(ctx, &frame, &result.key);
+                        self.thumbnails.insert(&result.key, tex);
+                        trace!("thumbnail ready: {}", result.name);
+                    }
+                    ThumbnailOutcome::Failed(message) => {
+                        // Visible failure state + bounded retry instead of a gray
+                        // placeholder for the rest of the session
+                        // (REVIEW-GUI-THUMB-2, no silent fallback).
+                        warn!("thumbnail failed for {}: {message}", result.name);
+                        self.thumbnails.mark_failed(&result.key, message);
+                    }
                 }
-                ThumbnailOutcome::Failed(message) => {
-                    // Visible failure state + bounded retry instead of a gray
-                    // placeholder for the rest of the session
-                    // (REVIEW-GUI-THUMB-2, no silent fallback).
-                    warn!("thumbnail failed for {}: {message}", result.name);
-                    self.thumbnails.mark_failed(&result.key, message);
-                }
+                self.frame_thumbs_ready += 1;
+                ctx.request_repaint();
             }
-            ctx.request_repaint();
         }
 
         // PERF-GUI-7: drain any completed background RAW/raster decode without
@@ -5458,12 +5626,27 @@ impl eframe::App for LuminaApp {
         });
         if let Some(t0) = perf_t0 {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            // GUI-SCROLL-200-1: `slow_frame` flags every frame over the 16.7 ms
+            // (60 Hz) budget so scrolling spikes are greppable while thumbnail
+            // jobs run; `thumb_jobs_enqueued`/`thumbs_ready` correlate a spike
+            // with same-frame thumbnail work.
+            let slow_frame = ms > 16.7;
+            #[cfg(not(target_arch = "wasm32"))]
+            let counters = (self.frame_thumb_enqueued, self.frame_thumbs_ready);
+            #[cfg(target_arch = "wasm32")]
+            let counters = (0usize, 0usize);
             log::info!(
-                "LUMINA_PERF frame={:.2}ms pointer_down={}",
+                "LUMINA_PERF frame={:.2}ms pointer_down={} thumb_jobs_enqueued={} thumbs_ready={} slow_frame={}",
                 ms,
-                ctx.input(|i| i.pointer.any_down())
+                ctx.input(|i| i.pointer.any_down()),
+                counters.0,
+                counters.1,
+                slow_frame
             );
-            eprintln!("LUMINA_PERF frame={:.2}ms", ms);
+            eprintln!(
+                "LUMINA_PERF frame={:.2}ms thumb_jobs_enqueued={} thumbs_ready={} slow_frame={}",
+                ms, counters.0, counters.1, slow_frame
+            );
         }
     }
 }
@@ -6949,6 +7132,72 @@ mod tests {
         );
     }
 
+    /// GUI-SCROLL-200-1 (single view): scroll-wheel zoom over the preview must
+    /// stay fluid — it only *arms* the debounced re-render pipeline
+    /// (`mark_dirty`); no synchronous full decode/full render may run inside
+    /// the frame. A synchronous render would have consumed
+    /// `pending_full_render` and produced a fresh `render_key` in the same
+    /// pass.
+    #[test]
+    fn scroll_wheel_zoom_arms_debounce_without_synchronous_render() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        app.load_bytes(
+            ImageFrame::new(200, 150, [128_u8, 128, 128, 255].repeat(200 * 150))
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap(),
+            "zoom.png",
+        )
+        .unwrap();
+        app.render().unwrap();
+        app.texture = Some(ctx.load_texture(
+            "preview",
+            egui::ColorImage::new([200, 150], egui::Color32::BLACK),
+            egui::TextureOptions::LINEAR,
+        ));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let pointer = screen.center();
+        // Warm-up so the preview widget exists and hit-testing sees the cursor.
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(0.9),
+                events: vec![egui::Event::PointerMoved(pointer)],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.draw_preview(ui));
+            },
+        );
+        // Scroll-wheel zoom with the pointer hovering the preview.
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                events: vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 120.0),
+                    modifiers: Default::default(),
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.draw_preview(ui));
+            },
+        );
+        assert!(app.preview_zoom > 1.0, "wheel must zoom in");
+        assert_eq!(app.zoom_mode, ZoomMode::Custom);
+        assert!(
+            app.pending_full_render,
+            "zoom must arm the debounced full render"
+        );
+        assert!(
+            app.render_key.is_none(),
+            "no synchronous full render may run during the wheel frame"
+        );
+    }
+
     #[test]
     fn sync_zoom_derives_absolute_modes_from_uncropped_source_fit() {
         // REVIEW-GUI-ZOOMLOOP-1 regression: absolute zoom modes must derive
@@ -7213,5 +7462,163 @@ mod tests {
 
         // Unknown entry ids fail visibly instead of silently resetting.
         assert!(app.restore_history("nope").is_err());
+    }
+
+    // ---- GUI-SCROLL-200-1: visible-first thumbnail scheduling (headless) ----
+
+    /// Build an app browsing a folder with `count` supported images and return
+    /// the app plus all entry indices (the scheduling helpers are format-
+    /// agnostic; the RAW filter only applies to which views show entries).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn app_with_entries(count: usize) -> (LuminaApp, tempfile::TempDir, Vec<usize>) {
+        let directory = tempfile::tempdir().unwrap();
+        for i in 0..count {
+            save_png(&directory.path().join(format!("img{i:03}.png")));
+        }
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        let indices: Vec<usize> = (0..app.entries().len()).collect();
+        assert_eq!(indices.len(), count, "every image must become an entry");
+        (app, directory, indices)
+    }
+
+    /// Visible cells (+ buffer ring) are enqueued first and in full; off-screen
+    /// cells receive at most `PREFETCH_BUDGET_PER_FRAME` nearest-first jobs.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn thumbnail_scheduling_prioritizes_visible_over_off_screen() {
+        let (mut app, _dir, indices) = app_with_entries(40);
+        let keys: Vec<String> = indices
+            .iter()
+            .map(|&i| app.entries()[i].thumb_key().to_owned())
+            .collect();
+        let ctx = egui::Context::default();
+
+        // Viewport shows cells 0..10 → buffered 0..18 immediate + 4 prefetch.
+        let window = 0..10;
+        let buffered_len = viewport::buffered_range(
+            window.clone(),
+            indices.len(),
+            viewport::VISIBLE_BUFFER_CELLS,
+        )
+        .len();
+        let enqueued = app.ensure_thumbnail_priority(&ctx, &indices, window);
+        assert_eq!(
+            enqueued,
+            buffered_len + viewport::PREFETCH_BUDGET_PER_FRAME,
+            "visible work must be unbounded, off-screen work capped per frame"
+        );
+        for (i, key) in keys.iter().enumerate().take(buffered_len) {
+            assert!(
+                !app.thumbnails.needs_job(key),
+                "cell {i} (visible/buffered) must be scheduled"
+            );
+        }
+        for key in keys
+            .iter()
+            .skip(buffered_len + viewport::PREFETCH_BUDGET_PER_FRAME)
+        {
+            assert!(
+                app.thumbnails.needs_job(key),
+                "distant cell must NOT be scheduled yet"
+            );
+        }
+
+        // Re-scheduling the same window must never redo visible work: every
+        // visible cell is already in flight/done, so only the bounded
+        // off-screen prefetch progresses (≤ budget per frame).
+        let again = app.ensure_thumbnail_priority(&ctx, &indices, 0..10);
+        assert!(
+            again <= viewport::PREFETCH_BUDGET_PER_FRAME,
+            "identical schedule call must stay within the prefetch budget, got {again}"
+        );
+        let visible_again =
+            viewport::buffered_range(0..10, indices.len(), viewport::VISIBLE_BUFFER_CELLS);
+        for key in keys.iter().take(visible_again.len()) {
+            assert!(
+                !app.thumbnails.needs_job(key),
+                "visible cell must not be rescheduled"
+            );
+        }
+    }
+
+    /// Scrolling to the end schedules the end first and prefetches backwards
+    /// from there (nearest-first), never the far-away start.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn thumbnail_scheduling_follows_the_viewport_nearest_first() {
+        let (mut app, _dir, indices) = app_with_entries(40);
+        let keys: Vec<String> = indices
+            .iter()
+            .map(|&i| app.entries()[i].thumb_key().to_owned())
+            .collect();
+        let ctx = egui::Context::default();
+        // First frame: user is at the top.
+        app.ensure_thumbnail_priority(&ctx, &indices, 0..10);
+        // Then scrolls to the very end without idle time to prefetch.
+        let count = indices.len();
+        let enqueued = app.ensure_thumbnail_priority(&ctx, &indices, count - 2..count);
+        assert_eq!(enqueued, 10 + viewport::PREFETCH_BUDGET_PER_FRAME);
+        for key in keys.iter().skip(count - 12) {
+            assert!(
+                !app.thumbnails.needs_job(key),
+                "end-of-list cell must be scheduled"
+            );
+        }
+        // Prefetch walked backwards from index 30: 29, 28, 27, 26.
+        for key in &keys[26..30] {
+            assert!(
+                !app.thumbnails.needs_job(key),
+                "nearest prefetch cell must be scheduled"
+            );
+        }
+        // The middle of the list was never touched by this short session.
+        for key in &keys[23..26] {
+            assert!(
+                app.thumbnails.needs_job(key),
+                "middle cell must remain untouched"
+            );
+        }
+        for key in keys.iter().take(18.min(count)) {
+            assert!(
+                !app.thumbnails.needs_job(key),
+                "first-frame cells stay scheduled"
+            );
+        }
+    }
+
+    /// A failed worker frees its in-flight slot and stays inside the bounded
+    /// retry budget — scheduling never re-enqueues beyond
+    /// [`filmstrip::THUMBNAIL_MAX_ATTEMPTS`] (REVIEW-GUI-THUMB-2 regression).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn thumbnail_scheduling_respects_retry_budget() {
+        let (mut app, _dir, indices) = app_with_entries(1);
+        let key = app.entries()[indices[0]].thumb_key().to_owned();
+        let ctx = egui::Context::default();
+        // First schedule enqueues exactly one job for the single visible cell.
+        assert_eq!(app.ensure_thumbnail_priority(&ctx, &indices, 0..1), 1);
+        // While that job is in flight (or has already finished) nothing is
+        // rescheduled — no duplicate jobs regardless of worker speed.
+        assert_eq!(
+            app.ensure_thumbnail_priority(&ctx, &indices, 0..1),
+            0,
+            "in-flight/done cells must not be rescheduled"
+        );
+        // Each reported worker failure consumes one bounded retry unit
+        // (REVIEW-GUI-THUMB-2); the schedule path must honour that budget.
+        for _ in 0..filmstrip::THUMBNAIL_MAX_ATTEMPTS {
+            app.thumbnails.mark_failed(&key, "boom");
+        }
+        assert_eq!(
+            app.ensure_thumbnail_priority(&ctx, &indices, 0..1),
+            0,
+            "exhausted retry budget must not be rescheduled"
+        );
+        assert_eq!(
+            app.thumbnails.failure(&key),
+            Some("boom"),
+            "exhausted retries must stay a visible error, never a silent fallback"
+        );
     }
 }

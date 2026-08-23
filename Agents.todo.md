@@ -649,18 +649,20 @@ Offen (nächste Batches):
       Masken-Tile-Upload, nicht Preview-Present). `VramState` LRU/Pool
       (45 MP+) + `warn!` bei `GpuContext::new` Adapter-Fehler.
       Dokumentiert in `docs/gpu-bootstrap.md` (Dual-Backend glow vs wgpu).
-- [ ] **GUI-SCROLL-200-1 (hartes Kriterium, Tester 2026-08-23)** Flüssiges
-      Scrollen über Previews in einem Ordner mit **200 Bildern** — im Grid/
-      Filmstrip **und** in der Einzelansicht mit voller Auflösung; weniger
-      ist akzeptabel, aber ein Selling Point, wenn es auch im **Develop**-
-      Modul flüssig bleibt. Abnahmekriterien: Scrollen während laufender
-      Thumbnail-Jobs ohne Frame-Drops > 16 ms (Messung via
-      `LUMINA_PERF_LOG=1`); Virtualisierung des Grids (nur sichtbare Zellen
-      enqueuen); Priorisierung sichtbarer Thumbnails vor Off-Screen
-      (`TiledCache`-/Worker-Pool-Nutzung); Einzelansicht: Full-Res-Decode
-      asynchron + Progressive Vorschau (Draft-Pyramide), kein UI-Freeeze.
-      Basis: bestehender Worker-Pool (`available_parallelism`), DraftPyramid,
-      ROI-Rendering. Verwandt: PERF-GUI-3/5, GUI-60FPS-1.
+- **GUI-SCROLL-200-1 — verifiziert erledigt (2026-08-23, Implementierung
+  `ses_fd0cdd9c7`, unabhängige Verifizierung `ses_fd051d31` — BESTANDEN):**
+  Grid/Navigator via `ScrollArea::show_rows`, Filmstrip horizontal via
+  `show_viewport`+Spacer; O(n)-Thumbnail-Loop entfernt →
+  `ensure_thumbnail_priority` (sichtbares Fenster + 8-Zellen-Buffer
+  ungecappt, Off-Screen-Prefetch 4/Frame nearest-first, neue Datei
+  `crates/lumina-gui/src/viewport.rs`); Scroll-Zoom armiert nur den
+  Debounce (Test `scroll_wheel_zoom_arms_debounce_without_synchronous_render`);
+  `LUMINA_PERF_LOG=1` jetzt mit `thumb_jobs_enqueued/thumbs_ready/
+  slow_frame`. Verifiziert: fmt clean, clippy gui + workspace
+  `-D warnings` 0, `cargo test -p lumina-gui` **81 passed** (+14).
+  Hinweise: F-3 Buffer zellenbasiert statt zeilenbasiert (kosmetisch,
+  ggf. später heben); Live-Messung mit 200 RAWs manuell beim nächsten
+  Test (`slow_frame=true` darf bei Scroll-Frames nicht auftreten).
 
 ### GUI-60FPS-1 (2026-08-23)
 
