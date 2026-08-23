@@ -770,14 +770,33 @@ Eintrag genannt. Alle acht Teil-Reviews sind abgeschlossen.
   entscheiden; der zweite löscht den frischen Lock des ersten
   (`crates/lumina-sidecar/src/lib.rs:1146–1158`) → Lost Update ohne
   Conflict. Fix: atomares Reclaim via rename/flock.
-- [ ] **REVIEW-GPU-DIVERGENCE-1** GPU-Pfad liefert still falsche Pixel
-  (hoch; zusammengeführt aus GPU- und CLI/MCP-Review):
-  `render_with_gpu` implementiert nur WB+7 Toneregler — Vibrance/
-  Saturation (trotz vorhandener Uniform-Felder), Curves, HSL, Presence,
-  Masks, WB-aus-Metadaten, SourceActions fehlen komplett; CLI/GUI
-  rendern mit aktivem GPU-Backend andere Bilder als CPU-Builds, ohne
-  Fehler/Warnung. Fix: Rezept validieren und bei nicht unterstützten
-  Stufen hart auf CPU verweigern/routen; Golden-Rezeptkorb erweitern.
+
+**Verifiziert erledigt (2026-08-23, unabhängige Verifizierung
+`ses_fd1c884f` + Re-Verifizierung `ses_fd0d2d25` — BESTANDEN):**
+- **REVIEW-GPU-DIVERGENCE-1** `unsupported_gpu_stages(recipe)`-Validator
+  (inkl. Vibrance/Saturation, Curves≠Identität, HSL, Presence,
+  ColorGrading, NR/Sharpening/Effects, Geometry/Lens/Perspective,
+  SourceActions; Neutralformen lösen keine Route aus); `render_with_gpu`
+  routet bei Befund explizit CPU (`info!` einmal pro Reason-Set), CLI
+  `render_best_effort` zusätzlich bei SourceActions/Masken/Lensfun;
+  `render_to_vram` warnt sichtbar (VRAM nicht CPU-routbar). Golden-Korb
+  +6 Rezepte, +2 Tests mit maxAbsDiff=0-Assertions. Verifiziert: gpu 7
+  passed, cli 15+8, clippy workspace `-D warnings` 0.
+  Restrisiko dokumentiert: VRAM-Vorschau rendert Unsupported-Rezepte
+  tone-only (mit Warnung) bis GPU-STAGE-1.
+- **REVIEW-GUI-ZOOMLOOP-1** `preview_base_fit_scale` aus ungeschnittenen
+  Originalmaßen (`preview_src_w/h`); absolute Zoommodi ohne Textur-
+  Rückkopplung (`sync_zoom_derives_absolute_modes_from_uncropped_source_fit`).
+- **REVIEW-GUI-PANROI-1** `roi_from_zoom(w,h,zoom,pan,…)` mit
+  `PREVIEW_ROI_MARGIN=1.3` + Border-Clamping; Pan-Drag setzt
+  `mark_dirty()` → Draft im Hot-Path, debounced Full-Render mit finalem
+  Pan; Test `pan_drag_schedules_draft_and_final_roi_render`.
+- **REVIEW-GUI-EXPORT-1** `resolve_export_target`: erst `with_extension`,
+  dann Schutz vor Quelle/`.lumina.json`/`.lumina.zdata`
+  (`paths_resolve_equal_symmetric`); sichtbarer Fehler, Original byte-
+  identisch.
+  Verifiziert: fmt clean, clippy gui `-D warnings` 0,
+  `cargo test -p lumina-gui` **67 passed**.
 
 **Verifiziert erledigt (2026-08-23, Implementierung `ses_fd1f42935`,
 unabhängige Verifizierung `ses_fd1e0f491` — BESTANDEN):**
@@ -800,25 +819,8 @@ unabhängige Verifizierung `ses_fd1e0f491` — BESTANDEN):**
   lumina-gui` schlägt fehl (4× E0599) — CI prüft das offenbar nicht.
   Fix: Call-Sites gaten oder wasm-Stubs ergänzen; wasm32-Check für gui
   ohne Default-Features in CI aufnehmen.
-- [ ] **REVIEW-GUI-ZOOMLOOP-1** Absolute Zoommodi speisen sich aus der
-  ROI-gecroppten Textur (hoch): `sync_zoom` leitet `preview_zoom` aus
-  `preview_fit_scale` ab, das pro Frame aus der **aktuellen** (bei
-  Zoom > 1 gecroppten) Textur berechnet wird → 200 %/100 %/Fit-Width
-  landen falsch bzw. oszillieren frameweise zwischen zwei Zuständen
-  (lib.rs:1784–1800, 2421–2432). Fix: Fit-Scale gegen ungeschnittene
-  Originalmaße cachen bzw. absolute Modi direkt aus Pane+Originalmaßen
-  berechnen.
-- [ ] **REVIEW-GUI-PANROI-1** ROI immer zentriert, Pan fließt nicht ein
-  (hoch): `roi_from_zoom` ignoriert `preview_pan`; bei Zoom > 1 sind
-  Bildränder/Ecken unerreichbar (bei 32× nur das Zentrum sichtbar)
-  (lib.rs:1740–1752, 2496–2539). Fix: sichtbaren Source-Rect aus
-  Pan-Offset + Zoom ablehnen.
-- [ ] **REVIEW-GUI-EXPORT-1** Same-Path-Schutz prüft vor
-  `with_extension` (hoch): Export-Ziel `/d/photo` + Format PNG →
-  schreibt exakt das geladene Original `/d/photo.png` voll
-  (lib.rs:2261–2281). Fix: Extension zuerst anwenden, dann
-  Canonical-Vergleich; zusätzlich Sidecar-/zdata-Ziele ablehnen
-  (siehe REVIEW-CLI-WRITE-1).
+  (Update Nacharbeit PANROI: `export_to`-Gate-Fix behebt eine der 4
+  Lücken; aktuell noch 4→3? — beim Fix zählen und hier korrigieren.)
 - [ ] **REVIEW-RAW-ABI-1** Vendored `libraw-sys`-Structlayouts passen
   nicht zur gelinkten LibRaw 0.22.2 (hoch; empirisch per Offset-Probes
   verifiziert: `params` 1512 vs. real 5232, `color` 1888 vs. 5592,
