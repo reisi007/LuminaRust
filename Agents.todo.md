@@ -645,6 +645,25 @@ Subagenten steht aus, siehe unten):
       GPU-Benchmark-IDs in `perf/baseline.json` und Budgets auf `gate:true`
       stellen (aktuell report-only, F-074-N6 draft).
 
+### Lightroom-like UI (2026-08-23 beschlossen, in Arbeit)
+
+- [ ] **GUI-LR-RIGHT-1** Rechtes Develop-Panel um Lightroom-Standards erweitern:
+      Crop-/Histogramm-Thumbnail oben (mit Crop-Rechteck-Overlay aus
+      `Geometry`), Presets-Sektion (Liste aus Sidecar-`document.presets` mit
+      Hover/Apply + Create-Preset-Flow konsolidiert), History-Sektion
+      (reverse-chronologisch, Klick = Rezept-Zustand wiederherstellen,
+      nicht-destruktiv bis „Save Recipe/Sidecar“).
+      In Arbeit (Subagent läuft).
+- [ ] **GUI-LR-LIBRARY-1** Library-Modul: linker Ordnerbaum
+      (`SidePanel::left`, Root = 2 Vorfahren über `self.directory` bzw.
+      `$HOME`, lazy `read_dir` beim Aufklappen, RAW-Counts je Ordner,
+      Klick = `set_directory`) + zentriertes Thumbnail-Grid
+      (Doppelklick → `open_file` + Wechsel nach Develop).
+      In Arbeit (Subagent läuft).
+- **Abnahmekriterien (beide):** Build/Clippy/≥50 Tests grün; History-Restore
+  ändert nur Session-Rezept bis explizites Speichern; Ordnerbaum ohne neue
+  Dependencies; `trace!` für Restore/Preset-Apply/Folder-Select.
+
 ## Abnahmekriterien
 
 Die erste produktiv nutzbare Version muss mindestens Folgendes erfüllen:
