@@ -6,10 +6,10 @@ use crate::session::ImageState;
 use lumina_core::{
     render_frame, BitDepth, ExportOptions, ImageFileFormat, ImageFrame, RenderContext,
 };
-use lumina_raw::RawMetadata;
-use lumina_sidecar::{DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity};
 #[cfg(feature = "gpu")]
 use lumina_gpu::GpuContext;
+use lumina_raw::RawMetadata;
+use lumina_sidecar::{DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -136,7 +136,12 @@ pub fn render_copy(
 ) -> Result<ImageFrame, McpError> {
     GPU_CTX.with(|cell| {
         let ctx = cell.get_or_init(init_render_backend);
-        render_best_effort(ctx.as_ref(), &state.frame, &copy.recipe, camera_white_balance)
+        render_best_effort(
+            ctx.as_ref(),
+            &state.frame,
+            &copy.recipe,
+            camera_white_balance,
+        )
     })
 }
 
@@ -156,7 +161,6 @@ pub fn render_copy(
             camera_white_balance,
             source_actions: &[],
             masks: None,
-            #[cfg(feature = "lensfun")]
             lensfun: None,
         },
     )
@@ -189,7 +193,6 @@ fn render_best_effort(
                     camera_white_balance,
                     source_actions: &[],
                     masks: None,
-                    #[cfg(feature = "lensfun")]
                     lensfun: None,
                 },
             )

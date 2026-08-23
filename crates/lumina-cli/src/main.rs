@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use lumina_core::{
     export_image, match_total_exposure_masked, render_frame, resolve_mask_planes,
     suggest_auto_tone, tone_fingerprint, AutoToneConfig, ExportOptions, ImageFileFormat,
-    ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
-    RenderOutput, SourceActionArtifact,
+    ImageFrame, LensfunCorrectorRef, MaskContext, MaskInference, MaskLoadContext, MaskPlane,
+    MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
 };
 use lumina_onnx::{birefnet_manifest, StubBackend};
 use lumina_raw::{RawError, RawMetadata};
@@ -729,7 +729,6 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
                 // here (`let (frame, _raw) = ...`) and the repair-region workflow
                 // is a headless, source-resolution verification render without the
                 // EXIF scope the corrector requires — `None` keeps the manual model.
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
         )?;
@@ -1249,7 +1248,9 @@ fn process_selected(
         // F-098-N2: pass a Lensfun corrector when one was built from EXIF
         // (otherwise `None` → manual LuminaRust model / identity fallback).
         #[cfg(feature = "lensfun")]
-        lensfun: lensfun_corrector.as_ref(),
+        lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
+        #[cfg(not(feature = "lensfun"))]
+        lensfun: None,
     };
     // Prefer the GPU when an adapter is bound; otherwise the full CPU pipeline.
     // The chosen backend is logged once at startup (see `init_render_backend`).
@@ -1331,7 +1332,9 @@ fn process_selected(
                     policy: MaskPolicy::Warn,
                 }),
                 #[cfg(feature = "lensfun")]
-                lensfun: lensfun_corrector.as_ref(),
+                lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
+                #[cfg(not(feature = "lensfun"))]
+                lensfun: None,
             },
             options,
         )?
@@ -2076,7 +2079,6 @@ mod tests {
                 // F-098-N2: this is a synthetic, recipe-only render without RAW
                 // metadata/EXIF, so no Lensfun corrector can be built — `None`
                 // (manual model) is the correct, expected state here.
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
         )
@@ -2152,7 +2154,6 @@ mod tests {
                 // renders identically to `None` (see render.rs
                 // `no_layers_is_identical_to_no_mask_context`).
                 masks: None,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
             options,
@@ -2217,7 +2218,6 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 masks: None,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
             options,
@@ -2456,7 +2456,10 @@ mod tests {
                     camera_white_balance: None,
                     source_actions: &[],
                     masks: None,
-                    lensfun: Some(&corrector),
+                    #[cfg(feature = "lensfun")]
+                    lensfun: Some(LensfunCorrectorRef(&corrector)),
+                    #[cfg(not(feature = "lensfun"))]
+                    lensfun: None,
                 },
             )
             .unwrap();

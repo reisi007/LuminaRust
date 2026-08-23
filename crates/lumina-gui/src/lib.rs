@@ -26,7 +26,7 @@ use lumina_sidecar::{
     Resolution, SidecarDocument, SourceFingerprint, SourceIdentity, SourceStatus,
 };
 use lumina_sidecar::{
-    AnalysisFingerprint, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves,
+    AnalysisFingerprint, ColorGrading, ColorGradingRange, Crop, CurveChannels, CurvePoint, Curves,
     EditRecipe, Effects, Geometry, Grain, HslAdjustments, HslChannel, LensCorrection,
     NoiseReduction, Perspective, Presence, Preset, Sharpening, Vignette,
 };
@@ -34,6 +34,8 @@ use lumina_sidecar::{
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
 use std::collections::BTreeMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeSet;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
@@ -231,15 +233,13 @@ fn worker_thumbnail(job: ThumbnailJob) -> Option<ThumbnailResult> {
     } else {
         ImageFrame::decode(&bytes).ok()?
     };
-    let (small, w, h) =
-        downscale_rgba(&frame.pixels, frame.width, frame.height, THUMBNAIL_MAX_DIM);
+    let (small, w, h) = downscale_rgba(&frame.pixels, frame.width, frame.height, THUMBNAIL_MAX_DIM);
     let small_frame = ImageFrame::new(w, h, small).ok()?;
     let context = RenderContext {
         recipe: &EditRecipe::default(),
         camera_white_balance: None,
         source_actions: &[],
         masks: None,
-        #[cfg(feature = "lensfun")]
         lensfun: None,
     };
     let preview = render_frame(&small_frame, &context)
@@ -381,6 +381,21 @@ pub struct LuminaApp {
     preview_effective_scale: f32,
     /// Whether the left thumbnail navigator rail is open.
     navigator_open: bool,
+    /// Library module: expanded folder-tree nodes, keyed by absolute path.
+    #[cfg(not(target_arch = "wasm32"))]
+    open_folders: BTreeSet<String>,
+    /// Library module: lazy per-folder children cache, filled via `read_dir`
+    /// the first time a folder node is expanded.
+    #[cfg(not(target_arch = "wasm32"))]
+    folder_children: BTreeMap<String, Vec<String>>,
+    /// Library module: depth-limited RAW file count per folder node
+    /// (display only; computed once per folder).
+    #[cfg(not(target_arch = "wasm32"))]
+    folder_raw_counts: BTreeMap<String, usize>,
+    /// Develop history section: currently selected (last restored) history
+    /// entry id of the active virtual copy.
+    #[cfg(not(target_arch = "wasm32"))]
+    history_selected: Option<String>,
     /// PERF-GUI-7: receiver for a background RAW/raster decode. `Some` while a
     /// decode is in flight on a worker thread; native-only (no threads on wasm).
     #[cfg(not(target_arch = "wasm32"))]
@@ -475,11 +490,7 @@ impl LuminaApp {
                 let tx = result_tx.clone();
                 thread::spawn(move || {
                     loop {
-                        let job = match rx
-                            .lock()
-                            .expect("thumbnail job receiver poisoned")
-                            .recv()
-                        {
+                        let job = match rx.lock().expect("thumbnail job receiver poisoned").recv() {
                             Ok(job) => job,
                             Err(_) => break, // all senders gone → shut down
                         };
@@ -574,6 +585,14 @@ impl LuminaApp {
             // Navigator defaults to collapsed (hidden) and is revealed via the
             // "Navigator" toggle button in the preview toolbar (Lightroom-like).
             navigator_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            open_folders: BTreeSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            folder_children: BTreeMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            folder_raw_counts: BTreeMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            history_selected: None,
             #[cfg(not(target_arch = "wasm32"))]
             decode_rx: None,
             pending_full_render: false,
@@ -847,6 +866,29 @@ impl LuminaApp {
                 });
             }
         }
+        self.render()
+    }
+
+    /// Lightroom-style non-destructive history restore: copies the stored
+    /// recipe state of a history step of the active virtual copy into the
+    /// session recipe and re-renders. Nothing is persisted until the user
+    /// presses Save Recipe / Sidecar.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn restore_history(&mut self, entry_id: &str) -> Result<(), GuiError> {
+        let document = self
+            .document
+            .as_ref()
+            .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?;
+        let recipe = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == self.virtual_copy_id)
+            .and_then(|copy| copy.history.iter().find(|entry| entry.id == entry_id))
+            .map(|entry| entry.recipe.clone())
+            .ok_or_else(|| GuiError::Io(Str::HistoryEntryMissing.t().to_string()))?;
+        trace!("GUI interaction: history restore {}", entry_id);
+        self.history_selected = Some(entry_id.to_string());
+        self.recipe = recipe;
         self.render()
     }
 
@@ -1460,7 +1502,11 @@ impl LuminaApp {
             } else {
                 Some(wb)
             };
-            (image.frame, image.metadata.orientation, camera_white_balance)
+            (
+                image.frame,
+                image.metadata.orientation,
+                camera_white_balance,
+            )
         } else {
             (ImageFrame::decode(&bytes)?, 1, None)
         };
@@ -1521,7 +1567,11 @@ impl LuminaApp {
     }
 
     pub fn set_adjustment(&mut self, name: &str, value: f64) {
-        trace!("GUI interaction: set_adjustment {}={} (before render)", name, value);
+        trace!(
+            "GUI interaction: set_adjustment {}={} (before render)",
+            name,
+            value
+        );
         self.recipe.adjustments.insert(name.into(), value);
         self.render_key = None;
         self.tone_analysis = None;
@@ -1636,7 +1686,8 @@ impl LuminaApp {
         };
         // Derive the ROI from the zoom factor when no explicit crop was given
         // (PERF-GUI-5); the full render always honours masks.
-        let roi = roi.or_else(|| Self::roi_from_zoom(original.width, original.height, self.preview_zoom));
+        let roi =
+            roi.or_else(|| Self::roi_from_zoom(original.width, original.height, self.preview_zoom));
         self.preview_is_draft = false;
         self.pending_full_render = false;
         let result = self.render_from(&original, true, roi);
@@ -1673,7 +1724,8 @@ impl LuminaApp {
                 }
             }
         };
-        let roi = roi.or_else(|| Self::roi_from_zoom(source.width, source.height, self.preview_zoom));
+        let roi =
+            roi.or_else(|| Self::roi_from_zoom(source.width, source.height, self.preview_zoom));
         self.preview_is_draft = true;
         let result = self.render_from(&source, false, roi);
         if took_draft {
@@ -1802,7 +1854,6 @@ impl LuminaApp {
                 camera_white_balance: self.camera_white_balance,
                 source_actions: &[],
                 masks: masks_context,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
             },
         )?;
@@ -2013,7 +2064,13 @@ impl LuminaApp {
             return;
         }
         info!("decoding (background) {}", path);
-        self.status = format!("Decoding {}", Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or("image"));
+        self.status = format!(
+            "Decoding {}",
+            Path::new(&path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         self.decode_rx = Some(rx);
         std::thread::spawn(move || {
@@ -2040,9 +2097,17 @@ impl LuminaApp {
                     } else {
                         Some(wb)
                     };
-                    (image.frame, image.metadata.orientation, camera_white_balance)
+                    (
+                        image.frame,
+                        image.metadata.orientation,
+                        camera_white_balance,
+                    )
                 } else {
-                    (ImageFrame::decode(&bytes).map_err(|e| (path.clone(), e.to_string()))?, 1, None)
+                    (
+                        ImageFrame::decode(&bytes).map_err(|e| (path.clone(), e.to_string()))?,
+                        1,
+                        None,
+                    )
                 };
                 Ok(DecodedFrame {
                     path,
@@ -2087,10 +2152,8 @@ impl LuminaApp {
                         target_luminance: candidate.auto_features.target_luminance,
                         ..Default::default()
                     };
-                    let fingerprint = tone_fingerprint(
-                        self.original.as_ref().expect("loaded frame"),
-                        config,
-                    );
+                    let fingerprint =
+                        tone_fingerprint(self.original.as_ref().expect("loaded frame"), config);
                     let valid = candidate
                         .auto_features
                         .analysis_fingerprint
@@ -2242,7 +2305,6 @@ impl LuminaApp {
             camera_white_balance: self.camera_white_balance,
             source_actions: &[],
             masks: masks_context,
-            #[cfg(feature = "lensfun")]
             lensfun: None,
         };
         let encoded = export_image(original, &context, options).map_err(GuiError::Core)?;
@@ -2778,7 +2840,10 @@ impl LuminaApp {
     /// Toggle Before/After. Deliberately does not touch the recipe.
     pub fn toggle_before_after(&mut self) {
         self.before_after = !self.before_after;
-        trace!("GUI interaction: toggle_before_after -> {}", self.before_after);
+        trace!(
+            "GUI interaction: toggle_before_after -> {}",
+            self.before_after
+        );
     }
 
     /// Derive a deterministic WB (temperature, tint) from a picked sRGB point so
@@ -2821,7 +2886,11 @@ impl LuminaApp {
     }
 
     fn pick_white_balance_at(&mut self, nx: f64, ny: f64) {
-        trace!("GUI interaction: pick_white_balance_at nx={:.4} ny={:.4}", nx, ny);
+        trace!(
+            "GUI interaction: pick_white_balance_at nx={:.4} ny={:.4}",
+            nx,
+            ny
+        );
         let Some(frame) = &self.original else {
             return;
         };
@@ -3725,71 +3794,282 @@ impl LuminaApp {
         });
     }
 
-    fn draw_file_browser(&mut self, ui: &mut egui::Ui) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            ui.heading(Str::Library.t());
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.directory);
-                if ui.button(Str::Open.t()).clicked() {
-                    self.list_directory();
-                }
-            });
-            if ui.button(Str::Refresh.t()).clicked() {
-                self.list_directory();
+    /// Lightroom-like Library folder tree (left panel): directory hierarchy
+    /// rooted at `$HOME` (or two ancestors above the current directory when it
+    /// lives outside the home tree), lazily expanded via `read_dir`, showing a
+    /// depth-limited RAW count per node. Clicking a node selects the directory.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_folder_tree(&mut self, ui: &mut egui::Ui) {
+        ui.heading(Str::Folders.t());
+        // Direct path entry stays available (replaces the old text browser's
+        // address row) plus a manual rescan.
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut self.directory);
+            if ui.button(Str::Open.t()).clicked() {
+                let target = self.directory.clone();
+                self.set_directory(target);
             }
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let mut path_to_open = None;
-                for entry in &self.entries {
-                    let selected = self.path == entry.path.display().to_string();
-                    let label = format!(
-                        "{}  [{}] {}:{} {}:{}",
-                        entry.name,
-                        entry.status_label(),
-                        Str::Copies.t(),
-                        entry.virtual_copies,
-                        Str::Masking.t(),
-                        entry.missing_models
-                    );
-                    if ui.selectable_label(selected, label).clicked() {
-                        path_to_open = Some(entry.path.display().to_string());
-                    }
-                }
-                if let Some(path) = path_to_open {
-                    self.open_file(path);
-                }
-            });
+        });
+        if ui.button(Str::Refresh.t()).clicked() {
+            self.list_directory();
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            ui.heading(Str::Library.t());
-            ui.label(Str::NotAvailable.t());
+        ui.separator();
+        let root = library_root(&self.directory);
+        // The root itself is always visible/expanded.
+        self.open_folders.insert(root.display().to_string());
+        let mut select_target: Option<String> = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            self.draw_folder_node(ui, &root, &root, 0, &mut select_target);
+        });
+        if let Some(path) = select_target {
+            trace!("GUI interaction: folder select {}", path);
+            self.set_directory(path);
         }
     }
 
-    /// The full Develop control stack: the eight F-100 sections in fixed order,
-    /// then the preset manager and the global render/save actions.  Every
-    /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
-    fn draw_develop_panel(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-            // The eight adjustment sections are grayed and non-interactive until an
-            // image is loaded (F-100 disabled-while-empty behaviour).
-            let had_enabled = ui.is_enabled();
-            ui.set_enabled(self.original.is_some());
-            self.draw_basic(ui);
-            self.draw_tone_curve(ui);
-            self.draw_color(ui);
-            self.draw_effects(ui);
-            self.draw_detail(ui);
-            self.draw_optics(ui);
-            self.draw_geometry(ui);
-            self.draw_masking(ui);
-            ui.set_enabled(had_enabled);
-            ui.separator();
-        ui.collapsing(Str::Preset.t(), |ui| {
+    /// One folder-tree node: disclosure arrow + label with RAW count, then the
+    /// lazily cached children when expanded.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_folder_node(
+        &mut self,
+        ui: &mut egui::Ui,
+        root: &Path,
+        path: &Path,
+        depth: usize,
+        select_target: &mut Option<String>,
+    ) {
+        let path_str = path.display().to_string();
+        // Depth-limited RAW count, computed once per folder and cached.
+        if !self.folder_raw_counts.contains_key(&path_str) {
+            let count = count_raw_files(path, FOLDER_SCAN_DEPTH);
+            self.folder_raw_counts.insert(path_str.clone(), count);
+        }
+        let raw_count = self.folder_raw_counts[&path_str];
+        let open = self.open_folders.contains(&path_str);
+        ui.horizontal(|ui| {
+            ui.add_space((depth * 14) as f32);
+            // Disclosure toggle.
+            let (arrow_rect, arrow_resp) =
+                ui.allocate_exact_size(egui::vec2(12.0, 16.0), egui::Sense::click());
+            ui.painter().text(
+                arrow_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                if open { "▾" } else { "▸" },
+                egui::FontId::default(),
+                ui.visuals().text_color(),
+            );
+            if arrow_resp.clicked() {
+                if open {
+                    self.open_folders.remove(&path_str);
+                } else {
+                    self.open_folders.insert(path_str.clone());
+                }
+            }
+            let label = format!("{} ({})", folder_label(root, path), raw_count);
+            if ui
+                .selectable_label(self.directory == path_str, label)
+                .clicked()
+            {
+                *select_target = Some(path_str.clone());
+            }
+        });
+        if !open {
+            return;
+        }
+        // Lazy children cache: fill via read_dir on first expansion.
+        let children = match self.folder_children.get(&path_str) {
+            Some(children) => children.clone(),
+            None => {
+                let children: Vec<String> = subdirectories(path)
+                    .iter()
+                    .map(|child| child.display().to_string())
+                    .collect();
+                self.folder_children
+                    .insert(path_str.clone(), children.clone());
+                children
+            }
+        };
+        for child in children {
+            self.draw_folder_node(ui, root, Path::new(&child), depth + 1, select_target);
+        }
+    }
+
+    /// Lightroom-like Library grid view (center): RAW files of the current
+    /// directory rendered through the shared ThumbnailManager pipeline (no
+    /// duplicate generation). Double-click opens a file and switches to
+    /// Develop (Loupe).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_library_grid(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let raw_entries: Vec<FileBrowserEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| is_raw_name(&entry.name))
+            .cloned()
+            .collect();
+        if raw_entries.is_empty() {
+            ui.heading(Str::Library.t());
+            ui.label(Str::ReadyForImage.t());
+            return;
+        }
+        const CELL_W: f32 = 132.0;
+        const CELL_H: f32 = 100.0;
+        let cols = ((ui.available_width() / CELL_W).floor() as usize).max(1);
+        let mut open_target: Option<String> = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for chunk in raw_entries.chunks(cols) {
+                ui.horizontal(|ui| {
+                    for entry in chunk {
+                        let selected = self.path == entry.path.display().to_string();
+                        let tex = self.thumbnails.get(&entry.name).cloned();
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(CELL_W - 8.0, CELL_H - 8.0),
+                            egui::Sense::click(),
+                        );
+                        if selected {
+                            ui.painter().rect_stroke(
+                                rect.expand(2.0),
+                                3.0,
+                                egui::Stroke::new(2.0_f32, ui.visuals().selection.bg_fill),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        if let Some(texture) = tex {
+                            ui.put(
+                                rect,
+                                egui::Image::from_texture(&texture).max_size(rect.size()),
+                            );
+                        } else {
+                            ui.painter()
+                                .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+                            ui.put(rect, egui::Label::new(&entry.name));
+                        }
+                        if resp.double_clicked() {
+                            trace!(
+                                "GUI interaction: library grid open {}",
+                                entry.path.display()
+                            );
+                            open_target = Some(entry.path.display().to_string());
+                        }
+                        // Sidecar/copy status on hover (kept from the former
+                        // text file-browser).
+                        resp.on_hover_text(format!(
+                            "{}\n[{}] {}:{} {}:{}",
+                            entry.name,
+                            entry.status_label(),
+                            Str::Copies.t(),
+                            entry.virtual_copies,
+                            Str::Masking.t(),
+                            entry.missing_models
+                        ));
+                    }
+                });
+            }
+        });
+        for entry in &raw_entries {
+            self.ensure_thumbnail(ctx, entry);
+        }
+        if let Some(target) = open_target {
+            self.open_file(target);
+            self.active_module = Module::Develop;
+        }
+    }
+
+    /// Display-only crop/histogram thumbnail at the top of the right Develop
+    /// panel (Lightroom-like): the current render texture with the recipe's
+    /// free-crop rectangle overlaid and the outside dimmed. Purely visual —
+    /// no interaction, no recipe mutation.
+    fn draw_crop_thumb(&mut self, ui: &mut egui::Ui) {
+        let Some(texture) = self.texture.clone() else {
+            return;
+        };
+        let size = texture.size();
+        let (tex_w, tex_h) = (size[0] as f32, size[1] as f32);
+        let width = ui.available_width();
+        let height = 120.0_f32.min(ui.available_height().min(160.0));
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 2.0, egui::Color32::from_gray(24));
+        if tex_w <= 0.0 || tex_h <= 0.0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+            return;
+        }
+        let scale = (rect.width() / tex_w).min(rect.height() / tex_h);
+        let draw_size = egui::vec2(tex_w * scale, tex_h * scale);
+        let img_rect = egui::Rect::from_center_size(rect.center(), draw_size);
+        ui.put(
+            img_rect,
+            egui::Image::from_texture(&texture).max_size(draw_size),
+        );
+        let crop = self
+            .recipe
+            .geometry
+            .as_ref()
+            .and_then(|geometry| geometry.crop.as_ref());
+        let Some(crop_rect) = crop_overlay_rect(crop, img_rect) else {
+            return;
+        };
+        let painter = ui.painter();
+        let dim = egui::Color32::from_black_alpha(140);
+        // Four border bands around the crop window keep the outside dimmed
+        // without a second texture pass.
+        painter.rect_filled(
+            egui::Rect::from_min_max(img_rect.min, egui::pos2(img_rect.max.x, crop_rect.top())),
+            0.0,
+            dim,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(img_rect.min.x, crop_rect.bottom()), img_rect.max),
+            0.0,
+            dim,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(img_rect.min.x, crop_rect.top()),
+                egui::pos2(crop_rect.left(), crop_rect.bottom()),
+            ),
+            0.0,
+            dim,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(crop_rect.right(), crop_rect.top()),
+                egui::pos2(img_rect.max.x, crop_rect.bottom()),
+            ),
+            0.0,
+            dim,
+        );
+        painter.rect_stroke(
+            crop_rect,
+            0.0,
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 214, 0)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    /// Lightroom-style Presets section: presets saved in the sidecar document
+    /// (click to apply, hover highlight via `selectable_label`) with the
+    /// create-preset flow consolidated below the list.
+    fn draw_presets_section(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::PresetsSection.t(), |ui| {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Clone to end the shared borrow before `apply_preset` needs
+                // `&mut self`.
+                let document = self.document.clone();
+                if let Some(document) = document {
+                    if document.presets.is_empty() {
+                        ui.label(Str::NoPresets.t());
+                    }
+                    for preset in &document.presets {
+                        if ui.selectable_label(false, &preset.name).clicked() {
+                            trace!("GUI interaction: panel preset apply {}", preset.id);
+                            if let Err(error) = self.apply_preset(preset) {
+                                self.show_error(error);
+                            }
+                        }
+                    }
+                    ui.separator();
+                }
+            }
             ui.text_edit_singleline(&mut self.preset_name);
             for field in ["exposure", "contrast", "highlights", "shadows"] {
                 let selected = self.preset_fields.entry(field.into()).or_insert(false);
@@ -3809,46 +4089,117 @@ impl LuminaApp {
                 }
             }
         });
-        ui.separator();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.path);
-                if ui.button(Str::Load.t()).clicked() {
-                    self.begin_load_path(self.path.clone());
+    }
+
+    /// Lightroom-style History section: reverse-chronological entries of the
+    /// active virtual copy; clicking an entry restores its stored recipe into
+    /// the session recipe (non-destructive until Save Recipe / Sidecar).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_history_section(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::History.t(), |ui| {
+            let Some(document) = self.document.clone() else {
+                ui.label(Str::NoSidecarLoaded.t());
+                return;
+            };
+            let Some(copy) = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == self.virtual_copy_id)
+            else {
+                ui.label(Str::VirtualCopyNotFound.t());
+                return;
+            };
+            if copy.history.is_empty() {
+                ui.label(Str::NoHistory.t());
+                return;
+            }
+            let mut restore_target: Option<String> = None;
+            for (index, entry) in copy.history.iter().enumerate().rev() {
+                let mut label = format!("{}. {}", index + 1, entry.id);
+                if let Some(recorded_at) = &entry.recorded_at {
+                    label.push_str(&format!(" ({})", recorded_at));
                 }
-            });
-            if ui.button(Str::ChooseFile.t()).clicked() {
-                if let Some(path) = rfd::FileDialog::new().pick_file() {
-                    self.path = path.display().to_string();
-                    self.begin_load_path(self.path.clone());
+                let selected = self.history_selected.as_deref() == Some(entry.id.as_str());
+                if ui.selectable_label(selected, label).clicked() {
+                    restore_target = Some(entry.id.clone());
                 }
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            ui.label(Str::NotAvailable.t());
-        }
-        if ui.button(Str::MatchExposure.t()).clicked() {
-            if let Err(error) = self.match_total_exposure(0.5) {
-                self.show_error(error);
-            }
-        }
-        ui.horizontal(|ui| {
-            if ui.button(Str::Reset.t()).clicked() {
-                self.reset();
-            }
-            if ui.button(Str::RenderApply.t()).clicked() {
-                if let Err(error) = self.render() {
+            if let Some(id) = restore_target {
+                if let Err(error) = self.restore_history(&id) {
                     self.show_error(error);
                 }
             }
         });
-        #[cfg(not(target_arch = "wasm32"))]
-        if ui.button(Str::SaveRecipe.t()).clicked() {
-            self.save_sidecar();
-        }
-        });
+    }
+
+    /// The full Develop control stack: the eight F-100 sections in fixed order,
+    /// then the preset manager and the global render/save actions.  Every
+    /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
+    fn draw_develop_panel(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Lightroom-style panel head: display-only crop/histogram
+                // thumbnail with the active crop overlay, then the Presets and
+                // History collapsible sections.
+                self.draw_crop_thumb(ui);
+                self.draw_presets_section(ui);
+                #[cfg(not(target_arch = "wasm32"))]
+                self.draw_history_section(ui);
+                ui.separator();
+                // The eight adjustment sections are grayed and non-interactive until an
+                // image is loaded (F-100 disabled-while-empty behaviour).
+                let had_enabled = ui.is_enabled();
+                ui.set_enabled(self.original.is_some());
+                self.draw_basic(ui);
+                self.draw_tone_curve(ui);
+                self.draw_color(ui);
+                self.draw_effects(ui);
+                self.draw_detail(ui);
+                self.draw_optics(ui);
+                self.draw_geometry(ui);
+                self.draw_masking(ui);
+                ui.set_enabled(had_enabled);
+                ui.separator();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut self.path);
+                        if ui.button(Str::Load.t()).clicked() {
+                            self.begin_load_path(self.path.clone());
+                        }
+                    });
+                    if ui.button(Str::ChooseFile.t()).clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            self.path = path.display().to_string();
+                            self.begin_load_path(self.path.clone());
+                        }
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    ui.label(Str::NotAvailable.t());
+                }
+                if ui.button(Str::MatchExposure.t()).clicked() {
+                    if let Err(error) = self.match_total_exposure(0.5) {
+                        self.show_error(error);
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(Str::Reset.t()).clicked() {
+                        self.reset();
+                    }
+                    if ui.button(Str::RenderApply.t()).clicked() {
+                        if let Err(error) = self.render() {
+                            self.show_error(error);
+                        }
+                    }
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button(Str::SaveRecipe.t()).clicked() {
+                    self.save_sidecar();
+                }
+            });
     }
 
     /// Library-module sidecar / virtual-copy manager (native only).  Mask editing
@@ -4067,7 +4418,10 @@ impl LuminaApp {
             self.set_zoom_mode(ZoomMode::OneToOne);
         }
         if ui
-            .selectable_label(self.zoom_mode == ZoomMode::TwoHundred, Str::ZoomTwoHundred.t())
+            .selectable_label(
+                self.zoom_mode == ZoomMode::TwoHundred,
+                Str::ZoomTwoHundred.t(),
+            )
             .clicked()
         {
             self.set_zoom_mode(ZoomMode::TwoHundred);
@@ -4117,9 +4471,13 @@ impl LuminaApp {
                 let (cell, resp) =
                     ui.allocate_exact_size(egui::vec2(120.0, 90.0), egui::Sense::click());
                 if let Some(texture) = tex {
-                    ui.put(cell, egui::Image::from_texture(&texture).max_size(cell.size()));
+                    ui.put(
+                        cell,
+                        egui::Image::from_texture(&texture).max_size(cell.size()),
+                    );
                 } else {
-                    ui.painter().rect_filled(cell, 2.0, egui::Color32::from_gray(40));
+                    ui.painter()
+                        .rect_filled(cell, 2.0, egui::Color32::from_gray(40));
                     ui.put(cell, egui::Label::new(&entry.name));
                 }
                 if active {
@@ -4131,10 +4489,7 @@ impl LuminaApp {
                     );
                 }
                 if resp.clicked() {
-                    trace!(
-                        "GUI interaction: navigator open {}",
-                        entry.path.display()
-                    );
+                    trace!("GUI interaction: navigator open {}", entry.path.display());
                     self.open_file(entry.path.display().to_string());
                 }
             }
@@ -4259,6 +4614,116 @@ fn is_raw_name(name: &str) -> bool {
     )
 }
 
+/// Root of the Library folder tree: `$HOME` when the current directory lives
+/// inside it (Lightroom shows the whole user tree), otherwise two ancestors
+/// above the directory (grandparent), with a final fallback to the directory
+/// itself. Pure path logic so headless tests can exercise every branch without
+/// mutating process environment state.
+#[cfg(not(target_arch = "wasm32"))]
+fn library_root(directory: &str) -> PathBuf {
+    let dir = Path::new(directory);
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() && dir.starts_with(&home) {
+            return PathBuf::from(home);
+        }
+    }
+    dir.ancestors()
+        .nth(2)
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| dir.to_path_buf())
+}
+
+/// Short display label of a folder node: path relative to the tree root, or
+/// the final component for the root itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn folder_label(root: &Path, path: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(relative) if !relative.as_os_str().is_empty() => relative.display().to_string(),
+        _ => path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string()),
+    }
+}
+
+/// How many directory levels the RAW-count scan descends at most. Keeps the
+/// per-folder count cheap even under large trees.
+#[cfg(not(target_arch = "wasm32"))]
+const FOLDER_SCAN_DEPTH: usize = 3;
+
+/// Number of RAW files under `dir`, descending at most `remaining_depth`
+/// directory levels (depth 0 scans nothing). Pure read-only helper used by the
+/// Library folder tree.
+#[cfg(not(target_arch = "wasm32"))]
+fn count_raw_files(dir: &Path, remaining_depth: usize) -> usize {
+    if remaining_depth == 0 {
+        return 0;
+    }
+    let mut count = 0usize;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                count += count_raw_files(&path, remaining_depth - 1);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if is_raw_name(name) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Immediate subdirectories of `dir`, sorted; empty when unreadable so a
+/// permission error degrades to "no children" instead of a broken node.
+#[cfg(not(target_arch = "wasm32"))]
+fn subdirectories(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    dirs.sort();
+    dirs
+}
+
+/// Maps the recipe's normalized free-crop rectangle (`Crop::Free` coordinates
+/// are `0..=1`) into an on-screen image rect for the display-only crop overlay
+/// thumbnail. Returns `None` for no crop / aspect presets (whose normalized
+/// rect depends on the decoded aspect ratio and is not tracked here).
+fn crop_overlay_rect(crop: Option<&Crop>, img_rect: egui::Rect) -> Option<egui::Rect> {
+    let Some(Crop::Free {
+        x,
+        y,
+        width,
+        height,
+    }) = crop
+    else {
+        return None;
+    };
+    if *width <= 0.0 || *height <= 0.0 {
+        return None;
+    }
+    let clamp01 = |v: f32| v.clamp(0.0, 1.0);
+    let min = img_rect.min
+        + egui::vec2(
+            clamp01(*x) * img_rect.width(),
+            clamp01(*y) * img_rect.height(),
+        );
+    let max = img_rect.min
+        + egui::vec2(
+            clamp01(x + width) * img_rect.width(),
+            clamp01(y + height) * img_rect.height(),
+        );
+    Some(egui::Rect::from_min_max(min, max))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
     recipe.auto_features.auto_exposure = None;
@@ -4280,8 +4745,6 @@ fn decoder_identity(source_is_raw: bool) -> &'static str {
         "image"
     }
 }
-
-
 
 impl eframe::App for LuminaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -4481,14 +4944,14 @@ impl eframe::App for LuminaApp {
             self.draw_histogram(ui);
         });
 
-        // Left: the Library file browser. Develop/Export leave the left edge to
-        // the large navigator/preview working area.
+        // Left: Lightroom-like Library folder tree. Develop/Export leave the
+        // left edge to the navigator/preview working area.
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_module == Module::Library {
-            egui::SidePanel::left("browser")
+            egui::SidePanel::left("folders")
                 .resizable(true)
-                .default_width(260.0)
-                .show(ctx, |ui| self.draw_file_browser(ui));
+                .default_width(220.0)
+                .show(ctx, |ui| self.draw_folder_tree(ui));
         }
 
         // Left: Lightroom-like thumbnail navigator rail (Develop / Export). The
@@ -4552,6 +5015,18 @@ impl eframe::App for LuminaApp {
                     ui.centered_and_justified(|ui| ui.label(Str::NotAvailable.t()));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.draw_preview_area(ctx, ui);
+                }
+            }
+            // Library: Lightroom-like grid view (folders tree left, RAW
+            // thumbnail grid center); Develop/Export keep the large preview.
+            Module::Library => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.draw_library_grid(ctx, ui);
+                }
+                #[cfg(target_arch = "wasm32")]
                 {
                     self.draw_preview_area(ctx, ui);
                 }
@@ -5556,7 +6031,6 @@ mod tests {
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
-            #[cfg(feature = "lensfun")]
             lensfun: None,
         };
         let options = ExportOptions {
@@ -5604,7 +6078,6 @@ mod tests {
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
-            #[cfg(feature = "lensfun")]
             lensfun: None,
         };
         let options = ExportOptions {
@@ -5734,5 +6207,144 @@ mod tests {
             ImageFileFormat::default_extension(ImageFileFormat::Png),
             "png"
         );
+    }
+
+    // ---- Lightroom-like Library folder tree (pure helpers) ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn library_root_prefers_home_inside_and_grandparent_outside() {
+        // Outside `$HOME` the tree root is two ancestors above the directory
+        // (the grandparent); degenerate paths fall back to the path itself.
+        // Deterministic regardless of the environment because these paths are
+        // never inside a real `$HOME` prefix.
+        assert_eq!(
+            library_root("/var/folders/xy/ab/cd"),
+            PathBuf::from("/var/folders/xy")
+        );
+        assert_eq!(library_root("/etc"), PathBuf::from("/etc"));
+        assert_eq!(library_root("/"), PathBuf::from("/"));
+        assert_eq!(library_root("relative/dir"), PathBuf::from("relative/dir"));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn folder_scan_helpers_count_raw_files_with_depth_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        let deeper = sub.join("deeper");
+        std::fs::create_dir_all(&deeper).unwrap();
+        std::fs::write(dir.path().join("a.ARW"), b"x").unwrap();
+        std::fs::write(dir.path().join("b.jpg"), b"x").unwrap();
+        std::fs::write(sub.join("c.nef"), b"x").unwrap();
+        std::fs::write(deeper.join("d.orf"), b"x").unwrap();
+
+        assert_eq!(count_raw_files(dir.path(), 3), 3);
+        // The depth limit stops the scan below `sub`.
+        assert_eq!(count_raw_files(dir.path(), 2), 2);
+        assert_eq!(count_raw_files(dir.path(), 1), 1);
+        assert_eq!(count_raw_files(dir.path(), 0), 0);
+
+        let subs = subdirectories(dir.path());
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0], sub);
+
+        // Labels are root-relative; the root itself shows its final component.
+        assert_eq!(folder_label(dir.path(), &sub), "sub");
+        let root_name = dir.path().file_name().unwrap().to_string_lossy();
+        assert_eq!(folder_label(dir.path(), dir.path()), root_name);
+    }
+
+    // ---- Display-only crop overlay thumbnail (pure helper) ----
+
+    #[test]
+    fn crop_overlay_rect_maps_normalized_free_crop_into_image_rect() {
+        let img = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
+        assert!(crop_overlay_rect(None, img).is_none());
+        let geometry_none = Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        };
+        assert!(crop_overlay_rect(geometry_none.crop.as_ref(), img).is_none());
+
+        // Aspect presets have no normalized rect without the source aspect.
+        let aspect = Crop::Aspect {
+            preset: lumina_sidecar::AspectPreset::OneToOne,
+        };
+        assert!(crop_overlay_rect(Some(&aspect), img).is_none());
+
+        let free = Crop::Free {
+            x: 0.1,
+            y: 0.2,
+            width: 0.5,
+            height: 0.4,
+        };
+        let rect = crop_overlay_rect(Some(&free), img).unwrap();
+        assert!((rect.min.x - 20.0).abs() < 1e-4);
+        assert!((rect.min.y - 30.0).abs() < 1e-4);
+        assert!((rect.max.x - 70.0).abs() < 1e-4);
+        assert!((rect.max.y - 50.0).abs() < 1e-4);
+
+        // Degenerate crop sizes resolve to no overlay.
+        let degenerate = Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.5,
+        };
+        assert!(crop_overlay_rect(Some(&degenerate), img).is_none());
+    }
+
+    // ---- History restore (non-destructive session state change) ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn history_restore_swaps_session_recipe_without_touching_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", -2.0);
+        app.save_sidecar();
+
+        // Seed one explicit history step holding a different recipe state.
+        let mut stored = EditRecipe::default();
+        stored.adjustments.insert("exposure".into(), 1.5);
+        {
+            let document = app.document.as_mut().unwrap();
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == app.virtual_copy_id)
+                .unwrap();
+            copy.history.push(HistoryEntry {
+                id: "history-test-1".into(),
+                recipe: stored,
+                recorded_at: Some("2026-08-23T10:00:00Z".into()),
+                extras: BTreeMap::new(),
+            });
+        }
+
+        // Restore swaps the session recipe and marks the selection.
+        app.restore_history("history-test-1").unwrap();
+        assert_eq!(app.recipe().adjustments["exposure"], 1.5);
+        assert_eq!(app.history_selected.as_deref(), Some("history-test-1"));
+
+        // Non-destructive: the sidecar still holds the pre-restore recipe.
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == "vc-original")
+            .unwrap();
+        assert_eq!(copy.recipe.adjustments["exposure"], -2.0);
+
+        // Unknown entry ids fail visibly instead of silently resetting.
+        assert!(app.restore_history("nope").is_err());
     }
 }

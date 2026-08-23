@@ -42,6 +42,22 @@ pub struct MaskContext<'a> {
     pub policy: MaskPolicy,
 }
 
+/// Feature-uniform borrow of a Lensfun corrector.
+///
+/// Defined for both `lensfun` and non-`lensfun` builds so [`RenderContext::lensfun`]
+/// is always present. This removes a Cargo feature-unification footgun: when one
+/// workspace crate enables `lumina-core/lensfun`, `RenderContext` gains the field
+/// for *every* dependent, but a dependent whose own `lensfun` feature is off would
+/// otherwise drop its `#[cfg(feature = "lensfun")] lensfun: None` init line and fail
+/// to compile (E0063). See F-098 / CI clippy.
+#[cfg(feature = "lensfun")]
+#[derive(Debug, Clone, Copy)]
+pub struct LensfunCorrectorRef<'a>(pub &'a lumina_lensfun::Corrector);
+
+#[cfg(not(feature = "lensfun"))]
+#[derive(Debug, Clone, Copy)]
+pub struct LensfunCorrectorRef<'a>(pub core::marker::PhantomData<&'a ()>);
+
 /// Everything [`render_frame`] needs beyond the decoded frame.
 #[derive(Debug, Clone)]
 pub struct RenderContext<'a> {
@@ -49,12 +65,12 @@ pub struct RenderContext<'a> {
     pub camera_white_balance: Option<[f32; 4]>,
     pub source_actions: &'a [SourceActionArtifact],
     pub masks: Option<MaskContext<'a>>,
-    /// Optional Lensfun lens corrector (F-098-N1). Only present when the
-    /// `lensfun` feature is enabled. `None` (or the feature being off) falls
+    /// Optional Lensfun lens corrector (F-098-N1). Always present; under the
+    /// `lensfun` feature it carries a borrowed [`LensfunCorrectorRef`] (which
+    /// wraps `lensfun::Corrector`), otherwise it is always `None`. `None` falls
     /// back to the manual distortion/vignette model — no silent behaviour
     /// change in default builds.
-    #[cfg(feature = "lensfun")]
-    pub lensfun: Option<&'a lumina_lensfun::Corrector>,
+    pub lensfun: Option<LensfunCorrectorRef<'a>>,
 }
 
 /// One effective mask layer: the evaluated and frame-sized (bilinearly
@@ -117,7 +133,7 @@ pub fn render_frame(
     // feature) the pipeline is byte-identical to the default path. CA and the
     // recipe's perspective/crop/rotation are still honoured by `apply_geometry`.
     #[cfg(feature = "lensfun")]
-    if let Some(corrector) = context.lensfun {
+    if let Some(LensfunCorrectorRef(corrector)) = context.lensfun {
         frame.apply_geometry(
             context.recipe.geometry.as_ref(),
             context.recipe.lens_correction.as_ref(),
@@ -482,7 +498,6 @@ mod tests {
             recipe,
             camera_white_balance: None,
             source_actions: &[],
-            #[cfg(feature = "lensfun")]
             lensfun: None,
             masks,
         }
@@ -504,7 +519,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[action],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -533,7 +547,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: Some([1.0, 1.0, 1.0, 1.0]),
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -565,7 +578,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[action],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -592,7 +604,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[mismatched_dims],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -611,7 +622,6 @@ mod tests {
                     recipe: &recipe,
                     camera_white_balance: None,
                     source_actions: &[wrong_frame_dims],
-                    #[cfg(feature = "lensfun")]
                     lensfun: None,
                     masks: None,
                 },
@@ -661,7 +671,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
@@ -696,7 +705,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -722,7 +730,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -760,7 +767,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -786,7 +792,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -818,7 +823,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -840,7 +844,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -889,7 +892,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
@@ -928,7 +930,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Warn)),
             },
@@ -953,7 +954,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: Some(mask_context(
                     &copies,
@@ -998,7 +998,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1067,7 +1066,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1080,7 +1078,6 @@ mod tests {
                 recipe: &EditRecipe::default(),
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1135,7 +1132,6 @@ mod tests {
                 recipe: &EditRecipe::default(),
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1175,7 +1171,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1194,7 +1189,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1231,7 +1225,6 @@ mod tests {
                 recipe: &EditRecipe::default(),
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1292,7 +1285,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1323,7 +1315,6 @@ mod tests {
                 recipe: &EditRecipe::default(),
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1357,7 +1348,6 @@ mod tests {
                 recipe: &EditRecipe::default(),
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1383,7 +1373,6 @@ mod tests {
                 recipe: &EditRecipe::default(),
                 camera_white_balance: None,
                 source_actions: &actions,
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1441,7 +1430,6 @@ mod tests {
             recipe: &recipe,
             camera_white_balance: Some([1.2, 1.0, 0.9, 1.0]),
             source_actions: &actions,
-            #[cfg(feature = "lensfun")]
             lensfun: None,
             masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Warn)),
         };
@@ -1494,7 +1482,6 @@ mod tests {
                 recipe: &recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1513,7 +1500,6 @@ mod tests {
                 recipe: &entry.recipe,
                 camera_white_balance: None,
                 source_actions: &[],
-                #[cfg(feature = "lensfun")]
                 lensfun: None,
                 masks: None,
             },
@@ -1605,7 +1591,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 masks: None,
-                lensfun: Some(&corrector),
+                lensfun: Some(LensfunCorrectorRef(&corrector)),
             },
         )
         .unwrap();
@@ -1680,7 +1666,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 masks: None,
-                lensfun: corrector.as_ref(),
+                lensfun: corrector.as_ref().map(LensfunCorrectorRef),
             },
         )
         .unwrap();

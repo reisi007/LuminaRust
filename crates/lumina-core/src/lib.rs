@@ -35,8 +35,8 @@ pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use memory::{MemoryBudget, MemoryBudgetError};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use render::{
-    render_frame, MaskContext, MaskLayerResult, MaskPolicy, RenderContext, RenderOutput,
-    SourceActionArtifact,
+    render_frame, LensfunCorrectorRef, MaskContext, MaskLayerResult, MaskPolicy, RenderContext,
+    RenderOutput, SourceActionArtifact,
 };
 pub use tone::{
     analyze_tone, match_total_exposure, match_total_exposure_masked, suggest_auto_tone,
@@ -323,13 +323,7 @@ impl ImageFrame {
     /// clamped to the frame bounds) into a new frame. Used by the GUI to render
     /// only the visible viewport bounding box when zoomed in (ROI). The cropped
     /// frame keeps `image`-decoded byte order; the alpha channel is copied.
-    pub fn crop_region(
-        &self,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
-    ) -> Result<ImageFrame, CoreError> {
+    pub fn crop_region(&self, x: u32, y: u32, w: u32, h: u32) -> Result<ImageFrame, CoreError> {
         let x = x.min(self.width.saturating_sub(1));
         let y = y.min(self.height.saturating_sub(1));
         let w = w.min(self.width - x);

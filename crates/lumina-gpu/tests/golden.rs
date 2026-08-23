@@ -294,6 +294,7 @@ fn cpu_gpu_golden_equivalence() {
                     camera_white_balance: None,
                     source_actions: &[],
                     masks: None,
+                    lensfun: None,
                 },
             )
             .expect("CPU render_frame must succeed")
@@ -358,6 +359,7 @@ fn cpu_render_oracle_is_deterministic() {
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
+            lensfun: None,
         },
     )
     .expect("first CPU render")
@@ -369,6 +371,7 @@ fn cpu_render_oracle_is_deterministic() {
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
+            lensfun: None,
         },
     )
     .expect("second CPU render")

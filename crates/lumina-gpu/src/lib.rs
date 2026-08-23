@@ -249,12 +249,8 @@ impl GpuContext {
         shaders::write_uniforms(&resources.queue, &pipeline.uniform_buffer, &uniforms);
 
         // Source frame → input texture.
-        let input_texture = shaders::create_input_texture(
-            &resources.device,
-            width,
-            height,
-            "lumina-gpu-input",
-        );
+        let input_texture =
+            shaders::create_input_texture(&resources.device, width, height, "lumina-gpu-input");
         resources.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &input_texture,
@@ -278,12 +274,8 @@ impl GpuContext {
         let sampler = shaders::create_sampler(&resources.device, "lumina-gpu-sampler");
 
         // Render target + readback staging buffer.
-        let output_texture = shaders::create_output_texture(
-            &resources.device,
-            width,
-            height,
-            "lumina-gpu-output",
-        );
+        let output_texture =
+            shaders::create_output_texture(&resources.device, width, height, "lumina-gpu-output");
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bytes_per_row = shaders::aligned_bytes_per_row(width);
         let readback = shaders::create_readback_buffer(
@@ -304,11 +296,12 @@ impl GpuContext {
 
         // Encode: draw the fullscreen triangle into the RGBA8 target, then copy
         // it back to the staging buffer.
-        let mut encoder = resources.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("lumina-gpu-encode"),
-            },
-        );
+        let mut encoder =
+            resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumina-gpu-encode"),
+                });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lumina-gpu-color-tone"),
@@ -363,9 +356,7 @@ impl GpuContext {
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        resources
-            .device
-            .poll(wgpu::Maintain::Wait);
+        resources.device.poll(wgpu::Maintain::Wait);
         rx.recv()
             .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
             .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;

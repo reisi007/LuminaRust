@@ -21,8 +21,8 @@
 //! a right-aligned monospace value that is editable inline (via [`egui::DragValue`]),
 //! tooltips, focus/keyboard accessibility and a grayed disabled state.
 
-use eframe::egui;
 use crate::theme::{ACCENT, DISABLED, HANDLE_BORDER, TRACK_HOVER, TRACK_IDLE};
+use eframe::egui;
 
 /// How a normative value maps to its on-screen representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +197,11 @@ fn draw_track(
 
         // Keyboard: arrow keys nudge by the (fine while Alt held) step.
         if focused {
-            let step = if alt { display_step / 10.0 } else { display_step };
+            let step = if alt {
+                display_step / 10.0
+            } else {
+                display_step
+            };
             let mut nudged = false;
             for (key, dir) in [
                 (egui::Key::ArrowRight, 1.0),
@@ -250,10 +254,8 @@ fn draw_track(
     // Filled portion up to the handle.
     if enabled && frac > 0.0 {
         let fill_right = (track_rect.left() as f64 + frac * track_rect.width() as f64) as f32;
-        let fill_rect = egui::Rect::from_min_max(
-            track_rect.min,
-            egui::pos2(fill_right, track_rect.max.y),
-        );
+        let fill_rect =
+            egui::Rect::from_min_max(track_rect.min, egui::pos2(fill_right, track_rect.max.y));
         if fill_rect.width() > 0.5_f32 {
             painter.rect_filled(fill_rect, rounding, fill);
         }
@@ -415,9 +417,8 @@ pub fn lr_slider<T: Scalar>(
         ui.style_mut().drag_value_text_style = prev_text_style;
         if value_changed {
             let clamped = edit_value.clamp(display_min, display_max);
-            *value = T::from_f64(
-                from_display(clamped, spec.scale).clamp(spec.range.0, spec.range.1),
-            );
+            *value =
+                T::from_f64(from_display(clamped, spec.scale).clamp(spec.range.0, spec.range.1));
             action = SliderAction::Changed;
         }
 

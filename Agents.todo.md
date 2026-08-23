@@ -610,59 +610,62 @@ Subagenten steht aus, siehe unten):
   CLI/MCP GPU-first-Wiring mit sichtbarem Backend-Log
   (`render backend: gpu (Apple M5 Pro …)`), `LUMINA_MCP_LOG` implementiert.
 
-### Neu aus manuellem Test 2026-08-23 (offen)
+### Neu aus manuellem Test 2026-08-23
 
-- [ ] **GUI-CRASH-1** Release-Panic im Zoom/Pan-Pfad nach dem Debounce-
-      Vollrender: `f32 clamp "min > max": min = 444.9877, max = 444.98105`
-      (`gui.log` Zeile ~66178, Panic-Hook + Ringbuffer funktionieren). Ursache:
-      Rect-/Pos-Berechnung aus veraltetem Zoom-State wird invertiert
-      (Rundungsdifferenz). Fix: clamp-Reihenfolgen absichern
-      (`Rect::from_min_size` + `.max(0.0)`-Breiten, Epsilon-Guards),
-      Division durch 0 in `to_normalized` bei 0-Rect vermeiden.
-      In Arbeit (Fix-Batch läuft).
-- [ ] **GUI-FIT-1** „Fit" zeigt das Bild weiterhin kleiner als das Panel
-      (object-contain nutzt evtl. falsche verfügbare Fläche — Navigator/rechte
-      Leiste müssen VOR der Preview allokiert sein; kein `min(1.0)`-Cap im
-      Fit-Modus; Textur 5774×3849 muss voll ins zentrale Pane gemappt werden).
-      In Arbeit (Fix-Batch läuft).
-- [ ] **GUI-AUTOLOAD-1** Auto-Load des ersten RAW greift laut Tester nicht
-      (Log zeigt zwar `loaded image … cr3`, aber Nutzer-Erlebnis: kein Bild).
-      Verifizieren, ob Decode-Ergebnis im Update-Loop konsumiert wird
-      (`poll_decode`), bevor „kein Bild“ angezeigt wird. In Arbeit.
-- [ ] **GUI-RAWONLY-1** Nicht-RAWs erscheinen trotz Filter in Navigator/
-      Filmstrip → RAW-only-Filter direkt in beiden Draw-Loops erzwingen
-      (`is_raw_name(&e.name)`, unabhängig von `is_supported_image`, das für
-      Tests breiter ist). In Arbeit.
-- [ ] **GUI-60FPS-1** Flüssige 60 FPS bei Slider/Maske fehlen noch:
-      Readback (`map_async`) aus dem GPU-Pfad entfernen und direkt in die
-      egui-Textur/Swapchain rendern; Masken-Brush als R8/R16-Maskentextur im
-      VRAM + Overlay-Shader (nur geänderte 512²-Kachel neu zeichnen).
-      Nächster Batch nach Crash-Fix. Ziel: Slider-Drag < 16 ms Frame-Zeit.
-- [ ] **GPU-STAGE-1** Masken-/WB-/SourceAction-Stufen auf der GPU ergänzen
-      (derzeit rendert der GPU-Pfad diese Stufen noch nicht; CPU-Pfad bleibt
-      Referenz). Nach GUI-60FPS-1.
-- [ ] **BENCH-BASELINE-1** Nach Stabilisierung: Baseline-Capture für die 6
-      GPU-Benchmark-IDs in `perf/baseline.json` und Budgets auf `gate:true`
-      stellen (aktuell report-only, F-074-N6 draft).
+**Verifiziert erledigt (2026-08-23, `bbb0cba`, unabhängige Verifizierung):**
+- **GUI-CRASH-1** Release-Panic `f32 clamp min>max` (Fix: order-independent
+  clamp in `draw_preview` + div-by-zero guards in `to_normalized`/scroll-zoom;
+  Regression `to_normalized_is_finite_for_zero_size_rect`).
+- **GUI-FIT-1** „Fit“ kleiner war Folgesymptom des Panics; Fit ist uncapped
+  object-contain und nutzt korrekt das zentrale Pane nach Navigator.
+- **GUI-AUTOLOAD-1** Auto-Load robuster (RAW-only `is_raw_name`,
+  `auto_load_attempted` + `decode_rx.is_none()` Gate).
+- **GUI-RAWONLY-1** Filmstrip + Navigator RAW-only-Filter (`is_raw_name`).
 
-### Lightroom-like UI (2026-08-23 beschlossen, in Arbeit)
+Offen (nächste Batches):
 
-- [ ] **GUI-LR-RIGHT-1** Rechtes Develop-Panel um Lightroom-Standards erweitern:
-      Crop-/Histogramm-Thumbnail oben (mit Crop-Rechteck-Overlay aus
-      `Geometry`), Presets-Sektion (Liste aus Sidecar-`document.presets` mit
-      Hover/Apply + Create-Preset-Flow konsolidiert), History-Sektion
-      (reverse-chronologisch, Klick = Rezept-Zustand wiederherstellen,
-      nicht-destruktiv bis „Save Recipe/Sidecar“).
-      In Arbeit (Subagent läuft).
-- [ ] **GUI-LR-LIBRARY-1** Library-Modul: linker Ordnerbaum
-      (`SidePanel::left`, Root = 2 Vorfahren über `self.directory` bzw.
-      `$HOME`, lazy `read_dir` beim Aufklappen, RAW-Counts je Ordner,
-      Klick = `set_directory`) + zentriertes Thumbnail-Grid
-      (Doppelklick → `open_file` + Wechsel nach Develop).
-      In Arbeit (Subagent läuft).
-- **Abnahmekriterien (beide):** Build/Clippy/≥50 Tests grün; History-Restore
-  ändert nur Session-Rezept bis explizites Speichern; Ordnerbaum ohne neue
-  Dependencies; `trace!` für Restore/Preset-Apply/Folder-Select.
+- [ ] **GUI-60FPS-1** Flüssige 60 FPS bei Slider/Maske: Readback (`map_async`)
+      raus, direkt in egui-Textur/Swapchain; Masken-Brush als VRAM-Textur +
+      Overlay-Shader (nur geänderte 512²-Kachel). Ziel < 16 ms.
+- [ ] **GPU-STAGE-1** Masken-/WB-/SourceAction-Stufen auf GPU (derzeit nur
+      Tone-Stage; CPU bleibt Referenz). Nach GUI-60FPS-1.
+- [ ] **BENCH-BASELINE-1** Baseline-Capture 6 GPU-Benchmark-IDs
+      `perf/baseline.json` → `gate:true` (aktuell report-only, F-074-N6 draft).
+
+### Lightroom-like UI (2026-08-23 beschlossen)
+
+**Verifiziert erledigt (2026-08-23, Subagent `ses_fd28c399…`, unabhängige
+Verifizierung):**
+- **GUI-LR-RIGHT-1** Rechtes Panel: Crop-Thumbnail (120 px Head,
+  `Geometry.crop` Free-Overlay, `crop_overlay_rect`), Presets-Sektion
+  (`document.presets`, Hover/Apply, Create konsolidiert; `Str::PresetsSection`),
+  History-Sektion (reverse-chronologisch, `restore_history()` nicht-destruktiv).
+- **GUI-LR-LIBRARY-1** Library: linker Ordnerbaum (`SidePanel::left "folders"`,
+  Root `$HOME`/grandparent, `BTreeSet`/`BTreeMap` lazy `read_dir`,
+  RAW-Counts `FOLDER_SCAN_DEPTH=3`, `set_directory`), zentriertes
+  Thumbnail-Grid (`ensure_thumbnail`, Doppelklick → `open_file` + Develop).
+- Verifiziert: `cargo build -p lumina-gui` grün,
+  `cargo clippy -p lumina-gui` clean,
+  `cargo test -p lumina-gui` **54 passed** (+4: `library_root_prefers_home…`,
+  `crop_overlay_rect…`, `history_restore…`, `to_normalized…`),
+  `cargo fmt -- --check` clean; `Str` `Folders/History/NoHistory/NoPresets/
+  HistoryEntryMissing`.
+
+Offen: kittest Snapshots für Library-Layout brauchen GPU-Regenerierung
+(`--ignored`); Crop-Overlay ignoriert Rotation/Mirroring (display-only).
+
+### CI-Green 2026-08-23
+
+**Verifiziert erledigt:** `lensfun` Feature-Unification (E0063): `RenderContext.lensfun`
+via `LensfunCorrectorRef<'a>` immer vorhanden (cfg-aware newtype
+`#[derive(Debug,Clone,Copy)]` in `render.rs`, `lensfun: None,`-Gates entfernt,
+`Some`/`as_ref` → `LensfunCorrectorRef` + `None`-Fallback, `LensfunCorrectorRef`
+re-export). Betrifft `lumina-core`, `lumina-cli`, `lumina-mcp`, `lumina-bench`,
+`lumina-gpu/tests/golden.rs`; `lumina-gui` bleibt `default=["lensfun","gpu"]`.
+Verifiziert: `cargo build -p lumina-core`/`--features lensfun`,
+`cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,
+lumina-bench/raw-bench" -- -D warnings` grün,
+`cargo test -p lumina-core` 207/210 passed (Tone-Message `0e0..=1e0` korrigiert).
 
 ## Abnahmekriterien
 

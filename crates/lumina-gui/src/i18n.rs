@@ -51,6 +51,9 @@ pub enum Str {
     Optics,
     Geometry,
     Masking,
+    Folders,
+    History,
+    PresetsSection,
     Navigator,
     Preview,
     Zoom,
@@ -182,7 +185,6 @@ pub enum Str {
     ApplyPreset,
     RenderApply,
     SaveRecipe,
-    Preset,
     NotAvailable,
     RenderStateStale,
     RenderStateCurrent,
@@ -223,6 +225,9 @@ pub enum Str {
     SaveNeedsLocalPath,
     SidecarSaved,
     MaskUnavailable,
+    HistoryEntryMissing,
+    NoHistory,
+    NoPresets,
 
     // Local-adjustment validation & status literals that were previously free-form
     // German strings. UI language is English (F-100); routed through these keys so
@@ -291,6 +296,9 @@ impl Str {
             Str::Optics => "Optics",
             Str::Geometry => "Geometry",
             Str::Masking => "Masking",
+            Str::Folders => "Folders",
+            Str::History => "History",
+            Str::PresetsSection => "Presets",
             Str::Navigator => "Navigator",
             Str::Preview => "Preview",
             Str::Zoom => "Zoom",
@@ -415,7 +423,6 @@ impl Str {
             Str::ApplyPreset => "Create & Apply Preset",
             Str::RenderApply => "Render / Apply",
             Str::SaveRecipe => "Save Recipe / Sidecar",
-            Str::Preset => "Preset",
             Str::NotAvailable => "Not available",
             Str::RenderStateStale => "Render state stale / pending",
             Str::RenderStateCurrent => "Render state current",
@@ -456,6 +463,9 @@ impl Str {
             Str::MaskUnavailable => {
                 "Warning: mask unavailable; it is not applied in the preview"
             }
+            Str::HistoryEntryMissing => "History entry not found",
+            Str::NoHistory => "No history entries",
+            Str::NoPresets => "No presets saved yet",
 
             Str::RelativeExposureRequiresAutoTone => {
                 "Relative Exposure requires active Auto-Tone"

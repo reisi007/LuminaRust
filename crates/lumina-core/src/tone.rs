@@ -458,7 +458,7 @@ mod tests {
             match_total_exposure(&dark, f64::NAN)
                 .unwrap_err()
                 .to_string(),
-            "invalid target_luminance: must be finite and in 0..=1, got NaN"
+            "invalid target_luminance: must be finite and in 0e0..=1e0, got NaN"
         );
     }
 
