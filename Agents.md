@@ -268,6 +268,11 @@ Eine Änderung ist erst fertig, wenn:
   verändert.
 - Keine stillen Fallbacks bei veralteten Rezepten, Farbprofilen, Masken oder
   fehlenden Artefakten.
+- Keine vorbestehenden Build-/Clippy-/Test-Fehler oder -Warnungen werden als
+  „bekannt", „vorbestehend" oder „nicht Teil des Gates" abgehakt. Jeder solche
+  Befund wird vor dem Abschluss eines Batches sauber behoben — in der Regel
+  durch korrektes `#[cfg]`-Gating oder echte Fehlerbehandlung, nicht durch
+  `allow`-Attribute oder das Ausklammern aus den Prüfschritten.
 - Keine Pipeline-Stufe ohne definierte Reihenfolge, Versionierung und Tests.
 - Keine Rezeptfeldänderung ohne Schema- und Migrationsentscheidung.
 - Keine absolute Pfadangabe in einem portablen Sidecar.
