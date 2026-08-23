@@ -2356,7 +2356,9 @@ mod tests {
         let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
         let visible_mean = rendered
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(index, _)| *index >= 32)
             .map(|(_, pixel)| {

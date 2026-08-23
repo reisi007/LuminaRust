@@ -2807,6 +2807,9 @@ impl LuminaApp {
 
             ui.put(rect, egui::Image::from_texture(&texture));
 
+            // WB eyedropper needs the source-coordinate mapping, which is part
+            // of the native (non-wasm) capability set.
+            #[cfg(not(target_arch = "wasm32"))]
             if pick && response.clicked() {
                 if let Some(pos) = response.interact_pointer_pos() {
                     let (nx, ny) = Self::to_normalized(
@@ -5612,6 +5615,8 @@ impl eframe::App for LuminaApp {
             }
             // Library: Lightroom-like grid view (folders tree left, RAW
             // thumbnail grid center); Develop/Export keep the large preview.
+            // Under wasm32 the grid import path is not available; fall back to
+            // the plain preview like the other modules.
             Module::Library => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -5619,10 +5624,13 @@ impl eframe::App for LuminaApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    self.draw_preview_area(ctx, ui);
+                    self.draw_preview(ui);
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             _ => self.draw_preview_area(ctx, ui),
+            #[cfg(target_arch = "wasm32")]
+            _ => self.draw_preview(ui),
         });
         if let Some(t0) = perf_t0 {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;

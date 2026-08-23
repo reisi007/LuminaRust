@@ -213,7 +213,7 @@ pub enum CoreError {
 ///
 /// When the `parallel` feature is enabled the chunks are processed with
 /// `rayon::par_chunks_exact_mut(4)`; otherwise sequentially with
-/// `chunks_exact_mut(4)` (which LLVM can auto-vectorize). Every closure only
+/// `as_chunks_mut::<4>()` (which LLVM can auto-vectorize). Every closure only
 /// touches its own 4-byte slice, so execution order is irrelevant and the result
 /// is bit-identical to a sequential pass. Use this only for order-independent
 /// per-pixel work (the adjustment passes read and write a single pixel).
@@ -233,7 +233,11 @@ where
     F: Fn(&mut [u8]),
 {
     debug_assert_eq!(pixels.len() % 4, 0);
-    pixels.chunks_exact_mut(4).for_each(f);
+    pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .for_each(|pixel| f(&mut pixel[..]));
 }
 
 impl ImageFrame {
@@ -518,7 +522,9 @@ impl ImageFrame {
                 // JPEG is RGB; drop the alpha channel. Build it directly from
                 // the (possibly mutated) buffer without an intermediate clone.
                 let rgb: Vec<u8> = pixels_ref
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .flat_map(|pixel| pixel[..3].iter().copied())
                     .collect();
                 JpegEncoder::new_with_quality(&mut output, options.quality).write_image(
@@ -1904,7 +1910,7 @@ fn apply_presence(pixels: &mut [u8], width: u32, height: u32, p: &lumina_sidecar
     sorted.sort_by(|a, b| a.total_cmp(b));
     let a = sorted[((sorted.len() as f32 * 0.95) as usize).min(sorted.len().saturating_sub(1))]
         .max(0.05);
-    for (index, px) in pixels.chunks_exact_mut(4).enumerate() {
+    for (index, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let base_t = (1.0 - 0.95 * dark[index] / a).clamp(0.05, 1.0);
         let t = if p.dehaze > 0.0 {
             1.0 - p.dehaze * (1.0 - base_t)
@@ -2021,7 +2027,9 @@ fn apply_sharpening(
     let w = width as usize;
     let h = height as usize;
     let lum: Vec<f32> = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32)
         .collect();
     let blur = |radius: f32| -> Vec<f32> {
@@ -2069,7 +2077,7 @@ fn apply_sharpening(
             maxg = maxg.max(gradients[y * w + x]);
         }
     }
-    for (idx, p) in pixels.chunks_exact_mut(4).enumerate() {
+    for (idx, p) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let d = s.detail * (lum[idx] - fine[idx]) + (1.0 - s.detail) * (lum[idx] - coarse[idx]);
         let edge = if maxg > 0.0 {
             (gradients[idx] / maxg).clamp(0.0, 1.0)
@@ -3074,7 +3082,9 @@ mod tests {
             [7, 19, 31]
         );
         assert!(first.pixels[..]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| &pixel[..3])
             .any(|channel| *channel == 0 || *channel == 255));
     }
@@ -3742,12 +3752,16 @@ mod tests {
         clarity.apply_recipe(&p(0.0, 1.0)).unwrap();
         let texture_changed = texture
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] != 20 && px[0] != 200)
             .count();
         let clarity_changed = clarity
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] != 20 && px[0] != 200)
             .count();
         assert!(clarity_changed > texture_changed);
@@ -4369,7 +4383,7 @@ mod tests {
         };
         let mut f = ImageFrame::new(8, 6, input.clone()).unwrap();
         f.apply_recipe(&r).unwrap();
-        for px in f.pixels.chunks_exact(4) {
+        for px in f.pixels.as_chunks::<4>().0 {
             assert_eq!(px[3], 77);
             assert_eq!(
                 px[0] as i32 - input[0] as i32,
@@ -4502,46 +4516,76 @@ mod tests {
             blacks,
         } = params;
         if let Some(gains) = wb_gains {
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 for (channel, gain) in pixel[..3].iter_mut().zip(*gains) {
                     *channel = ((*channel as f64 * gain).round()).clamp(0.0, 255.0) as u8;
                 }
             }
         }
         if let Some(multiplier) = exposure_multiplier {
-            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+            for channel in pixels
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .flat_map(|pixel| &mut pixel[..3])
+            {
                 *channel = ((*channel as f64 * multiplier).round()).clamp(0.0, 255.0) as u8;
             }
         }
         if let Some(factor) = contrast_factor {
-            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+            for channel in pixels
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .flat_map(|pixel| &mut pixel[..3])
+            {
                 *channel =
                     (((*channel as f64 - 128.0) * factor + 128.0).round()).clamp(0.0, 255.0) as u8;
             }
         }
         if let Some(shadows) = shadows {
-            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+            for channel in pixels
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .flat_map(|pixel| &mut pixel[..3])
+            {
                 let x = *channel as f64 / 255.0;
                 let weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
                 *channel = ((x + shadows * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
         if let Some(highlights) = highlights {
-            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+            for channel in pixels
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .flat_map(|pixel| &mut pixel[..3])
+            {
                 let x = *channel as f64 / 255.0;
                 let weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
                 *channel = ((x + highlights * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
         if let Some(whites) = whites {
-            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+            for channel in pixels
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .flat_map(|pixel| &mut pixel[..3])
+            {
                 let x = *channel as f64 / 255.0;
                 let weight = ((x - 0.5) / 0.5).max(0.0);
                 *channel = ((x + whites * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
         if let Some(blacks) = blacks {
-            for channel in pixels.chunks_exact_mut(4).flat_map(|pixel| &mut pixel[..3]) {
+            for channel in pixels
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .flat_map(|pixel| &mut pixel[..3])
+            {
                 let x = *channel as f64 / 255.0;
                 let weight = ((0.5 - x) / 0.5).max(0.0);
                 *channel = ((x - blacks * weight * 0.25).clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -4626,7 +4670,7 @@ mod tests {
 
                                     let mut optimized = vec![0u8; 48 * 4];
                                     let mut reference = vec![0u8; 48 * 4];
-                                    for pixel in optimized.chunks_exact_mut(4) {
+                                    for pixel in optimized.as_chunks_mut::<4>().0 {
                                         pixel[0] = rng();
                                         pixel[1] = rng();
                                         pixel[2] = rng();

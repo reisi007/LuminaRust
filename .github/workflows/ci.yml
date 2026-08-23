@@ -206,7 +206,10 @@ jobs:
       - name: Check portable core and GUI
         run: |
           cargo check -p lumina-core --target wasm32-unknown-unknown
-          cargo check -p lumina-gui --target wasm32-unknown-unknown
+          # lumina-gui's default features (`lensfun`, `gpu`) are native-only;
+          # the documented wasm32 capability boundary is the check WITHOUT
+          # default features (see crates/lumina-gui/Cargo.toml).
+          cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features
 
   docs:
     name: Documentation checks

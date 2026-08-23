@@ -377,7 +377,7 @@ mod tests {
 
     fn frame(width: u32, height: u32, rgb: [u8; 3]) -> ImageFrame {
         let mut pixels = vec![0u8; (width * height * 4) as usize];
-        for p in pixels.chunks_exact_mut(4) {
+        for p in pixels.as_chunks_mut::<4>().0 {
             p[0] = rgb[0];
             p[1] = rgb[1];
             p[2] = rgb[2];

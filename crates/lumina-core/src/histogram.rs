@@ -62,7 +62,7 @@ impl LuminanceHistogram {
     /// all-zero histogram without panics or division by zero.
     pub fn new(frame: &ImageFrame) -> Self {
         let mut bins = vec![0u64; BIN_COUNT];
-        for pixel in frame.pixels.chunks_exact(4) {
+        for pixel in frame.pixels.as_chunks::<4>().0 {
             let luminance = (REC709_WEIGHTS[0] * f64::from(pixel[0])
                 + REC709_WEIGHTS[1] * f64::from(pixel[1])
                 + REC709_WEIGHTS[2] * f64::from(pixel[2]))

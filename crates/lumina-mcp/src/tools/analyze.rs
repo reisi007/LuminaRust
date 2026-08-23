@@ -84,7 +84,7 @@ fn channel_histograms(frame: &ImageFrame) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
     let mut red = vec![0u64; 256];
     let mut green = vec![0u64; 256];
     let mut blue = vec![0u64; 256];
-    for pixel in frame.pixels.chunks_exact(4) {
+    for pixel in frame.pixels.as_chunks::<4>().0 {
         red[pixel[0] as usize] += 1;
         green[pixel[1] as usize] += 1;
         blue[pixel[2] as usize] += 1;
@@ -99,7 +99,7 @@ fn channel_stats(frame: &ImageFrame) -> Value {
     let mut sum_squares = [0f64; 3];
     let mut minimum = [255u8; 3];
     let mut maximum = [0u8; 3];
-    for pixel in frame.pixels.chunks_exact(4) {
+    for pixel in frame.pixels.as_chunks::<4>().0 {
         for channel in 0..3 {
             let value = pixel[channel] as f64;
             sums[channel] += value;
@@ -136,7 +136,7 @@ fn channel_stats(frame: &ImageFrame) -> Value {
 fn stddev_luminance(frame: &ImageFrame, mean: f64) -> f64 {
     let total = (frame.width as usize * frame.height as usize).max(1) as f64;
     let mut sum_squares = 0.0;
-    for pixel in frame.pixels.chunks_exact(4) {
+    for pixel in frame.pixels.as_chunks::<4>().0 {
         let luminance =
             (0.2126 * pixel[0] as f64 + 0.7152 * pixel[1] as f64 + 0.0722 * pixel[2] as f64)
                 / 255.0;
@@ -148,7 +148,7 @@ fn stddev_luminance(frame: &ImageFrame, mean: f64) -> f64 {
 /// Most frequent quantized colors, sorted by frequency (then key for stability).
 fn dominant_colors(frame: &ImageFrame, count: usize) -> Vec<Value> {
     let mut frequencies: HashMap<u32, u64> = HashMap::new();
-    for pixel in frame.pixels.chunks_exact(4) {
+    for pixel in frame.pixels.as_chunks::<4>().0 {
         // Quantize each channel to its top 4 bits for a stable, coarse palette.
         let key = ((pixel[0] as u32 & 0xF0) << 16)
             | ((pixel[1] as u32 & 0xF0) << 8)

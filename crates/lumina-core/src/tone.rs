@@ -90,12 +90,24 @@ fn mean_luminance(frame: &ImageFrame) -> f64 {
     if count == 0 {
         return 0.0;
     }
-    let sum: f64 = frame.pixels.chunks_exact(4).map(luminance_of).sum();
+    let sum: f64 = frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| luminance_of(pixel))
+        .sum();
     sum / count as f64
 }
 
 pub fn analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
-    let mut v: Vec<f64> = frame.pixels.chunks_exact(4).map(luminance_of).collect();
+    let mut v: Vec<f64> = frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| luminance_of(pixel))
+        .collect();
     if v.is_empty() {
         return ToneAnalysis {
             mean: 0.0,
@@ -807,7 +819,9 @@ mod tests {
     fn reference_analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
         let mut v: Vec<f64> = frame
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 (0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2]))
                     / 255.0

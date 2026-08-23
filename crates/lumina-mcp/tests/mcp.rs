@@ -63,7 +63,7 @@ fn tool_error_name(server: &mut Server, name: &str, args: Value) -> String {
 
 fn make_png(path: &Path, width: u32, height: u32) {
     let mut pixels = vec![0u8; (width * height * 4) as usize];
-    for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = (index % width as usize) as u8;
         let y = (index / width as usize) as u8;
         pixel[0] = x;

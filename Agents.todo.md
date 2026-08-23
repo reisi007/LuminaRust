@@ -839,16 +839,23 @@ unabhängige Verifizierung `ses_fd1e0f491` — BESTANDEN):**
   konsistentes Bild A → kein Phantom-Sidecar, Fehler sichtbar.
   Verifiziert: fmt clean, clippy `-p lumina-gui -D warnings` 0,
   `cargo test -p lumina-gui` **62 passed** (+8 neue Tests).
-- [ ] **REVIEW-GUI-WASM-1** wasm32-Build von lumina-gui bricht
-  (hoch): `to_normalized`/`image_dims` sind cfg(not(wasm32)), werden
-  aber in `draw_preview` ungegate aufgerufen; `draw_preview_area`
-  ebenfalls (lib.rs:2594, 2547–2627, 5029). Verifiziert:
+
+**Verifiziert erledigt (2026-08-23, Implementierung `ses_fd04bd02d`,
+unabhängige Verifizierung `ses_fd03c318c` — BESTANDEN):**
+- **REVIEW-GUI-WASM-1** Alle 4 E0599 behoben (WB-Eyedropper nativ gegatet;
+  Library-wasm-Zweig + Catch-all nutzen `draw_preview`). Verifiziert:
   `cargo check --target wasm32-unknown-unknown --no-default-features -p
-  lumina-gui` schlägt fehl (4× E0599) — CI prüft das offenbar nicht.
-  Fix: Call-Sites gaten oder wasm-Stubs ergänzen; wasm32-Check für gui
-  ohne Default-Features in CI aufnehmen.
-  (Update Nacharbeit PANROI: `export_to`-Gate-Fix behebt eine der 4
-  Lücken; aktuell noch 4→3? — beim Fix zählen und hier korrigieren.)
+  lumina-gui` grün; natives Verhalten unverändert. ci.yml wasm-Job prüft
+  gui jetzt mit `--no-default-features` (Capability-Grenze).
+  Folgeaufgabe (niedrig): wasm32-Check erzeugt 20 Warnungen (u.a.
+  dead_code `prefetch_order`) — ohne `-D warnings`, ggf. aufräumen.
+- Zusätzlich im Batch: **34× chunks_exact_to_as_chunks-Fixes** (Clippy
+  1.98, CI-Rust checks) in lumina-core/onnx/mcp/cli — verhaltensidentisch
+  verifiziert; clippy workspace `-D warnings` 0, core 214/217+7,
+  sidecar-zdata 94, gpu 7, gui 81.
+
+**Verifiziert erledigt (2026-08-23, Implementierung `ses_fd1f42935`,
+unabhängige Verifizierung `ses_fd1e0f491` — BESTANDEN):**
 - [ ] **REVIEW-RAW-ABI-1** Vendored `libraw-sys`-Structlayouts passen
   nicht zur gelinkten LibRaw 0.22.2 (hoch; empirisch per Offset-Probes
   verifiziert: `params` 1512 vs. real 5232, `color` 1888 vs. 5592,

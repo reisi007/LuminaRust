@@ -62,7 +62,7 @@ fn brighter_pair_strategy() -> impl Strategy<Value = (ImageFrame, ImageFrame)> {
     frame_strategy().prop_map(|mut darker| {
         darker.pixels[0] = darker.pixels[0].min(245);
         let mut brighter = darker.clone();
-        for pixel in brighter.pixels.chunks_exact_mut(4) {
+        for pixel in brighter.pixels.as_chunks_mut::<4>().0 {
             pixel[0] = pixel[0].saturating_add(10);
         }
         (darker, brighter)
@@ -522,7 +522,7 @@ proptest! {
     #[test]
     fn analyze_tone_ignores_alpha(frame in frame_strategy()) {
         let mut no_alpha = frame.clone();
-        for pixel in no_alpha.pixels.chunks_exact_mut(4) {
+        for pixel in no_alpha.pixels.as_chunks_mut::<4>().0 {
             pixel[3] = 0;
         }
         prop_assert_eq!(analyze_tone(&frame), analyze_tone(&no_alpha));

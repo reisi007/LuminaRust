@@ -376,7 +376,9 @@ fn apply_source_actions(
         }
         for (i, (pixel, value)) in frame
             .pixels
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(region.values.iter())
             .enumerate()
         {
