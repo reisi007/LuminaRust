@@ -327,13 +327,19 @@ impl GpuContext {
                 vram: std::sync::Mutex::new(None),
                 recipe: None,
             }),
-            // Degrade gracefully to the CPU fallback rather than failing the app.
-            Err(_err) => Ok(Self {
-                resources: None,
-                pipeline: std::sync::Mutex::new(None),
-                vram: std::sync::Mutex::new(None),
-                recipe: None,
-            }),
+            // Degrade gracefully to the CPU fallback rather than failing the
+            // app — but never silently (REVIEW-GPU-N1, Agents.md: no silent
+            // fallbacks): the adapter/device failure is logged loudly so
+            // headless or misconfigured machines stay diagnosable.
+            Err(err) => {
+                log::warn!("GPU initialization failed, falling back to CPU rendering: {err}");
+                Ok(Self {
+                    resources: None,
+                    pipeline: std::sync::Mutex::new(None),
+                    vram: std::sync::Mutex::new(None),
+                    recipe: None,
+                })
+            }
         }
     }
 
@@ -928,14 +934,17 @@ impl GpuContext {
         let zoom = (frame.width as f32 / viewport.width.max(1.0)).clamp(0.01, 100.0);
         let pyramid = crate::tiling::DraftPyramid::new(frame.width, frame.height);
         let lvl = pyramid.level_for_zoom(zoom);
+        // REVIEW-GPU-LEVELS-1: the ROI expansion routes through the pyramid, so
+        // the logged level and the produced tile keys can no longer diverge.
         let cache = crate::tiling::TiledCache::new(64);
-        let keys = cache.keys_for_viewport(&viewport, zoom);
+        let keys = cache.keys_for_viewport(&pyramid, &viewport, zoom);
         log::debug!(
-            "render_draft: gpu scaffold (adapter present), {} tiles for viewport {:?} @ zoom {:.3} (pyramid level {})",
+            "render_draft: gpu scaffold (adapter present), {} tiles for viewport {:?} @ zoom {:.3} (pyramid level {}, cache generation {})",
             keys.len(),
             viewport,
             zoom,
-            lvl
+            lvl,
+            cache.generation()
         );
         // Real GPU tile upload + draw is filled in by the shader/tiling subagents.
         // Bootstrapping: produce real pixels via the CPU reference.
@@ -1268,14 +1277,15 @@ fn init_gpu_resources() -> Result<GpuResources, GpuError> {
     });
 
     // Since wgpu 25, `request_adapter` returns a `Result` with a descriptive
-    // error for the "no adapter" case.
+    // error for the "no adapter" case. The cause is preserved in the payload so
+    // the CPU-fallback warning (`GpuContext::new`) can surface it.
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
         apply_limit_buckets: false,
     }))
-    .map_err(|_| GpuError::AdapterUnavailable("no Metal adapter found".into()))?;
+    .map_err(|err| GpuError::AdapterUnavailable(format!("no Metal adapter found: {err}")))?;
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("lumina-gpu"),

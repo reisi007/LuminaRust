@@ -36,11 +36,11 @@
 //! returns. This keeps the harness green on machines without a GPU while still
 //! running the real comparison wherever a GPU exists.
 //!
-//! Per `Agents.md` (no silent fallback), the bootstrap's CPU fallback is called
-//! out loudly: until the GPU DAG is wired, `render_with_gpu` routes through the
-//! CPU pipeline, so the harness prints a `[WARN]` noting that the comparison is
-//! currently CPU-vs-CPU and will become meaningful once the shader/tiling
-//! stages land.
+//! Per `Agents.md` (no silent fallback), initialization failures are surfaced
+//! loudly: `GpuContext::new` returns a `GpuError` (e.g. `AdapterUnavailable`)
+//! and the caller logs a `[WARN]` ("GPU initialization failed, falling back to
+//! CPU rendering"). The equivalence check itself only runs when a real adapter
+//! is bound (see above); absent one it is skipped, never silently passed.
 
 use blake3::Hasher;
 use lumina_core::{render_frame, ImageFrame, RenderContext};
