@@ -276,8 +276,11 @@ Eine Änderung ist erst fertig, wenn:
 ## Dokumentations- und Todo-Regeln
 
 - `Agents.todo.md` enthält ausschließlich offene, umsetzbare Aufgaben.
-- Abgeschlossene Punkte werden nicht nur abgehakt, sondern nach bestätigter
-  Verifizierung aus der Datei entfernt.
+- Abgeschlossene Punkte werden nach bestätigter Verifizierung **komplett aus
+  der Datei entfernt** — niemals nur abhaken und niemals in einen neuen
+  Bereich/Block (z. B. „Erledigt", „Verifiziert", „Done") verschieben. Es gibt
+  keine dauerhafte Liste abgehakter Aufgaben; erledigter Zustand lebt in der
+  Git-Historie und den Feature-Dokumenten weiter.
 - Eine Aufgabe darf nur entfernt werden, wenn der Verifizierungs-Agent die
   Implementierung und Testabdeckung bestätigt hat.
 - Neue Erkenntnisse oder Folgearbeiten werden als neue offene Aufgaben ergänzt.
