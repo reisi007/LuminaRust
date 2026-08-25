@@ -2284,6 +2284,21 @@ impl LuminaApp {
                 Vec::new()
             }
         };
+        // REVIEW-CORE-DIGEST-WIRING: this preview key deliberately stays on the
+        // neutral `RenderKey::new` defaults instead of attaching the `with_*`
+        // builders, because neither builder input exists at this site:
+        // - No `with_export_options`: the render target is a plain in-memory
+        //   RGBA8 frame (`format: "rgba8"`) displayed as a texture; it is never
+        //   encoded here, so there are no encoder parameters to identify. The
+        //   core digest distinguishes that state explicitly (`None` differs
+        //   from every attached `Some(_)`), and the real export path
+        //   (`export_to`) re-renders from the original via `export_image`
+        //   without consulting any cache keyed by this preview key.
+        // - No `with_source_action_hashes`: the `RenderContext` above passes
+        //   `source_actions: &[]`, so no repair-region pixels were applied and
+        //   the empty hash list truthfully describes exactly these pixels.
+        //   Recipe-referenced artifact checksums must not be mixed in here —
+        //   that would claim repair content this frame does not contain.
         self.render_key = Some(RenderKey::new(
             source_hash,
             if self.source_is_raw {
@@ -6286,6 +6301,67 @@ mod tests {
         app.render().unwrap();
         assert!(app.render_key().is_some());
         assert_eq!(app.tone_analysis().unwrap().sample_count, 2);
+    }
+
+    /// REVIEW-CORE-DIGEST-WIRING: pins the contract of the single RenderKey
+    /// construction site (the preview render). Identical inputs must produce
+    /// an identical digest (cache-hit contract), and the digest must separate
+    /// the deliberately plain in-memory preview from every attached export-
+    /// option set or source-action artifact hash list.
+    #[test]
+    fn render_key_digest_separates_export_options_and_source_action_hashes() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.render().unwrap();
+        let key = app.render_key().expect("render key after render").clone();
+
+        // Same inputs -> same digest: an unchanged state keeps cache identity.
+        app.render().unwrap();
+        assert_eq!(
+            key.digest(),
+            app.render_key().expect("re-rendered").digest()
+        );
+
+        // The preview is a plain in-memory frame render: no encoder options,
+        // no applied source-action artifacts.
+        assert!(key.export_options.is_none());
+        assert!(key.source_action_artifact_hashes.is_empty());
+
+        // Varying export options change the digest ...
+        let quality_90 = key.clone().with_export_options(ExportOptions {
+            quality: 90,
+            ..Default::default()
+        });
+        let quality_60 = key.clone().with_export_options(ExportOptions {
+            quality: 60,
+            ..Default::default()
+        });
+        assert_ne!(key.digest(), quality_90.digest());
+        assert_ne!(quality_90.digest(), quality_60.digest());
+        // ... and equal options reproduce it exactly.
+        let quality_90_again = key.clone().with_export_options(ExportOptions {
+            quality: 90,
+            ..Default::default()
+        });
+        assert_eq!(quality_90.digest(), quality_90_again.digest());
+
+        // Varying source-action artifact hashes change the digest ...
+        let repaired = key
+            .clone()
+            .with_source_action_hashes(["blake3:repair-artifact".to_owned()]);
+        assert_ne!(key.digest(), repaired.digest());
+        assert_ne!(
+            repaired.digest(),
+            key.clone()
+                .with_source_action_hashes(["blake3:other-artifact".to_owned()])
+                .digest()
+        );
+        // ... and equal hashes reproduce it exactly.
+        assert_eq!(
+            repaired.digest(),
+            key.with_source_action_hashes(["blake3:repair-artifact".to_owned()])
+                .digest()
+        );
     }
 
     #[test]
