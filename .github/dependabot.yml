@@ -1,4 +1,6 @@
 version: 2
+# 2026-08-25: No-op Kommentar zum Re-Trigger der Config-Verarbeitung
+# nach dem Automerge-Fix (Workflow 1fffe7f); Konfiguration unverändert.
 updates:
   # Cargo workspace: der Root-Manifest deckt alle Member unter crates/*
   # ab (ein gemeinsames Cargo.lock im Repo-Root) - daher genau EIN cargo-Eintrag.
