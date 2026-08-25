@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Cargo workspace: der Root-Manifest deckt alle Member unter crates/*
+  # ab (ein gemeinsames Cargo.lock im Repo-Root) - daher genau EIN cargo-Eintrag.
+  # vendor/libraw-sys ist bewusst AUSGENOMMEN: gepatchter Vendor-Fork via
+  # [patch.crates-io] (macOS libstdc++-Fix), kein eigenes Dependabot-Update.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule: {interval: "weekly"}
+    open-pull-requests-limit: 8
+    labels: ["dependencies"]
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
