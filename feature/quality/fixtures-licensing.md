@@ -188,15 +188,15 @@ abgeglichen. Vollständige Tabelle: `THIRD-PARTY-NOTICES.md`.
 `[patch.crates-io]` gepinnt). Dessen `build.rs` linkt die **System**-Bibliothek
 `libraw_r` über `pkg-config` (**dynamisch**, nicht vendored/statisch).
 
-- Upstream LibRaw ist **dreifach lizenziert**: LGPL-2.1-or-later **ODER**
-  CDDL-1.0 **ODER** *LibRaw Software License* (permissiv, BSD-artig).
-  > Hinweis: `docs/adr/0002-raw-backend.md` nennt bisher nur „dual
-  > (LGPL/CDDL)“ — die dritte, permissive Option fehlt dort (R5).
+- Upstream LibRaw (0.22.2) ist **dual lizenziert**: LGPL-2.1-or-later **ODER**
+  CDDL-1.0. Die früher zusätzlich angebotene permissive *LibRaw Software
+  License* wurde upstream mit v0.18 (2017) **entfernt** und existiert für
+  aktuelle Versionen nicht mehr — ein „tri-license"-Verweis ist veraltet.
+  `docs/adr/0002-raw-backend.md` beschreibt LibRaw daher korrekt als dual.
 - **Verpflichtung:** Dynamisches Linken beibehalten (statisches Einbetten würde
   LGPL auf das Gesamtwerk ausweiten); LibRaw-Lizenztext + Quellangebot für die
   verwendete Version mitliefern. CI pinnt **LibRaw 0.22.2** (OCI-Label
-  `lumina.libraw_version`). Bevorzugt die permissive *LibRaw Software License*
-  nutzen.
+  `lumina.libraw_version`).
 - Bereits im `README.md` vermerkt („LibRaw steht unter der LGPL-2.1-or-later;
   Distributionen müssen die LibRaw-Lizenz …“).
 
@@ -259,7 +259,7 @@ Quell-URL erfassen; Fixture-Seeds eingefroren.
 | **R2** | 🟠 Hoch | Alle 9 Workspace-Crates ohne `license`-Feld; Repo-Root ohne `LICENSE`/`NOTICE` — Projekt bewusst unlizenziert / kommerziell bis MVP | Lizenz bei MVP entscheiden (siehe `Agents.todo.md`, Antworten des Eigentümers 2026-08-20 → LIZ interim proprietär); dann `license` + Root-`LICENSE` konsistent ergänzen |
 | **R3** | 🟠 Hoch | LibRaw-Dynamik-Link-Verpflichtung (§6.3) | Dynamisches Linken beibehalten; LibRaw-Lizenz + Quellangebot für 0.22.2 im Release bündeln |
 | **R4** | 🟡 Mittel | `onnx-rt`-Pfad lädt ORT-Prebuilt-Binaries (Netz) | Bei Release-Freigabe ORT-Redistribution + Prebuilt-Terms prüfen, Pin `=2.0.0-rc.13` halten, Modell-Lizenzen/Hashes erfassen |
-| **R5** | ✅ Gelöst (2026-08-20) | ADR 0002 nannte LibRaw „dual"; upstream ist **dreifach** (permissiv fehlte) | ADR 0002 um die dritte, permissive Option (LibRaw Software License) ergänzt |
+| **R5** | ✅ Gelöst (2026-08-25) | Veralteter „tri-license"-Verweis (permissive *LibRaw Software License*) — diese Option wurde upstream mit LibRaw 0.18 entfernt; LibRaw 0.22.2 ist **dual** (LGPL-2.1-or-later / CDDL-1.0), ADR 0002 bereits korrekt | Doku (§6.3, ADR 0002, `THIRD-PARTY-NOTICES.md`, `licenses/`) auf Dual-Lizenz korrigiert |
 | **R6** | ✅ Gelöst (2026-08-20) | SAM-2-Lizenz ungeprüft; BiRefNet „Apache-2.0" aus Manifest, nicht aus der Gewichtsquelle | Beide an der tatsächlichen Quelle verifiziert und in §5 erfasst: **SAM 2.1 = Apache-2.0** (Code + Gewichte, facebookresearch/sam2 `LICENSE` + Meta-Announcement), **BiRefNet = MIT** (GitHub `LICENSE` + HF-Card `license: mit`) — Manifest-`license`-Feld und Doku korrigiert (Commit folgt); AGPL-Falle via `ultralytics` in §5 dokumentiert |
 | **R7** | 🟢 Niedrig | `r-efi` trägt `LGPL-2.1-or-later`-Option | Keine Aktion: UEFI-only, nie ausgeliefert; bei UEFI-Build unter MIT/Apache erfüllen |
 

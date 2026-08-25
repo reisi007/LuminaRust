@@ -2,6 +2,10 @@
 
 **Project:** LuminaRust
 **Generated:** 2026-08-19
+**Updated:** 2026-08-25 — LibRaw licensing corrected to dual (LGPL/CDDL;
+"LibRaw Software License" was removed upstream with v0.18) and the bundled
+license-text inventory (`licenses/`, release script
+`scripts/release/bundle-licenses.sh`) added (F-078-R3/R4).
 **Scope of this document:** Complete, machine-checkable inventory of every
 third-party crate resolved by the workspace, plus the distribution terms of the
 native libraries and ML models that LuminaRust links against or distributes.
@@ -53,8 +57,17 @@ The following components impose attribution / notice / source-availability
 obligations that MUST be honored in any distributed build:
 
 1. **LibRaw (native C library, linked via `vendor/libraw-sys`)**
-   - License: tri-licensed **LGPL-2.1-or-later / CDDL-1.0 / LibRaw Software
-     License** (the third is a permissive, BSD-like license).
+   - License: dual **LGPL-2.1-or-later / CDDL-1.0** (distributor's choice).
+     *Correction 2026-08-25:* earlier revisions of this document described a
+     third option ("LibRaw Software License 27032010"); that option was
+     **removed upstream with LibRaw 0.18** ("all signed agreements have
+     expired", libraw.org/news/libraw-0-18-released) and is not part of
+     LibRaw 0.22.2 — the upstream `COPYRIGHT` at tag 0.22.2 names exactly two
+     licenses. There is no "Common Clause" anywhere in LibRaw's licensing.
+   - License texts shipped verbatim in `licenses/libraw/`
+     (`LICENSE.LGPL`, `LICENSE.CDDL`, upstream `COPYRIGHT` including the
+     embedded dcraw / DCB-FBDD / X3F / Adobe DNG SDK notices); written source
+     offer for the pinned version: `licenses/libraw/SOURCE-OFFER.md`.
    - `libraw-sys` (the Rust FFI bindings, `vendor/libraw-sys`) is **MIT**
      (© David Cuddeback).
    - `lumina-raw` links to the **system** `libraw_r` shared library via
@@ -64,9 +77,8 @@ obligations that MUST be honored in any distributed build:
      LibRaw into the binary, which would extend LGPL to the whole work); ship
      LibRaw's license text and a written offer / pointer to LibRaw source for the
      exact version used (CI pins LibRaw **0.22.2**, recorded in the
-     `lumina.libraw_version` OCI label of the `lumina-ci` image). Prefer relying
-     on the permissive **LibRaw Software License** option where the distributor's
-     jurisdiction/intent allows.
+     `lumina.libraw_version` OCI label of the `lumina-ci` image); keep the
+     pinned version in sync with `licenses/libraw/SOURCE-OFFER.md`.
 2. **Bundled fonts in `epaint_default_fonts` (egui)** — `((MIT OR Apache-2.0)
    AND OFL-1.1 AND Ubuntu-font-1.0)`. The SIL Open Font License (OFL-1.1) and
    Ubuntu Font License 1.0 require font attribution and prohibit selling the
@@ -105,7 +117,9 @@ obligations that MUST be honored in any distributed build:
    - **Obligation:** Keep the **dynamic-link** arrangement (do not statically
      embed Lensfun into the binary, which would extend LGPL to the whole work);
      ship Lensfun's license text and a written offer / pointer to Lensfun source
-     for the exact version used (**0.3.4**) in the release bundle.
+     for the exact version used (**0.3.4**) in the release bundle — both are
+     provided by `licenses/lensfun/` (`COPYING.LGPL-3.0`,
+     `COPYING.CC-BY-SA-3.0`, `SOURCE-OFFER.md`).
    - **Lensfun database (camera/lens profiles,
      `/opt/homebrew/share/lensfun/version_1/*.xml`):** licensed **CC-BY-SA-3.0**
      (verified 2026-08-20 against upstream `data/COPYING.CC_BY-SA_3.0` in the
@@ -133,8 +147,42 @@ obligations that MUST be honored in any distributed build:
      prebuilt-binary redistribution terms to be re-checked before release
      (R4).
    - **Obligation:** bundle the respective license texts (MIT / Apache-2.0)
-     and the SAM 2.1 NOTICE (if present) with any distributed weights or
-     binaries.
+     with any distributed weights or binaries — provided verbatim in
+     `licenses/models/` together with provenance pointers
+     (`MODEL-SOURCE-OFFER.md`). SAM 2 ships no separate `NOTICE` file (checked
+     2026-08-25), so nothing additional has to be forwarded under Apache-2.0
+     §4(d).
+
+## Release bundle: license texts & source offers (F-078-R3/R4)
+
+All native-library and model license texts plus written source offers live in
+[`licenses/`](licenses/README.md) and are copied into every distributable
+bundle by [`scripts/release/bundle-licenses.sh`](scripts/release/bundle-licenses.sh)
+(default destination `dist/licenses`; verifies every required file, writes a
+SHA256 manifest, aborts loudly on anything missing). Inventory:
+
+| Bundle path | Content |
+| --- | --- |
+| `THIRD-PARTY-NOTICES.md` | this document (crate table + obligations) |
+| `licenses/libraw/` | upstream `COPYRIGHT` @ tag 0.22.2, LGPL-2.1 text, CDDL-1.0 text, written source offer for **LibRaw 0.22.2** (R3) |
+| `licenses/lensfun/` | LGPL-3.0 text (= upstream `lgpl-3.0.txt`), CC-BY-SA-3.0 legalcode (lens database), source offer for **Lensfun 0.3.4** + DB attribution |
+| `licenses/models/` | BiRefNet MIT, SAM 2.1 Apache-2.0, ONNX Runtime MIT; provenance/export-path notes (incl. R4 reminder) |
+| `CHECKSUMS.sha256` | SHA256 manifest over the bundled license payload |
+
+Short pre-release checklist (full version in `licenses/README.md`):
+
+1. Run `scripts/release/bundle-licenses.sh <bundle-dir>` and include its output
+   in every distributable artifact.
+2. Builds linking LibRaw (native decode, default): keep the link dynamic;
+   `licenses/libraw/SOURCE-OFFER.md` must name the pinned version — update it
+   in the same commit as any CI pin change.
+3. Builds with feature `native` (Lensfun): bundle must contain
+   `licenses/lensfun/` and surface the CC-BY-SA-3.0 database attribution.
+4. Bundles shipping model weights: `licenses/models/` present; manifest hashes
+   match the shipped weights; export path avoided `ultralytics` (AGPL).
+5. ORT redistribution terms re-checked at release time if the download channel
+   changes (open item R4); ONNX Runtime itself is MIT (© Microsoft Corporation),
+   redistribution permitted with the bundled notice.
 
 ## Complete crate license table (all-features resolve)
 

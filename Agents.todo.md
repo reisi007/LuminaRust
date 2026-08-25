@@ -333,10 +333,7 @@ implementiert und aus dieser Liste entfernt; offen:
 
 **Phase 11: Qualität, Performance und Release**
 
-- [ ] **[PRIO: mittel] F-078-R3/R4** (Pre-Release): Lensfun-/LibRaw-Lizenztexte +
-  Quellangebot + Modell-Lizenzen (BiRefNet MIT, SAM 2 Apache-2.0, ONNX Runtime
-  MIT) im Release-Bundle mitliefern. (R5/R6 geschlossen; R2 = LIZ-Entscheidung,
-  siehe gepinnte Entscheidungen.)
+
 
 ### PRIO: niedrig
 
@@ -556,14 +553,7 @@ wo möglich, vor dem nächsten manuellen GUI-Test geklärt werden.
 
 **Arbeitsbaumänderungen während des Reviews (in Arbeit)**
 
-- [ ] **[PRIO: mittel] WTREE-REVIEW-1** Während des Reviews entstandene, bewusst
-  behaltene, aber noch nicht reviewte Änderungen vor Übernahme prüfen:
-  `crates/lumina-core/src/mask_tiles.rs` (neu, 382 Zeilen + Modul-Export),
-  `crates/lumina-gpu/src/tiling.rs` (`TILE_SIZE` verkettet auf
-  `mask_tiles::MASK_TILE_SIZE`), `crates/lumina-raw/tests/probe_flip.rs`
-  (diagnostischer Probe-Test zu REVIEW-RAW-ABI-1/FLIP-1 — als
-  Regressionstest übernehmen oder entfernen).
-  Ist-Stand 2026-08-25: Review + Übernahme durch Subagenten beauftragt.
+
 
 ## Block C – „Nach dem nächsten manuellen GUI-Test“
 

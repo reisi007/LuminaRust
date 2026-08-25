@@ -140,7 +140,7 @@ Notes:
 | OFL-1.1 / Ubuntu-font-1.0 (egui fonts) | 1 crate (`epaint_default_fonts`) | ✅ | font attribution | bundle font license |
 | Apache-2.0 WITH LLVM-exception | ~6 | ✅ | none | bundle notice |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` (`r-efi`) | 2 | ✅ (under MIT/Apache) | only if compiled for `uefi` | never shipped → no action; otherwise comply under MIT |
-| **LibRaw (LGPL-2.1 / CDDL-1.0 / LibRaw Software License)** | native, linked | ⚠️ weak copyleft | **only real obligation (default build)** | see §4.4 |
+| **LibRaw (LGPL-2.1-or-later / CDDL-1.0, dual)** | native, dynamically linked | ⚠️ weak copyleft | **only real obligation (default build)** | see §4.4 |
 | **Lensfun (LGPL-3.0, DB CC-BY-SA-3.0)** | native, **dynamically** linked via `lumina-lensfun` → `pkg-config`, only when the `native` feature is enabled (default **off**) | ⚠️ weak copyleft | only when `native` feature enabled | dynamic link (obligation does not extend to whole work); ship license text + source offer for 0.3.4 + DB attribution; see `THIRD-PARTY-NOTICES.md` (Attribution obligations, #5) |
 
 ### 4.4 The single real obligation: LibRaw
@@ -151,17 +151,16 @@ fork pinned via `[patch.crates-io]` in the workspace root `Cargo.toml`. Its
 and emits `cargo:rustc-link-lib` — i.e. **dynamic linking**, not vendoring or
 static embedding.
 
-- Upstream LibRaw is **tri-licensed**: LGPL-2.1-or-later **OR** CDDL-1.0 **OR**
-  the *LibRaw Software License* (a permissive, BSD-like license).
-  > Note: `docs/adr/0002-raw-backend.md` currently describes LibRaw as
-  > "dual-licensed LGPL-2.1 and CDDL-1.0". Upstream actually offers the third,
-  > permissive option — see open item R5.
+- Upstream LibRaw (0.22.2) is **dual-licensed**: LGPL-2.1-or-later **OR**
+  CDDL-1.0. The previously also-offered permissive *LibRaw Software License*
+  was **removed upstream with v0.18** (2017) and no longer exists for current
+  versions — any "tri-license" reference is outdated. `docs/adr/0002-raw-backend.md`
+  already describes LibRaw correctly as dual.
 - **Obligation:** Keep the **dynamic-link** arrangement (statically embedding
   LibRaw would extend LGPL to the whole binary). Ship LibRaw's license text and
   a written offer / pointer to LibRaw source for the exact version used. CI pins
   **LibRaw 0.22.2** (recorded in the `lumina.libraw_version` OCI label of the
-  `lumina-ci` image). Prefer relying on the permissive **LibRaw Software License**
-  option where the distributor's context allows.
+  `lumina-ci` image).
 - This is already acknowledged in the top-level `README.md` (§"LibRaw steht
   unter der LGPL-2.1-or-later; Distributionen müssen die LibRaw-Lizenz …").
 
@@ -196,7 +195,7 @@ Policy:
 | **R2** | 🟠 High | All 9 workspace crates declare **no `license` field** and the repo root has **no LICENSE file** — project is intentionally unlicensed / commercial-for-now pending the MVP license decision. | Decide project license at MVP (see `Agents.todo.md`, owner answers 2026-08-20 → LIZ interim proprietary); then add `license` to all crates + root `LICENSE` consistent with that decision. |
 | **R3** | 🟠 High | LibRaw dynamic-link obligation (§4.4). | Keep dynamic linking; ship LibRaw license + source offer for 0.22.2 in the release bundle/NOTICE. |
 | **R4** | 🟡 Medium | `onnx-rt` path downloads ONNX Runtime prebuilt binaries (network) and would bundle MIT-licensed ORT. | When enabling `onnx-rt` for a release, re-verify ORT/ONNX Runtime redistribution terms, keep `=2.0.0-rc.13` pin, and record model weight licenses/hashes. |
-| **R5** | 🟡 Medium | ADR 0002 says LibRaw is "dual" (LGPL/CDDL); upstream is **tri**-licensed (adds permissive LibRaw Software License). | Update ADR 0002 to record the third, permissive option and recommend relying on it. |
+| **R5** | ✅ Resolved (2026-08-25) | Veralteter "tri-license"-Verweis (permissive *LibRaw Software License*); diese Option wurde upstream mit LibRaw 0.18 entfernt — LibRaw 0.22.2 ist **dual** (LGPL-2.1-or-later / CDDL-1.0), ADR 0002 bereits korrekt. | Doku (§4.4, ADR 0002, `THIRD-PARTY-NOTICES.md`, `licenses/`) auf Dual-Lizenz korrigiert. |
 | **R6** | 🟡 Medium | SAM 2 license unverified; BiRefNet Apache-2.0 taken from manifest (not from weight source). | Verify each model's license against the actual weight source at integration (F-048/F-080) and record in §3. |
 | **R7** | 🟢 Low | `r-efi` carries an `LGPL-2.1-or-later` option. | No action: UEFI-only, never shipped for supported targets; if ever built for UEFI, comply under its MIT/Apache option. |
 
