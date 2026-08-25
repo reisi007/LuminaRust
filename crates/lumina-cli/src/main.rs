@@ -1174,19 +1174,29 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
     Ok(input.display().to_string())
 }
 
-fn collect_images(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
-    // REVIEW-CLI-N5: the visited set holds canonical directory identities so
-    // filesystem cycles (symlink loops, bind mounts) terminate instead of
-    // overflowing the stack.
+/// Shared recursive directory walk behind `collect_images` and
+/// `collect_sidecars` (REVIEW-CLI-N5 / REVIEW-CLI-FOLLOWUP-1): the visited set
+/// holds canonical directory identities so filesystem cycles (symlink loops,
+/// bind mounts) terminate instead of overflowing the stack, directory symlinks
+/// are never followed and every directory level is walked in deterministic
+/// (sorted) order.
+fn collect_tree_files<F>(path: &Path, output: &mut Vec<PathBuf>, keep: F) -> Result<(), CliError>
+where
+    F: Fn(&Path) -> bool,
+{
     let mut visited = BTreeSet::new();
-    collect_images_inner(path, output, &mut visited)
+    collect_tree_files_inner(path, output, &mut visited, &keep)
 }
 
-fn collect_images_inner(
+fn collect_tree_files_inner<F>(
     path: &Path,
     output: &mut Vec<PathBuf>,
     visited: &mut BTreeSet<PathBuf>,
-) -> Result<(), CliError> {
+    keep: &F,
+) -> Result<(), CliError>
+where
+    F: Fn(&Path) -> bool,
+{
     let identity = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if !visited.insert(identity) {
         return Ok(());
@@ -1201,12 +1211,16 @@ fn collect_images_inner(
         // `entry.file_type()` never follows symlinks: a symlinked directory is
         // never recursed into, which removes symlink loops by construction.
         if entry.file_type().map_err(|e| io_error(&p, e))?.is_dir() {
-            collect_images_inner(&p, output, visited)?;
-        } else if has_image_extension(&p) && p.is_file() {
+            collect_tree_files_inner(&p, output, visited, keep)?;
+        } else if keep(&p) && p.is_file() {
             output.push(p);
         }
     }
     Ok(())
+}
+
+fn collect_images(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    collect_tree_files(path, output, has_image_extension)
 }
 
 /// Supported input extensions for batch collection.
@@ -1223,16 +1237,13 @@ fn has_image_extension(path: &Path) -> bool {
 }
 
 fn collect_sidecars(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
-    for entry in fs::read_dir(path).map_err(|e| io_error(path, e))? {
-        let entry = entry.map_err(|e| io_error(path, e))?;
-        let p = entry.path();
-        if p.is_dir() {
-            collect_sidecars(&p, output)?
-        } else if p.to_string_lossy().ends_with(".lumina.json") {
-            output.push(p)
-        }
-    }
-    Ok(())
+    // REVIEW-CLI-FOLLOWUP-1: same symlink-/loop-safe walk as `collect_images`
+    // (see `collect_tree_files`) so reindex cannot cycle through directory
+    // symlinks either. Regular-file-only collection also keeps dangling or
+    // special (FIFO) `.lumina.json` entries out of the scan.
+    collect_tree_files(path, output, |p| {
+        p.to_string_lossy().ends_with(".lumina.json")
+    })
 }
 fn emit(json: bool, value: serde_json::Value, text: &str) -> Result<(), CliError> {
     if json {
@@ -2774,6 +2785,48 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["alias.png", "deep.png", "top.png"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_sidecars_survives_symlink_loops() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        // Sidecar collection is purely path-based, so plain marker files are
+        // enough here.
+        let top = root.join("top.png.lumina.json");
+        fs::write(&top, b"{}").unwrap();
+        fs::write(root.join("sub/deep.png.lumina.json"), b"{}").unwrap();
+        // Self-referencing directory loop plus an alias onto a subdirectory —
+        // neither may be followed during the sidecar walk (REVIEW-CLI-
+        // FOLLOWUP-1; without the guard this test recurses until the stack
+        // overflows).
+        symlink(&root, root.join("loop")).unwrap();
+        symlink(root.join("sub"), root.join("link-sub")).unwrap();
+        // A file symlink stays collectable (reading it cannot cycle).
+        symlink(&top, root.join("alias.png.lumina.json")).unwrap();
+
+        let mut found = Vec::new();
+        collect_sidecars(&root, &mut found).unwrap();
+        // The shared walk sorts every directory level, so the collected
+        // sequence itself is already deterministic.
+        let mut sorted = found.clone();
+        sorted.sort();
+        assert_eq!(found, sorted);
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "alias.png.lumina.json",
+                "deep.png.lumina.json",
+                "top.png.lumina.json"
+            ]
+        );
     }
 
     #[test]
