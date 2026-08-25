@@ -225,12 +225,6 @@ MVP-blockierend)**
   RenderKeys via `with_export_options`/`with_source_action_hashes`
   verdrahten, damit Cache-Hits korrekte Qualität/Repair-Pixels liefern
   (Core-Seite erledigt).
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-FOLLOWUP-1** `artifact_status` erkennt
-  <8-Byte-Container nicht als `Corrupt` (nur Magic-Parsing); bei
-  `reference.format=="zdata"` ohne gültige Magic → `Corrupt`.
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-FOLLOWUP-2** `artifact_status` validiert
-  Reference width/height nicht gegen Bundle-Records (dokumentierte Lücke).
-
 
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**

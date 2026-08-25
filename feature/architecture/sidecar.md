@@ -110,7 +110,9 @@ REVIEW-SIDECAR-FOLLOWUP-1/-2):
 - `Missing`: Pfad fehlt oder ist keine reguläre Datei.
 - `Corrupt`: Die Datei existiert, ist aber nicht verwendbar — sie ist leer
   bzw. kleiner als der 8-Byte-Container-Magic, deklariert ein
-  `.lumina.zdata`-Format (`"zdata"`, `"zdata-mask"`, `"lumina-zdata"`), ohne
+  `.lumina.zdata`-Format (`"zdata"`, `"zdata-mask"`, `"lumina-zdata"` —
+  Substring-Match auf `contains("zdata")`, da reale Producer unterschiedlich
+  schreiben), ohne
   mit `LUMZDATA` zu beginnen, übersteigt das Containergrößenlimit oder — bei
   echten Containern — scheitert beim Parsen oder an der BLAKE3-Prüfung.
   Diese Prüfsummen werden beim Statuscheck aktiv verifiziert („eager“), nicht

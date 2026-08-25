@@ -983,11 +983,13 @@ pub enum ArtifactStatus {
     Available,
     /// The artifact file does not exist (or is not a regular file).
     Missing,
-    /// REVIEW-SIDECAR-STATUS-1: the artifact exists on disk but is not usable —
-    /// it is empty, exceeds the container size limit, or (for formats this
-    /// crate owns, i.e. `.lumina.zdata` containers) fails parsing or BLAKE3
-    /// checksum verification. A corrupt artifact must never be reported as
-    /// available; callers treat it like missing data with a visible message.
+    /// REVIEW-SIDECAR-STATUS-1 / REVIEW-SIDECAR-FOLLOWUP-1: the artifact exists
+    /// on disk but is not usable — it is smaller than the 8-byte container
+    /// magic (including empty), exceeds the container size limit, declares a
+    /// `.lumina.zdata` format without carrying the `LUMZDATA` magic, or (for
+    /// containers this crate owns) fails parsing or BLAKE3 checksum
+    /// verification. A corrupt artifact must never be reported as available;
+    /// callers treat it like missing data with a visible message.
     Corrupt,
 }
 
@@ -1355,37 +1357,92 @@ pub fn source_status(path: &Path, source: &SourceIdentity) -> Result<SourceStatu
     }
 }
 
+/// Container magic of `.lumina.zdata` bundles. Duplicated from the
+/// feature-gated `zdata` module so the structural checks below work in every
+/// build.
+const ZDATA_MAGIC: [u8; 8] = *b"LUMZDATA";
+
+/// REVIEW-SIDECAR-FOLLOWUP-1: every format name used for `.lumina.zdata`
+/// payloads embeds "zdata" (`"zdata"`, `"zdata-mask"`, `"lumina-zdata"`), so a
+/// substring match covers all producer spellings without maintaining a list.
+/// A reference declaring such a format must carry the container magic; that
+/// errs toward visibility (reporting corrupt) instead of silently treating a
+/// mislabeled file as an unverifiable opaque payload.
+fn format_declares_zdata(format: &str) -> bool {
+    format.contains("zdata")
+}
+
+/// Outcome of the build-independent file checks shared by both
+/// `artifact_status` variants.
+enum BasicArtifactCheck {
+    /// Absent or not a regular file.
+    Missing,
+    /// Exists but can never be an artifact this crate persists.
+    Corrupt,
+    /// Passed the structural checks; payload verification may follow.
+    Usable(PathBuf),
+}
+
+/// Existence/size floor applied identically with and without the `zdata`
+/// feature (REVIEW-SIDECAR-STATUS-1 + REVIEW-SIDECAR-FOLLOWUP-1):
+///
+/// * absent or non-regular paths are `Missing`,
+/// * files smaller than the 8-byte container magic — including empty ones —
+///   are `Corrupt`; previously a non-empty <8-byte file slipped through the
+///   failed magic read as `Available`,
+/// * everything else is handed on with its resolved path.
+fn basic_artifact_file_check(
+    bundle_root: &Path,
+    artifact: &ArtifactReference,
+) -> BasicArtifactCheck {
+    let path = bundle_root.join(&artifact.relative_path);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return BasicArtifactCheck::Missing;
+    };
+    if !metadata.is_file() {
+        return BasicArtifactCheck::Missing;
+    }
+    if metadata.len() < ZDATA_MAGIC.len() as u64 {
+        return BasicArtifactCheck::Corrupt;
+    }
+    BasicArtifactCheck::Usable(path)
+}
+
 /// Checks whether the referenced artifact is usable.
 ///
-/// REVIEW-SIDECAR-STATUS-1: existence alone is no longer sufficient. The check
-/// performs, in order:
+/// REVIEW-SIDECAR-STATUS-1 / REVIEW-SIDECAR-FOLLOWUP-1: existence alone is no
+/// longer sufficient. The check performs, in order:
 ///
 /// 1. `Missing` when the path is absent or not a regular file,
-/// 2. `Corrupt` for empty files (a zero-byte artifact is never valid),
-/// 3. format-aware verification: files beginning with the `LUMZDATA` container
+/// 2. `Corrupt` for files smaller than the 8-byte container magic (an empty
+///    or undersized artifact is never valid),
+/// 3. `Corrupt` when the declared format names a `.lumina.zdata` payload but
+///    the file lacks the `LUMZDATA` magic — such a file is mislabeled, not an
+///    opaque payload,
+/// 4. format-aware verification: files beginning with the `LUMZDATA` container
 ///    magic are parsed and their per-record BLAKE3 checksums verified eagerly;
 ///    any parse/checksum/size failure yields `Corrupt`,
-/// 4. `Available` otherwise.
+/// 5. `Available` otherwise.
 ///
 /// Known limitation (documented SOLL gap, not a silent fallback): opaque
 /// non-container payloads cannot be deep-verified because this crate owns no
-/// parser for them; they are reported as `Available` once non-empty. The
-/// reference's declared resolution (`width`/`height`) describes the mask plane
-/// and has no generic mapping onto bundle records either; validating it
-/// requires the consuming pipeline's decoder.
+/// parser for them; they are reported as `Available` once they pass checks
+/// 1–2. The reference's declared resolution (`width`/`height`) describes the
+/// mask plane and has no generic mapping onto bundle records either; see
+/// `feature/architecture/sidecar.md` ("Artefaktstatus-Prüfung") for why this
+/// validation belongs to the consuming pipeline loader, not this function.
 #[cfg(feature = "zdata")]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
-    let path = bundle_root.join(&artifact.relative_path);
-    let Ok(metadata) = fs::metadata(&path) else {
-        return ArtifactStatus::Missing;
+    let path = match basic_artifact_file_check(bundle_root, artifact) {
+        BasicArtifactCheck::Missing => return ArtifactStatus::Missing,
+        BasicArtifactCheck::Corrupt => return ArtifactStatus::Corrupt,
+        BasicArtifactCheck::Usable(path) => path,
     };
-    if !metadata.is_file() {
-        return ArtifactStatus::Missing;
-    }
-    if metadata.len() == 0 {
+    let has_magic = starts_with_zdata_magic(&path);
+    if !has_magic && format_declares_zdata(&artifact.format) {
         return ArtifactStatus::Corrupt;
     }
-    if starts_with_zdata_magic(&path) {
+    if has_magic {
         return match load_zdata(&path) {
             Ok(_) => ArtifactStatus::Available,
             // An oversized/truncated/corrupt container must not count as
@@ -1396,18 +1453,18 @@ pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> Arti
     ArtifactStatus::Available
 }
 
-/// Non-zdata build: without the container codec there is nothing to verify
-/// beyond existence and emptiness.
+/// Non-zdata build: without the container codec a magic-bearing file cannot be
+/// deep-verified here; it counts as usable once it passes the structural
+/// checks (documented limitation, not a silent fallback — the same rules as
+/// the `zdata` build apply up to the eager checksum pass).
 #[cfg(not(feature = "zdata"))]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
-    let path = bundle_root.join(&artifact.relative_path);
-    let Ok(metadata) = fs::metadata(&path) else {
-        return ArtifactStatus::Missing;
+    let path = match basic_artifact_file_check(bundle_root, artifact) {
+        BasicArtifactCheck::Missing => return ArtifactStatus::Missing,
+        BasicArtifactCheck::Corrupt => return ArtifactStatus::Corrupt,
+        BasicArtifactCheck::Usable(path) => path,
     };
-    if !metadata.is_file() {
-        return ArtifactStatus::Missing;
-    }
-    if metadata.len() == 0 {
+    if !starts_with_zdata_magic(&path) && format_declares_zdata(&artifact.format) {
         return ArtifactStatus::Corrupt;
     }
     ArtifactStatus::Available
@@ -1415,15 +1472,16 @@ pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> Arti
 
 /// Reads at most 8 bytes and reports whether the file begins with the zdata
 /// container magic (`LUMZDATA`), so only containers this crate owns get the
-/// (comparatively expensive) full parse+checksum verification.
-#[cfg(feature = "zdata")]
+/// (comparatively expensive) full parse+checksum verification. Compiled
+/// without the `zdata` feature too: the magic check itself needs only
+/// [`std::fs`] and keeps both `artifact_status` builds consistent.
 fn starts_with_zdata_magic(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 8];
     let Ok(mut file) = fs::File::open(path) else {
         return false;
     };
-    file.read_exact(&mut magic).is_ok() && &magic == b"LUMZDATA"
+    file.read_exact(&mut magic).is_ok() && magic == ZDATA_MAGIC
 }
 
 pub fn xmp_supported() -> bool {
@@ -4753,12 +4811,72 @@ mod tests {
         );
     }
 
+    /// REVIEW-SIDECAR-FOLLOWUP-1: a non-empty file shorter than the 8-byte
+    /// magic used to slip past the failed magic read as `Available`, and a
+    /// `zdata`-declared file without the magic used to fall through as an
+    /// unverifiable "opaque" payload.
+    #[cfg(feature = "zdata")]
+    #[test]
+    fn artifact_status_rejects_undersized_and_magicless_declared_zdata() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("masks")).unwrap();
+        let mut reference = ArtifactReference {
+            relative_path: "masks/subject.zdata".into(),
+            format: "zdata".into(),
+            checksum: "blake3:x".into(),
+            width: 2,
+            height: 2,
+            channels: "u16".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        // Non-empty but smaller than the container magic.
+        std::fs::write(root.join(&reference.relative_path), b"LUM").unwrap();
+        assert_eq!(
+            artifact_status(root, &reference),
+            ArtifactStatus::Corrupt,
+            "a non-empty <8-byte file can never be a container header"
+        );
+        // Larger than the magic but without it, while declaring `zdata`: the
+        // declared format owns the container, so this is mislabeled — corrupt,
+        // not an opaque payload.
+        let magicless = b"not-a-lumina-container-payload";
+        std::fs::write(root.join(&reference.relative_path), magicless).unwrap();
+        assert_eq!(
+            artifact_status(root, &reference),
+            ArtifactStatus::Corrupt,
+            "a format==zdata file without LUMZDATA magic must not count as available"
+        );
+        // The same bytes under the producer spelling written by lumina-core
+        // are covered by the same rule.
+        reference.format = "lumina-zdata".into();
+        assert_eq!(
+            artifact_status(root, &reference),
+            ArtifactStatus::Corrupt,
+            "the lumina-zdata producer spelling requires the container magic too"
+        );
+        // The identical bytes under a genuinely opaque format stay available:
+        // this crate owns no parser for them (documented limitation).
+        reference.format = "opaque".into();
+        reference.relative_path = "masks/opaque.bin".into();
+        std::fs::write(root.join(&reference.relative_path), magicless).unwrap();
+        assert_eq!(
+            artifact_status(root, &reference),
+            ArtifactStatus::Available,
+            "opaque formats remain available once they pass the structural checks"
+        );
+    }
+
+    /// REVIEW-SIDECAR-STATUS-1 / REVIEW-SIDECAR-FOLLOWUP-1: runs with and
+    /// without the `zdata` feature so both `artifact_status` builds enforce
+    /// the same structural floor.
     #[test]
     fn empty_artifact_file_is_corrupt_even_without_zdata_support() {
         let directory = tempfile::tempdir().unwrap();
         let artifact_dir = directory.path().join("masks");
         std::fs::create_dir_all(&artifact_dir).unwrap();
-        let reference = ArtifactReference {
+        let mut reference = ArtifactReference {
             relative_path: "masks/a.bin".into(),
             format: "opaque".into(),
             checksum: "blake3:x".into(),
@@ -4773,6 +4891,14 @@ mod tests {
             artifact_status(directory.path(), &reference),
             ArtifactStatus::Corrupt
         );
+        // REVIEW-SIDECAR-FOLLOWUP-1: non-empty but shorter than the container
+        // magic — previously misread as `Available` when the magic read failed.
+        std::fs::write(directory.path().join(&reference.relative_path), b"ab").unwrap();
+        assert_eq!(
+            artifact_status(directory.path(), &reference),
+            ArtifactStatus::Corrupt,
+            "a non-empty <8-byte file must stay corrupt in every build"
+        );
         std::fs::write(
             directory.path().join(&reference.relative_path),
             b"opaque-payload",
@@ -4781,6 +4907,21 @@ mod tests {
         assert_eq!(
             artifact_status(directory.path(), &reference),
             ArtifactStatus::Available
+        );
+        // A zdata-declared path without the container magic is corrupt in both
+        // builds; with the feature it additionally fails the declared-format
+        // rule before any parse would run.
+        reference.format = "zdata".into();
+        reference.relative_path = "masks/b.zdata".into();
+        std::fs::write(
+            directory.path().join(&reference.relative_path),
+            b"opaque-payload",
+        )
+        .unwrap();
+        assert_eq!(
+            artifact_status(directory.path(), &reference),
+            ArtifactStatus::Corrupt,
+            "a zdata-declared file without LUMZDATA magic must be corrupt"
         );
     }
 
