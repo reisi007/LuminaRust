@@ -29,17 +29,22 @@ use lumina_gui::{LuminaApp, Module};
 ///
 /// Collapsing-header labels of the Develop panel, in draw order.
 ///
-/// Kept in sync with `LuminaApp::draw_develop_panel` (via `Str::*` in
+/// Kept in sync with `LuminaApp::DEVELOP_SECTIONS` (single source of truth in
+/// `crates/lumina-gui/src/lib.rs`, labels via `Str::*` in
 /// `crates/lumina-gui/src/i18n.rs`): `Presets` + `History` (top, collapsible)
 /// followed by the eight F-100 sections `Basic` … `Masking`.
+/// F-103-N10 (user decision 2026-08-25): Detail BEFORE Effects (Lightroom
+/// Classic panel order). NOTE: the committed goldens still show the old
+/// Effects-before-Detail layout and need a one-off refresh on a GPU machine:
+/// `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored`
 const DEVELOP_SECTIONS: &[&str] = &[
     "Presets",
     "History",
     "Basic",
     "Tone Curve",
     "Color",
-    "Effects",
     "Detail",
+    "Effects",
     "Optics",
     "Geometry",
     "Masking",

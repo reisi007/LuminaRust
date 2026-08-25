@@ -585,6 +585,10 @@ struct DecodedFrame {
 #[cfg(not(target_arch = "wasm32"))]
 type DecodeResult = Result<DecodedFrame, (String, String)>;
 
+/// Draw method of one Develop section: `fn(&mut LuminaApp, &mut egui::Ui)`.
+/// Factored out so [`LuminaApp::DEVELOP_SECTIONS`] stays readable.
+type DevelopSectionDraw = fn(&mut LuminaApp, &mut egui::Ui);
+
 impl LuminaApp {
     /// Set the active top-level module (Library / Develop / Export). Used by the
     /// headless snapshot tests (F-103-N9) to render a specific module; this is a
@@ -4939,6 +4943,31 @@ impl LuminaApp {
         });
     }
 
+    /// Normative draw order of the eight F-100 Develop sections, rendered by
+    /// [`LuminaApp::draw_develop_panel`] in exactly this sequence.
+    /// Lightroom Classic panel order: Basic → Tone Curve → HSL/Color →
+    /// Color Grading → **Detail → Effects** → Optics → Geometry → Masking.
+    ///
+    /// F-103-N10 (user decision 2026-08-25): **Detail BEFORE Effects** —
+    /// Sharpening/Noise Reduction are shown above Vignette/Grain, matching
+    /// Lightroom Classic (previously Effects was drawn first; SOLL and GUI
+    /// were aligned in `feature/platform/cli-gui-wasm.md` § UI-Konventionen).
+    ///
+    /// Collapse state is keyed by the section label (egui auto-IDs), not by
+    /// position, so reordering here neither changes nor resets user collapse
+    /// state. The order is pinned by the
+    /// `develop_section_order_is_lightroom_conform` test below.
+    const DEVELOP_SECTIONS: &[(Str, DevelopSectionDraw)] = &[
+        (Str::Basic, LuminaApp::draw_basic),
+        (Str::ToneCurve, LuminaApp::draw_tone_curve),
+        (Str::Color, LuminaApp::draw_color),
+        (Str::Detail, LuminaApp::draw_detail),
+        (Str::Effects, LuminaApp::draw_effects),
+        (Str::Optics, LuminaApp::draw_optics),
+        (Str::Geometry, LuminaApp::draw_geometry),
+        (Str::Masking, LuminaApp::draw_masking),
+    ];
+
     /// The full Develop control stack: the eight F-100 sections in fixed order,
     /// then the preset manager and the global render/save actions.  Every
     /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
@@ -4957,14 +4986,12 @@ impl LuminaApp {
                 // The eight adjustment sections are grayed and non-interactive until an
                 // image is loaded (F-100 disabled-while-empty behaviour).
                 ui.add_enabled_ui(self.original.is_some(), |ui| {
-                    self.draw_basic(ui);
-                    self.draw_tone_curve(ui);
-                    self.draw_color(ui);
-                    self.draw_effects(ui);
-                    self.draw_detail(ui);
-                    self.draw_optics(ui);
-                    self.draw_geometry(ui);
-                    self.draw_masking(ui);
+                    // F-100 section order (incl. F-103-N10: Detail BEFORE
+                    // Effects) has its single source of truth in
+                    // `DEVELOP_SECTIONS`; see there.
+                    for (_, draw_section) in Self::DEVELOP_SECTIONS {
+                        draw_section(self, ui);
+                    }
                 });
                 ui.separator();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -6229,6 +6256,33 @@ mod tests {
             .unwrap()
             .encode(ImageFileFormat::Png)
             .unwrap()
+    }
+    /// F-100 / F-103-N10 (user decision 2026-08-25): the Develop sections are
+    /// drawn in Lightroom Classic panel order — **Detail BEFORE Effects**.
+    /// `draw_develop_panel` renders exactly this table, so this pins the real
+    /// render order without a GPU harness.
+    #[test]
+    fn develop_section_order_is_lightroom_conform() {
+        let order: Vec<Str> = LuminaApp::DEVELOP_SECTIONS
+            .iter()
+            .map(|(label, _)| *label)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                Str::Basic,
+                Str::ToneCurve,
+                Str::Color,
+                Str::Detail,
+                Str::Effects,
+                Str::Optics,
+                Str::Geometry,
+                Str::Masking,
+            ]
+        );
+        let detail = order.iter().position(|s| *s == Str::Detail).unwrap();
+        let effects = order.iter().position(|s| *s == Str::Effects).unwrap();
+        assert!(detail < effects, "Detail must precede Effects");
     }
     #[test]
     fn recipe_change_and_render() {

@@ -201,10 +201,21 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 
 - Das Bearbeitungs- beziehungsweise Develop-Panel befindet sich auf der
   rechten Seite. Seine Sektionen sind kollabierbar und heißen in der deutschen
-  UI **Grundtonung**, **Tonwertkurve**, **Farbe**, **Effekte**, **Details**,
+  UI **Grundtonung**, **Tonwertkurve**, **Farbe**, **Details**, **Effekte**,
   **Optik**, **Geometrie** und **Maskierung**. Die englischen Lightroom-
-  Referenzbegriffe sind Basic, Tone Curve, Color, Effects, Detail, Optics,
+  Referenzbegriffe sind Basic, Tone Curve, Color, Detail, Effects, Optics,
   Geometry und Masking.
+
+> **Produktentscheidung (2026-08-25, Projekteeigentümer — F-103-N10):**
+> Die Sektionsreihenfolge folgt der Lightroom-Classic-Panelfolge
+> (Basic → Tone Curve → HSL/Color → Color Grading → **Detail → Effects** …):
+> **„Details“ (Schärfen, Rauschreduzierung) steht vor „Effekte“
+> (Vignettierung/Körnung).** Zuvor war in diesem Abschnitt „Effekte“ vor
+> „Details“ notiert (und so auch gerendert); SOLL und GUI sind mit dieser
+> Entscheidung gleichgezogen (Umsetzung 2026-08-26). Die Kollaps-Zustände
+> bleiben davon unberührt, da egui sie an den Sektionslabels speichert, nicht
+> an der Position.
+
 - Die Sektionen werden in dieser Reihenfolge angezeigt. Innerhalb der Sektionen
   wird die Bearbeitungsreihenfolge der F-089–F-099-Unterstufen sichtbar und
   verbindlich abgebildet: **globale Tonwerte** (Exposure, Contrast,
