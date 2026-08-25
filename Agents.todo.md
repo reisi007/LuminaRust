@@ -295,11 +295,11 @@ quantitative Limits (Bildgröße/Speicher/Threads/GPU) nirgends dokumentiert.
 
 **USER-ENTSCHEIDUNGEN 2026-08-25 (aus Block B freigegeben)**
 
-- [ ] **[PRIO: mittel] F-103-N10** Sektionsreihenfolge „Detail" vor „Effects"
-  — **USER-ENTSCHEIDUNG 2026-08-25: LR-Classic-konform.** SOLL
-  (`feature/cli-gui-wasm.md`, F-100) korrigieren („Detail" = Sharpening/Noise
-  Reduction VOR „Effects" = Vignette/Grain) und GUI-Anordnung angleichen;
-  eine Abweichungs-Dokumentation entfällt damit.
+- [ ] **[PRIO: mittel] KITTEST-GOLDENS-REFRESH** Snapshot-Goldens auf
+  GPU-Maschine neu erzeugen (`UPDATE_SNAPSHOTS=true cargo test -p
+  lumina-gui --test kittest_snapshots -- --ignored`): sichtbare
+  UI-Änderungen (Geometry-Hinweis, Draft-Hinweis, F-103-N10
+  Sektionsreihenfolge) sind noch nicht in den Goldens.
 - [ ] **[PRIO: mittel] F-101-F1** Erweiterter MCP-Scope umsetzen —
   **USER-ENTSCHEIDUNG 2026-08-25: jetzt angehen.** Volle CLI-Abdeckung als
   MCP-Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
