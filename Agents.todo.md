@@ -220,11 +220,6 @@ MVP-blockierend)**
   der Maskenloader (`lumina-core::mask_loader`) soll Dimensionen beim Laden
   prüfen und bei Abweichung `Corrupt`/Re-Inferenz auslösen.
 
-- [ ] **[PRIO: niedrig] REVIEW-CORE-DIGEST-WIRING** RenderKey-Digest-Fixes
-  (ExportOptions/SourceAction-Hashes) in CLI/GUI/MCP beim Bau der
-  RenderKeys via `with_export_options`/`with_source_action_hashes`
-  verdrahten, damit Cache-Hits korrekte Qualität/Repair-Pixels liefern
-  (Core-Seite erledigt).
 
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
