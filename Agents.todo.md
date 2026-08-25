@@ -119,12 +119,6 @@ stehenden Restbestand.
 
 
 
-- [ ] **[PRIO: mittel] REVIEW-RAW-FLIP-1** `sizes.flip` (dcraw-Bitmaske) wird 1:1 als
-  EXIF-Orientation persistiert — falsche Codewelt (z. B. flip=5 ist
-  EXIF 8, nicht 5); Portrait-Fixture persistiert nachweislich falsch
-  (mittel; lumina-raw/src/lib.rs:280–283). Fix: explizit übersetzen
-  oder Rohwert unter eigenem Namen führen. Re-Check 2026-08-25:
-  unverändert (`1..=8 => data.sizes.flip as u8`).
 
 
 **Performance-Verfeinerung — Lightroom-artige interaktive Geschwindigkeit**
