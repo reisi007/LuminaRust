@@ -19,7 +19,7 @@ unten). Details siehe
 | Datei | Zweck (Tests / Benches) | Ermittelte Metadaten (EXIF, via `exiftool`) | Provenienz dokumentiert |
 | --- | --- | --- | --- |
 | `aircraft-landscape.cr3` | `lumina-raw`-Test `aircraft_landscape_fixture_*` (Geometrie/Metadaten); Decode-Bench (Env `LUMINA_RAW_FIXTURE`) | Canon EOS R1 · RF200-800mm F6.3-9 IS USM · 2026:08:14 20:16:49 · 1/1000 s · ISO 1000 · 800 mm · Orientierung 1 (Horizontal) · 6032×4024 · EXIF `Artist`/`Copyright` = `reisinger.pictures/Florian Reisinger`, `Owner Name` = `Florian Reisinger` | **JA** — Autor belegt + Lizenzgewährung dokumentiert (2026-08-20) |
-| `aircraft-portrait.cr3` | `lumina-raw`-Test `aircraft_portrait_fixture_*` (EXIF-Orientierung); Decode-Bench (Env `LUMINA_RAW_FIXTURE`) | Canon EOS R1 · RF200-800mm F6.3-9 IS USM · 2026:08:14 20:17:32 · 1/1000 s · ISO 1250 · 800 mm · Orientierung 5 (Rotate 270 CW) · 4024×6032 · EXIF `Artist`/`Copyright` = `reisinger.pictures/Florian Reisinger`, `Owner Name` = `Florian Reisinger` | **JA** — Autor belegt + Lizenzgewährung dokumentiert (2026-08-20) |
+| `aircraft-portrait.cr3` | `lumina-raw`-Test `aircraft_portrait_fixture_*` (EXIF-Orientierung); Decode-Bench (Env `LUMINA_RAW_FIXTURE`) | Canon EOS R1 · RF200-800mm F6.3-9 IS USM · 2026:08:14 20:17:32 · 1/1000 s · ISO 1250 · 800 mm · Orientierung 8 (Rotate 270 CW) · 4024×6032 · EXIF `Artist`/`Copyright` = `reisinger.pictures/Florian Reisinger`, `Owner Name` = `Florian Reisinger` | **JA** — Autor belegt + Lizenzgewährung dokumentiert (2026-08-20) |
 
 Eingeführt in Commit `1e388bf` („Add tone controls and RAW sample fixtures“,
 2026-08-17, Author Florian Reisinger). Dateigrößen: landscape 11.607.210 Bytes,
