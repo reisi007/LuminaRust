@@ -140,6 +140,31 @@ Der Build-Agent ist der verantwortliche Orchestrator. Er:
 - übernimmt eine Aufgabe erst nach erfolgreicher Verifizierung und aktualisiert
   danach Plan und Feature-Dokument.
 
+### Parallele Delegation und Konfliktvermeidung
+
+Um Block A möglichst parallel abzuarbeiten, ohne dass sich Agenten in die Quere
+kommen, gilt:
+
+- **Ein Crate = ein schreibender Agent.** Jeder Implementierungs-Agent erhält
+  exklusiven Schreibzugriff auf genau ein Crate (bzw. ein klar abgegrenztes
+  Docs-/Modulverzeichnis). Dateien desselben Crates werden nicht auf mehrere
+  parallele Agenten verteilt — sonst entstehen Edit- und Kompilierkonflikte.
+- **Gemeinsame APIs/Schemas bleiben seriell.** Ändert eine Aufgabe eine
+  öffentliche Schnittstelle, die ein anderer Agent nutzt (z. B. Core-Pipeline
+  ↔ GUI), wird sie in einer eigenen Welle vor den abhängenden Agenten
+  umgesetzt; abhängige Agenten verwenden nur bereits existierende, stabile
+  Signaturen.
+- **Build-Parallelität ist durch den Cargo-Lock begrenzt.** Mehrere Agenten
+  rufen `cargo` zeitgleich auf; Cargo serialisiert den Zugriff auf `target/`
+  per Lock. Das verlängert die Gesamtlaufzeit, erzeugt aber keine
+  Datenkorruption — parallelisierte Agenten sind sicher.
+- **Abgestürzte/fehlerhafte Subagenten neu starten.** Ein Subagent, der mit
+  einem Fehler zurückkehrt, wird über seine `sessionID` mit Fortsetzung
+  (`continue`) neu gestartet, statt den Kontext neu aufzubauen.
+- **Kein Commit durch Subagenten.** Implementierungs-Agenten committen nicht;
+  der Build-Agent führt den Commit nach bestandener Verifizierung gebündelt
+  aus.
+
 ### Direkte Änderungen des Build-Agenten
 
 Der Build-Agent darf kleine, risikoarme Änderungen selbst durchführen, ohne
