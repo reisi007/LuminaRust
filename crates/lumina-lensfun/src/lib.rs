@@ -37,6 +37,20 @@
 //! sample, and [`Corrector::color_gain`] applies the (position-dependent)
 //! vignetting correction to a single pixel's RGB. Both are wrapped in the
 //! inverse-bilinear resampling loop of the caller.
+//!
+//! # Vignetting-only profiles
+//!
+//! A profile may carry vignetting calibration but no distortion calibration
+//! for the requested parameters (the `lf_modifier_initialize` bitmask then
+//! contains `LF_MODIFY_VIGNETTING` only). For such modifiers
+//! `lf_modifier_apply_geometry_distortion` returns false **without writing**
+//! its output buffer, so [`Corrector::geometry`] passes the coordinates
+//! through unchanged ([`Corrector::has_distortion`] reports `false`).
+//! Ignoring the return value collapsed every destination pixel onto
+//! `(0, 0)` — a single-colour image (review REVIEW-LENSFUN-VIGN-1). Callers
+//! must gate geometric use of a corrector on
+//! [`Corrector::has_distortion`]; the vignetting correction of such a
+//! corrector remains fully usable.
 
 #![cfg_attr(not(feature = "native"), allow(dead_code))]
 
@@ -132,6 +146,9 @@ mod ffi {
         pub fn lf_db_destroy(db: *mut lfDatabase);
         /// Returns an `lfError` (0 == LF_NO_ERROR).
         pub fn lf_db_load(db: *mut lfDatabase) -> c_int;
+        /// Loads one XML database file into `db`, in addition to whatever is
+        /// already loaded. Returns an `lfError` (0 == LF_NO_ERROR).
+        pub fn lf_db_load_file(db: *mut lfDatabase, filename: *const c_char) -> c_int;
         /// Frees memory allocated by the database search functions.
         pub fn lf_free(data: *mut c_void);
 
@@ -177,6 +194,13 @@ mod ffi {
 
         /// Maps a destination (corrected) pixel to the source (distorted)
         /// pixel. `res` must hold `width * height * 2` floats.
+        ///
+        /// The return value is lensfun's `cbool`, which 0.3.x `#define`s as a
+        /// plain `int` (`#define cbool int` in lensfun.h), hence `c_int`.
+        /// **False (0) leaves `res` completely untouched** — for example when
+        /// the modifier was initialized without distortion calibration
+        /// (vignetting-only profile; review REVIEW-LENSFUN-VIGN-1). Callers
+        /// must treat false as "keep the coordinates unchanged".
         pub fn lf_modifier_apply_geometry_distortion(
             modifier: *mut lfModifier,
             xu: c_float,
@@ -258,6 +282,34 @@ mod ffi {
             }
         }
 
+        /// Load a Lensfun database from one XML file (instead of the system
+        /// search paths). Returns `None` if the database cannot be initialised
+        /// or the file does not exist or fails to parse.
+        ///
+        /// Thread safety: serialized behind [`LENSFUN_GLOBAL_LOCK`], like
+        /// [`Self::load_system`].
+        pub fn load_file(path: &std::path::Path) -> Option<LensfunDb> {
+            // Runs before any C allocation, so `?` cannot leak the handle.
+            let as_str = path.to_str()?;
+            let c_path = match std::ffi::CString::new(as_str) {
+                Ok(c) => c,
+                Err(_) => return None,
+            };
+            let _guard = lensfun_global_lock();
+            unsafe {
+                let db = lf_db_new();
+                if db.is_null() {
+                    return None;
+                }
+                let err = lf_db_load_file(db, c_path.as_ptr());
+                if err != 0 {
+                    lf_db_destroy(db);
+                    return None;
+                }
+                Some(LensfunDb { db })
+            }
+        }
+
         /// Build a lens corrector for the given camera/lens, or `None` if no
         /// matching, non-identity profile is found.
         ///
@@ -307,6 +359,17 @@ mod ffi {
         modifier: *mut lfModifier,
         width: u32,
         height: u32,
+        /// True iff lensfun set up a geometry callback
+        /// (`LF_MODIFY_DISTORTION`), i.e. the profile carries distortion
+        /// calibration for the requested parameters. Only then may the
+        /// corrector be used geometrically ([`Corrector::geometry`]);
+        /// vignetting-only profiles keep [`Corrector::geometry`] at the
+        /// identity mapping (review REVIEW-LENSFUN-VIGN-1).
+        has_distortion: bool,
+        /// True iff lensfun set up a colour callback (`LF_MODIFY_VIGNETTING`),
+        /// i.e. the profile carries vignetting calibration for the requested
+        /// parameters.
+        has_vignetting: bool,
     }
 
     impl Corrector {
@@ -314,6 +377,11 @@ mod ffi {
         /// matching profile is found or the correction would be the identity
         /// (in which case the manual LuminaRust model is preferred — graceful
         /// fallback).
+        ///
+        /// A corrector may be *vignetting-only* (`has_distortion() == false`,
+        /// `has_vignetting() == true`) when the profile has no distortion
+        /// calibration for these parameters. Such a corrector must only be
+        /// used for colour correction; its `geometry` is the identity mapping.
         #[allow(clippy::too_many_arguments)]
         pub fn for_camera(
             db: &LensfunDb,
@@ -408,6 +476,8 @@ mod ffi {
                     modifier,
                     width,
                     height,
+                    has_distortion: enabled & LF_MODIFY_DISTORTION != 0,
+                    has_vignetting: enabled & LF_MODIFY_VIGNETTING != 0,
                 };
                 // No-op detection: if the correction is ~identity at
                 // representative points, fall back to the manual model.
@@ -420,10 +490,19 @@ mod ffi {
 
         /// Map a destination pixel `(x, y)` (in `[0, width-1] × [0, height-1]`)
         /// to the source pixel to sample (the Lensfun correction mapping).
+        ///
+        /// If the modifier has no distortion callback (vignetting-only
+        /// profile, [`Self::has_distortion`] `== false`), lensfun reports
+        /// false and does not write `res`; the coordinates are then passed
+        /// through **unchanged** instead of collapsing onto `(0, 0)`
+        /// (review REVIEW-LENSFUN-VIGN-1).
         pub fn geometry(&self, x: f64, y: f64) -> (f64, f64) {
             unsafe {
-                let mut res = [0.0_f32; 2];
-                lf_modifier_apply_geometry_distortion(
+                // Prefill with the identity mapping: on a `false` return
+                // lensfun leaves the buffer untouched, so the passthrough
+                // values below are correct even before we check the flag.
+                let mut res = [x as f32, y as f32];
+                let ok = lf_modifier_apply_geometry_distortion(
                     self.modifier,
                     x as c_float,
                     y as c_float,
@@ -431,8 +510,24 @@ mod ffi {
                     1,
                     res.as_mut_ptr(),
                 );
+                if ok == 0 {
+                    return (x, y);
+                }
                 (res[0] as f64, res[1] as f64)
             }
+        }
+
+        /// Whether this corrector performs geometric (distortion) correction.
+        /// Geometric use is only valid when this returns `true`; for
+        /// vignetting-only profiles [`Self::geometry`] is the identity
+        /// mapping. See review REVIEW-LENSFUN-VIGN-1.
+        pub fn has_distortion(&self) -> bool {
+            self.has_distortion
+        }
+
+        /// Whether this corrector performs colour (vignetting) correction.
+        pub fn has_vignetting(&self) -> bool {
+            self.has_vignetting
         }
 
         /// Apply the Lensfun vignetting correction to a single pixel's RGB.
@@ -464,17 +559,22 @@ mod ffi {
             if w <= 0.0 || h <= 0.0 {
                 return true;
             }
-            // Geometry at centre + four corners.
-            for (x, y) in [
-                (w / 2.0, h / 2.0),
-                (0.0, 0.0),
-                (w - 1.0, 0.0),
-                (0.0, h - 1.0),
-                (w - 1.0, h - 1.0),
-            ] {
-                let (sx, sy) = self.geometry(x, y);
-                if (sx - x).abs() > eps || (sy - y).abs() > eps {
-                    return false;
+            // Geometry at centre + four corners. Only probed when lensfun
+            // actually enabled a distortion callback — a vignetting-only
+            // modifier maps coordinates through unchanged (`geometry`),
+            // which would make every probe trivially pass anyway.
+            if self.has_distortion {
+                for (x, y) in [
+                    (w / 2.0, h / 2.0),
+                    (0.0, 0.0),
+                    (w - 1.0, 0.0),
+                    (0.0, h - 1.0),
+                    (w - 1.0, h - 1.0),
+                ] {
+                    let (sx, sy) = self.geometry(x, y);
+                    if (sx - x).abs() > eps || (sy - y).abs() > eps {
+                        return false;
+                    }
                 }
             }
             // Vignetting at the four corners (vs a flat 100 baseline).
@@ -504,6 +604,8 @@ mod ffi {
             f.debug_struct("Corrector")
                 .field("width", &self.width)
                 .field("height", &self.height)
+                .field("has_distortion", &self.has_distortion)
+                .field("has_vignetting", &self.has_vignetting)
                 .finish_non_exhaustive()
         }
     }
@@ -562,6 +664,116 @@ mod tests {
             corner.0 > centre.0 + 1e-3,
             "corner gain {corner:?} should brighten vs centre {centre:?} (reverse=false correction)"
         );
+    }
+
+    // A vignetting-only profile (REVIEW-LENSFUN-VIGN-1): the pre-fix wrapper
+    // ignored the false return of `lf_modifier_apply_geometry_distortion`,
+    // kept `res = (0, 0)` for every pixel and collapsed the corrected image
+    // onto a single colour.
+
+    const FIXTURE_CAM_MAKE: &str = "Lumina Test Corp";
+    const FIXTURE_CAM_MODEL: &str = "Lumina Test Body";
+
+    /// Writes a minimal Lensfun *version_1* database XML containing one camera
+    /// and one lens with ONLY vignetting calibration (attribute layout as in
+    /// the system databases) and returns its path.
+    fn write_vignetting_only_fixture(tag: &str) -> std::path::PathBuf {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<lensdatabase>
+    <camera>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Test Body</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+    <lens>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Vignetting-Only 50mm f/2.8</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <!-- No distortion, no TCA: vignetting only. -->
+            <vignetting model="pa" focal="50" aperture="2.8" distance="10" k1="-0.08" k2="-0.03" k3="-0.01"/>
+        </calibration>
+    </lens>
+</lensdatabase>
+"#;
+        let path =
+            std::env::temp_dir().join(format!("lumina-lensfun-{tag}-{}.xml", std::process::id()));
+        std::fs::write(&path, xml).expect("write fixture database");
+        path
+    }
+
+    #[test]
+    fn load_file_missing_file_yields_none() {
+        assert!(LensfunDb::load_file(std::path::Path::new(
+            "/nonexistent/lumina-lensfun-definitely-missing.xml"
+        ))
+        .is_none());
+    }
+
+    #[test]
+    fn vignetting_only_profile_keeps_geometry_identity() {
+        let path = write_vignetting_only_fixture("vignonly");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            400,
+            300,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("vignetting-only corrector must be built");
+
+        // The profile corrects vignetting only — no distortion calibration.
+        assert!(!c.has_distortion());
+        assert!(c.has_vignetting());
+
+        // Geometry must be an EXACT identity mapping for every pixel of the
+        // image ("Bild unverändert"): the pre-fix behaviour returned (0, 0)
+        // here and collapsed the whole image onto its top-left pixel.
+        const W: u32 = 400;
+        const H: u32 = 300;
+        for y in 0..H {
+            for x in 0..W {
+                let (sx, sy) = c.geometry(f64::from(x), f64::from(y));
+                assert_eq!(sx, f64::from(x), "x deviates at ({x}, {y})");
+                assert_eq!(sy, f64::from(y), "y deviates at ({x}, {y})");
+            }
+        }
+
+        // Fractional (off-grid) coordinates pass through unchanged as well.
+        let (sx, sy) = c.geometry(123.456, 7.89);
+        assert_eq!(sx, 123.456);
+        assert_eq!(sy, 7.89);
+
+        // The vignetting correction itself stays active — otherwise the
+        // constructor would have dropped the corrector as an identity no-op
+        // and there would be nothing left to protect.
+        assert!(!c.is_identity());
+        let centre = c.color_gain(100.0, 100.0, 100.0, 200.0, 150.0);
+        let corner = c.color_gain(100.0, 100.0, 100.0, 0.0, 0.0);
+        assert!(
+            corner.0 > centre.0 + 1e-3,
+            "corner gain {corner:?} should brighten vs centre {centre:?}"
+        );
+    }
+
+    #[test]
+    fn real_profile_reports_distortion_and_vignetting_flags() {
+        let db = LensfunDb::load_system().expect("system lensfun db");
+        let c = Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), 1000, 750, 18.0, 5.6, 10.0)
+            .expect("profile found");
+        // The DX 18-55mm VR carries distortion AND vignetting calibration at
+        // these parameters, so both callbacks must be enabled.
+        assert!(c.has_distortion());
+        assert!(c.has_vignetting());
     }
 
     #[test]
