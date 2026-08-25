@@ -214,17 +214,17 @@ MVP-blockierend)**
 - [ ] **[PRIO: niedrig] F-082-FOLLOWUP-HASH** ORT-Mismatch-Refuse-Zweig
   (`ModelArtifactStale`) ohne ausführbaren Test (benötigt ladbares
   `.onnx` mit abweichendem Pin); hash-gepinnte ONNX-Fixture erfassen.
+- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-LOADER-RES** Auflösungsvalidierung im
+  ladenden Pfad: `artifact_status` validiert Reference-width/height bewusst
+  nicht gegen Bundle-Records (siehe sidecar.md „Artefaktstatus-Prüfung");
+  der Maskenloader (`lumina-core::mask_loader`) soll Dimensionen beim Laden
+  prüfen und bei Abweichung `Corrupt`/Re-Inferenz auslösen.
 
 - [ ] **[PRIO: niedrig] REVIEW-CORE-DIGEST-WIRING** RenderKey-Digest-Fixes
   (ExportOptions/SourceAction-Hashes) in CLI/GUI/MCP beim Bau der
   RenderKeys via `with_export_options`/`with_source_action_hashes`
   verdrahten, damit Cache-Hits korrekte Qualität/Repair-Pixels liefern
   (Core-Seite erledigt).
-- [ ] **[PRIO: niedrig] REVIEW-CLI-FOLLOWUP-1** `collect_sidecars` hat weiterhin
-  keinen Symlink-/Loop-Schutz (N5 deckte nur `collect_images` ab).
-- [ ] **[PRIO: niedrig] REVIEW-MCP-DOCS** `feature/platform/mcp-server.md` um
-  neue Verhalten ergänzen: SidecarConflict/-32010, isError-Result,
-  Extension-Gate, strenge Quality-Bounds, Identity-Check bei Load.
 - [ ] **[PRIO: niedrig] REVIEW-SIDECAR-FOLLOWUP-1** `artifact_status` erkennt
   <8-Byte-Container nicht als `Corrupt` (nur Magic-Parsing); bei
   `reference.format=="zdata"` ohne gültige Magic → `Corrupt`.

@@ -101,6 +101,47 @@ bleiben außerhalb beider Dateien. Atomare JSON- und zdata-Schreibvorgänge sind
 jeweils gewährleistet; eine gemeinsame Zwei-Dateien-Transaktion ist ausdrücklich
 noch offen.
 
+### Artefaktstatus-Prüfung (`artifact_status`)
+
+`artifact_status(bundle_root, reference)` meldet pro Artefakt `Available`,
+`Missing` oder `Corrupt`. Stand 2026-08-25 (REVIEW-SIDECAR-STATUS-1,
+REVIEW-SIDECAR-FOLLOWUP-1/-2):
+
+- `Missing`: Pfad fehlt oder ist keine reguläre Datei.
+- `Corrupt`: Die Datei existiert, ist aber nicht verwendbar — sie ist leer
+  bzw. kleiner als der 8-Byte-Container-Magic, deklariert ein
+  `.lumina.zdata`-Format (`"zdata"`, `"zdata-mask"`, `"lumina-zdata"`), ohne
+  mit `LUMZDATA` zu beginnen, übersteigt das Containergrößenlimit oder — bei
+  echten Containern — scheitert beim Parsen oder an der BLAKE3-Prüfung.
+  Diese Prüfsummen werden beim Statuscheck aktiv verifiziert („eager“), nicht
+  erst bei der ersten Tile-Anfrage; ein bitflipped Payload zählt damit nie als
+  verfügbar.
+- `Available`: alle obigen Prüfungen bestanden.
+
+Diese Regeln gelten in jedem Build; ohne das `zdata`-Feature entfällt nur die
+aktive Parse-/Prüfsummenverifizierung magic-tragender Dateien (dokumentierte
+Grenze, kein stiller Fallback).
+
+**Dokumentierte SOLL-Lücke (bewusst offen):** `artifact_status` validiert die
+in der Reference deklarierte Auflösung (`width`/`height`) **nicht** gegen die
+Record-Dimensionen des Bundles. Eine solche Validierung ist ohne den
+konsumierenden Pipeline-Decoder nicht sound implementierbar:
+
+1. Eine `ArtifactReference` trägt keine Record-ID(s); in einem gemeinsamen
+   Bundle liegen mehrere Masken- und Repair-Region-Records, sodass die
+   zugehörigen Records einer Reference innerhalb von `artifact_status` nicht
+   identifizierbar sind. Eine Prüfung gegen alle Records würde korrekte
+   Bundles fälschlich als `Corrupt` melden.
+2. Repair-Region-Records führen regionslokale Dimensionen, die zu keiner
+   Maskenebene in Beziehung stehen.
+3. Die Zusammensetzung von Kacheln zu einer Maskenebene (Offsets, Kachelraster,
+   Nachskalierung beim Lesen) ist Semantik des konsumierenden Loaders.
+
+Die tiefere Auflösungsvalidierung gehört deshalb in den ladenden Pfad
+(z. B. den Maskenloader von `lumina-core`), der Masken-ID und Dekontext kennt.
+Bis dahin bleibt die Lücke hier ausdrücklich dokumentiert; sie ist kein
+stiller Fallback, sondern eine abgegrenzte Verantwortungsgrenze.
+
 Der Container muss Random Access auf einzelne Kacheln erlauben und darf später
 weitere Artefakttypen aufnehmen. OpenEXR und 7z sind für dieses Arbeitsformat
 nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
@@ -138,10 +179,11 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   beim Laden (nicht mehr lazy beim Tile-Zugriff). Korrekte Container bis 512 MB:
   bewusster Korrektheit-vor-Geschwindigkeit-Trade-off.
 - **Artefaktstatus:** `artifact_status` unterscheidet `Missing`, `Available`
-  und neu `Corrupt` (leere Datei, fehlende/falsche LUMZDATA-Magic, Parse- oder
-  Prüfsummenfehler). Bekannte Grenzen: Container < 8 Bytes werden aktuell noch
-  nicht als `Corrupt` erkannt; Reference-width/height wird nicht gegen
-  Bundle-Records validiert (beides Folgeaufgaben in `Agents.todo.md`).
+  und neu `Corrupt` (leere Datei, <8-Byte-Container ohne Magic,
+  zdata-deklariertes Format ohne `LUMZDATA`-Magic, fehlende/falsche Magic,
+  Parse- oder Prüfsummenfehler). Reference-width/height wird bewusst nicht
+  gegen Bundle-Records validiert — siehe oben „Artefaktstatus-Prüfung
+  (`artifact_status`)“ für Begründung und Verantwortungsgrenze.
 - **Recovery/Validierung:** `recover_sidecar` entfernt Temp-Dateien erst ab
   mtime-Schwelle (lebende Writer bleiben unberührt); Migrationstempfiles tragen
   das Präfix `.{name}.tmp-` und sind damit sweeponfähig. `delete_virtual_copy`
