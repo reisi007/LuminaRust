@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 #[cfg(feature = "lensfun")]
 use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
@@ -31,7 +31,7 @@ use lumina_sidecar::{
 };
 use rayon::prelude::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -223,7 +223,7 @@ enum Command {
     DustRemoval(DustRemovalArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 struct FileArgs {
     #[arg(long)]
     input: PathBuf,
@@ -241,6 +241,11 @@ struct FileArgs {
     force_render: bool,
     #[arg(long)]
     virtual_copy: Option<String>,
+    /// How missing or invalid mask artifacts are handled when rendering
+    /// (REVIEW-CLI-EXPORTMASK-1): `warn` warns and continues (the harmonized
+    /// default for every render-capable subcommand), `strict` aborts.
+    #[arg(long, value_enum, default_value = "warn")]
+    mask_policy: CliMaskPolicy,
 }
 
 #[derive(Debug, Args)]
@@ -281,6 +286,11 @@ struct ExportArgs {
     migrate: bool,
     #[arg(long)]
     json: bool,
+    /// REVIEW-CLI-EXPORTMASK-1: harmonized stale-mask behaviour. Default
+    /// `warn` continues with a warning (like render/batch/process); `strict`
+    /// aborts before anything is decoded or written.
+    #[arg(long, value_enum, default_value = "warn")]
+    mask_policy: CliMaskPolicy,
 }
 
 #[derive(Debug, Args)]
@@ -309,6 +319,9 @@ struct BatchArgs {
     quality: u8,
     #[arg(long)]
     virtual_copy: Option<String>,
+    /// Same harmonized stale-mask behaviour as export/render (default warn).
+    #[arg(long, value_enum, default_value = "warn")]
+    mask_policy: CliMaskPolicy,
 }
 
 #[derive(Debug, Args)]
@@ -371,6 +384,34 @@ struct RepairRegionInput {
 
 fn default_source_action_kind() -> SourceActionKind {
     SourceActionKind::DustRemoval
+}
+
+/// CLI-facing `--mask-policy` selection (REVIEW-CLI-EXPORTMASK-1). `warn` is
+/// the harmonized default everywhere: missing or stale masks produce a warning
+/// and the command continues; `strict` aborts the command with an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum CliMaskPolicy {
+    /// Missing/stale masks warn; the command continues.
+    Warn,
+    /// Missing/stale masks abort the command.
+    Strict,
+}
+
+impl CliMaskPolicy {
+    fn to_policy(self) -> MaskPolicy {
+        match self {
+            Self::Warn => MaskPolicy::Warn,
+            Self::Strict => MaskPolicy::Strict,
+        }
+    }
+}
+
+/// Parsed `*.status.json` resume marker written by `batch` (REVIEW-CLI-N3).
+/// Resume decisions read this struct instead of substring-matching raw text.
+#[derive(Debug, Deserialize)]
+struct BatchStatusFile {
+    #[serde(default)]
+    status: String,
 }
 
 #[derive(Debug, Args)]
@@ -449,7 +490,21 @@ fn import_file(args: FileArgs) -> Result<(), CliError> {
     if args.migrate && path.exists() {
         migrate_sidecar(&path)?;
     } else if path.exists() {
-        load_sidecar(&path)?;
+        let document = load_sidecar(&path)?;
+        // REVIEW-CLI-N7: mirror `process_selected`'s source-change detection.
+        // Import must not silently bless a sidecar whose edits belong to
+        // different file contents — reproducibility over convenience. The
+        // mismatch is a loud error; the sidecar keeps guarding the OLD
+        // contents until it is consciously removed or migrated.
+        let current_identity = source_identity(&args.input, &bytes, &frame, raw.as_ref())?;
+        if document.source.content_hash != current_identity.content_hash
+            || document.source.byte_length != current_identity.byte_length
+        {
+            return Err(CliError::Message(format!(
+                "source changed since sidecar was written: `{}`; remove or rename the sidecar to re-import consciously",
+                args.input.display()
+            )));
+        }
     } else {
         let document = SidecarDocument::new(
             source_identity(&args.input, &bytes, &frame, raw.as_ref())?,
@@ -525,6 +580,7 @@ fn render(args: FileArgs) -> Result<(), CliError> {
         },
         args.quality,
         args.virtual_copy.as_deref(),
+        args.mask_policy.to_policy(),
         &mut mask_warnings,
     )?;
     emit(
@@ -540,10 +596,24 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
     if args.migrate {
         migrate_sidecar(&sidecar_path_for(&args.input))?;
     }
-    // This check is deliberately before decoding and writing the export.  A
-    // warning is allowed by the product contract, but an explicit update must
-    // never pretend that an unavailable inference engine succeeded.
-    preflight_masks(&args.input, args.virtual_copy.as_deref(), args.update_masks)?;
+    // REVIEW-CLI-EXPORTMASK-1: stale-mask behaviour is harmonized across the
+    // render-capable subcommands — the default is warn-and-continue (identical
+    // to render/batch/process); aborting is reserved for an explicit
+    // `--mask-policy strict`. The preflight deliberately runs before decoding
+    // and writing so a strict abort leaves no half-written artifacts.
+    preflight_masks(
+        &args.input,
+        args.virtual_copy.as_deref(),
+        args.update_masks,
+        args.mask_policy.to_policy(),
+    )?;
+    if args.update_masks {
+        // Persist the one-shot refresh request (same channel develop/batch
+        // use) so THIS export's render re-infers; `process_selected` consumes
+        // and removes it again. Without an inference engine the render itself
+        // fails loudly instead of pretending a stale mask was refreshed.
+        mark_masks_pending_refresh(&args.input, args.virtual_copy.as_deref())?;
+    }
     let output = args.output.with_extension(format_extension(&args.format));
     let mut mask_warnings = Vec::new();
     process_selected(
@@ -561,6 +631,7 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
         },
         args.quality,
         args.virtual_copy.as_deref(),
+        args.mask_policy.to_policy(),
         &mut mask_warnings,
     )?;
     emit(
@@ -570,7 +641,12 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
     )
 }
 
-fn preflight_masks(input: &Path, virtual_copy: Option<&str>, update: bool) -> Result<(), CliError> {
+fn preflight_masks(
+    input: &Path,
+    virtual_copy: Option<&str>,
+    update: bool,
+    policy: MaskPolicy,
+) -> Result<(), CliError> {
     let path = sidecar_path_for(input);
     let document = match load_sidecar(&path) {
         Ok(document) => document,
@@ -597,14 +673,50 @@ fn preflight_masks(input: &Path, virtual_copy: Option<&str>, update: bool) -> Re
     if missing == 0 {
         return Ok(());
     }
-    if update {
+    if policy == MaskPolicy::Strict {
         return Err(CliError::Message(format!(
-            "--update-masks requested for {missing} mask(s), but no AI inference engine is available; export aborted"
+            "strict mask policy: {missing} mask(s) are missing or unavailable for `{id}`; command aborted"
         )));
     }
-    eprintln!(
-        "warning: {missing} mask(s) are missing or unavailable; they will not be applied (use --update-masks when an inference engine is installed)"
-    );
+    // Harmonized default (REVIEW-CLI-EXPORTMASK-1): warn-and-continue. An
+    // explicit `--update-masks` is honoured by the render itself — masks are
+    // re-inferred when an engine is available and the command fails loudly
+    // when none is; it never silently succeeds with stale pixels.
+    if update {
+        eprintln!(
+            "warning: {missing} mask(s) for `{id}` are missing or unavailable; --update-masks will re-infer them during the render and fail loudly if no inference engine is installed"
+        );
+    } else {
+        eprintln!(
+            "warning: {missing} mask(s) for `{id}` are missing or unavailable; they will not be applied (use --update-masks when an inference engine is installed)"
+        );
+    }
+    Ok(())
+}
+
+/// Persists the ONE-SHOT `--update-masks` request into the named virtual
+/// copy's recipe options — the same channel develop/batch/mask use. The next
+/// render through `process_selected` consumes it and removes it from the
+/// persisted recipe again (REVIEW-CLI-MASKFLAG-1).
+fn mark_masks_pending_refresh(input: &Path, virtual_copy: Option<&str>) -> Result<(), CliError> {
+    let path = sidecar_path_for(input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let id = virtual_copy.unwrap_or("vc-original");
+    let Some(copy) = document
+        .virtual_copies
+        .iter_mut()
+        .find(|copy| copy.id == id)
+    else {
+        return Err(CliError::Message(format!("unknown virtual copy `{id}`")));
+    };
+    copy.recipe
+        .options
+        .insert("update_masks".into(), "true".into());
+    save_sidecar(&path, &document)?;
     Ok(())
 }
 
@@ -657,9 +769,10 @@ fn validate(args: IndexArgs) -> Result<(), CliError> {
 }
 
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
-    // Never overwrite the original with the optional render output.
+    // Never overwrite the original — or its Lumina bundle files — with the
+    // optional render output (REVIEW-CLI-WRITE-1).
     if let Some(output) = &args.render_out {
-        reject_same_path(&args.input, output)?;
+        reject_protected_output(&args.input, output)?;
     }
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (frame, _raw) = decode_input(&args.input, &bytes)?;
@@ -706,21 +819,11 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
         )));
     }
 
-    // Persist the artifact bytes into the portable `.lumina.zdata` bundle,
-    // appended next to the source.  The recipe stores only a RELATIVE reference
+    // REVIEW-CLI-N2: validate the sidecar and resolve the target copy BEFORE
+    // anything is appended to the `.lumina.zdata` bundle. Appending first left
+    // orphaned artifact bytes behind whenever the sidecar was missing or the
+    // virtual copy did not exist. The recipe stores only a RELATIVE reference
     // (the bundle file name), never an absolute path.
-    let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
-    let relative_path = zdata_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("repair.zdata")
-        .to_string();
-    let checksum = region.checksum();
-    append_repair_region(&zdata_path, region).map_err(|error| {
-        CliError::Message(format!("could not write repair-region bundle: {error}"))
-    })?;
-
-    // Record the action spec in the active virtual copy's recipe.
     let sidecar_path = sidecar_path_for(&args.input);
     let mut document = match load_sidecar(&sidecar_path) {
         Ok(document) => document,
@@ -744,6 +847,21 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
         })
         .transpose()?
         .unwrap_or(0);
+
+    // Persist the artifact bytes into the portable `.lumina.zdata` bundle,
+    // appended next to the source.
+    let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
+    let relative_path = zdata_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repair.zdata")
+        .to_string();
+    let checksum = region.checksum();
+    append_repair_region(&zdata_path, region).map_err(|error| {
+        CliError::Message(format!("could not write repair-region bundle: {error}"))
+    })?;
+
+    // Record the action spec in the validated virtual copy's recipe.
     let spec = SourceActionSpec {
         version: SOURCE_ACTION_VERSION,
         kind: definition.kind,
@@ -857,16 +975,39 @@ fn reindex(args: IndexArgs) -> Result<(), CliError> {
     let mut files = Vec::new();
     collect_sidecars(&args.input, &mut files)?;
     let mut valid = 0usize;
+    let mut invalid: Vec<String> = Vec::new();
     for path in files {
-        if load_sidecar(&path).is_ok() {
-            valid += 1;
+        match load_sidecar(&path) {
+            Ok(_) => valid += 1,
+            // REVIEW-CLI-N4: corrupt sidecars are never ignored silently —
+            // each one is reported and the command exits non-zero so scripts
+            // and the future index adapter notice the broken state.
+            Err(error) => invalid.push(format!("{}: {error}", path.display())),
         }
     }
+    for entry in &invalid {
+        eprintln!("warning: invalid sidecar: {entry}");
+    }
+    let invalid_count = invalid.len();
+    let text = format!("reindexed: {valid} valid, {invalid_count} invalid");
     emit(
         args.json,
-        serde_json::json!({"command":"reindex", "input":args.input, "sidecars":valid, "status":"ok"}),
-        "reindexed",
-    )
+        serde_json::json!({
+            "command":"reindex",
+            "input":args.input,
+            "sidecars":valid,
+            "invalid":invalid_count,
+            "errors":invalid,
+            "status": if invalid_count == 0 { "ok" } else { "invalid-sidecars" }
+        }),
+        &text,
+    )?;
+    if invalid_count != 0 {
+        return Err(CliError::Message(format!(
+            "reindex found {invalid_count} invalid sidecar(s)"
+        )));
+    }
+    Ok(())
 }
 
 fn batch(args: BatchArgs) -> Result<(), CliError> {
@@ -875,9 +1016,15 @@ fn batch(args: BatchArgs) -> Result<(), CliError> {
     }
     validate_format(&args.format)?;
     validate_quality(args.quality)?;
-    fs::create_dir_all(&args.output).map_err(|e| io_error(&args.output, e))?;
     let mut inputs = Vec::new();
     collect_images(&args.input, &mut inputs)?;
+    // REVIEW-CLI-BATCHCOLLIDE-1: outputs are name-based inside ONE flat
+    // directory, so distinct inputs can map onto the same target file name
+    // (`a/x.arw` and `b/x.png` both write `x.png`). Refuse the whole run up
+    // front — before the output directory even exists — instead of letting
+    // later items silently overwrite earlier ones.
+    reject_duplicate_batch_targets(&inputs, &args.format)?;
+    fs::create_dir_all(&args.output).map_err(|e| io_error(&args.output, e))?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs)
         .build()
@@ -916,6 +1063,37 @@ fn batch(args: BatchArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Rejects inputs whose name-based batch targets collide after the output
+/// extension is normalized, listing the colliding pair. Runs before any
+/// output is written so a rejected batch leaves no partial state.
+fn reject_duplicate_batch_targets(inputs: &[PathBuf], format: &str) -> Result<(), CliError> {
+    let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for input in inputs {
+        let name = input
+            .file_name()
+            .map(|name| name.to_os_string())
+            .ok_or_else(|| CliError::Message("input has no file name".into()))?;
+        let target = PathBuf::from(name)
+            .with_extension(format_extension(format))
+            .to_string_lossy()
+            .into_owned();
+        match seen.get(&target) {
+            Some(first) if first != input => {
+                return Err(CliError::Message(format!(
+                    "batch output collision: `{}` and `{}` both write `{}` into the output directory; refusing to silently overwrite (mirror the directory structure or split the run)",
+                    first.display(),
+                    input.display(),
+                    target
+                )));
+            }
+            _ => {
+                seen.insert(target, input.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
     let name = input
         .file_name()
@@ -929,7 +1107,13 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
         .join(format!("{}.status.json", name.to_string_lossy()));
     if args.resume && status.exists() && output.is_file() {
         let state = fs::read_to_string(&status).map_err(|e| io_error(&status, e))?;
-        if state.contains("\"status\":\"ok\"") {
+        // REVIEW-CLI-N3: resume decides on the PARSED JSON status, not on a
+        // substring match of the raw file; a malformed status file counts as
+        // "not done" and the item is reprocessed.
+        if serde_json::from_str::<BatchStatusFile>(&state)
+            .ok()
+            .is_some_and(|state| state.status == "ok")
+        {
             return Ok(input.display().to_string());
         }
     }
@@ -972,6 +1156,7 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
                 },
                 args.quality,
                 args.virtual_copy.as_deref(),
+                args.mask_policy.to_policy(),
                 &mut Vec::new(),
             ) {
                 Ok(()) => {
@@ -990,27 +1175,53 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
 }
 
 fn collect_images(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
-    for entry in fs::read_dir(path).map_err(|e| io_error(path, e))? {
-        let entry = entry.map_err(|e| io_error(path, e))?;
+    // REVIEW-CLI-N5: the visited set holds canonical directory identities so
+    // filesystem cycles (symlink loops, bind mounts) terminate instead of
+    // overflowing the stack.
+    let mut visited = BTreeSet::new();
+    collect_images_inner(path, output, &mut visited)
+}
+
+fn collect_images_inner(
+    path: &Path,
+    output: &mut Vec<PathBuf>,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<(), CliError> {
+    let identity = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(identity) {
+        return Ok(());
+    }
+    let mut entries: Vec<std::fs::DirEntry> = fs::read_dir(path)
+        .map_err(|e| io_error(path, e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io_error(path, e))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
         let p = entry.path();
-        if p.is_dir() {
-            collect_images(&p, output)?;
-        } else if p
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| {
-                matches!(
-                    e.to_ascii_lowercase().as_str(),
-                    "png" | "jpg" | "jpeg" | "webp" | "arw" | "cr2" | "cr3" | "dng" | "nef"
-                )
-            })
-            .unwrap_or(false)
-        {
+        // `entry.file_type()` never follows symlinks: a symlinked directory is
+        // never recursed into, which removes symlink loops by construction.
+        if entry.file_type().map_err(|e| io_error(&p, e))?.is_dir() {
+            collect_images_inner(&p, output, visited)?;
+        } else if has_image_extension(&p) && p.is_file() {
             output.push(p);
         }
     }
     Ok(())
 }
+
+/// Supported input extensions for batch collection.
+fn has_image_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "arw" | "cr2" | "cr3" | "dng" | "nef"
+            )
+        })
+        .unwrap_or(false)
+}
+
 fn collect_sidecars(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
     for entry in fs::read_dir(path).map_err(|e| io_error(path, e))? {
         let entry = entry.map_err(|e| io_error(path, e))?;
@@ -1044,7 +1255,51 @@ fn migrate_sidecar(path: &Path) -> Result<(), CliError> {
 fn process(args: ProcessArgs) -> Result<(), CliError> {
     // `process` has no explicit quality flag; it uses the shared default (90),
     // which is identical to the historical `frame.encode(format)` output.
-    process_selected(args, 90, None, &mut Vec::new())
+    process_selected(args, 90, None, MaskPolicy::Warn, &mut Vec::new())
+}
+
+/// Composite zdata record id for a persisted mask plane (REVIEW-CLI-N1).
+///
+/// Tiles inside the `.lumina.zdata` bundle are stored under the composite
+/// record id `<copy_id>/<mask_id>` so two virtual copies may carry same-named
+/// masks (`subject`) without silently sharing one matte. Field order and the
+/// `/` separator are normative: `lumina-gui` must adopt this exact convention
+/// when it reads/writes mask tiles.
+fn zdata_mask_tile_id(copy_id: &str, mask_id: &str) -> String {
+    format!("{copy_id}/{mask_id}")
+}
+
+/// Loads every persisted source-mask plane from the optional `.lumina.zdata`
+/// bundle, keyed by `(copy_id, mask_id)` (REVIEW-CLI-N1). A missing or
+/// unreadable bundle yields an empty map; missing per-key tiles are decided
+/// by the F-051 decision layer in lumina-core (cache, re-inference or a loud
+/// error — never a silent fallback).
+fn load_persisted_mask_planes(
+    document: &SidecarDocument,
+    zdata_path: &Path,
+) -> BTreeMap<(String, String), MaskPlane> {
+    let mut planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
+    if !zdata_path.exists() {
+        return planes;
+    }
+    let Ok(container) = lumina_sidecar::load_zdata(zdata_path) else {
+        return planes;
+    };
+    for copy in &document.virtual_copies {
+        for mask in copy
+            .mask_library
+            .iter()
+            .filter(|m| matches!(m.operation, MaskOperation::Source))
+        {
+            let Ok(tile) = container.tile(&zdata_mask_tile_id(&copy.id, &mask.id), 0, 0) else {
+                continue;
+            };
+            if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
+                planes.insert((copy.id.clone(), mask.id.clone()), plane);
+            }
+        }
+    }
+    planes
 }
 
 /// Build a Lensfun lens corrector from decoded RAW metadata (EXIF) for use as
@@ -1107,9 +1362,12 @@ fn process_selected(
     args: ProcessArgs,
     quality: u8,
     virtual_copy: Option<&str>,
+    policy: MaskPolicy,
     mask_warnings_out: &mut Vec<String>,
 ) -> Result<(), CliError> {
-    reject_same_path(&args.input, &args.output)?;
+    // REVIEW-CLI-WRITE-1: the guard covers the original itself (path and
+    // hard-link identity) plus its `.lumina.json`/`.lumina.zdata` bundle.
+    reject_protected_output(&args.input, &args.output)?;
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
@@ -1156,6 +1414,22 @@ fn process_selected(
         .transpose()?
         .unwrap_or(0);
     let mut recipe = document.virtual_copies[copy_index].recipe.clone();
+    // REVIEW-CLI-MASKFLAG-1: `update_masks` (and the legacy `force_render`)
+    // are ONE-SHOT requests persisted into the recipe options by
+    // develop/batch/mask/export. They are consumed here and dropped from the
+    // recipe before it is written back, so a confirmably valid persisted mask
+    // stops triggering re-inference on every future run (Agents.md
+    // persistence invariant: a valid mask is reused, never silently
+    // recomputed). The sidecar is saved only after a successful render below,
+    // so a failed run keeps the pending request intact for the next attempt.
+    // (`force_render` has no consumer yet — the CLI always renders fresh — so
+    // consuming it is pure pollution cleanup.)
+    let refresh_masks = recipe
+        .options
+        .get("update_masks")
+        .is_some_and(|value| value == "true");
+    recipe.options.remove("update_masks");
+    recipe.options.remove("force_render");
     let auto_requested = args.auto_tone;
     if auto_requested {
         recipe.auto_features.enable_auto_tone = true;
@@ -1216,27 +1490,10 @@ fn process_selected(
     }
     // --- F-048 / F-051: intelligent mask-loading decision layer ---
     // Load every persisted source-mask plane from the optional `.lumina.zdata`
-    // bundle (regardless of status); the decision layer below validates
-    // identity and decides whether to use it, re-infer, or fall back.
-    let mut loaded_planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
+    // bundle (regardless of status); the decision layer in lumina-core
+    // validates identity and decides whether to use it, re-infer, or fail.
     let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
-    if zdata_path.exists() {
-        if let Ok(container) = lumina_sidecar::load_zdata(&zdata_path) {
-            for copy in &document.virtual_copies {
-                for mask in copy
-                    .mask_library
-                    .iter()
-                    .filter(|m| matches!(m.operation, MaskOperation::Source))
-                {
-                    if let Ok(tile) = container.tile(&mask.id, 0, 0) {
-                        if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
-                            loaded_planes.insert((copy.id.clone(), mask.id.clone()), plane);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let loaded_planes = load_persisted_mask_planes(&document, &zdata_path);
 
     // Wire the ONNX adapter (StubBackend / BiRefNet descriptor) when available.
     // `None` means no inference engine is installed at all (F-051: the decision
@@ -1263,13 +1520,10 @@ fn process_selected(
             // F-049: `--update-masks` is persisted into the active copy's recipe
             // options by the develop/export/batch commands and reloaded here, so
             // the refresh flag the decision layer needs is driven by the CLI
-            // flag (and survives the persisted sidecar).
-            refresh: document.virtual_copies[copy_index]
-                .recipe
-                .options
-                .get("update_masks")
-                .is_some_and(|value| value == "true"),
-            policy: MaskPolicy::Warn,
+            // flag (and survives the persisted sidecar). It is consumed above:
+            // after this run it is removed from the recipe again.
+            refresh: refresh_masks,
+            policy,
         },
         &frame,
     )?;
@@ -1290,7 +1544,7 @@ fn process_selected(
             copies: &resolved.copies,
             active_copy_id: &active_copy.id,
             planes: mask_planes.clone(),
-            policy: MaskPolicy::Warn,
+            policy,
         }),
         // F-098-N2: pass a Lensfun corrector when one was built from EXIF
         // (otherwise `None` → manual LuminaRust model / identity fallback).
@@ -1376,7 +1630,7 @@ fn process_selected(
                     active_copy_id: &active_copy.id,
                     // Reuse the same planes captured for the warning render above.
                     planes: mask_planes.clone(),
-                    policy: MaskPolicy::Warn,
+                    policy,
                 }),
                 #[cfg(feature = "lensfun")]
                 lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
@@ -1390,6 +1644,13 @@ fn process_selected(
     };
     write_atomically(&args.output, &encoded)?;
 
+    // REVIEW-CLI-N6 (conscious v1 scope): the export is written BEFORE the
+    // sidecar/history update below. If this final `save_sidecar` fails, the
+    // command exits non-zero although the export exists — the export is then
+    // newer than the recorded history. The architecture explicitly leaves a
+    // two-file transaction out of v1 (see `lumina-sidecar` lib.rs); the atomic
+    // sidecar write makes a torn state impossible, so the worst case is a
+    // successful export missing its newest history entry.
     let copy = &mut document.virtual_copies[copy_index];
     copy.recipe = recipe.clone();
     copy.history.push(HistoryEntry {
@@ -1593,6 +1854,74 @@ fn reject_same_path(input: &Path, output: &Path) -> Result<(), CliError> {
         ));
     }
     Ok(())
+}
+
+/// REVIEW-CLI-WRITE-1: refuses an output path that would clobber the original
+/// source, one of its Lumina bundle files (`<input>.lumina.json`,
+/// `<input>.lumina.zdata`) or a hard link to them. Path equality covers
+/// canonical aliases (including not-yet-existing targets, resolved against
+/// their parent directory); `(dev, inode)` identity additionally catches hard
+/// links, which canonicalization cannot see.
+fn reject_protected_output(input: &Path, output: &Path) -> Result<(), CliError> {
+    reject_same_path(input, output)?;
+    let output_resolved = resolve_candidate(output).map_err(|error| io_error(output, error))?;
+    let protected = [
+        ("sidecar", lumina_sidecar::sidecar_path_for(input)),
+        (
+            "mask/source-action bundle",
+            lumina_sidecar::zdata_path_for(input),
+        ),
+    ];
+    for (kind, target) in protected {
+        let target_resolved =
+            resolve_candidate(&target).map_err(|error| io_error(&target, error))?;
+        if target_resolved == output_resolved {
+            return Err(CliError::Message(format!(
+                "output `{}` would overwrite the Lumina {kind} `{}`; refusing (non-destructive guarantee)",
+                output.display(),
+                target.display()
+            )));
+        }
+    }
+    if paths_are_same_file(input, output).map_err(|error| io_error(input, error))? {
+        return Err(CliError::Message(format!(
+            "output `{}` is a hard link to the input `{}`; refusing to overwrite the original",
+            output.display(),
+            input.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Resolves `path` to a comparable identity: existing paths are canonicalized,
+/// missing ones are resolved against their canonical parent directory (the
+/// same convention as `lumina_sidecar::paths_resolve_equal`).
+fn resolve_candidate(path: &Path) -> std::io::Result<PathBuf> {
+    if path.exists() {
+        fs::canonicalize(path)
+    } else {
+        let parent = fs::canonicalize(path.parent().unwrap_or_else(|| Path::new(".")))?;
+        Ok(parent.join(path.file_name().unwrap_or_default()))
+    }
+}
+
+/// Unix: true when both paths refer to the same underlying file via
+/// `(dev, inode)` identity — this catches hard links between distinct paths.
+#[cfg(unix)]
+fn paths_are_same_file(a: &Path, b: &Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    if !(a.exists() && b.exists()) {
+        return Ok(false);
+    }
+    let (meta_a, meta_b) = (fs::metadata(a)?, fs::metadata(b)?);
+    Ok(meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino())
+}
+
+/// Non-unix fallback: no portable inode identity exists; only path equality
+/// (checked separately above) applies.
+#[cfg(not(unix))]
+fn paths_are_same_file(_a: &Path, _b: &Path) -> std::io::Result<bool> {
+    Ok(false)
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
@@ -1995,9 +2324,10 @@ mod tests {
         fs::write(&input, &bytes).unwrap();
         write_sidecar_with_valid_layer(&input, &bytes, &frame);
 
-        // Provide a 2x2 fully-filled artifact plane for `subject`.
+        // Provide a 2x2 fully-filled artifact plane for `subject`, stored
+        // under the per-copy composite record id (REVIEW-CLI-N1).
         let tile = lumina_sidecar::MaskTile {
-            mask_id: "subject".into(),
+            mask_id: zdata_mask_tile_id("vc-original", "subject"),
             tile_x: 0,
             tile_y: 0,
             width: 2,
@@ -2023,6 +2353,7 @@ mod tests {
             },
             90,
             None,
+            MaskPolicy::Warn,
             &mut warnings,
         )
         .unwrap();
@@ -2059,6 +2390,7 @@ mod tests {
             },
             90,
             None,
+            MaskPolicy::Warn,
             &mut warnings,
         )
         .unwrap();
@@ -2066,7 +2398,485 @@ mod tests {
         assert!(warnings.is_empty());
     }
 
-    // ---- F-085: history steps and mask × matching interplay ----
+    // ---- Review fixes (2026-08 wave): one-shot mask flags, per-copy zdata
+    // tiles, harmonized mask policy, batch collisions/resume, reindex exit
+    // codes, symlink-safe collection, overwrite guards, import hash check,
+    // dust-removal ordering. ----
+
+    /// Writes a tiny 2x2 PNG and returns its path plus the frame.
+    fn png_input(directory: &Path, name: &str, pixel: u8) -> (PathBuf, ImageFrame) {
+        let input = directory.join(name);
+        let frame = ImageFrame::new(2, 2, vec![pixel; 16]).unwrap();
+        fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        (input, frame)
+    }
+
+    #[test]
+    fn one_shot_mask_flags_are_consumed_and_removed_from_the_recipe() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = png_input(directory.path(), "input.png", 100);
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // Persisted artifact under the composite record id so the render is
+        // warning-free once the flag is consumed.
+        let tile = lumina_sidecar::MaskTile {
+            mask_id: zdata_mask_tile_id("vc-original", "subject"),
+            tile_x: 0,
+            tile_y: 0,
+            width: 2,
+            height: 2,
+            values: vec![65535; 4],
+        };
+        let container = lumina_sidecar::ZDataContainer::new(vec![tile]).unwrap();
+        lumina_sidecar::save_zdata(&lumina_sidecar::zdata_path_for(&input), &container).unwrap();
+
+        // develop/batch-style: persist the one-shot requests into the recipe.
+        let sidecar_path = sidecar_path_for(&input);
+        let mut document = load_sidecar(&sidecar_path).unwrap();
+        document.virtual_copies[0]
+            .recipe
+            .options
+            .insert("update_masks".into(), "true".into());
+        document.virtual_copies[0]
+            .recipe
+            .options
+            .insert("force_render".into(), "true".into());
+        save_sidecar(&sidecar_path, &document).unwrap();
+
+        let output = directory.path().join("output.png");
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output,
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+            },
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut warnings,
+        )
+        .unwrap();
+
+        // REVIEW-CLI-MASKFLAG-1: after a successful run the consumed flags
+        // must be gone from the persisted recipe — otherwise every future
+        // run would re-infer despite a valid persisted mask.
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert!(!document.virtual_copies[0]
+            .recipe
+            .options
+            .contains_key("update_masks"));
+        assert!(!document.virtual_copies[0]
+            .recipe
+            .options
+            .contains_key("force_render"));
+    }
+
+    #[test]
+    fn zdata_tiles_are_scoped_per_virtual_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = png_input(directory.path(), "input.png", 100);
+        let bytes = fs::read(&input).unwrap();
+        let identity = source_identity(&input, &bytes, &frame, None).unwrap();
+        let mut document = SidecarDocument::new(identity.clone(), "raster-mvp-1");
+        document.virtual_copies[0].mask_library = vec![valid_mask_definition(
+            "subject",
+            lumina_sidecar::MaskOperation::Source,
+            vec![],
+            &identity,
+            2,
+            2,
+        )];
+        // Second copy with the SAME mask id — the previous keying shared one
+        // matte between both copies (REVIEW-CLI-N1).
+        let mut second = document.virtual_copies[0].clone();
+        second.id = "vc-two".into();
+        second.name = "Two".into();
+        document.virtual_copies.push(second);
+
+        // Distinct planes under the composite record ids.
+        let original_tile = lumina_sidecar::MaskTile {
+            mask_id: zdata_mask_tile_id("vc-original", "subject"),
+            tile_x: 0,
+            tile_y: 0,
+            width: 2,
+            height: 2,
+            values: vec![0; 4],
+        };
+        let two_tile = lumina_sidecar::MaskTile {
+            mask_id: zdata_mask_tile_id("vc-two", "subject"),
+            tile_x: 0,
+            tile_y: 0,
+            width: 2,
+            height: 2,
+            values: vec![65535; 4],
+        };
+        let container = lumina_sidecar::ZDataContainer::new(vec![original_tile, two_tile]).unwrap();
+        let zdata_path = lumina_sidecar::zdata_path_for(&input);
+        lumina_sidecar::save_zdata(&zdata_path, &container).unwrap();
+
+        let planes = load_persisted_mask_planes(&document, &zdata_path);
+        assert_eq!(planes.len(), 2);
+        assert_eq!(
+            planes[&("vc-original".into(), "subject".into())].values,
+            vec![0; 4]
+        );
+        assert_eq!(
+            planes[&("vc-two".into(), "subject".into())].values,
+            vec![65535; 4]
+        );
+
+        // Legacy bundles that stored the plane under the plain mask id are
+        // deliberately NOT picked up any more (pre-MVP schema decision): a
+        // silently shared matte is exactly what the fix removes.
+        let legacy = lumina_sidecar::MaskTile {
+            mask_id: "subject".into(),
+            tile_x: 0,
+            tile_y: 0,
+            width: 2,
+            height: 2,
+            values: vec![12345; 4],
+        };
+        let container = lumina_sidecar::ZDataContainer::new(vec![legacy]).unwrap();
+        lumina_sidecar::save_zdata(&zdata_path, &container).unwrap();
+        assert!(load_persisted_mask_planes(&document, &zdata_path).is_empty());
+    }
+
+    #[test]
+    fn export_with_stale_masks_continues_by_default_and_aborts_under_strict() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 90);
+        let bytes = fs::read(&input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        // Valid-status mask whose artifact is NOT available (no `.lumina.zdata`).
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+
+        // Default `warn`: warn-and-continue, export succeeds (the wired stub
+        // engine even re-infers during the render).
+        let output = directory.path().join("out-warn.png");
+        export(ExportArgs {
+            input: input.clone(),
+            output: output.clone(),
+            format: "png".into(),
+            quality: 90,
+            virtual_copy: None,
+            update_masks: false,
+            force_render: false,
+            migrate: false,
+            json: false,
+            mask_policy: CliMaskPolicy::Warn,
+        })
+        .unwrap();
+        assert!(output.is_file());
+
+        // `strict`: aborts BEFORE anything is decoded or written.
+        let strict_output = directory.path().join("out-strict.png");
+        let error = export(ExportArgs {
+            input: input.clone(),
+            output: strict_output.clone(),
+            format: "png".into(),
+            quality: 90,
+            virtual_copy: None,
+            update_masks: false,
+            force_render: false,
+            migrate: false,
+            json: false,
+            mask_policy: CliMaskPolicy::Strict,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("strict mask policy"));
+        assert!(!strict_output.exists());
+    }
+
+    #[test]
+    fn mask_policy_flag_defaults_to_warn_and_parses_strict() {
+        let cli =
+            Cli::try_parse_from(["lumina", "export", "--input", "a.png", "--output", "b.png"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Export(ExportArgs {
+                mask_policy: CliMaskPolicy::Warn,
+                ..
+            })
+        ));
+
+        let cli = Cli::try_parse_from([
+            "lumina",
+            "batch",
+            "--input",
+            "src",
+            "--output",
+            "out",
+            "--mask-policy",
+            "strict",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Batch(BatchArgs {
+                mask_policy: CliMaskPolicy::Strict,
+                ..
+            })
+        ));
+
+        assert!(Cli::try_parse_from([
+            "lumina",
+            "render",
+            "--input",
+            "a.png",
+            "--output",
+            "b.png",
+            "--mask-policy",
+            "bogus",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn batch_rejects_colliding_output_names_before_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let src = directory.path().join("src");
+        fs::create_dir_all(src.join("a")).unwrap();
+        fs::create_dir_all(src.join("b")).unwrap();
+        let (_, frame_a) = png_input(&src.join("a"), "x.png", 10);
+        let (_, frame_b) = png_input(&src.join("b"), "x.arw", 20);
+        drop(frame_a);
+        drop(frame_b);
+
+        let out = directory.path().join("out");
+        let error = batch(BatchArgs {
+            input: src,
+            output: out.clone(),
+            jobs: 1,
+            retry: 0,
+            resume: false,
+            dry_run: false,
+            update_masks: false,
+            force_render: false,
+            json: false,
+            format: "png".into(),
+            quality: 90,
+            virtual_copy: None,
+            mask_policy: CliMaskPolicy::Warn,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("collision"));
+        // The refusal happens before the output directory exists.
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn batch_resume_requires_parsed_ok_status() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "a.png", 30);
+        let out_dir = directory.path().join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        let output = out_dir.join("a.png");
+        fs::write(&output, b"previous").unwrap();
+        let status = out_dir.join("a.png.status.json");
+        let args = BatchArgs {
+            input: input.clone(),
+            output: out_dir.clone(),
+            jobs: 1,
+            retry: 0,
+            resume: true,
+            dry_run: true,
+            update_masks: false,
+            force_render: false,
+            json: false,
+            format: "png".into(),
+            quality: 90,
+            virtual_copy: None,
+            mask_policy: CliMaskPolicy::Warn,
+        };
+
+        // A spaced `"status": "ok"` parses as done (the old substring match
+        // failed here and reprocessed the item).
+        fs::write(&status, r#"{ "input": "a.png", "status": "ok" }"#).unwrap();
+        let before = fs::read_to_string(&status).unwrap();
+        batch_one(&input, &args).unwrap();
+        assert_eq!(fs::read_to_string(&status).unwrap(), before);
+
+        // A parsed non-ok status means "not done": the item is reprocessed
+        // and the status file rewritten by this (dry) run.
+        fs::write(
+            &status,
+            r#"{"note":"\"status\":\"ok\" decoy","status":"failed"}"#,
+        )
+        .unwrap();
+        batch_one(&input, &args).unwrap();
+        let rewritten = fs::read_to_string(&status).unwrap();
+        assert!(rewritten.contains("\"dry-run\""), "{rewritten}");
+
+        // Malformed JSON counts as not done, too.
+        fs::write(&status, "not json at all").unwrap();
+        batch_one(&input, &args).unwrap();
+        let rewritten = fs::read_to_string(&status).unwrap();
+        assert!(rewritten.contains("\"dry-run\""), "{rewritten}");
+    }
+
+    #[test]
+    fn reindex_fails_when_a_sidecar_is_corrupt() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "good.png", 40);
+        let bytes = fs::read(&input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // All-valid directory → success.
+        reindex(IndexArgs {
+            input: directory.path().to_path_buf(),
+            json: true,
+            migrate: false,
+        })
+        .unwrap();
+
+        // One corrupt sidecar → loud failure (non-zero exit via `main`).
+        fs::write(directory.path().join("broken.lumina.json"), "{ truncated").unwrap();
+        let error = reindex(IndexArgs {
+            input: directory.path().to_path_buf(),
+            json: true,
+            migrate: false,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid sidecar"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_images_survives_symlink_loops() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        let (_, top) = png_input(&root, "top.png", 50);
+        let (_, deep) = png_input(&root.join("sub"), "deep.png", 60);
+        drop(top);
+        drop(deep);
+        // Self-referencing directory loop plus an alias onto a subdirectory.
+        symlink(&root, root.join("loop")).unwrap();
+        symlink(root.join("sub"), root.join("link-sub")).unwrap();
+        // A file symlink stays collectable (reading it cannot cycle).
+        symlink(root.join("top.png"), root.join("alias.png")).unwrap();
+
+        let mut found = Vec::new();
+        collect_images(&root, &mut found).unwrap();
+        found.sort();
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["alias.png", "deep.png", "top.png"]);
+    }
+
+    #[test]
+    fn output_guard_rejects_sidecar_zdata_and_hardlink_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 70);
+
+        // Not-yet-existing bundle targets are protected at their future path…
+        assert!(reject_protected_output(&input, &sidecar_path_for(&input)).is_err());
+        assert!(reject_protected_output(&input, &lumina_sidecar::zdata_path_for(&input)).is_err());
+
+        // …and equally once they exist.
+        fs::write(sidecar_path_for(&input), b"{}").unwrap();
+        assert!(reject_protected_output(&input, &sidecar_path_for(&input)).is_err());
+
+        // A benign sibling path stays writable.
+        let ok = directory.path().join("elsewhere.png");
+        assert!(reject_protected_output(&input, &ok).is_ok());
+
+        #[cfg(unix)]
+        {
+            let hardlink = directory.path().join("hardlink.png");
+            fs::hard_link(&input, &hardlink).unwrap();
+            let error = reject_protected_output(&input, &hardlink).unwrap_err();
+            assert!(error.to_string().contains("hard link"));
+        }
+    }
+
+    #[test]
+    fn import_rejects_changed_source_against_existing_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 80);
+        let args = FileArgs {
+            input: input.clone(),
+            output: None,
+            format: "png".into(),
+            quality: 90,
+            json: false,
+            migrate: false,
+            force_render: false,
+            virtual_copy: None,
+            mask_policy: CliMaskPolicy::Warn,
+        };
+        import_file(args.clone()).unwrap();
+
+        // Change the file contents behind the same path: a second import must
+        // fail loudly instead of blessing a sidecar for foreign contents.
+        let changed = ImageFrame::new(2, 2, vec![81; 16]).unwrap();
+        fs::write(&input, changed.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        let error = import_file(args).unwrap_err();
+        assert!(error.to_string().contains("source changed"));
+    }
+
+    #[test]
+    fn dust_removal_leaves_no_orphan_bundle_when_the_copy_is_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 85);
+        let bytes = fs::read(&input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        save_sidecar(
+            &sidecar_path_for(&input),
+            &SidecarDocument::new(
+                source_identity(&input, &bytes, &frame, None).unwrap(),
+                "raster-mvp-1",
+            ),
+        )
+        .unwrap();
+
+        // Replacement image matching the source dimensions.
+        let replacement = directory.path().join("replacement.png");
+        let replacement_frame = ImageFrame::new(2, 2, vec![200; 16]).unwrap();
+        fs::write(
+            &replacement,
+            replacement_frame.encode(ImageFileFormat::Png).unwrap(),
+        )
+        .unwrap();
+        let definition = directory.path().join("region.json");
+        fs::write(
+            &definition,
+            serde_json::json!({
+                "id": "r1",
+                "region_width": 2,
+                "region_height": 2,
+                "region_values": [0, 0, 0, 0],
+                "replacement_path": replacement,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let error = dust_removal(DustRemovalArgs {
+            input: input.clone(),
+            repair_region: definition,
+            virtual_copy: Some("ghost".into()),
+            render_out: None,
+            json: true,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown virtual copy"));
+        // REVIEW-CLI-N2: nothing was appended before validation failed.
+        assert!(!lumina_sidecar::zdata_path_for(&input).exists());
+    }
+
     //
     // Documented boundary (F-042-N1): the CLI still passes an empty
     // source-action list (`source_actions: &[]` in `process_selected`).
@@ -2298,7 +3108,7 @@ mod tests {
         //   masked delta:  log2(0.5 / (60/255)) = log2(2.125) ~= 1.08746
         //   unmasked delta: log2(0.5 / (130/255)) ~= -0.0280
         let tile = lumina_sidecar::MaskTile {
-            mask_id: "subject".into(),
+            mask_id: zdata_mask_tile_id("vc-original", "subject"),
             tile_x: 0,
             tile_y: 0,
             width: 8,
@@ -2325,6 +3135,7 @@ mod tests {
             },
             90,
             None,
+            MaskPolicy::Warn,
             &mut warnings,
         )
         .unwrap();

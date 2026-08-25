@@ -116,28 +116,7 @@ stehenden Restbestand.
 
 
 
-- [ ] **[PRIO: mittel] REVIEW-CLI-MASKFLAG-1** `update_masks`/`force_render` bleiben
-  ewig im Rezept → permanente Re-Inferenz trotz gültiger Maske
-  (mittel; lumina-cli/src/main.rs:443, 901, 1219, 1348; Verstoß gegen
-  Persistenz-Invariante). Fix: Option nach Konsum aus dem persistierten
-  Rezept entfernen. Re-Check 2026-08-25: Flags werden weiterhin in
-  recipe-extras geschrieben (develop/batch) und nie konsumiert entfernt.
-- [ ] **[PRIO: mittel] REVIEW-CLI-EXPORTMASK-1** `export --update-masks` bricht bei
-  stale Masks ab, batch/develop laufen weiter; Flag wird für Export gar
-  nicht durchgereicht (mittel). Teilstand 2026-08-25: Flag wird für
-  Export jetzt über `preflight_masks(..., args.update_masks)` gereicht
-  (mit Test); die Inkonsistenz zwischen den Subkommanden bleibt.
-- [ ] **[PRIO: mittel] REVIEW-CLI-WRITE-1** Overwrite-Guards decken weder Sidecar-/
-  zdata-Ziele noch Hardlinks (Inode-Identität) ab (mittel;
-  main.rs:1067, 1544; lumina-mcp/src/tools/save.rs:33–44). Fix:
-  Zielpfade gegen `<input>.lumina.json/.zdata` prüfen + (dev,inode)-Vergleich.
-  Re-Check 2026-08-25: nur ein `paths_resolve_equal`-Guard (Export vs.
-  Quelle); keine Inode-Prüfung; MCP-save prüft nur kanonische Quelle.
-- [ ] **[PRIO: mittel] REVIEW-CLI-BATCHCOLLIDE-1** Batch schreibt alle Inputs
-  namensbasiert in ein Zielverzeichnis → Kollisionen überschreiben
-  still, beide melden „ok" (mittel; main.rs:874–881). Fix: Dubletten
-  vorab ablehnen oder Struktur spiegeln. Re-Check 2026-08-25:
-  unverändert (`args.output.join(name)` ohne Dubletten-Prüfung).
+
 
 - [ ] **[PRIO: mittel] REVIEW-GUI-MASKGEO-1** Masken-Pinsel/Verlauf/Radial (und
   WB-Pipette) ignorieren Crop/Rotation/Mirror des Rezepts → Markierungen
@@ -248,29 +227,9 @@ MVP-blockierend)**
 
 
 - [ ] **[PRIO: niedrig] REVIEW-CORE-WASM-FOLLOWUP** `cargo check -p lumina-core --target wasm32-unknown-unknown --all-targets` scheitert an Dev-Dependencies (wait-timeout/getrandom), identisch an HEAD — der dokumentierte lib-only-Capability-Gate ist grün; Dev-Deps für wasm32 cfg-gaten oder `--all-targets` offiziell als native-only dokumentieren.
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N1** CLI lädt zdata-Tiles nur per `mask.id` statt
-  `(copy_id, mask_id)` → Kopien mit gleichen Masken-IDs teilen Matte
-  (main.rs:1186). Re-Check 2026-08-25: Speicher-Key weiterhin
-  `container.tile(&mask.id, …)`; auch GUI betroffen.
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N2** dust_removal hängt Artefakt an, bevor Sidecar/
-  Copy validiert sind → orphaned Bundles bei Fehlern (main.rs:674).
-  Re-Check 2026-08-25: `append_repair_region` läuft vor `load_sidecar`/
-  Copy-Validierung.
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N3** Batch-Resume per Substring-Match auf
-  Statusdatei (main.rs:885). Fix: JSON parsen. Re-Check 2026-08-25:
-  `state.contains("\"status\":\"ok\"")`.
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N4** reindex ignoriert korrupte Sidecars still, Exit 0
-  (main.rs:811). Re-Check 2026-08-25: unverändert (zählt valide, meldet
-  immer „ok").
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N5** collect_images folgt Symlink-Loops ohne Schutz
-  → Stack Overflow (main.rs:947). Re-Check 2026-08-25: rekursiv ohne
-  Visited-Set/Symlink-Filter.
 - [ ] **[PRIO: niedrig] REVIEW-CLI-N6** Export geschrieben bevor Sidecar-Update; Fehler
   → Exit 1 trotz existierendem Export (main.rs:1346). Re-Check
   2026-08-25: unverändert (als v1-Umfang in sidecar lib.rs dokumentiert).
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N7** import akzeptiert geänderte Quelle gegen
-  bestehendes Sidecar ohne Warnung (main.rs:400). Re-Check 2026-08-25:
-  import_file prüft keinen Content-Hash (im Gegensatz zu process_selected).
 
 
 - [ ] **[PRIO: niedrig] REVIEW-GUI-N1** Save berechnet Fingerprint neu und löscht

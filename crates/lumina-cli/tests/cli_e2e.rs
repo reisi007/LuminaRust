@@ -343,6 +343,216 @@ fn dust_removal_persists_action_and_renders_only_inside_region() {
     assert_eq!(fs::read(&input).unwrap(), original_bytes);
 }
 
+/// REVIEW-CLI-N4 end to end: a corrupt sidecar must fail the whole command
+/// with a non-zero exit code, while an all-valid directory stays green.
+#[test]
+fn reindex_exits_non_zero_when_a_sidecar_is_corrupt() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = write_png(&directory, "input.png");
+    assert!(cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    // All-valid directory → exit 0.
+    let ok = cli()
+        .args([
+            "reindex",
+            "--input",
+            directory.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ok.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+
+    // One corrupt sidecar → warnings plus non-zero exit.
+    fs::write(directory.path().join("broken.lumina.json"), "{ truncated").unwrap();
+    let bad = cli()
+        .args(["reindex", "--input", directory.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(stderr.contains("invalid sidecar"), "stderr: {stderr}");
+}
+
+/// REVIEW-CLI-BATCHCOLLIDE-1 end to end: colliding target names fail the run
+/// with exit code != 0 and leave no output directory behind.
+#[test]
+fn batch_output_collision_exits_non_zero_without_writing_outputs() {
+    fn write_png_at(path: &std::path::Path) {
+        let frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+        fs::write(path, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let src = directory.path().join("src");
+    fs::create_dir_all(src.join("a")).unwrap();
+    fs::create_dir_all(src.join("b")).unwrap();
+    write_png_at(&src.join("a").join("x.png"));
+    write_png_at(&src.join("b").join("x.png"));
+
+    let out = directory.path().join("out");
+    let result = cli()
+        .args([
+            "batch",
+            "--input",
+            src.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("collision"), "stderr: {stderr}");
+    assert!(!out.exists());
+}
+
+/// REVIEW-CLI-N7 end to end: importing a changed source against an existing
+/// sidecar fails loudly instead of blessing foreign contents.
+#[test]
+fn import_rejects_changed_source_with_non_zero_exit() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = write_png(&directory, "input.png");
+    assert!(cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+
+    let changed = ImageFrame::new(1, 1, vec![41, 80, 120, 255]).unwrap();
+    fs::write(&input, changed.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    let second = cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("source changed"));
+}
+
+/// REVIEW-CLI-MASKFLAG-1 end to end: `develop --update-masks` persists the
+/// request, a successful render consumes it, and the persisted recipe no
+/// longer carries the flag afterwards.
+#[test]
+fn update_masks_flag_is_consumed_and_removed_after_a_successful_render() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = write_png(&directory, "input.png");
+    assert!(cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert!(cli()
+        .args([
+            "develop",
+            "--input",
+            input.to_str().unwrap(),
+            "--update-masks"
+        ])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let sidecar = sidecar_path_for(&input);
+    let document = load_sidecar(&sidecar).unwrap();
+    assert_eq!(
+        document.virtual_copies[0]
+            .recipe
+            .options
+            .get("update_masks")
+            .map(String::as_str),
+        Some("true")
+    );
+
+    let output = directory.path().join("output.png");
+    let result = cli()
+        .args([
+            "process",
+            "--input",
+            input.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let document = load_sidecar(&sidecar).unwrap();
+    assert!(
+        !document.virtual_copies[0]
+            .recipe
+            .options
+            .contains_key("update_masks"),
+        "consumed one-shot flag must not survive in the persisted recipe"
+    );
+}
+
+/// REVIEW-CLI-WRITE-1 end to end: `process` refuses outputs pointing at the
+/// `.lumina.zdata` bundle (even before it exists) and at hard links to the
+/// original — both with a non-zero exit and without touching the targets.
+#[test]
+fn process_refuses_sidecar_bundle_and_hardlink_outputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = write_png(&directory, "input.png");
+    assert!(cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let original_bytes = fs::read(&input).unwrap();
+
+    // Future zdata location.
+    let zdata = lumina_sidecar::zdata_path_for(&input);
+    let result = cli()
+        .args([
+            "process",
+            "--input",
+            input.to_str().unwrap(),
+            "--output",
+            zdata.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("would overwrite"), "stderr: {stderr}");
+    assert!(!zdata.exists());
+
+    // Hard link to the original under a different name.
+    #[cfg(unix)]
+    {
+        let alias = directory.path().join("alias.png");
+        fs::hard_link(&input, &alias).unwrap();
+        let result = cli()
+            .args([
+                "process",
+                "--input",
+                input.to_str().unwrap(),
+                "--output",
+                alias.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains("hard link"), "stderr: {stderr}");
+    }
+    // The original was never modified.
+    assert_eq!(fs::read(&input).unwrap(), original_bytes);
+}
+
 #[test]
 fn dust_removal_rejects_dimension_mismatch() {
     let directory = tempfile::tempdir().unwrap();
