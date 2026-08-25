@@ -210,22 +210,7 @@ stehenden Restbestand.
   (mittel; lumina-raw/src/lib.rs:280–283). Fix: explizit übersetzen
   oder Rohwert unter eigenem Namen führen. Re-Check 2026-08-25:
   unverändert (`1..=8 => data.sizes.flip as u8`).
-- [ ] **[PRIO: mittel] REVIEW-ONNX-AVAIL-1** `<StubBackend as SubjectInference>::infer`
-  ignoriert `self.available` — „fehlendes" Modell liefert still Matte
-  (mittel; lumina-onnx/src/backend.rs:114–143 vs. SAM-Gate sam2.rs:277).
-  Teilstand 2026-08-25: Decision-Layer (mask_loader) gated Re-Inferenz
-  auf `backend.is_available()`, SAM2-Stub enforced es; der geprüfte
-  StubBackend-Pfad selbst ist unverändert.
-- [ ] **[PRIO: mittel] REVIEW-ONNX-HASH-1** Modell-Hash wird nie gegen Manifest
-  geprüft (`path.exists()` genügt; Platzhalter „pending-integration")
-  → getauschte Gewichte laufen unter alter Identität in Masken-Sidecars
-  (mittel; ort_backend.rs:34–53). Fix: Hash beim Laden berechnen und
-  auf Mismatch stale-markieren. Re-Check 2026-08-25: unverändert.
-- [ ] **[PRIO: mittel] REVIEW-ONNX-PREPROC-1** ORT-Preprocessing nur [0,1] statt
-  ImageNet mean/std, Tensor-Namen hartcodiert statt aus Manifest,
-  Output-Shape ungeprüft (Fehler meldet dann 0/0-Dims) (mittel;
-  ort_backend.rs:66–95). Fix vor Integration echter Gewichte.
-  Re-Check 2026-08-25: unverändert.
+
 
 **Performance-Verfeinerung — Lightroom-artige interaktive Geschwindigkeit**
 
@@ -367,16 +352,30 @@ MVP-blockierend)**
 - [ ] **[PRIO: niedrig] REVIEW-RAW-N2** `metadata.lens` ist immer `None`, obwohl Feld
   existiert und Lensfun-Integration ihn braucht (lib.rs:307). Befüllen
   oder Feld entfernen. Re-Check 2026-08-25: unverändert (`lens: None`).
-- [ ] **[PRIO: niedrig] REVIEW-ONNX-N1** SAM-Prompt-Typosystem kann dokumentierte
-  Labels −1/2/3 nicht ausdrücken; Koordinatenraum-Verantwortung
-  (Source- vs. 1024²-Modell-Space) implizit — vor ORT-Decoder klären
-  (sam2.rs:20–56). Teilstand 2026-08-25: Docs präzisiert (Labels,
-  1024²-Space); Box-Ecken strukturell via BoxPrompt; Labels −1/2/3 als
-  PointLabel-Varianten weiterhin nicht ausdrückbar, kein Mapping-Helper.
-- [ ] **[PRIO: niedrig] REVIEW-ONNX-N2** `ModelManifest::validate()` prüft nur
-  Capability-Invariante; leere Hash-/Lizenzstrings und Null-
-  Auflösungen passieren (manifest.rs:141). Re-Check 2026-08-25:
-  unverändert.
+- [ ] **[PRIO: niedrig] F-082-FOLLOWUP-ORT** `OrtBackend` panickt bei
+  unbekanntem Output-Namen (`outputs[output_name]` unwrap) statt
+  `OnnxError::InferenceFailed`; mit echten Gewichten fixen (F-082).
+- [ ] **[PRIO: niedrig] F-082-FOLLOWUP-HASH** ORT-Mismatch-Refuse-Zweig
+  (`ModelArtifactStale`) ohne ausführbaren Test (benötigt ladbares
+  `.onnx` mit abweichendem Pin); hash-gepinnte ONNX-Fixture erfassen.
+- [ ] **[PRIO: niedrig] REVIEW-GUI-STATUS-FOLLOWUP** `lumina-gui/src/lib.rs`
+  prüft Artefaktstatus nur auf `== Missing`; auf `!= Available` umstellen,
+  damit `Corrupt` (REVIEW-SIDECAR-STATUS-1) korrekt behandelt wird.
+- [ ] **[PRIO: niedrig] REVIEW-CORE-DIGEST-WIRING** RenderKey-Digest-Fixes
+  (ExportOptions/SourceAction-Hashes) in CLI/GUI/MCP beim Bau der
+  RenderKeys via `with_export_options`/`with_source_action_hashes`
+  verdrahten, damit Cache-Hits korrekte Qualität/Repair-Pixels liefern
+  (Core-Seite erledigt).
+- [ ] **[PRIO: niedrig] REVIEW-CLI-FOLLOWUP-1** `collect_sidecars` hat weiterhin
+  keinen Symlink-/Loop-Schutz (N5 deckte nur `collect_images` ab).
+- [ ] **[PRIO: niedrig] REVIEW-MCP-DOCS** `feature/platform/mcp-server.md` um
+  neue Verhalten ergänzen: SidecarConflict/-32010, isError-Result,
+  Extension-Gate, strenge Quality-Bounds, Identity-Check bei Load.
+- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-FOLLOWUP-1** `artifact_status` erkennt
+  <8-Byte-Container nicht als `Corrupt` (nur Magic-Parsing); bei
+  `reference.format=="zdata"` ohne gültige Magic → `Corrupt`.
+- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-FOLLOWUP-2** `artifact_status` validiert
+  Reference width/height nicht gegen Bundle-Records (dokumentierte Lücke).
 
 - [ ] **[PRIO: niedrig] REVIEW-GUI-WASM-FOLLOWUP** wasm32-Check der GUI erzeugt ~20
   Warnungen (u. a. dead_code `prefetch_order`) — ohne `-D warnings`;

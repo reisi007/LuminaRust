@@ -11,6 +11,11 @@ lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Model-artifact identity hash. SHA-256 is the documented `model_hash`
+# algorithm for mask identity (feature/product/ai-masks.md, F-082:
+# "`model_hash` = Artefakt-SHA256"). Computed locally from committed/local
+# artifacts only — no downloads.
+sha2 = "0.10"
 
 # Real ONNX Runtime backend. OPTIONAL and gated behind the non-default
 # `onnx-rt` feature so the default build/test stays green with no network

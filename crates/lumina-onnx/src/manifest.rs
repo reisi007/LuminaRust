@@ -35,6 +35,44 @@ pub struct Resolution {
     pub height: u32,
 }
 
+/// Per-channel input normalization for the ONNX graph (REVIEW-ONNX-PREPROC-1).
+///
+/// Pixel value `v` (u8) is mapped to `(v / 255 - mean[c]) / std[c]` before it
+/// is written into the input tensor. The normalization is part of the model
+/// I/O contract and therefore lives in the manifest — backends must read it
+/// from there instead of hardcoding a scheme.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputNormalization {
+    /// Per-channel mean in RGB order, on the `[0, 1]` scale.
+    pub mean: [f32; 3],
+    /// Per-channel standard deviation in RGB order, on the `[0, 1]` scale.
+    pub std: [f32; 3],
+}
+
+impl InputNormalization {
+    /// ImageNet mean/std — the documented preprocessing of BiRefNet and the
+    /// SAM 2.1 image encoder. This is also the serde default so manifests
+    /// written before the field existed keep parsing with the correct target
+    /// semantics (the previous `[0, 1]`-only behavior was reviewed as wrong,
+    /// not as a compatibility requirement).
+    pub const IMAGENET: InputNormalization = InputNormalization {
+        mean: [0.485, 0.456, 0.406],
+        std: [0.229, 0.224, 0.225],
+    };
+
+    /// Default used by `#[serde(default)]`: ImageNet normalization.
+    pub fn imagenet() -> Self {
+        Self::IMAGENET
+    }
+}
+
+impl Default for InputNormalization {
+    fn default() -> Self {
+        Self::IMAGENET
+    }
+}
+
 /// Input tensor specification for an ONNX model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +85,9 @@ pub struct ModelInputSpec {
     pub tensor_name: String,
     /// Tensor memory layout expected by the model.
     pub tensor_format: TensorFormat,
+    /// Input normalization applied before the tensor is filled.
+    #[serde(default = "InputNormalization::imagenet")]
+    pub normalization: InputNormalization,
 }
 
 /// Model capabilities (F-080).
@@ -103,8 +144,9 @@ impl ModelCapabilities {
 }
 
 /// Unchecked deserialization form. Deserializing into this struct rejects
-/// unknown fields; [`TryFrom`] then enforces the capability invariant so a
-/// manifest with no capabilities set is rejected at construction time.
+/// unknown fields; [`TryFrom`] then enforces the full manifest invariants so a
+/// manifest with no capabilities set, an empty hash/license, a zero
+/// resolution, or empty tensor names is rejected at construction time.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModelManifestUnchecked {
@@ -113,7 +155,18 @@ struct ModelManifestUnchecked {
     model_hash: String,
     license: String,
     input: ModelInputSpec,
+    /// Name of the primary (matte) output tensor. Defaults to `output`, the
+    /// documented single-output contract of the v1 subject models, so
+    /// manifests written before the field existed keep parsing.
+    #[serde(default = "default_output_tensor_name")]
+    output_tensor_name: String,
     capabilities: ModelCapabilities,
+}
+
+/// Default primary output tensor name (`#[serde(default)]` for manifests
+/// written before the field existed).
+fn default_output_tensor_name() -> String {
+    "output".to_owned()
 }
 
 /// Serializable ONNX model identity + I/O contract.
@@ -128,20 +181,43 @@ pub struct ModelManifest {
     pub model_name: String,
     /// Model version (semver-ish string).
     pub model_version: String,
-    /// Content/artifact hash identifying the exact weights.
+    /// Content/artifact hash identifying the exact weights. The documented
+    /// algorithm is SHA-256 over the artifact bytes; the placeholder
+    /// [`crate::hash::PENDING_INTEGRATION_HASH`] marks the pre-integration
+    /// state in which no pinned identity exists yet.
     pub model_hash: String,
     /// Model license, e.g. `Apache-2.0`.
     pub license: String,
     /// Input tensor specification.
     pub input: ModelInputSpec,
+    /// Name of the primary (matte) output tensor in the ONNX graph.
+    pub output_tensor_name: String,
     /// Declared model capabilities.
     pub capabilities: ModelCapabilities,
 }
 
 impl ModelManifest {
-    /// Validate the manifest (currently the capability invariant).
+    /// Validate the full manifest invariant set (REVIEW-ONNX-N2):
+    ///
+    /// * at least one capability is declared;
+    /// * `model_hash` and `license` are non-empty;
+    /// * the inference resolution is non-zero on both axes;
+    /// * input and output tensor names are non-empty;
+    /// * the input normalization is finite with strictly positive `std`
+    ///   (a zero/NaN `std` would silently poison preprocessing).
+    ///
+    /// Violations surface as [`OnnxError::InvalidManifest`] with all reasons
+    /// joined; the capability invariant keeps its established
+    /// [`OnnxError::UnsupportedModel`] error.
     pub fn validate(&self) -> Result<(), OnnxError> {
-        self.capabilities.validate_for(&self.model_name)
+        self.capabilities.validate_for(&self.model_name)?;
+        validate_fields(
+            &self.model_name,
+            &self.model_hash,
+            &self.license,
+            &self.input,
+            &self.output_tensor_name,
+        )
     }
 
     /// Map this manifest's identity onto the sidecar [`ModelIdentity`] used by
@@ -161,11 +237,61 @@ impl ModelManifest {
     }
 
     /// Deserialize from JSON, rejecting unknown fields and enforcing the
-    /// capability invariant.
+    /// manifest invariants (see [`ModelManifest::validate`]).
     pub fn from_json(json: &str) -> Result<Self, OnnxError> {
         let unchecked: ModelManifestUnchecked =
             serde_json::from_str(json).map_err(|e| OnnxError::InvalidManifest(e.to_string()))?;
         unchecked.try_into()
+    }
+}
+
+/// Shared field invariants enforced by [`ModelManifest::validate`] and the
+/// `TryFrom<ModelManifestUnchecked>` construction path.
+fn validate_fields(
+    model_name: &str,
+    model_hash: &str,
+    license: &str,
+    input: &ModelInputSpec,
+    output_tensor_name: &str,
+) -> Result<(), OnnxError> {
+    let mut problems: Vec<String> = Vec::new();
+    if model_hash.trim().is_empty() {
+        problems.push("model_hash must not be empty".to_owned());
+    }
+    if license.trim().is_empty() {
+        problems.push("license must not be empty".to_owned());
+    }
+    if input.resolution.width == 0 || input.resolution.height == 0 {
+        problems.push(format!(
+            "input resolution must be non-zero, got {}x{}",
+            input.resolution.width, input.resolution.height
+        ));
+    }
+    if input.tensor_name.trim().is_empty() {
+        problems.push("input.tensor_name must not be empty".to_owned());
+    }
+    if output_tensor_name.trim().is_empty() {
+        problems.push("output_tensor_name must not be empty".to_owned());
+    }
+    for (axis, value) in input.normalization.mean.iter().enumerate() {
+        if !value.is_finite() {
+            problems.push(format!("normalization.mean[{axis}] must be finite"));
+        }
+    }
+    for (axis, value) in input.normalization.std.iter().enumerate() {
+        if !value.is_finite() || *value <= 0.0 {
+            problems.push(format!(
+                "normalization.std[{axis}] must be finite and > 0, got {value}"
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(OnnxError::InvalidManifest(format!(
+            "model `{model_name}` manifest is invalid: {}",
+            problems.join("; ")
+        )))
     }
 }
 
@@ -174,12 +300,20 @@ impl TryFrom<ModelManifestUnchecked> for ModelManifest {
 
     fn try_from(raw: ModelManifestUnchecked) -> Result<Self, Self::Error> {
         raw.capabilities.validate_for(&raw.model_name)?;
+        validate_fields(
+            &raw.model_name,
+            &raw.model_hash,
+            &raw.license,
+            &raw.input,
+            &raw.output_tensor_name,
+        )?;
         Ok(Self {
             model_name: raw.model_name,
             model_version: raw.model_version,
             model_hash: raw.model_hash,
             license: raw.license,
             input: raw.input,
+            output_tensor_name: raw.output_tensor_name,
             capabilities: raw.capabilities,
         })
     }
@@ -261,7 +395,7 @@ pub fn birefnet_manifest() -> ModelManifest {
     ModelManifest {
         model_name: "BiRefNet".into(),
         model_version: "1.0.0".into(),
-        model_hash: "pending-integration".into(),
+        model_hash: crate::hash::PENDING_INTEGRATION_HASH.into(),
         license: "MIT".into(),
         input: ModelInputSpec {
             resolution: Resolution {
@@ -271,7 +405,10 @@ pub fn birefnet_manifest() -> ModelManifest {
             channel_layout: ChannelLayout::Rgb,
             tensor_name: "input".into(),
             tensor_format: TensorFormat::Nchw,
+            // BiRefNet preprocesses with ImageNet mean/std.
+            normalization: InputNormalization::IMAGENET,
         },
+        output_tensor_name: "output".into(),
         capabilities: ModelCapabilities {
             subject_segmentation: true,
             box_prompt: false,
@@ -299,7 +436,7 @@ pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
     ModelManifest {
         model_name: variant.model_name().into(),
         model_version: SAM2_RELEASE_VERSION.into(),
-        model_hash: "pending-integration".into(),
+        model_hash: crate::hash::PENDING_INTEGRATION_HASH.into(),
         license: "Apache-2.0".into(),
         input: ModelInputSpec {
             resolution: Resolution {
@@ -309,7 +446,13 @@ pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
             channel_layout: ChannelLayout::Rgb,
             tensor_name: "images".into(),
             tensor_format: TensorFormat::Nchw,
+            // The SAM 2.1 image encoder uses ImageNet normalization.
+            normalization: InputNormalization::IMAGENET,
         },
+        // Primary decoder output per the documented F-082 prompt contract
+        // (`masks` on the original resolution + `iou_predictions` +
+        // `low_res_masks`).
+        output_tensor_name: "masks".into(),
         capabilities: ModelCapabilities {
             subject_segmentation: false,
             box_prompt: true,
@@ -613,5 +756,138 @@ mod tests {
         assert!(Sam2Variant::ALL.contains(&variant));
         // The method and free function agree.
         assert_eq!(profile.select_variant(), select_variant(&profile));
+    }
+
+    // REVIEW-ONNX-N2 — non-empty hash/license, valid resolutions, non-empty
+    // tensor names and a sane normalization are enforced by validate().
+    #[test]
+    fn validate_rejects_empty_hash_and_license() {
+        let mut m = birefnet_manifest();
+        m.model_hash = "  ".to_owned();
+        let err = m.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("model_hash must not be empty"),
+            "got {err}"
+        );
+
+        let mut m = birefnet_manifest();
+        m.license = String::new();
+        let err = m.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("license must not be empty"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_resolution() {
+        let mut m = birefnet_manifest();
+        m.input.resolution = Resolution {
+            width: 0,
+            height: 32,
+        };
+        let err = m.validate().unwrap_err();
+        assert!(err.to_string().contains("must be non-zero"), "got {err}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_tensor_names() {
+        let mut m = birefnet_manifest();
+        m.input.tensor_name = String::new();
+        assert!(m.validate().is_err());
+
+        let mut m = birefnet_manifest();
+        m.output_tensor_name = " ".to_owned();
+        assert!(m
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("output_tensor_name must not be empty"));
+    }
+
+    #[test]
+    fn validate_rejects_degenerate_normalization() {
+        let mut m = sam2_1_manifest(Sam2Variant::Tiny);
+        m.input.normalization.std = [0.229, 0.0, 0.225];
+        let err = m.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("normalization.std[1]"),
+            "zero std must be rejected, got {err}"
+        );
+
+        let mut m = sam2_1_manifest(Sam2Variant::Tiny);
+        m.input.normalization.mean[2] = f32::NAN;
+        assert!(m
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("normalization.mean[2] must be finite"));
+    }
+
+    #[test]
+    fn from_json_enforces_field_invariants_too() {
+        let json = serde_json::json!({
+            "model_name": "X",
+            "model_version": "1",
+            "model_hash": "",
+            "license": "MIT",
+            "input": {
+                "resolution": {"width": 4, "height": 4},
+                "channel_layout": "rgb",
+                "tensor_name": "input",
+                "tensor_format": "nchw"
+            },
+            "capabilities": {"subject_segmentation": true}
+        })
+        .to_string();
+        let err = ModelManifest::from_json(&json).unwrap_err();
+        assert!(
+            matches!(err, OnnxError::InvalidManifest(_)),
+            "empty hash via JSON must be rejected, got {err:?}"
+        );
+    }
+
+    /// Manifests written before `normalization`/`output_tensor_name` existed
+    /// must keep parsing: normalization defaults to ImageNet, output name to
+    /// `output` (documented single-output v1 contract).
+    #[test]
+    fn from_json_defaults_new_fields_for_pre_existing_manifests() {
+        let json = serde_json::json!({
+            "model_name": "X",
+            "model_version": "1",
+            "model_hash": "h",
+            "license": "MIT",
+            "input": {
+                "resolution": {"width": 4, "height": 4},
+                "channel_layout": "rgb",
+                "tensor_name": "input",
+                "tensor_format": "nchw"
+            },
+            "capabilities": {
+                "subject_segmentation": true,
+                "box_prompt": false,
+                "point_prompt": false,
+                "mask_prompt": false,
+                "class_detection": false,
+                "instance_segmentation": false
+            }
+        })
+        .to_string();
+        let m = ModelManifest::from_json(&json).unwrap();
+        assert_eq!(m.output_tensor_name, "output");
+        assert_eq!(m.input.normalization, InputNormalization::IMAGENET);
+    }
+
+    /// Explicitly serialized manifests round-trip the new fields verbatim.
+    #[test]
+    fn json_roundtrip_preserves_normalization_and_output_name() {
+        let mut m = birefnet_manifest();
+        m.input.normalization = InputNormalization {
+            mean: [0.5, 0.5, 0.5],
+            std: [0.25, 0.25, 0.25],
+        };
+        m.output_tensor_name = "matte".into();
+        let back = ModelManifest::from_json(&m.to_json().unwrap()).unwrap();
+        assert_eq!(m, back);
     }
 }

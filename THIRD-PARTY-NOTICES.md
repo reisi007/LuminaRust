@@ -484,6 +484,12 @@ Short pre-release checklist (full version in `licenses/README.md`):
 | `ordered-stream` | 0.2.0 | MIT OR Apache-2.0 |
 | `ort` | 2.0.0-rc.13 | MIT OR Apache-2.0 |
 | `ort-sys` | 2.0.0-rc.13 | MIT OR Apache-2.0 |
+| `sha2` | 0.10.9 | MIT OR Apache-2.0 |
+| `digest` | 0.10.7 | MIT OR Apache-2.0 |
+| `block-buffer` | 0.10.4 | MIT OR Apache-2.0 |
+| `crypto-common` | 0.1.7 | MIT OR Apache-2.0 |
+| `generic-array` | 0.14.7 | MIT OR Apache-2.0 |
+| `typenum` | 1.20.1 | MIT OR Apache-2.0 |
 | `parking_lot` | 0.12.5 | MIT OR Apache-2.0 |
 | `parking_lot_core` | 0.9.12 | MIT OR Apache-2.0 |
 | `paste` | 1.0.15 | MIT OR Apache-2.0 |

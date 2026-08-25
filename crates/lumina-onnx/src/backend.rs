@@ -121,6 +121,14 @@ impl SubjectInference for StubBackend {
     }
 
     fn infer(&self, image: &ImageFrame) -> Result<MaskPlane, OnnxError> {
+        // Same gate as the SAM stub (`sam2.rs`): a backend reporting itself
+        // unavailable must refuse inference instead of silently emitting a
+        // matte (REVIEW-ONNX-AVAIL-1, no silent fallbacks).
+        if !self.available {
+            return Err(OnnxError::MissingModel {
+                path: self.manifest.model_name.clone(),
+            });
+        }
         if image.width == 0 || image.height == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
@@ -217,6 +225,53 @@ mod tests {
         assert!(
             matches!(err, OnnxError::InvalidDimensions { .. }),
             "{err:?}"
+        );
+    }
+
+    // REVIEW-ONNX-AVAIL-1 — an unavailable stub must refuse inference instead
+    // of silently producing a matte.
+    #[test]
+    fn unavailable_stub_infer_surfaces_missing_model() {
+        let backend = StubBackend::new(birefnet_manifest())
+            .unwrap()
+            .with_availability(false);
+        assert!(!backend.is_available());
+        let img = frame(64, 64, [1, 2, 3]);
+        let err = <StubBackend as SubjectInference>::infer(&backend, &img).unwrap_err();
+        match &err {
+            OnnxError::MissingModel { path } => {
+                assert_eq!(path, "BiRefNet", "error must name the unavailable model");
+            }
+            other => panic!("expected MissingModel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn available_stub_still_infers() {
+        let backend = StubBackend::new(birefnet_manifest())
+            .unwrap()
+            .with_availability(true);
+        let img = frame(32, 32, [9, 9, 9]);
+        assert!(backend.infer(&img).is_ok(), "available stub must infer");
+    }
+
+    /// The `lumina-core` bridge must propagate the refusal as a hard
+    /// `CoreError::MaskInference` (F-051 decision layer relies on it).
+    #[test]
+    fn core_bridge_propagates_unavailable_backend() {
+        use lumina_core::MaskInference;
+        let backend = StubBackend::new(birefnet_manifest())
+            .unwrap()
+            .with_availability(false);
+        let img = frame(16, 16, [0, 0, 0]);
+        let err = MaskInference::infer(&backend, &img).unwrap_err();
+        assert!(
+            matches!(err, lumina_core::CoreError::MaskInference { .. }),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains("not available"),
+            "core error must carry the missing-model reason, got {err}"
         );
     }
 }

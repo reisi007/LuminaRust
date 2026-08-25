@@ -30,6 +30,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 pub mod backend;
+pub mod hash;
 pub mod manifest;
 pub mod preprocess;
 pub mod sam2;
@@ -38,15 +39,23 @@ pub mod sam2;
 pub mod ort_backend;
 
 pub use backend::{StubBackend, SubjectInference};
+pub use hash::{
+    compute_sha256_hex, verify_model_file, verify_model_hash, ModelHashStatus,
+    PENDING_INTEGRATION_HASH,
+};
 pub use manifest::{
     birefnet_manifest, sam2_1_manifest, sam2_1_manifests, select_variant, ChannelLayout,
-    DeviceProfile, ModelCapabilities, ModelInputSpec, ModelManifest, Resolution, Sam2Variant,
-    TensorFormat, BIREFNET_INFERENCE_HEIGHT, BIREFNET_INFERENCE_WIDTH, SAM2_INFERENCE_HEIGHT,
-    SAM2_INFERENCE_WIDTH,
+    DeviceProfile, InputNormalization, ModelCapabilities, ModelInputSpec, ModelManifest,
+    Resolution, Sam2Variant, TensorFormat, BIREFNET_INFERENCE_HEIGHT, BIREFNET_INFERENCE_WIDTH,
+    SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
 };
-pub use preprocess::{preprocess_rgb_to_model, rescale_model_matte};
+pub use preprocess::{
+    matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_rgb_to_model,
+    rescale_model_matte, validate_output_shape,
+};
 pub use sam2::{
-    BoxPrompt, MaskPromptLogits, PointLabel, PromptMaskInference, PromptPoint, SegmentationPrompt,
+    model_point_to_source, source_box_to_model, source_point_to_model, BoxPrompt, MaskPromptLogits,
+    PointLabel, PromptMaskInference, PromptPoint, SegmentationPrompt, SourceBox, SourcePoint,
     StubSam2Backend,
 };
 
@@ -78,6 +87,18 @@ pub enum OnnxError {
     /// A model artifact required for inference is not available.
     #[error("model artifact `{path}` is not available")]
     MissingModel { path: String },
+    /// The loaded artifact's hash differs from the manifest `model_hash`
+    /// (stale/mismatched weights). Reported instead of silently inferring
+    /// with the wrong weights (REVIEW-ONNX-HASH-1).
+    #[error(
+        "model artifact for `{name}` is stale: manifest pins hash `{expected}`, \
+         but the artifact hashes to `{actual}`"
+    )]
+    ModelArtifactStale {
+        name: String,
+        expected: String,
+        actual: String,
+    },
     /// A segmentation prompt was unsupported or invalid (e.g. a capability the
     /// model does not declare, inverted/empty box, out-of-bounds coordinates, or
     /// a mask-logits size mismatch). Reported, never silently downgraded.

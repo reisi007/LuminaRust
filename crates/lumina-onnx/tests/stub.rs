@@ -41,3 +41,21 @@ fn stub_matte_spans_full_range() {
     assert_eq!(min, 0, "corners must be transparent");
     assert!(max >= 65000, "center must be near-opaque, got {max}");
 }
+
+/// REVIEW-ONNX-AVAIL-1 — a stub reporting itself unavailable must refuse
+/// inference with `MissingModel` instead of silently emitting a matte.
+#[test]
+fn unavailable_stub_refuses_inference() {
+    use lumina_onnx::SubjectInference as _;
+    let backend = StubBackend::new(birefnet_manifest())
+        .unwrap()
+        .with_availability(false);
+    let img = solid_frame(64, 64, [5, 5, 5]);
+    let err = backend.infer(&img).unwrap_err();
+    match &err {
+        lumina_onnx::OnnxError::MissingModel { path } => {
+            assert_eq!(path, "BiRefNet");
+        }
+        other => panic!("expected MissingModel, got {other:?}"),
+    }
+}
