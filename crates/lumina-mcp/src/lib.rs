@@ -11,7 +11,7 @@ pub mod session;
 pub mod tools;
 pub mod util;
 
-use error::{error_response, ok_response, tool_result_response};
+use error::{error_response, ok_response, tool_error_result, tool_result_response};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::env;
@@ -141,13 +141,17 @@ impl Server {
 
     /// Dispatches a parsed JSON-RPC message.
     pub fn handle_message(&mut self, value: Value) -> Option<Value> {
-        let request: Request = match serde_json::from_value(value) {
+        let request: Request = match Request::deserialize(&value) {
             Ok(request) => request,
             Err(error) => {
+                // The line parsed as JSON but does not satisfy the JSON-RPC
+                // request shape: this is Invalid Request (-32600), not a
+                // Parse error (-32700). Echo the id when one is detectable.
+                let id = value.get("id").filter(|id| !id.is_null()).cloned();
                 return Some(error_response(
-                    None,
-                    -32700,
-                    format!("parse error: {error}"),
+                    id,
+                    -32600,
+                    format!("invalid request: {error}"),
                     None,
                 ));
             }
@@ -171,14 +175,25 @@ impl Server {
                     .get("arguments")
                     .cloned()
                     .unwrap_or_else(|| json!({}));
+
+                // An unknown tool is a protocol-level error (MCP spec:
+                // -32602 with "Unknown tool"), distinct from a registered
+                // tool failing during execution.
+                if !tools::is_known_tool(&name) {
+                    return Some(error_response(
+                        Some(id),
+                        -32602,
+                        format!("Unknown tool: {name}"),
+                        Some(json!({ "tool": name })),
+                    ));
+                }
+
                 match tools::dispatch_tool(self, &name, &arguments) {
                     Ok(payload) => Some(tool_result_response(id, payload)),
-                    Err(error) => Some(error_response(
-                        Some(id),
-                        error.code(),
-                        error.message(),
-                        Some(error.data()),
-                    )),
+                    // Tool execution errors stay inside the result with
+                    // `isError: true` so the calling model can read and react
+                    // to them; they are not transport-layer failures.
+                    Err(error) => Some(tool_error_result(id, &error)),
                 }
             }
             other => Some(error_response(

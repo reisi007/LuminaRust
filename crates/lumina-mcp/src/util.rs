@@ -55,6 +55,61 @@ pub fn get_str<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, Mc
         .ok_or_else(|| McpError::InvalidParams(format!("missing string argument `{key}`")))
 }
 
+/// Parses an optional unsigned integer argument strictly.
+///
+/// The JSON value must be a non-negative integer within `minimum..=maximum`;
+/// fractional values, negatives, non-numbers, and values that would only fit
+/// after truncation (e.g. `quality: 256` squeezed into a u8) are rejected with
+/// a JSON-RPC `InvalidParams` error. An absent field — or an explicit `null` —
+/// means "not provided". Schema annotations (`minimum`/`maximum`) are advisory
+/// documentation for clients; this server-side check is the authoritative one.
+pub fn parse_bounded_uint(
+    args: &serde_json::Value,
+    key: &str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Option<u64>, McpError> {
+    let Some(value) = args.get(key).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let parsed = value.as_u64().ok_or_else(|| {
+        McpError::InvalidParams(format!(
+            "`{key}` must be an integer in {minimum}..={maximum}, got `{value}`"
+        ))
+    })?;
+    if !(minimum..=maximum).contains(&parsed) {
+        return Err(McpError::InvalidParams(format!(
+            "`{key}` must be an integer in {minimum}..={maximum}, got `{parsed}`"
+        )));
+    }
+    Ok(Some(parsed))
+}
+
+/// Validates that `output`'s extension agrees with the requested export
+/// format. Writing JPEG bytes into a `.png` file would produce an artifact
+/// that lies about its container, so mismatches are rejected loudly instead of
+/// silently encoding whatever the extension suggests (same rule as the CLI's
+/// `output_format` gate).
+pub fn validate_output_extension(output: &Path, format: ImageFileFormat) -> Result<(), McpError> {
+    let extension = output
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    match ImageFileFormat::from_extension(extension) {
+        Some(derived) if derived == format => Ok(()),
+        Some(derived) => Err(McpError::InvalidParams(format!(
+            "output extension `.{extension}` encodes {} but format `{}` was requested; \
+             align the extension with the format",
+            derived.default_extension(),
+            format.default_extension()
+        ))),
+        None => Err(McpError::UnsupportedFormat(format!(
+            "unsupported output extension `.{extension}`; use .{}, .jpg/.jpeg or .webp",
+            format.default_extension()
+        ))),
+    }
+}
+
 /// Builds a [`SourceIdentity`] for a freshly created sidecar, mirroring the
 /// `lumina-cli` import logic.
 pub fn build_source_identity(

@@ -54,3 +54,13 @@ pub fn dispatch_tool(server: &mut Server, name: &str, args: &Value) -> Result<Va
         other => Err(McpError::MethodNotFound(format!("unknown tool: {other}"))),
     }
 }
+
+/// Returns `true` if `name` refers to a registered tool. The protocol layer
+/// uses this to answer an unknown tool with the MCP-spec protocol error
+/// (`-32602`, "Unknown tool") instead of treating it as a tool execution
+/// failure.
+pub fn is_known_tool(name: &str) -> bool {
+    list_tool_definitions()
+        .iter()
+        .any(|tool| tool["name"].as_str() == Some(name))
+}

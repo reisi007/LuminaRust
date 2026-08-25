@@ -187,19 +187,7 @@ stehenden Restbestand.
   still, beide melden „ok" (mittel; main.rs:874–881). Fix: Dubletten
   vorab ablehnen oder Struktur spiegeln. Re-Check 2026-08-25:
   unverändert (`args.output.join(name)` ohne Dubletten-Prüfung).
-- [ ] **[PRIO: mittel] REVIEW-MCP-QUALITY-1** `quality as u8` trunciert ohne
-  Validierung (256→0) (mittel; save.rs:47–52; analog preview.rs:31).
-  Fix: 1..=100 serverseitig erzwingen. Re-Check 2026-08-25: unverändert
-  (`as_u64().map(|v| v as u8)`).
-- [ ] **[PRIO: mittel] REVIEW-MCP-SAVE-1** `lumina_save` nutzt `fs::write` statt
-  atomarem Write; Format/Extension ungeprüft (mittel; save.rs:66–68).
-  Re-Check 2026-08-25: unverändert.
-- [ ] **[PRIO: mittel] REVIEW-MCP-SESSION-1** Ganzes, evtl. veraltetes In-Memory-
-  Document wird zurückgeschrieben → Lost Update; Load prüft
-  content_hash nicht (mittel; session.rs:36–59, edit.rs, load.rs:37).
-  Fix: `save_sidecar_if_unchanged` + Quell-Identitätsprüfung wie CLI.
-  Re-Check 2026-08-25: MCP persistiert via Plain-`save_sidecar`
-  (edit.rs); die CAS-API ist vorhanden, wird aber von MCP nicht genutzt.
+
 - [ ] **[PRIO: mittel] REVIEW-GUI-MASKGEO-1** Masken-Pinsel/Verlauf/Radial (und
   WB-Pipette) ignorieren Crop/Rotation/Mirror des Rezepts → Markierungen
   landen transformiert-falsch (mittel; lib.rs:2589–2669). Fix: inverse
@@ -380,9 +368,7 @@ MVP-blockierend)**
 - [ ] **[PRIO: niedrig] REVIEW-CLI-N7** import akzeptiert geänderte Quelle gegen
   bestehendes Sidecar ohne Warnung (main.rs:400). Re-Check 2026-08-25:
   import_file prüft keinen Content-Hash (im Gegensatz zu process_selected).
-- [ ] **[PRIO: niedrig] REVIEW-MCP-N1** JSON-RPC-Codes: Parse-vs-Invalid-Request
-  konflatet; Tool-Fehler nicht als isError-Result (lib.rs:139).
-  Re-Check 2026-08-25: Struct-Parse-Fehler antworten weiterhin -32700.
+
 
 - [ ] **[PRIO: niedrig] REVIEW-GUI-N1** Save berechnet Fingerprint neu und löscht
   Konfliktstatus still; GUI nutzt CAS (`save_sidecar_if_unchanged`)

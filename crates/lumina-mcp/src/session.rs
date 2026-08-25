@@ -25,6 +25,11 @@ pub struct ImageState {
     pub raw_metadata: Option<RawMetadata>,
     /// The loaded (or freshly created) sidecar document.
     pub document: SidecarDocument,
+    /// Revision (content hash) of `document` as currently persisted on disk.
+    /// Used as the compare-and-swap expectation on the next write so an
+    /// externally modified sidecar can never be silently overwritten
+    /// (REVIEW-MCP-SESSION-1: no lost updates).
+    pub sidecar_revision: String,
     /// `"loaded"` if an existing sidecar was read, `"created"` if one was
     /// materialized on load.
     pub sidecar_status: String,

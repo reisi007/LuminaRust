@@ -6,7 +6,10 @@ use crate::util::{build_source_identity, detect_format, is_raw_path};
 use crate::Server;
 use lumina_core::ImageFrame;
 use lumina_raw::RawMetadata;
-use lumina_sidecar::{load_sidecar, save_sidecar, sidecar_path_for, SidecarDocument};
+use lumina_sidecar::{
+    document_revision, load_sidecar, save_sidecar_if_unchanged, sidecar_path_for, SidecarDocument,
+    SidecarError, SourceIdentity,
+};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -15,6 +18,10 @@ pub const NAME: &str = "lumina_load";
 pub const DESCRIPTION: &str = "Load an image (RAW, PNG, JPEG, WebP) and return its metadata. \
 Assigns a process-local image_id and (re)loads the sidecar. A new lumina_load \
 discards the previously loaded image.";
+
+/// Pipeline identifier for sidecars materialized by this server (same value as
+/// the CLI's import path).
+const PIPELINE_VERSION: &str = "raster-mvp-1";
 
 pub fn schema() -> Value {
     json!({
@@ -56,16 +63,25 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     };
 
     let sidecar_path = sidecar_path_for(path);
-    let (document, status) = if sidecar_path.exists() {
-        let document =
-            load_sidecar(&sidecar_path).map_err(|error| McpError::Sidecar(format!("{error}")))?;
-        (document, "loaded".to_string())
+    let identity = build_source_identity(path, &bytes, &frame, raw_metadata.as_ref());
+    let (document, sidecar_revision, status) = if sidecar_path.exists() {
+        open_existing_sidecar(&sidecar_path, &identity)?
     } else {
-        let identity = build_source_identity(path, &bytes, &frame, raw_metadata.as_ref());
-        let document = SidecarDocument::new(identity, "raster-mvp-1");
-        save_sidecar(&sidecar_path, &document)
-            .map_err(|error| McpError::Sidecar(format!("{error}")))?;
-        (document, "created".to_string())
+        // Compare-and-swap create: if another process materialized the default
+        // sidecar in this race window, adopt its document instead of clobbering
+        // it (both are fresh defaults; the identity check still applies).
+        let fresh = SidecarDocument::new(identity.clone(), PIPELINE_VERSION);
+        match save_sidecar_if_unchanged(&sidecar_path, &fresh, None) {
+            Ok(revision) => (fresh, revision, "created".to_string()),
+            Err(SidecarError::Conflict(_)) => {
+                log::warn!(
+                    "sidecar appeared concurrently while loading `{}`; adopting it",
+                    path.display()
+                );
+                open_existing_sidecar(&sidecar_path, &identity)?
+            }
+            Err(error) => return Err(McpError::Sidecar(format!("{error}"))),
+        }
     };
 
     let id = server.generate_image_id(path);
@@ -85,6 +101,7 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         frame,
         raw_metadata,
         document,
+        sidecar_revision,
         sidecar_status: status,
     });
 
@@ -96,4 +113,29 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         "virtual_copies": virtual_copies,
         "sidecar_status": sidecar_status,
     }))
+}
+
+/// Loads an existing sidecar and verifies it against the source's current
+/// identity. A sidecar whose recorded content hash or byte length no longer
+/// matches the source is stale; per F-001/F-101 it is reported loudly and
+/// never silently used (same rule as the CLI develop/export path).
+fn open_existing_sidecar(
+    sidecar_path: &Path,
+    identity: &SourceIdentity,
+) -> Result<(SidecarDocument, String, String), McpError> {
+    let document =
+        load_sidecar(sidecar_path).map_err(|error| McpError::Sidecar(format!("{error}")))?;
+    if document.source.content_hash != identity.content_hash
+        || document.source.byte_length != identity.byte_length
+    {
+        return Err(McpError::Sidecar(format!(
+            "source changed since sidecar was written: `{}` (sidecar content hash `{}`, current `{}`)",
+            sidecar_path.display(),
+            document.source.content_hash,
+            identity.content_hash
+        )));
+    }
+    let revision =
+        document_revision(&document).map_err(|error| McpError::Sidecar(format!("{error}")))?;
+    Ok((document, revision, "loaded".to_string()))
 }

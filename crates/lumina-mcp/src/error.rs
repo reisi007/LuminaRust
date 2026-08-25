@@ -36,6 +36,10 @@ pub enum McpError {
     Render(String),
     Encode(String),
     Sidecar(String),
+    /// The sidecar changed on disk between `lumina_load` and a write-back
+    /// (compare-and-swap miss). The session never overwrites an externally
+    /// modified sidecar; the caller must re-load to pick up external changes.
+    SidecarConflict(String),
 }
 
 impl McpError {
@@ -56,6 +60,7 @@ impl McpError {
             McpError::Render(_) => -32007,
             McpError::Encode(_) => -32008,
             McpError::Sidecar(_) => -32009,
+            McpError::SidecarConflict(_) => -32010,
         }
     }
 
@@ -77,6 +82,7 @@ impl McpError {
             McpError::Render(_) => "RenderError",
             McpError::Encode(_) => "EncodeError",
             McpError::Sidecar(_) => "SidecarError",
+            McpError::SidecarConflict(_) => "SidecarConflict",
         }
     }
 
@@ -105,6 +111,11 @@ impl McpError {
             McpError::UnknownCopy(m) => format!("{}: unknown virtual copy `{}`", self.name(), m),
             McpError::InvalidParams(m) => format!("{}: {}", self.name(), m),
             McpError::Sidecar(m) => format!("{}: {}", self.name(), m),
+            McpError::SidecarConflict(m) => format!(
+                "{}: sidecar changed concurrently (`{}`); re-run lumina_load and retry",
+                self.name(),
+                m
+            ),
             McpError::Decode(m) => format!("{}: {}", self.name(), m),
             McpError::Render(m) => format!("{}: {}", self.name(), m),
             McpError::Encode(m) => format!("{}: {}", self.name(), m),
@@ -136,6 +147,7 @@ impl McpError {
             McpError::UnknownCopy(m) => json!({ "error": self.name(), "copy": m }),
             McpError::InvalidParams(m) => json!({ "error": self.name(), "message": m }),
             McpError::Sidecar(m) => json!({ "error": self.name(), "message": m }),
+            McpError::SidecarConflict(m) => json!({ "error": self.name(), "path": m }),
             McpError::Decode(m) => json!({ "error": self.name(), "message": m }),
             McpError::Render(m) => json!({ "error": self.name(), "message": m }),
             McpError::Encode(m) => json!({ "error": self.name(), "message": m }),
@@ -195,6 +207,20 @@ pub fn tool_result_response(id: Value, payload: Value) -> Value {
         "content": [{ "type": "text", "text": text }],
         "isError": false,
         "structuredContent": payload,
+    });
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+/// Wraps a tool *execution* error into the MCP `tools/call` result shape with
+/// `isError: true`. Per the MCP specification, execution failures belong
+/// inside the result object — where the calling model can read and react to
+/// them — while protocol-level errors (unknown tool, malformed request,
+/// unknown method) remain JSON-RPC error responses on the transport layer.
+pub fn tool_error_result(id: Value, error: &McpError) -> Value {
+    let result = json!({
+        "content": [{ "type": "text", "text": error.message() }],
+        "isError": true,
+        "structuredContent": error.data(),
     });
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }

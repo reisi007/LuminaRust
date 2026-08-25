@@ -5,14 +5,16 @@ use crate::error::McpError;
 use crate::session::ImageState;
 use crate::util::{get_str, recipe_hash};
 use crate::Server;
-use lumina_sidecar::{save_sidecar, SidecarError};
+use lumina_sidecar::{save_sidecar_if_unchanged, SidecarError};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub const NAME: &str = "lumina_edit";
 pub const DESCRIPTION: &str = "Set global tonal adjustments in the recipe of a virtual copy and \
 write the sidecar atomically (write-through). Idempotent: identical input yields an \
-identical recipe_hash. Rejects out-of-range values with InvalidAdjustment.";
+identical recipe_hash. Rejects out-of-range values with InvalidAdjustment. The write is a \
+compare-and-swap against the revision seen at lumina_load; an externally modified sidecar \
+surfaces as SidecarConflict instead of being overwritten.";
 
 pub fn schema() -> Value {
     json!({
@@ -95,15 +97,27 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .map(str::to_owned);
     let index = resolve_copy_index(state, requested.as_deref())?;
 
+    // Mutate a clone first: if the compare-and-swap below fails, the session
+    // document stays exactly as loaded and can be re-based by a new load.
+    let mut updated = state.document.clone();
     for (key, value) in &adjustments {
-        state.document.virtual_copies[index]
+        updated.virtual_copies[index]
             .recipe
             .adjustments
             .insert(key.clone(), *value);
     }
+    let hash = recipe_hash(&updated.virtual_copies[index].recipe);
 
-    let hash = recipe_hash(&state.document.virtual_copies[index].recipe);
-    save_sidecar(&state.sidecar_path, &state.document).map_err(map_sidecar_error)?;
+    // Compare-and-swap write (REVIEW-MCP-SESSION-1): the save only lands when
+    // the on-disk sidecar still matches the revision this session loaded. An
+    // external writer between lumina_load and now surfaces as SidecarConflict
+    // instead of being silently overwritten (lost update).
+    let expected_revision = state.sidecar_revision.clone();
+    let revision =
+        save_sidecar_if_unchanged(&state.sidecar_path, &updated, Some(&expected_revision))
+            .map_err(map_sidecar_error)?;
+    state.document = updated;
+    state.sidecar_revision = revision;
     Ok(json!({ "ok": true, "recipe_hash": hash }))
 }
 
@@ -120,5 +134,8 @@ fn resolve_copy_index(state: &ImageState, requested: Option<&str>) -> Result<usi
 }
 
 fn map_sidecar_error(error: SidecarError) -> McpError {
-    McpError::Sidecar(format!("{error}"))
+    match error {
+        SidecarError::Conflict(path) => McpError::SidecarConflict(path),
+        other => McpError::Sidecar(other.to_string()),
+    }
 }

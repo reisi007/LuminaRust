@@ -1,10 +1,13 @@
 //! `lumina_save` — render the edited frame and export it to disk.
 
 use crate::error::McpError;
-use crate::util::{encode_with_quality, get_str, parse_output_format, render_copy};
+use crate::util::{
+    encode_with_quality, get_str, parse_bounded_uint, parse_output_format, render_copy,
+    validate_output_extension,
+};
 use crate::Server;
+use lumina_sidecar::{paths_resolve_equal, write_atomically};
 use serde_json::{json, Value};
-use std::fs;
 use std::path::Path;
 
 pub const NAME: &str = "lumina_save";
@@ -47,28 +50,34 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .ok_or_else(|| McpError::InvalidParams("missing `output_path`".into()))?;
     let output = Path::new(output_path);
 
-    // Never overwrite the original image.
-    if let Ok(canonical_output) = std::fs::canonicalize(output) {
-        if let Ok(canonical_source) = std::fs::canonicalize(&state.source_path) {
-            if canonical_output == canonical_source {
-                return Err(McpError::Encode(
-                    "output_path equals the source image; refusing to overwrite the original"
-                        .into(),
-                ));
-            }
-        }
-    }
-
+    // Validate arguments before rendering (fail fast): format and extension
+    // must agree, quality must be an integer in 1..=100. The schema
+    // annotations are advisory for clients; this check is authoritative — a
+    // value like 256 fails here instead of truncating to 0.
     let format_str = args
         .get("format")
         .and_then(|value| value.as_str())
         .unwrap_or("png");
     let format = parse_output_format(format_str)?;
-    let quality = args
-        .get("quality")
-        .and_then(|value| value.as_u64())
-        .map(|value| value as u8)
-        .unwrap_or(90);
+    let quality = parse_bounded_uint(args, "quality", 1, 100)?.unwrap_or(90) as u8;
+    validate_output_extension(output, format)?;
+
+    // Never overwrite the original image (non-destructive guarantee). Unlike
+    // plain canonicalization this also catches not-yet-existing outputs that
+    // resolve onto the source's own name.
+    match paths_resolve_equal(&state.source_path, output) {
+        Ok(true) => {
+            return Err(McpError::Encode(
+                "output_path equals the source image; refusing to overwrite the original".into(),
+            ))
+        }
+        Ok(false) => {}
+        Err(error) => {
+            return Err(McpError::Encode(format!(
+                "could not resolve output path `{output_path}`: {error}"
+            )))
+        }
+    }
 
     let requested = args.get("virtual_copy").and_then(|value| value.as_str());
     let copy = state.find_copy(requested)?;
@@ -79,7 +88,8 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let rendered = render_copy(state, copy, white_balance)?;
     let bytes = encode_with_quality(&rendered, format, quality)?;
 
-    fs::write(output, &bytes)
+    // Atomic write: a crash mid-export can never leave a torn artifact behind.
+    write_atomically(output, &bytes)
         .map_err(|error| McpError::Encode(format!("could not write `{output_path}`: {error}")))?;
 
     Ok(json!({

@@ -1,9 +1,10 @@
 //! `lumina_preview` — fast, cache-free, deterministic downscaled PNG preview.
 
 use crate::error::McpError;
-use crate::util::{downscale_bilinear, get_str, render_copy};
+use crate::util::{downscale_bilinear, get_str, parse_bounded_uint, render_copy};
 use crate::Server;
 use lumina_core::ImageFileFormat;
+use lumina_sidecar::write_atomically;
 use serde_json::{json, Value};
 use std::fs;
 
@@ -36,11 +37,9 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let image_id = get_str(args, "image_id")?;
     let state = server.session.require_id(image_id)?;
 
-    let max_width = args
-        .get("max_width")
-        .and_then(|value| value.as_u64())
-        .map(|value| value as u32)
-        .unwrap_or(1024);
+    // Strict bound: a value like 2^32 + 5 must fail instead of truncating to 5.
+    let max_width =
+        parse_bounded_uint(args, "max_width", 1, u64::from(u32::MAX))?.unwrap_or(1024) as u32;
 
     let requested = args.get("virtual_copy").and_then(|value| value.as_str());
     let copy = state.find_copy(requested)?;
@@ -62,7 +61,9 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         ))
     })?;
     let preview_path = server.preview_dir.join(format!("{}.png", state.id));
-    fs::write(&preview_path, &png).map_err(|error| {
+    // Atomic write: a vision model reading the preview mid-write can never
+    // observe a torn PNG.
+    write_atomically(&preview_path, &png).map_err(|error| {
         McpError::Encode(format!(
             "could not write preview `{preview_path:?}`: {error}"
         ))
