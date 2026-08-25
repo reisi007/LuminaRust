@@ -113,23 +113,7 @@ stehenden Restbestand.
 
 **Review-Befunde Full-Repo-Review (2026-08-23) — Mittel**
 
-- [ ] **[PRIO: mittel] REVIEW-SIDECAR-TMP-1** `recover_sidecar` löscht Temp-Dateien
-  lebender Writer (mittel; lib.rs:1109–1130). Fix: mtime-Schwelle oder
-  Sweep unter Lock. Re-Check 2026-08-25: unverändert.
-- [ ] **[PRIO: mittel] REVIEW-SIDECAR-CAS-1** CAS (`save_sidecar_if_unchanged`) nicht
-  gegen Plain-`save_sidecar` serialisiert (mittel; lib.rs:1075–1100).
-  Fix: alle Writes über Lock oder Vertrag dokumentieren. Re-Check
-  2026-08-25: Plain-`save_sidecar` nimmt weiterhin keinen Lock.
-- [ ] **[PRIO: mittel] REVIEW-SIDECAR-ZDATA-1** zdata Read-Modify-Write ohne Lock →
-  verlorene Repair-Regionen/Dangling Refs (mittel;
-  zdata.rs:688–699). Fix: `.zdata.lock` + Checksum-Verifikation beim
-  Laden. Re-Check 2026-08-25: unverändert — `append_repair_region`
-  lädt/speichert ohne Lock; BLAKE3 wird erst lazy beim Tile-Zugriff
-  geprüft, nicht beim Laden.
-- [ ] **[PRIO: mittel] REVIEW-SIDECAR-STATUS-1** `artifact_status` prüft nur
-  `is_file()`, keine Checksum/Format/Auflösung (mittel;
-  lib.rs:1187–1193) → korrupte Artefakte gelten als Available.
-  Re-Check 2026-08-25: unverändert.
+
 - [ ] **[PRIO: mittel] REVIEW-CORE-CROP-1** `crop_rect`: u32-Underflow/Empty-Crop durch
   1e-6-Toleranz (mittel; lib.rs:1227–1246). Fix: x/y ≤ 1 explizit,
   saturating_sub, pw/ph == 0 als Fehler. Re-Check 2026-08-25: Validierung
@@ -310,25 +294,7 @@ implementiert und aus dieser Liste entfernt; offen:
 **Review-Befunde Full-Repo-Review (2026-08-23) — Niedrig (Backlog, nicht
 MVP-blockierend)**
 
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-N1** Migration-Tempfile nutzt Crate-Default-Prefix
-  statt `.{name}.tmp-` → Recover-Sweep räumt nie auf (lib.rs:1241).
-  Re-Check 2026-08-25: `atomic_write_bytes` nutzt
-  `NamedTempFile::new_in` (Default-Prefix).
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-N2** schema_version 0 wird in `from_json` still
-  zu 1 normalisiert, divergiert vom Migrationspfad (lib.rs:1311).
-  Re-Check 2026-08-25: unverändert (Bewusstsein durch Pre-Alpha-Entscheid
-  geschärft, Code gleich).
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-N3** Unbekannte Adjustment-Keys und
-  MaskLayer.feather/blur/density sowie target_luminance ohne
-  Finite/Range-Validierung (lib.rs:1724, 320, 827). Re-Check
-  2026-08-25: unbekannte Keys werden via `_ => continue` übersprungen;
-  keine Range-Checks für feather/blur/density/target_luminance.
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-N4** `delete_virtual_copy` mutiert vor
-  `validate()` → bei Fehler bleibt Rechenliste inkonsistent hängen
-  (lib.rs:1373). Re-Check 2026-08-25: unverändert.
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-N5** `load_sidecar` liest Datei komplett vor
-  Größenlimit (read_to_string) — `load_zdata` macht es richtig
-  (lib.rs:979). Re-Check 2026-08-25: unverändert.
+
 - [ ] **[PRIO: niedrig] REVIEW-CORE-N1** Histogram-Stufen-Digest ohne OutputSpec
   (pipeline.rs:160; latent, bis Vorschau-Histogramme gecacht werden).
   Re-Check 2026-08-25: Digest nimmt `output` nur unter Scope „render".

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -27,6 +27,15 @@ pub const SCHEMA_VERSION: u32 = 2;
 pub const SOURCE_ACTION_VERSION: u16 = 1;
 pub const MAX_SIDECAR_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_VIRTUAL_COPIES: usize = 10_000;
+
+/// REVIEW-SIDECAR-TMP-1: an atomic-write temporary must be at least this old
+/// before [`recover_sidecar`] considers it orphaned. A live writer keeps its
+/// temporary fresh, so a concurrent reader's recovery sweep can never delete a
+/// temporary that is currently being written. The value matches the stale-lock
+/// threshold of [`acquire_write_lock`]: both answer the same question — "is
+/// this artefact of a crashed writer?" — with the same conservative bound.
+pub const TEMP_SWEEP_AGE: Duration = Duration::from_secs(30);
+
 pub type Extras = BTreeMap<String, Value>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -937,7 +946,12 @@ pub struct RecoveryReport {
     pub removed_temporary_files: usize,
 }
 
-struct WriteLock {
+/// REVIEW-SIDECAR-CAS-1 / REVIEW-SIDECAR-ZDATA-1: the per-target write lock is
+/// shared by every writer of a bundle file (JSON sidecar *and* `.lumina.zdata`)
+/// so plain saves, compare-and-swap saves and read-modify-write appends all
+/// serialize against each other. `pub(crate)` because `zdata` reuses it for the
+/// `.zdata.lock`.
+pub(crate) struct WriteLock {
     path: PathBuf,
 }
 
@@ -965,8 +979,16 @@ pub enum SourceStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactStatus {
+    /// The artifact exists and passed every check this crate can perform.
     Available,
+    /// The artifact file does not exist (or is not a regular file).
     Missing,
+    /// REVIEW-SIDECAR-STATUS-1: the artifact exists on disk but is not usable —
+    /// it is empty, exceeds the container size limit, or (for formats this
+    /// crate owns, i.e. `.lumina.zdata` containers) fails parsing or BLAKE3
+    /// checksum verification. A corrupt artifact must never be reported as
+    /// available; callers treat it like missing data with a visible message.
+    Corrupt,
 }
 
 /// Returns the sidecar path immediately next to `source`.
@@ -983,12 +1005,43 @@ pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {
     // tempfile prefix used by save_sidecar; a partial file must not become a
     // valid document after a crash.
     recover_sidecar(path)?;
-    let json = fs::read_to_string(path).map_err(|error| {
+    // REVIEW-SIDECAR-N5: the size limit is enforced *before* the file is read
+    // (metadata gate) and a second time on the bounded read itself, so an
+    // oversized or sparse file can never be pulled into memory in full. The
+    // metadata/open race is covered by the `take` bound, not by the stat.
+    let metadata = fs::metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             SidecarError::Missing(path.display().to_string())
         } else {
-            io_error("reading", path, error)
+            io_error("reading sidecar metadata", path, error)
         }
+    })?;
+    if metadata.len() > MAX_SIDECAR_BYTES as u64 {
+        return Err(SidecarError::Invalid(format!(
+            "sidecar exceeds size limit of {MAX_SIDECAR_BYTES} bytes: `{}`",
+            path.display()
+        )));
+    }
+    let mut file = fs::File::open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SidecarError::Missing(path.display().to_string())
+        } else {
+            io_error("opening", path, error)
+        }
+    })?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_SIDECAR_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| io_error("reading", path, error))?;
+    if bytes.len() > MAX_SIDECAR_BYTES {
+        return Err(SidecarError::Invalid(format!(
+            "sidecar exceeds size limit of {MAX_SIDECAR_BYTES} bytes: `{}`",
+            path.display()
+        )));
+    }
+    let json = String::from_utf8(bytes).map_err(|_| {
+        SidecarError::Json(format!("sidecar is not valid UTF-8: `{}`", path.display()))
     })?;
     SidecarDocument::from_json(&json)
 }
@@ -996,7 +1049,23 @@ pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {
 /// Validates before writing and replaces the destination only after the complete
 /// temporary file has been flushed and synced. Output and sidecar are not a
 /// two-file transaction (the architecture explicitly leaves that out of v1).
+///
+/// REVIEW-SIDECAR-CAS-1: this is a *serialized* write — it takes the same
+/// per-sidecar write lock as [`save_sidecar_if_unchanged`] and
+/// [`migrate_sidecar_file`], so a plain save can no longer race an in-flight
+/// compare-and-swap into a lost update. Contract for all writers: every JSON
+/// sidecar write must go through `save_sidecar`, `save_sidecar_if_unchanged`
+/// or `migrate_sidecar_file`; direct filesystem writes bypass conflict
+/// detection entirely and are not supported.
 pub fn save_sidecar(path: &Path, document: &SidecarDocument) -> Result<(), SidecarError> {
+    let _lock = acquire_write_lock(path)?;
+    save_sidecar_locked(path, document)
+}
+
+/// The actual atomic replace. Caller must hold the sidecar's write lock; the
+/// lock deliberately lives with the public wrappers so the check-then-write
+/// window of the compare-and-swap path stays inside one critical section.
+fn save_sidecar_locked(path: &Path, document: &SidecarDocument) -> Result<(), SidecarError> {
     let json = document.to_json()?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().map(|name| name.to_string_lossy());
@@ -1102,7 +1171,9 @@ pub fn save_sidecar_if_unchanged(
             path.display()
         )));
     }
-    save_sidecar(path, document)?;
+    // Already holding the lock: use the unlocked inner write (the public
+    // `save_sidecar` would deadlock on the non-reentrant lock).
+    save_sidecar_locked(path, document)?;
     document_revision(document)
 }
 
@@ -1113,6 +1184,15 @@ pub fn document_revision(document: &SidecarDocument) -> Result<String, SidecarEr
 
 /// Remove orphaned atomic-write temporaries.  The destination is never
 /// touched, and temporary contents are never parsed or promoted.
+///
+/// REVIEW-SIDECAR-TMP-1: only temporaries that are demonstrably older than
+/// [`TEMP_SWEEP_AGE`] are removed. A live writer keeps its temporary fresh, so
+/// a concurrent reader running recovery can no longer delete the temporary out
+/// from under an in-flight save (which previously made the writer's atomic
+/// rename fail). A temporary whose modification time cannot be determined is
+/// deliberately *kept*: an un-swept leftover is harmless clutter, while
+/// deleting a live writer's temporary loses data. Leftovers younger than the
+/// threshold are swept by a later recovery once they have aged past it.
 pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().map(|name| name.to_string_lossy());
@@ -1124,12 +1204,23 @@ pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
     for entry in entries {
         let entry = entry.map_err(|error| io_error("reading recovery entry", parent, error))?;
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with(&prefix) && entry.path().is_file() {
-            fs::remove_file(entry.path()).map_err(|error| {
-                io_error("removing orphaned temporary file", &entry.path(), error)
-            })?;
-            removed += 1;
+        if !name.to_string_lossy().starts_with(&prefix) || !entry.path().is_file() {
+            continue;
         }
+        // REVIEW-SIDECAR-TMP-1: skip temporaries that may belong to a live
+        // writer (fresh modification time or undeterminable metadata).
+        let orphaned = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age > TEMP_SWEEP_AGE);
+        if !orphaned {
+            continue;
+        }
+        fs::remove_file(entry.path())
+            .map_err(|error| io_error("removing orphaned temporary file", &entry.path(), error))?;
+        removed += 1;
     }
     Ok(RecoveryReport {
         removed_temporary_files: removed,
@@ -1137,7 +1228,7 @@ pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn acquire_write_lock(_path: &Path) -> Result<WriteLock, SidecarError> {
+pub(crate) fn acquire_write_lock(_path: &Path) -> Result<WriteLock, SidecarError> {
     // WASM is capability-separated: no filesystem locking, single writer.
     Ok(WriteLock {
         path: PathBuf::from(".wasm-lock"),
@@ -1145,7 +1236,7 @@ fn acquire_write_lock(_path: &Path) -> Result<WriteLock, SidecarError> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
+pub(crate) fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().map(|name| name.to_string_lossy());
     let lock_path = parent.join(format!(
@@ -1264,18 +1355,91 @@ pub fn source_status(path: &Path, source: &SourceIdentity) -> Result<SourceStatu
     }
 }
 
+/// Checks whether the referenced artifact is usable.
+///
+/// REVIEW-SIDECAR-STATUS-1: existence alone is no longer sufficient. The check
+/// performs, in order:
+///
+/// 1. `Missing` when the path is absent or not a regular file,
+/// 2. `Corrupt` for empty files (a zero-byte artifact is never valid),
+/// 3. format-aware verification: files beginning with the `LUMZDATA` container
+///    magic are parsed and their per-record BLAKE3 checksums verified eagerly;
+///    any parse/checksum/size failure yields `Corrupt`,
+/// 4. `Available` otherwise.
+///
+/// Known limitation (documented SOLL gap, not a silent fallback): opaque
+/// non-container payloads cannot be deep-verified because this crate owns no
+/// parser for them; they are reported as `Available` once non-empty. The
+/// reference's declared resolution (`width`/`height`) describes the mask plane
+/// and has no generic mapping onto bundle records either; validating it
+/// requires the consuming pipeline's decoder.
+#[cfg(feature = "zdata")]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
-    if bundle_root.join(&artifact.relative_path).is_file() {
-        ArtifactStatus::Available
-    } else {
-        ArtifactStatus::Missing
+    let path = bundle_root.join(&artifact.relative_path);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return ArtifactStatus::Missing;
+    };
+    if !metadata.is_file() {
+        return ArtifactStatus::Missing;
     }
+    if metadata.len() == 0 {
+        return ArtifactStatus::Corrupt;
+    }
+    if starts_with_zdata_magic(&path) {
+        return match load_zdata(&path) {
+            Ok(_) => ArtifactStatus::Available,
+            // An oversized/truncated/corrupt container must not count as
+            // available just because the file exists.
+            Err(_) => ArtifactStatus::Corrupt,
+        };
+    }
+    ArtifactStatus::Available
+}
+
+/// Non-zdata build: without the container codec there is nothing to verify
+/// beyond existence and emptiness.
+#[cfg(not(feature = "zdata"))]
+pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
+    let path = bundle_root.join(&artifact.relative_path);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return ArtifactStatus::Missing;
+    };
+    if !metadata.is_file() {
+        return ArtifactStatus::Missing;
+    }
+    if metadata.len() == 0 {
+        return ArtifactStatus::Corrupt;
+    }
+    ArtifactStatus::Available
+}
+
+/// Reads at most 8 bytes and reports whether the file begins with the zdata
+/// container magic (`LUMZDATA`), so only containers this crate owns get the
+/// (comparatively expensive) full parse+checksum verification.
+#[cfg(feature = "zdata")]
+fn starts_with_zdata_magic(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 8];
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    file.read_exact(&mut magic).is_ok() && &magic == b"LUMZDATA"
 }
 
 pub fn xmp_supported() -> bool {
     false
 }
 
+/// Explicit, non-writing migration preview.
+///
+/// REVIEW-SIDECAR-N2 (documented decision, 2026-08-25): the historical
+/// `schema_version` 0 → 1 bump lives *only* here (and in
+/// [`migrate_sidecar_file`]). The loader (`SidecarDocument::from_json`) never
+/// normalizes v0 silently — it rejects with an explicit migration hint. The
+/// bump is a one-time historical accommodation for pre-release documents that
+/// predate the versioned schema stamp; it is applied only after an explicit
+/// migration request, with the usual backup + atomic-replace semantics in the
+/// file-level path.
 pub fn migrate_json(json: &str) -> Result<String, SidecarError> {
     let mut value: Value =
         serde_json::from_str(json).map_err(|e| SidecarError::Json(e.to_string()))?;
@@ -1320,7 +1484,15 @@ pub fn migrate_sidecar_file(path: &Path) -> Result<bool, SidecarError> {
 
 fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<(), SidecarError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+    // REVIEW-SIDECAR-N1: use the same `.{name}.tmp-` prefix as every other
+    // atomic write in this crate. The crate-default tempfile name was invisible
+    // to `recover_sidecar`, so an interrupted migration leaked a temporary that
+    // the recovery sweep could never identify or clean up.
+    let filename = path.file_name().map(|name| name.to_string_lossy());
+    let filename = filename.as_deref().unwrap_or("migration");
+    let mut temporary = tempfile::Builder::new()
+        .prefix(&format!(".{filename}.tmp-"))
+        .tempfile_in(parent)
         .map_err(|error| io_error("creating migration temporary file", parent, error))?;
     temporary
         .write_all(bytes)
@@ -1382,15 +1554,27 @@ impl SidecarDocument {
         if json.len() > MAX_SIDECAR_BYTES {
             return Err(SidecarError::Invalid("sidecar exceeds size limit".into()));
         }
-        let mut value: Value =
+        let value: Value =
             serde_json::from_str(json).map_err(|e| SidecarError::Json(e.to_string()))?;
         let version = value
             .get("schema_version")
             .and_then(Value::as_u64)
             .ok_or_else(|| SidecarError::Invalid("missing schema_version".into()))?;
+        // REVIEW-SIDECAR-N2 (documented decision, 2026-08-25): the historical
+        // `schema_version` 0 → 1 bump is *migration-only*. The loader never
+        // normalizes silently; a v0 document is rejected loudly and points at
+        // the explicit migration path (`migrate_json` / `migrate_sidecar_file`),
+        // keeping `from_json` and the migration machinery consistent. This
+        // matches the pre-alpha rule that incompatible documents fail with a
+        // visible error instead of a best-effort interpretation.
         if version == 0 {
-            value["schema_version"] = Value::from(1);
-        } else if version != 1 && version != u64::from(SCHEMA_VERSION) {
+            return Err(SidecarError::Invalid(
+                "unsupported schema_version 0; explicit migration is required \
+                 (see migrate_sidecar_file)"
+                    .into(),
+            ));
+        }
+        if version != 1 && version != u64::from(SCHEMA_VERSION) {
             return Err(SidecarError::Invalid(format!(
                 "unsupported schema_version {version}; explicit migration is required"
             )));
@@ -1427,8 +1611,15 @@ impl SidecarDocument {
         {
             return invalid(format!("duplicate virtual copy id `{}`", copy.id));
         }
+        // REVIEW-SIDECAR-N4: the document is validated with the copy in place,
+        // but a failed validation rolls the insertion back so `self` stays
+        // exactly as it was before the rejected call.
         self.virtual_copies.push(copy);
-        self.validate()
+        if let Err(error) = self.validate() {
+            self.virtual_copies.pop();
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn rename_virtual_copy(
@@ -1436,12 +1627,16 @@ impl SidecarDocument {
         id: &str,
         name: impl Into<String>,
     ) -> Result<(), SidecarError> {
+        let name = name.into();
+        // REVIEW-SIDECAR-N4: check the incoming value before mutating so an
+        // invalid rename cannot leave a mutated document behind.
+        validate_name("virtual copy name", &name)?;
         let copy = self
             .virtual_copies
             .iter_mut()
             .find(|copy| copy.id == id)
             .ok_or_else(|| SidecarError::Invalid(format!("unknown virtual copy `{id}`")))?;
-        copy.name = name.into();
+        copy.name = name;
         self.validate()
     }
 
@@ -1459,8 +1654,19 @@ impl SidecarDocument {
             .iter()
             .position(|copy| copy.id == id)
             .ok_or_else(|| SidecarError::Invalid(format!("unknown virtual copy `{id}`")))?;
-        self.deleted_virtual_copies
-            .push(self.virtual_copies.remove(index));
+        // REVIEW-SIDECAR-N4: validate the post-delete state *before* committing
+        // it. Deleting a copy that still owns masks referenced from elsewhere
+        // must fail loudly AND leave the document unchanged — previously the
+        // copy had already been moved to `deleted_virtual_copies` when
+        // validation failed, leaving callers with a mutated-but-invalid
+        // document.
+        let copy = self.virtual_copies.remove(index);
+        if let Err(error) = self.validate() {
+            // Roll back to the exact pre-call state.
+            self.virtual_copies.insert(index, copy);
+            return Err(error);
+        }
+        self.deleted_virtual_copies.push(copy);
         self.validate()
     }
 
@@ -1470,9 +1676,19 @@ impl SidecarDocument {
             .iter()
             .position(|copy| copy.id == id)
             .ok_or_else(|| SidecarError::Invalid(format!("unknown deleted virtual copy `{id}`")))?;
-        self.virtual_copies
-            .push(self.deleted_virtual_copies.remove(index));
-        self.validate()
+        // REVIEW-SIDECAR-N4: same validate-before-commit contract as
+        // `delete_virtual_copy`; a rejected restore leaves the copy in the
+        // deleted list at its original position.
+        let copy = self.deleted_virtual_copies.remove(index);
+        self.virtual_copies.push(copy);
+        if let Err(error) = self.validate() {
+            let copy = self.virtual_copies.pop();
+            if let Some(copy) = copy {
+                self.deleted_virtual_copies.insert(index, copy);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<(), SidecarError> {
@@ -1511,6 +1727,14 @@ impl SidecarDocument {
                 validate_name("mask name", &mask.name)?;
                 validate_name("mask rescaling_method", &mask.rescaling_method)?;
                 validate_name("mask generator_version", &mask.generator_version)?;
+                // REVIEW-SIDECAR-N3: a zero-sized inference resolution can
+                // never back a valid matte; reject it at the schema boundary.
+                if mask.inference_resolution.width == 0 || mask.inference_resolution.height == 0 {
+                    return invalid(format!(
+                        "mask `{}/{}` inference_resolution must be non-zero",
+                        copy.id, mask.id
+                    ));
+                }
                 if !mask_ids.insert(&mask.id) {
                     return invalid(format!(
                         "duplicate mask id `{}` in copy `{}`",
@@ -1551,6 +1775,29 @@ impl SidecarDocument {
             validate_unique_ids("export record", &copy.export_records, |export| &export.id)?;
             for layer in &copy.mask_layers {
                 validate_name("mask layer id", &layer.id)?;
+                // REVIEW-SIDECAR-N3: local adjustment parameters were persisted
+                // without any finite/range validation. feather/blur are
+                // radii-like quantities (>= 0), density is a normalized
+                // 0..=1 opacity. Defaults (0/0/1) of every existing valid
+                // sidecar satisfy these bounds.
+                if !layer.feather.is_finite() || layer.feather < 0.0 {
+                    return invalid(format!(
+                        "mask layer `{}` feather must be finite and >= 0",
+                        layer.id
+                    ));
+                }
+                if !layer.blur.is_finite() || layer.blur < 0.0 {
+                    return invalid(format!(
+                        "mask layer `{}` blur must be finite and >= 0",
+                        layer.id
+                    ));
+                }
+                if !layer.density.is_finite() || !(0.0..=1.0).contains(&layer.density) {
+                    return invalid(format!(
+                        "mask layer `{}` density must be finite within 0..=1",
+                        layer.id
+                    ));
+                }
             }
             for entry in &copy.history {
                 validate_name("history entry id", &entry.id)?;
@@ -1800,13 +2047,27 @@ fn validate_source_action_ref(a: &SourceActionArtifactRef) -> Result<(), Sidecar
 }
 
 fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
+    // REVIEW-SIDECAR-N3: auto-features persist analysis results; a non-finite
+    // target luminance would poison every downstream tone computation.
+    if !a.auto_features.target_luminance.is_finite() {
+        return invalid("invalid auto_features target_luminance");
+    }
     for (name, value) in &a.adjustments {
         let (lo, hi) = match name.as_str() {
             "exposure" => (-10.0, 10.0),
             "wb_temperature" => (1500.0, 12000.0),
             "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
             | "vibrance" | "saturation" => (-1.0, 1.0),
-            _ => continue,
+            // REVIEW-SIDECAR-N3: unknown adjustment keys stay accepted for
+            // forward compatibility (they ride the recipe like extras), but a
+            // NaN/∞ value is never a meaningful slider state and would
+            // otherwise bypass validation entirely.
+            _ => {
+                if !value.is_finite() {
+                    return invalid(format!("adjustment `{name}` must be finite"));
+                }
+                continue;
+            }
         };
         if !value.is_finite() || !(*value >= lo && *value <= hi) {
             return invalid(format!("invalid adjustment `{name}`"));
@@ -2046,6 +2307,18 @@ fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// REVIEW-SIDECAR-TMP-1 helper: backdates a file's modification time so a
+    /// recovery sweep treats it as an orphaned crash leftover.
+    fn backdate(path: &Path, age: Duration) {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("backdate target must exist");
+        file.set_modified(SystemTime::now() - age)
+            .expect("set_modified must succeed on the host filesystem");
+    }
+
     fn source() -> SourceIdentity {
         SourceIdentity {
             relative_name: "IMG_0001.ARW".into(),
@@ -3007,11 +3280,21 @@ mod tests {
         changed.virtual_copies[0].name = "Changed".into();
         assert!(save_sidecar_if_unchanged(&path, &changed, Some("wrong")).is_err());
         save_sidecar_if_unchanged(&path, &changed, Some(&revision)).unwrap();
+        // REVIEW-SIDECAR-TMP-1: only temporaries older than the sweep age are
+        // orphaned; a fresh one is treated as a live writer's temporary.
         std::fs::write(
             directory.path().join(".image.lumina.json.tmp-crash"),
             b"partial",
         )
         .unwrap();
+        assert!(directory
+            .path()
+            .join(".image.lumina.json.tmp-crash")
+            .exists());
+        backdate(
+            &directory.path().join(".image.lumina.json.tmp-crash"),
+            Duration::from_secs(60),
+        );
         assert_eq!(
             load_sidecar(&path).unwrap().virtual_copies[0].name,
             "Changed"
@@ -3026,16 +3309,40 @@ mod tests {
     fn recovery_never_promotes_partial_temporary_file() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("image.lumina.json");
-        std::fs::write(
-            directory.path().join(".image.lumina.json.tmp-crash"),
-            b"{\"partial\": true}",
-        )
-        .unwrap();
+        let temp = directory.path().join(".image.lumina.json.tmp-crash");
+        std::fs::write(&temp, b"{\"partial\": true}").unwrap();
+        backdate(&temp, Duration::from_secs(60));
         assert!(matches!(load_sidecar(&path), Err(SidecarError::Missing(_))));
-        assert!(!directory
-            .path()
-            .join(".image.lumina.json.tmp-crash")
-            .exists());
+        assert!(!temp.exists());
+    }
+
+    /// REVIEW-SIDECAR-TMP-1 regression: a temporary belonging to a *live*
+    /// writer (fresh mtime) must survive a concurrent reader's recovery sweep.
+    #[test]
+    fn recovery_spares_fresh_temporary_of_live_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        save_sidecar(&path, &document).unwrap();
+        // Simulate another process mid-save: a fresh temporary with content.
+        let live_temp = directory.path().join(".image.lumina.json.tmp-live");
+        std::fs::write(&live_temp, b"{\"in-flight\": true").unwrap();
+        // A load (which sweeps) must not delete the live writer's temporary...
+        let loaded = load_sidecar(&path).unwrap();
+        assert_eq!(loaded, document);
+        assert!(
+            live_temp.exists(),
+            "recover_sidecar deleted a live writer's fresh temporary"
+        );
+        // ...while recover_sidecar reports nothing removed...
+        let report = recover_sidecar(&path).unwrap();
+        assert_eq!(report.removed_temporary_files, 0);
+        assert!(live_temp.exists());
+        // ...and once aged past the threshold it is swept again.
+        backdate(&live_temp, TEMP_SWEEP_AGE + Duration::from_secs(1));
+        let report = recover_sidecar(&path).unwrap();
+        assert_eq!(report.removed_temporary_files, 1);
+        assert!(!live_temp.exists());
     }
 
     #[test]
@@ -3468,6 +3775,7 @@ mod tests {
         save_sidecar(&path, &document).unwrap();
         let temp = directory.path().join(".image.lumina.json.tmp-crash");
         std::fs::write(&temp, b"{\"schema_version\": 2, \"partial\": ").unwrap();
+        backdate(&temp, TEMP_SWEEP_AGE + Duration::from_secs(1));
         assert!(temp.exists());
         // The original sidecar must remain intact and readable; load_sidecar
         // recovers it and sweeps the orphaned temporary.
@@ -3507,11 +3815,19 @@ mod tests {
         assert_eq!(std::fs::read(&bak).unwrap(), original_bytes);
         // The live target is now migrated to the current schema.
         assert_eq!(load_sidecar(&path).unwrap().schema_version, SCHEMA_VERSION);
-        // The previous valid state is recoverable directly from the `.bak`.
-        let recovered = load_sidecar(&bak).unwrap();
-        let expected =
-            SidecarDocument::from_json(&String::from_utf8(original_bytes).unwrap()).unwrap();
-        assert_eq!(recovered, expected);
+        // REVIEW-SIDECAR-N2: the loader rejects historical v0 documents loudly
+        // instead of silently normalizing them.
+        let error = load_sidecar(&bak).unwrap_err();
+        assert!(
+            error.to_string().contains("schema_version 0"),
+            "v0 backup must be rejected loudly, got {error}"
+        );
+        // Recovery from the snapshot goes through the explicit migration
+        // path and reproduces exactly the original (pre-migration) content.
+        let migrated = migrate_json(&String::from_utf8(original_bytes).unwrap()).unwrap();
+        let recovered = SidecarDocument::from_json(&migrated).unwrap();
+        assert_eq!(recovered.virtual_copies, document.virtual_copies);
+        assert_eq!(recovered.schema_version, SCHEMA_VERSION);
     }
 
     // ----- B) Backup / restore -----
@@ -3554,12 +3870,18 @@ mod tests {
         // The live target is subsequently corrupted (e.g. a failed later write).
         std::fs::write(&path, b"{\"schema_version\": 2, \"corrupt\": true").unwrap();
         assert!(load_sidecar(&path).is_err());
-        // The previous valid state survives in the `.bak` and restores exactly.
-        let recovered = load_sidecar(&bak).unwrap();
-        assert_eq!(
-            recovered,
-            SidecarDocument::from_json(&original_json).unwrap()
-        );
+        // REVIEW-SIDECAR-N2: the raw v0 snapshot is not silently accepted by
+        // the loader; the previous valid state is recovered by explicitly
+        // migrating the snapshot's bytes.
+        assert!(load_sidecar(&bak).is_err());
+        let migrated = migrate_json(&std::fs::read_to_string(&bak).unwrap()).unwrap();
+        let recovered = SidecarDocument::from_json(&migrated).unwrap();
+        let expected = {
+            let mut expected_value: Value = serde_json::from_str(&original_json).unwrap();
+            expected_value["schema_version"] = Value::from(SCHEMA_VERSION);
+            SidecarDocument::from_json(&serde_json::to_string(&expected_value).unwrap()).unwrap()
+        };
+        assert_eq!(recovered, expected);
     }
 
     #[test]
@@ -3576,8 +3898,14 @@ mod tests {
         // The snapshot is byte-exact (never a truncated copy of the original).
         let bak_bytes = std::fs::read(&bak).unwrap();
         assert_eq!(bak_bytes, original_bytes);
-        // And it is a fully valid, parseable sidecar — not a partial file.
-        assert!(load_sidecar(&bak).is_ok());
+        // REVIEW-SIDECAR-N2: it is fully valid, parseable JSON — not a partial
+        // file. The raw v0 snapshot is rejected by the loader (loud failure)
+        // but parses and migrates cleanly through the explicit path.
+        assert!(
+            serde_json::from_str::<Value>(&String::from_utf8(bak_bytes.clone()).unwrap()).is_ok()
+        );
+        assert!(SidecarDocument::from_json(&String::from_utf8(bak_bytes).unwrap()).is_err());
+        assert!(migrate_json(&String::from_utf8(original_bytes).unwrap()).is_ok());
         // No partial `.bak` temporary should linger after the atomic write.
         for entry in std::fs::read_dir(directory.path()).unwrap() {
             let name = entry.unwrap().file_name();
@@ -4285,5 +4613,444 @@ mod tests {
         // corrupted or partially written.
         let loaded = load_sidecar(&path).unwrap();
         assert!(loaded.validate().is_ok());
+    }
+
+    // =====================================================================
+    // REVIEW-SIDECAR batch: lock serialization, artifact verification,
+    // migration temp prefixes, v0 rejection, range validation, mutation
+    // rollback and bounded sidecar reads.
+    // =====================================================================
+
+    // ----- REVIEW-SIDECAR-CAS-1: plain saves serialize against CAS -----
+
+    #[test]
+    fn serialized_writes_reject_concurrent_lock_holder() {
+        // A fresh lock means another writer is mid-save. Both a plain
+        // `save_sidecar` and a compare-and-swap must report an explicit
+        // Conflict instead of writing concurrently (previously only the CAS
+        // path locked, so a plain save could silently overwrite an in-flight
+        // compare-and-swap result).
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let lock_path = directory.path().join(".image.lumina.json.lock");
+        std::fs::File::create(&lock_path).unwrap();
+
+        let mut edited = document.clone();
+        edited.virtual_copies[0].name = "plain".into();
+        let plain = save_sidecar(&path, &edited);
+        assert!(
+            matches!(&plain, Err(SidecarError::Conflict(message)) if message.contains("locked")),
+            "plain save must not bypass the write lock, got {plain:?}"
+        );
+
+        let mut cas_edited = document.clone();
+        cas_edited.virtual_copies[0].name = "cas".into();
+        let cas = save_sidecar_if_unchanged(&path, &cas_edited, Some(&revision));
+        assert!(
+            matches!(cas, Err(SidecarError::Conflict(_))),
+            "CAS must see the same lock, got {cas:?}"
+        );
+
+        // The holder's sidecar is untouched by both rejected writers.
+        assert_eq!(
+            load_sidecar(&path).unwrap().virtual_copies[0].name,
+            "Original"
+        );
+        std::fs::remove_file(&lock_path).unwrap();
+        // After the lock is released both writers work again.
+        save_sidecar(&path, &edited).unwrap();
+        assert_eq!(load_sidecar(&path).unwrap().virtual_copies[0].name, "plain");
+    }
+
+    #[test]
+    fn mixed_plain_and_cas_writes_stay_serialized() {
+        // Threads racing plain saves against a compare-and-swap must produce
+        // exactly one complete document — never a torn or lost mixture.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
+        let mut plain_doc = document.clone();
+        plain_doc.virtual_copies[0].name = "plain-winner".into();
+        let mut cas_doc = document.clone();
+        cas_doc.virtual_copies[0].name = "cas-writer".into();
+
+        let plain_path = path.clone();
+        let plain_payload = plain_doc.clone();
+        let plain_thread = std::thread::spawn(move || save_sidecar(&plain_path, &plain_payload));
+        let cas_path = path.clone();
+        let cas_revision = revision;
+        let cas_payload = cas_doc.clone();
+        let cas_thread = std::thread::spawn(move || {
+            save_sidecar_if_unchanged(&cas_path, &cas_payload, Some(&cas_revision))
+        });
+        let plain_result = plain_thread.join().unwrap();
+        let cas_result = cas_thread.join().unwrap();
+        plain_result.unwrap();
+        // The CAS either won before the plain save or lost with an explicit
+        // Conflict; a silent lost update is forbidden.
+        assert!(cas_result.is_ok() || matches!(cas_result, Err(SidecarError::Conflict(_))));
+        let loaded = load_sidecar(&path).unwrap();
+        assert!(loaded == plain_doc || loaded == cas_doc);
+    }
+
+    // ----- REVIEW-SIDECAR-STATUS-1: corrupt artifacts are visible -----
+
+    #[cfg(feature = "zdata")]
+    #[test]
+    fn artifact_status_verifies_container_content_not_just_existence() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let artifact_dir = root.join("masks");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let reference = ArtifactReference {
+            relative_path: "masks/subject.zdata".into(),
+            format: "zdata".into(),
+            checksum: "blake3:x".into(),
+            width: 2,
+            height: 2,
+            channels: "u16".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        // Missing: nothing on disk.
+        assert_eq!(artifact_status(root, &reference), ArtifactStatus::Missing);
+        // Corrupt: an empty file can never be a valid artifact.
+        std::fs::write(root.join(&reference.relative_path), b"").unwrap();
+        assert_eq!(artifact_status(root, &reference), ArtifactStatus::Corrupt);
+        // Available: a fully valid container passes parse + checksum checks.
+        let container = ZDataContainer::new(f077_tiles()).unwrap();
+        save_zdata(&root.join(&reference.relative_path), &container).unwrap();
+        assert_eq!(artifact_status(root, &reference), ArtifactStatus::Available);
+        // Corrupt: a flipped payload byte previously counted as Available
+        // because only `is_file()` was consulted.
+        let bytes = std::fs::read(root.join(&reference.relative_path)).unwrap();
+        let header_len = 40usize;
+        let mut corrupted = bytes.clone();
+        corrupted[header_len] ^= 0xff;
+        std::fs::write(root.join(&reference.relative_path), &corrupted).unwrap();
+        assert_eq!(
+            artifact_status(root, &reference),
+            ArtifactStatus::Corrupt,
+            "a bit-flipped zdata payload must not count as available"
+        );
+        // Restore intact bytes, then flip the stored checksum itself.
+        let index_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        let record_offset = u64::from_le_bytes(
+            bytes[index_offset + 20..index_offset + 28]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let mut bad_checksum = bytes.clone();
+        bad_checksum[record_offset + 36] ^= 1;
+        std::fs::write(root.join(&reference.relative_path), &bad_checksum).unwrap();
+        assert_eq!(
+            artifact_status(root, &reference),
+            ArtifactStatus::Corrupt,
+            "a broken stored BLAKE3 digest must not count as available"
+        );
+    }
+
+    #[test]
+    fn empty_artifact_file_is_corrupt_even_without_zdata_support() {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact_dir = directory.path().join("masks");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let reference = ArtifactReference {
+            relative_path: "masks/a.bin".into(),
+            format: "opaque".into(),
+            checksum: "blake3:x".into(),
+            width: 1,
+            height: 1,
+            channels: "u16".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        std::fs::write(directory.path().join(&reference.relative_path), b"").unwrap();
+        assert_eq!(
+            artifact_status(directory.path(), &reference),
+            ArtifactStatus::Corrupt
+        );
+        std::fs::write(
+            directory.path().join(&reference.relative_path),
+            b"opaque-payload",
+        )
+        .unwrap();
+        assert_eq!(
+            artifact_status(directory.path(), &reference),
+            ArtifactStatus::Available
+        );
+    }
+
+    // ----- REVIEW-SIDECAR-N1: migration temporaries are sweepable -----
+
+    #[test]
+    fn migration_leaves_no_stray_temporary_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let document = SidecarDocument::new(source(), "pipeline-1");
+        let mut value: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+        value["schema_version"] = Value::from(0);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        migrate_sidecar_file(&path).unwrap();
+        for entry in std::fs::read_dir(directory.path()).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_string_lossy().contains(".tmp"),
+                "migration temporary leaked with crate-default prefix: {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_migration_temporary_is_sweepable_by_recovery() {
+        // An interrupted migration used to leave `<crate-default>.tmp` files
+        // that recover_sidecar could never recognize. With the aligned
+        // `.{name}.tmp-` prefix the sweep now cleans them up.
+        let directory = tempfile::tempdir().unwrap();
+        let bak = directory.path().join("image.lumina.json.bak");
+        std::fs::write(&bak, b"{\"schema_version\": 0, \"partial\": ").unwrap();
+        let orphaned = directory.path().join(".image.lumina.json.bak.tmp-crash");
+        std::fs::write(&orphaned, b"partial migration temp").unwrap();
+        backdate(&orphaned, TEMP_SWEEP_AGE + Duration::from_secs(1));
+        let report = recover_sidecar(&bak).unwrap();
+        assert_eq!(report.removed_temporary_files, 1);
+        assert!(!orphaned.exists());
+    }
+
+    // ----- REVIEW-SIDECAR-N2: schema_version 0 requires explicit migration -----
+
+    #[test]
+    fn schema_version_zero_is_rejected_with_migration_hint() {
+        let d = SidecarDocument::new(source(), "pipeline-1");
+        let mut value: Value = serde_json::from_str(&d.to_json().unwrap()).unwrap();
+        value["schema_version"] = Value::from(0);
+        let json = serde_json::to_string(&value).unwrap();
+        let error = SidecarDocument::from_json(&json).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("schema_version 0") && message.contains("explicit migration"),
+            "loader must reject v0 loudly with a migration hint, got {message}"
+        );
+        // The explicit migration path still performs the historical bump.
+        let migrated = migrate_json(&json).unwrap();
+        assert_eq!(
+            SidecarDocument::from_json(&migrated)
+                .unwrap()
+                .schema_version,
+            SCHEMA_VERSION
+        );
+    }
+
+    // ----- REVIEW-SIDECAR-N3: finite/range validation for local values -----
+
+    #[test]
+    fn mask_layer_local_adjustments_are_range_validated() {
+        let build = |feather: f32, blur: f32, density: f32| {
+            let mut d = SidecarDocument::new(source(), "p");
+            d.virtual_copies[0].mask_library.push(mask("m"));
+            d.virtual_copies[0].mask_layers.push(MaskLayer {
+                id: "layer".into(),
+                mask: MaskReference {
+                    copy_id: "vc-original".into(),
+                    mask_id: "m".into(),
+                    extras: Extras::new(),
+                },
+                inverted: false,
+                feather,
+                blur,
+                density,
+                extras: Extras::new(),
+            });
+            d.validate()
+        };
+        // Defaults of every existing valid sidecar stay accepted.
+        assert!(build(0.0, 0.0, 1.0).is_ok());
+        assert!(build(0.5, 2.0, 0.25).is_ok());
+        // feather/blur must be finite and >= 0.
+        assert!(build(-0.1, 0.0, 1.0).is_err());
+        assert!(build(f32::NAN, 0.0, 1.0).is_err());
+        assert!(build(f32::INFINITY, 0.0, 1.0).is_err());
+        // blur must be finite and >= 0.
+        assert!(build(0.0, -1.0, 1.0).is_err());
+        assert!(build(0.0, f32::NAN, 1.0).is_err());
+        // density must be finite within 0..=1.
+        assert!(build(0.0, 0.0, 1.5).is_err());
+        assert!(build(0.0, 0.0, -0.01).is_err());
+        assert!(build(0.0, 0.0, f32::NAN).is_err());
+    }
+
+    #[test]
+    fn target_luminance_must_be_finite() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.auto_features.target_luminance = f64::NAN;
+        assert!(d.validate().is_err());
+        d.virtual_copies[0].recipe.auto_features.target_luminance = f64::INFINITY;
+        assert!(d.validate().is_err());
+        d.virtual_copies[0].recipe.auto_features.target_luminance = 0.42;
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn unknown_adjustment_keys_must_be_finite_but_stay_forward_compatible() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        // Unknown keys remain accepted for forward compatibility...
+        d.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("future_slider".into(), 3.0);
+        let json = d.to_json().unwrap();
+        assert_eq!(
+            SidecarDocument::from_json(&json).unwrap().virtual_copies[0]
+                .recipe
+                .adjustments["future_slider"],
+            3.0
+        );
+        // ...but NaN/∞ slider states are never meaningful.
+        d.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("future_slider".into(), f64::NAN);
+        assert!(d.validate().is_err());
+        d.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("future_slider".into(), f64::NEG_INFINITY);
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn zero_inference_resolution_is_rejected() {
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut m = mask("zerores");
+        m.inference_resolution.width = 0;
+        d.virtual_copies[0].mask_library.push(m);
+        assert!(d
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("inference_resolution"));
+
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut m = mask("zerores-h");
+        m.inference_resolution.height = 0;
+        d.virtual_copies[0].mask_library.push(m);
+        assert!(d.validate().is_err());
+    }
+
+    // ----- REVIEW-SIDECAR-N4: rejected mutations roll back -----
+
+    #[test]
+    fn rejected_delete_virtual_copy_leaves_document_unchanged() {
+        // vc-original owns a layer that references vc-target's mask. Deleting
+        // vc-target would strand that layer, so validation must reject the
+        // delete *and* the document must stay byte-for-byte at its prior
+        // state (previously the copy had already been moved to the deleted
+        // list when validation failed).
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].mask_library.push(mask("original-mask"));
+        d.virtual_copies[0].mask_layers.push(MaskLayer {
+            id: "original-layer".into(),
+            mask: MaskReference {
+                copy_id: "vc-target".into(),
+                mask_id: "target-mask".into(),
+                extras: Extras::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: Extras::new(),
+        });
+        d.virtual_copies.push(VirtualCopy {
+            id: "vc-target".into(),
+            name: "Target".into(),
+            is_default: false,
+            recipe: EditRecipe::default(),
+            mask_library: vec![mask("target-mask")],
+            mask_layers: vec![],
+            history: vec![],
+            export_records: vec![],
+            extras: Extras::new(),
+        });
+        let before = d.clone();
+        assert!(d.validate().is_ok());
+
+        // Deleting vc-target breaks the surviving layer -> rejected.
+        let error = d.delete_virtual_copy("vc-target").unwrap_err();
+        assert!(
+            error.to_string().contains("unknown copy"),
+            "delete must fail on the stranded reference, got {error}"
+        );
+        assert_eq!(d, before, "a rejected delete must not mutate the document");
+
+        // Deleting vc-original stays forbidden by the explicit guard.
+        assert!(d.delete_virtual_copy("vc-original").is_err());
+        assert_eq!(d, before);
+
+        // Deleting vc-original's *masks* is not a copy deletion; instead
+        // verify the successful path once more: removing the dependent layer
+        // makes the same delete legal.
+        d.virtual_copies[0].mask_layers.clear();
+        d.delete_virtual_copy("vc-target").unwrap();
+        assert_eq!(d.virtual_copies.len(), 1);
+        assert_eq!(d.deleted_virtual_copies.len(), 1);
+        assert_eq!(d.deleted_virtual_copies[0].id, "vc-target");
+
+        // A rejected restore also leaves the document unchanged.
+        let after_delete = d.clone();
+        d.restore_virtual_copy("does-not-exist").unwrap_err();
+        assert_eq!(d, after_delete);
+    }
+
+    #[test]
+    fn rejected_duplicate_and_rename_leave_document_unchanged() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.duplicate_virtual_copy("vc-original", "vc-copy", "Copy")
+            .unwrap();
+        let before = d.clone();
+
+        // Duplicate id -> precheck rejects without inserting.
+        assert!(d
+            .duplicate_virtual_copy("vc-original", "vc-copy", "Other")
+            .is_err());
+        assert_eq!(d, before);
+
+        // Invalid recipe content in the duplicate -> rollback on validate.
+        let mut poisoned_source = d.clone();
+        poisoned_source.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("exposure".into(), 99.0);
+        assert!(poisoned_source
+            .duplicate_virtual_copy("vc-original", "vc-poison", "Poison")
+            .is_err());
+
+        // Empty rename -> rejected before mutating.
+        assert!(d.rename_virtual_copy("vc-copy", "   ").is_err());
+        assert_eq!(d, before);
+
+        // Unknown id rename -> rejected.
+        assert!(d.rename_virtual_copy("missing", "X").is_err());
+        assert_eq!(d, before);
+    }
+
+    // ----- REVIEW-SIDECAR-N5: bounded sidecar reads -----
+
+    #[test]
+    fn oversized_sidecar_file_is_rejected_without_full_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("huge.lumina.json");
+        let file = fs::File::create(&path).unwrap();
+        // Sparse file: reserves length without occupying disk space.
+        file.set_len(MAX_SIDECAR_BYTES as u64 + 1).unwrap();
+        drop(file);
+        let error = load_sidecar(&path).unwrap_err();
+        assert!(
+            matches!(&error, SidecarError::Invalid(message) if message.contains("size limit")),
+            "oversized sidecar must be rejected by size, got {error}"
+        );
     }
 }

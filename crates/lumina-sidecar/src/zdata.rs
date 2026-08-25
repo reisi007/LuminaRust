@@ -650,6 +650,31 @@ impl ZDataContainer {
         Ok(specs)
     }
 
+    /// Verifies the BLAKE3 checksum of *every* record eagerly.
+    ///
+    /// REVIEW-SIDECAR-ZDATA-1: checksums used to be checked only lazily when a
+    /// tile/region payload was decoded, so a corrupt container could load
+    /// "successfully" and the corruption surfaced much later (or never, for
+    /// records nobody touched). Loading a container from disk now proves the
+    /// whole bundle intact up front; random access afterwards still re-checks
+    /// as before. Cost: one decompression pass over all payloads at load time
+    /// — accepted deliberately, because a silently usable-but-corrupt mask
+    /// violates the no-silent-fallback principle.
+    pub fn verify_checksums(&self) -> Result<(), ZDataError> {
+        for record in &self.records {
+            let payload_start = record.offset + RECORD_HEADER_LEN + record.mask_id.len();
+            let payload_end = payload_start + record.compressed_len as usize;
+            let raw = decode_payload(
+                &self.bytes[payload_start..payload_end],
+                record.uncompressed_len,
+            )?;
+            if blake3::hash(&raw).as_bytes() != &record.checksum {
+                return Err(ZDataError::Checksum(record.mask_id.clone()));
+            }
+        }
+        Ok(())
+    }
+
     /// Returns a new container with `region` appended to this one.  The existing
     /// records are decompressed and re-serialized, so a single bundle keeps both
     /// mask tiles and repair regions.  A duplicate id is rejected.
@@ -684,14 +709,35 @@ pub fn load_zdata(path: &Path) -> Result<ZDataContainer, ZDataError> {
             "container file exceeds size limit of {MAX_CONTAINER_BYTES} bytes"
         )));
     }
-    ZDataContainer::from_bytes(&bytes)
+    let container = ZDataContainer::from_bytes(&bytes)?;
+    // REVIEW-SIDECAR-ZDATA-1: prove the whole bundle intact at load time
+    // instead of discovering corruption lazily on first tile access.
+    container.verify_checksums()?;
+    Ok(container)
+}
+
+/// Maps the shared write-lock error into the zdata error domain. The lock
+/// itself (`.zdata.lock`) and its stale-reclaim semantics live in `lib.rs` so
+/// JSON sidecar and zdata bundle writers serialize identically.
+fn lock_error(path: &Path, error: crate::SidecarError) -> ZDataError {
+    ZDataError::Io {
+        operation: "acquiring zdata write lock".into(),
+        path: path.display().to_string(),
+        message: error.to_string(),
+    }
 }
 
 /// Appends a repair-region artifact to the bundle at `path` (creating the
 /// bundle if it does not yet exist) and writes it atomically.  Pre-existing
 /// mask tiles and repair regions are preserved.  A duplicate id or a
 /// region/replacement dimension mismatch is reported as an error.
+///
+/// REVIEW-SIDECAR-ZDATA-1: this read-modify-write runs under the bundle's
+/// `.zdata.lock`, so two concurrent appends serialize instead of one silently
+/// overwriting the other's freshly appended region (lost update / dangling
+/// recipe references). The same lock guards [`save_zdata`].
 pub fn append_repair_region(path: &Path, region: RepairRegionArtifact) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
     let existing = if path.exists() {
         Some(load_zdata(path)?)
     } else {
@@ -701,10 +747,19 @@ pub fn append_repair_region(path: &Path, region: RepairRegionArtifact) -> Result
         Some(container) => container.add_repair_region(region)?,
         None => ZDataContainer::new(vec![])?.add_repair_region(region)?,
     };
-    save_zdata(path, &container)
+    save_zdata_locked(path, &container)
 }
 
 pub fn save_zdata(path: &Path, container: &ZDataContainer) -> Result<(), ZDataError> {
+    // REVIEW-SIDECAR-ZDATA-1: plain saves take the same `.zdata.lock` as
+    // `append_repair_region`, so an append can never be overwritten mid-flight
+    // by a concurrent whole-container save.
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    save_zdata_locked(path, container)
+}
+
+/// Atomic replace; caller must hold the bundle's write lock.
+fn save_zdata_locked(path: &Path, container: &ZDataContainer) -> Result<(), ZDataError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path
         .file_name()
@@ -1265,5 +1320,124 @@ mod tests {
         let container = ZDataContainer::new_with(vec![RecordSpec::RepairRegion(artifact)]).unwrap();
         // `tile` is restricted to MaskTile records:
         assert!(container.tile("repair-1", 0, 0).is_err());
+    }
+
+    // =====================================================================
+    // REVIEW-SIDECAR-ZDATA-1: eager checksum verification at load time and
+    // a serialized read-modify-write path.
+    // =====================================================================
+
+    #[test]
+    fn load_zdata_verifies_checksums_eagerly_not_lazily() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = zdata_path_for(&directory.path().join("image.raw"));
+        save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
+        let bytes = fs::read(&path).unwrap();
+
+        // Corrupt the LAST compressed payload byte (records end where the
+        // index begins). Parsing alone still succeeds because verification was
+        // lazy; loading from disk must now fail up front instead of handing
+        // out a container whose first untouched-tile access would explode.
+        let index_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        let mut bad_payload = bytes.clone();
+        let last_payload = index_offset - 1;
+        bad_payload[last_payload] ^= 0xff;
+        fs::write(&path, &bad_payload).unwrap();
+        let error = load_zdata(&path).unwrap_err();
+        assert!(
+            matches!(error, ZDataError::Checksum(_) | ZDataError::Invalid(_)),
+            "corrupt payload must be detected at load time, got {error}"
+        );
+
+        // Corrupting the STORED digest is always reported as a checksum
+        // failure (the intact payload still decodes).
+        fs::write(&path, &bytes).unwrap();
+        let fresh = fs::read(&path).unwrap();
+        let record_offset = u64::from_le_bytes(
+            fresh[index_offset + 20..index_offset + 28]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let mut bad_digest = fresh.clone();
+        bad_digest[record_offset + 36] ^= 1;
+        fs::write(&path, &bad_digest).unwrap();
+        assert!(matches!(load_zdata(&path), Err(ZDataError::Checksum(_))));
+
+        // The intact container still loads.
+        fs::write(&path, &bytes).unwrap();
+        assert!(load_zdata(&path).is_ok());
+    }
+
+    #[test]
+    fn concurrent_appends_serialize_instead_of_losing_updates() {
+        // REVIEW-SIDECAR-ZDATA-1 regression: two read-modify-write appends
+        // used to race without a lock, so one could silently overwrite the
+        // other's freshly appended region (lost update / dangling recipe
+        // reference). Under the `.zdata.lock` both regions must survive.
+        let directory = tempfile::tempdir().unwrap();
+        let path = zdata_path_for(&directory.path().join("image.raw"));
+        save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
+
+        let mut first = repair_region();
+        first.id = "repair-a".into();
+        let mut second = repair_region();
+        second.id = "repair-b".into();
+
+        let p1 = path.clone();
+        let t1 = std::thread::spawn(move || append_repair_region(&p1, first));
+        let p2 = path.clone();
+        let t2 = std::thread::spawn(move || append_repair_region(&p2, second));
+        t1.join().unwrap().expect("first append must succeed");
+        t2.join().unwrap().expect("second append must succeed");
+
+        let final_container = load_zdata(&path).unwrap();
+        assert_eq!(
+            final_container.tile_count(),
+            4,
+            "both tiles AND both appended regions must survive"
+        );
+        assert!(final_container.repair_region("repair-a").is_ok());
+        assert!(final_container.repair_region("repair-b").is_ok());
+        // No lock file may leak after the operations complete.
+        assert!(!directory
+            .path()
+            .join(".image.raw.lumina.zdata.lock")
+            .exists());
+    }
+
+    #[test]
+    fn fresh_zdata_lock_blocks_append_and_save_with_explicit_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = zdata_path_for(&directory.path().join("image.raw"));
+        save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
+        // A live writer holds a fresh lock.
+        let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
+        std::fs::File::create(&lock_path).unwrap();
+
+        let error = append_repair_region(&path, {
+            let mut r = repair_region();
+            r.id = "blocked".into();
+            r
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&error, ZDataError::Io { operation, .. } if operation.contains("lock")),
+            "append must report the held lock explicitly, got {error}"
+        );
+        let save_error = save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap_err();
+        assert!(
+            matches!(&save_error, ZDataError::Io { operation, .. } if operation.contains("lock")),
+            "plain save must take the same lock, got {save_error}"
+        );
+
+        // The bundle is untouched by both rejected writers.
+        let unchanged = load_zdata(&path).unwrap();
+        assert_eq!(unchanged.tile_count(), 2);
+        drop(fs::remove_file(&lock_path));
+        // After release the append works again.
+        let mut ok_region = repair_region();
+        ok_region.id = "after-release".into();
+        append_repair_region(&path, ok_region).unwrap();
+        assert_eq!(load_zdata(&path).unwrap().tile_count(), 3);
     }
 }
