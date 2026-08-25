@@ -193,6 +193,14 @@ erfolgt im aktuellen Raster-MVP **nicht**.
   Build-Suffix (z.B. `"0.22.2-Release"`); ein reiner Formatwechsel
   (Release↔Debug bei gleicher Nummer) invalidiert aktuell unnötig und könnte
   später auf das numerische Tripel normalisiert werden.
+  **Generierungs-Suffix:** Ändert eine LuminaRust-seitige Korrektur das
+  beobachtbare Decode-Ergebnis, ohne die gelinkte Bibliotheksversion zu
+  ändern, hängt `libraw_decode_version()` ein `+luminaabiN`-Suffix an
+  (`abi2`: ABI-Repinning inkl. tatsächlich angewandter `use_camera_wb`;
+  `abi3`: `RawMetadata.orientation` trägt die echte EXIF-Orientation statt
+  des dcraw-flip-Rohwerts, REVIEW-RAW-FLIP-1). Alte Caches und persistierte
+  Artefakte veralten damit sichtbar statt stillschweigend weiterverwendet zu
+  werden.
 
 ## Optionale Stufen und Adjustment-Semantik
 

@@ -54,6 +54,10 @@ pub struct RawMetadata {
     pub width: u32,
     /// Visible output geometry; this is not necessarily the pre-orientation buffer geometry.
     pub height: u32,
+    /// True EXIF orientation code (`1..=8`) of the source: the permutation that
+    /// the decoder promotion step applied to turn the unrotated sensor buffer
+    /// into the visible frame. This is NOT the raw dcraw flip value; see
+    /// [`dcraw_flip_to_exif_orientation`] for the verified translation.
     pub orientation: u8,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
@@ -69,6 +73,54 @@ pub struct RawMetadata {
     pub camera_white_balance: [f32; 4],
     pub pre_multipliers: [f32; 4],
     pub icc_profile: Option<Vec<u8>>,
+}
+
+/// Translates the dcraw/LibRaw `flip` bit-field (`libraw_image_sizes_t.flip`,
+/// values `0..=7`) into the EXIF orientation code (`1..=8`) that
+/// [`RawMetadata::orientation`] promises. The two codings are **not**
+/// identical: dcraw encodes the rotation as a bit field, EXIF uses an
+/// enumeration (e.g. dcraw flip 5 is EXIF orientation 8, not 5).
+///
+/// REVIEW-RAW-FLIP-1: the table was verified empirically against the linked
+/// LibRaw 0.22.2 sources —
+///
+/// - `src/write/file_write.cpp`, `LibRaw::flip_index()`: flip bit semantics.
+///   For an output pixel `(x, y)` the source coordinate in the unrotated
+///   buffer is derived as: swap row/column when bit `4` is set (transpose),
+///   mirror rows when bit `2` is set, mirror columns when bit `1` is set.
+/// - `src/metadata/tiff.cpp:631`: LibRaw's own inverse lookup
+///   `"50132467"[orientation & 7]` maps EXIF orientation → flip and confirms
+///   this table as its exact inverse (see the round-trip unit test).
+/// - `src/metadata/identify.cpp`: degree-based flips are normalised at open
+///   time (90° → 6, 180° → 3, 270° → 5), so `sizes.flip` is always in
+///   `0..=7` after `libraw_open_*`.
+///
+/// | flip | bits (4/2/1) | geometry                        | EXIF orientation |
+/// | ---- | ------------ | ------------------------------- | ---------------- |
+/// | 0    | 000          | identity                        | 1                |
+/// | 1    | 001          | mirror horizontal               | 2                |
+/// | 2    | 010          | mirror vertical                 | 4                |
+/// | 3    | 011          | rotate 180°                     | 3                |
+/// | 4    | 100          | transpose (main diagonal)       | 5                |
+/// | 5    | 101          | rotate 90° CCW (= 270° CW)      | 8                |
+/// | 6    | 110          | rotate 90° CW                   | 6                |
+/// | 7    | 111          | anti-transpose (anti-diagonal)  | 7                |
+///
+/// Values outside `0..=7` do not occur after `identify()` (an unknown flip is
+/// stored as `UINT_MAX` and reset to `0`); they are defensively mapped to
+/// orientation `1` ("no rotation"), mirroring LibRaw's own unknown→0 handling.
+pub fn dcraw_flip_to_exif_orientation(flip: i32) -> u8 {
+    match flip {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        3 => 3,
+        4 => 5,
+        5 => 8,
+        6 => 6,
+        7 => 7,
+        _ => 1,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,18 +225,26 @@ pub fn libraw_version() -> Option<String> {
 /// Falls back to `"unknown"` when no native LibRaw is linked (WASM), keeping
 /// the decoder identity stable for non-native targets.
 ///
-/// The value carries a `+luminaabiN` generation suffix: the vendored bindings
-/// were re-pinned to the true LibRaw 0.22 layout (REVIEW-RAW-ABI-1), which
-/// changed observable decode output — `use_camera_wb`/`use_camera_matrix` are
-/// now actually applied and EXIF orientation is applied by the promotion step
-/// instead of LibRaw — without changing the linked library version. The suffix
-/// invalidates caches and persisted artefacts computed with the broken
-/// bindings instead of silently reusing them.
+/// The value carries a `+luminaabiN` generation suffix. It changes whenever a
+/// LuminaRust-side fix alters observable decode output **without** changing the
+/// linked library version, so caches and persisted artefacts computed with the
+/// previous behaviour are invalidated instead of silently reused:
+///
+/// - `+luminaabi2`: the vendored bindings were re-pinned to the true LibRaw
+///   0.22 layout (REVIEW-RAW-ABI-1); `use_camera_wb`/`use_camera_matrix` are
+///   now actually applied and EXIF orientation is applied by the promotion
+///   step instead of LibRaw.
+/// - `+luminaabi3`: `RawMetadata.orientation` now carries the true EXIF
+///   orientation code instead of the raw dcraw flip bit-field
+///   (REVIEW-RAW-FLIP-1). For flips 1, 2, 4 and 5 this changes both the
+///   persisted orientation value and the pixel permutation applied by the
+///   promotion step (e.g. dcraw flip 5: previously persisted as orientation 5
+///   with a transpose, now correctly orientation 8 with a 90° CCW rotation).
 pub fn libraw_decode_version() -> String {
-    const BINDINGS_GENERATION: &str = "+luminaabi2";
+    const DECODE_GENERATION: &str = "+luminaabi3";
     match libraw_version() {
-        Some(version) => format!("{version}{BINDINGS_GENERATION}"),
-        None => format!("unknown{BINDINGS_GENERATION}"),
+        Some(version) => format!("{version}{DECODE_GENERATION}"),
+        None => format!("unknown{DECODE_GENERATION}"),
     }
 }
 
@@ -293,13 +353,13 @@ mod native {
             return Err(error("opening input", code));
         }
         let data = unsafe { &*handle.0 };
-        // The EXIF flip is captured BEFORE `user_flip` is forced to 0 below:
+        // The dcraw flip is captured BEFORE `user_flip` is forced to 0 below:
         // it records the source orientation that the promotion step must apply
-        // itself, because LibRaw is deliberately told NOT to rotate.
-        let orientation = match data.sizes.flip {
-            1..=8 => data.sizes.flip as u8,
-            _ => 1,
-        };
+        // itself, because LibRaw is deliberately told NOT to rotate. The raw
+        // flip bit-field is translated into the EXIF orientation code that
+        // `RawMetadata.orientation` and the promotion step operate on
+        // (REVIEW-RAW-FLIP-1; see `dcraw_flip_to_exif_orientation`).
+        let orientation = dcraw_flip_to_exif_orientation(data.sizes.flip);
         let camera_matrix = data.color.rgb_cam;
         let camera_white_balance = data.color.cam_mul;
         let pre_multipliers = data.color.pre_mul;
@@ -711,6 +771,71 @@ mod native {
             let frame = rgba_from_bytes(&src, 4, 3, 3, 1).unwrap();
             assert!(frame.pixels.iter().skip(3).step_by(4).all(|&a| a == 255));
         }
+
+        /// Verbatim port of LibRaw 0.22.2 `LibRaw::flip_index`
+        /// (`src/write/file_write.cpp`) restricted to coordinate mapping: for
+        /// an output pixel `(x, y)` of the flipped image it yields the source
+        /// coordinates in the unrotated W×H buffer. Bit semantics: bit 4
+        /// transposes, bit 2 mirrors rows, bit 1 mirrors columns. This is the
+        /// exact transform LibRaw applies when `flip != 0`; our promotion step
+        /// must reproduce it from the translated EXIF orientation.
+        fn libraw_flip_index_source_xy(
+            flip: u32,
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+        ) -> (u32, u32) {
+            let mut row = y;
+            let mut col = x;
+            if flip & 4 != 0 {
+                std::mem::swap(&mut row, &mut col);
+            }
+            if flip & 2 != 0 {
+                row = height - 1 - row;
+            }
+            if flip & 1 != 0 {
+                col = width - 1 - col;
+            }
+            (col, row)
+        }
+
+        /// REVIEW-RAW-FLIP-1 geometry proof: for every dcraw flip 0..=7, the
+        /// promotion mapping (`oriented_source_xy` driven by the translated
+        /// EXIF orientation) must be pixel-for-pixel identical to what LibRaw
+        /// itself would produce via `flip_index` on a non-square buffer.
+        #[test]
+        fn exif_promotion_matches_libraw_flip_index_for_every_flip() {
+            let (width, height) = (7u32, 5u32);
+            for flip in 0u8..=7 {
+                let orientation = crate::dcraw_flip_to_exif_orientation(flip as i32);
+                let (out_width, out_height) = if (5..=8).contains(&orientation) {
+                    (height, width)
+                } else {
+                    (width, height)
+                };
+                assert_eq!(
+                    (out_width, out_height),
+                    if flip & 4 != 0 {
+                        (height, width)
+                    } else {
+                        (width, height)
+                    },
+                    "flip {flip}: output dimensions must match LibRaw's swap rule"
+                );
+                for y in 0..out_height {
+                    for x in 0..out_width {
+                        let expected =
+                            libraw_flip_index_source_xy(flip as u32, x, y, width, height);
+                        let actual = oriented_source_xy(x, y, width, height, orientation);
+                        assert_eq!(
+                            actual, expected,
+                            "flip {flip} → orientation {orientation} diverges at ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -759,15 +884,86 @@ mod tests {
         assert_eq!(image.frame.pixels.len(), 6032 * 4024 * 4);
     }
 
+    /// Content-driven verification note (REVIEW-RAW-FLIP-1): a planned
+    /// luminance-band heuristic ("bright sky above dark ground") was measured
+    /// against this fixture and turned out FALSE (top-row mean luminance
+    /// ≈ 111.0 vs bottom-row ≈ 118.9; the scene has no reliable vertical
+    /// brightness gradient). Content-driven rotation verification is therefore
+    /// done against ground truth instead of scene assumptions:
+    /// `tests/abi_layout.rs` compares the promoted output byte-for-byte against
+    /// LibRaw's OWN rotation (`user_flip=k` → `dcraw_make_mem_image`, which
+    /// applies `flip_index`), for every dcraw flip 0..=7 and for this fixture
+    /// end-to-end.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn aircraft_portrait_fixture_applies_exif_orientation() {
+        // The fixture carries dcraw flip 5, which is EXIF orientation **8**
+        // ("Rotate 270 CW", confirmed via exiftool), NOT orientation 5. Before
+        // REVIEW-RAW-FLIP-1 the raw flip value was persisted 1:1 as
+        // `orientation` and the promotion step applied a transpose instead of
+        // the correct 90° CCW rotation (dimensions matched by coincidence,
+        // pixel content was mirrored).
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
         let image = decode_bytes(bytes, "aircraft-portrait.cr3").unwrap();
-        assert_eq!(image.metadata.orientation, 5);
+        assert_eq!(image.metadata.orientation, 8);
         assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
         assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
         assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
+    }
+
+    #[test]
+    fn dcraw_flip_maps_to_verified_exif_orientation_table() {
+        // Verified against LibRaw 0.22.2: flip_index() bit semantics and the
+        // inverse "50132467" lookup in src/metadata/tiff.cpp.
+        let expected = [
+            (0, 1), // identity
+            (1, 2), // mirror horizontal
+            (2, 4), // mirror vertical
+            (3, 3), // rotate 180°
+            (4, 5), // transpose (main diagonal)
+            (5, 8), // rotate 90° CCW (= 270° CW)
+            (6, 6), // rotate 90° CW
+            (7, 7), // anti-transpose (anti-diagonal)
+        ];
+        for (flip, orientation) in expected {
+            assert_eq!(
+                dcraw_flip_to_exif_orientation(flip),
+                orientation,
+                "dcraw flip {flip} must map to EXIF orientation {orientation}"
+            );
+        }
+    }
+
+    #[test]
+    fn dcraw_flip_out_of_range_maps_to_no_rotation() {
+        // After identify() LibRaw only reports 0..=7; unknown flips are reset
+        // to 0 (= no rotation). Anything else must defensively behave the same
+        // way instead of wrapping into a bogus orientation.
+        for flip in [-5i32, -1, 8, 9, 90, 180, 270, i32::MAX, i32::MIN] {
+            assert_eq!(
+                dcraw_flip_to_exif_orientation(flip),
+                1,
+                "out-of-range flip {flip} must map to EXIF orientation 1"
+            );
+        }
+    }
+
+    /// Round-trip through LibRaw's own inverse table:
+    /// `src/metadata/tiff.cpp` maps EXIF orientation → flip via the string
+    /// `"50132467"[orientation & 7]`. Our translation must be its exact
+    /// inverse — this pins the table to LibRaw's semantics, not to a copy of
+    /// itself.
+    #[test]
+    fn exif_orientation_round_trips_through_libraw_inverse_table() {
+        const LIBRAW_ORIENTATION_TO_FLIP: [u8; 8] = [5, 0, 1, 3, 2, 4, 6, 7]; // "50132467"
+        for orientation in 1u8..=8 {
+            let flip = LIBRAW_ORIENTATION_TO_FLIP[(orientation & 7) as usize];
+            assert_eq!(
+                dcraw_flip_to_exif_orientation(i32::from(flip)),
+                orientation,
+                "round trip failed for EXIF orientation {orientation}"
+            );
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -797,11 +993,11 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn libraw_decode_version_carries_bindings_generation() {
+    fn libraw_decode_version_carries_decode_generation() {
         let decode_version = libraw_decode_version();
         assert!(
-            decode_version.ends_with("+luminaabi2"),
-            "decode identity must carry the bindings generation suffix, got `{decode_version}`"
+            decode_version.ends_with("+luminaabi3"),
+            "decode identity must carry the current decode generation suffix, got `{decode_version}`"
         );
         assert!(
             decode_version.starts_with("0.22."),
@@ -812,7 +1008,7 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     #[test]
     fn libraw_decode_version_falls_back_to_unknown_with_generation() {
-        assert_eq!(libraw_decode_version(), "unknown+luminaabi2");
+        assert_eq!(libraw_decode_version(), "unknown+luminaabi3");
     }
 
     #[cfg(target_arch = "wasm32")]
