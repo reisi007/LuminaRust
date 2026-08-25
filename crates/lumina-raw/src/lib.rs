@@ -172,8 +172,20 @@ pub fn libraw_version() -> Option<String> {
 ///
 /// Falls back to `"unknown"` when no native LibRaw is linked (WASM), keeping
 /// the decoder identity stable for non-native targets.
+///
+/// The value carries a `+luminaabiN` generation suffix: the vendored bindings
+/// were re-pinned to the true LibRaw 0.22 layout (REVIEW-RAW-ABI-1), which
+/// changed observable decode output — `use_camera_wb`/`use_camera_matrix` are
+/// now actually applied and EXIF orientation is applied by the promotion step
+/// instead of LibRaw — without changing the linked library version. The suffix
+/// invalidates caches and persisted artefacts computed with the broken
+/// bindings instead of silently reusing them.
 pub fn libraw_decode_version() -> String {
-    libraw_version().unwrap_or_else(|| "unknown".to_string())
+    const BINDINGS_GENERATION: &str = "+luminaabi2";
+    match libraw_version() {
+        Some(version) => format!("{version}{BINDINGS_GENERATION}"),
+        None => format!("unknown{BINDINGS_GENERATION}"),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -249,6 +261,10 @@ mod native {
             .filter(|value| *value > 0.0)
     }
 
+    /// Upper sanity bound for an embedded ICC profile. Real profiles stay far
+    /// below this; anything larger indicates a corrupt `profile_length`.
+    const MAX_ICC_PROFILE_BYTES: usize = 64 * 1024 * 1024;
+
     pub fn decode_bytes_with_options(
         bytes: &[u8],
         name: &str,
@@ -277,6 +293,9 @@ mod native {
             return Err(error("opening input", code));
         }
         let data = unsafe { &*handle.0 };
+        // The EXIF flip is captured BEFORE `user_flip` is forced to 0 below:
+        // it records the source orientation that the promotion step must apply
+        // itself, because LibRaw is deliberately told NOT to rotate.
         let orientation = match data.sizes.flip {
             1..=8 => data.sizes.flip as u8,
             _ => 1,
@@ -287,13 +306,23 @@ mod native {
         let icc_profile = if data.color.profile.is_null() || data.color.profile_length == 0 {
             None
         } else {
-            Some(unsafe {
-                std::slice::from_raw_parts(
-                    data.color.profile.cast::<u8>(),
-                    data.color.profile_length as usize,
-                )
-                .to_vec()
-            })
+            // LibRaw owns exactly `profile_length` bytes behind `profile`; the
+            // pinned-ABI asserts guarantee the field offsets are real. The
+            // length is still sanity-capped before materialising a slice from
+            // the foreign pointer, so a corrupt length can never turn into an
+            // out-of-bounds read or an absurd allocation.
+            let length = usize::try_from(data.color.profile_length)
+                .map_err(|_| RawError::InvalidData("ICC profile length"))?;
+            if length > MAX_ICC_PROFILE_BYTES {
+                return Err(RawError::InvalidData("ICC profile length"));
+            }
+            // SAFETY: `profile` points to LibRaw-owned memory of exactly
+            // `profile_length` bytes while the handle is open; `length` was
+            // validated against that bound above.
+            Some(
+                unsafe { std::slice::from_raw_parts(data.color.profile.cast::<u8>(), length) }
+                    .to_vec(),
+            )
         };
         let metadata = RawMetadata {
             width: 0,
@@ -315,6 +344,11 @@ mod native {
             icc_profile,
         };
         unsafe {
+            // Direct field writes are safe only because the vendored bindings
+            // are pinned to the linked LibRaw 0.22 ABI (see
+            // vendor/libraw-sys/src/lib.rs and the layout gates in its
+            // build.rs). Before the pin, these writes landed inside
+            // `makernotes` and neither flag was ever applied.
             (*handle.0).params.user_flip = 0;
             if let Some(value) = options.demosaicing.libraw_value() {
                 raw::libraw_set_demosaic(handle.0, value);
@@ -367,16 +401,15 @@ mod native {
                 return Err(RawError::InvalidData("image data size"));
             }
             let source = unsafe { std::slice::from_raw_parts(image.data.as_ptr(), length) };
-            // Orientation is pinned to `1` here on purpose: LibRaw's
-            // `dcraw_make_mem_image` already applies the EXIF orientation to the
-            // processed buffer (see `RawMetadata.orientation`), so the only
-            // remaining transformation is promoting RGB(A) -> RGBA8.
+            // `user_flip` is forced to 0, so LibRaw hands out the UNROTATED
+            // buffer; the captured EXIF `orientation` is applied here in the
+            // promotion step (see `rgba_from_bytes`).
             rgba_from_bytes(
                 source,
                 image.width as u32,
                 image.height as u32,
                 image.colors as usize,
-                1,
+                orientation,
             )?
         } else {
             let length = (image.width as usize)
@@ -393,7 +426,7 @@ mod native {
                 image.width as u32,
                 image.height as u32,
                 image.colors as usize,
-                1,
+                orientation,
             )?
         };
         let mut metadata = metadata;
@@ -404,11 +437,13 @@ mod native {
     }
 
     /// Promotes a LibRaw 8-bit RGB(A) processed image to an RGBA8 `ImageFrame`,
-    /// applying the same EXIF-orientation permutation the previous `orient`
-    /// helper applied. Orientation `1` (no rotation/flip) is the hot path used
-    /// by the committed fixtures: it is a pure RGB -> RGBA promotion (opaque
-    /// alpha) with no per-pixel branch and no `slice::copy_from_slice` bounds
-    /// churn, which keeps the inner loop tight and vectorizable. The generic arm
+    /// applying the EXIF-orientation permutation recorded in
+    /// `RawMetadata.orientation`. The input is the UNROTATED LibRaw buffer
+    /// (`user_flip` is forced to 0), so this step owns the rotation.
+    /// Orientation `1` (no rotation/flip) is the hot path used by the
+    /// landscape fixture: it is a pure RGB -> RGBA promotion (opaque alpha)
+    /// with no per-pixel branch and no `slice::copy_from_slice` bounds churn,
+    /// which keeps the inner loop tight and vectorizable. The generic arm
     /// reproduces the original per-pixel mapping exactly for the other
     /// orientations.
     fn rgba_from_bytes(
@@ -758,6 +793,26 @@ mod tests {
             parts.iter().all(|part| !part.is_empty()),
             "version parts must not be empty, got `{version}`"
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn libraw_decode_version_carries_bindings_generation() {
+        let decode_version = libraw_decode_version();
+        assert!(
+            decode_version.ends_with("+luminaabi2"),
+            "decode identity must carry the bindings generation suffix, got `{decode_version}`"
+        );
+        assert!(
+            decode_version.starts_with("0.22."),
+            "native decode identity should start with the linked version, got `{decode_version}`"
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn libraw_decode_version_falls_back_to_unknown_with_generation() {
+        assert_eq!(libraw_decode_version(), "unknown+luminaabi2");
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -106,25 +106,7 @@ Erstes vollständiges Review des gesamten bestehenden Codes (alle 10 Crates,
 dieser Datei entfernt; Code-Verifikationslauf 2026-08-25 bestätigt den unten
 stehenden Restbestand.
 
-- [ ] **[PRIO: hoch] REVIEW-RAW-ABI-1** Vendored `libraw-sys`-Structlayouts passen
-  nicht zur gelinkten LibRaw 0.22.2 (hoch; empirisch per Offset-Probes
-  verifiziert: `params` 1512 vs. real 5232, `color` 1888 vs. 5592,
-  `other` 150088 vs. 192680): `camera_matrix`/`camera_white_balance`/
-  EXIF-Felder lesen Garbage und werden ins Sidecar persistiert;
-  `color.profile` wird via `from_raw_parts` von potentiellem Wild-
-  Pointer kopiert (UB/Crash-Risiko); Schreibzugriffe auf
-  `params.user_flip`/`use_camera_wb` landen im Makernotes-Bereich —
-  user_flip/camera-WB werden still NICHT angewendet (Probe bestätigt:
-  `sizes.flip` bleibt trotz `user_flip=0`) und überschreiben hunderte
-  Bytes Live-State. Betrifft jeden nativen Decode
-  (lumina-raw/src/lib.rs:284–327). Fix: Bindings gegen 0.22.x
-  regenerieren oder nur Accessor-Funktionen nutzen;
-  statische Size/Offset-Asserts ins build.rs; `tests/sizes.rs` des
-  sys-Crates in CI ausführen (existiert, läuft aber nie).
-  Re-Check 2026-08-25: unverändert — handgeschriebene `#[repr(C)]`-Structs,
-  direkter Feldzugriff inkl. `params.user_flip = 0` und
-  `from_raw_parts` auf `color.profile`; build.rs hat nur Link-Asserts; CI
-  führt `vendor/libraw-sys/tests/sizes.rs` nicht aus.
+
 
 
 ### PRIO: mittel

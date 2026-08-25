@@ -65,11 +65,10 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     env:
       CARGO_TERM_COLOR: always
-      # NOTE: RUSTFLAGS="-D warnings" is intentionally NOT set here. It would
-      # promote warnings in the vendored `libraw-sys` build script (deprecated
-      # `gcc` crate alias under modern toolchains) to hard errors and break
-      # `cargo check`/`cargo test`. The strict lint gate is the dedicated
-      # Clippy step below, which runs `-D warnings` on workspace crates only.
+      # NOTE: RUSTFLAGS="-D warnings" is intentionally NOT set here. The strict
+      # lint gate is the dedicated Clippy step below, which runs `-D warnings`
+      # on workspace crates only; the vendored `libraw-sys` build script is
+      # lint-excluded there on purpose (it is not a workspace member).
 
     steps:
       - name: Checkout
@@ -91,6 +90,15 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --all-targets
+
+      # vendor/libraw-sys is intentionally NOT a workspace member, so the
+      # `cargo test --workspace` above never enters it. These ABI-layout
+      # asserts (build-time C _Static_assert + Rust const-asserts + runtime
+      # crosscheck) are the regression net for REVIEW-RAW-ABI-1 and must run
+      # in CI. The CI container ships LibRaw 0.22.2 (OCI label
+      # lumina.libraw_version), satisfying the build.rs version gate.
+      - name: Run vendored libraw-sys ABI tests
+        run: cargo test -p libraw-sys
 
       - name: Run native zdata tests
         run: cargo test -p lumina-sidecar --features zdata

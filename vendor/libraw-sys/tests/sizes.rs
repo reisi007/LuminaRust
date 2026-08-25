@@ -1,187 +1,108 @@
-extern crate libraw_sys as libraw;
+//! Runtime cross-check of the pinned LibRaw ABI (enforcement layer 3).
+//!
+//! The single-source layout table lives in `build.rs`; from it:
+//! - a generated C file (`libraw_layout_gate.c`) `_Static_assert`s every value
+//!   against the real LibRaw headers at **build time**,
+//! - generated Rust constants pin the hand-written structs at **compile time**
+//!   (`src/lib.rs::pinned_abi_checks`),
+//! - and THIS test compares the Rust-computed values against the same values as
+//!   measured **live** through the compiled C table, plus asserts that the
+//!   linked library reports the pinned `0.22.x` version family.
+//!
+//! If this test fails after a system library upgrade, the vendored bindings no
+//! longer match the linked LibRaw: reads would return garbage and writes would
+//! corrupt unrelated state. Update `src/lib.rs` AND the table in `build.rs`
+//! together against the new `libraw/libraw_types.h`, then re-run the offset
+//! probe.
 
-use std::mem;
+use libraw_sys::{abi};
+use libraw_sys as raw;
+use std::ffi::CStr;
+use std::os::raw::c_uint;
 
 #[link(name = "sizes")]
-mod sizes {
-    extern crate libc;
+extern "C" {
+    /// Returns the C-measured value for entry `index` of the pinned layout
+    /// table (generated into `libraw_layout_gate.c`), or `(size_t)-1` when out
+    /// of range.
+    fn lumina_libraw_layout_value(index: c_uint) -> usize;
+    fn lumina_libraw_layout_count() -> c_uint;
+}
 
-    use self::libc::size_t;
-
-    extern "C" {
-        pub fn size_of_libraw_data_t() -> size_t;
-        pub fn size_of_libraw_image_sizes_t() -> size_t;
-        pub fn size_of_libraw_iparams_t() -> size_t;
-
-        #[cfg(have_lensinfo)]
-        pub fn size_of_libraw_lensinfo_t() -> size_t;
-        #[cfg(have_nikonlens)]
-        pub fn size_of_libraw_nikonlens_t() -> size_t;
-        #[cfg(have_dnglens)]
-        pub fn size_of_libraw_dnglens_t() -> size_t;
-        #[cfg(have_makernotes_lens)]
-        pub fn size_of_libraw_makernotes_lens_t() -> size_t;
-
-        pub fn size_of_libraw_output_params_t() -> size_t;
-        pub fn size_of_libraw_colordata_t() -> size_t;
-
-        #[cfg(have_ph1)]
-        pub fn size_of_ph1_t() -> size_t;
-        #[cfg(have_dng_color)]
-        pub fn size_of_libraw_dng_color_t() -> size_t;
-        #[cfg(have_canon_makernotes)]
-        pub fn size_of_libraw_canon_makernotes_t() -> size_t;
-
-        pub fn size_of_libraw_imgother_t() -> size_t;
-
-        #[cfg(have_gps_info)]
-        pub fn size_of_libraw_gps_info_t() -> size_t;
-
-        pub fn size_of_libraw_thumbnail_t() -> size_t;
-        pub fn size_of_libraw_rawdata_t() -> size_t;
-        pub fn size_of_libraw_internal_output_params_t() -> size_t;
-        pub fn size_of_libraw_processed_image_t() -> size_t;
-        pub fn size_of_libraw_decoder_info_t() -> size_t;
-    }
+fn libraw_version_string() -> String {
+    let pointer = unsafe { raw::libraw_version() };
+    assert!(!pointer.is_null(), "LibRaw did not report a version");
+    unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
 }
 
 #[test]
-fn it_should_have_same_size_for_libraw_data_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_data_t() as usize, mem::size_of::<libraw::libraw_data_t>());
-    }
+fn linked_libraw_matches_pinned_abi_family() {
+    let version = libraw_version_string();
+    assert!(
+        version.starts_with(&format!("{}.", abi::PINNED_LIBRAW_FAMILY)),
+        "linked LibRaw `{version}` is outside the pinned `{}` ABI family.\n\
+         The hand-written bindings in vendor/libraw-sys/src/lib.rs would read\n\
+         garbage and write into wrong fields. Re-pin them (and the table in\n\
+         build.rs) against the new libraw/libraw_types.h before upgrading.",
+        abi::PINNED_LIBRAW_FAMILY
+    );
 }
 
 #[test]
-fn it_should_have_same_size_for_libraw_image_sizes_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_image_sizes_t() as usize, mem::size_of::<libraw::libraw_image_sizes_t>());
+fn rust_layout_matches_c_measured_layout_entry_by_entry() {
+    let c_count = unsafe { lumina_libraw_layout_count() } as usize;
+    assert_eq!(
+        c_count,
+        abi::ENTRY_COUNT,
+        "C and Rust layout tables disagree on length; regenerate via build.rs"
+    );
+    for (index, (label, expected)) in abi::LAYOUT_LABELS.iter().zip(abi::LAYOUT_VALUES.iter()).enumerate() {
+        let measured = unsafe { lumina_libraw_layout_value(index as c_uint) };
+        assert_ne!(measured, usize::MAX, "C layout table returned out-of-range for {label}");
+        assert_eq!(
+            measured, *expected,
+            "pinned-ABI drift at {label}: Rust table says {expected}, linked headers measure {measured}"
+        );
     }
 }
 
+/// Direct proof that the two struct members LuminaRust writes through direct
+/// field access (`params.user_flip`, `params.use_camera_wb`) sit exactly where
+/// the pinned table claims, using a live handle instead of static offsets.
 #[test]
-fn it_should_have_same_size_for_libraw_output_params_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_output_params_t() as usize, mem::size_of::<libraw::libraw_output_params_t>());
-    }
+fn live_handle_member_offsets_match_pinned_table() {
+    let handle = unsafe { raw::libraw_init(raw::LIBRAW_OPTIONS_NONE) };
+    assert!(!handle.is_null(), "libraw_init failed");
+    let _guard = HandleGuard(handle);
+    let base = handle as usize;
+    let data = unsafe { &*handle };
+
+    let params_offset = (&data.params as *const _ as usize).wrapping_sub(base);
+    let color_offset = (&data.color as *const _ as usize).wrapping_sub(base);
+    let other_offset = (&data.other as *const _ as usize).wrapping_sub(base);
+
+    assert_eq!(params_offset, abi::OFFSET_libraw_data_t_params);
+    assert_eq!(color_offset, abi::OFFSET_libraw_data_t_color);
+    assert_eq!(other_offset, abi::OFFSET_libraw_data_t_other);
+
+    // Field-level spot checks inside the live structs.
+    let user_flip_offset = (&data.params.user_flip as *const _ as usize)
+        .wrapping_sub(handle as usize)
+        .wrapping_sub(abi::OFFSET_libraw_data_t_params);
+    assert_eq!(user_flip_offset, abi::OFFSET_libraw_output_params_t_user_flip);
+
+    let cam_mul_offset = (&data.color.cam_mul as *const _ as usize)
+        .wrapping_sub(handle as usize)
+        .wrapping_sub(abi::OFFSET_libraw_data_t_color);
+    assert_eq!(cam_mul_offset, abi::OFFSET_libraw_colordata_t_cam_mul);
 }
 
-#[test]
-fn it_should_have_same_size_for_libraw_iparams_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_iparams_t() as usize, mem::size_of::<libraw::libraw_iparams_t>());
-    }
-}
+struct HandleGuard(*mut raw::libraw_data_t);
 
-#[cfg(have_lensinfo)]
-#[test]
-fn it_should_have_same_size_for_libraw_lensinfo_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_lensinfo_t() as usize, mem::size_of::<libraw::libraw_lensinfo_t>());
-    }
-}
-
-#[cfg(have_nikonlens)]
-#[test]
-fn it_should_have_same_size_for_libraw_nikonlens_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_nikonlens_t() as usize, mem::size_of::<libraw::libraw_nikonlens_t>());
-    }
-}
-
-#[cfg(have_dnglens)]
-#[test]
-fn it_should_have_same_size_for_libraw_dnglens_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_dnglens_t() as usize, mem::size_of::<libraw::libraw_dnglens_t>());
-    }
-}
-
-#[cfg(have_makernotes_lens)]
-#[test]
-fn it_should_have_same_size_for_libraw_makernotes_lens_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_makernotes_lens_t() as usize, mem::size_of::<libraw::libraw_makernotes_lens_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_colordata_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_colordata_t() as usize, mem::size_of::<libraw::libraw_colordata_t>());
-    }
-}
-
-#[cfg(have_ph1)]
-#[test]
-fn it_should_have_same_size_for_ph1_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_ph1_t() as usize, mem::size_of::<libraw::ph1_t>());
-    }
-}
-
-#[cfg(have_dng_color)]
-#[test]
-fn it_should_have_same_size_for_libraw_dng_color_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_dng_color_t() as usize, mem::size_of::<libraw::libraw_dng_color_t>());
-    }
-}
-
-#[cfg(have_canon_makernotes)]
-#[test]
-fn it_should_have_same_size_for_libraw_canon_makernotes_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_canon_makernotes_t() as usize, mem::size_of::<libraw::libraw_canon_makernotes_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_imgother_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_imgother_t() as usize, mem::size_of::<libraw::libraw_imgother_t>());
-    }
-}
-
-#[cfg(have_gps_info)]
-#[test]
-fn it_should_have_same_size_for_libraw_gps_info_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_gps_info_t() as usize, mem::size_of::<libraw::libraw_gps_info_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_thumbnail_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_thumbnail_t() as usize, mem::size_of::<libraw::libraw_thumbnail_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_rawdata_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_rawdata_t() as usize, mem::size_of::<libraw::libraw_rawdata_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_internal_output_params_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_internal_output_params_t() as usize, mem::size_of::<libraw::libraw_internal_output_params_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_processed_image_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_processed_image_t() as usize, mem::size_of::<libraw::libraw_processed_image_t>());
-    }
-}
-
-#[test]
-fn it_should_have_same_size_for_libraw_decoder_info_t() {
-    unsafe {
-        assert_eq!(sizes::size_of_libraw_decoder_info_t() as usize, mem::size_of::<libraw::libraw_decoder_info_t>());
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { raw::libraw_close(self.0) };
+        }
     }
 }
