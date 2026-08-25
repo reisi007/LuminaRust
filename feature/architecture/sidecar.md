@@ -125,6 +125,33 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
 - XMP wird in v1 weder gelesen noch geschrieben. Ein späterer XMP-Adapter darf
   keine Lumina-Sidecar-Daten als nichtautoritative Alternative behandeln.
 
+### Umgesetzter Stand (Review-Batch 2026-08-25, verifiziert)
+
+- **Schreibserialisierung:** Alle JSON-Schreibzugriffe laufen über einen
+  Crate-Lock (`save_sidecar`, `save_sidecar_if_unchanged`,
+  `migrate_sidecar_file`); CAS prüft die Revision innerhalb der kritischen
+  Sektion. Plain-`save_sidecar` meldet Lock-Kontention als
+  `Conflict`/`Io(lock)` statt stillem Last-Write-Wins. Das bewusst lock-freie
+  `write_atomically` bleibt Artefakt-Ausgabepfad (CLI/GUI-Export).
+- **zdata:** Read-Modify-Write (`append_repair_region`, `save_zdata`) nimmt die
+  gemeinsame `.zdata.lock`; `load_zdata` verifiziert BLAKE3-Prüfsummen **eager**
+  beim Laden (nicht mehr lazy beim Tile-Zugriff). Korrekte Container bis 512 MB:
+  bewusster Korrektheit-vor-Geschwindigkeit-Trade-off.
+- **Artefaktstatus:** `artifact_status` unterscheidet `Missing`, `Available`
+  und neu `Corrupt` (leere Datei, fehlende/falsche LUMZDATA-Magic, Parse- oder
+  Prüfsummenfehler). Bekannte Grenzen: Container < 8 Bytes werden aktuell noch
+  nicht als `Corrupt` erkannt; Reference-width/height wird nicht gegen
+  Bundle-Records validiert (beides Folgeaufgaben in `Agents.todo.md`).
+- **Recovery/Validierung:** `recover_sidecar` entfernt Temp-Dateien erst ab
+  mtime-Schwelle (lebende Writer bleiben unberührt); Migrationstempfiles tragen
+  das Präfix `.{name}.tmp-` und sind damit sweeponfähig. `delete_virtual_copy`
+  & Co. validieren vor der Mutation und rollen bei Fehlern auf den exakten
+  Vorzustand zurück. `load_sidecar` begrenzt das Lesen vor dem Einlesen
+  (Metadata-Gate + Größenlimit) und lehnt `schema_version` 0 laut ab — der
+  historische Bump läuft ausschließlich über den expliziten Migrationspfad.
+- **Verbraucherhinweis:** Konsumenten müssen auf `!= Available` prüfen, um
+  `Corrupt` zu erfassen (CLI tut dies; GUI seit 2026-08-25 ebenfalls).
+
 ## Migration und Konflikte
 
 **Pre-Alpha-Entscheidung (2026-08-23, Produkteigentümer):** Solange LuminaRust

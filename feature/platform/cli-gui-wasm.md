@@ -78,6 +78,28 @@ Batchjobs benötigen Resume, Retry, Dry-Run, begrenzten Speicher, reproduzierbar
 Exit-Codes und strukturierte Ausgabe. Optionen für virtuelle Kopie,
 Masken-Neuberechnung und Render-Cache werden explizit angeboten.
 
+**Umgesetzter Stand (Review-Batch 2026-08-25, verifiziert):**
+- **Masken-Policy:** Alle Renderkommandos (`render`, `export`, `batch`,
+  `develop`/`process`) akzeptieren `--mask-policy warn|strict` (Default
+  `warn`). `warn` = Warn-and-continue bei fehlenden/stalen Masken (überall
+  konsistent, inklusive `export --update-masks`, das den Request an den
+  eigenen Render durchreicht statt vorab abzubrechen); `strict` bricht laut
+  ab. Damit ist `MaskPolicy::Strict` erstmals wirklich erreichbar.
+- **Einmalige Masken-Flags:** `update_masks`/`force_render` werden nach dem
+  Konsum aus dem persistierten Rezept entfernt — keine permanente Re-Inferenz
+  trotz gültiger Maske (Persistenz-Invariante).
+- **Persistenter Masken-Tile-Key:** zdata-Tiles werden unter der Composite-ID
+  `<copy_id>/<mask_id>` gespeichert/gelesen (nicht mehr nur `mask.id`);
+  Kopien mit gleichen Masken-IDs teilen keine Matte mehr. Die GUI nutzt
+  dieselbe Konvention. Legacy-Plain-ID-Tiles werden verworfen (Pre-MVP-
+  Schemaentscheid).
+- **Schutzmechanismen:** Overwrite-Guards decken `<input>.lumina.json`/
+  `.lumina.zdata` (auch noch nicht existierende Ziele) und Hardlinks via
+  `(dev, inode)` ab; Batch lehnt namensbasierte Zielkollisionen vorab ab;
+  `reindex` beendet mit Exit ≠ 0 bei korrupten Sidecars; `import` prüft
+  Content-Hash gegen ein bestehendes Sidecar; Verzeichnis-Walks sind
+  symlink-/loopsicher.
+
 ## Desktop-GUI
 
 Die GUI zeigt Datei-, Sidecar-, Offline-, Masken- und Konfliktstatus. Vorschau

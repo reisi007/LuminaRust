@@ -2,7 +2,15 @@
 
 **Feature:** F-101 MCP AI-Agent-Schnittstelle
 **Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, 8 Tools inkl.
-`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 17 Tests grün)
+`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 27 Tests grün).
+Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
+(`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
+Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
+Zurückschreiben (`save_sidecar_if_unchanged` + Quell-Identitätsprüfung bei
+`lumina_load`; Konflikt → neuer Fehler `SidecarConflict`/-32010 statt
+Lost Update) und korrekte JSON-RPC-Codetrennung (-32700 Parse /
+-32600 Invalid Request / -32602 Unknown Tool; Tool-Fehler als
+`isError: true`-Result statt Transportfehler).
 **MVP-Erklärung:** letzter vor MVP offener Punkt ist geschlossen
 
 ## Inhaltsverzeichnis
@@ -468,7 +476,13 @@ Der Server implementiert einen Minimal-MCP-Server:
    `content` (Text/JSON) oder `error` zurück.
 5. `notifications/initialized` → akzeptiert, beantwortet nicht.
 
-Fehler werden als MCP-Error-Response zurückgegeben:
+Fehler werden als MCP-Error-Response zurückgegeben. Codetrennung seit
+2026-08-25: Parse-Fehler → `-32700` (id `null`), strukturell ungültige
+Requests → `-32600` (id-Echo wenn erkennbar), unbekanntes Tool →
+`-32602`; Fehler **registrierter** Tools werden als normales Result mit
+`isError: true` + `structuredContent.error` gemeldet (MCP-Spec),
+nicht als Transportfehler. Seitdem auch neu: `SidecarConflict`
+(`-32010`) bei CAS-Konflikt in `lumina_edit`/`lumina_save`.
 
 ```json
 {

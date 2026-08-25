@@ -652,6 +652,17 @@ Bekannte Grenzen: per-pixel-FFI-Overhead (Benchmark/Optimierung als
 F-074-Folgeaufgabe), CA bewusst manuell, DB-Ladezyklus pro Render-Aufruf
 (MVP ok), Distance-Default 10,0 m (RawMetadata hat kein Distanzfeld),
 `lens_name` wird nicht befüllt (Body-Match statt falschem Lens-Match).
+**Review-Nachziehen 2026-08-25 (verifiziert, BESTANDEN):**
+Vignetting-only-Profile kollabieren das Bild nicht mehr —
+`lf_modifier_apply_geometry_distortion` wird auf den Returnwert geprüft;
+bei `false` werden die Koordinaten unverändert durchgereichen und der
+Corrector wird nur mit `LF_MODIFY_DISTORTION` geometrisch verwendet
+(`has_distortion`/`has_vignetting` aus der Initialize-Bitmaske;
+Regressionstest mit Vignetting-only-Fixture verlangt exakte
+Geometrie-Identität). Zusätzlich ersetzt ein Build-time-Offset-Probe in
+`build.rs` (offsetof gegen installierte Header; lauter Abbruch bei
+lensfun ≠ 0.3.x ohne verifizierbaren Compiler) die ABI-Wette des
+hartkodierten `lf_camera_crop_factor`-Offsets.
 **Thread-Sicherheit (lensfun 0.3.4):** Die Datenbank-/Suchpfade der
 Distro-/Release-Bibliothek sind nicht thread-safe — `GuessParameters` →
 `_lf_parse_lens_name` kompiliert global geteilte POSIX-Regexes lazy ohne

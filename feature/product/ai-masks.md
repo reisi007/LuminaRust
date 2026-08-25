@@ -302,6 +302,22 @@ Prüfsummen werden auf der zdata-Ebene (BLAKE3) abgewiesen
 (`ZDataError::Checksum`), sodass das Artefakt nicht in `loaded_planes` gelangt
 und vom Entscheidungslayer wie ein fehlendes Artefakt behandelt wird.
 
+**Status (Review-Nachziehen 2026-08-25):** Umgesetzt und unabhängig
+verifiziert. `lumina-onnx` verhält sich jetzt auch auf Backend-Ebene ohne
+stille Fallbacks: `StubBackend::infer` gated auf `available` (→
+`MissingModel`), der Modell-Hash wird beim Laden gegen das Manifest
+verifiziert (`ModelHashStatus::{Verified,Pending,Mismatch}`; Mismatch →
+harter Fehler `OnnxError::ModelArtifactStale` statt stiller Matte),
+ORT-Preprocessing nutzt Manifest-mean/std (ImageNet-Default, korrekte
+CHW-Planes) mit Tensor-/Output-Namen aus dem Manifest und validierter
+Output-Shape, und `ModelManifest::validate` erzwingt non-empty
+hash/license sowie gültige Auflösungen/Tensor-Namen. SAM-Prompt-Typsystem
+deckt Labels −1/0/1/2/3 inklusive Source↔1024²-Mapping ab (76 Tests).
+Bekannte Grenzen bis F-082: ORT-Mismatch-Zweig ohne ausführbaren Test
+(benötigt hash-gepinntes `.onnx`-Fixture); unbekannter Output-Name panikt
+intern in ort statt sauberem `InferenceFailed` (Folgeaufgaben in
+`Agents.todo.md`).
+
 ## Abnahme
 
 - Eine gültige Matte wird nach Neustart ohne Modell-Download verwendet.
