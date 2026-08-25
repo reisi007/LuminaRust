@@ -1,9 +1,15 @@
 //! Shared eframe application for the native and browser MVP.
 
+// REVIEW-GUI-WASM-FOLLOWUP: `filmstrip` (background thumbnail pool, disk-cache
+// probes) and `viewport` (filmstrip/navigator windowing math) are native-only
+// capabilities — the WASM filmstrip is a static capability hint. Gating the
+// modules themselves keeps the wasm32 build free of dead-code warnings.
+#[cfg(not(target_arch = "wasm32"))]
 mod filmstrip;
 mod i18n;
 mod slider;
 mod theme;
+#[cfg(not(target_arch = "wasm32"))]
 mod viewport;
 
 use eframe::egui;
@@ -13,11 +19,15 @@ use lumina_core::cache::disk::DiskFolderCache;
 use lumina_core::cache::PreviewKind;
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_core::MaskPolicy;
+// REVIEW-GUI-WASM-FOLLOWUP: `export_image`/`ExportOptions` (Export module) and
+// `rasterize_prompt` (mask overlay) are only reachable on native.
 use lumina_core::{
-    analyze_tone, export_image, masks::rasterize_prompt, match_total_exposure_masked, render_frame,
-    suggest_auto_tone, tone_fingerprint, AutoToneConfig, ExportOptions, ImageFileFormat,
-    ImageFrame, MaskContext, MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey,
+    analyze_tone, match_total_exposure_masked, render_frame, suggest_auto_tone, tone_fingerprint,
+    AutoToneConfig, ImageFileFormat, ImageFrame, MaskContext, MaskLayerResult, MaskPlane,
+    OutputSpec, RenderContext, RenderKey,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use lumina_core::{export_image, masks::rasterize_prompt, ExportOptions};
 use lumina_raw::RawError;
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::{
@@ -44,10 +54,16 @@ use std::sync::{mpsc, Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
+// REVIEW-GUI-WASM-FOLLOWUP: every `debug!` call site sits behind a native
+// thumbnail/decode path, so the import is gated with them.
+#[cfg(not(target_arch = "wasm32"))]
+use log::debug;
+use log::{error, info, trace, warn};
+use theme::apply_lightroom_dark;
+
+#[cfg(not(target_arch = "wasm32"))]
 use filmstrip::{downscale_rgba, ThumbnailManager, THUMBNAIL_MAX_DIM};
 use i18n::Str;
-use log::{debug, error, info, trace, warn};
-use theme::apply_lightroom_dark;
 
 /// Work which may be performed when the GUI has no interactive input.
 ///
@@ -182,13 +198,16 @@ impl IdleQueue {
         self.tasks.len() != before
     }
 
-    /// Takes the highest-priority task. Equal priorities retain FIFO order.
+    /// Takes the highest-priority task. Equal priorities retain FIFO order
+    /// (REVIEW-GUI-N4): ties are broken by the monotonically increasing
+    /// enqueue id, so the *first*-enqueued task of a priority class wins.
+    /// (`Iterator::max_by_key` alone would pick the *last* maximum — LIFO.)
     pub fn pop_next(&mut self) -> Option<(u64, IdleTask)> {
         let index = self
             .tasks
             .iter()
             .enumerate()
-            .max_by_key(|(_, task)| task.priority)?
+            .min_by_key(|(_, task)| (std::cmp::Reverse(task.priority), task.id))?
             .0;
         let task = self.tasks.remove(index);
         Some((task.id, task.task))
@@ -367,14 +386,21 @@ pub struct LuminaApp {
     active_module: Module,
     /// Export module UI state (F-103-N5). The target path is chosen via a
     /// native save dialog; the format/quality drive the shared export path.
+    /// Native-only: the wasm Export module is a capability hint
+    /// (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
     export_path: String,
+    #[cfg(not(target_arch = "wasm32"))]
     export_format: ImageFileFormat,
+    #[cfg(not(target_arch = "wasm32"))]
     export_quality: u8,
     /// Before/After toggle state. Never mutates the recipe.
     before_after: bool,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
-    /// Generated filmstrip thumbnail textures.
+    /// Generated filmstrip thumbnail textures. Native-only (REVIEW-GUI-
+    /// WASM-FOLLOWUP): the wasm filmstrip is a static placeholder.
+    #[cfg(not(target_arch = "wasm32"))]
     thumbnails: ThumbnailManager,
     // ---- PERF-GUI-* (CPU interactivity quick-wins, no GPU) ----
     /// True while the preview shows a low-resolution draft (rendered from
@@ -421,7 +447,9 @@ pub struct LuminaApp {
     preview_src_h: f32,
     /// Effective on-screen scale (screen px per source px) for the zoom readout.
     preview_effective_scale: f32,
-    /// Whether the left thumbnail navigator rail is open.
+    /// Whether the left thumbnail navigator rail is open. Native-only (the
+    /// navigator rail is a native module; REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
     navigator_open: bool,
     /// Library module: expanded folder-tree nodes, keyed by absolute path.
     #[cfg(not(target_arch = "wasm32"))]
@@ -442,6 +470,14 @@ pub struct LuminaApp {
     /// decode is in flight on a worker thread; native-only (no threads on wasm).
     #[cfg(not(target_arch = "wasm32"))]
     decode_rx: Option<std::sync::mpsc::Receiver<DecodeResult>>,
+    /// REVIEW-GUI-N1: revision (BLAKE3 over the JSON) of the on-disk sidecar
+    /// that the in-memory `document` lineage is based on. `None` means no
+    /// sidecar file existed when this lineage started (fresh document). Passed
+    /// to the compare-and-swap write in [`Self::save_sidecar`] so an
+    /// externally modified sidecar surfaces as a visible conflict instead of
+    /// being silently overwritten; refreshed after every successful save.
+    #[cfg(not(target_arch = "wasm32"))]
+    sidecar_revision: Option<String>,
     /// True while an edit (slider drag, presence change, etc.) needs a
     /// full-quality render. Drives the debounced full render after a pointer
     /// drag settles (PERF-GUI-3/4). Cleared once the full render runs.
@@ -450,7 +486,9 @@ pub struct LuminaApp {
     /// `list_directory` never re-triggers it every time the directory is
     /// rescanned (the decode is async and `original` stays `None` until it
     /// finishes). Left unset while no RAW entry exists, so a later scan of a
-    /// now-populated directory can still auto-load.
+    /// now-populated directory can still auto-load. Native-only (directory
+    /// auto-load is a native file-system capability).
+    #[cfg(not(target_arch = "wasm32"))]
     auto_load_attempted: bool,
     /// GUI-60FPS-1: optional GPU context for the native desktop. `None` on wasm
     /// or when no adapter is bound (CPU fallback remains fully functional).
@@ -651,11 +689,15 @@ impl LuminaApp {
             #[cfg(not(target_arch = "wasm32"))]
             thumbnail_rx,
             active_module: Module::Develop,
+            #[cfg(not(target_arch = "wasm32"))]
             export_path: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             export_format: ImageFileFormat::Png,
+            #[cfg(not(target_arch = "wasm32"))]
             export_quality: 90,
             before_after: false,
             wb_pick_mode: false,
+            #[cfg(not(target_arch = "wasm32"))]
             thumbnails: ThumbnailManager::new(),
             preview_is_draft: false,
             draft_original: None,
@@ -673,6 +715,7 @@ impl LuminaApp {
             preview_effective_scale: 1.0,
             // Navigator defaults to collapsed (hidden) and is revealed via the
             // "Navigator" toggle button in the preview toolbar (Lightroom-like).
+            #[cfg(not(target_arch = "wasm32"))]
             navigator_open: false,
             #[cfg(not(target_arch = "wasm32"))]
             open_folders: BTreeSet::new(),
@@ -684,7 +727,10 @@ impl LuminaApp {
             history_selected: None,
             #[cfg(not(target_arch = "wasm32"))]
             decode_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            sidecar_revision: None,
             pending_full_render: false,
+            #[cfg(not(target_arch = "wasm32"))]
             auto_load_attempted: false,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             gpu: lumina_gpu::GpuContext::new().ok(),
@@ -836,7 +882,7 @@ impl LuminaApp {
                         for mask in &copy.mask_library {
                             let artifact_missing = mask.artifact.as_ref().is_some_and(|artifact| {
                                 lumina_sidecar::artifact_status(bundle_root, artifact)
-                                    == ArtifactStatus::Missing
+                                    != ArtifactStatus::Available
                             });
                             if matches!(
                                 mask.status,
@@ -886,6 +932,13 @@ impl LuminaApp {
     }
     pub fn preview(&self) -> Option<&ImageFrame> {
         self.preview.as_ref()
+    }
+    /// REVIEW-GUI-N5: whether the current preview is a low-resolution draft
+    /// (slider drag in flight). Consumers of the preview pixels (histogram,
+    /// exposure matching) must check this so a draft is never silently
+    /// measured as if it were the final render.
+    pub fn preview_is_draft(&self) -> bool {
+        self.preview_is_draft
     }
     pub fn render_key(&self) -> Option<&RenderKey> {
         self.render_key.as_ref()
@@ -1016,6 +1069,17 @@ impl LuminaApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// Switch the active virtual copy (REVIEW-GUI-VCSWITCH-1).
+    ///
+    /// Switching adopts the target copy's stored recipe. Session state that
+    /// belonged to the previous copy is reset: the history selection and any
+    /// in-progress mask-tool gesture. Unsaved edits of the previous copy are
+    /// **discarded** by design (the stored recipe is authoritative); this is
+    /// made visible through a distinct status message plus a `warn!` log —
+    /// never silently.
+    ///
+    /// Errors (no sidecar, unknown id) are returned to the caller; UI call
+    /// sites must surface them via `show_error` instead of discarding them.
     pub fn select_virtual_copy(&mut self, id: &str) -> Result<(), GuiError> {
         let Some(document) = &self.document else {
             return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
@@ -1025,13 +1089,52 @@ impl LuminaApp {
             .iter()
             .find(|copy| copy.id == id)
             .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+        // Dirty check against the copy we are leaving, BEFORE adopting the new
+        // recipe.
+        let discarded_unsaved = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == self.virtual_copy_id)
+            .is_some_and(|previous| previous.recipe != self.recipe);
+        let previous_id = self.virtual_copy_id.clone();
         self.virtual_copy_id = copy.id.clone();
         self.recipe = copy.recipe.clone();
         self.selected_mask_id = copy
             .mask_layers
             .first()
             .map(|layer| layer.mask.mask_id.clone());
-        self.render()
+        // Per-copy session state resets (REVIEW-GUI-VCSWITCH-1): a history
+        // selection or an in-progress drag of the previous copy must never
+        // leak into the newly selected one.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.history_selected = None;
+            self.pending_brush_marks.clear();
+            self.drag_start = None;
+            self.drag_current = None;
+            self.drawing = false;
+        }
+        if discarded_unsaved {
+            warn!(
+                "virtual-copy switch from `{previous_id}` to `{}` discarded unsaved edits",
+                self.virtual_copy_id
+            );
+        }
+        // The status is set *after* `render` because a successful render
+        // overwrites it ("Preview current"); on a render failure the error
+        // path keeps its own visible state.
+        let outcome = self.render();
+        if outcome.is_ok() {
+            self.status = if discarded_unsaved {
+                format!(
+                    "Switched to copy `{}` — unsaved edits of `{previous_id}` were discarded",
+                    self.virtual_copy_id
+                )
+            } else {
+                format!("Switched to copy `{}`", self.virtual_copy_id)
+            };
+        }
+        outcome
     }
 
     /// Select a mask from the active copy's library and make it the active layer.
@@ -1187,7 +1290,11 @@ impl LuminaApp {
     pub fn set_mask_inverted(&mut self, inverted: bool) -> Result<(), GuiError> {
         let layer = self.active_layer_mut()?;
         layer.inverted = inverted;
-        self.render_key = None;
+        // REVIEW-GUI-MASKRENDER-1: layer edits change the evaluated matte, so
+        // the preview must actually re-render — route through `mark_dirty`
+        // (which also schedules the debounced render), not just invalidate
+        // the key.
+        self.mark_dirty();
         Ok(())
     }
 
@@ -1197,7 +1304,8 @@ impl LuminaApp {
             return Err(GuiError::Io(Str::FeatheringMustBeBetween.t().to_string()));
         }
         self.active_layer_mut()?.feather = feather;
-        self.render_key = None;
+        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`.
+        self.mark_dirty();
         Ok(())
     }
 
@@ -1267,11 +1375,64 @@ impl LuminaApp {
 
     // ---- F-103-N4: interactive mask tools (Brush / Linear / Radial) ----
 
+    /// Visible reason shown when a source-coordinate tool is refused because
+    /// active recipe geometry changes the mapping between the displayed
+    /// (post-geometry) preview and the source frame (REVIEW-GUI-MASKGEO-1).
+    #[cfg(not(target_arch = "wasm32"))]
+    const GEOMETRY_TOOL_BLOCKED: &str = "Mask and white-balance tools are unavailable while Crop, Rotation, Mirror or Perspective is active — drawn/picked source coordinates would land transformed-wrong. Reset the geometry to use them.";
+
+    /// True while recipe geometry changes the mapping between the displayed
+    /// (post-geometry) preview frame and the un-decoded source frame
+    /// (REVIEW-GUI-MASKGEO-1).
+    ///
+    /// The interactive tools map pointer positions to *source* coordinates
+    /// (`to_normalized` + ROI). With `Crop`/`rotation`/mirroring — and equally
+    /// with a non-neutral `Perspective`, which changes the output bounds — that
+    /// mapping is no longer identity, so brush/gradient/radial prompts and WB
+    /// picks would silently land at transformed-wrong positions. Until the
+    /// core applies geometry to mask planes (documented F-041 alignment limit)
+    /// the honest behaviour is to refuse these tools visibly instead of
+    /// writing wrong data.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn geometry_blocks_source_mapping(&self) -> bool {
+        let geometry_active = self.recipe.geometry.as_ref().is_some_and(|g| {
+            g.crop.is_some()
+                || g.rotation_degrees.abs() > f32::EPSILON
+                || g.mirror_horizontal
+                || g.mirror_vertical
+        });
+        let perspective_active = self.recipe.perspective.as_ref().is_some_and(|p| {
+            p.vertical != 0.0
+                || p.horizontal != 0.0
+                || p.rotation != 0.0
+                || p.scale != 1.0
+                || p.aspect_ratio != 1.0
+                || p.shift_x != 0.0
+                || p.shift_y != 0.0
+        });
+        geometry_active || perspective_active
+    }
+
     /// Arm or disarm an interactive masking tool. Disarming returns the preview
     /// to its ordinary click/eyedropper behaviour and cancels any in-progress
     /// drag.
+    ///
+    /// REVIEW-GUI-MASKGEO-1: arming is refused (visibly, tool stays `None`)
+    /// while recipe geometry is active — see
+    /// [`Self::geometry_blocks_source_mapping`]. No silent fallback into
+    /// transformed-wrong marks.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_tool(&mut self, tool: MaskTool) {
+        if tool != MaskTool::None && self.geometry_blocks_source_mapping() {
+            warn!("mask tool {tool:?} refused while recipe geometry is active");
+            self.mask_tool = MaskTool::None;
+            self.pending_brush_marks.clear();
+            self.drag_start = None;
+            self.drag_current = None;
+            self.drawing = false;
+            self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
+            return;
+        }
         self.mask_tool = tool;
         self.pending_brush_marks.clear();
         self.drag_start = None;
@@ -1305,7 +1466,8 @@ impl LuminaApp {
             return Err(GuiError::Io("Blur must be between 0 and 1".into()));
         }
         self.active_layer_mut()?.blur = blur;
-        self.render_key = None;
+        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`.
+        self.mark_dirty();
         Ok(())
     }
 
@@ -1316,7 +1478,8 @@ impl LuminaApp {
             return Err(GuiError::Io("Density must be between 0 and 1".into()));
         }
         self.active_layer_mut()?.density = density;
-        self.render_key = None;
+        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`.
+        self.mark_dirty();
         Ok(())
     }
 
@@ -1662,7 +1825,31 @@ impl LuminaApp {
             self.document = None;
             self.virtual_copy_id = "vc-original".into();
             self.selected_mask_id = None;
+            // REVIEW-GUI-N1: a new image starts a fresh sidecar lineage.
+            self.sidecar_revision = None;
+            // REVIEW-GUI-N3: per-image session state must never leak from the
+            // previous file into this one.
+            self.history_selected = None;
+            self.pending_brush_marks.clear();
+            self.drag_start = None;
+            self.drag_current = None;
+            self.drawing = false;
         }
+        // REVIEW-GUI-N3 (viewport + interaction state): a new image opens at
+        // fit with no pan, no zoom ROI, no Before/After hold, no armed WB
+        // eyedropper and no stale render bookkeeping — otherwise image B
+        // opened in an 8× crop of image A.
+        self.preview_zoom = 1.0;
+        self.zoom_mode = ZoomMode::Fit;
+        self.preview_pan = egui::Vec2::ZERO;
+        self.preview_roi = None;
+        self.before_after = false;
+        self.wb_pick_mode = false;
+        self.render_mask_layers.clear();
+        self.render_key = None;
+        self.tone_analysis = None;
+        self.pending_full_render = false;
+        self.last_edit_time = 0.0;
         self.original = Some(frame.clone());
         self.recipe = EditRecipe::default();
         self.error = None;
@@ -1750,9 +1937,19 @@ impl LuminaApp {
     }
 
     pub fn match_total_exposure(&mut self, target: f64) -> Result<(), GuiError> {
+        // REVIEW-GUI-N5: never measure a draft. If the preview is currently a
+        // low-resolution drag draft, commit the pending full-quality render
+        // first so the measurement domain is the final visible render.
+        if self.preview_is_draft {
+            self.render_full([0, 0], None)?;
+        }
         let Some(frame) = &self.preview else {
             return Ok(());
         };
+        debug_assert!(
+            !self.preview_is_draft,
+            "measurement must run on the full render, never a draft"
+        );
         // F-041: measure the final visible domain — the rendered preview
         // (post crop/geometry, same frame that is displayed) weighted by the
         // effective mask planes of the last render. wasm32 renders without
@@ -1977,18 +2174,41 @@ impl LuminaApp {
     fn render_from(
         &mut self,
         source: &ImageFrame,
-        with_masks: bool,
+        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] with_masks: bool,
         roi: Option<[u32; 4]>,
     ) -> Result<(), GuiError> {
         // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
         // the full frame is never processed for a magnified view.
-        let cropped = match roi {
+        //
+        // REVIEW-GUI-N6: the recorded `preview_roi` must describe the pixels
+        // that were *actually* rendered — it feeds the pointer→source mapping
+        // of the WB eyedropper / mask tools. Core's `crop_region` clamps
+        // oversized rects instead of failing, so the effective (clamped) rect
+        // is computed here and recorded; when the crop genuinely fails, the
+        // full frame is rendered and `preview_roi` is cleared instead of
+        // silently keeping the rejected request.
+        let effective_roi = roi.map(|[x, y, w, h]| {
+            let x = x.min(source.width.saturating_sub(1));
+            let y = y.min(source.height.saturating_sub(1));
+            let w = w.min(source.width - x);
+            let h = h.min(source.height - y);
+            [x, y, w, h]
+        });
+        let cropped = match effective_roi {
             Some([x, y, w, h]) => source.crop_region(x, y, w, h).ok(),
             None => None,
         };
+        let crop_applied = cropped.is_some();
         let source = match &cropped {
             Some(f) => f,
-            None => source,
+            None => {
+                if roi.is_some() {
+                    warn!(
+                        "ROI crop {roi:?} failed; rendering the full frame and clearing preview_roi"
+                    );
+                }
+                source
+            }
         };
         // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
         // (native only).  Missing or unreadable zdata is not a hard error:
@@ -2085,8 +2305,12 @@ impl LuminaApp {
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
         // Record the crop this texture represents so pointer→source mapping in
-        // `draw_preview` (WB eyedropper / mask tools) stays accurate when zoomed.
-        self.preview_roi = roi;
+        // `draw_preview` (WB eyedropper / mask tools) stays accurate when
+        // zoomed. The *effective* (clamped) rect is recorded, and only when
+        // the crop actually succeeded — a failed crop fell back to the full
+        // frame, and recording the rejected request would corrupt every
+        // subsequent coordinate mapping (REVIEW-GUI-N6).
+        self.preview_roi = if crop_applied { effective_roi } else { None };
         self.render_mask_layers = output.mask_layers;
         self.error = None;
         self.status = if !mask_warnings.is_empty() {
@@ -2109,6 +2333,13 @@ impl LuminaApp {
     /// the active virtual copy (native only).  Missing/unreadable zdata yields
     /// an empty map; affected layers are handled by the `MaskPolicy::Warn`
     /// path in [`render_frame`].
+    ///
+    /// KONSISTENZ (REVIEW-CLI-N1): tile records are addressed by the composite
+    /// id [`Self::zdata_tile_record_id`] (`"{copy_id}/{mask_id}"`) so two
+    /// virtual copies that happen to share a mask id never share a matte.
+    /// Containers written before that convention carry the bare `mask_id`;
+    /// those records stay readable through an explicitly logged legacy lookup
+    /// (documented read compatibility — not a silent fallback).
     #[cfg(not(target_arch = "wasm32"))]
     fn load_mask_planes(&self) -> BTreeMap<(String, String), MaskPlane> {
         let mut planes = BTreeMap::new();
@@ -2134,7 +2365,21 @@ impl LuminaApp {
             .iter()
             .filter(|m| matches!(m.status, MaskStatus::Valid))
         {
-            if let Ok(tile) = container.tile(&mask.id, 0, 0) {
+            let tile = match container.tile(&Self::zdata_tile_record_id(&copy.id, &mask.id), 0, 0) {
+                Ok(tile) => Some(tile),
+                Err(_) => match container.tile(&mask.id, 0, 0) {
+                    Ok(tile) => {
+                        debug!(
+                            "mask plane copy `{}` / mask `{}` loaded under the legacy bare \
+                             mask-id zdata key",
+                            copy.id, mask.id
+                        );
+                        Some(tile)
+                    }
+                    Err(_) => None,
+                },
+            };
+            if let Some(tile) = tile {
                 if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
                     planes.insert((copy.id.clone(), mask.id.clone()), plane);
                 }
@@ -2143,9 +2388,12 @@ impl LuminaApp {
         planes
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn load_mask_planes(&self) -> BTreeMap<(String, String), MaskPlane> {
-        BTreeMap::new()
+    /// Composite zdata tile-record id shared with the CLI (REVIEW-CLI-N1):
+    /// `"{copy_id}/{mask_id}"`. The field order mirrors the
+    /// `(copy_id, mask_id)` planes key of `MaskContext`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zdata_tile_record_id(copy_id: &str, mask_id: &str) -> String {
+        format!("{copy_id}/{mask_id}")
     }
 
     fn show_error(&mut self, error: impl ToString) {
@@ -2154,6 +2402,9 @@ impl LuminaApp {
         self.error = Some(message);
     }
 
+    /// REVIEW-GUI-WASM-FOLLOWUP: the texture upload is driven by the native
+    /// preview-area path only.
+    #[cfg(not(target_arch = "wasm32"))]
     fn update_texture(&mut self, ctx: &egui::Context) {
         // Before/After shows the original (never the recipe) so the toggle can
         // never mutate the recipe — it only swaps which frame is displayed.
@@ -2320,29 +2571,59 @@ impl LuminaApp {
                 if let Ok(document) =
                     lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&path))
                 {
-                    let candidate = document.virtual_copies[0].recipe.clone();
-                    self.document = Some(document);
-                    let config = AutoToneConfig {
-                        target_luminance: candidate.auto_features.target_luminance,
-                        ..Default::default()
-                    };
-                    let fingerprint =
-                        tone_fingerprint(self.original.as_ref().expect("loaded frame"), config);
-                    let valid = candidate
-                        .auto_features
-                        .analysis_fingerprint
-                        .as_ref()
-                        .is_some_and(|stored| is_current_tone_analysis(stored, &fingerprint));
-                    self.recipe = candidate;
-                    let stale_auto_tone = self.recipe.auto_features.enable_auto_tone && !valid;
-                    if stale_auto_tone {
-                        clear_stale_auto_tone(&mut self.recipe);
-                        self.status = Str::AutoToneStale.t().into();
-                    }
-                    if let Err(error) = self.render() {
-                        self.show_error(error);
-                    } else if stale_auto_tone {
-                        self.status = Str::AutoToneStale.t().into();
+                    // REVIEW-GUI-N1: remember the revision this document was
+                    // loaded from — the save path compares against it (CAS).
+                    self.sidecar_revision = lumina_sidecar::document_revision(&document).ok();
+                    // REVIEW-GUI-N2: resolve the copy by identity, never
+                    // positionally. `apply_decoded_frame` reset the session to
+                    // the default copy id ("vc-original"); prefer that id,
+                    // then the document's default copy, then the first entry —
+                    // and adopt whichever id actually resolved so subsequent
+                    // edits/saves target the same copy even when the JSON
+                    // array was reordered.
+                    let resolved = document
+                        .virtual_copies
+                        .iter()
+                        .find(|copy| copy.id == self.virtual_copy_id)
+                        .or_else(|| document.virtual_copies.iter().find(|copy| copy.is_default))
+                        .or_else(|| document.virtual_copies.first())
+                        .cloned();
+                    if let Some(copy) = resolved {
+                        let candidate = copy.recipe.clone();
+                        self.virtual_copy_id = copy.id.clone();
+                        self.selected_mask_id = copy
+                            .mask_layers
+                            .first()
+                            .map(|layer| layer.mask.mask_id.clone());
+                        self.document = Some(document);
+                        let config = AutoToneConfig {
+                            target_luminance: candidate.auto_features.target_luminance,
+                            ..Default::default()
+                        };
+                        let fingerprint =
+                            tone_fingerprint(self.original.as_ref().expect("loaded frame"), config);
+                        let valid = candidate
+                            .auto_features
+                            .analysis_fingerprint
+                            .as_ref()
+                            .is_some_and(|stored| is_current_tone_analysis(stored, &fingerprint));
+                        self.recipe = candidate;
+                        let stale_auto_tone = self.recipe.auto_features.enable_auto_tone && !valid;
+                        if stale_auto_tone {
+                            clear_stale_auto_tone(&mut self.recipe);
+                            self.status = Str::AutoToneStale.t().into();
+                        }
+                        if let Err(error) = self.render() {
+                            self.show_error(error);
+                        } else if stale_auto_tone {
+                            self.status = Str::AutoToneStale.t().into();
+                        }
+                    } else {
+                        // A sidecar without any virtual copy cannot be
+                        // rendered from; surface it instead of silently
+                        // keeping an unrelated recipe.
+                        warn!("sidecar for {} has no virtual copies", path.display());
+                        self.show_error(GuiError::Io(Str::VirtualCopyNotFound.t().to_string()));
                     }
                 }
             }
@@ -2377,6 +2658,20 @@ impl LuminaApp {
         }
     }
 
+    /// Persist the active virtual copy's recipe into the sidecar.
+    ///
+    /// REVIEW-GUI-SAVEMSG-1: the "Sidecar saved" status is set **only** on
+    /// success; a failed write keeps the error visible instead of being
+    /// overwritten by a success message.
+    ///
+    /// REVIEW-GUI-N1: the write goes through the compare-and-swap API
+    /// [`lumina_sidecar::save_sidecar_if_unchanged`] with the revision read
+    /// from disk immediately before, so an externally modified sidecar is
+    /// reported as a conflict instead of being silently overwritten.
+    /// Additionally, `document.source` of an already-loaded document is kept
+    /// as loaded — recomputing it from the live bytes would silently launder a
+    /// source/conflict state (the fresh identity is only set for documents
+    /// newly created in this session).
     #[cfg(not(target_arch = "wasm32"))]
     fn save_sidecar(&mut self) {
         if self.path.trim().is_empty() {
@@ -2388,11 +2683,24 @@ impl LuminaApp {
             self.show_error(Str::NoImageLoaded.t());
             return;
         };
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
+        // REVIEW-GUI-N1: compare-and-swap against the revision this document
+        // lineage was loaded from (`self.sidecar_revision`, captured at
+        // load time and refreshed after each successful save). An external
+        // modification since then therefore surfaces as a visible conflict
+        // instead of being silently overwritten. `None` expects the file to
+        // not exist yet (fresh document); if a file appeared in the meantime,
+        // the CAS refuses visibly rather than clobbering it.
+        let expected_revision = self.sidecar_revision.clone();
         let mut document = self
             .document
             .take()
             .unwrap_or_else(|| SidecarDocument::new(self.source_identity(frame), "raster-mvp-1"));
-        document.source = self.source_identity(frame);
+        // REVIEW-GUI-N1: the identity of an already-loaded document stays
+        // exactly as loaded — recomputing it here from the live bytes would
+        // silently launder an externally changed source (conflict laundering).
+        // A document newly created above already carries the current identity
+        // via `SidecarDocument::new(self.source_identity(frame), ..)`.
         let Some(copy) = document
             .virtual_copies
             .iter_mut()
@@ -2403,17 +2711,28 @@ impl LuminaApp {
             return;
         };
         copy.recipe = self.recipe.clone();
-        if let Err(error) =
-            lumina_sidecar::save_sidecar(&lumina_sidecar::sidecar_path_for(&path), &document)
-        {
-            error!("sidecar save failed for {}: {error}", path.display());
-            self.show_error(error);
-        } else {
-            self.status = Str::SidecarSaved.t().into();
+        match lumina_sidecar::save_sidecar_if_unchanged(
+            &sidecar_path,
+            &document,
+            expected_revision.as_deref(),
+        ) {
+            Ok(new_revision) => {
+                self.status = Str::SidecarSaved.t().into();
+                self.sidecar_revision = Some(new_revision);
+                self.document = Some(document);
+                self.list_directory();
+                // `list_directory` overwrites the status with its scan result;
+                // restore the success message so the final state is honest.
+                self.status = Str::SidecarSaved.t().into();
+            }
+            Err(save_error) => {
+                error!("sidecar save failed for {}: {save_error}", path.display());
+                self.show_error(save_error);
+                // Keep the document so the failed edit is not lost; the
+                // conflict stays visible until resolved.
+                self.document = Some(document);
+            }
         }
-        self.document = Some(document);
-        self.list_directory();
-        self.status = Str::SidecarSaved.t().into();
     }
 
     // ---- F-103-N5: Export module -------------------------------------------
@@ -2821,7 +3140,14 @@ impl LuminaApp {
             // of the native (non-wasm) capability set.
             #[cfg(not(target_arch = "wasm32"))]
             if pick && response.clicked() {
-                if let Some(pos) = response.interact_pointer_pos() {
+                // REVIEW-GUI-MASKGEO-1: the picker may have been armed before
+                // geometry was edited; refuse the pick visibly instead of
+                // sampling transformed-wrong source pixels, and disarm so the
+                // stale mode does not linger.
+                if self.geometry_blocks_source_mapping() {
+                    self.wb_pick_mode = false;
+                    self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
+                } else if let Some(pos) = response.interact_pointer_pos() {
                     let (nx, ny) = Self::to_normalized(
                         pos,
                         rect,
@@ -2893,6 +3219,13 @@ impl LuminaApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_mask_tool_drag(&mut self, response: &egui::Response, rect: egui::Rect) {
         if self.mask_tool == MaskTool::None || self.wb_pick_mode {
+            return;
+        }
+        // REVIEW-GUI-MASKGEO-1 defense in depth: the tool can only be armed via
+        // `set_mask_tool`, which already refuses while geometry is active — but
+        // geometry could be *edited* mid-session, so re-check before mapping
+        // any pointer position into source coordinates.
+        if self.geometry_blocks_source_mapping() {
             return;
         }
         let Some(pos) = response.interact_pointer_pos() else {
@@ -3148,6 +3481,15 @@ impl LuminaApp {
     fn draw_histogram(&self, ui: &mut egui::Ui) {
         ui.separator();
         ui.heading(Str::Histogram.t());
+        // REVIEW-GUI-N5: a draft preview's histogram is measured from the
+        // low-resolution drag render — it must say so instead of posing as
+        // the final render state.
+        if self.preview_is_draft {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "Draft preview — histogram reflects the low-res draft until the full render completes",
+            );
+        }
         if let Some(analysis) = self.current_analysis() {
             ui.label(format!(
                 "Mean {:.3}  Median {:.3}",
@@ -3269,6 +3611,9 @@ impl LuminaApp {
         Ok(())
     }
 
+    /// REVIEW-GUI-WASM-FOLLOWUP: the eyedropper reads source pixels from the
+    /// loaded frame — a native capability (no file IO on wasm).
+    #[cfg(not(target_arch = "wasm32"))]
     fn pick_white_balance_at(&mut self, nx: f64, ny: f64) {
         trace!(
             "GUI interaction: pick_white_balance_at nx={:.4} ny={:.4}",
@@ -3329,7 +3674,23 @@ impl LuminaApp {
                 });
                 ui.label(Str::PickWhiteBalanceHint.t());
             } else if ui.button(Str::WbEyedropper.t()).clicked() {
-                self.wb_pick_mode = true;
+                // REVIEW-GUI-MASKGEO-1: with active Crop/Rotation/Mirror/
+                // Perspective the clicked preview position no longer maps
+                // 1:1 onto source pixels — refuse visibly instead of picking
+                // transformed-wrong values.
+                #[cfg(not(target_arch = "wasm32"))]
+                let geometry_blocked = self.geometry_blocks_source_mapping();
+                #[cfg(target_arch = "wasm32")]
+                let geometry_blocked = false;
+                if geometry_blocked {
+                    warn!("WB eyedropper refused while recipe geometry is active");
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
+                    }
+                } else {
+                    self.wb_pick_mode = true;
+                }
             }
             ui.separator();
             self.adjustment_slider(
@@ -3386,6 +3747,14 @@ impl LuminaApp {
             if changed {
                 self.recipe.curves = Some(build_tone_curve(s, d, l, h));
                 self.mark_dirty();
+                // REVIEW-GUI-CURVE-1: a clamped output absorbs part of a
+                // delta (Shadows cannot go below its 0.0 base point), so the
+                // affected slider visibly snaps back. Surface that MVP limit
+                // explicitly instead of leaving the user with a silently
+                // moving slider.
+                if tone_curve_roundtrip_is_lossy(s, d, l, h) {
+                    self.status = "Tone curve: extreme region values are clamped to the 0..=1 output range (MVP limit) — negative Shadows beyond the base point are not representable.".into();
+                }
             }
         });
     }
@@ -4047,26 +4416,35 @@ impl LuminaApp {
             // the preview is interpreted; persistence goes through the sidecar.
             ui.separator();
             ui.label(Str::MaskTool.t());
-            ui.horizontal_wrapped(|ui| {
-                for (tool, label) in [
-                    (MaskTool::Brush, Str::MaskToolBrush),
-                    (MaskTool::LinearGradient, Str::MaskToolGradient),
-                    (MaskTool::Radial, Str::MaskToolRadial),
-                ] {
+            // REVIEW-GUI-MASKGEO-1: while recipe geometry is active the drawn
+            // coordinates would land transformed-wrong, so the tool row is
+            // disabled and an explicit hint explains why (no silent fallback).
+            let geometry_blocked = self.geometry_blocks_source_mapping();
+            ui.add_enabled_ui(!geometry_blocked, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (tool, label) in [
+                        (MaskTool::Brush, Str::MaskToolBrush),
+                        (MaskTool::LinearGradient, Str::MaskToolGradient),
+                        (MaskTool::Radial, Str::MaskToolRadial),
+                    ] {
+                        if ui
+                            .selectable_label(self.mask_tool == tool, label.t())
+                            .clicked()
+                        {
+                            self.set_mask_tool(tool);
+                        }
+                    }
                     if ui
-                        .selectable_label(self.mask_tool == tool, label.t())
+                        .selectable_label(self.mask_tool == MaskTool::None, Str::MaskToolNone.t())
                         .clicked()
                     {
-                        self.set_mask_tool(tool);
+                        self.set_mask_tool(MaskTool::None);
                     }
-                }
-                if ui
-                    .selectable_label(self.mask_tool == MaskTool::None, Str::MaskToolNone.t())
-                    .clicked()
-                {
-                    self.set_mask_tool(MaskTool::None);
-                }
+                });
             });
+            if geometry_blocked {
+                ui.colored_label(egui::Color32::YELLOW, Self::GEOMETRY_TOOL_BLOCKED);
+            }
             if self.mask_tool == MaskTool::Brush {
                 let mut radius = self.brush_radius;
                 if ui
@@ -4658,7 +5036,12 @@ impl LuminaApp {
                     }
                 });
             if selected != self.virtual_copy_id {
-                let _ = self.select_virtual_copy(&selected);
+                // REVIEW-GUI-VCSWITCH-1: a failed copy switch (unknown id,
+                // missing sidecar) must be visible — never swallowed.
+                if let Err(error) = self.select_virtual_copy(&selected) {
+                    error!("virtual copy switch to `{selected}` failed: {error}");
+                    self.show_error(error);
+                }
             }
             if ui.button(Str::NewCopy.t()).clicked() {
                 let id = format!("vc-{}", copy_count + 1);
@@ -4894,6 +5277,9 @@ impl LuminaApp {
         }
     }
 
+    /// REVIEW-GUI-WASM-FOLLOWUP: thumbnail textures are produced by the native
+    /// worker pool only.
+    #[cfg(not(target_arch = "wasm32"))]
     fn make_thumbnail_texture(
         &self,
         ctx: &egui::Context,
@@ -4941,7 +5327,9 @@ impl LuminaApp {
 
     /// Lightroom-like zoom toolbar: absolute zoom modes (re-derived each frame
     /// from the pane) plus a live zoom percentage readout. The active mode is
-    /// highlighted.
+    /// highlighted. Native-only (REVIEW-GUI-WASM-FOLLOWUP): rendered by the
+    /// native preview-area header.
+    #[cfg(not(target_arch = "wasm32"))]
     fn zoom_toolbar(&mut self, ui: &mut egui::Ui) {
         let pct = (self.preview_effective_scale * 100.0) as i32;
         ui.label(format!("{}: {}%", Str::Zoom.t(), pct));
@@ -5057,12 +5445,19 @@ impl LuminaApp {
 /// [`Curves`] point list via [`build_tone_curve`]; the read-back keeps the
 /// slider values stable for typical (unclamped) adjustments.
 fn tone_curve_regions(recipe: &EditRecipe) -> (f64, f64, f64, f64) {
-    let base: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
     let points = recipe
         .curves
         .as_ref()
         .map(|c| c.master.clone())
         .unwrap_or_default();
+    tone_curve_regions_from_points(&points)
+}
+
+/// Read-back of the four region deltas from stored curve points
+/// (REVIEW-GUI-CURVE-1): kept separate so the roundtrip-loss detection can
+/// evaluate the exact same math without constructing an [`EditRecipe`].
+fn tone_curve_regions_from_points(points: &[CurvePoint]) -> (f64, f64, f64, f64) {
+    let base: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
     let mut out = (0.0f64, 0.0, 0.0, 0.0);
     let vals: [f64; 4] = std::array::from_fn(|i| {
         let bx = base[i];
@@ -5095,6 +5490,46 @@ fn build_tone_curve(shadows: f64, darks: f64, lights: f64, highlights: f64) -> C
         master,
         channels: CurveChannels::default(),
     }
+}
+
+/// REVIEW-GUI-CURVE-1: true when building the master curve from the four
+/// region deltas loses part of a delta because the clamped `[0,1]` output
+/// absorbs it — most visibly Shadows, whose base point is `0.0`, so any
+/// negative delta clamps to "no change" and the slider would snap back to 0.
+/// Storing raw deltas would be a recipe-schema change (`Curves` outputs are
+/// normatively `[0,1]`), so the GUI instead surfaces this limit explicitly in
+/// the UI instead of letting the slider move silently.
+///
+/// The comparison carries an epsilon because outputs are stored as `f32`:
+/// read-back noise (~1e-7) must not be reported as clamp loss; real losses
+/// are multiples of the slider step (≥1e-2).
+fn tone_curve_roundtrip_is_lossy(shadows: f64, darks: f64, lights: f64, highlights: f64) -> bool {
+    const EPSILON: f64 = 1e-3;
+    let curve = build_tone_curve(shadows, darks, lights, highlights);
+    let (rs, rd, rl, rh) = tone_curve_regions_from_points(&curve.master);
+    (rs - shadows).abs() > EPSILON
+        || (rd - darks).abs() > EPSILON
+        || (rl - lights).abs() > EPSILON
+        || (rh - highlights).abs() > EPSILON
+}
+
+/// Idle-debounce window (seconds) before the pending full-quality render is
+/// committed after the last edit (PERF-GUI-3/4).
+const FULL_RENDER_DEBOUNCE_SECONDS: f64 = 0.150;
+
+/// REVIEW-GUI-DEBOUNCE-1: pure decision helper for the debounced full render.
+///
+/// Returns `Some(remaining_seconds)` while the wait window is still open (the
+/// caller must schedule a repaint for exactly that long), and `None` when the
+/// debounce has elapsed or no drag time was recorded (`last_edit_time == 0.0`
+/// → immediate render). Kept pure so the stranding fix is unit-testable
+/// without an event loop.
+fn full_render_debounce_remaining(last_edit_time: f64, now: f64) -> Option<f64> {
+    if last_edit_time <= 0.0 {
+        return None;
+    }
+    let remaining = FULL_RENDER_DEBOUNCE_SECONDS - (now - last_edit_time);
+    (remaining > 0.0).then_some(remaining)
 }
 
 /// Mutable reference to one HSL mixer channel, creating the `Option` slot on
@@ -5131,6 +5566,9 @@ fn is_supported_image(path: &Path) -> bool {
 }
 
 /// Human-readable label for an [`ImageFileFormat`] used by the Export panel.
+/// Native-only (REVIEW-GUI-WASM-FOLLOWUP): the wasm Export module is a
+/// capability hint without a format picker.
+#[cfg(not(target_arch = "wasm32"))]
 fn format_label(format: ImageFileFormat) -> &'static str {
     match format {
         ImageFileFormat::Png => "PNG",
@@ -5479,19 +5917,31 @@ impl eframe::App for LuminaApp {
             // 150 ms debounce after the last edit before committing the full
             // render. `last_edit_time == 0` (no drag recorded) routes to an
             // immediate full render so non-drag edits are never stranded.
-            let elapsed = if self.last_edit_time > 0.0 {
-                now - self.last_edit_time
-            } else {
-                f64::MAX
-            };
-            if elapsed >= 0.150 {
-                trace!("GUI render: debounced full render after interaction");
-                let screen = ctx.input(|i| i.viewport_rect());
-                let viewport = [screen.width() as u32, screen.height() as u32];
-                if let Err(e) = self.render_full(viewport, None) {
-                    self.show_error(e);
+            //
+            // REVIEW-GUI-DEBOUNCE-1: while still inside the wait window
+            // (<150 ms) neither a render happens nor did anything schedule a
+            // repaint — egui would sleep indefinitely and the draft preview
+            // stayed until the next unrelated input. The waiting branch now
+            // requests a timed repaint exactly when the debounce elapses.
+            match full_render_debounce_remaining(self.last_edit_time, now) {
+                Some(remaining_seconds) => {
+                    trace!(
+                        "GUI render: debounce wait, repaint in {:.1} ms",
+                        remaining_seconds * 1000.0
+                    );
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                        remaining_seconds,
+                    ));
                 }
-                self.last_edit_time = 0.0;
+                None => {
+                    trace!("GUI render: debounced full render after interaction");
+                    let screen = ctx.input(|i| i.viewport_rect());
+                    let viewport = [screen.width() as u32, screen.height() as u32];
+                    if let Err(e) = self.render_full(viewport, None) {
+                        self.show_error(e);
+                    }
+                    self.last_edit_time = 0.0;
+                }
             }
         }
 
@@ -7681,6 +8131,536 @@ mod tests {
             app.thumbnails.failure(&key),
             Some("boom"),
             "exhausted retries must stay a visible error, never a silent fallback"
+        );
+    }
+
+    // ---- REVIEW-GUI-N4: IdleQueue FIFO tie-break ----
+
+    #[test]
+    fn idle_queue_pops_fifo_within_same_priority() {
+        let mut queue = IdleQueue::new(4);
+        queue
+            .enqueue(
+                IdleTask::MaskInference {
+                    mask_id: "first".into(),
+                },
+                5,
+            )
+            .unwrap();
+        queue
+            .enqueue(
+                IdleTask::MaskInference {
+                    mask_id: "second".into(),
+                },
+                5,
+            )
+            .unwrap();
+        queue
+            .enqueue(
+                IdleTask::MaskInference {
+                    mask_id: "high".into(),
+                },
+                9,
+            )
+            .unwrap();
+        // Higher priority first…
+        assert_eq!(
+            queue.pop_next().unwrap().1,
+            IdleTask::MaskInference {
+                mask_id: "high".into()
+            }
+        );
+        // …then the *earliest*-enqueued task of the equal-priority class
+        // (the old `max_by_key` implementation returned the last maximum →
+        // LIFO and popped "second" first).
+        assert_eq!(
+            queue.pop_next().unwrap().1,
+            IdleTask::MaskInference {
+                mask_id: "first".into()
+            }
+        );
+        assert_eq!(
+            queue.pop_next().unwrap().1,
+            IdleTask::MaskInference {
+                mask_id: "second".into()
+            }
+        );
+        assert!(queue.pop_next().is_none());
+    }
+
+    // ---- REVIEW-GUI-MASKGEO-1: geometry blocks source-coordinate tools ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn geometry_blocks_source_mapping_flags_each_dimension() {
+        let mut app = new_app();
+        assert!(!app.geometry_blocks_source_mapping(), "default is neutral");
+        app.recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 90.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        assert!(app.geometry_blocks_source_mapping(), "rotation blocks");
+        app.recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: true,
+            mirror_vertical: false,
+        });
+        assert!(app.geometry_blocks_source_mapping(), "mirror blocks");
+        app.recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: Some(Crop::Free {
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.5,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        assert!(app.geometry_blocks_source_mapping(), "crop blocks");
+        app.recipe.geometry = None;
+        app.recipe.perspective = Some(Perspective {
+            version: 1,
+            vertical: 0.4,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        });
+        assert!(app.geometry_blocks_source_mapping(), "perspective blocks");
+        app.recipe.perspective = Some(Perspective {
+            version: 1,
+            vertical: 0.0,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        });
+        assert!(
+            !app.geometry_blocks_source_mapping(),
+            "a neutral perspective is not blocking"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_mask_tool_refused_visibly_while_geometry_active() {
+        let mut app = new_app();
+        app.load_bytes(png(), "geo.png").unwrap();
+        app.recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: Some(Crop::Free {
+                x: 0.0,
+                y: 0.0,
+                width: 0.6,
+                height: 0.6,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        app.set_mask_tool(MaskTool::Brush);
+        assert_eq!(app.mask_tool, MaskTool::None, "arming must be refused");
+        assert!(
+            app.status().contains("unavailable"),
+            "refusal must be visible, got {:?}",
+            app.status()
+        );
+        // Without geometry arming works again.
+        app.recipe.geometry = None;
+        app.set_mask_tool(MaskTool::Brush);
+        assert_eq!(app.mask_tool, MaskTool::Brush);
+        // Disarming stays possible in every state.
+        app.set_mask_tool(MaskTool::None);
+        assert_eq!(app.mask_tool, MaskTool::None);
+    }
+
+    // ---- REVIEW-GUI-SAVEMSG-1 / REVIEW-GUI-N1: save status + CAS ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn failed_save_reports_error_and_never_claims_sidecar_saved() {
+        use lumina_sidecar::{load_sidecar, save_sidecar as raw_save, sidecar_path_for};
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.0);
+        app.save_sidecar();
+        assert!(app.error().is_none());
+        assert_eq!(app.status(), Str::SidecarSaved.t());
+
+        // External modification behind the GUI's back.
+        let sidecar = sidecar_path_for(&source);
+        let mut external = load_sidecar(&sidecar).unwrap();
+        external.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("contrast".into(), 0.9);
+        raw_save(&sidecar, &external).unwrap();
+
+        // Local unsaved edit + save → the CAS must refuse with a visible
+        // conflict instead of silently overwriting the external change.
+        app.set_adjustment("exposure", 2.0);
+        app.save_sidecar();
+        assert_eq!(
+            app.status(),
+            Str::Error.t(),
+            "conflicting save must surface as an error status"
+        );
+        assert!(app.error().is_some(), "conflict must be visible");
+        assert_ne!(
+            app.status(),
+            Str::SidecarSaved.t(),
+            "REVIEW-GUI-SAVEMSG-1: a failed save must never report success"
+        );
+
+        // The on-disk document is untouched by the refused write.
+        let after = load_sidecar(&sidecar).unwrap();
+        assert_eq!(
+            after.virtual_copies[0].recipe.adjustments.get("exposure"),
+            Some(&1.0)
+        );
+        assert_eq!(
+            after.virtual_copies[0].recipe.adjustments.get("contrast"),
+            Some(&0.9)
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn successful_save_keeps_loaded_source_identity_instead_of_recomputing_it() {
+        use lumina_sidecar::{load_sidecar, sidecar_path_for};
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        // First session writes an initial sidecar.
+        let mut first = new_app();
+        open_and_decode(&mut first, source.display().to_string());
+        first.save_sidecar();
+        assert!(first.error().is_none());
+
+        // Second session LOADS the sidecar; its identity must survive a
+        // subsequent save untouched (REVIEW-GUI-N1: no silent recompute /
+        // conflict laundering).
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let loaded_hash = app.document.as_ref().unwrap().source.content_hash.clone();
+        assert!(
+            loaded_hash.starts_with("blake3:"),
+            "precondition: a real loaded identity, got {loaded_hash}"
+        );
+        app.set_adjustment("exposure", 0.5);
+        app.save_sidecar();
+        assert!(app.error().is_none());
+        assert_eq!(app.status(), Str::SidecarSaved.t());
+        let stored = load_sidecar(&sidecar_path_for(&source)).unwrap();
+        assert_eq!(
+            stored.source.content_hash, loaded_hash,
+            "saving must not rewrite the loaded source identity"
+        );
+    }
+
+    // ---- REVIEW-GUI-VCSWITCH-1: copy switch resets state, surfaces errors ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn select_virtual_copy_resets_session_state_and_notes_discarded_edits() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("contrast", 0.3);
+        app.save_sidecar();
+        app.duplicate_virtual_copy("vc-2", "Copy 2").unwrap();
+        app.save_sidecar();
+
+        // Previous-copy session state that must not leak across the switch.
+        app.history_selected = Some("history-stale".into());
+        app.drag_start = Some(Point2 { x: 0.2, y: 0.2 });
+        app.drag_current = Some(Point2 { x: 0.4, y: 0.4 });
+        app.drawing = true;
+        // Unsaved edit relative to vc-original.
+        app.set_adjustment("exposure", 3.0);
+
+        app.select_virtual_copy("vc-2").unwrap();
+        assert_eq!(app.virtual_copy_id, "vc-2");
+        assert_eq!(app.history_selected, None, "history selection must reset");
+        assert_eq!(app.drag_start, None, "drag gesture state must reset");
+        assert!(!app.drawing, "in-progress drag flag must reset");
+        assert!(
+            app.status().contains("discarded"),
+            "discarding unsaved edits must be stated, got {:?}",
+            app.status()
+        );
+
+        // A clean switch (no unsaved edits) reports without the warning.
+        app.select_virtual_copy("vc-original").unwrap();
+        assert!(app.status().starts_with("Switched to copy"));
+        assert!(!app.status().contains("discarded"));
+
+        // Unknown ids fail visibly instead of being swallowed.
+        assert!(app.select_virtual_copy("nope").is_err());
+    }
+
+    // ---- REVIEW-GUI-CURVE-1: tone-curve clamp loss detection ----
+
+    #[test]
+    fn tone_curve_roundtrip_loss_is_detected() {
+        // Shadows base point is 0.0 — any negative delta is clamped away.
+        assert!(tone_curve_roundtrip_is_lossy(-0.5, 0.0, 0.0, 0.0));
+        // Darks base 1/3: -1.0 would overshoot below 0 → clamped → lossy.
+        assert!(tone_curve_roundtrip_is_lossy(0.0, -1.0, 0.0, 0.0));
+        // Lights base 2/3: +1.0 would exceed 1 → clamped → lossy.
+        assert!(tone_curve_roundtrip_is_lossy(0.0, 0.0, 1.0, 0.0));
+        // Typical representable adjustments are not lossy.
+        assert!(!tone_curve_roundtrip_is_lossy(0.25, -0.1, 0.1, -0.25));
+        assert!(!tone_curve_roundtrip_is_lossy(0.0, 0.0, 0.0, 0.0));
+    }
+
+    // ---- REVIEW-GUI-DEBOUNCE-1: debounce wait schedules its own repaint ----
+
+    #[test]
+    fn full_render_debounce_remaining_math() {
+        // No drag recorded → immediate render (None).
+        assert_eq!(full_render_debounce_remaining(0.0, 500.0), None);
+        // Debounce elapsed → due now.
+        assert_eq!(full_render_debounce_remaining(10.0, 10.2), None);
+        // Still inside the window → the remaining wait, so the caller can
+        // request a timed repaint instead of stranding the draft preview.
+        let remaining = full_render_debounce_remaining(10.0, 10.05).unwrap();
+        assert!((remaining - 0.100).abs() < 1e-9, "got {remaining}");
+        let boundary = full_render_debounce_remaining(10.0, 10.0 + 0.150).unwrap_or(0.0);
+        assert_eq!(boundary, 0.0, "at the boundary the render is due");
+    }
+
+    // ---- REVIEW-GUI-MASKRENDER-1: layer edits schedule a render ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mask_layer_edits_route_through_mark_dirty() {
+        let mut app = new_app();
+        app.load_bytes(png(), "layer.png").unwrap();
+        app.create_mask("Subject").unwrap();
+        app.render().unwrap();
+        assert!(app.render_key().is_some());
+
+        for edit in [
+            |app: &mut LuminaApp| app.set_mask_inverted(true),
+            |app: &mut LuminaApp| app.set_mask_feather(0.3),
+            |app: &mut LuminaApp| app.set_mask_blur(0.2),
+            |app: &mut LuminaApp| app.set_mask_density(0.8),
+        ] {
+            app.render().unwrap();
+            assert!(!app.pending_full_render);
+            edit(&mut app).unwrap();
+            assert!(
+                app.pending_full_render,
+                "layer edit must schedule the debounced render"
+            );
+            assert!(
+                app.render_key().is_none(),
+                "layer edit must invalidate the stale render key"
+            );
+        }
+    }
+
+    // ---- REVIEW-GUI-N2: recipe restore resolves copies by identity ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_decode_restores_recipe_by_copy_identity_not_position() {
+        use lumina_sidecar::{load_sidecar, save_sidecar as raw_save, sidecar_path_for};
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        app.save_sidecar();
+
+        // Add a second copy with a clearly different recipe, then REORDER the
+        // JSON array so the default copy is no longer at position 0 — the old
+        // positional restore picked up the wrong recipe here.
+        let sidecar = sidecar_path_for(&source);
+        let mut document = load_sidecar(&sidecar).unwrap();
+        document
+            .duplicate_virtual_copy("vc-original", "vc-2", "Copy 2")
+            .unwrap();
+        for copy in &mut document.virtual_copies {
+            if copy.id == "vc-2" {
+                copy.is_default = false;
+                copy.recipe.adjustments.insert("exposure".into(), -4.0);
+            } else if copy.id == "vc-original" {
+                copy.is_default = true;
+            }
+        }
+        document.virtual_copies.reverse();
+        raw_save(&sidecar, &document).unwrap();
+
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(
+            reopened.virtual_copy_id, "vc-original",
+            "the copy matching the session id must win over array position"
+        );
+        assert_eq!(
+            reopened.recipe().adjustments.get("exposure"),
+            Some(&1.5),
+            "the restored recipe must come from the identity-matched copy"
+        );
+    }
+
+    // ---- REVIEW-GUI-N3: file switch resets viewport/session state ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn loading_a_new_image_resets_viewport_and_session_state() {
+        let mut app = new_app();
+        app.load_bytes(png(), "a.png").unwrap();
+        app.preview_zoom = 8.0;
+        app.zoom_mode = ZoomMode::Custom;
+        app.preview_pan = egui::vec2(42.0, -17.0);
+        app.preview_roi = Some([0, 0, 1, 1]);
+        app.before_after = true;
+        app.wb_pick_mode = true;
+        app.history_selected = Some("history-stale".into());
+        app.drag_start = Some(Point2 { x: 0.1, y: 0.1 });
+        app.drawing = true;
+
+        app.load_bytes(png(), "b.png").unwrap();
+        assert_eq!(app.preview_zoom, 1.0, "zoom resets on file switch");
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert_eq!(app.preview_pan, egui::Vec2::ZERO);
+        assert_eq!(app.preview_roi, None);
+        assert!(!app.before_after, "Before/After must reset");
+        assert!(!app.wb_pick_mode, "WB eyedropper must disarm");
+        assert_eq!(app.history_selected, None);
+        assert_eq!(app.drag_start, None);
+        assert!(!app.drawing);
+    }
+
+    // ---- REVIEW-GUI-N5: draft preview is never silently measured ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn match_total_exposure_commits_draft_before_measuring() {
+        let mut app = new_app();
+        app.load_bytes(png(), "draft.png").unwrap();
+        app.render().unwrap();
+        app.set_adjustment("exposure", 0.5);
+        // Simulate the drag-draft state the hot path produces.
+        app.render_draft([800, 600], None).unwrap();
+        assert!(app.preview_is_draft(), "precondition: preview is a draft");
+
+        app.match_total_exposure(0.5).unwrap();
+        assert!(
+            !app.preview_is_draft(),
+            "matching must measure the committed full render, not the draft"
+        );
+        assert!(app.recipe().auto_features.matched_exposure.is_some());
+    }
+
+    // ---- REVIEW-GUI-N6: failed ROI crop clears preview_roi ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn failed_roi_crop_falls_back_to_full_frame_and_clears_preview_roi() {
+        let mut app = new_app();
+        app.load_bytes(png(), "roi.png").unwrap(); // 2×1 image
+
+        // A zero-sized crop request genuinely fails; the full frame is
+        // rendered, and the rejected ROI must NOT be recorded (it feeds the
+        // pointer→source mapping).
+        app.render_full([800, 600], Some([0, 0, 0, 9999])).unwrap();
+        assert_eq!(app.preview_roi, None);
+
+        // An oversized request is clamped by `crop_region`; the *effective*
+        // rect is recorded so the mapping stays truthful.
+        app.render_full([800, 600], Some([0, 0, 9999, 9999]))
+            .unwrap();
+        assert_eq!(app.preview_roi, Some([0, 0, 2, 1]));
+
+        // A valid sub-rect is recorded unchanged.
+        app.render_full([800, 600], Some([1, 0, 1, 1])).unwrap();
+        assert_eq!(app.preview_roi, Some([1, 0, 1, 1]));
+    }
+
+    // ---- KONSISTENZ (REVIEW-CLI-N1): composite zdata tile key ----
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_mask_planes_reads_composite_tile_key_and_legacy_fallback() {
+        use lumina_sidecar::{save_zdata, zdata_path_for, MaskTile, ZDataContainer};
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let id = app.create_mask("Subject").unwrap();
+        // The plane loader only picks Valid masks; a hand-drawn prompt mask is
+        // complete without a model, so mark it valid directly.
+        {
+            let document = app.document.as_mut().unwrap();
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|c| c.id == app.virtual_copy_id)
+                .unwrap();
+            let mask = copy.mask_library.iter_mut().find(|m| m.id == id).unwrap();
+            mask.status = MaskStatus::Valid;
+        }
+
+        let zdata_path = zdata_path_for(&source);
+        let tile = |mask_id: String| MaskTile {
+            mask_id,
+            tile_x: 0,
+            tile_y: 0,
+            width: 2,
+            height: 1,
+            values: vec![u16::MAX, 0],
+        };
+
+        // 1) Composite key `"{copy_id}/{mask_id}"` (shared with the CLI).
+        save_zdata(
+            &zdata_path,
+            &ZDataContainer::new(vec![tile(LuminaApp::zdata_tile_record_id(
+                "vc-original",
+                &id,
+            ))])
+            .unwrap(),
+        )
+        .unwrap();
+        let planes = app.load_mask_planes();
+        assert!(
+            planes.contains_key(&("vc-original".to_string(), id.clone())),
+            "composite-keyed tile must load under (copy_id, mask_id)"
+        );
+
+        // 2) Legacy containers carry the bare mask id; they stay readable via
+        // the documented, logged fallback.
+        save_zdata(
+            &zdata_path,
+            &ZDataContainer::new(vec![tile(id.clone())]).unwrap(),
+        )
+        .unwrap();
+        let planes = app.load_mask_planes();
+        assert!(
+            planes.contains_key(&("vc-original".to_string(), id)),
+            "legacy bare-mask-id tiles must remain readable"
         );
     }
 }

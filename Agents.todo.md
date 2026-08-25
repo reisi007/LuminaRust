@@ -118,38 +118,7 @@ stehenden Restbestand.
 
 
 
-- [ ] **[PRIO: mittel] REVIEW-GUI-MASKGEO-1** Masken-Pinsel/Verlauf/Radial (und
-  WB-Pipette) ignorieren Crop/Rotation/Mirror des Rezepts → Markierungen
-  landen transformiert-falsch (mittel; lib.rs:2589–2669). Fix: inverse
-  Geometrie in `to_normalized` einrechnen oder Werkzeuge bei aktiver
-  Geometrie deaktivieren. Re-Check 2026-08-25: `to_normalized` mappt nur
-  ROI→Volllösung, keine inverse Rezept-Geometrie.
-- [ ] **[PRIO: mittel] REVIEW-GUI-SAVEMSG-1** Nach fehlgeschlagenem `save_sidecar`
-  steht trotzdem „Sidecar saved" im Status (mittel; lib.rs:2222–2233).
-  Re-Check 2026-08-25: unverändert — `save_sidecar()` setzt am Funktions-
-  ende bedingungslos `Str::SidecarSaved`, auch nach dem Err-Zweig.
-- [ ] **[PRIO: mittel] REVIEW-GUI-VCSWITCH-1** Virtual-Copy-Wechsel verwirft ungespeicherte
-  Edits ohne Rückfrage; `history_selected`/Drag-State werden nicht
-  zurückgesetzt, Fehler wird verschluckt (mittel; lib.rs:909–925, 4240).
-  Re-Check 2026-08-25: `select_virtual_copy` überschreibt Rezept ohne
-  Rückfrage/Reset.
-- [ ] **[PRIO: mittel] REVIEW-GUI-CURVE-1** Tone-Curve-Roundtrip clamppt Shadows-
-  Slider auf 0 → Regler springt sichtbar zurück (−50 % → −33 %→0)
-  (mittel; lib.rs:2981–3003). Fix: Deltas speichern statt geclampte
-  Outputs, oder UI-Hinweis. Re-Check 2026-08-25: unverändert — Outputs
-  werden in `build_tone_curve` auf [0,1] geclampt (dokumentierte
-  MVP-Vereinfachung), Readback leitet Deltas aus geclampten Outputs ab.
-- [ ] **[PRIO: mittel] REVIEW-GUI-DEBOUNCE-1** Debounced Vollrender kann stranden:
-  im Wartefenster (< 150 ms) wird weder gerendert noch ein getaktetes
-  Repaint angefordert → Draft-Vorschau bleibt bis zur nächsten Eingabe
-  (mittel; lib.rs:4869–4889). Fix: `request_repaint_after` im
-  Warte-Zweig. Re-Check 2026-08-25: kein `request_repaint_after` in
-  lib.rs; Warte-Zweig plant kein Repaint.
-- [ ] **[PRIO: mittel] REVIEW-GUI-MASKRENDER-1** Masken-Layer-Edits (Invert/Feather/
-  Blur/Density) setzen nur `render_key = None`, planen aber kein
-  Render → Vorschau bleibt dauerhaft alt (mittel; lib.rs:1077–1092,
-  1193–1211). Fix: über `mark_dirty()` routen. Re-Check 2026-08-25:
-  Setter nutzen weiterhin nur `self.render_key = None`.
+
 - [ ] **[PRIO: mittel] REVIEW-RAW-FLIP-1** `sizes.flip` (dcraw-Bitmaske) wird 1:1 als
   EXIF-Orientation persistiert — falsche Codewelt (z. B. flip=5 ist
   EXIF 8, nicht 5); Portrait-Fixture persistiert nachweislich falsch
@@ -232,31 +201,7 @@ MVP-blockierend)**
   2026-08-25: unverändert (als v1-Umfang in sidecar lib.rs dokumentiert).
 
 
-- [ ] **[PRIO: niedrig] REVIEW-GUI-N1** Save berechnet Fingerprint neu und löscht
-  Konfliktstatus still; GUI nutzt CAS (`save_sidecar_if_unchanged`)
-  nicht (lib.rs:2208–2224). Re-Check 2026-08-25: GUI ruft Plain-
-  `save_sidecar`, überschreibt `document.source` neu.
-- [ ] **[PRIO: niedrig] REVIEW-GUI-N2** `finish_decode` stellt Rezept aus
-  `virtual_copies[0]` (positionell) wieder her, während
-  `virtual_copy_id` auf `"vc-original"` fixiert wird — verstoßt gegen
-  die ID-stabil-Regel bei umsortierten Sidecars (lib.rs:2128/2145,
-  1553). Fix: Copy per id/is_default suchen. Re-Check 2026-08-25:
-  unverändert (`virtual_copies[0].recipe.clone()`).
-- [ ] **[PRIO: niedrig] REVIEW-GUI-N3** Dateiwechsel resettet Zoom/Pan/BeforeAfter/
-  WB-Pipette/History-Auswahl nicht → Bild B öffnet im 8×-Crop von
-  Bild A (lib.rs:1536–1567). Re-Check 2026-08-25: `apply_decoded_frame`
-  setzt Zoom/Pan/before_after/history_selected nicht zurück.
-- [ ] **[PRIO: niedrig] REVIEW-GUI-N4** `IdleQueue::pop_next` ist LIFO statt
-  dokumentiertem FIFO bei gleichen Prioritäten (`max_by_key` wählt
-  letztes Maximum) (lib.rs:184–194). Re-Check 2026-08-25: unverändert.
-- [ ] **[PRIO: niedrig] REVIEW-GUI-N5** `preview_is_draft` ist write-only: Histogramm/
-  Exposure-Matching messen still Drafts; Flag konsumieren oder Feld
-  entfernen (lib.rs:350, 1559, 1691, 1729). Re-Check 2026-08-25:
-  weiterhin nur Writes.
-- [ ] **[PRIO: niedrig] REVIEW-GUI-N6** Fehlgeschlagener ROI-Crop fällt still auf
-  Vollbild zurück, `preview_roi` wird aber trotzdem gesetzt (latent;
-  lib.rs:1815–1822). Re-Check 2026-08-25: `crop_region(...).ok()`-
-  Fallback + bedingungsloses `self.preview_roi = roi`.
+
 - [ ] **[PRIO: niedrig] REVIEW-RAW-N1** Returncode von `libraw_adjust_sizes_info_only`
   geschluckt — Budget-Gate könnte auf veralteten Maßen basieren
   (lumina-raw/src/lib.rs:335). Re-Check 2026-08-25: `let _ = unsafe {...}`.
@@ -269,9 +214,7 @@ MVP-blockierend)**
 - [ ] **[PRIO: niedrig] F-082-FOLLOWUP-HASH** ORT-Mismatch-Refuse-Zweig
   (`ModelArtifactStale`) ohne ausführbaren Test (benötigt ladbares
   `.onnx` mit abweichendem Pin); hash-gepinnte ONNX-Fixture erfassen.
-- [ ] **[PRIO: niedrig] REVIEW-GUI-STATUS-FOLLOWUP** `lumina-gui/src/lib.rs`
-  prüft Artefaktstatus nur auf `== Missing`; auf `!= Available` umstellen,
-  damit `Corrupt` (REVIEW-SIDECAR-STATUS-1) korrekt behandelt wird.
+
 - [ ] **[PRIO: niedrig] REVIEW-CORE-DIGEST-WIRING** RenderKey-Digest-Fixes
   (ExportOptions/SourceAction-Hashes) in CLI/GUI/MCP beim Bau der
   RenderKeys via `with_export_options`/`with_source_action_hashes`
@@ -288,10 +231,7 @@ MVP-blockierend)**
 - [ ] **[PRIO: niedrig] REVIEW-SIDECAR-FOLLOWUP-2** `artifact_status` validiert
   Reference width/height nicht gegen Bundle-Records (dokumentierte Lücke).
 
-- [ ] **[PRIO: niedrig] REVIEW-GUI-WASM-FOLLOWUP** wasm32-Check der GUI erzeugt ~20
-  Warnungen (u. a. dead_code `prefetch_order`) — ohne `-D warnings`;
-  sauber cfg-gaten (Folgabe aus REVIEW-GUI-WASM-1; betrifft auch die
-  benigne `load_mask_planes`-Notiz aus F-072).
+
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
 
