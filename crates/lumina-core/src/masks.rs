@@ -3,6 +3,7 @@
 use lumina_sidecar::{
     BrushMarkSign, MaskDefinition, MaskOperation, MaskPrompt, MaskReference, VirtualCopy,
 };
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -44,6 +45,8 @@ pub enum MaskError {
     },
     #[error("mask rasterization of {required} pixels exceeds the memory budget limit {limit}")]
     MemoryBudgetExceeded { required: u64, limit: u64 },
+    #[error("mask layer density must be finite and in 0..=1, got {value}")]
+    InvalidDensity { value: String },
 }
 
 impl MaskPlane {
@@ -67,6 +70,11 @@ impl MaskPlane {
 pub struct MaskGraph<'a> {
     definitions: BTreeMap<(String, String), &'a MaskDefinition>,
     sources: BTreeMap<(String, String), MaskPlane>,
+    /// REVIEW-MASK-N1: number of node bodies actually executed by the most
+    /// recent [`MaskGraph::evaluate`] call. Shared subtrees execute once and
+    /// are served from the per-call memo; this counter makes that observable
+    /// (tests, diagnostics) without changing evaluation semantics.
+    evaluated_node_count: Cell<usize>,
 }
 
 impl<'a> MaskGraph<'a> {
@@ -82,21 +90,47 @@ impl<'a> MaskGraph<'a> {
         Self {
             definitions,
             sources,
+            evaluated_node_count: Cell::new(0),
         }
     }
 
+    /// Diagnostics for [`REVIEW-MASK-N1`]: how many node bodies the last
+    /// [`Self::evaluate`] call actually computed. With a DAG of shared
+    /// subtrees this stays at the number of *distinct* nodes instead of
+    /// growing exponentially with the number of sharing paths.
+    pub fn last_evaluated_node_count(&self) -> usize {
+        self.evaluated_node_count.get()
+    }
+
     pub fn evaluate(&self, root: &MaskReference) -> Result<MaskPlane, MaskError> {
-        self.evaluate_node(
+        // REVIEW-MASK-N1: memoize successful subtree results **per evaluate
+        // call**. A plane is a pure function of its `(copy_id, mask_id)`
+        // definition and the loaded sources, so caching `Ok` results inside
+        // one traversal is sound (a memo hit can never be on the current
+        // cycle-detection stack: only completed nodes are cached). Scoping
+        // the memo to a single `evaluate` invocation keeps every call fully
+        // deterministic and independent of prior calls.
+        self.evaluated_node_count.set(0);
+        let mut memo = BTreeMap::new();
+        let plane = self.evaluate_node(
             &(root.copy_id.clone(), root.mask_id.clone()),
             &mut Vec::new(),
-        )
+            &mut memo,
+        )?;
+        Ok(plane)
     }
 
     fn evaluate_node(
         &self,
         key: &(String, String),
         stack: &mut Vec<(String, String)>,
+        memo: &mut BTreeMap<(String, String), MaskPlane>,
     ) -> Result<MaskPlane, MaskError> {
+        if let Some(plane) = memo.get(key) {
+            return Ok(plane.clone());
+        }
+        self.evaluated_node_count
+            .set(self.evaluated_node_count.get() + 1);
         let definition = self
             .definitions
             .get(key)
@@ -151,7 +185,8 @@ impl<'a> MaskGraph<'a> {
                             actual: count,
                         });
                     }
-                    let mut plane = self.evaluate_reference(&definition.references[0], stack)?;
+                    let mut plane =
+                        self.evaluate_reference(&definition.references[0], stack, memo)?;
                     plane
                         .values
                         .iter_mut()
@@ -169,9 +204,10 @@ impl<'a> MaskGraph<'a> {
                             actual: count,
                         });
                     }
-                    let mut result = self.evaluate_reference(&definition.references[0], stack)?;
+                    let mut result =
+                        self.evaluate_reference(&definition.references[0], stack, memo)?;
                     for reference in &definition.references[1..] {
-                        let other = self.evaluate_reference(reference, stack)?;
+                        let other = self.evaluate_reference(reference, stack, memo)?;
                         ensure_dimensions(&result, &other)?;
                         match operation {
                             MaskOperation::Union => result
@@ -199,17 +235,25 @@ impl<'a> MaskGraph<'a> {
             }
         })();
         stack.pop();
-        result
+        match result {
+            Ok(plane) => {
+                memo.insert(key.clone(), plane.clone());
+                Ok(plane)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn evaluate_reference(
         &self,
         reference: &MaskReference,
         stack: &mut Vec<(String, String)>,
+        memo: &mut BTreeMap<(String, String), MaskPlane>,
     ) -> Result<MaskPlane, MaskError> {
         self.evaluate_node(
             &(reference.copy_id.clone(), reference.mask_id.clone()),
             stack,
+            memo,
         )
     }
 }
@@ -240,6 +284,16 @@ pub fn rasterize_prompt(
     width: u32,
     height: u32,
 ) -> Result<MaskPlane, MaskError> {
+    // REVIEW-MASK-ZERO-1: a zero-dimension target would panic downstream
+    // (`chunks_exact_mut(0)` in the per-prompt rasterizers) and can never
+    // yield a meaningful matte. Reject it explicitly instead.
+    if width == 0 || height == 0 {
+        return Err(MaskError::InvalidPlane {
+            width,
+            height,
+            length: 0,
+        });
+    }
     let w = width as usize;
     let h = height as usize;
     let budget = crate::memory::MemoryBudget::from_env();
@@ -876,5 +930,133 @@ mod tests {
         let plane = graph.evaluate(&reference("ellipse-source")).unwrap();
         // Full-image ellipse -> all max.
         assert_eq!(plane.values, vec![u16::MAX, u16::MAX]);
+    }
+
+    // =====================================================================
+    // REVIEW-MASK-ZERO-1: zero-dimension targets must be MaskErrors.
+    // =====================================================================
+
+    #[test]
+    fn rasterize_prompt_rejects_zero_dimensions_with_mask_error() {
+        let prompt = MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            transformation: PromptTransform::default(),
+        };
+        for (width, height) in [(0u32, 5u32), (5, 0), (0, 0)] {
+            assert_eq!(
+                rasterize_prompt(&prompt, width, height),
+                Err(MaskError::InvalidPlane {
+                    width,
+                    height,
+                    length: 0
+                }),
+                "width={width} height={height}"
+            );
+        }
+        // The guard runs before the per-prompt match: every prompt kind is
+        // covered by the same rejection.
+        let ellipse = MaskPrompt::Brush {
+            marks: vec![],
+            resolution: (4, 4),
+            transformation: PromptTransform::default(),
+        };
+        assert!(matches!(
+            rasterize_prompt(&ellipse, 0, 4),
+            Err(MaskError::InvalidPlane { .. })
+        ));
+    }
+
+    #[test]
+    fn graph_evaluates_zero_dimension_prompt_source_as_error_not_panic() {
+        let mut def = definition("zero-source", MaskOperation::Source, vec![]);
+        def.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            transformation: PromptTransform::default(),
+        });
+        def.geometry_context.width = 0;
+        def.geometry_context.height = 0;
+        let graph = graph(vec![def], &[]);
+        assert!(matches!(
+            graph.evaluate(&reference("zero-source")),
+            Err(MaskError::InvalidPlane { .. })
+        ));
+    }
+
+    // =====================================================================
+    // REVIEW-MASK-N1: per-call memoization of shared subtrees.
+    // =====================================================================
+
+    #[test]
+    fn memoized_dag_executes_each_shared_subtree_once() {
+        // Diamond with a doubly-shared leaf:
+        //   d = union(a, b); a = invert(s); b = invert(s)
+        // Without memoization the leaf `s` executes twice (once under `a`,
+        // once under `b`); with memoization every node body runs exactly
+        // once and the result is unchanged.
+        let refs = |ids: &[&str]| ids.iter().map(|id| reference(id)).collect();
+        let graph = graph(
+            vec![
+                definition("s", MaskOperation::Source, vec![]),
+                definition("a", MaskOperation::Invert, refs(&["s"])),
+                definition("b", MaskOperation::Invert, refs(&["s"])),
+                definition("d", MaskOperation::Union, refs(&["a", "b"])),
+            ],
+            &[("s", vec![100, 65_000])],
+        );
+        let plane = graph.evaluate(&reference("d")).unwrap();
+        assert_eq!(
+            plane.values,
+            vec![u16::MAX - 100, u16::MAX - 65_000],
+            "union of two identical inversions must equal one inversion"
+        );
+        assert_eq!(
+            graph.last_evaluated_node_count(),
+            4,
+            "distinct nodes s/a/b/d must each execute exactly once"
+        );
+        // A second evaluation on the same graph is independent (per-call
+        // memo) and executes the same number of node bodies again.
+        let again = graph.evaluate(&reference("d")).unwrap();
+        assert_eq!(again.values, plane.values);
+        assert_eq!(graph.last_evaluated_node_count(), 4);
+    }
+
+    #[test]
+    fn deep_sharing_stays_linear_under_memoization() {
+        // A chain where every level references the SAME base mask twice:
+        //   m0 = source; m{k} = union(m{k-1}, m{k-1})
+        // Without memoization this is exponential in k; with memoization the
+        // executed-node count is exactly k + 1 (m0..mk).
+        let levels = 12;
+        let mut definitions = vec![definition("m0", MaskOperation::Source, vec![])];
+        for k in 1..=levels {
+            definitions.push(definition(
+                &format!("m{k}"),
+                MaskOperation::Union,
+                vec![
+                    reference(&format!("m{}", k - 1)),
+                    reference(&format!("m{}", k - 1)),
+                ],
+            ));
+        }
+        let payloads = [("m0", vec![1u16, 65_000])];
+        let graph = graph(definitions, &payloads);
+        let plane = graph.evaluate(&reference(&format!("m{levels}"))).unwrap();
+        assert_eq!(plane.values, payloads[0].1);
+        assert_eq!(
+            graph.last_evaluated_node_count(),
+            levels as usize + 1,
+            "memoization must keep the doubly-referencing chain linear"
+        );
     }
 }

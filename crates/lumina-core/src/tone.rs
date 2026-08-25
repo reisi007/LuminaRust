@@ -39,9 +39,17 @@ impl AutoToneConfig {
                 "target_luminance must be finite and in 0..=1".into(),
             ));
         }
-        if !self.epsilon.is_finite() || self.epsilon <= 0.0 || self.epsilon > 1.0 {
+        // REVIEW-CORE-N3: epsilon also drives the black/white branch
+        // thresholds (`median <= epsilon` → +max EV, `median >= 1 - epsilon`
+        // → -min EV). The two branches overlap for epsilon > 0.5 — an
+        // epsilon near 1.0 would push EVERY image into the "+10 EV" black
+        // fallback. Restrict epsilon to (0, 0.5) so the branches stay
+        // disjoint and the threshold semantics remain meaningful.
+        if !self.epsilon.is_finite() || self.epsilon <= 0.0 || self.epsilon >= 0.5 {
             return Err(CoreError::InvalidAutoToneConfig(
-                "epsilon must be finite, greater than zero, and at most one".into(),
+                "epsilon must be finite, greater than zero, and less than 0.5 \
+                 (the black/white branches must not overlap)"
+                    .into(),
             ));
         }
         for (name, (minimum, maximum)) in [
@@ -384,6 +392,17 @@ mod tests {
                 epsilon: 0.0,
                 ..Default::default()
             },
+            // REVIEW-CORE-N3: epsilon ≥ 0.5 would let the black/white
+            // branches overlap (epsilon near 1.0 sends every image to the
+            // "+10 EV" black fallback), so the upper bound is exclusive.
+            AutoToneConfig {
+                epsilon: 0.5,
+                ..Default::default()
+            },
+            AutoToneConfig {
+                epsilon: 1.0,
+                ..Default::default()
+            },
             AutoToneConfig {
                 target_luminance: -0.1,
                 ..Default::default()
@@ -402,6 +421,25 @@ mod tests {
             },
         ] {
             assert!(config.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn epsilon_below_one_half_is_valid_and_branches_stay_disjoint() {
+        // REVIEW-CORE-N3: the largest legal epsilon keeps the black/white
+        // fallback thresholds (`<= eps`, `>= 1 - eps`) strictly disjoint.
+        let config = AutoToneConfig {
+            epsilon: 0.499,
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        // Every uniform frame stays on a well-defined branch and yields the
+        // documented zero-contrast identity (span = 0 ≤ epsilon).
+        for value in [0u8, 1, 64, 127, 128, 200, 254, 255] {
+            let frame = ImageFrame::new(1, 1, vec![value, value, value, 255]).unwrap();
+            let result = suggest_auto_tone(&frame, config).unwrap();
+            assert_eq!(result.contrast, 0.0);
+            assert!((-10.0..=10.0).contains(&result.exposure));
         }
     }
 

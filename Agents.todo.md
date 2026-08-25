@@ -114,40 +114,7 @@ stehenden Restbestand.
 **Review-Befunde Full-Repo-Review (2026-08-23) — Mittel**
 
 
-- [ ] **[PRIO: mittel] REVIEW-CORE-CROP-1** `crop_rect`: u32-Underflow/Empty-Crop durch
-  1e-6-Toleranz (mittel; lib.rs:1227–1246). Fix: x/y ≤ 1 explizit,
-  saturating_sub, pw/ph == 0 als Fehler. Re-Check 2026-08-25: Validierung
-  ergänzt (finite/w>0/h>0/x,y≥0/x+w≤1+1e-6), aber weiterhin KEIN explizites
-  x≤1, kein saturating_sub (`min(width - px)` kann bei px>width unterlaufen)
-  und pw/ph==0 ist kein Fehler → Restrisiko im Toleranzfenster bleibt.
-- [ ] **[PRIO: mittel] REVIEW-CORE-EXPORTKEY-1** ExportOptions (quality/dither/seed/
-  bit_depth) fehlen in OutputSpec/RenderKey-Identität (mittel;
-  pipeline.rs:88–107) → Cache-Hits liefern falsche Qualität. Fix:
-  volle ExportOptions in den Digest. Re-Check 2026-08-25: OutputSpec =
-  {profile,width,height,format}; ExportOptions weiterhin nicht im Digest.
-- [ ] **[PRIO: mittel] REVIEW-CORE-SRCACC-1** `source_actions` in keinem Cache-Digest
-  (mittel; cache.rs:162–210) → geänderte Repair-Artefakte servieren
-  alte Pixels. Fix: Artifact-Checksummen in RenderKey. Re-Check
-  2026-08-25: unverändert.
-- [ ] **[PRIO: mittel] REVIEW-CORE-DECODE-1** `ImageFrame::decode` unbegrenzte
-  Allokation, kein MemoryBudget (mittel; lib.rs:255–260). Fix:
-  Dimensionen vorab prüfen + `check_decode`. Re-Check 2026-08-25:
-  unverändert.
-- [ ] **[PRIO: mittel] REVIEW-MASK-STRICT-1** MaskPolicy::Strict wird nirgends
-  verwendet (CLI setzt immer Warn) (mittel). Fix: Strict-Pfad ehrlich
-  verdrahten oder Policy entfernen. Re-Check 2026-08-25: CLI/GUI/MCP
-  konstruieren ausschließlich `MaskPolicy::Warn`.
-- [ ] **[PRIO: mittel] REVIEW-MASK-ZERO-1** `rasterize_prompt` panickt bei Breite 0
-  (`chunks_exact_mut(0)`) statt `MaskError` (mittel; masks.rs:269 ff.);
-  Sidecar-Validierung prüft width/height ≠ 0 nicht. Fix: Guard +
-  Validierung. Re-Check 2026-08-25: Ellipse/Polygon/Gradient-Zweige
-  nutzen weiterhin `chunks_exact_mut(w)`; `check_mask(0,0)` passt und
-  `MaskPlane::new` erlaubt 0×0.
-- [ ] **[PRIO: mittel] REVIEW-MASK-BLUR-1** Feathering/Blur O(w·h·radius) — bei
-  feather ≈ 1.0 Minuten pro Render/Export (mittel;
-  mask_modulation.rs:61–96). Fix: Sliding-Window-Box-Blur O(w·h),
-  byte-identisch. Re-Check 2026-08-25: separabler Box-Blur, aber innere
-  Schleife summiert pro Pixel über den Radius → weiterhin O(w·h·radius).
+
 
 - [ ] **[PRIO: mittel] REVIEW-CLI-MASKFLAG-1** `update_masks`/`force_render` bleiben
   ewig im Rezept → permanente Re-Inferenz trotz gültiger Maske
@@ -280,22 +247,7 @@ implementiert und aus dieser Liste entfernt; offen:
 MVP-blockierend)**
 
 
-- [ ] **[PRIO: niedrig] REVIEW-CORE-N1** Histogram-Stufen-Digest ohne OutputSpec
-  (pipeline.rs:160; latent, bis Vorschau-Histogramme gecacht werden).
-  Re-Check 2026-08-25: Digest nimmt `output` nur unter Scope „render".
-- [ ] **[PRIO: niedrig] REVIEW-CORE-N2** `cdf_at(NaN)` gibt NaN zurück statt Fehler
-  (histogram.rs:155). Re-Check 2026-08-25: `clamp` propagiert NaN.
-- [ ] **[PRIO: niedrig] REVIEW-CORE-N3** `AutoToneConfig.epsilon` bis 1.0 zulässig →
-  +10 EV auf fast jedem Bild; Zweige überlappen > 0.5 (tone.rs:36).
-  Re-Check 2026-08-25: validate erlaubt explizit „at most one".
-- [ ] **[PRIO: niedrig] REVIEW-MASK-N1** MaskGraph ohne Memoization → handcrafted DAGs
-  exponentiell (masks.rs:95–203). Re-Check 2026-08-25: unverändert.
-- [ ] **[PRIO: niedrig] REVIEW-MASK-N2** Density < 0 löscht Maske still, > 1 wirkungslos
-  (mask_modulation.rs:40). Re-Check 2026-08-25: Kern-Seite unvalidiert
-  (die GUI validiert 0..=1 lokal, Sidecar/Kern nicht).
-- [ ] **[PRIO: niedrig] REVIEW-MASK-N3** `model_identity_matches(None) => true` segnet
-  fremdmodellierte Artefakte als valide ab (mask_loader.rs:330).
-  Re-Check 2026-08-25: unverändert.
+- [ ] **[PRIO: niedrig] REVIEW-CORE-WASM-FOLLOWUP** `cargo check -p lumina-core --target wasm32-unknown-unknown --all-targets` scheitert an Dev-Dependencies (wait-timeout/getrandom), identisch an HEAD — der dokumentierte lib-only-Capability-Gate ist grün; Dev-Deps für wasm32 cfg-gaten oder `--all-targets` offiziell als native-only dokumentieren.
 - [ ] **[PRIO: niedrig] REVIEW-CLI-N1** CLI lädt zdata-Tiles nur per `mask.id` statt
   `(copy_id, mask_id)` → Kopien mit gleichen Masken-IDs teilen Matte
   (main.rs:1186). Re-Check 2026-08-25: Speicher-Key weiterhin

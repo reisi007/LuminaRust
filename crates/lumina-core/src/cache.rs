@@ -378,6 +378,71 @@ mod tests {
         assert_eq!(cache.get(CacheStage::Mask, &changed), None);
         assert_eq!(cache.get(CacheStage::Preview, &changed), None);
     }
+
+    // REVIEW-CORE-SRCACC-1: a changed repair artifact must not serve stale
+    // pixels from any downstream stage.
+    #[test]
+    fn source_action_artifact_change_misses_preview_but_reuses_decode() {
+        let mut cache = CacheStore::new(100);
+        let stop = Cancellation::default();
+        let first = key().with_source_action_hashes(["blake3:old-artifact".to_owned()]);
+        cache
+            .put(CacheStage::Decode, &first, vec![1], &stop)
+            .unwrap();
+        cache
+            .put(CacheStage::Preview, &first, vec![2], &stop)
+            .unwrap();
+        let changed = first.with_source_action_hashes(["blake3:new-artifact".to_owned()]);
+        assert_eq!(cache.get(CacheStage::Decode, &changed), Some(vec![1]));
+        assert_eq!(cache.get(CacheStage::Preview, &changed), None);
+    }
+
+    // REVIEW-CORE-EXPORTKEY-1: two encodes that differ only in quality (or
+    // dither/seed/bit depth) must not share a preview/export entry.
+    #[test]
+    fn export_option_change_misses_preview() {
+        let mut cache = CacheStore::new(100);
+        let stop = Cancellation::default();
+        let first = key().with_export_options(crate::ExportOptions {
+            quality: 90,
+            ..crate::ExportOptions::default()
+        });
+        cache
+            .put(CacheStage::Preview, &first, vec![1], &stop)
+            .unwrap();
+        let changed = first.clone().with_export_options(crate::ExportOptions {
+            quality: 60,
+            ..crate::ExportOptions::default()
+        });
+        assert_eq!(cache.get(CacheStage::Preview, &changed), None);
+        assert_eq!(
+            cache.get(CacheStage::Preview, &first),
+            Some(vec![1]),
+            "the original entry stays reachable"
+        );
+    }
+
+    // REVIEW-CORE-N1: histograms are measured post-crop, so a size change is
+    // a histogram cache miss.
+    #[test]
+    fn output_size_change_misses_histogram_but_reuses_decode() {
+        let mut cache = CacheStore::new(200);
+        let stop = Cancellation::default();
+        let mut first = key();
+        first.output.width = 32;
+        first.output.height = 32;
+        cache
+            .put(CacheStage::Decode, &first, vec![1], &stop)
+            .unwrap();
+        cache
+            .put(CacheStage::Histogram, &first, vec![2], &stop)
+            .unwrap();
+        let mut resized = first.clone();
+        resized.output.width = 64;
+        resized.output.height = 64;
+        assert_eq!(cache.get(CacheStage::Decode, &resized), Some(vec![1]));
+        assert_eq!(cache.get(CacheStage::Histogram, &resized), None);
+    }
     #[test]
     fn newer_job_makes_older_result_stale() {
         let tracker = StaleTracker::default();

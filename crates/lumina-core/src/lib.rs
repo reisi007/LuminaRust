@@ -242,8 +242,13 @@ where
 
 impl ImageFrame {
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, CoreError> {
-        let expected = width as usize * height as usize * 4;
-        if pixels.len() != expected {
+        // Checked so a pathological dimension pair can neither overflow the
+        // multiplication nor wrap into a false match (REVIEW-CORE-DECODE-1,
+        // defense in depth alongside the decode-budget guard).
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|value| value.checked_mul(4));
+        if expected != Some(pixels.len()) {
             return Err(CoreError::InvalidFrame {
                 width,
                 height,
@@ -257,7 +262,28 @@ impl ImageFrame {
         })
     }
 
+    /// Decodes an encoded raster image (PNG/JPEG/WebP) into an RGBA8 frame.
+    ///
+    /// REVIEW-CORE-DECODE-1: the image geometry is read from the container
+    /// header **before** any pixel buffer is allocated and checked against the
+    /// configured [`MemoryBudget`] (`check_decode` with RGBA8 geometry, i.e.
+    /// four bytes per pixel). An oversized (or corrupt) input therefore fails
+    /// fast with [`CoreError::Decode`] instead of triggering an unbounded
+    /// allocation inside the decoder. The budget honours the `LUMINA_MAX_*`
+    /// environment overrides like every other F-075 check point.
     pub fn decode(bytes: &[u8]) -> Result<Self, CoreError> {
+        let (header_width, header_height) = image::ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|error| CoreError::Decode(error.to_string()))?
+            .into_dimensions()
+            .map_err(|error| CoreError::Decode(error.to_string()))?;
+        MemoryBudget::from_env()
+            .check_decode(u64::from(header_width), u64::from(header_height), 4, 1)
+            .map_err(|error| {
+                CoreError::Decode(format!(
+                    "image {header_width}x{header_height} exceeds the decode memory budget: {error}"
+                ))
+            })?;
         let image =
             image::load_from_memory(bytes).map_err(|error| CoreError::Decode(error.to_string()))?;
         let rgba = image.to_rgba8();
@@ -1325,6 +1351,13 @@ fn crop_rect(
         || h <= 0.0
         || x < 0.0
         || y < 0.0
+        // REVIEW-CORE-CROP-1: normalized coordinates are bounded by 1 on BOTH
+        // ends. Without the explicit upper bound the 1e-6 tolerance window of
+        // the rectangle sum allowed `x` slightly above 1, whose rounded pixel
+        // origin could land past the frame edge and underflow the
+        // `width - px` extent below.
+        || x > 1.0
+        || y > 1.0
         || x + w > 1.0 + 1e-6
         || y + h > 1.0 + 1e-6
     {
@@ -1335,10 +1368,36 @@ fn crop_rect(
             maximum: 1.0,
         });
     }
-    let px = (x * width as f64).round() as u32;
-    let py = (y * height as f64).round() as u32;
+    // Rounding can move the origin onto (or past) the frame edge even for a
+    // legal `0..=1` rectangle (for example x == 1.0 with width rounding to
+    // exactly `width`). Clamp the origin into range — keeping at least one
+    // pixel for non-degenerate frames — and derive the extent with saturating
+    // arithmetic so no u32 underflow can produce a bogus crop rect
+    // (REVIEW-CORE-CROP-1).
+    if width == 0 || height == 0 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "geometry.crop (empty frame)".into(),
+            value: -1.0,
+            minimum: 0.0,
+            maximum: 1.0,
+        });
+    }
+    let px = (((x * width as f64).round() as i64).clamp(0, i64::from(width) - 1)) as u32;
+    let py = (((y * height as f64).round() as i64).clamp(0, i64::from(height) - 1)) as u32;
     let pw = ((w * width as f64).round() as u32).max(1).min(width - px);
     let ph = ((h * height as f64).round() as u32).max(1).min(height - py);
+    // REVIEW-CORE-CROP-1: an empty extent is a hard error, never a zero-size
+    // frame that would flow through the rest of the pipeline. With both
+    // clamps above this only triggers on degenerate inputs; it stays as an
+    // explicit guard instead of an implicit invariant.
+    if pw == 0 || ph == 0 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "geometry.crop (empty crop rectangle)".into(),
+            value: -1.0,
+            minimum: 0.0,
+            maximum: 1.0,
+        });
+    }
     Ok((px, py, pw, ph))
 }
 
@@ -2389,6 +2448,177 @@ mod tests {
             let decoded = ImageFrame::decode(&frame.encode(format).unwrap()).unwrap();
             assert_eq!((decoded.width, decoded.height), (2, 1));
             assert_eq!(decoded.pixels.len(), 8);
+        }
+    }
+
+    // ---- REVIEW-CORE-DECODE-1: decode memory-budget guard ----
+
+    /// Minimal table-less IEEE CRC32 (poly `0xEDB88320`) over `bytes`.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    /// Builds a syntactically complete-but-empty PNG (signature + IHDR + an
+    /// empty IDAT + IEND) claiming `width × height`. The decoder can resolve
+    /// the geometry from the header, but there are no pixel data to decode:
+    /// the budget check must reject the image before any allocation happens.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&13u32.to_be_bytes());
+        ihdr.extend_from_slice(b"IHDR");
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(8); // bit depth
+        ihdr.push(6); // color type RGBA
+        ihdr.push(0); // compression
+        ihdr.push(0); // filter
+        ihdr.push(0); // interlace
+        ihdr.extend_from_slice(&crc32(&ihdr[4..]).to_be_bytes());
+        bytes.extend_from_slice(&ihdr);
+        // Empty IDAT: `read_info` scans up to the image data without
+        // decoding any of it.
+        let mut idat = Vec::new();
+        idat.extend_from_slice(&0u32.to_be_bytes());
+        idat.extend_from_slice(b"IDAT");
+        idat.extend_from_slice(&crc32(b"IDAT").to_be_bytes());
+        bytes.extend_from_slice(&idat);
+        let mut iend = Vec::new();
+        iend.extend_from_slice(&0u32.to_be_bytes());
+        iend.extend_from_slice(b"IEND");
+        iend.extend_from_slice(&crc32(b"IEND").to_be_bytes());
+        bytes.extend_from_slice(&iend);
+        bytes
+    }
+
+    #[test]
+    fn decode_rejects_oversized_headers_before_allocating() {
+        // 20000x20000 = 400 MP exceeds the default 200 MP raw-pixel budget.
+        // The header check must reject the image BEFORE the decoder allocates
+        // any pixel buffer (the file carries no pixel data at all).
+        let bytes = png_header(20_000, 20_000);
+        match ImageFrame::decode(&bytes) {
+            Err(CoreError::Decode(message)) => {
+                assert!(
+                    message.contains("memory budget"),
+                    "unexpected message: {message}"
+                );
+                assert!(message.contains("20000x20000"));
+            }
+            other => panic!("expected CoreError::Decode with budget message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_accepts_normal_sized_images_after_budget_check() {
+        let frame = ImageFrame::new(3, 2, vec![7; 24]).unwrap();
+        let encoded = frame.encode(ImageFileFormat::Png).unwrap();
+        assert_eq!(ImageFrame::decode(&encoded).unwrap(), frame);
+    }
+
+    // ---- REVIEW-CORE-CROP-1: crop rect hardening ----
+
+    #[test]
+    fn crop_rect_identity_full_frame_and_half_crop_are_stable() {
+        assert_eq!(crop_rect(64, 48, None).unwrap(), (0, 0, 64, 48));
+        let full = lumina_sidecar::Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        assert_eq!(crop_rect(64, 48, Some(&full)).unwrap(), (0, 0, 64, 48));
+        let half = lumina_sidecar::Crop::Free {
+            x: 0.25,
+            y: 0.5,
+            width: 0.5,
+            height: 0.5,
+        };
+        assert_eq!(crop_rect(64, 48, Some(&half)).unwrap(), (16, 24, 32, 24));
+    }
+
+    #[test]
+    fn crop_rect_edge_origins_clamp_into_the_frame_without_underflow() {
+        // x/y == 1.0 previously rounded px/py onto (or past) the frame edge:
+        // `width - px` underflowed or produced a zero-size crop that flowed
+        // through the pipeline as an empty frame. The hardened arithmetic
+        // clamps the origin to the last pixel and keeps a non-empty extent.
+        for (x, y) in [(1.0f32, 0.5f32), (0.5f32, 1.0f32), (1.0f32, 1.0f32)] {
+            let crop = lumina_sidecar::Crop::Free {
+                x,
+                y,
+                // Tiny extents so the rectangle sums stay inside the
+                // documented 1e-6 tolerance — this is exactly the input
+                // class that previously underflowed the extent arithmetic.
+                width: 1e-7,
+                height: 1e-7,
+            };
+            let (px, py, pw, ph) = crop_rect(64, 48, Some(&crop))
+                .unwrap_or_else(|error| panic!("crop with origin ({x},{y}) failed: {error:?}"));
+            assert!(pw >= 1 && ph >= 1, "empty rect for origin ({x},{y})");
+            assert!(px + pw <= 64 && py + ph <= 48);
+            if x == 1.0 {
+                assert_eq!(px + pw, 64, "x-edge crop must end at the last column");
+            }
+            if y == 1.0 {
+                assert_eq!(py + ph, 48, "y-edge crop must end at the last row");
+            }
+        }
+    }
+
+    #[test]
+    fn crop_rect_rejects_origins_above_one_inside_tolerance_window() {
+        // The rectangle sum stays inside the old 1e-6 tolerance, but the
+        // origin above 1 would push the rounded pixel origin past a large
+        // frame edge and underflow the extent arithmetic.
+        let crop = lumina_sidecar::Crop::Free {
+            x: 1.000_000_5,
+            y: 0.0,
+            width: 1e-7,
+            height: 0.5,
+        };
+        assert!(crop_rect(10_000_000, 10, Some(&crop)).is_err());
+    }
+
+    #[test]
+    fn crop_rect_valid_sweep_always_yields_in_bounds_non_empty_rects() {
+        // Deterministic xorshift sweep over accepted rectangles (including
+        // exact-fit and within-tolerance edges): every resulting pixel rect
+        // must be non-empty and inside the frame.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..2000 {
+            let x = (next() % 1001) as f32 / 1000.0;
+            let y = (next() % 1001) as f32 / 1000.0;
+            let room_x = 1000 - (x * 1000.0) as u64;
+            let room_y = 1000 - (y * 1000.0) as u64;
+            let w = (next() % (room_x + 2)) as f32 / 1000.0; // may exceed the sum by ≤ 1e-6-ish
+            let h = (next() % (room_y + 2)) as f32 / 1000.0;
+            if !(w > 0.0 && h > 0.0 && x + w <= 1.0 + 1e-6 && y + h <= 1.0 + 1e-6) {
+                continue;
+            }
+            let crop = lumina_sidecar::Crop::Free {
+                x,
+                y,
+                width: w,
+                height: h,
+            };
+            let (px, py, pw, ph) = crop_rect(97, 61, Some(&crop)).unwrap();
+            assert!(pw >= 1 && ph >= 1, "empty rect for {x},{y},{w},{h}");
+            assert!(px + pw <= 97 && py + ph <= 61);
         }
     }
 

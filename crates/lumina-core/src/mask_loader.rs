@@ -334,8 +334,16 @@ fn model_identity_matches(model: &ModelIdentity, configured: Option<&ModelIdenti
                 && model.version == configured.version
                 && model.hash == configured.hash
         }
-        // No model is configured to compare against — nothing to invalidate on.
-        None => true,
+        // REVIEW-MASK-N3: without a configured expected model identity the
+        // persisted artifact's model context CANNOT be confirmed. Per F-048
+        // ("kann Gültigkeit nicht bestätigt werden → gilt als fehlend") and
+        // the sidecar mask rules (Modellname/-version/-hash gehören zur
+        // Gültigkeit), an unconfirmable artifact is treated as stale, not as
+        // valid — a mask produced by a foreign/unknown model must never be
+        // served silently as confirmably valid (`LoadedPersisted`). The
+        // decision layer's F-051 path then either re-infers (model present),
+        // serves it from cache WITH a stale warning, or fails hard.
+        None => false,
     }
 }
 
@@ -789,6 +797,57 @@ mod tests {
                 .values,
             vec![PERSISTED_VALUE; 16]
         );
+    }
+
+    // REVIEW-MASK-N3: without a configured expected model identity the
+    // persisted artifact's model context cannot be confirmed — it must be
+    // treated as stale (cache-with-warning / re-inference / hard error),
+    // never as confirmably valid.
+    #[test]
+    fn unconfirmable_model_identity_is_never_loaded_persisted() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        // No model wired at all: the otherwise perfectly matching artifact
+        // may not silently pass as `LoadedPersisted`. The F-051 path serves
+        // it from cache WITH an explicit staleness warning instead.
+        let result = resolve_one(
+            definition.clone(),
+            Some(PERSISTED_VALUE),
+            None,
+            None,
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::CachedUnavailable);
+        assert!(result.model_unavailable);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(!result.warnings.is_empty());
+
+        // With an available model but no configured identity to compare
+        // against, validity is likewise unconfirmable → re-inference.
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            None,
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        assert!(!result.model_unavailable);
+        assert!(result.warnings.is_empty());
     }
 
     #[test]

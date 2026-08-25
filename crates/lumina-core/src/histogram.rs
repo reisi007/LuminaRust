@@ -27,7 +27,7 @@
 //! [`LuminanceHistogram::digest`] over bins and frame dimensions, making it
 //! directly usable as the value stored under `CacheStage::Histogram`.
 
-use crate::ImageFrame;
+use crate::{CoreError, ImageFrame};
 use serde::{Deserialize, Serialize};
 
 /// Number of luminance bins and, simultaneously, the inverse of the bin width.
@@ -152,20 +152,31 @@ impl LuminanceHistogram {
     /// The cumulative function is linearly interpolated between bin edges, so
     /// it is monotonic non-decreasing and continuous, mirroring the quantile
     /// interpolation used by [`Self::p01`], [`Self::median`] and [`Self::p99`].
-    pub fn cdf_at(&self, value: f64) -> f64 {
+    /// Finite inputs outside `0..=1` are clamped into range; non-finite inputs
+    /// (NaN/±Inf) are rejected with [`CoreError::InvalidAdjustment`] instead of
+    /// propagating NaN through the clamp (REVIEW-CORE-N2).
+    pub fn cdf_at(&self, value: f64) -> Result<f64, CoreError> {
+        if !value.is_finite() {
+            return Err(CoreError::InvalidAdjustment {
+                name: "histogram.cdf_at".into(),
+                value,
+                minimum: 0.0,
+                maximum: 1.0,
+            });
+        }
         let sample_count = self.sample_count();
         if sample_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let value = value.clamp(0.0, 1.0);
         let edge = value * BIN_COUNT as f64;
         let lower_bin = edge.floor() as usize;
         if lower_bin >= BIN_COUNT {
-            return 1.0;
+            return Ok(1.0);
         }
         let fraction = edge - lower_bin as f64;
         let below: u64 = self.bins[..lower_bin].iter().sum();
-        (below as f64 + self.bins[lower_bin] as f64 * fraction) / sample_count as f64
+        Ok((below as f64 + self.bins[lower_bin] as f64 * fraction) / sample_count as f64)
     }
 
     /// Stable content digest for cache identity (blake3 over frame dimensions
@@ -281,7 +292,7 @@ mod tests {
         assert_eq!(empty.median(), 0.0);
         assert_eq!(empty.p99(), 0.0);
         assert_eq!(empty.mean(), 0.0);
-        assert_eq!(empty.cdf_at(0.5), 0.0);
+        assert_eq!(empty.cdf_at(0.5).unwrap(), 0.0);
         assert!(empty.bins.iter().all(|bin| *bin == 0));
         assert!(empty
             .digest()
@@ -300,16 +311,16 @@ mod tests {
                 .collect(),
         );
         let histogram = LuminanceHistogram::new(&image);
-        let mut previous = histogram.cdf_at(0.0);
+        let mut previous = histogram.cdf_at(0.0).unwrap();
         assert_eq!(previous, 0.0);
         for step in 1..=256u32 {
             let value = f64::from(step) / 256.0;
-            let current = histogram.cdf_at(value);
+            let current = histogram.cdf_at(value).unwrap();
             assert!(current >= previous, "CDF not monotone at {value}");
             assert!((0.0..=1.0).contains(&current));
             previous = current;
         }
-        assert!((histogram.cdf_at(1.0) - 1.0).abs() < 1e-12);
+        assert!((histogram.cdf_at(1.0).unwrap() - 1.0).abs() < 1e-12);
         for quantile in [histogram.p01(), histogram.median(), histogram.p99()] {
             assert!(quantile.is_finite());
             assert!((0.0..=1.0).contains(&quantile));
@@ -318,11 +329,40 @@ mod tests {
         assert!(histogram.median() <= histogram.p99());
         // CDF evaluated at the quantile values preserves their ordering
         // (guaranteed by CDF monotonicity).
-        let cdf_p01 = histogram.cdf_at(histogram.p01());
-        let cdf_median = histogram.cdf_at(histogram.median());
-        let cdf_p99 = histogram.cdf_at(histogram.p99());
+        let cdf_p01 = histogram.cdf_at(histogram.p01()).unwrap();
+        let cdf_median = histogram.cdf_at(histogram.median()).unwrap();
+        let cdf_p99 = histogram.cdf_at(histogram.p99()).unwrap();
         assert!(cdf_p01 <= cdf_median);
         assert!(cdf_median <= cdf_p99);
+    }
+
+    // REVIEW-CORE-N2: NaN/±Inf must be rejected instead of silently
+    // propagating through `clamp` (which returns NaN for a NaN input).
+    #[test]
+    fn cdf_at_rejects_non_finite_values_with_an_error() {
+        let image = frame(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]);
+        let histogram = LuminanceHistogram::new(&image);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = histogram
+                .cdf_at(value)
+                .err()
+                .unwrap_or_else(|| panic!("cdf_at({value}) must fail"));
+            match error {
+                CoreError::InvalidAdjustment {
+                    ref name,
+                    minimum,
+                    maximum,
+                    ..
+                } => {
+                    assert_eq!(name, "histogram.cdf_at");
+                    assert_eq!((minimum, maximum), (0.0, 1.0));
+                }
+                other => panic!("unexpected error for cdf_at({value}): {other:?}"),
+            }
+        }
+        // Finite out-of-range values stay clamped as documented.
+        assert_eq!(histogram.cdf_at(-0.5).unwrap(), 0.0);
+        assert_eq!(histogram.cdf_at(1.5).unwrap(), 1.0);
     }
 
     /// Constructed, densely populated images where the histogram quantiles are
@@ -433,11 +473,11 @@ mod tests {
             prop_assert!(histogram.p01() <= histogram.median() + 1e-15);
             prop_assert!(histogram.median() <= histogram.p99() + 1e-15);
 
-            let mut previous = histogram.cdf_at(0.0);
+            let mut previous = histogram.cdf_at(0.0).unwrap();
             prop_assert_eq!(previous, 0.0);
             for step in 1..=64u32 {
                 let value = f64::from(step) / 64.0;
-                let current = histogram.cdf_at(value);
+                let current = histogram.cdf_at(value).unwrap();
                 prop_assert!(
                     current >= previous - 1e-12,
                     "CDF must be monotone at {value}: {current} < {previous}"
@@ -445,7 +485,7 @@ mod tests {
                 prop_assert!((0.0..=1.0).contains(&current));
                 previous = current;
             }
-            prop_assert!((histogram.cdf_at(1.0) - 1.0).abs() < 1e-12);
+            prop_assert!((histogram.cdf_at(1.0).unwrap() - 1.0).abs() < 1e-12);
         }
 
         /// Reconstructing the same image twice yields the identical histogram

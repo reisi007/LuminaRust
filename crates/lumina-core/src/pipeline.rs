@@ -103,7 +103,21 @@ pub struct RenderKey {
     pub recipe_hash: String,
     mask_recipe_hash: String,
     pub mask_artifact_hashes: Vec<String>,
+    /// REVIEW-CORE-SRCACC-1: checksums of the resolved source-action
+    /// (repair-region) artifacts that the render actually applied. The recipe
+    /// hash covers the persisted *references*; these hashes cover the resolved
+    /// runtime artifacts so that changed repair artifacts cannot be served
+    /// from stale cached pixels. Empty when no source actions were applied.
+    pub source_action_artifact_hashes: Vec<String>,
     pub output: OutputSpec,
+    /// REVIEW-CORE-EXPORTKEY-1: full export parameters beyond
+    /// [`OutputSpec`] (bit depth, quality, dithering, dither seed). They shape
+    /// the encoded preview/export bytes, so two renders that differ only in
+    /// quality/dither/seed/bit depth must never share a cache entry.
+    /// `None` means "no encoder parameters attached" (a plain frame render)
+    /// and is distinguished from every `Some(_)` in the digest. Attach via
+    /// [`RenderKey::with_export_options`].
+    pub export_options: Option<crate::ExportOptions>,
 }
 
 impl RenderKey {
@@ -149,8 +163,35 @@ impl RenderKey {
             recipe_hash,
             mask_recipe_hash,
             mask_artifact_hashes,
+            // REVIEW-CORE-SRCACC-1 / REVIEW-CORE-EXPORTKEY-1: neutral defaults
+            // keep the existing constructor call sites compiling. Callers that
+            // apply source-action artifacts or encode with explicit export
+            // options MUST attach them via the `with_*` builders so the
+            // digest covers them.
+            source_action_artifact_hashes: Vec::new(),
             output,
+            export_options: None,
         }
+    }
+
+    /// Attaches the full encoder parameters (REVIEW-CORE-EXPORTKEY-1) so they
+    /// participate in the render-scope digest. Every caller that encodes a
+    /// rendered frame into preview/export bytes with explicit options must
+    /// attach them here; otherwise cache hits can serve pixels encoded with a
+    /// different quality/dither/seed/bit depth.
+    #[must_use]
+    pub fn with_export_options(mut self, options: crate::ExportOptions) -> Self {
+        self.export_options = Some(options);
+        self
+    }
+
+    /// Attaches the checksums of the resolved source-action artifacts
+    /// (REVIEW-CORE-SRCACC-1) so changed repair artifacts invalidate every
+    /// downstream cache stage instead of serving stale pixels.
+    #[must_use]
+    pub fn with_source_action_hashes<I: IntoIterator<Item = String>>(mut self, hashes: I) -> Self {
+        self.source_action_artifact_hashes = hashes.into_iter().collect();
+        self
     }
 
     pub fn digest(&self) -> String {
@@ -196,6 +237,24 @@ impl RenderKey {
                 hasher.update(value.as_bytes());
                 hasher.update(&[0]);
             }
+            // REVIEW-CORE-SRCACC-1: resolved source-action artifacts composite
+            // right after decode and before every downstream stage, so every
+            // non-decode stage digest covers their checksums. A changed repair
+            // artifact therefore invalidates mask/preview/histogram/export
+            // entries instead of serving stale pixels.
+            for value in &self.source_action_artifact_hashes {
+                hasher.update(value.as_bytes());
+                hasher.update(&[0]);
+            }
+        }
+        if scope == "histogram" {
+            // REVIEW-CORE-N1: a histogram is measured on the post-crop frame,
+            // so two renders that differ only in output size produce different
+            // histograms. Without the geometry in the stage key, a cached
+            // histogram of one size could be served for another. Profile and
+            // format stay render-only (they cannot change luminance bins).
+            hasher.update(&self.output.width.to_le_bytes());
+            hasher.update(&self.output.height.to_le_bytes());
         }
         if matches!(scope, "render") {
             hasher.update(self.output.profile.as_bytes());
@@ -203,6 +262,26 @@ impl RenderKey {
             hasher.update(self.output.format.as_bytes());
             hasher.update(&self.output.width.to_le_bytes());
             hasher.update(&self.output.height.to_le_bytes());
+            // REVIEW-CORE-EXPORTKEY-1: full encoder identity in the render
+            // digest. The leading marker byte separates "no encoder options"
+            // from every attached option set.
+            match &self.export_options {
+                None => {
+                    hasher.update(&[0]);
+                }
+                Some(options) => {
+                    hasher.update(&[1]);
+                    hasher.update(options.format.default_extension().as_bytes());
+                    hasher.update(&[0]);
+                    hasher.update(&[match options.bit_depth {
+                        crate::BitDepth::Eight => 8u8,
+                        crate::BitDepth::Sixteen => 16u8,
+                    }]);
+                    hasher.update(&[options.quality]);
+                    hasher.update(&[u8::from(options.dither)]);
+                    hasher.update(&options.seed.to_le_bytes());
+                }
+            }
         }
         hasher.finalize().to_hex().to_string()
     }
@@ -505,5 +584,140 @@ mod tests {
             b.stage_digest(crate::cache::CacheStage::Mask)
         );
         assert_ne!(a.digest(), b.digest());
+    }
+
+    fn base_key() -> RenderKey {
+        RenderKey::new(
+            "source",
+            "decode-1",
+            "pipeline-1",
+            "vc",
+            &EditRecipe::default(),
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 100,
+                height: 100,
+                format: "png".into(),
+            },
+        )
+    }
+
+    // REVIEW-CORE-EXPORTKEY-1
+    #[test]
+    fn export_options_change_render_but_not_upstream_stage_digests() {
+        let options = crate::ExportOptions::default();
+        let key = base_key().with_export_options(options);
+        assert_ne!(key.digest(), base_key().digest());
+
+        // Every individual export parameter must be distinguishable.
+        let mut changed = options;
+        changed.quality = 42;
+        assert_ne!(
+            key.digest(),
+            base_key().with_export_options(changed).digest()
+        );
+        changed = options;
+        changed.dither = !options.dither;
+        assert_ne!(
+            key.digest(),
+            base_key().with_export_options(changed).digest()
+        );
+        changed = options;
+        changed.seed = options.seed + 1;
+        assert_ne!(
+            key.digest(),
+            base_key().with_export_options(changed).digest()
+        );
+        changed = options;
+        changed.format = crate::ImageFileFormat::Jpeg;
+        assert_ne!(
+            key.digest(),
+            base_key().with_export_options(changed).digest()
+        );
+
+        // Encoder parameters cannot affect decode, matte or histogram stages.
+        assert_eq!(
+            key.stage_digest(crate::cache::CacheStage::Decode),
+            base_key().stage_digest(crate::cache::CacheStage::Decode)
+        );
+        assert_eq!(
+            key.stage_digest(crate::cache::CacheStage::Mask),
+            base_key().stage_digest(crate::cache::CacheStage::Mask)
+        );
+        // "No options attached" differs from every attached option set.
+        assert_eq!(base_key().export_options, None);
+    }
+
+    // REVIEW-CORE-SRCACC-1
+    #[test]
+    fn source_action_artifact_hashes_change_every_downstream_digest() {
+        let key = base_key().with_source_action_hashes(["blake3:repair-a".to_owned()]);
+        let mut changed = key.clone();
+        changed.source_action_artifact_hashes = vec!["blake3:repair-b".to_owned()];
+        assert_ne!(key.digest(), changed.digest());
+        assert_ne!(
+            key.stage_digest(crate::cache::CacheStage::Preview),
+            changed.stage_digest(crate::cache::CacheStage::Preview)
+        );
+        assert_ne!(
+            key.stage_digest(crate::cache::CacheStage::Histogram),
+            changed.stage_digest(crate::cache::CacheStage::Histogram)
+        );
+        // The decode stage is upstream of source actions and stays shareable.
+        assert_eq!(
+            key.stage_digest(crate::cache::CacheStage::Decode),
+            changed.stage_digest(crate::cache::CacheStage::Decode)
+        );
+    }
+
+    // REVIEW-CORE-N1
+    #[test]
+    fn histogram_digest_distinguishes_output_geometry() {
+        let small = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "vc",
+            &EditRecipe::default(),
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 100,
+                height: 100,
+                format: "rgba8".into(),
+            },
+        );
+        let large = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "vc",
+            &EditRecipe::default(),
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 200,
+                height: 200,
+                format: "rgba8".into(),
+            },
+        );
+        assert_ne!(
+            small.stage_digest(crate::cache::CacheStage::Histogram),
+            large.stage_digest(crate::cache::CacheStage::Histogram)
+        );
+        // Profile/format stay render-only: they cannot change luminance bins.
+        let rec2020 = RenderKey {
+            output: OutputSpec {
+                profile: "Rec2020".into(),
+                ..small.output.clone()
+            },
+            ..small.clone()
+        };
+        assert_eq!(
+            small.stage_digest(crate::cache::CacheStage::Histogram),
+            rec2020.stage_digest(crate::cache::CacheStage::Histogram)
+        );
+        assert_ne!(small.digest(), rec2020.digest());
     }
 }

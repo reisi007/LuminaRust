@@ -281,7 +281,21 @@ fn evaluate_layer(
     let mut plane = resample_plane_bilinear(&plane, frame_width, frame_height);
     // F-049: apply the per-layer modulation (invert → feather → blur → density)
     // to the resolved, frame-sized plane before it weights the adjustments.
-    crate::mask_modulation::modulate_mask_plane(&mut plane, layer);
+    // REVIEW-MASK-N2: an invalid modulation (e.g. a density outside 0..=1) is
+    // an evaluation failure like any other — Strict aborts the render, Warn
+    // skips the layer with a recorded message. No silent fallback.
+    if let Err(error) = crate::mask_modulation::modulate_mask_plane(&mut plane, layer) {
+        let message = format!(
+            "mask layer `{}` could not be modulated (`{}/{}`): {error}; layer skipped",
+            layer.id, layer.mask.copy_id, layer.mask.mask_id
+        );
+        return Err(LayerFailure::Evaluation {
+            copy_id: layer.mask.copy_id.clone(),
+            mask_id: layer.mask.mask_id.clone(),
+            reason: error.to_string(),
+            message,
+        });
+    }
     Ok(plane)
 }
 
@@ -865,6 +879,138 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(warn.mask_warnings.len(), 1);
+    }
+
+    #[test]
+    fn invalid_density_is_warn_skip_and_strict_error() {
+        // REVIEW-MASK-N2: an out-of-range layer density must never silently
+        // erase (density < 0) or ignore (density > 1) the mask. Warn skips
+        // the layer with a recorded message; Strict aborts the render.
+        let definitions = vec![mask_definition(
+            "subject",
+            MaskStatus::Valid,
+            MaskOperation::Source,
+            vec![],
+        )];
+        let copies = vec![copy_with(
+            "vc",
+            definitions,
+            vec![MaskLayer {
+                density: -0.5,
+                ..layer("layer-1", reference("vc", "subject"))
+            }],
+        )];
+        let planes = BTreeMap::from([(
+            ("vc".into(), "subject".into()),
+            MaskPlane::new(1, 1, vec![u16::MAX]).unwrap(),
+        )]);
+        let recipe = EditRecipe::default();
+        let frame = base_frame();
+
+        let warn = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: Some(mask_context(
+                    &copies,
+                    "vc",
+                    planes.clone(),
+                    MaskPolicy::Warn,
+                )),
+            },
+        )
+        .unwrap();
+        assert!(warn.mask_layers.is_empty());
+        assert_eq!(warn.mask_warnings.len(), 1);
+        assert!(warn.mask_warnings[0].contains("modulated"));
+        assert!(warn.mask_warnings[0].contains("density"));
+        assert_eq!(warn.frame, frame);
+
+        let strict = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            strict,
+            CoreError::MaskEvaluation { ref reason, .. } if reason.contains("density")
+        ));
+    }
+
+    #[test]
+    fn strict_policy_fails_the_whole_render_not_partial_layers() {
+        // REVIEW-MASK-STRICT-1 (core semantics): under Strict a render with
+        // ANY unavailable layer is an error — no partial `mask_layers` result
+        // is produced and no warning list is emitted. The valid first layer
+        // must not leak into the error output as if the render succeeded.
+        let definitions = vec![
+            mask_definition("good", MaskStatus::Valid, MaskOperation::Source, vec![]),
+            mask_definition("ghost", MaskStatus::Missing, MaskOperation::Source, vec![]),
+        ];
+        let copies = vec![copy_with(
+            "vc",
+            definitions,
+            vec![
+                layer("layer-good", reference("vc", "good")),
+                layer("layer-bad", reference("vc", "ghost")),
+            ],
+        )];
+        let planes = BTreeMap::from([(
+            ("vc".into(), "good".into()),
+            MaskPlane::new(1, 1, vec![u16::MAX]).unwrap(),
+        )]);
+        let recipe = EditRecipe::default();
+        let strict = render_frame(
+            &base_frame(),
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
+            },
+        );
+        match strict {
+            Err(CoreError::MaskUnavailable {
+                ref mask_id,
+                ref status,
+                ..
+            }) => {
+                assert_eq!(mask_id, "ghost");
+                assert_eq!(status, "Missing");
+            }
+            other => panic!("expected strict MaskUnavailable error, got {other:?}"),
+        }
+
+        // Control: the same context under Warn keeps the good layer and
+        // records exactly one warning for the bad one.
+        let warn_planes = BTreeMap::from([(
+            ("vc".into(), "good".into()),
+            MaskPlane::new(1, 1, vec![u16::MAX]).unwrap(),
+        )]);
+        let warn = render_frame(
+            &base_frame(),
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: Some(mask_context(&copies, "vc", warn_planes, MaskPolicy::Warn)),
+            },
+        )
+        .unwrap();
+        assert_eq!(warn.mask_layers.len(), 1);
+        assert_eq!(warn.mask_layers[0].layer_id, "layer-good");
         assert_eq!(warn.mask_warnings.len(), 1);
     }
 
