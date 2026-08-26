@@ -443,10 +443,30 @@ pub struct GpuContext {
     /// `source_actions` then CPU-route exactly as before the stage existed.
     #[cfg(feature = "gpu")]
     source_actions: Option<Vec<SourceActionArtifact>>,
+    /// Cached GPU textures for the bound source-action artifacts (R2-GPU-03):
+    /// region (R16Uint) + replacement (RGBA8) per artifact, uploaded once in
+    /// [`GpuContext::set_source_action_artifacts`] and reused by every render
+    /// until the artifacts are re-bound or cleared. `None` until bound.
+    #[cfg(feature = "gpu")]
+    sa_textures: Option<
+        Vec<(
+            wgpu::Texture,
+            wgpu::TextureView,
+            wgpu::Texture,
+            wgpu::TextureView,
+        )>,
+    >,
     /// Last recipe pushed via [`GpuContext::update_uniforms`]. Used both to feed
     /// the uniform buffer (GPU path) and as the CPU-fallback recipe.
     #[cfg(feature = "gpu")]
     recipe: Option<EditRecipe>,
+    /// Per-size pool of input/output/readback resources for
+    /// [`GpuContext::render_with_gpu`] (R2-GPU-04). Reusing them across calls
+    /// avoids recreating wgpu objects every render; the dominant residual cost
+    /// on small frames is the blocking readback, which the readback-free present
+    /// path avoids entirely.
+    #[cfg(feature = "gpu")]
+    rwgpu_cache: std::sync::Mutex<std::collections::HashMap<(u32, u32), RenderWithGpuResources>>,
 }
 
 /// VRAM-resident interactive state for GUI-60FPS-1.
@@ -470,11 +490,26 @@ struct VramState {
     output_view: wgpu::TextureView,
     #[allow(dead_code)]
     mask: wgpu::Texture,
-    mask_view: wgpu::TextureView,
-    /// Filtering sampler for colour textures (overlay base).
-    color_sampler: wgpu::Sampler,
     overlay_uniform: wgpu::Buffer,
-    overlay_layout: wgpu::BindGroupLayout,
+    /// Cached base (source) texture for the tone pass (R2-GPU-01). Uploaded only
+    /// when the source frame changes; reused across draft ticks so the 96 MB
+    /// CPU→GPU upload does not run on every slider tick.
+    #[allow(dead_code)]
+    input: wgpu::Texture,
+    input_view: wgpu::TextureView,
+    /// Nearest sampler for the base texture (`textureSampleLevel`, exact texel).
+    input_sampler: wgpu::Sampler,
+    /// Identity of the last uploaded source frame (`(pixels_ptr, pixels_len)`).
+    /// Lets us skip the re-upload while the same source is dragged.
+    input_source_identity: Option<(usize, usize)>,
+    /// Overlay present pipelines cached per target format (R2-GPU-02) so the
+    /// present shader is not recompiled on every repaint.
+    overlay_pipelines: std::collections::HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// Overlay bind group built once (all its parts are stable in VRAM); the hot
+    /// present path only reuses it (R2-GPU-02). `mask_view`/`color_sampler`/
+    /// `overlay_layout` are consumed into this group at construction and so are
+    /// kept as locals in `create_vram_state` rather than struct fields.
+    overlay_bind_group: wgpu::BindGroup,
 }
 
 /// Dimension-keyed LRU pool of [`VramState`] entries (GUI-WGPU-PRESENT-1).
@@ -707,12 +742,18 @@ impl GpuContext {
         device: wgpu::Device,
         queue: wgpu::Queue,
     ) -> Result<Self, GpuError> {
-        Ok(Self::from_resources(Some(GpuResources {
+        let mut resources = GpuResources {
             instance,
             adapter,
             device,
             queue,
-        })))
+            device_lost: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        // The GUI shares eframe's device/queue (GUI-WGPU-PRESENT-1). A lost or
+        // erroring device must not panic the app (R2-GPU-06): install the same
+        // non-panicking handlers as the standalone path.
+        register_device_handlers(&mut resources);
+        Ok(Self::from_resources(Some(resources)))
     }
 
     /// Shared constructor body for [`GpuContext::new`] / [`GpuContext::from_parts`].
@@ -723,7 +764,11 @@ impl GpuContext {
             sa_pipeline: std::sync::Mutex::new(None),
             vram: std::sync::Mutex::new(VramPool::new()),
             source_actions: None,
+            #[cfg(feature = "gpu")]
+            sa_textures: None,
             recipe: None,
+            #[cfg(feature = "gpu")]
+            rwgpu_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -843,6 +888,57 @@ impl GpuContext {
                 }
             }
         }
+        // R2-GPU-03: the region/replacement textures don't change between drags,
+        // so upload them once here and cache them on the context. The render
+        // path reuses the cached textures instead of re-creating + re-uploading
+        // a full-size texture per render tick.
+        if let Some(resources) = self.resources.as_ref() {
+            let mut cached = Vec::with_capacity(artifacts.len());
+            for (index, action) in artifacts.iter().enumerate() {
+                let region_tex = shaders::create_region_texture(
+                    &resources.device,
+                    action.region.width,
+                    action.region.height,
+                    &format!("lumina-gpu-sa-region-{index}"),
+                );
+                shaders::write_u16_plane(
+                    &resources.queue,
+                    &region_tex,
+                    action.region.width,
+                    action.region.height,
+                    &action.region.values,
+                );
+                let region_view = region_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                let repl_tex = shaders::create_input_texture(
+                    &resources.device,
+                    action.replacement.width,
+                    action.replacement.height,
+                    &format!("lumina-gpu-sa-repl-{index}"),
+                );
+                resources.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &repl_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &action.replacement.pixels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(action.replacement.width * 4),
+                        rows_per_image: Some(action.replacement.height),
+                    },
+                    wgpu::Extent3d {
+                        width: action.replacement.width,
+                        height: action.replacement.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                let repl_view = repl_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                cached.push((region_tex, region_view, repl_tex, repl_view));
+            }
+            self.sa_textures = Some(cached);
+        }
         self.source_actions = Some(artifacts.to_vec());
         Ok(())
     }
@@ -851,6 +947,7 @@ impl GpuContext {
     /// recipes with `source_actions` CPU-route again.
     pub fn clear_source_action_artifacts(&mut self) {
         self.source_actions = None;
+        self.sa_textures = None;
     }
 
     /// The bound source-action artifacts that match `width`×`height`, or `None`
@@ -942,6 +1039,14 @@ impl GpuContext {
                 "no adapter for vram path".into(),
             ));
         };
+        // R2-GPU-06: a lost device must not panic — signal the caller (the GUI
+        // then drops `vram_fresh` and falls back to the CPU present path).
+        if resources
+            .device_lost
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(GpuError::AdapterUnavailable("GPU device lost".into()));
+        }
         self.ensure_pipeline()?;
         self.ensure_vram(frame.width, frame.height)?;
         let guard = self.pipeline.lock().unwrap();
@@ -955,37 +1060,39 @@ impl GpuContext {
         } else {
             None
         };
-        let input = shaders::create_input_texture(
-            &resources.device,
-            frame.width,
-            frame.height,
-            "lumina-gpu-vram-input",
-        );
-        resources.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &input,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &frame.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
-            },
-            wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let input_view = input.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = shaders::create_sampler(&resources.device, "lumina-gpu-vram-samp");
+        // R2-GPU-01: reuse the cached base texture and re-upload it only when
+        // the source frame changes. During a slider drag the same source is
+        // passed every tick, so this skips the ~96 MB CPU→GPU upload on all but
+        // the first tick.
         let mut vram_guard = self.vram.lock().unwrap();
         let Some(v) = vram_guard.active() else {
             return Err(GpuError::RenderFailed("vram not ready".into()));
         };
+        let src_identity = (frame.pixels.as_ptr() as usize, frame.pixels.len());
+        if v.input_source_identity != Some(src_identity) {
+            resources.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &v.input,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &frame.pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(frame.width * 4),
+                    rows_per_image: Some(frame.height),
+                },
+                wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            v.input_source_identity = Some(src_identity);
+        }
+        let input_view = &v.input_view;
+        let sampler = &v.input_sampler;
         let mut enc = resources
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1016,63 +1123,26 @@ impl GpuContext {
                 &sa.uniform_buffer,
                 &sa_uniforms,
             );
+            // R2-GPU-03: reuse the cached region/replacement textures uploaded
+            // in `set_source_action_artifacts` instead of re-creating + re-
+            // uploading them every render tick.
+            let sa_cache = self
+                .sa_textures
+                .as_ref()
+                .expect("source-action textures are cached when artifacts are bound");
             let mut region_views = Vec::with_capacity(artifacts.len());
             let mut replacement_views = Vec::with_capacity(artifacts.len());
-            for (index, artifact) in artifacts.iter().enumerate() {
-                debug_assert_eq!(
-                    (artifact.region.width, artifact.region.height),
-                    (frame.width, frame.height),
-                    "matching_source_actions validated dimensions"
-                );
-                let region_tex = shaders::create_region_texture(
-                    &resources.device,
-                    artifact.region.width,
-                    artifact.region.height,
-                    &format!("lumina-gpu-sa-region-{index}"),
-                );
-                shaders::write_u16_plane(
-                    &resources.queue,
-                    &region_tex,
-                    artifact.region.width,
-                    artifact.region.height,
-                    &artifact.region.values,
-                );
-                region_views.push(region_tex.create_view(&wgpu::TextureViewDescriptor::default()));
-                let repl_tex = shaders::create_input_texture(
-                    &resources.device,
-                    artifact.replacement.width,
-                    artifact.replacement.height,
-                    &format!("lumina-gpu-sa-repl-{index}"),
-                );
-                resources.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &repl_tex,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &artifact.replacement.pixels,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(artifact.replacement.width * 4),
-                        rows_per_image: Some(artifact.replacement.height),
-                    },
-                    wgpu::Extent3d {
-                        width: artifact.replacement.width,
-                        height: artifact.replacement.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-                replacement_views
-                    .push(repl_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+            for (_, rview, _, rvview) in sa_cache.iter() {
+                region_views.push(rview);
+                replacement_views.push(rvview);
             }
-            let region_refs: Vec<&wgpu::TextureView> = region_views.iter().collect();
-            let replacement_refs: Vec<&wgpu::TextureView> = replacement_views.iter().collect();
+            let region_refs: Vec<&wgpu::TextureView> = region_views.clone();
+            let replacement_refs: Vec<&wgpu::TextureView> = replacement_views.clone();
             let sa_bind = shaders::create_source_action_bind_group(
                 &resources.device,
                 &sa.bind_group_layout,
                 &sa.uniform_buffer,
-                &input_view,
+                input_view,
                 &region_refs,
                 &replacement_refs,
                 artifacts.len() as u32,
@@ -1108,14 +1178,14 @@ impl GpuContext {
             }
             &sa_intermediate_view
         } else {
-            &input_view
+            input_view
         };
         let tone_bind = shaders::create_color_tone_bind_group(
             &resources.device,
             &pipeline.bind_group_layout,
             &pipeline.uniform_buffer,
             tone_input_view,
-            &sampler,
+            sampler,
         );
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1262,6 +1332,14 @@ impl GpuContext {
         let Some(resources) = self.resources.as_ref() else {
             return Ok(());
         };
+        // R2-GPU-06: a lost device must not panic — skip the present so the GUI
+        // keeps showing the last good CPU preview instead of crashing.
+        if resources
+            .device_lost
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(GpuError::AdapterUnavailable("GPU device lost".into()));
+        }
         let mut guard = self.vram.lock().unwrap();
         let Some(v) = guard.active() else {
             return Ok(());
@@ -1281,16 +1359,22 @@ impl GpuContext {
         };
         shaders::write_overlay_uniforms(&resources.queue, &v.overlay_uniform, &uniforms);
         let dest_view = dest.create_view(&wgpu::TextureViewDescriptor::default());
-        let overlay_pipe = shaders::create_overlay_pipeline(&resources.device, dest.format())
-            .map_err(|e| GpuError::RenderFailed(e.to_string()))?;
-        let bind = shaders::create_overlay_bind_group(
-            &resources.device,
-            &v.overlay_layout,
-            &v.overlay_uniform,
-            &v.output_view,
-            &v.mask_view,
-            &v.color_sampler,
-        );
+        // R2-GPU-02: cache the overlay pipeline per target format so the present
+        // shader is compiled once, not on every repaint. The bind group is
+        // built once in `create_vram_state` (all its parts are stable in VRAM).
+        let format = dest.format();
+        // R2-GPU-02: cache the overlay pipeline per target format so the present
+        // shader is compiled once, not on every repaint. The bind group is
+        // built once in `create_vram_state` (all its parts are stable in VRAM).
+        if let std::collections::hash_map::Entry::Vacant(e) =
+            v.overlay_pipelines.entry(format)
+        {
+            let pipe = shaders::create_overlay_pipeline(&resources.device, format)
+                .map_err(|e| GpuError::RenderFailed(e.to_string()))?;
+            e.insert(pipe);
+        }
+        let overlay_pipe = &v.overlay_pipelines[&format];
+        let bind = &v.overlay_bind_group;
         let mut enc = resources
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1318,8 +1402,8 @@ impl GpuContext {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&overlay_pipe);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_pipeline(overlay_pipe);
+            pass.set_bind_group(0, bind, &[]);
             pass.draw(0..3, 0..1);
         }
         resources.queue.submit(Some(enc.finish()));
@@ -1450,6 +1534,14 @@ impl GpuContext {
         let Some(resources) = self.resources.as_ref() else {
             return Self::render_cpu(frame, recipe);
         };
+        // R2-GPU-06: a lost device must not panic — degrade to the CPU oracle.
+        if resources
+            .device_lost
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            log::warn!("GPU device lost; routing render_with_gpu to CPU");
+            return Self::render_cpu(frame, recipe);
+        }
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: never let the GPU path drop
         // recipe stages. Route to the CPU oracle loudly instead of rendering
         // different pixels — with one exception: when source-action artifacts
@@ -1476,42 +1568,71 @@ impl GpuContext {
         let uniforms = shaders::Uniforms::from_recipe(recipe);
         shaders::write_uniforms(&resources.queue, &pipeline.uniform_buffer, &uniforms);
 
-        // Source frame → input texture.
-        let input_texture =
-            shaders::create_input_texture(&resources.device, width, height, "lumina-gpu-input");
-        resources.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &input_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &frame.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
+        // R2-GPU-04: reuse the input/output/readback for the same dimensions
+        // across calls instead of re-creating them every render. The dominant
+        // per-call cost on small frames is wgpu object churn; pooling removes
+        // it. The blocking readback round-trip remains — the readback-free
+        // present path (`render_to_vram` + `copy_vram_to_texture`) avoids it.
+        let bytes_per_row = shaders::aligned_bytes_per_row(width);
+        let mut cache_guard = self.rwgpu_cache.lock().unwrap();
+        let pooled = cache_guard.entry((width, height)).or_insert_with(|| {
+            let input =
+                shaders::create_input_texture(&resources.device, width, height, "lumina-gpu-input");
+            let output = shaders::create_output_texture(
+                &resources.device,
                 width,
                 height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let input_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
+                "lumina-gpu-output",
+            );
+            let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+            let readback = shaders::create_readback_buffer(
+                &resources.device,
+                width,
+                height,
+                "lumina-gpu-readback",
+            );
+            RenderWithGpuResources {
+                input,
+                output,
+                output_view,
+                readback,
+                input_source_identity: None,
+            }
+        });
+        // Upload the current source frame into the pooled input texture — but
+        // only when the source actually changed (R2-GPU-04, mirroring
+        // R2-GPU-01). A benchmark loop or repeated exports of the same frame
+        // skip the ≈16 MB CPU→GPU transfer on every call after the first.
+        let src_identity = (frame.pixels.as_ptr() as usize, frame.pixels.len());
+        if pooled.input_source_identity != Some(src_identity) {
+            resources.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &pooled.input,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &frame.pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            pooled.input_source_identity = Some(src_identity);
+        }
+        let input_view = pooled
+            .input
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = shaders::create_sampler(&resources.device, "lumina-gpu-sampler");
-
-        // Render target + readback staging buffer.
-        let output_texture =
-            shaders::create_output_texture(&resources.device, width, height, "lumina-gpu-output");
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bytes_per_row = shaders::aligned_bytes_per_row(width);
-        let readback = shaders::create_readback_buffer(
-            &resources.device,
-            width,
-            height,
-            "lumina-gpu-readback",
-        );
+        let output_texture = &pooled.output;
+        let output_view = &pooled.output_view;
+        let readback = &pooled.readback;
 
         // Bind group: uniform (0) + tone input texture (1) + sampler (2).
         // Built below once the (possibly source-action-composited) tone input
@@ -1548,54 +1669,21 @@ impl GpuContext {
                     &sa.uniform_buffer,
                     &sa_uniforms,
                 );
+                // R2-GPU-03: reuse the cached region/replacement textures
+                // uploaded in `set_source_action_artifacts` instead of
+                // re-creating + re-uploading them every render call.
+                let sa_cache = self
+                    .sa_textures
+                    .as_ref()
+                    .expect("source-action textures are cached when artifacts are bound");
                 let mut region_views = Vec::with_capacity(artifacts.len());
                 let mut replacement_views = Vec::with_capacity(artifacts.len());
-                for (index, artifact) in artifacts.iter().enumerate() {
-                    let region_tex = shaders::create_region_texture(
-                        &resources.device,
-                        artifact.region.width,
-                        artifact.region.height,
-                        &format!("lumina-gpu-sa-region-{index}"),
-                    );
-                    shaders::write_u16_plane(
-                        &resources.queue,
-                        &region_tex,
-                        artifact.region.width,
-                        artifact.region.height,
-                        &artifact.region.values,
-                    );
-                    region_views
-                        .push(region_tex.create_view(&wgpu::TextureViewDescriptor::default()));
-                    let repl_tex = shaders::create_input_texture(
-                        &resources.device,
-                        artifact.replacement.width,
-                        artifact.replacement.height,
-                        &format!("lumina-gpu-sa-repl-{index}"),
-                    );
-                    resources.queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &repl_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &artifact.replacement.pixels,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(artifact.replacement.width * 4),
-                            rows_per_image: Some(artifact.replacement.height),
-                        },
-                        wgpu::Extent3d {
-                            width: artifact.replacement.width,
-                            height: artifact.replacement.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    replacement_views
-                        .push(repl_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+                for (_, rview, _, rvview) in sa_cache.iter() {
+                    region_views.push(rview);
+                    replacement_views.push(rvview);
                 }
-                let region_refs: Vec<&wgpu::TextureView> = region_views.iter().collect();
-                let replacement_refs: Vec<&wgpu::TextureView> = replacement_views.iter().collect();
+                let region_refs: Vec<&wgpu::TextureView> = region_views.clone();
+                let replacement_refs: Vec<&wgpu::TextureView> = replacement_views.clone();
                 let sa_bind = shaders::create_source_action_bind_group(
                     &resources.device,
                     &sa.bind_group_layout,
@@ -1649,7 +1737,7 @@ impl GpuContext {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lumina-gpu-color-tone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &output_view,
+                    view: output_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -1673,13 +1761,13 @@ impl GpuContext {
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &output_texture,
+                texture: output_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
+                buffer: readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(bytes_per_row),
@@ -1863,6 +1951,10 @@ struct GpuResources {
     device: wgpu::Device,
     #[allow(dead_code)]
     queue: wgpu::Queue,
+    /// Mirrors device loss into a flag the render methods poll, so a revoked
+    /// adapter/device (driver update, GPU reset, monitor unplug) degrades to the
+    /// CPU path instead of erroring or panicking (R2-GPU-06).
+    device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Compiled color/tone render pipeline plus its uniform buffer and bind group
@@ -1894,6 +1986,45 @@ struct SourceActionPipelineState {
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
+/// Pooled resources for a single [`GpuContext::render_with_gpu`] size bucket
+/// (R2-GPU-04).
+///
+/// `render_with_gpu` is a one-shot readback render used by exports/CLI; before
+/// this pool it re-created the input/output textures and readback buffer on
+/// every call. Those objects are reused per `(width, height)` so repeated
+/// renders (e.g. a benchmark loop or a batch export of same-size frames) don't
+/// pay the wgpu object-churn cost each time. The GPU *allocations* are pooled;
+/// the input texture is re-uploaded with the current frame only when the source
+/// actually changes (identity-gated, mirroring R2-GPU-01), so a benchmark loop
+/// that renders the same frame repeatedly skips the per-call CPU→GPU transfer.
+///
+/// **Bottleneck (R2-GPU-04).** At 2048² the GPU path is not faster than the CPU
+/// oracle because the dominant cost is the *synchronous* readback round-trip
+/// this one-shot API is forced into: `queue.write_texture` (≈16 MB upload) →
+/// tone pass → `copy_texture_to_buffer` (≈16 MB) → `map_async` +
+/// `device.poll(wait_indefinitely)` which stalls the calling thread until the
+/// GPU finishes and the staging buffer is mapped. The per-pixel tone math on the
+/// GPU is cheaper than the CPU, but the transfer + blocking-sync overhead
+/// outweighs that win at this resolution. This is inherent to an API that must
+/// return a CPU-owned `Frame` (export/CLI); the readback-free present path
+/// (`render_to_vram` + `copy_vram_to_texture`, which composites straight into an
+/// egui-registered texture) avoids the round-trip entirely and is where the GPU
+/// actually wins for interactive preview. Making `render_with_gpu` faster for
+/// export therefore requires async readback or a persistent VRAM `Frame` (M2),
+/// not just pooled resources — which is why this pool removes churn but leaves
+/// the readback as the floor.
+#[cfg(feature = "gpu")]
+struct RenderWithGpuResources {
+    input: wgpu::Texture,
+    output: wgpu::Texture,
+    output_view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    /// Identity (`(pixels_ptr, pixels_len)`) of the last frame uploaded into
+    /// `input`, so repeated renders of the same source skip the CPU→GPU upload
+    /// (R2-GPU-04, mirroring R2-GPU-01).
+    input_source_identity: Option<(usize, usize)>,
+}
+
 /// Create one pooled VRAM state: output (RGBA8) + mask (R16Uint) textures
 /// plus the overlay uniform/layout. The mask is cleared to zero so compositing
 /// stays identity until a brush tile or evaluated plane is uploaded.
@@ -1913,6 +2044,22 @@ fn create_vram_state(
     let color_sampler = shaders::create_sampler(device, "lumina-gpu-vram-color-samp");
     let overlay_uniform = shaders::create_overlay_uniform_buffer(device);
     let overlay_layout = shaders::create_overlay_bind_group_layout(device);
+    // R2-GPU-01: cache the base (source) texture per pool entry so the tone
+    // pass reuses it across draft ticks instead of re-creating + re-uploading
+    // the full frame every slider tick.
+    let input = shaders::create_input_texture(device, width, height, "lumina-gpu-vram-base");
+    let input_view = input.create_view(&wgpu::TextureViewDescriptor::default());
+    let input_sampler = shaders::create_sampler(device, "lumina-gpu-vram-base-samp");
+    // R2-GPU-02: build the overlay bind group once — every part it references is
+    // stable in VRAM, so the per-frame present path only reuses it.
+    let overlay_bind_group = shaders::create_overlay_bind_group(
+        device,
+        &overlay_layout,
+        &overlay_uniform,
+        &output_view,
+        &mask_view,
+        &color_sampler,
+    );
     // Clear mask to zero so compositing is identity until a brush writes.
     let zero_rows = vec![0u8; (width as usize) * (height as usize) * 2];
     queue.write_texture(
@@ -1940,10 +2087,13 @@ fn create_vram_state(
         output,
         output_view,
         mask,
-        mask_view,
-        color_sampler,
         overlay_uniform,
-        overlay_layout,
+        input,
+        input_view,
+        input_sampler,
+        input_source_identity: None,
+        overlay_pipelines: std::collections::HashMap::new(),
+        overlay_bind_group,
     })
 }
 
@@ -2150,20 +2300,81 @@ fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> 
 }
 "#;
 
+/// Select the wgpu backend set for the standalone (CLI/MCP/test) GPU init
+/// (R2-GPU-07).
+///
+/// Historically this was hard-restricted to `wgpu::Backends::METAL`, which
+/// silently denied GPU acceleration to Windows/Linux CLI/MCP consumers (their
+/// adapters are Vulkan/DX12). We now default to `wgpu::Backends::all()` so
+/// wgpu's own adapter enumeration picks the best available backend per
+/// platform; an explicit `LUMINA_GPU_BACKENDS` (`metal`|`vulkan`|`dx12`|`gl`|`all`)
+/// can narrow the set (e.g. to pin Metal on Apple Silicon). The GUI path
+/// (`from_parts`) is unaffected — it reuses the eframe renderer's already-chosen
+/// backend.
+#[cfg(feature = "gpu")]
+fn select_backends() -> wgpu::Backends {
+    match std::env::var("LUMINA_GPU_BACKENDS").as_deref() {
+        Ok("metal") => wgpu::Backends::METAL,
+        Ok("vulkan") => wgpu::Backends::VULKAN,
+        Ok("dx12") => wgpu::Backends::DX12,
+        Ok("gl") => wgpu::Backends::GL,
+        _ => wgpu::Backends::all(),
+    }
+}
+
+/// Register wgpu error handlers so GPU problems never take down the app
+/// (R2-GPU-06).
+///
+/// wgpu's default uncaptured-error handler panics (debug) / logs (release); a
+/// shader/validation error from `lumina-gpu` would otherwise crash the GUI. We
+/// install a non-panicking handler that logs loudly instead of panicking. For
+/// device loss we install the dedicated device-lost callback, which flips
+/// [`GpuResources::device_lost`] so the render methods degrade to the CPU
+/// pipeline instead of producing further errors.
+#[cfg(feature = "gpu")]
+fn register_device_handlers(resources: &mut GpuResources) {
+    resources
+        .device
+        .on_uncaptured_error(std::sync::Arc::new(move |err: wgpu::Error| {
+            // Log loudly but never panic: the GPU path is an accelerator, and the
+            // render methods fall back to the CPU oracle on any error.
+            match &err {
+                wgpu::Error::OutOfMemory { .. } => {
+                    log::error!("GPU out of memory: {err}");
+                }
+                _ => {
+                    log::warn!(
+                    "GPU uncaptured error (GPU path will fall back to CPU where possible): {err}"
+                );
+                }
+            }
+        }));
+    // Explicit device-lost callback (R2-GPU-06): when the adapter/device is
+    // revoked (driver update, GPU reset, monitor unplug), flip the flag so
+    // subsequent renders route to the CPU path.
+    let lost_flag = resources.device_lost.clone();
+    resources.device.set_device_lost_callback(
+        move |reason: wgpu::DeviceLostReason, message: String| {
+            log::error!("GPU device lost: {reason:?} - {message}");
+            lost_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        },
+    );
+}
+
 /// Enumerate a GPU adapter and create a device/queue.
 ///
-/// Restricted to the **Metal** backend for the M-series native path
-/// (Apple Silicon). On other native targets the backend list can be widened
-/// later. Returns [`GpuError::AdapterUnavailable`] when no adapter matches, and
-/// [`GpuError::DeviceUnavailable`] when device/queue creation fails — callers
-/// are expected to treat either as "use the CPU fallback".
+/// Enumerates all available backends (R2-GPU-07) for the M-series native path
+/// and beyond. Returns [`GpuError::AdapterUnavailable`] when no adapter
+/// matches, and [`GpuError::DeviceUnavailable`] when device/queue creation
+/// fails — callers are expected to treat either as "use the CPU fallback".
 #[cfg(feature = "gpu")]
 fn init_gpu_resources() -> Result<GpuResources, GpuError> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        // Metal is the primary backend on Apple Silicon (M5 Pro). Restricting
-        // the backend list avoids pulling Vulkan/DX12/WGPU-GL on platforms where
-        // they are unavailable and keeps adapter selection deterministic.
-        backends: wgpu::Backends::METAL,
+        // Metal is the primary backend on Apple Silicon, but we now enumerate all
+        // available backends so Windows/Linux CLI/MCP consumers also get GPU
+        // acceleration (R2-GPU-07). `LUMINA_GPU_BACKENDS` can pin a specific
+        // backend.
+        backends: select_backends(),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
@@ -2176,7 +2387,7 @@ fn init_gpu_resources() -> Result<GpuResources, GpuError> {
         force_fallback_adapter: false,
         apply_limit_buckets: false,
     }))
-    .map_err(|err| GpuError::AdapterUnavailable(format!("no Metal adapter found: {err}")))?;
+    .map_err(|err| GpuError::AdapterUnavailable(format!("no GPU adapter found: {err}")))?;
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("lumina-gpu"),
@@ -2188,12 +2399,15 @@ fn init_gpu_resources() -> Result<GpuResources, GpuError> {
     }))
     .map_err(|err| GpuError::DeviceUnavailable(err.to_string()))?;
 
-    Ok(GpuResources {
+    let mut resources = GpuResources {
         instance,
         adapter,
         device,
         queue,
-    })
+        device_lost: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    register_device_handlers(&mut resources);
+    Ok(resources)
 }
 
 #[cfg(all(test, feature = "gpu"))]
