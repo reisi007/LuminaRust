@@ -14,19 +14,15 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// RAW extensions accepted by [`lumina_raw`].
-const RAW_EXTENSIONS: &[&str] = &[
-    "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr", "iiq",
-    "rwl", "mos", "erf", "kdc", "x3f",
-];
-
 /// Raster extensions accepted directly by [`ImageFrame::decode`].
 const RASTER_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
 
-/// Returns `true` if the path points at a RAW file.
+/// Returns `true` if the path points at a RAW file. R2-CLI-02: routed through
+/// the single-source [`lumina_raw::RAW_EXTENSIONS`] list (`is_raw_extension`)
+/// instead of the previous private copy that could drift from it again.
 pub fn is_raw_path(path: &Path) -> bool {
     extension(path)
-        .map(|ext| RAW_EXTENSIONS.contains(&ext.as_str()))
+        .map(|ext| lumina_raw::is_raw_extension(&ext))
         .unwrap_or(false)
 }
 
@@ -39,8 +35,7 @@ fn extension(path: &Path) -> Option<String> {
 /// Detects and returns the canonical format string, or `UnsupportedFormat`.
 pub fn detect_format(path: &Path) -> Result<String, McpError> {
     let ext = extension(path).unwrap_or_default();
-    let supported =
-        RAW_EXTENSIONS.contains(&ext.as_str()) || RASTER_EXTENSIONS.contains(&ext.as_str());
+    let supported = lumina_raw::is_raw_extension(&ext) || RASTER_EXTENSIONS.contains(&ext.as_str());
     if supported {
         Ok(ext)
     } else {
@@ -111,28 +106,35 @@ pub fn validate_output_extension(output: &Path, format: ImageFileFormat) -> Resu
 }
 
 /// Builds a [`SourceIdentity`] for a freshly created sidecar, mirroring the
-/// `lumina-cli` import logic.
+/// `lumina-cli` `source_identity` logic exactly (R2-CLI-02): a missing file
+/// name and a failing `fs::metadata` are **loud** errors — the previous silent
+/// `bytes.len()` fallback could mask a source that changed (or became
+/// unreadable) between the byte read and the identity build, which would then
+/// bless a sidecar against a wrong `byte_length`.
 pub fn build_source_identity(
     path: &Path,
     bytes: &[u8],
     frame: &ImageFrame,
     raw_metadata: Option<&RawMetadata>,
-) -> SourceIdentity {
+) -> Result<SourceIdentity, McpError> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("image")
+        .ok_or_else(|| McpError::InvalidParams("input must have a file name".into()))?
         .to_string();
+    // CLI parity: `byte_length` is the on-disk length from `fs::metadata`.
+    // A metadata failure aborts loudly like the CLI's `source_identity`
+    // instead of silently falling back to the in-memory length.
     let byte_length = fs::metadata(path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(bytes.len() as u64);
+        .map_err(|error| McpError::FileNotFound(format!("{path:?}: {error}")))?
+        .len();
     let orientation = raw_metadata.map_or(1u8, |metadata| metadata.orientation);
     let raw_format = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_uppercase();
-    SourceIdentity {
+    Ok(SourceIdentity {
         relative_name: name,
         content_hash: format!("blake3:{}", blake3::hash(bytes).to_hex()),
         byte_length,
@@ -165,7 +167,7 @@ pub fn build_source_identity(
             extras: BTreeMap::new(),
         },
         extras: BTreeMap::new(),
-    }
+    })
 }
 
 /// Deterministic short hash of a recipe, used as the `recipe_hash` returned by
@@ -201,18 +203,16 @@ pub fn read_and_decode(
     Ok((bytes, frame, raw_metadata))
 }
 
-/// Image input extensions collected by `lumina_batch` (identical list to the
-/// CLI's `has_image_extension`).
-pub const BATCH_IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "arw", "cr2", "cr3", "dng", "nef",
-];
-
 /// Returns `true` when the path carries an extension accepted by batch
-/// collection.
+/// collection (R2-CLI-02): raster formats plus EVERY RAW extension from the
+/// single-source [`lumina_raw::RAW_EXTENSIONS`] list — the same predicate as
+/// the CLI's `has_image_extension`. The previous private 9-extension copy
+/// silently skipped RAF/ORF/etc. in `lumina_batch`.
 pub fn has_batch_image_extension(path: &Path) -> bool {
-    extension(path)
-        .map(|ext| BATCH_IMAGE_EXTENSIONS.contains(&ext.as_str()))
-        .unwrap_or(false)
+    extension(path).is_some_and(|ext| {
+        matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp")
+            || lumina_raw::is_raw_extension(&ext)
+    })
 }
 
 /// Returns `true` when the path looks like a Lumina sidecar JSON

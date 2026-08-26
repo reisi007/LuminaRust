@@ -2,7 +2,7 @@
 
 **Feature:** F-101 MCP AI-Agent-Schnittstelle
 **Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, 8 Tools inkl.
-`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 43 Tests grün).
+`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 45 Tests grün).
 **F-101-F1 erweiterter Scope (2026-08-26):** 4 zusätzliche CLI-Abdeckungs-
 Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
@@ -26,6 +26,16 @@ gelesenen Bytes direkt (`decode_bytes`, kein zweiter Disk-Read).
 Präzisierung (R2-MCP-03): `SidecarConflict` (-32010) entsteht ausschließlich
 in `lumina_edit` — `lumina_save` hat keinen Sidecar-Write-Pfad und kann
 diesen Fehler daher nicht auslösen.
+Extension-/Identity-Unifikation (R2-CLI-02, 2026-08-26): `lumina-mcp` trifft
+alle Extension-Entscheidungen über die Single-Source
+`lumina_raw::RAW_EXTENSIONS`/`is_raw_extension`; die privaten Kopien (18er
+RAW-Liste und die gedriftete 9er-Batch-Liste) sind entfernt. `lumina_batch`
+sammelt damit alle 18 RAW-Formate statt vorher still nur 9 (Drift-Guard- und
+E2E-Test analog dem CLI). Der `SourceIdentity`-Bau
+(`build_source_identity`) entspricht exakt der CLI-`source_identity`-
+Semantik: Fehlender Dateiname und `fs::metadata`-Fehler brechen laut ab
+(`InvalidParams` bzw. `FileNotFound`) — der bisherige stille
+`bytes.len()`-Fallback ist entfernt.
 **MVP-Erklärung:** letzter vor MVP offener Punkt ist geschlossen
 
 ## Inhaltsverzeichnis

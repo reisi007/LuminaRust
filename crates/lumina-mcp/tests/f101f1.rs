@@ -341,6 +341,82 @@ fn batch_validates_arguments_before_touching_the_filesystem() {
     assert!(!output_dir.exists(), "no output on rejected arguments");
 }
 
+/// R2-CLI-02 MCP drift guard: BOTH predicates must accept every RAW extension
+/// exported by the single-source `lumina_raw::RAW_EXTENSIONS` — batch
+/// collection and decode routing previously disagreed via a private 9-extension
+/// copy that silently skipped RAF/ORF/etc. in `lumina_batch`.
+#[test]
+fn batch_collection_and_decode_routing_agree_on_every_raw_extension() {
+    use lumina_mcp::util::{has_batch_image_extension, is_raw_path};
+
+    for extension in lumina_raw::RAW_EXTENSIONS {
+        let path_string = format!("photo.{extension}");
+        let path = Path::new(&path_string);
+        assert!(is_raw_path(path), "`is_raw_path` must accept `{extension}`");
+        assert!(
+            has_batch_image_extension(path),
+            "`has_batch_image_extension` (batch collection) must accept `{extension}`"
+        );
+    }
+    // Non-image names stay out of both paths.
+    for foreign in ["notes.txt", "archive.zip", "x.lumina.json", "noext"] {
+        assert!(!has_batch_image_extension(Path::new(foreign)), "{foreign}");
+        assert!(!is_raw_path(Path::new(foreign)), "{foreign}");
+    }
+}
+
+/// R2-CLI-02 end-to-end: synthetic (non-decodable) files for ALL RAW formats
+/// must be COLLECTED by `lumina_batch` — every one attempted exactly once and,
+/// on decode failure, reported loudly per item. The decodable PNG still
+/// renders; the run itself reports `failed` instead of silently dropping the
+/// skipped formats.
+#[test]
+fn batch_collection_finds_every_raw_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let input_dir = dir.path().join("in");
+    let output_dir = dir.path().join("out");
+    fs::create_dir_all(&input_dir).unwrap();
+
+    // Distinct stems: all targets normalize onto `.png`, so identical stems
+    // would trip the up-front collision guard instead of testing collection.
+    for (index, extension) in lumina_raw::RAW_EXTENSIONS.iter().enumerate() {
+        fs::write(
+            input_dir.join(format!("camera_{index:02}.{extension}")),
+            b"synthetic non-image payload",
+        )
+        .unwrap();
+    }
+    make_png(&input_dir.join("good.png"), 4, 4, 0);
+
+    let mut server = new_server(&dir.path().join("previews"));
+    let report = tool_ok(
+        &mut server,
+        "lumina_batch",
+        json!({
+            "input": input_dir.to_string_lossy(),
+            "output": output_dir.to_string_lossy(),
+        }),
+    );
+
+    let raw_count = lumina_raw::RAW_EXTENSIONS.len();
+    let results = report["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        raw_count + 1,
+        "every RAW format plus the PNG must be collected"
+    );
+    let collected_raw = results
+        .iter()
+        .filter(|r| r["input"].as_str().unwrap_or_default().contains("camera_"))
+        .count();
+    assert_eq!(collected_raw, raw_count, "report: {report}");
+    // The synthetic payloads cannot decode: loud per-item failures, and the
+    // one real image still renders.
+    assert_eq!(report["failed"], raw_count);
+    assert_eq!(report["succeeded"], 1);
+    assert!(output_dir.join("good.png").is_file());
+}
+
 // ---------------------------------------------------------------------------
 // lumina_reindex
 // ---------------------------------------------------------------------------

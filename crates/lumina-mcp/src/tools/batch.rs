@@ -153,7 +153,7 @@ fn batch_one(
 
     let (_bytes, frame, raw_metadata) = read_and_decode(source)?;
     let identity =
-        crate::util::build_source_identity(source, &_bytes, &frame, raw_metadata.as_ref());
+        crate::util::build_source_identity(source, &_bytes, &frame, raw_metadata.as_ref())?;
     let sidecar_path = lumina_sidecar::sidecar_path_for(source);
     let document = if sidecar_path.exists() {
         let (document, _revision, _status) =

@@ -164,9 +164,13 @@ werden nach unabhängiger Verifizierung entfernt.
   GPU-06 (kein on_uncaptured_error/Device-Lost-Handling -> App-Panik möglich),
   GPU-07 (Backends::METAL hardcodet, Windows/Linux nie GPU), GPU-04 (GPU-Pfad
   @2048 nicht schneller als CPU — gepoolte Ressourcen, L).
-- [ ] **[PRIO: mittel] R2-LENSFUN-BUNDLE**: LENS-01 (pro-Pixel-FFI ~48 Mio. Übergänge
-  @24MP, Row-API nutzen, M), LENS-02 (Corrector-'static Safety-Kommentar + Test),
-  LENS-04 (build.rs rerun-if-changed auf Library-Datei).
+- [ ] **[PRIO: mittel] R2-LENS-01-ADOPTION**: Row-Wrapper (geometry_row/apply_vignetting_row)
+  sind additiv in lumina-lensfun verfügbar (~48 Mio. → ~16k FFI-Übergänge @24MP),
+  ABER nicht byteidentisch zu den 1-Pixel-Calls (lensfuns Blockpfade akkumulieren
+  inkrementell; erste Spalte bitidentisch, Drift ≤7.4e-4 px @257 Spalten,
+  skaliert mit Breite). Adoption im Core-Loop erfordert bewusste Golden-
+  Rebaseline-Entscheidung (F-043-Toleranzen anfassen!) — nach manuellem Test
+  zusammen mit GPU-Bundle entscheiden.
 
 ### PRIO: niedrig (R2, gebündelt)
 
@@ -176,7 +180,8 @@ werden nach unabhängiger Verifizierung entfernt.
   GPU-12 (Overlay-Composite-Shader ohne Pixeltest), GPU-13 (lock().unwrap()
   Poisoning), RAW-03 (toter name-Parameter der Decode-API), PRESETS-FAIL-CLOSED
   (recipe_scope_violation fail-open bei Serialisierungsfehler — praktisch
-  unerreichbar, optional fail-closed), LENS-03
+  unerreichbar, optional fail-closed), GUI-IS_RAW_NAME (letzte private
+  Extension-Teilkopie in lumina-gui/lib.rs ~6288 auf RAW_EXTENSIONS umstellen)
   (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
   core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
   in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation

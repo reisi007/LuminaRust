@@ -49,7 +49,7 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let (_bytes, frame, raw_metadata) = read_and_decode(path)?;
 
     let sidecar_path = sidecar_path_for(path);
-    let identity = build_source_identity(path, &_bytes, &frame, raw_metadata.as_ref());
+    let identity = build_source_identity(path, &_bytes, &frame, raw_metadata.as_ref())?;
     let status = if sidecar_path.exists() {
         // Existing sidecar: validate against the CURRENT contents. A mismatch
         // is a loud SidecarError ("source changed"), never silently blessed —

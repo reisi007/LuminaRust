@@ -70,7 +70,7 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     };
 
     let sidecar_path = sidecar_path_for(path);
-    let identity = build_source_identity(path, &bytes, &frame, raw_metadata.as_ref());
+    let identity = build_source_identity(path, &bytes, &frame, raw_metadata.as_ref())?;
     let (document, sidecar_revision, status) = if sidecar_path.exists() {
         open_existing_sidecar(&sidecar_path, &identity)?
     } else {
