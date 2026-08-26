@@ -1366,9 +1366,7 @@ impl GpuContext {
         // R2-GPU-02: cache the overlay pipeline per target format so the present
         // shader is compiled once, not on every repaint. The bind group is
         // built once in `create_vram_state` (all its parts are stable in VRAM).
-        if let std::collections::hash_map::Entry::Vacant(e) =
-            v.overlay_pipelines.entry(format)
-        {
+        if let std::collections::hash_map::Entry::Vacant(e) = v.overlay_pipelines.entry(format) {
             let pipe = shaders::create_overlay_pipeline(&resources.device, format)
                 .map_err(|e| GpuError::RenderFailed(e.to_string()))?;
             e.insert(pipe);
