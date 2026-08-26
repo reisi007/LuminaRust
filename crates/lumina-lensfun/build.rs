@@ -23,6 +23,13 @@
 //! silent: a `cargo:warning` is emitted and builds against lensfun versions
 //! outside the validated 0.3.x series are refused outright instead of
 //! silently misreading struct memory.
+//!
+//! # Library tracking (review R2-LENS-04)
+//!
+//! Because the probe validates against whatever library is *installed*, the
+//! script also emits `cargo:rerun-if-changed` for the resolved `liblensfun`
+//! shared-library file, so a system upgrade re-runs the probe instead of
+//! silently keeping a stale ABI verdict (see `track_resolved_library`).
 
 use std::env;
 use std::path::PathBuf;
@@ -62,12 +69,14 @@ fn main() {
     let flags = String::from_utf8_lossy(&output.stdout);
     let mut linked = false;
     let mut include_dirs: Vec<String> = Vec::new();
+    let mut link_dirs: Vec<String> = Vec::new();
     for token in flags.split_whitespace() {
         if let Some(path) = token.strip_prefix("-L") {
             // Strip an optional leading `:` (some pkg-config prints `-L/path`).
             let path = path.strip_prefix(':').unwrap_or(path);
             if !path.is_empty() {
                 println!("cargo:rustc-link-search=native={path}");
+                link_dirs.push(path.to_owned());
             }
         } else if let Some(path) = token.strip_prefix("-I") {
             let path = path.strip_prefix(':').unwrap_or(path);
@@ -90,10 +99,96 @@ fn main() {
 
     verify_lfcamera_layout(&include_dirs);
 
+    // R2-LENS-04: track the *resolved* shared library so this script (and its
+    // ABI layout probe) re-runs when the installed liblensfun changes, not
+    // only when build.rs itself is edited.
+    track_resolved_library(&link_dirs);
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=LIBLENSFUN_SYS_DIR");
     println!("cargo:rerun-if-env-changed=CC");
+}
+
+/// Shared-library file names to look for, per target OS.
+fn lensfun_dylib_names() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &["liblensfun.dylib"]
+    } else if cfg!(target_os = "windows") {
+        &["liblensfun.dll", "lensfun.dll"]
+    } else {
+        &[
+            "liblensfun.so",
+            "liblensfun.so.3",
+            "liblensfun.so.2",
+            "liblensfun.so.1",
+            "liblensfun.so.0",
+        ]
+    }
+}
+
+/// Emit `cargo:rerun-if-changed` for the resolved `liblensfun` shared library
+/// (review R2-LENS-04).
+///
+/// Without this, cargo only re-runs the ABI layout probe when `build.rs`
+/// changes; a system upgrade of liblensfun (same link path, new library) went
+/// unnoticed. We resolve the actual file next to the pkg-config link dirs
+/// (falling back to `pkg-config --variable=libdir`) and canonicalise it, so
+/// both an upgraded file's mtime and a changed symlink target trigger a
+/// rebuild. If the library cannot be located at all we are never silent: a
+/// loud warning explains that the probe will not auto-rerun on upgrades.
+fn track_resolved_library(link_dirs: &[String]) {
+    let candidates = lensfun_dylib_names();
+
+    let mut found: Option<PathBuf> = None;
+    'dirs: for dir in link_dirs {
+        for name in candidates {
+            let candidate = PathBuf::from(dir).join(name);
+            if candidate.is_file() {
+                found = Some(candidate);
+                break 'dirs;
+            }
+        }
+    }
+
+    // Some setups rely on the linker's default search paths instead of an
+    // explicit `-L`; pkg-config still knows the libdir in that case.
+    if found.is_none() {
+        if let Ok(output) = Command::new("pkg-config")
+            .args(["--variable=libdir", "lensfun"])
+            .output()
+        {
+            if output.status.success() {
+                let dir = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if !dir.is_empty() {
+                    for name in candidates {
+                        let candidate = PathBuf::from(&dir).join(name);
+                        if candidate.is_file() {
+                            found = Some(candidate);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match found {
+        Some(lib) => {
+            // Canonicalise through Homebrew/Debian-style symlink chains
+            // (`liblensfun.dylib -> .../0.3.4/lib/liblensfun.dylib`): stat
+            // then tracks the real file, and an upgrade that repoints or
+            // replaces it triggers a rebuild of this crate.
+            let tracked = std::fs::canonicalize(&lib).unwrap_or(lib);
+            println!("cargo:rerun-if-changed={}", tracked.display());
+        }
+        None => println!(
+            "cargo:warning=lumina-lensfun: could not locate the resolved \
+             liblensfun shared library next to the pkg-config link path; the \
+             ABI layout probe will NOT re-run automatically after a system \
+             lensfun upgrade."
+        ),
+    }
 }
 
 /// Build-time assert for the `lfCamera` layout assumption baked into
