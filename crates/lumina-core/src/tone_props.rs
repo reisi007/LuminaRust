@@ -297,15 +297,14 @@ proptest! {
     /// TOLERANCE (documented): the comparison is `|delta_masked -
     /// delta_plain| < 1e-9`, not bit-exact. Mathematically both deltas are
     /// `log2(target / mean_visible)`, but the two code paths sum in different
-    /// orders — `match_total_exposure_masked` accumulates the weighted
-    /// luminances in row-major order, `analyze_tone` sorts the values first
-    /// (`v.sort_by(f64::total_cmp)`) and sums the sorted vector. f64 addition
-    /// is not associative, so the means can differ in the last bit (≈1 ULP),
-    /// which `log2` amplifies by at most ~1e-13 in the measurement range of
-    /// these frames. 1e-9 is two to four orders of magnitude above that and
-    /// far below any semantic difference; the intersection/subset character of
-    /// the property (visible pixels, product of layers) is asserted exactly
-    /// via [`visible_subframe`].
+    /// expressions — the plain matcher accumulates the unweighted pixel-order
+    /// luminance mean, the masked loop accumulates weighted luminances in
+    /// row-major order. f64 addition is not associative, so the results can
+    /// differ in the last bit (≈1 ULP), which `log2` amplifies by at most
+    /// ~1e-13 in the measurement range of these frames. 1e-9 is two to four
+    /// orders of magnitude above that and far below any semantic difference;
+    /// the intersection/subset character of the property (visible pixels,
+    /// product of layers) is asserted exactly via [`visible_subframe`].
     #[test]
     fn masked_binary_planes_reduce_to_subframe(
         (frame, layers) in frame_with_binary_planes_strategy(),
@@ -333,9 +332,15 @@ proptest! {
     /// Invariant (F-043, Schwarz-/Weißbild-Pfade): the documented fallbacks
     /// `median <= epsilon -> exposure_bounds.1` (black) and
     /// `median >= 1 - epsilon -> exposure_bounds.0` (white). Values 1..=3
-    /// stay on the regular `log2` path because `v/255 > epsilon` for `v >= 1`
-    /// (and `< 1 - epsilon` for `v <= 3`). The expected exposure mirrors the
-    /// source branch-for-branch, including the final clamp.
+    /// stay on the regular `log2` path because the analysis median is > epsilon
+    /// for `v >= 1` (and `< 1 - epsilon` for `v <= 3`). The expected exposure
+    /// mirrors the source branch-for-branch, including the final clamp.
+    ///
+    /// R2-PERF-01: the analysis median is the documented 256-bin class-mark
+    /// estimate (`bin(v) = v` for gray levels; bin 0 reports its lower edge
+    /// `0.0`, bin 255 its upper edge `1.0`, interior bins their center), so
+    /// the expectation uses that exact median — keeping the branch structure
+    /// assertions bit-exact.
     #[test]
     fn auto_tone_black_and_white_fallback_paths(value in prop_oneof![
         (0u8..=3).boxed(),
@@ -344,7 +349,11 @@ proptest! {
         let frame = ImageFrame::new(1, 1, vec![value, value, value, 255]).unwrap();
         let config = AutoToneConfig::default();
         let result = suggest_auto_tone(&frame, config).unwrap();
-        let median = f64::from(value) / 255.0;
+        let median = match value {
+            0 => 0.0,
+            255 => 1.0,
+            v => (f64::from(v) + 0.5) / 256.0,
+        };
         let expected = {
             let raw = if median <= config.epsilon {
                 config.exposure_bounds.1
@@ -361,14 +370,20 @@ proptest! {
 
     /// Invariant (F-043, Gleichverteilung): a frame with a single pixel value
     /// has span `p99 - p01 == 0 <= epsilon`, so contrast is the identity
-    /// `0.0`. For `0 < k < 255` the exposure follows the regular `log2` path;
-    /// for the universal black/white frames the documented fallback bounds
-    /// apply. SOURCE BOUNDARY (documented, not fixed): the `span <= epsilon`
-    /// branch returns `0.0` *unclamped* — for pathological
-    /// `contrast_bounds` excluding `0.0` the "contrast in bounds" invariant
-    /// would not hold. `0.0` is the documented identity value (pipeline.md:
-    /// "Leere Bilder liefern 0"), so the properties use bounds containing
-    /// `0.0` (default config).
+    /// `0.0` — R2-PERF-01 preserves this bit-exactly: every sample of a
+    /// constant frame lands in one bin, so both quantile brackets estimate the
+    /// same class mark and the span stays exactly `0.0`. For `0 < k < 255` the
+    /// exposure follows the regular `log2` path; for the universal black/white
+    /// frames the documented fallback bounds apply. SOURCE BOUNDARY
+    /// (documented, not fixed): the `span <= epsilon` branch returns `0.0`
+    /// *unclamped* — for pathological `contrast_bounds` excluding `0.0` the
+    /// "contrast in bounds" invariant would not hold. `0.0` is the documented
+    /// identity value (pipeline.md: "Leere Bilder liefern 0"), so the
+    /// properties use bounds containing `0.0` (default config).
+    ///
+    /// R2-PERF-01: the expected exposure uses the documented 256-bin
+    /// class-mark median (`(k + 0.5)/256` for interior gray levels, exact
+    /// `0.0`/`1.0` at the outer bins).
     #[test]
     fn auto_tone_uniform_frame_has_zero_contrast(value in 0u8..=255) {
         let mut pixels = Vec::with_capacity(16);
@@ -379,7 +394,11 @@ proptest! {
         let config = AutoToneConfig::default();
         let result = suggest_auto_tone(&frame, config).unwrap();
         prop_assert_eq!(result.contrast, 0.0, "value {}", value);
-        let median = f64::from(value) / 255.0;
+        let median = match value {
+            0 => 0.0,
+            255 => 1.0,
+            v => (f64::from(v) + 0.5) / 256.0,
+        };
         let expected = {
             let raw = if median <= config.epsilon {
                 config.exposure_bounds.1
@@ -502,7 +521,10 @@ proptest! {
     }
 
     /// Invariant (F-043, Analyse): `analyze_tone` always reports exactly
-    /// `width * height` samples with finite values in `0..=1` and `p01 <= p99`.
+    /// `width * height` samples with finite values in `0..=1`, monotone
+    /// quantiles (`p01 <= median <= p99` — guaranteed by construction since
+    /// R2-PERF-01: class marks are ordered by bin index and interpolation is
+    /// convex) and `p01 <= p99`.
     #[test]
     fn analyze_tone_invariants(frame in any_frame_strategy()) {
         let analysis = analyze_tone(&frame);
@@ -514,7 +536,64 @@ proptest! {
             prop_assert!(value.is_finite(), "analysis value must be finite");
             prop_assert!((0.0..=1.0).contains(&value), "analysis value {} outside 0..=1", value);
         }
+        prop_assert!(analysis.p01 <= analysis.median, "p01 {} > median {}", analysis.p01, analysis.median);
+        prop_assert!(analysis.median <= analysis.p99, "median {} > p99 {}", analysis.median, analysis.p99);
         prop_assert!(analysis.p01 <= analysis.p99, "p01 {} > p99 {}", analysis.p01, analysis.p99);
+    }
+
+    /// Invariant (R2-PERF-01): the 256-bin class-mark statistics track the
+    /// exact sorted-sample statistics within the documented universal bound of
+    /// one bin width `1/256`. Every class mark lies inside the bin of the
+    /// order statistic it estimates; linear interpolation is convex in both
+    /// brackets, so the deviation can never exceed one bin width — for ANY
+    /// frame, dense or sparse. The mean stays the exact pixel-order sum and
+    /// must agree with the exact mean to within f64 rounding.
+    #[test]
+    fn analyze_tone_tracks_sorted_sample_statistics_within_one_bin(
+        frame in any_frame_strategy(),
+    ) {
+        const BIN_BOUND: f64 = 1.0 / 256.0 + 1e-9;
+        let analysis = analyze_tone(&frame);
+        let mut values: Vec<f64> = frame
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| {
+                (0.2126 * f64::from(pixel[0])
+                    + 0.7152 * f64::from(pixel[1])
+                    + 0.0722 * f64::from(pixel[2]))
+                    / 255.0
+            })
+            .collect();
+        if values.is_empty() {
+            prop_assert_eq!(analysis.sample_count, 0);
+            return Ok(());
+        }
+        values.sort_by(f64::total_cmp);
+        let percentile = |q: f64| {
+            let position = q * (values.len() - 1) as f64;
+            let low = position.floor() as usize;
+            let high = position.ceil() as usize;
+            values[low]
+                + (values[high] - values[low]) * (position - low as f64)
+        };
+        prop_assert!(
+            (analysis.mean - values.iter().sum::<f64>() / values.len() as f64).abs() <= 1e-9,
+            "mean: pixel-order sum {} vs sorted sum {}",
+            analysis.mean,
+            values.iter().sum::<f64>() / values.len() as f64
+        );
+        for (name, actual, expected) in [
+            ("p01", analysis.p01, percentile(0.01)),
+            ("median", analysis.median, percentile(0.5)),
+            ("p99", analysis.p99, percentile(0.99)),
+        ] {
+            prop_assert!(
+                (actual - expected).abs() <= BIN_BOUND,
+                "{name}: bin estimate {actual} vs exact {expected}, exceeds {BIN_BOUND}"
+            );
+        }
     }
 
     /// Invariant (F-043, Alpha): alpha is deliberately ignored by the tone
@@ -534,6 +613,10 @@ proptest! {
 /// clamped to `epsilon..=1.0`, so every target in `[0, epsilon)` is lifted to
 /// `epsilon` and yields a bit-identical result. The upper end of the clamp
 /// range is *not* pulled down: target `1.0` stays `1.0`.
+///
+/// R2-PERF-01: gray level 128 lands in bin 128, whose documented class-mark
+/// median is `(128 + 0.5)/256`; the expectations below use that analysis
+/// median.
 #[test]
 fn auto_tone_target_zero_is_clamped_to_epsilon() {
     let config = AutoToneConfig {
@@ -545,7 +628,7 @@ fn auto_tone_target_zero_is_clamped_to_epsilon() {
     config.validate().unwrap();
     let frame = ImageFrame::new(1, 1, vec![128, 128, 128, 255]).unwrap();
     let lifted = suggest_auto_tone(&frame, config).unwrap();
-    let expected = (0.01f64 / (128.0 / 255.0)).log2();
+    let expected = (0.01f64 / (128.5f64 / 256.0)).log2();
     assert!(
         (lifted.exposure - expected).abs() < 1e-9,
         "exposure {} != lifted formula {expected}",
@@ -570,7 +653,7 @@ fn auto_tone_target_zero_is_clamped_to_epsilon() {
         },
     )
     .unwrap();
-    let expected_upper = (1.0f64 / (128.0 / 255.0)).log2();
+    let expected_upper = (1.0f64 / (128.5f64 / 256.0)).log2();
     assert!(
         (upper.exposure - expected_upper).abs() < 1e-9,
         "exposure {} != upper formula {expected_upper}",

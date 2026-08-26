@@ -26,13 +26,18 @@
 //! The type is `Serialize`/`Deserialize` and exposes a stable blake3
 //! [`LuminanceHistogram::digest`] over bins and frame dimensions, making it
 //! directly usable as the value stored under `CacheStage::Histogram`.
+//!
+//! Since R2-PERF-01 the binning loop itself lives in the shared single-pass
+//! kernel [`accumulate_bins_and_luminance_sum`], which is also the foundation
+//! of [`crate::tone::analyze_tone`]: histogram panel and tone panel derive
+//! their numbers from the very same pass over the pixels.
 
 use crate::{CoreError, ImageFrame};
 use serde::{Deserialize, Serialize};
 
 /// Number of luminance bins and, simultaneously, the inverse of the bin width.
-const BIN_COUNT: usize = 256;
-const BIN_WIDTH: f64 = 1.0 / BIN_COUNT as f64;
+pub(crate) const BIN_COUNT: usize = 256;
+pub(crate) const BIN_WIDTH: f64 = 1.0 / BIN_COUNT as f64;
 /// Rec.709 (BT.709) luminance weights for the sRGB-encoded MVP domain.
 const REC709_WEIGHTS: [f64; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -56,24 +61,48 @@ pub struct LuminanceHistogram {
     pub bins: Vec<u64>,
 }
 
+/// Shared single-pass kernel behind [`LuminanceHistogram::new`] and
+/// [`crate::tone::analyze_tone`] (R2-PERF-01).
+///
+/// One iteration over the RGBA8 pixels computes BOTH the 256-bin luminance
+/// histogram AND the exact pixel-order f64 luminance sum, so consumers that
+/// need histogram and tone statistics no longer pay two passes — and the tone
+/// analysis no longer allocates one `f64` per pixel nor sorts (the historical
+/// implementation held ~8 bytes per pixel on the heap and ran O(n log n)).
+///
+/// The per-pixel expression is written exactly like
+/// [`crate::tone::luminance_of`], and the sum accumulates sequentially in
+/// pixel order starting from `0.0` — the very same operations as
+/// [`crate::tone::mean_luminance`]. The returned sum is therefore bit-identical
+/// to that measurement (guaranteed by a unit test in `tone.rs`). The binning
+/// decision per pixel is identical to the pre-refactor inline loop of
+/// [`LuminanceHistogram::new`], so persisted histograms and their digests are
+/// byte-stable across this refactor.
+pub(crate) fn accumulate_bins_and_luminance_sum(frame: &ImageFrame) -> ([u64; BIN_COUNT], f64) {
+    let mut bins = [0u64; BIN_COUNT];
+    let mut sum = 0.0f64;
+    for pixel in frame.pixels.as_chunks::<4>().0 {
+        let luminance = (REC709_WEIGHTS[0] * f64::from(pixel[0])
+            + REC709_WEIGHTS[1] * f64::from(pixel[1])
+            + REC709_WEIGHTS[2] * f64::from(pixel[2]))
+            / 255.0;
+        let bin = ((luminance * BIN_COUNT as f64) as usize).min(BIN_COUNT - 1);
+        bins[bin] += 1;
+        sum += luminance;
+    }
+    (bins, sum)
+}
+
 impl LuminanceHistogram {
     /// Builds the 256-bin histogram for `frame`. Alpha is ignored; every
     /// pixel contributes its Rec.709 luminance sample. Empty frames yield an
     /// all-zero histogram without panics or division by zero.
     pub fn new(frame: &ImageFrame) -> Self {
-        let mut bins = vec![0u64; BIN_COUNT];
-        for pixel in frame.pixels.as_chunks::<4>().0 {
-            let luminance = (REC709_WEIGHTS[0] * f64::from(pixel[0])
-                + REC709_WEIGHTS[1] * f64::from(pixel[1])
-                + REC709_WEIGHTS[2] * f64::from(pixel[2]))
-                / 255.0;
-            let bin = ((luminance * BIN_COUNT as f64) as usize).min(BIN_COUNT - 1);
-            bins[bin] += 1;
-        }
+        let (bins, _) = accumulate_bins_and_luminance_sum(frame);
         Self {
             width: frame.width,
             height: frame.height,
-            bins,
+            bins: bins.to_vec(),
         }
     }
 

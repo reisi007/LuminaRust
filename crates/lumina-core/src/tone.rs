@@ -1,9 +1,18 @@
+use crate::histogram::{
+    accumulate_bins_and_luminance_sum, LuminanceHistogram, BIN_COUNT, BIN_WIDTH,
+};
 use crate::masks::MaskPlane;
 use crate::{CoreError, ImageFrame};
 
 /// Luminance is measured from RGBA8's encoded sRGB RGB channels, normalized to
 /// 0..=1, with Rec.709 weights. Alpha is deliberately ignored in this raster
 /// MVP, so transparent pixels are still samples of their RGB values.
+///
+/// Since R2-PERF-01 the quantiles of [`analyze_tone`] are class-mark
+/// estimates over the shared 256-bin luminance histogram (universal accuracy
+/// bound: one bin width `1/256` against the sorted-sample interpolation); the
+/// mean stays the exact pixel-order sum. Normative contract:
+/// `feature/architecture/pipeline.md` § Auto-Tone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ToneAnalysis {
     pub mean: f64,
@@ -87,12 +96,12 @@ fn luminance_of(pixel: &[u8]) -> f64 {
 
 /// Single-pass mean Rec.709 luminance over all pixels (alpha ignored).
 ///
-/// The exposure matchers only need the mean, so this avoids the full sort that
-/// [`analyze_tone`] performs for its percentiles. The arithmetic mean is taken
-/// in pixel order; it agrees with `analyze_tone(frame).mean` to within the
-/// last floating-point bit (f64 addition is not associative) — far below every
-/// tolerance used by the golden/property tests and the byte-identity reference
-/// check. For constant frames (every pixel equal) it is bit-exact.
+/// The exposure matchers only need the mean, so this avoids the full histogram
+/// aggregation that [`analyze_tone`] performs for its quantiles. The
+/// arithmetic mean is taken in pixel order; since R2-PERF-01,
+/// `analyze_tone(frame).mean` is computed by exactly the same expression in
+/// the same order, so the two are **bit-identical** (unit-tested). For
+/// constant frames it is bit-exact.
 fn mean_luminance(frame: &ImageFrame) -> f64 {
     let count = frame.pixels.len() / 4;
     if count == 0 {
@@ -108,15 +117,84 @@ fn mean_luminance(frame: &ImageFrame) -> f64 {
     sum / count as f64
 }
 
+/// Class mark of a populated bin for the tone quantile estimator
+/// (R2-PERF-01): bin `0` reports its lower edge (`0.0`) and bin `255` its
+/// upper edge (`1.0`) because those edges are exact bounds of the samples
+/// they contain — this keeps degenerate uniform black/white frames bit-exact
+/// and preserves the documented Auto-Tone fallback branches. Interior bins
+/// report their center (the standard class mark of grouped data), whose
+/// distance from any sample in the bin is at most half a bin width.
+fn class_mark(bin: usize) -> f64 {
+    match bin {
+        0 => 0.0,
+        b if b >= BIN_COUNT - 1 => 1.0,
+        b => (b as f64 + 0.5) * BIN_WIDTH,
+    }
+}
+
+/// Value estimate for the `rank`-th smallest luminance sample (0-based) from
+/// the 256-bin counts: the class mark of the bin holding that rank.
+fn rank_class_mark(bins: &[u64; BIN_COUNT], rank: usize) -> f64 {
+    let mut cumulative = 0u64;
+    for (bin, &count) in bins.iter().enumerate() {
+        cumulative += count;
+        if (rank as u64) < cumulative {
+            return class_mark(bin);
+        }
+    }
+    class_mark(BIN_COUNT - 1)
+}
+
+/// Quantile estimator over the shared 256-bin histogram (R2-PERF-01).
+///
+/// The bracketing order statistics `floor(q·(n−1))` and `ceil(q·(n−1))` are
+/// estimated by their bins' class marks and linearly interpolated with the
+/// exact fractional rank — the same interpolation shape as the historical
+/// sorted-sample implementation, applied to class-mark estimates.
+///
+/// # Accuracy (documented contract)
+///
+/// Every class mark lies inside the bin of the order statistic it estimates,
+/// so the estimate deviates from that sample by at most one bin width
+/// `1/256`; linear interpolation is convex in both brackets, which yields the
+/// **universal bound** `|estimate − exact_sorted_interpolation| ≤ 1/256` for
+/// every frame (dense or sparse). The estimator is monotone non-decreasing in
+/// `q` (the marks are ordered by bin index), constant frames give
+/// `p01 == median == p99`, and empty frames return `0.0`.
+fn histogram_class_mark_quantile(bins: &[u64; BIN_COUNT], sample_count: usize, q: f64) -> f64 {
+    let position = q * (sample_count - 1) as f64;
+    let low = position.floor() as usize;
+    let high = position.ceil() as usize;
+    let low_value = rank_class_mark(bins, low);
+    if high == low {
+        return low_value;
+    }
+    low_value + (rank_class_mark(bins, high) - low_value) * (position - low as f64)
+}
+
+/// Tone statistics of a frame in a single pass (R2-PERF-01).
+///
+/// Replaces the historical per-pixel `Vec<f64>` allocation (~8 bytes per
+/// pixel: ~192 MB at 24 MP) plus full O(n log n) sort with the shared 256-bin
+/// pass of [`crate::histogram::accumulate_bins_and_luminance_sum`] (2 KB of
+/// stack state, O(n)); see [`analyze_tone_with_histogram`] for the combined
+/// form that also returns the persisted histogram.
+///
+/// # Result semantics (normative: `feature/architecture/pipeline.md` § Auto-Tone)
+///
+/// - `mean`: exact pixel-order Rec.709 luminance sum divided by the sample
+///   count — the same measurement domain and summation order as
+///   [`match_total_exposure`], i.e. `analyze_tone(f).mean ==
+///   mean_luminance(f)` bit-exactly.
+/// - `median`/`p01`/`p99`: interpolated from the shared 256-bin luminance
+///   histogram via [`histogram_class_mark_quantile`]. Deviation from the
+///   historical sorted-sample interpolation is bounded by one bin width
+///   (`1/256`) for **every** frame; monotone in `q`; uniform black/white
+///   frames report exactly `0.0`/`1.0`, so the Auto-Tone fallback branches
+///   behave bit-identically to before.
 pub fn analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
-    let mut v: Vec<f64> = frame
-        .pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|pixel| luminance_of(pixel))
-        .collect();
-    if v.is_empty() {
+    let sample_count = frame.pixels.len() / 4;
+    if sample_count == 0 {
         return ToneAnalysis {
             mean: 0.0,
             median: 0.0,
@@ -125,26 +203,54 @@ pub fn analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
             sample_count: 0,
         };
     }
-    // Unstable sort yields a byte-identical sorted vector to the historical
-    // stable sort: luminance ∈ [0,1] is finite and non-negative, so equal
-    // elements are interchangeable and `total_cmp` coincides with plain numeric
-    // order. The per-index values (and therefore the mean/percentiles below)
-    // are unchanged, while pdqsort is materially faster than the merge-sort
-    // backing `sort_by` — the dominant cost of this analyzer at large sizes.
-    v.sort_unstable_by(f64::total_cmp);
-    let percentile = |q: f64| {
-        let position = q * (v.len() - 1) as f64;
-        let low = position.floor() as usize;
-        let high = position.ceil() as usize;
-        v[low] + (v[high] - v[low]) * (position - low as f64)
-    };
+    let (bins, sum) = accumulate_bins_and_luminance_sum(frame);
     ToneAnalysis {
-        mean: v.iter().sum::<f64>() / v.len() as f64,
-        median: percentile(0.5),
-        p01: percentile(0.01),
-        p99: percentile(0.99),
-        sample_count: v.len(),
+        mean: sum / sample_count as f64,
+        median: histogram_class_mark_quantile(&bins, sample_count, 0.5),
+        p01: histogram_class_mark_quantile(&bins, sample_count, 0.01),
+        p99: histogram_class_mark_quantile(&bins, sample_count, 0.99),
+        sample_count,
     }
+}
+
+/// Combined single-pass analysis (R2-PERF-01): one iteration over the pixels
+/// yields BOTH the persisted [`LuminanceHistogram`] AND the [`ToneAnalysis`]
+/// derived from the very same bins.
+///
+/// This is the coupling point for consumers that display the histogram panel
+/// and the tone panel together: instead of running `LuminanceHistogram::new`
+/// and [`analyze_tone`] as two separate full passes over the frame (as the GUI
+/// and `lumina_analyze` historically did), one pass produces both results.
+/// The returned pair satisfies
+/// `(analysis, histogram) == (analyze_tone(frame), LuminanceHistogram::new(frame))`
+/// exactly (unit-tested), and the analysis quantiles are derived from exactly
+/// `histogram.bins`, so both panels share one consistent pass structure.
+pub fn analyze_tone_with_histogram(frame: &ImageFrame) -> (ToneAnalysis, LuminanceHistogram) {
+    let (bins, sum) = accumulate_bins_and_luminance_sum(frame);
+    let sample_count = frame.pixels.len() / 4;
+    let analysis = if sample_count == 0 {
+        ToneAnalysis {
+            mean: 0.0,
+            median: 0.0,
+            p01: 0.0,
+            p99: 0.0,
+            sample_count: 0,
+        }
+    } else {
+        ToneAnalysis {
+            mean: sum / sample_count as f64,
+            median: histogram_class_mark_quantile(&bins, sample_count, 0.5),
+            p01: histogram_class_mark_quantile(&bins, sample_count, 0.01),
+            p99: histogram_class_mark_quantile(&bins, sample_count, 0.99),
+            sample_count,
+        }
+    };
+    let histogram = LuminanceHistogram {
+        width: frame.width,
+        height: frame.height,
+        bins: bins.to_vec(),
+    };
+    (analysis, histogram)
 }
 
 pub fn suggest_auto_tone(
@@ -351,7 +457,12 @@ mod tests {
         )
         .unwrap();
         let a = analyze_tone(&f);
-        assert!((a.median - 96.0 / 255.0).abs() < 1e-9);
+        // R2-PERF-01: the median is now the documented 256-bin class-mark
+        // estimate. Its universal bound against the exact sorted-sample
+        // interpolation (96/255 for this frame) is one bin width (1/256);
+        // pipeline.md § Auto-Tone. The exact value here is
+        // 96.5/256 = 0.376953…, deviation 4.8e-4.
+        assert!((a.median - 96.0 / 255.0).abs() <= 1.0 / 256.0 + 1e-9);
         assert!(a.p01 < a.p99);
     }
     #[test]
@@ -850,10 +961,11 @@ mod tests {
 
     // ---- F-074-A3: byte-/value-identity against the original logic ----
 
-    /// Independent reimplementation of the ORIGINAL (pre-F-074-A3) `analyze_tone`:
-    /// stable sort + sorted-sum mean + linear-interpolation percentiles. Used
-    /// only by the identity check below to prove the optimized kernels did not
-    /// change their results.
+    /// Independent reimplementation of the ORIGINAL (pre-R2-PERF-01)
+    /// `analyze_tone`: per-pixel vector + stable sort + sorted-sum mean +
+    /// linear-interpolation percentiles. Used by the bounded-drift comparison
+    /// below to prove the 256-bin class-mark kernel stays inside its
+    /// documented tolerances against the original semantics.
     fn reference_analyze_tone(frame: &ImageFrame) -> ToneAnalysis {
         let mut v: Vec<f64> = frame
             .pixels
@@ -956,19 +1068,27 @@ mod tests {
     }
 
     #[test]
-    fn tone_analyzers_are_value_identical_to_original_reference() {
-        // `analyze_tone`/`suggest_auto_tone` keep their byte-exact values: the
-        // only change is `sort_by` → `sort_unstable_by`, which is identical for
-        // the [0,1]-valued, finite, non-negative luminance domain (equal
-        // elements are interchangeable, so the sorted vector is unchanged).
-        // They are therefore compared with exact `==`.
+    fn tone_analyzers_track_original_reference_within_documented_bounds() {
+        // R2-PERF-01 replaced the per-pixel sort with the shared 256-bin
+        // class-mark pass. The ORIGINAL semantics are kept as the reference
+        // implementations above and compared with the documented contract
+        // (pipeline.md § Auto-Tone):
         //
-        // `match_total_exposure` now computes its mean from a single linear
-        // pass instead of the sorted `analyze_tone` sum; the two means differ
-        // only in the last floating-point bit (f64 addition is not associative),
-        // so it is compared with a 1e-6 value tolerance — far tighter than the
-        // codebase's own documented mean-equivalence tolerance (1/512) and well
-        // inside every golden/property test.
+        // - `mean`: same measurement domain, but the summation changed from
+        //   the sorted vector to pixel order (identical to the exposure
+        //   matchers). f64 addition is not associative, so last-bit
+        //   differences are possible → 1e-9 (far below every golden
+        //   tolerance; the matchers' own mean was already pixel-order).
+        // - `median`/`p01`/`p99`: class-mark estimates over 256 bins. Every
+        //   class mark lies in the bin of the order statistic it estimates,
+        //   so the universal bound against the sorted-sample interpolation is
+        //   exactly one bin width `1/256` for EVERY frame — asserted here.
+        // - `suggest_auto_tone` exposure/contrast derive from those
+        //   statistics; log-sensitivity amplifies a one-bin median shift by
+        //   `1/(m·ln2)` (worst case here ≈ 0.02 EV) → documented 0.05.
+        // - `match_total_exposure` is untouched (single-pass mean + shared
+        //   delta); compared against the original sorted-sum reference with
+        //   the established 1e-6 tolerance.
         let frames = vec![
             ImageFrame::new(0, 0, vec![]).unwrap(),
             ImageFrame::new(1, 1, vec![0, 0, 0, 255]).unwrap(),
@@ -985,24 +1105,181 @@ mod tests {
             .unwrap(),
             bench_like_frame(512),
         ];
+        const BIN_BOUND: f64 = 1.0 / 256.0 + 1e-9;
 
         for frame in &frames {
-            assert_eq!(analyze_tone(frame), reference_analyze_tone(frame));
-            let config = AutoToneConfig::default();
-            assert_eq!(
-                suggest_auto_tone(frame, config).unwrap(),
-                reference_suggest_auto_tone(frame, config).unwrap()
+            let optimized = analyze_tone(frame);
+            let reference = reference_analyze_tone(frame);
+            assert_eq!(optimized.sample_count, reference.sample_count);
+            assert!(
+                (optimized.mean - reference.mean).abs() <= 1e-9,
+                "mean: optimized {} vs reference {}",
+                optimized.mean,
+                reference.mean
             );
-            for target in [0.0, 1e-6, 0.25, 0.5, 0.63, 0.9, 1.0] {
-                let optimized = match_total_exposure(frame, target).unwrap();
-                let reference = reference_match_total_exposure(frame, target).unwrap();
-                let diff = (optimized - reference).abs();
+            assert!(
+                optimized.p01 <= optimized.median && optimized.median <= optimized.p99,
+                "quantile ordering broken: {:?}",
+                optimized
+            );
+            for (name, value, expected) in [
+                ("median", optimized.median, reference.median),
+                ("p01", optimized.p01, reference.p01),
+                ("p99", optimized.p99, reference.p99),
+            ] {
                 assert!(
-                    diff <= 1e-6,
-                    "match_total_exposure target {target}: optimized {optimized} vs reference \
-                     {reference}, diff {diff}"
+                    (value - expected).abs() <= BIN_BOUND,
+                    "{name}: optimized {value} vs reference {expected}, bound {BIN_BOUND}"
                 );
             }
+
+            let config = AutoToneConfig::default();
+            let opt_auto = suggest_auto_tone(frame, config).unwrap();
+            let ref_auto = reference_suggest_auto_tone(frame, config).unwrap();
+            assert!(
+                (opt_auto.exposure - ref_auto.exposure).abs() <= 0.05,
+                "auto exposure: optimized {} vs reference {}",
+                opt_auto.exposure,
+                ref_auto.exposure
+            );
+            assert!(
+                (opt_auto.contrast - ref_auto.contrast).abs() <= 0.05,
+                "auto contrast: optimized {} vs reference {}",
+                opt_auto.contrast,
+                ref_auto.contrast
+            );
+
+            for target in [0.0, 1e-6, 0.25, 0.5, 0.63, 0.9, 1.0] {
+                let diff = (match_total_exposure(frame, target).unwrap()
+                    - reference_match_total_exposure(frame, target).unwrap())
+                .abs();
+                assert!(
+                    diff <= 1e-6,
+                    "match_total_exposure target {target}: optimized vs reference, diff {diff}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mean_is_bit_identical_to_the_pixel_order_matcher_mean() {
+        // R2-PERF-01: `analyze_tone.mean` and the exposure matcher's internal
+        // `mean_luminance` use exactly the same expression and summation
+        // order, so they must agree bit-exactly — this is what keeps the
+        // Auto-Tone analysis display and `match_total_exposure` consistent.
+        let frames = vec![
+            ImageFrame::new(0, 0, vec![]).unwrap(),
+            ImageFrame::new(1, 1, vec![128, 128, 128, 255]).unwrap(),
+            ImageFrame::new(
+                3,
+                2,
+                vec![
+                    3, 17, 91, 0, 42, 128, 211, 255, 255, 64, 7, 32, 99, 101, 203, 17, 180, 220,
+                    12, 200, 71, 33, 88, 250,
+                ],
+            )
+            .unwrap(),
+            bench_like_frame(64),
+        ];
+        for frame in &frames {
+            assert_eq!(analyze_tone(frame).mean, mean_luminance(frame));
+        }
+    }
+
+    #[test]
+    fn degenerate_frames_stay_exact_and_preserve_the_fallback_branches() {
+        // Constant frames: p01 == median == p99 (span 0 → contrast identity),
+        // uniform black reports median exactly 0.0 and uniform white exactly
+        // 1.0 (outer-bin edge class marks), so the documented Auto-Tone
+        // black/white fallback branches fire bit-identically to the
+        // sorted-sample implementation.
+        for value in [0u8, 1, 64, 128, 200, 254, 255] {
+            let mut pixels = Vec::with_capacity(16 * 4);
+            for _ in 0..16 {
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+            let frame = ImageFrame::new(4, 4, pixels).unwrap();
+            let analysis = analyze_tone(&frame);
+            assert_eq!(analysis.p01, analysis.median);
+            assert_eq!(analysis.median, analysis.p99);
+            match value {
+                0 => assert_eq!(analysis.median, 0.0),
+                255 => assert_eq!(analysis.median, 1.0),
+                v => assert!((analysis.median - (f64::from(v) + 0.5) / 256.0).abs() <= 1e-12),
+            }
+            let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
+            assert_eq!(result.contrast, 0.0, "value {value}");
+            if value == 0 {
+                assert_eq!(result.exposure, AutoToneConfig::default().exposure_bounds.1);
+            } else if value == 255 {
+                assert_eq!(result.exposure, AutoToneConfig::default().exposure_bounds.0);
+            } else {
+                let expected = (AutoToneConfig::default().target_luminance
+                    / result.analysis.median)
+                    .log2()
+                    .clamp(
+                        AutoToneConfig::default().exposure_bounds.0,
+                        AutoToneConfig::default().exposure_bounds.1,
+                    );
+                assert_eq!(result.exposure, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn bimodal_frames_get_an_exact_median_across_the_gap() {
+        // 8x8 black/white checkerboard: two populated bins far apart. The
+        // historical failure mode of naive intra-bin quantiles would place
+        // the median inside bin 0 (~0.004); the class-mark bracket estimator
+        // interpolates between the outer-bin edge marks and reproduces the
+        // exact sorted-sample statistics bit-near-exactly.
+        let mut pixels = Vec::with_capacity(64 * 4);
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let value = if (x + y) % 2 == 0 { 255 } else { 0 };
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
+        let analysis = analyze_tone(&frame);
+        assert_eq!(analysis.sample_count, 64);
+        assert_eq!(analysis.p01, 0.0);
+        assert!((analysis.median - 0.5).abs() < 1e-9);
+        assert_eq!(analysis.p99, 1.0);
+
+        let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
+        assert!((result.exposure - 0.0).abs() <= 1e-9);
+        assert!((result.contrast - (-0.2)).abs() <= 1e-9);
+    }
+
+    #[test]
+    fn analyze_tone_with_histogram_matches_the_individual_calls() {
+        // Coupling contract (R2-PERF-01): the combined single-pass call is
+        // exactly equivalent to the two individual calls it replaces, and the
+        // analysis quantiles are derived from exactly the returned histogram.
+        let frames = vec![
+            ImageFrame::new(0, 0, vec![]).unwrap(),
+            ImageFrame::new(1, 1, vec![128, 128, 128, 255]).unwrap(),
+            ImageFrame::new(
+                3,
+                2,
+                vec![
+                    3, 17, 91, 0, 42, 128, 211, 255, 255, 64, 7, 32, 99, 101, 203, 17, 180, 220,
+                    12, 200, 71, 33, 88, 250,
+                ],
+            )
+            .unwrap(),
+            bench_like_frame(32),
+        ];
+        for frame in &frames {
+            let combined = analyze_tone_with_histogram(frame);
+            assert_eq!(combined.0, analyze_tone(frame));
+            assert_eq!(combined.1, LuminanceHistogram::new(frame));
+            // Same digest identity the histogram cache relies on.
+            assert_eq!(
+                combined.1.digest(),
+                crate::LuminanceHistogram::new(frame).digest()
+            );
         }
     }
 }

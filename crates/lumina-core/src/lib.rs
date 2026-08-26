@@ -46,8 +46,8 @@ pub use render::{
 };
 pub use stage_cache::StageFrameCache;
 pub use tone::{
-    analyze_tone, match_total_exposure, match_total_exposure_masked, suggest_auto_tone,
-    tone_fingerprint, AutoToneConfig, AutoToneResult, ToneAnalysis,
+    analyze_tone, analyze_tone_with_histogram, match_total_exposure, match_total_exposure_masked,
+    suggest_auto_tone, tone_fingerprint, AutoToneConfig, AutoToneResult, ToneAnalysis,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

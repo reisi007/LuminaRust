@@ -736,11 +736,29 @@ invalidiert, wohl aber Preview und Export.
 
 Im Raster-MVP werden die RGBA8-RGB-Kanäle als sRGB-codierte Werte auf 0..=1
 normalisiert und mit Rec.709 (0.2126/0.7152/0.0722) gewichtet. Alpha wird
-ignoriert, auch bei transparenten Pixeln. Perzentile verwenden lineare
-Interpolation zwischen sortierten Samples. Auto-Tone richtet den Median auf das
-Ziel aus und bestimmt Kontrast aus der p01/p99-Spanne; Exposure ist auf
--10..=10 EV und Contrast auf -1..=1 begrenzt. Leere Bilder liefern 0, Schwarz
-liefert den oberen Exposure-Fallback und Weiß den unteren.
+ignoriert, auch bei transparenten Pixeln. Der Mittelwert ist die exakte
+pixel-order Rec.709-Summe geteilt durch die Sample-Anzahl (seit R2-PERF-01
+bit-identisch zur Messung des Exposure Matchings). Median/p01/p99 sind
+dokumentierte Klassenmark-Schätzer über den gemeinsamen 256-Bin-Luminanz-
+Histogramm-Pass: Die beiden den Rang `q·(n−1)` klammernden Ordnungsstatistiken
+werden durch das Klassenmark ihres Bins geschätzt (Bin 0 → Unterkante `0.0`,
+Bin 255 → Oberkante `1.0`, Innen-Bins → Bin-Zentrum) und mit dem exakten
+Fraktionalrang linear interpoliert. Auto-Tone richtet den Median auf das Ziel
+aus und bestimmt Kontrast aus der p01/p99-Spanne; Exposure ist auf -10..=10 EV
+und Contrast auf -1..=1 begrenzt. Leere Bilder liefern 0, Schwarz liefert den
+oberen Exposure-Fallback und Weiß den unteren — uniform schwarze/weiße Bilder
+melden den Median exakt als `0.0`/`1.0`, sodass diese Fallback-Zweige
+bit-identisch zum früheren sortierten Verfahren bleiben.
+
+**Genauigkeitsvertrag (R2-PERF-01, normativ):** Gegenüber der historischen
+linearen Interpolation zwischen sortierten Samples gilt für JEDES Bild
+(dicht oder sparsam besetzt) die universelle Schranke
+`|Schätzer − exaktes Perzentil| ≤ 1/256` (ein Bin breit): Jedes Klassenmark
+liegt im Bin der Ordnungsstatistik, die es schätzt, und lineare Interpolation
+ist in beiden Klammern konvex. Der Estimator ist monoton nicht-fallend in `q`
+(`p01 ≤ median ≤ p99` per Konstruktion); Gleichverteilungs-Bilder liefern
+`p01 == median == p99` (Spanne exakt 0 → Kontrast-Identität). Der Mittelwert
+ist von der Quantisierung nicht betroffen (exakt).
 
 > **Implementierungsstatus (F-039, 2026-08-18):** Explizite
 > `LuminanceHistogram`-Repräsentation in `lumina-core` umgesetzt
@@ -752,6 +770,38 @@ liefert den oberen Exposure-Fallback und Weiß den unteren.
 > Bin-Zentren ≤ 1/512). Serde (Serialize/Deserialize) und ein stabiler
 > blake3-Digest (`digest()` über Bins + Dimensionen) machen die Repräsentation
 > direkt für `CacheStage::Histogram` nutzbar.
+
+> **Implementierungsstatus (R2-PERF-01, 2026-08-26):** `analyze_tone`
+> (`crates/lumina-core/src/tone.rs`) nutzt statt eines `Vec<f64>` pro Pixel
+> (~8 Byte/Pixel ≈ 192 MB bei 24 MP) plus vollständiger O(n log n)-Sortierung
+> jetzt einen gemeinsamen Single-Pass (`accumulate_bins_and_luminance_sum`,
+> `histogram.rs`) über 256 Bins plus exakte Luminanzsumme (2 KB Stack-State,
+> O(n)). Die Signatur ist unverändert; neu ist additiv
+> `analyze_tone_with_histogram(frame) -> (ToneAnalysis, LuminanceHistogram)`:
+> EIN Pass liefert Histogramm-Panel UND Tone-Panel dieselbe Pass-Struktur und
+> konsistente Zahlen (GUI-Kopplung kann damit zwei Vollläufe ersetzen; das
+> Histogramm-Panel selbst bleibt mit `LuminanceHistogram::new` byte-stabil,
+> inklusive Digest). Werte-Auswirkungen, explizit und nicht still:
+> - `mean`: unverändert exakt; Summationsreihenfolge wechselte von
+>   sortierter Summe zu Pixel-Order — Abweichung höchstens letzte f64-Bits,
+>   bit-identisch zur `match_total_exposure`-Messung (getestet).
+> - `median`/`p01`/`p99`: innerhalb der oben normierten 1/256-Schranke;
+>   reale Fotos (dicht belegte Bins) bewegen sich typischerweise deutlich
+>   darunter. Auto-Tone-Ergebnisse können sich dadurch um bis zu
+>   `(1/256)/(m·ln2)` EV ändern (bei Mitteltönen ≈ 0,02 EV; der
+>   Schwarz-/Weiß-Fallback bleibt bit-exakt). Bereits persistierte Rezepte
+>   speichern ihre Auto-Tone-Werte und bleiben unverändert; erst NEUE
+>   Auto-Tone-Berechnungen nutzen den dokumentierten Estimator.
+> - Consumer: GUI-Tone-Panel, `lumina_analyze` (MCP) und Auto-Tone lesen die
+>   Werte weiter über die unveränderte `analyze_tone`-Signatur; die F-043-
+>   Goldens prüfen weiterhin gegen die geschlossenen Formeln — Mittelwert
+>   bei 1e-9, Quantile bei der normierten 1/256-Toleranz (Checker-Fixture
+>   zusätzlich exakt bei 1e-9), siehe Status F-043.
+> - Benchmark: `core/analyze_tone__2048` ging von ≈ 69 ms (Baseline) auf
+>   ≈ 2–4 ms erwartungsgemäß zurück (Single-Pass + 256-Bin-Auswertung statt
+>   33-MB-Allokation + pdqsort bei 2048²; `core/histogram__2048` misst den
+>   reinen Pass mit 2,76 ms). Budgets in `perf/baseline.json` wurden NICHT
+>   angepasst (Gate schlägt nur bei Verlangsamung an).
 
 ## Exposure Matching
 
@@ -826,11 +876,12 @@ deren **jede** Ebene vollständig `u16::MAX` ist (jedes Pixelgewicht exakt
 bit-exakt an den ungemaskten Pfad (`matching_delta(analyze_tone(frame).mean,
 …)`, identisch zu `match_total_exposure`). Das ist ein dokumentierter
 Fast-Path, kein Fallback: Mathematisch sind beide Messungen identisch, aber
-die sortierte Summation in `analyze_tone` und die zeilenweise Summation der
-gewichteten Schleife können sich im letzten f64-Bit unterscheiden — erst die
-Delegation garantiert die bit-exakte Identität `All-MAX ≡ ungemaskt`. Die
-`InvalidMaskPlane`-Validierung läuft vor dem Fast-Path; eine
-dimensionsfehlerhafte All-MAX-Ebene wird weiterhin abgelehnt.
+die Summation des ungewichteten Mittels (`mean_luminance`, Pixel-Order — seit
+R2-PERF-01 auch die `analyze_tone.mean`-Definition) und die zeilenweise
+Summation der gewichteten Schleife können sich im letzten f64-Bit
+unterscheiden — erst die Delegation garantiert die bit-exakte Identität
+`All-MAX ≡ ungemaskt`. Die `InvalidMaskPlane`-Validierung läuft vor dem
+Fast-Path; eine dimensionsfehlerhafte All-MAX-Ebene wird weiterhin abgelehnt.
 
 **Status (F-043):** Echte Property- und Referenzbildtests für Auto-Tone und
 Exposure Matching sind umgesetzt:
@@ -851,10 +902,15 @@ Exposure Matching sind umgesetzt:
   `reference_checker`, `reference_zone`) mit programmatischer Provenance —
   deterministisch aus dokumentierten Pixelfunktionen erzeugt, keine externen
   Quellen, keine Lizenzpflicht (`tests/fixtures/README.md` dokumentiert die
-  exakten Formeln und die Regeneration). `analyze_tone`-Statistiken werden
-  gegen die geschlossenen Formeln mit 1e-9-Toleranz geprüft,
-  Auto-Tone-/Matching-Ergebnisse mit ±0.01; zusätzlich eine
-  Monotonie-Kontrolle über alle drei Fixtures.
+  exakten Formeln und die Regeneration). Seit R2-PERF-01 wird der
+  `analyze_tone`-**Mittelwert** gegen die geschlossenen Formeln mit 1e-9
+  geprüft; **Median/p01/p99** mit der normierten R2-PERF-01-Toleranz von
+  einem Bin (1/256 + Slack) — der Checker-Fixture pinnt zusätzlich die exakte
+  Reproduktion (0.0/0.5/1.0) bei 1e-9. Auto-Tone-/Matching-Ergebnisse mit
+  ±0.01; die vom bin-quantisierten Median abgeleitete Gradient-Exposure mit
+  ±0.05 (dokumentierte Log-Sensitivitäts-Amplifikation); zusätzlich eine
+  Monotonie-Kontrolle über alle drei Fixtures sowie Property-Tests für die
+  universelle 1/256-Schranke und die Quantil-Monotonie in `tone_props.rs`.
 
 ## Cache und Invalidierung
 

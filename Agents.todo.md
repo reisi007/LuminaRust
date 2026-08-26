@@ -139,11 +139,6 @@ werden nach unabhängiger Verifizierung entfernt.
   zurück statt Key zu entfernen -> Rezept bleibt dauerhaft CPU-routed, obwohl
   Pixel identisch (lumina-gpu/src/lib.rs:177-194 + gui 2018/3948). Fix:
   Wert-Neutralität prüfen (Key==0.0 überspringen). S.
-- [ ] **[PRIO: hoch] R2-PERF-01** `analyze_tone` allokiert pro Tick ein f64-Vec pro
-  Pixel (~192 MB @24MP) + O(n log n)-Sortierung (~69 ms @2048²), obwohl
-  LuminanceHistogram die O(n)-Alternative bereitstellt (tone.rs:111-145;
-  GUI ruft es je Draft-Tick). Fix: Single-Pass über 256 Bins bzw. Histogramm;
-  optional tone_analysis an Render-Key koppeln (GUI-Seite separat). M.
 - [ ] **[PRIO: hoch] R2-GPU-01** `render_to_vram` erzeugt/lädt Input-Textur jeden Tick
   neu (~96 MB CPU→GPU-Upload @24MP) entgegen docs/gpu-bootstrap.md:92-94
   (lib.rs:896-920). Fix: Input-Textur pro Pool-Eintrag halten, Neu-Upload nur
@@ -163,7 +158,9 @@ werden nach unabhängiger Verifizierung entfernt.
 
 - [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-04 (CPU-Draft läuft auf GPU-Pfaden
   redundant mit — Drosselung ist Verhaltensentscheidung, nach manuellem Test),
-  GUIMOD-06 (Routing/Fallback nur stderr, kein Statusbadge/i18n).
+  GUIMOD-06 (Routing/Fallback nur stderr, kein Statusbadge/i18n),
+  GUI-TONE-KOPPLUNG (analyze_tone_with_histogram nutzen → ein Pass statt zwei
+  pro Render; API steht seit R2-PERF-01 bereit).
 - [ ] **[PRIO: niedrig] R2-GUI-FOLLOWUP** (aus GUI-Verifizierung): apply_decoded_frame
   setzt vram_fresh/gpu_stage_gate beim Bildwechsel nicht zurück — ≤1 Frame kann
   VRAM-Ergebnis des Vorgängerbilds zeigen (vorbestehend, Dims-Check greift bei
