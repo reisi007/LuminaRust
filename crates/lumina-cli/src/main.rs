@@ -33,6 +33,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -1653,15 +1654,23 @@ fn process_selected(
     } else {
         render_output.frame.encode_with_options(options)?
     };
-    write_atomically(&args.output, &encoded)?;
-
-    // REVIEW-CLI-N6 (conscious v1 scope): the export is written BEFORE the
-    // sidecar/history update below. If this final `save_sidecar` fails, the
-    // command exits non-zero although the export exists — the export is then
-    // newer than the recorded history. The architecture explicitly leaves a
-    // two-file transaction out of v1 (see `lumina-sidecar` lib.rs); the atomic
-    // sidecar write makes a torn state impossible, so the worst case is a
-    // successful export missing its newest history entry.
+    // REVIEW-CLI-N6 (two-artifact ordering, decided 2026-08-26): the encoded
+    // export is STAGED first — a temporary file in the output directory,
+    // written, flushed and fsynced with the exact `.{name}.tmp-*` scheme of
+    // the shared atomic writer — but only renamed into place AFTER the
+    // sidecar update below has been committed atomically. A failing
+    // `save_sidecar` therefore exits non-zero with NEITHER artifact changed:
+    // the staged file is deleted on drop and the sidecar's atomic replace
+    // never happened. This removes the old failure mode "exit 1 despite an
+    // existing export". The remaining window shrinks to the final
+    // same-directory rename; if even that fails, the residue is a sidecar
+    // newer than a missing, re-derivable export — exports are derived
+    // artifacts and the sidecar is the source of truth, so that state is
+    // visible and benign rather than silently torn. (A true cross-file
+    // transaction stays out of scope per the v1 note in
+    // `lumina-sidecar/src/lib.rs`; this is ordering + staged rollback, not a
+    // new transaction primitive.)
+    let staged = StagedArtifact::stage(&args.output, &encoded)?;
     let copy = &mut document.virtual_copies[copy_index];
     copy.recipe = recipe.clone();
     copy.history.push(HistoryEntry {
@@ -1671,6 +1680,7 @@ fn process_selected(
         extras: BTreeMap::new(),
     });
     save_sidecar(&sidecar_path, &document)?;
+    staged.commit()?;
     Ok(())
 }
 
@@ -1942,6 +1952,67 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// REVIEW-CLI-N6: staged write for the export/sidecar two-artifact sequence.
+///
+/// The encoded bytes are written into a temporary file inside the target's
+/// directory — same `.{name}.tmp-*` scheme, flush and fsync steps as
+/// [`lumina_sidecar::write_atomically`] — but the target name is NOT yet
+/// taken. [`StagedArtifact::commit`] later renames the temporary into place
+/// (a same-directory rename, atomic per POSIX). Dropping an uncommitted stage
+/// deletes the temporary, so every error path between `stage` and `commit`
+/// leaves neither artifact behind: this is what lets `process_selected` order
+/// the sequence as *stage export → save sidecar → commit export* and still
+/// roll back to "nothing changed" when the sidecar save fails.
+#[derive(Debug)]
+struct StagedArtifact {
+    temporary: tempfile::NamedTempFile,
+    target: PathBuf,
+}
+
+impl StagedArtifact {
+    /// Stage `bytes` for `target`: create, fill, flush and fsync a temporary
+    /// file in `target`'s parent directory so a later `commit` is a
+    /// same-directory (same-filesystem) rename. Fails before any sidecar
+    /// mutation could happen in the caller's sequence.
+    fn stage(target: &Path, bytes: &[u8]) -> Result<Self, CliError> {
+        let parent = target.parent().unwrap_or_else(|| Path::new("."));
+        let filename = target
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_else(|| "artifact".into());
+        let mut temporary = tempfile::Builder::new()
+            .prefix(&format!(".{filename}.tmp-"))
+            .tempfile_in(parent)
+            .map_err(|error| io_error(parent, error))?;
+        let temporary_path = temporary.path().to_path_buf();
+        temporary
+            .write_all(bytes)
+            .map_err(|error| io_error(&temporary_path, error))?;
+        temporary
+            .flush()
+            .map_err(|error| io_error(&temporary_path, error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| io_error(&temporary_path, error))?;
+        Ok(Self {
+            temporary,
+            target: target.to_path_buf(),
+        })
+    }
+
+    /// Publish the staged bytes by renaming them over the target path. The
+    /// staged file must not outlive this call either way: on success it has
+    /// been renamed, on failure the `PersistError` keeps nothing and the
+    /// dropped `NamedTempFile` removes the temporary.
+    fn commit(self) -> Result<(), CliError> {
+        self.temporary
+            .persist(&self.target)
+            .map_err(|error| io_error(&self.target, error.error))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1971,6 +2042,49 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// REVIEW-CLI-N6: an uncommitted stage must vanish completely on drop and
+    /// a committed stage must publish exactly the staged bytes.
+    #[test]
+    fn staged_artifact_cleans_up_without_commit_and_commits_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("out.png");
+
+        // Uncommitted stages disappear on drop — nothing partial remains.
+        {
+            let staged = StagedArtifact::stage(&target, b"first").unwrap();
+            assert!(!target.exists(), "staging must not take the target name");
+            assert!(staged.temporary.path().is_file());
+        }
+        assert_eq!(
+            fs::read_dir(directory.path()).unwrap().count(),
+            0,
+            "dropped stage must leave no temporary residue"
+        );
+
+        // Commit publishes exactly the staged bytes under the target name.
+        let staged = StagedArtifact::stage(&target, b"payload").unwrap();
+        staged.commit().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"payload");
+        assert_eq!(
+            fs::read_dir(directory.path()).unwrap().count(),
+            1,
+            "commit must rename, not copy: only the target remains"
+        );
+    }
+
+    /// REVIEW-CLI-N6: staging into a nonexistent parent fails at stage time —
+    /// i.e. before the caller could mutate any sidecar in its sequence.
+    #[test]
+    fn staged_artifact_fails_cleanly_for_missing_target_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("missing").join("out.png");
+        let error = StagedArtifact::stage(&target, b"x").unwrap_err();
+        assert!(
+            matches!(error, CliError::Io { .. }),
+            "unexpected error shape: {error:?}"
+        );
     }
 
     #[test]

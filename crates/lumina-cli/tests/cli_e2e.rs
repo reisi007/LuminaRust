@@ -553,6 +553,94 @@ fn process_refuses_sidecar_bundle_and_hardlink_outputs() {
     assert_eq!(fs::read(&input).unwrap(), original_bytes);
 }
 
+/// REVIEW-CLI-N6 end to end: when the sidecar update fails during export, the
+/// command exits 1 WITHOUT leaving the exported file behind — the export is
+/// staged first and only committed after the sidecar save succeeded, so a
+/// failing sidecar write rolls back to "neither artifact changed".
+#[test]
+#[cfg(unix)]
+fn export_with_failing_sidecar_save_exits_non_zero_without_output() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    // Separate source directory: making IT read-only fails exactly the
+    // sidecar write (the sidecar lives next to the input) while the output
+    // directory below stays writable, so the export staging step itself
+    // succeeds — precisely the sequence REVIEW-CLI-N6 is about.
+    let src_dir = directory.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    let frame = ImageFrame::new(1, 1, vec![40, 80, 120, 255]).unwrap();
+    let input = src_dir.join("input.png");
+    fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    assert!(cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let sidecar_before = fs::read(sidecar_path_for(&input)).unwrap();
+
+    let out_dir = directory.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let output = out_dir.join("export.png");
+
+    // Simulate the sidecar-write failure: a read-only source directory.
+    fs::set_permissions(&src_dir, PermissionsExt::from_mode(0o555)).unwrap();
+    // Root ignores directory write bits; probe once and skip instead of
+    // false-failing in elevated environments.
+    let probe = src_dir.join(".write-probe");
+    if fs::write(&probe, b"").is_ok() {
+        drop(fs::remove_file(&probe));
+        drop(fs::set_permissions(
+            &src_dir,
+            PermissionsExt::from_mode(0o755),
+        ));
+        eprintln!("skipping: directory permissions are not enforced (elevated privileges)");
+        return;
+    }
+
+    let result = cli()
+        .args([
+            "export",
+            "--input",
+            input.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // Restore permissions before asserting so the temp directory always cleans up.
+    fs::set_permissions(&src_dir, PermissionsExt::from_mode(0o755)).unwrap();
+
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "expected exit code 1, stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    // The failure must be the sidecar write (permission denied), not an
+    // earlier decode/render step.
+    assert!(stderr.contains("Permission denied"), "stderr: {stderr}");
+    // The core N6 assertion: NO export exists despite exit code 1 …
+    assert!(
+        !output.exists(),
+        "a failed export must not leave an output file behind"
+    );
+    // … and the staging left no temporary residue either.
+    assert_eq!(
+        fs::read_dir(&out_dir).unwrap().count(),
+        0,
+        "a failed export must leave no temporary files in the output directory"
+    );
+    // The failed sidecar save changed nothing on disk.
+    assert_eq!(
+        fs::read(sidecar_path_for(&input)).unwrap(),
+        sidecar_before,
+        "a failed sidecar save must leave the persisted sidecar untouched"
+    );
+}
+
 #[test]
 fn dust_removal_rejects_dimension_mismatch() {
     let directory = tempfile::tempdir().unwrap();
