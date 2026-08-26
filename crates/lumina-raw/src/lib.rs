@@ -64,6 +64,13 @@ pub struct RawMetadata {
     pub iso: Option<f32>,
     pub shutter: Option<f32>,
     pub aperture: Option<f32>,
+    /// Human-readable lens name as reported by the decoder (REVIEW-RAW-N2):
+    /// the standardised EXIF `LensModel` tag (`0xA434`, parsed by LibRaw into
+    /// `imgdata.lens.Lens`) when present, otherwise LibRaw's vendor-makernote
+    /// lens name (`imgdata.lens.makernotes.Lens`); `None` when the source
+    /// carries no usable lens identification. This is raw source metadata —
+    /// a Lensfun profile match may still resolve a different, database-
+    /// normalised lens name.
     pub lens: Option<String>,
     pub focal_length: Option<f32>,
     pub timestamp: Option<i64>,
@@ -240,6 +247,13 @@ pub fn libraw_version() -> Option<String> {
 ///   persisted orientation value and the pixel permutation applied by the
 ///   promotion step (e.g. dcraw flip 5: previously persisted as orientation 5
 ///   with a transpose, now correctly orientation 8 with a 90° CCW rotation).
+///
+/// Deliberate non-change (REVIEW-RAW-N2): populating `RawMetadata.lens`
+/// enriches display metadata only. It alters no pixel value, geometry, colour
+/// handling or budget input, and `RawMetadata` is neither persisted in
+/// sidecars nor hashed into decode fingerprints/RenderKeys, so caches and
+/// persisted artefacts computed before the change stay valid and no new
+/// generation suffix is required.
 pub fn libraw_decode_version() -> String {
     const DECODE_GENERATION: &str = "+luminaabi3";
     match libraw_version() {
@@ -288,6 +302,28 @@ mod native {
         }
     }
 
+    /// Runs `libraw_adjust_sizes_info_only` and propagates LibRaw's error code
+    /// instead of swallowing it (REVIEW-RAW-N1).
+    ///
+    /// LibRaw semantics (verified against the LibRaw 0.22 C API):
+    /// `libraw_adjust_sizes_info_only` returns an `int` error code
+    /// (`LIBRAW_SUCCESS = 0`, negative values on failure). Internally it is
+    /// `LibRaw::adjust_sizes_info_only()`, which is guarded by
+    /// `CHECK_ORDER_LOW(LIBRAW_PROGRESS_LOAD_RAW)` and finalises the visible
+    /// output geometry (`sizes.width`, `sizes.height`, margins, flip bookkeeping)
+    /// without allocating the processed buffer. A non-zero result therefore
+    /// means the geometry that both the memory-budget gate and the subsequent
+    /// `dcraw_process` rely on has NOT been reliably adjusted — proceeding
+    /// silently would let the budget gate validate outdated measures, so the
+    /// decode fails loudly instead.
+    pub(super) fn adjust_sizes_checked(handle: *mut raw::libraw_data_t) -> Result<(), RawError> {
+        let code = unsafe { raw::libraw_adjust_sizes_info_only(handle) };
+        if code != raw::LIBRAW_SUCCESS {
+            return Err(error("adjusting sizes", code));
+        }
+        Ok(())
+    }
+
     pub fn libraw_version() -> Option<String> {
         let ptr = unsafe { raw::libraw_version() };
         if ptr.is_null() {
@@ -324,6 +360,21 @@ mod native {
     /// Upper sanity bound for an embedded ICC profile. Real profiles stay far
     /// below this; anything larger indicates a corrupt `profile_length`.
     const MAX_ICC_PROFILE_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Resolves the human-readable lens name from the available LibRaw sources
+    /// with a deterministic source priority (REVIEW-RAW-N2): the standardised
+    /// EXIF `LensModel` tag wins over the vendor-specific makernote name,
+    /// because EXIF is format-independent and verbatim from the file, while
+    /// `imgdata.lens.makernotes.Lens` is only filled for cameras whose
+    /// makernotes LibRaw knows how to parse. Both inputs are already
+    /// normalised by [`text`] (`None` for empty/whitespace-only buffers), so a
+    /// present-but-empty EXIF field falls through to the makernote name.
+    fn resolve_lens_name(
+        exif_lens_model: Option<String>,
+        makernotes_lens: Option<String>,
+    ) -> Option<String> {
+        exif_lens_model.or(makernotes_lens)
+    }
 
     pub fn decode_bytes_with_options(
         bytes: &[u8],
@@ -393,7 +444,7 @@ mod native {
             iso: positive(data.other.iso_speed),
             shutter: positive(data.other.shutter),
             aperture: positive(data.other.aperture),
-            lens: None,
+            lens: resolve_lens_name(text(&data.lens.Lens), text(&data.lens.makernotes.Lens)),
             focal_length: positive(data.other.focal_len),
             timestamp: (data.other.timestamp != 0).then_some(data.other.timestamp as i64),
             artist: text(&data.other.artist),
@@ -425,8 +476,13 @@ mod native {
         }
         // Compute the output geometry without allocating the processed image
         // buffer, then enforce the memory budget before the allocation-prone
-        // processing step (F-075).
-        let _ = unsafe { raw::libraw_adjust_sizes_info_only(handle.0) };
+        // processing step (F-075). The return code is checked, not swallowed
+        // (REVIEW-RAW-N1): this is the call that finalises
+        // `sizes.width`/`sizes.height`, so a failure means the budget gate
+        // below would validate against stale/unadjusted measures and the
+        // subsequent `dcraw_process` output geometry would diverge from what
+        // was budgeted. No silent fallback.
+        adjust_sizes_checked(handle.0)?;
         let out_width = unsafe { &*handle.0 }.sizes.width as u64;
         let out_height = unsafe { &*handle.0 }.sizes.height as u64;
         let channels = 4u32; // final RGBA frame (3-channel LibRaw output is
@@ -676,6 +732,70 @@ mod native {
     }
 
     #[cfg(test)]
+    mod decode_gate_tests {
+        use super::*;
+
+        /// REVIEW-RAW-N1: a failure of `libraw_adjust_sizes_info_only` must be
+        /// propagated as a [`RawError::LibRaw`], not swallowed. A freshly
+        /// initialised handle has neither opened nor unpacked any input, so
+        /// LibRaw's own `CHECK_ORDER_LOW(LIBRAW_PROGRESS_LOAD_RAW)` guard
+        /// inside `adjust_sizes_info_only()` rejects the call with
+        /// `LIBRAW_OUT_OF_ORDER_CALL`. This exercises the new error path
+        /// end-to-end through real LibRaw semantics — no crafted file is
+        /// needed to make the call fail.
+        #[test]
+        fn adjust_sizes_failure_is_propagated_not_swallowed() {
+            let handle = Handle(unsafe { raw::libraw_init(raw::LIBRAW_OPTIONS_NONE) });
+            assert!(!handle.0.is_null(), "LibRaw handle must initialise");
+            let error = adjust_sizes_checked(handle.0).expect_err("out-of-order call must fail");
+            match error {
+                RawError::LibRaw {
+                    operation,
+                    code,
+                    message,
+                } => {
+                    assert_eq!(operation, "adjusting sizes");
+                    assert_eq!(code, raw::LIBRAW_OUT_OF_ORDER_CALL);
+                    assert!(!message.is_empty(), "strerror text must be present");
+                }
+                other => panic!("expected RawError::LibRaw, got {other:?}"),
+            }
+        }
+
+        /// REVIEW-RAW-N2 source priority: the standardised EXIF LensModel wins
+        /// over the vendor-specific makernote name.
+        #[test]
+        fn lens_resolution_prefers_exif_over_makernotes() {
+            let resolved = resolve_lens_name(Some("EXIF Lens".into()), Some("Maker Lens".into()));
+            assert_eq!(resolved.as_deref(), Some("EXIF Lens"));
+        }
+
+        /// When LibRaw could not parse an EXIF LensModel (`text()` normalises
+        /// empty/whitespace-only buffers to `None`), the makernote name is used;
+        /// with neither source available the field stays `None`.
+        #[test]
+        fn lens_resolution_falls_back_and_reports_absence() {
+            let fallback = resolve_lens_name(None, Some("Maker Lens".into()));
+            assert_eq!(fallback.as_deref(), Some("Maker Lens"));
+
+            let none = resolve_lens_name(None, None);
+            assert!(none.is_none());
+        }
+
+        /// Regression guard for the wiring: the metadata construction feeds
+        /// both LibRaw sources through `text()` into the resolver, so this pure
+        /// function documents the exact combination semantics relied upon.
+        #[test]
+        fn lens_resolution_matches_text_normalisation_contract() {
+            // `text()` never yields Some(empty); but if it ever did, the
+            // resolver would still prefer it over makernotes — the contract is
+            // "first Some wins", which keeps the priority deterministic.
+            let resolved = resolve_lens_name(Some(String::new()), Some("Maker Lens".into()));
+            assert_eq!(resolved.as_deref(), Some(""));
+        }
+    }
+
+    #[cfg(test)]
     mod conversion_tests {
         use super::*;
 
@@ -909,6 +1029,34 @@ mod tests {
         assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
         assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
         assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn aircraft_fixtures_expose_exif_lens_model() {
+        // REVIEW-RAW-N2: both committed CR3 fixtures carry the EXIF LensModel
+        // tag 0xA434 with value "RF200-800mm F6.3-9 IS USM" (verified with
+        // exiftool). LibRaw parses that tag into `imgdata.lens.Lens`, which
+        // `RawMetadata.lens` must now expose verbatim instead of a constant
+        // `None`. Pins the EXIF-first source priority end-to-end.
+        let fixtures: [(&str, &[u8]); 2] = [
+            (
+                "aircraft-landscape.cr3",
+                include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3"),
+            ),
+            (
+                "aircraft-portrait.cr3",
+                include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3"),
+            ),
+        ];
+        for (name, bytes) in fixtures {
+            let image = decode_bytes(bytes, name).unwrap();
+            assert_eq!(
+                image.metadata.lens.as_deref(),
+                Some("RF200-800mm F6.3-9 IS USM"),
+                "fixture {name} must report its EXIF lens model"
+            );
+        }
     }
 
     #[test]
