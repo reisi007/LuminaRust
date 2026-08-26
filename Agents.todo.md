@@ -129,16 +129,13 @@ werden nach unabhängiger Verifizierung entfernt.
   main.rs:1228-1238 vs. 1743-1754). Fix: RAW-Extension-Liste einmalig (aus
   lumina-raw exportieren), beide Prädikate referenzieren; Test: Batch findet
   RAF. Aufwand S. **Erst nach F-101-F1-Commit (gleiches main.rs im WIP).**
-- [ ] **[PRIO: hoch] R2-MCP-02** (MVP-blockierend, nicht-destruktive Garantie)
-  `lumina_save` nutzt keinen Output-Guard -> Symlink/Hardlink aufs Sidecar/
-  zdata würde Bundle mit PNG-Bytes überschreiben (tools/save.rs:63-88; Guard
-  `write_output_guarded` existiert in util.rs, wird nur in batch.rs genutzt).
-  Fix: Einzeiler. Läuft im F-101-F1-Verifizierungs-/Nachbesserungszyklus.
-- [ ] **[PRIO: hoch] R2-RAW-01** DemosaicMapping falsch: `Linear→1, Vng→2, Ppg→3,
-  Ahd→4, Dcb→11, Dht→12, Aahd→13`, dcraw_process erwartet aber 0/1/2/3/4/11/12,
-  alles andere = stiller Fallback AHD — jede explizite Wahl wählt den falschen
-  Algorithmus (lumina-raw/src/lib.rs:20-33). Fix: Mapping korrigieren +
-  Unit-Test-Pinning. S.
+- [ ] **[PRIO: mittel] R2-MCP-02** (Verifizierung hat das MVP-blockierende Schadens-
+  szenario EMPIRISCH widerlegt: POSIX-rename ersetzt den Directory-Entry statt
+  des Inode-Ziels; Extension-Gate blockt .lumina.json/.zdata laut — Aliase
+  blieben byte-identisch intakt.) Verbleibender Rest als Defense-in-Depth:
+  `reject_protected_target`/`write_output_guarded` auch in tools/save.rs
+  explizit nutzen (derzeit nur implizit über Gate+Rename geschützt) + 2
+  Regressionstests (Sidecar/zdata via Symlink/Hardlink-Alias nicht überschreiben).
 - [ ] **[PRIO: hoch] R2-MCP-01** GPU-Pfad verwirft `camera_white_balance` still ->
   build-abhängige Pixeldifferenz ohne Warnung (mcp/util.rs:334-368; Spiegel
   cli main.rs:127-175). Fix: `Some(camera_wb)` als CPU-Routing-Reason in
@@ -208,9 +205,7 @@ werden nach unabhängiger Verifizierung entfernt.
   (inkonsistente Fehlerverträge ohne Adapter), GPU-10 (totes Gerüst DraftPyramid/
   bake_3d_lut), GPU-11 (Agents.md listet lumina-gpu/bench/lensfun/mcp nicht),
   GPU-12 (Overlay-Composite-Shader ohne Pixeltest), GPU-13 (lock().unwrap()
-  Poisoning), RAW-02 (decode_file: volle Datei im Heap statt libraw_open_file),
-  RAW-03 (toter name-Parameter der Decode-API), RAW-04 (16-bit-Decode nie
-  end-to-end getestet), RAW-WASM (3× unneeded-return wasm32-Clippy), ONNX-05
+  Poisoning), RAW-03 (toter name-Parameter der Decode-API), ONNX-05
   (MissingModel-Displaytext irreführend), ONNX-06 (Degenerations-Guards
   ungetestet), ONNX-07 (normalize: 3 stride-Pässe statt 1 Pass), LENS-03
   (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
@@ -288,15 +283,6 @@ quantitative Limits (Bildgröße/Speicher/Threads/GPU) nirgends dokumentiert.
     GUI-STAGE-1/GUI-WGPU-PRESENT-1.
 
 **USER-ENTSCHEIDUNGEN 2026-08-25 (aus Block B freigegeben)**
-
-- [ ] **[PRIO: mittel] F-101-F1** Erweiterter MCP-Scope umsetzen —
-  **USER-ENTSCHEIDUNG 2026-08-25: jetzt angehen.** Volle CLI-Abdeckung als
-  MCP-Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
-  `lumina_dust_removal` u. a.), `lumina mcp` als CLI-Subcommand,
-  Vision-fähiger Agent (strukturierte `lumina_analyze`-Daten für Agents ohne
-  Vision). Konzepte/SOLL: `feature/platform/mcp-server.md` (Abschnitt
-  „Erweiterter MVP-Scope"). Produktnaming bleibt bewusst offen (NAMING-F1 in
-  Block B).
 
 ## Block B – „Offene Rückfragen“
 

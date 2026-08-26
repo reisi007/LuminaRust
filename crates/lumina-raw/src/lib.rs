@@ -18,17 +18,42 @@ pub enum DemosaicMethod {
 }
 
 impl DemosaicMethod {
+    /// Translates a method into LibRaw's `output_params.user_qual` value that
+    /// `libraw_set_demosaic` stores and `libraw_dcraw_process` dispatches on
+    /// (R2-RAW-01).
+    ///
+    /// Reference semantics of the linked LibRaw 0.22.x (`dcraw_process`
+    /// interpolation dispatch, `src/postprocessing/dcraw_process.cpp`; also
+    /// documented in the official API reference under
+    /// `libraw_output_params_t.user_qual`):
+    ///
+    /// | `user_qual` | algorithm |
+    /// | ----------- | --------- |
+    /// | 0           | linear    |
+    /// | 1           | VNG       |
+    /// | 2           | PPG       |
+    /// | 3           | AHD (default) |
+    /// | 4           | DCB       |
+    /// | 11          | DHT       |
+    /// | 12          | AAHD      |
+    ///
+    /// Any other value falls through the dispatch chain without selecting an
+    /// algorithm (a silent fallback — forbidden by Agents.md). Before this fix
+    /// the mapping was shifted by +1 (`Linear→1 … Aahd→13`), so every explicit
+    /// non-default choice ran the wrong algorithm and `Aahd` silently degraded
+    /// to AHD. The table is pinned byte-exactly by
+    /// `demosaic_libraw_values_match_dcraw_process_user_qual_table`.
     #[cfg(not(target_arch = "wasm32"))]
     fn libraw_value(self) -> Option<i32> {
         match self {
             Self::LibRawDefault => None,
-            Self::Linear => Some(1),
-            Self::Vng => Some(2),
-            Self::Ppg => Some(3),
-            Self::Ahd => Some(4),
-            Self::Dcb => Some(11),
-            Self::Dht => Some(12),
-            Self::Aahd => Some(13),
+            Self::Linear => Some(0),
+            Self::Vng => Some(1),
+            Self::Ppg => Some(2),
+            Self::Ahd => Some(3),
+            Self::Dcb => Some(4),
+            Self::Dht => Some(11),
+            Self::Aahd => Some(12),
         }
     }
 }
@@ -162,32 +187,38 @@ pub fn decode_file(path: impl AsRef<std::path::Path>) -> Result<RawImage, RawErr
     #[cfg(target_arch = "wasm32")]
     {
         let _ = path;
-        return Err(RawError::UnsupportedPlatform);
+        Err(RawError::UnsupportedPlatform)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = path.as_ref();
-        let bytes = std::fs::read(path).map_err(|error| RawError::Io {
-            path: path.display().to_string(),
-            message: error.to_string(),
-        })?;
-        let name = path
-            .file_name()
-            .and_then(|v| v.to_str())
-            .ok_or(RawError::MissingName)?;
-        decode_bytes(&bytes, name)
+        // R2-RAW-02: hand the path to LibRaw directly (`libraw_open_file`
+        // streams through its own datastream) instead of reading the whole
+        // RAW — up to 50–150 MB for a CR3 — into a heap buffer first. Peak
+        // memory drops by roughly the file size; `open_buffer` remains in
+        // use only for the byte-oriented `decode_bytes*` entry points.
+        native::decode_with_options(
+            native::DecodeInput::File(path.as_ref().to_path_buf()),
+            &RawDecodeOptions::default(),
+        )
     }
 }
 
 pub fn decode_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawImage, RawError> {
+    // `name` is currently unused by the decoder itself; removing the
+    // parameter is a deliberate breaking-API cleanup tracked separately
+    // (R2-RAW-03) and therefore NOT done here.
+    let _ = name;
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (bytes, name);
-        return Err(RawError::UnsupportedPlatform);
+        let _ = bytes;
+        Err(RawError::UnsupportedPlatform)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native::decode_bytes_with_options(bytes, name.as_ref(), &RawDecodeOptions::default())
+        native::decode_with_options(
+            native::DecodeInput::Buffer(bytes),
+            &RawDecodeOptions::default(),
+        )
     }
 }
 
@@ -196,14 +227,16 @@ pub fn decode_bytes_with_options(
     name: impl AsRef<str>,
     options: &RawDecodeOptions,
 ) -> Result<RawImage, RawError> {
+    // See `decode_bytes`: `name` stays in the signature until R2-RAW-03.
+    let _ = name;
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (bytes, name, options);
-        return Err(RawError::UnsupportedPlatform);
+        let _ = (bytes, options);
+        Err(RawError::UnsupportedPlatform)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native::decode_bytes_with_options(bytes, name.as_ref(), options)
+        native::decode_with_options(native::DecodeInput::Buffer(bytes), options)
     }
 }
 
@@ -248,6 +281,18 @@ pub fn libraw_version() -> Option<String> {
 ///   promotion step (e.g. dcraw flip 5: previously persisted as orientation 5
 ///   with a transpose, now correctly orientation 8 with a 90° CCW rotation).
 ///
+/// Deliberate non-change #2 (R2-RAW-01): correcting the
+/// `DemosaicMethod::libraw_value` mapping to the real `user_qual` table
+/// changes observable pixels **only** for decodes that explicitly select a
+/// non-default demosaic algorithm. The default (`LibRawDefault`) has never
+/// called `libraw_set_demosaic` and stays byte-identical, and the old mapping
+/// was never persisted: neither `DemosaicMethod` nor `RawDecodeOptions`
+/// appear in the sidecar schema or any other persisted artefact (both types
+/// are referenced exclusively inside this crate), so no persisted state can
+/// encode a choice made under the wrong mapping and no cache key built from
+/// persisted data depends on it. A generation bump would invalidate caches
+/// for nothing; none is issued.
+///
 /// Deliberate non-change (REVIEW-RAW-N2): populating `RawMetadata.lens`
 /// enriches display metadata only. It alters no pixel value, geometry, colour
 /// handling or budget input, and `RawMetadata` is neither persisted in
@@ -289,12 +334,14 @@ mod native {
         }
     }
 
+    fn strerror(code: i32) -> String {
+        unsafe { CStr::from_ptr(raw::libraw_strerror(code)) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
     fn error(operation: &'static str, code: i32) -> RawError {
-        let message = unsafe {
-            CStr::from_ptr(raw::libraw_strerror(code))
-                .to_string_lossy()
-                .into_owned()
-        };
+        let message = strerror(code);
         RawError::LibRaw {
             operation,
             code,
@@ -376,13 +423,27 @@ mod native {
         exif_lens_model.or(makernotes_lens)
     }
 
-    pub fn decode_bytes_with_options(
-        bytes: &[u8],
-        name: &str,
+    /// Where the RAW input comes from. `Buffer` keeps the byte-oriented API
+    /// on `libraw_open_buffer`; `File` lets LibRaw stream from its own
+    /// datastream via `libraw_open_file` (R2-RAW-02) instead of materialising
+    /// a full-file heap copy first.
+    pub(super) enum DecodeInput<'a> {
+        Buffer(&'a [u8]),
+        File(std::path::PathBuf),
+    }
+
+    pub fn decode_with_options(
+        input: DecodeInput<'_>,
         options: &RawDecodeOptions,
     ) -> Result<RawImage, RawError> {
-        if bytes.is_empty() {
-            return Err(RawError::InvalidData("empty input"));
+        let file_display_path: Option<String> = match &input {
+            DecodeInput::File(path) => Some(path.display().to_string()),
+            DecodeInput::Buffer(_) => None,
+        };
+        if let DecodeInput::Buffer(bytes) = &input {
+            if bytes.is_empty() {
+                return Err(RawError::InvalidData("empty input"));
+            }
         }
         if !matches!(options.output_bits, 8 | 16) {
             return Err(RawError::InvalidData("output bit depth"));
@@ -391,16 +452,51 @@ mod native {
         if handle.0.is_null() {
             return Err(RawError::InvalidData("LibRaw handle"));
         }
-        // SAFETY: LibRaw's `open_buffer` reads the input bytes and never mutates
-        // them; `bytes` outlives this call (it is a function parameter dropped
-        // only after `handle`, whose `Drop` closes the decoder). Handing the
-        // const slice pointer to the `*mut c_void` FFI argument therefore lets us
-        // skip an otherwise redundant full-file copy of the RAW (F-074-A2) without
-        // giving LibRaw writable access to caller memory.
-        let code = unsafe {
-            raw::libraw_open_buffer(handle.0, bytes.as_ptr() as *mut c_void, bytes.len())
+        let code = match input {
+            // SAFETY: LibRaw's `open_buffer` reads the input bytes and never
+            // mutates them; `bytes` outlives this call (it is a function
+            // parameter dropped only after `handle`, whose `Drop` closes the
+            // decoder). Handing the const slice pointer to the `*mut c_void`
+            // FFI argument therefore lets us skip an otherwise redundant
+            // full-file copy of the RAW (F-074-A2) without giving LibRaw
+            // writable access to caller memory.
+            DecodeInput::Buffer(bytes) => unsafe {
+                raw::libraw_open_buffer(handle.0, bytes.as_ptr() as *mut c_void, bytes.len())
+            },
+            // SAFETY: `open_file` copies the path string for the duration of
+            // the call and afterwards owns its internal datastream; the
+            // `CString` outlives the call and no caller memory stays aliased.
+            // Unlike `open_buffer`, LibRaw keeps reading lazily from its own
+            // file handle until `libraw_close` (see `Handle::drop`). The
+            // `char*` variant expects a native narrow path (UTF-8 on Unix;
+            // on Windows this goes through the ANSI code page — acceptable
+            // for the current macOS/Linux-first capability matrix).
+            DecodeInput::File(path) => {
+                match std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) {
+                    Ok(c_path) => unsafe { raw::libraw_open_file(handle.0, c_path.as_ptr()) },
+                    // Interior NUL bytes cannot name a real filesystem entry;
+                    // reported in the same shape `std::fs::read` failures used
+                    // to produce before the streaming refactor (R2-RAW-02).
+                    Err(_) => {
+                        return Err(RawError::Io {
+                            path: file_display_path.unwrap_or_default(),
+                            message: "path contains an interior NUL byte".to_string(),
+                        })
+                    }
+                }
+            }
         };
         if code != raw::LIBRAW_SUCCESS {
+            // Preserve the historical error shape for plain filesystem
+            // failures of `decode_file` (missing/unreadable file) so callers
+            // keep seeing `RawError::Io` with the path; everything else keeps
+            // the richer LibRaw diagnostics.
+            if code == raw::LIBRAW_IO_ERROR && file_display_path.is_some() {
+                return Err(RawError::Io {
+                    path: file_display_path.unwrap_or_default(),
+                    message: strerror(code),
+                });
+            }
             return Err(error("opening input", code));
         }
         let data = unsafe { &*handle.0 };
@@ -548,7 +644,6 @@ mod native {
         let mut metadata = metadata;
         metadata.width = frame.width;
         metadata.height = frame.height;
-        let _ = name;
         Ok(RawImage { frame, metadata })
     }
 
@@ -974,6 +1069,69 @@ mod tests {
         assert!(decode_bytes(&[], "empty.nef").is_err());
     }
 
+    /// Pins [`DemosaicMethod::libraw_value`] against LibRaw's documented
+    /// `output_params.user_qual` semantics (R2-RAW-01): `dcraw_process`
+    /// dispatches 0=linear, 1=VNG, 2=PPG, 3=AHD, 4=DCB, 11=DHT, 12=AAHD.
+    ///
+    /// Reference: official LibRaw API reference (`libraw_output_params_t.
+    /// user_qual`) and the interpolation dispatch chain in
+    /// `src/postprocessing/dcraw_process.cpp` of the linked 0.22.x sources —
+    /// any other value falls through the chain without selecting an
+    /// algorithm (silent fallback). Before this test existed, the mapping was
+    /// shifted by +1 (`Linear→1 … Aahd→13`), so every explicit choice ran the
+    /// wrong algorithm and AAHD silently degraded to AHD.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn demosaic_libraw_values_match_dcraw_process_user_qual_table() {
+        let expected = [
+            // The default deliberately maps to None: no `libraw_set_demosaic`
+            // call at all, so dcraw_process uses its own quality selection.
+            (DemosaicMethod::LibRawDefault, None),
+            (DemosaicMethod::Linear, Some(0)),
+            (DemosaicMethod::Vng, Some(1)),
+            (DemosaicMethod::Ppg, Some(2)),
+            (DemosaicMethod::Ahd, Some(3)),
+            (DemosaicMethod::Dcb, Some(4)),
+            (DemosaicMethod::Dht, Some(11)),
+            (DemosaicMethod::Aahd, Some(12)),
+        ];
+        for (method, value) in expected {
+            assert_eq!(
+                method.libraw_value(),
+                value,
+                "{method:?} must map to user_qual {value:?}"
+            );
+        }
+    }
+
+    /// Guard against future variants reintroducing the silent fallback: every
+    /// explicit method must land on a `user_qual` that dcraw_process actually
+    /// dispatches on (0..=4, 11, 12) — never on an unmapped value.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn demosaic_values_never_hit_the_dcraw_silent_fallback() {
+        let all = [
+            DemosaicMethod::LibRawDefault,
+            DemosaicMethod::Linear,
+            DemosaicMethod::Vng,
+            DemosaicMethod::Ppg,
+            DemosaicMethod::Ahd,
+            DemosaicMethod::Dcb,
+            DemosaicMethod::Dht,
+            DemosaicMethod::Aahd,
+        ];
+        for method in all {
+            match method.libraw_value() {
+                None => {} // default: intentionally no set_demosaic call
+                Some(value) => assert!(
+                    matches!(value, 0..=4 | 11 | 12),
+                    "{method:?} → user_qual {value} would fall through the \
+                     dcraw_process dispatch (silent fallback)"
+                ),
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     #[ignore = "set LUMINA_RAW_FIXTURE to a licensed fixture"]
@@ -1057,6 +1215,67 @@ mod tests {
                 "fixture {name} must report its EXIF lens model"
             );
         }
+    }
+
+    /// R2-RAW-04: the 16-bit decode path (`output_bits = 16` → LibRaw u16
+    /// output → high-byte promotion in `rgba_from_words`) previously ran only
+    /// in synthetic unit tests, so the real Budget-Gate/Promotion chain was
+    /// never exercised end-to-end. This test decodes a committed fixture at
+    /// 16 bit and pins the same geometry as the verified 8-bit decode.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn aircraft_landscape_fixture_decodes_with_output_bits_16() {
+        let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
+        let image = decode_bytes_with_options(
+            bytes,
+            "aircraft-landscape.cr3",
+            &RawDecodeOptions {
+                demosaicing: DemosaicMethod::LibRawDefault,
+                output_bits: 16,
+            },
+        )
+        .unwrap();
+        assert_eq!(image.metadata.orientation, 1);
+        assert_eq!((image.frame.width, image.frame.height), (6032, 4024));
+        assert_eq!((image.metadata.width, image.metadata.height), (6032, 4024));
+        assert_eq!(image.frame.pixels.len(), 6032 * 4024 * 4);
+        // The committed fixtures decode as 3-channel RGB; the promoted RGBA
+        // frame must be fully opaque on this path too.
+        assert!(
+            image
+                .frame
+                .pixels
+                .iter()
+                .skip(3)
+                .step_by(4)
+                .all(|&a| a == 255),
+            "16-bit promotion must emit opaque alpha"
+        );
+    }
+
+    /// R2-RAW-02: `decode_file` must stream through `libraw_open_file`
+    /// instead of reading the whole RAW into a heap buffer first. Decoding a
+    /// temporary copy of a committed fixture exercises the file path
+    /// end-to-end and must produce the known geometry. The second half pins
+    /// the error contract: an unopenable path stays a `RawError::Io`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn decode_file_streams_a_fixture_via_libraw_open_file() {
+        let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
+        let mut fixture = tempfile::NamedTempFile::new().expect("temp file");
+        std::io::Write::write_all(&mut fixture, bytes).expect("fixture copy");
+
+        let image = decode_file(fixture.path()).unwrap();
+        assert_eq!(image.metadata.orientation, 8);
+        assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
+        assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
+        assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
+
+        let missing = decode_file("/nonexistent/lumina-streaming-probe.cr3").unwrap_err();
+        assert!(
+            matches!(missing, RawError::Io { .. }),
+            "unopenable file must stay a RawError::Io, got {missing:?}"
+        );
     }
 
     #[test]
