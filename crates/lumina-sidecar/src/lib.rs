@@ -6,6 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+// Bare `thread::sleep` is used only by the native file-lock retry loop below;
+// the wasm32 lock stub never blocks, so the import is gated to match.
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
@@ -952,6 +955,9 @@ pub struct RecoveryReport {
 /// serialize against each other. `pub(crate)` because `zdata` reuses it for the
 /// `.zdata.lock`.
 pub(crate) struct WriteLock {
+    // Only the native lock cleanup (see `Drop`) ever reads the lock file path;
+    // on wasm32 there is no filesystem lock, so the field does not exist there.
+    #[cfg(not(target_arch = "wasm32"))]
     path: PathBuf,
 }
 
@@ -1232,9 +1238,7 @@ pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn acquire_write_lock(_path: &Path) -> Result<WriteLock, SidecarError> {
     // WASM is capability-separated: no filesystem locking, single writer.
-    Ok(WriteLock {
-        path: PathBuf::from(".wasm-lock"),
-    })
+    Ok(WriteLock {})
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -5184,10 +5188,11 @@ mod tests {
     fn oversized_sidecar_file_is_rejected_without_full_read() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("huge.lumina.json");
-        let file = fs::File::create(&path).unwrap();
-        // Sparse file: reserves length without occupying disk space.
-        file.set_len(MAX_SIDECAR_BYTES as u64 + 1).unwrap();
-        drop(file);
+        {
+            let file = fs::File::create(&path).unwrap();
+            // Sparse file: reserves length without occupying disk space.
+            file.set_len(MAX_SIDECAR_BYTES as u64 + 1).unwrap();
+        } // Handle closed here; an explicit `drop()` trips `clippy::drop_non_drop`.
         let error = load_sidecar(&path).unwrap_err();
         assert!(
             matches!(&error, SidecarError::Invalid(message) if message.contains("size limit")),
