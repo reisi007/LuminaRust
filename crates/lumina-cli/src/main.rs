@@ -19,7 +19,7 @@ use lumina_lensfun::{Corrector, LensfunDb};
 // enabled, so the default build stays CPU-only (per `Agents.md` capability
 // separation).
 #[cfg(feature = "gpu")]
-use lumina_gpu::{unsupported_gpu_stages, Frame, GpuContext};
+use lumina_gpu::{unsupported_gpu_stages_with_context, Frame, GpuContext};
 // Visible backend-selection logging (no silent fallback to CPU).
 use log::info;
 use lumina_sidecar::{
@@ -117,12 +117,13 @@ thread_local! {
 ///
 /// REVIEW-GPU-DIVERGENCE-1: the GPU bootstrap stage implements only white
 /// balance + the seven tone sliders. Before routing to the GPU, the render is
-/// validated against **both** the recipe ([`unsupported_gpu_stages`]) and the
-/// render context (source actions, mask layers, Lensfun corrector — none of
-/// which exist on the GPU path). Any unsupported stage routes the whole render
-/// explicitly to the CPU pipeline with a once-per-reason-set log line, so
-/// GPU-enabled builds always produce the same pixels as CPU builds. The GPU is
-/// an accelerator, never a semantic change (Agents.md: no silent fallbacks).
+/// validated against **both** the recipe and the render context
+/// ([`gpu_routing_reasons`] — including the decoder As-Shot WB context,
+/// R2-MCP-01, and touched-but-reset sliders at their neutral value,
+/// R2-GPU-05). Any unsupported stage routes the whole render explicitly to the
+/// CPU pipeline with a once-per-reason-set log line, so GPU-enabled builds
+/// always produce the same pixels as CPU builds. The GPU is an accelerator,
+/// never a semantic change (Agents.md: no silent fallbacks).
 #[cfg(feature = "gpu")]
 fn render_best_effort(
     ctx: Option<&GpuContext>,
@@ -130,27 +131,7 @@ fn render_best_effort(
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
 ) -> Result<RenderOutput, CliError> {
-    // Context-level features the GPU path cannot reproduce at all.
-    let mut reasons = unsupported_gpu_stages(recipe);
-    if !render_ctx.source_actions.is_empty() {
-        reasons.push("source_actions (context artifacts)".into());
-    }
-    let has_mask_layers = render_ctx
-        .masks
-        .as_ref()
-        .and_then(|masks| {
-            masks
-                .copies
-                .iter()
-                .find(|copy| copy.id == masks.active_copy_id)
-        })
-        .is_some_and(|copy| !copy.mask_layers.is_empty());
-    if has_mask_layers {
-        reasons.push("masks (active copy has layers)".into());
-    }
-    if lensfun_corrector_active(render_ctx) {
-        reasons.push("lens_correction (Lensfun corrector)".into());
-    }
+    let reasons = gpu_routing_reasons(recipe, render_ctx);
 
     match ctx {
         Some(ctx) if ctx.is_available() && reasons.is_empty() => {
@@ -172,6 +153,43 @@ fn render_best_effort(
                 .map_err(|error| CliError::Message(error.to_string()))?)
         }
     }
+}
+
+/// Recipe- and context-level reasons that force CPU rendering in
+/// [`render_best_effort`]. Pure decision logic so tests can pin the routing
+/// contract without a GPU adapter.
+///
+/// Context-level features the GPU path cannot reproduce at all:
+/// - decoder As-Shot white balance (R2-MCP-01, via the shared gate);
+/// - source-action artifacts, mask layers and the Lensfun corrector, none of
+///   which exist on the GPU path.
+#[cfg(feature = "gpu")]
+fn gpu_routing_reasons(recipe: &EditRecipe, render_ctx: &RenderContext<'_>) -> Vec<String> {
+    let mut reasons = unsupported_gpu_stages_with_context(
+        recipe,
+        false,
+        render_ctx.camera_white_balance.as_ref(),
+    );
+    if !render_ctx.source_actions.is_empty() {
+        reasons.push("source_actions (context artifacts)".into());
+    }
+    let has_mask_layers = render_ctx
+        .masks
+        .as_ref()
+        .and_then(|masks| {
+            masks
+                .copies
+                .iter()
+                .find(|copy| copy.id == masks.active_copy_id)
+        })
+        .is_some_and(|copy| !copy.mask_layers.is_empty());
+    if has_mask_layers {
+        reasons.push("masks (active copy has layers)".into());
+    }
+    if lensfun_corrector_active(render_ctx) {
+        reasons.push("lens_correction (Lensfun corrector)".into());
+    }
+    reasons
 }
 
 /// Whether the render context carries a non-identity Lensfun corrector (which
@@ -2349,6 +2367,96 @@ mod tests {
         // Drift guard pinned to the SOLL (feature/platform/mcp-server.md):
         // 7 editing tools + lumina_analyze + 4 F-101-F1 CLI-coverage tools.
         assert_eq!(tools.len(), 12, "tool set drifted; update SOLL + tests");
+    }
+
+    /// R2-MCP-01 + R2-GPU-05: the CLI routing decision treats a decoder
+    /// As-Shot WB context as CPU-forcing and ignores touched-but-reset sliders
+    /// at their neutral value.
+    ///
+    /// Pure reason-level assertions by design: today `lumina-core` validates
+    /// the As-Shot gains without re-applying them to pixels, so a WB divergence
+    /// is not pixel-observable yet — exactly the regression this route must
+    /// already prevent (see `unsupported_gpu_stages_with_context`). The GPU
+    /// gate semantics themselves are pinned in `lumina-gpu`.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_routing_reasons_flag_wb_context_and_respect_neutral_sliders() {
+        // Context WB present → explicit CPU reason; absent → no such reason.
+        let recipe = EditRecipe::default();
+        let with_wb = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: Some([1.9, 1.0, 1.4, 1.0]),
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let reasons = gpu_routing_reasons(&recipe, &with_wb);
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.starts_with("camera_white_balance")),
+            "{reasons:?}"
+        );
+        assert_eq!(reasons.len(), 1, "{reasons:?}");
+
+        let without_wb = RenderContext {
+            camera_white_balance: None,
+            ..with_wb.clone()
+        };
+        assert!(gpu_routing_reasons(&recipe, &without_wb).is_empty());
+
+        // Touched-but-reset sliders stay GPU-allowed …
+        let touched_reset = EditRecipe {
+            adjustments: BTreeMap::from([
+                ("vibrance".to_string(), 0.0),
+                ("saturation".to_string(), 0.0),
+            ]),
+            ..Default::default()
+        };
+        let reset_ctx = RenderContext {
+            recipe: &touched_reset,
+            ..without_wb.clone()
+        };
+        assert!(gpu_routing_reasons(&touched_reset, &reset_ctx).is_empty());
+
+        // … while non-neutral values keep flagging.
+        let non_neutral = EditRecipe {
+            adjustments: BTreeMap::from([("vibrance".to_string(), 0.25)]),
+            ..Default::default()
+        };
+        let non_neutral_ctx = RenderContext {
+            recipe: &non_neutral,
+            ..reset_ctx
+        };
+        let reasons = gpu_routing_reasons(&non_neutral, &non_neutral_ctx);
+        assert!(
+            reasons.iter().any(|r| r.contains("vibrance")),
+            "{reasons:?}"
+        );
+
+        // WB context stacks with other context-level reasons instead of
+        // replacing them.
+        let artifact = SourceActionArtifact {
+            region: MaskPlane {
+                width: 4,
+                height: 4,
+                values: vec![u16::MAX; 16],
+            },
+            replacement: ImageFrame::new(4, 4, vec![0; 4 * 4 * 4]).unwrap(),
+        };
+        let stacked = RenderContext {
+            source_actions: std::slice::from_ref(&artifact),
+            ..with_wb
+        };
+        let reasons = gpu_routing_reasons(&recipe, &stacked);
+        assert_eq!(reasons.len(), 2, "{reasons:?}");
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.starts_with("camera_white_balance")),
+            "{reasons:?}"
+        );
+        assert!(reasons.iter().any(|r| r.contains("source_actions")));
     }
 
     #[test]

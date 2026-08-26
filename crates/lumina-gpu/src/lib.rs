@@ -22,6 +22,11 @@
 //! render to the full CPU pipeline and logs once per reason set — the GPU is an
 //! accelerator, never a semantic change.
 //!
+//! [`unsupported_gpu_stages_with_context`] extends that verdict with the
+//! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
+//! must honor — most notably the decoder's As-Shot white balance (R2-MCP-01),
+//! which the shader has no notion of.
+//!
 //! The public API is therefore stable and always
 //! returns a [`Frame`], which keeps the CPU and GPU return types identical for
 //! callers.
@@ -149,21 +154,23 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// fallbacks).
 ///
 /// Currently detected as unsupported:
-/// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] (in
-///   particular non-zero `vibrance`/`saturation`, whose uniform fields exist
-///   but are not applied by the shader);
+/// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
+///   non-neutral value** (R2-GPU-05: sliders the GUI touched and reset store
+///   their neutral default back into the recipe map; at that value the CPU
+///   stage is pixel-identical to not having the key, so it must not block the
+///   GPU route);
 /// - non-neutral Curves, HSL, Presence;
 /// - Color Grading, Noise Reduction, Sharpening, Effects (vignette/grain);
 /// - Geometry / Lens Correction / Perspective;
 /// - non-empty SourceActions **unless** GPU source-action artifacts are bound
-///   (see [`unsupported_gpu_stages_for`]).
+///   (see [`unsupported_gpu_stages_with_context`]).
 ///
-/// Not listed: `RenderContext::camera_white_balance`. In `lumina-core` the
-/// As-Shot gains are validated but never re-applied to pixels (the decoder has
-/// already applied them), so they cause no CPU/GPU divergence today. If that
-/// ever changes, this predicate must grow a corresponding check.
+/// This predicate sees only the recipe. Render-context state the GPU stage
+/// cannot reproduce — decoder As-Shot white balance above all (R2-MCP-01) — is
+/// covered by [`unsupported_gpu_stages_with_context`], which the routing
+/// mirrors in `lumina-cli`/`lumina-mcp` consult before entering the GPU path.
 pub fn unsupported_gpu_stages(recipe: &EditRecipe) -> Vec<String> {
-    unsupported_gpu_stages_for(recipe, false)
+    unsupported_gpu_stages_with_context(recipe, false, None)
 }
 
 /// [`unsupported_gpu_stages`] with explicit source-action awareness (GPU-STAGE-1).
@@ -175,11 +182,40 @@ pub fn unsupported_gpu_stages(recipe: &EditRecipe) -> Vec<String> {
 /// the stage would silently drop the compositing and is flagged exactly as
 /// before — the CPU route keeps such renders pixel-safe.
 pub fn unsupported_gpu_stages_for(recipe: &EditRecipe, source_actions_bound: bool) -> Vec<String> {
+    unsupported_gpu_stages_with_context(recipe, source_actions_bound, None)
+}
+
+/// [`unsupported_gpu_stages_for`] plus the render-context features the GPU
+/// pipeline cannot reproduce at all.
+///
+/// R2-MCP-01: a render carrying a decoder As-Shot white balance
+/// (`RenderContext::camera_white_balance`) always CPU-routes until the shader
+/// becomes WB-context-capable. Today `lumina-core` validates those gains but
+/// does not re-apply them to pixels (the decoder already did), so valid
+/// contexts happen to be pixel-neutral — but the context is part of the CPU
+/// reference contract, including its validation: invalid gains abort the CPU
+/// render while a GPU path without that notion would silently ignore them.
+/// Routing on presence keeps identical source + sidecar producing identical
+/// pixels across feature sets and cannot regress into silent divergence if WB
+/// ever becomes pixel-active in core.
+pub fn unsupported_gpu_stages_with_context(
+    recipe: &EditRecipe,
+    source_actions_bound: bool,
+    camera_white_balance: Option<&[f32; 4]>,
+) -> Vec<String> {
     let mut reasons = Vec::new();
-    for key in recipe.adjustments.keys() {
-        if !GPU_SUPPORTED_ADJUSTMENT_KEYS.contains(&key.as_str()) {
-            reasons.push(format!("adjustment `{key}` not implemented on GPU"));
+    for (key, value) in recipe.adjustments.iter() {
+        if GPU_SUPPORTED_ADJUSTMENT_KEYS.contains(&key.as_str()) {
+            continue;
         }
+        // R2-GPU-05: value neutrality. The GUI writes slider defaults back
+        // into the map instead of removing keys ("touched once" must not mean
+        // "GPU-forbidden forever"): at its neutral value the CPU stage leaves
+        // every pixel unchanged, so skipping it drops nothing.
+        if adjustment_neutral_value(key) == Some(*value) {
+            continue;
+        }
+        reasons.push(format!("adjustment `{key}` not implemented on GPU"));
     }
     if let Some(curves) = &recipe.curves {
         if !curves_are_neutral(curves) {
@@ -223,7 +259,33 @@ pub fn unsupported_gpu_stages_for(recipe: &EditRecipe, source_actions_bound: boo
             MAX_SOURCE_ACTIONS
         ));
     }
+    if camera_white_balance.is_some() {
+        reasons.push("camera_white_balance (As-Shot context)".into());
+    }
     reasons
+}
+
+/// The identity ("no visible change") value of an adjustment key.
+///
+/// Every slider is centered at `0.0`; the temperature slider's identity point
+/// is the reference temperature 6500 K, from which the CPU derives exactly
+/// `[1.0, 1.0, 1.0]` channel gains (`wb_gains` derivation in
+/// `lumina-core::apply_recipe…`). Keys outside the recipe schema have no
+/// neutral value ([`None`]) and are therefore always flagged — the CPU
+/// pipeline rejects them outright, so no value could ever make them safe to
+/// drop on the GPU.
+///
+/// Note: `wb_temperature` is currently GPU-supported
+/// ([`GPU_SUPPORTED_ADJUSTMENT_KEYS`]), so its entry is unreachable through
+/// the gate today; it documents the correct neutral so future key-set changes
+/// cannot silently reintroduce the R2-GPU-05 value-blindness for it.
+fn adjustment_neutral_value(key: &str) -> Option<f64> {
+    match key {
+        "wb_temperature" => Some(6500.0),
+        "exposure" | "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
+        | "vibrance" | "saturation" => Some(0.0),
+        _ => None,
+    }
 }
 
 /// A curve is neutral when its master is the identity (`input == output` for
@@ -1366,6 +1428,13 @@ impl GpuContext {
     /// The routing decision is logged once per unique reason set — the GPU is an
     /// accelerator, never a semantic change (Agents.md: no silent fallbacks).
     ///
+    /// This method only sees the recipe. Render-context state — decoder As-Shot
+    /// white balance, mask layers, Lensfun correctors — cannot be expressed
+    /// here, so callers carrying such context must consult
+    /// [`unsupported_gpu_stages_with_context`] (plus their own context checks)
+    /// *before* calling this method; the CLI/MCP routing mirrors do exactly
+    /// that (R2-MCP-01).
+    ///
     /// When no adapter is bound (or the `gpu` feature is disabled downstream) this
     /// transparently falls back to the CPU pipeline so the public API always
     /// returns a real [`Frame`].
@@ -2222,5 +2291,151 @@ mod combine_tests {
         };
         let err = combine_mask_planes(&[single, other]).unwrap_err();
         assert!(err.contains("does not match"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod routing_gate_tests {
+    use super::*;
+    use lumina_sidecar::Perspective;
+
+    fn recipe_with_adjustments(entries: &[(&str, f64)]) -> EditRecipe {
+        EditRecipe {
+            adjustments: entries
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), *value))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// R2-GPU-05: sliders that were touched and reset carry their neutral
+    /// default (`0.0`) in the recipe map instead of being removed. They must
+    /// not flag the GPU route — only non-neutral values may.
+    #[test]
+    fn neutral_reset_adjustments_do_not_flag() {
+        let touched_and_reset =
+            recipe_with_adjustments(&[("vibrance", 0.0), ("saturation", 0.0), ("exposure", 0.0)]);
+        assert!(unsupported_gpu_stages(&touched_and_reset).is_empty());
+
+        let reasons = unsupported_gpu_stages(&recipe_with_adjustments(&[
+            ("vibrance", 0.2),
+            ("saturation", -0.5),
+        ]));
+        assert!(
+            reasons.iter().any(|r| r.contains("vibrance")),
+            "{reasons:?}"
+        );
+        assert!(
+            reasons.iter().any(|r| r.contains("saturation")),
+            "{reasons:?}"
+        );
+    }
+
+    /// Keys outside the recipe schema have no neutral value and stay flagged
+    /// regardless of their value — the CPU pipeline rejects them outright.
+    #[test]
+    fn unknown_keys_have_no_neutral_value() {
+        let bogus = recipe_with_adjustments(&[("clarity_v2", 0.0)]);
+        let reasons = unsupported_gpu_stages(&bogus);
+        assert!(
+            reasons.iter().any(|r| r.contains("clarity_v2")),
+            "{reasons:?}"
+        );
+    }
+
+    /// Documented per-key identity values (R2-GPU-05 follow-up): everything is
+    /// centered at `0.0` except `wb_temperature`, whose identity point is
+    /// 6500 K (exactly `[1.0, 1.0, 1.0]` channel gains).
+    #[test]
+    fn adjustment_neutral_table() {
+        assert_eq!(adjustment_neutral_value("wb_temperature"), Some(6500.0));
+        for key in [
+            "exposure",
+            "contrast",
+            "highlights",
+            "shadows",
+            "whites",
+            "blacks",
+            "wb_tint",
+            "vibrance",
+            "saturation",
+        ] {
+            assert_eq!(adjustment_neutral_value(key), Some(0.0), "{key}");
+        }
+        assert_eq!(adjustment_neutral_value("not_a_key"), None);
+    }
+
+    /// R2-MCP-01: carrying a decoder As-Shot WB context produces exactly one
+    /// CPU-routing reason; without one it stays absent. The reason stacks with
+    /// recipe-level reasons instead of replacing them, and the legacy
+    /// predicates delegate with no context.
+    #[test]
+    fn context_wb_routes_to_cpu() {
+        let wb: [f32; 4] = [1.8999, 1.0, 1.3953, 1.0];
+        let with_ctx =
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb));
+        assert_eq!(
+            with_ctx,
+            vec!["camera_white_balance (As-Shot context)".to_string()]
+        );
+
+        // Source-action binding does not change the WB verdict …
+        assert_eq!(
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), true, Some(&wb)),
+            with_ctx
+        );
+        // … and absence keeps the gate empty for a supported recipe.
+        assert!(
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty()
+        );
+
+        // WB stacks with recipe reasons instead of replacing them.
+        let mixed = unsupported_gpu_stages_with_context(
+            &recipe_with_adjustments(&[("vibrance", 0.3)]),
+            false,
+            Some(&wb),
+        );
+        assert_eq!(mixed.len(), 2, "{mixed:?}");
+        assert!(mixed.iter().any(|r| r.contains("vibrance")), "{mixed:?}");
+        assert!(
+            mixed.iter().any(|r| r.starts_with("camera_white_balance")),
+            "{mixed:?}"
+        );
+
+        // The legacy predicates delegate with `None`: identical to passing no
+        // context explicitly.
+        assert_eq!(
+            unsupported_gpu_stages(&EditRecipe::default()),
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None)
+        );
+        let vibrance_recipe = recipe_with_adjustments(&[("vibrance", 0.3)]);
+        assert_eq!(
+            unsupported_gpu_stages_for(&vibrance_recipe, true),
+            unsupported_gpu_stages_with_context(&vibrance_recipe, true, None)
+        );
+    }
+
+    /// Invariant: the value-neutrality change (R2-GPU-05) must not weaken any
+    /// other stage check — nested objects and flat stage markers still route.
+    #[test]
+    fn non_adjustment_stage_checks_unchanged() {
+        let recipe = EditRecipe {
+            effects: Some(lumina_sidecar::Effects::default()),
+            perspective: Some(Perspective {
+                version: 1,
+                vertical: 0.0,
+                horizontal: 0.0,
+                rotation: 0.0,
+                scale: 1.0,
+                aspect_ratio: 1.0,
+                shift_x: 0.0,
+                shift_y: 0.0,
+            }),
+            ..Default::default()
+        };
+        let reasons = unsupported_gpu_stages(&recipe);
+        assert!(reasons.contains(&"effects".to_string()), "{reasons:?}");
+        assert!(reasons.contains(&"perspective".to_string()), "{reasons:?}");
     }
 }

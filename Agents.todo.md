@@ -181,8 +181,8 @@ werden nach unabhängiger Verifizierung entfernt.
   Poisoning), RAW-03 (toter name-Parameter der Decode-API), PRESETS-FAIL-CLOSED
   (recipe_scope_violation fail-open bei Serialisierungsfehler — praktisch
   unerreichbar, optional fail-closed), GUI-IS_RAW_NAME (letzte private
-  Extension-Teilkopie in lumina-gui/lib.rs ~6288 auf RAW_EXTENSIONS umstellen)
-  (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
+  Extension-Teilkopie in lumina-gui/lib.rs ~6288 auf RAW_EXTENSIONS umstellen),
+  GPU-WB-GUI-GATE (gui gpu_present_if_ready sieht keinen Kontext-WB â recipe-only; Restbefund aus R2-MCP-01-HÃ¤rtung), SIGTRAP-GPU-TESTS (--features gpu cli/mcp: Rayon-Worker droppen thread_local GPU_CTX beim Exit, Signal 5 trotz grÃ¼ner Tests; vorbestehend), MCP-06 (downscale_bilinear gehört nach
   core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
   in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation
   Keys), SIDECAR-ZDATA-WASM

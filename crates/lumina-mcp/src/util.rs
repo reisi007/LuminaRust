@@ -7,7 +7,7 @@ use lumina_core::{
     render_frame, BitDepth, ExportOptions, ImageFileFormat, ImageFrame, RenderContext,
 };
 #[cfg(feature = "gpu")]
-use lumina_gpu::GpuContext;
+use lumina_gpu::{log_cpu_routing_once, unsupported_gpu_stages_with_context, GpuContext};
 use lumina_raw::RawMetadata;
 use lumina_sidecar::{DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity};
 use std::collections::BTreeMap;
@@ -325,9 +325,12 @@ pub fn render_copy(
 
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
 /// otherwise the full platform-neutral CPU pipeline. Mirrors the `lumina-cli`
-/// routing: the GPU bootstrap stub applies the recipe only (mask/WB/source-
-/// action stages land with later shader subagents), so the CPU branch keeps the
-/// complete pipeline.
+/// routing through the shared decision function (R2-MCP-01): recipes with
+/// GPU-unsupported stages **and** renders carrying the decoder As-Shot
+/// white-balance context route explicitly to the CPU pipeline — logged once
+/// per reason set, so identical source + sidecar produce identical pixels
+/// across feature sets. The GPU is an accelerator, never a semantic change
+/// (Agents.md: no silent fallbacks).
 #[cfg(feature = "gpu")]
 fn render_best_effort(
     ctx: Option<&GpuContext>,
@@ -335,12 +338,20 @@ fn render_best_effort(
     recipe: &EditRecipe,
     camera_white_balance: Option<[f32; 4]>,
 ) -> Result<ImageFrame, McpError> {
+    // Consult the shared routing gate BEFORE entering the GPU path. Recipe
+    // stages alone would also be caught inside `render_with_gpu`; checking
+    // here additionally covers the render-context half (As-Shot WB) and keeps
+    // CLI/MCP byte-for-byte on the same decision function.
+    let reasons = unsupported_gpu_stages_with_context(recipe, false, camera_white_balance.as_ref());
     match ctx {
-        Some(ctx) if ctx.is_available() => ctx
+        Some(ctx) if ctx.is_available() && reasons.is_empty() => ctx
             .render_with_gpu(frame, recipe)
             .map(|rendered| rendered.to_image_frame())
             .map_err(|error| McpError::Render(error.to_string())),
         _ => {
+            if !reasons.is_empty() {
+                log_cpu_routing_once(&reasons, "mcp render");
+            }
             let output = render_frame(
                 frame,
                 &RenderContext {
@@ -566,4 +577,110 @@ pub fn downscale_bilinear(frame: &ImageFrame, max_width: u32) -> ImageFrame {
         }
     }
     ImageFrame::new(new_width, new_height, pixels).expect("downscaled dimensions are consistent")
+}
+
+#[cfg(all(test, feature = "gpu"))]
+mod routing_tests {
+    use super::*;
+
+    fn gradient_frame(width: u32, height: u32) -> ImageFrame {
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(&[
+                    ((x as f32 / width as f32) * 255.0).round() as u8,
+                    ((y as f32 / height as f32) * 255.0).round() as u8,
+                    160,
+                    255,
+                ]);
+            }
+        }
+        ImageFrame::new(width, height, pixels).expect("synthetic gradient frame")
+    }
+
+    fn cpu_oracle(
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+        camera_white_balance: Option<[f32; 4]>,
+    ) -> ImageFrame {
+        render_frame(
+            frame,
+            &RenderContext {
+                recipe,
+                camera_white_balance,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+            },
+        )
+        .expect("CPU oracle render")
+        .frame
+    }
+
+    /// Invariant of both routing fixes: the CPU branch stays byte-identical to
+    /// the reference pipeline — routing changes never alter CPU pixels
+    /// (`Agents.md`: CPU is the oracle).
+    #[test]
+    fn cpu_branch_matches_render_frame_byte_identically() {
+        let frame = gradient_frame(16, 16);
+        let wb = [1.7f32, 1.0, 1.3, 1.0];
+        let recipe = EditRecipe::default();
+        let routed =
+            render_best_effort(None, &frame, &recipe, Some(wb)).expect("CPU branch renders");
+        assert_eq!(routed.pixels, cpu_oracle(&frame, &recipe, Some(wb)).pixels);
+    }
+
+    /// R2-MCP-01: invalid As-Shot gains must fail loudly through the routing
+    /// choke point. Before the fix a bound adapter silently ignored the whole
+    /// context; now it always CPU-routes into core's validation, which rejects
+    /// non-positive gains before any pixel mutation.
+    #[test]
+    fn invalid_as_shot_gains_fail_loudly_on_every_backend() {
+        let frame = gradient_frame(8, 8);
+        let bad_wb = [0.0f32, 1.0, 1.0, 1.0];
+        let recipe = EditRecipe::default();
+
+        // Without an adapter the CPU branch validates directly …
+        assert!(render_best_effort(None, &frame, &recipe, Some(bad_wb)).is_err());
+
+        // … and with an adapter the route must still reach that validation.
+        let Ok(ctx) = GpuContext::new() else {
+            eprintln!("GPU context init failed - adapter-side assertion skipped");
+            return;
+        };
+        if !ctx.is_available() {
+            eprintln!("GPU adapter unavailable - adapter-side assertion skipped");
+            return;
+        }
+        assert!(
+            render_best_effort(Some(&ctx), &frame, &recipe, Some(bad_wb)).is_err(),
+            "a bound adapter must not bypass As-Shot gain validation"
+        );
+    }
+
+    /// R2-MCP-01 end-to-end: with an adapter available, carrying a valid
+    /// As-Shot context produces exactly the CPU-oracle pixels (the render is
+    /// CPU-routed instead of dropping the context on the GPU).
+    #[test]
+    fn wb_context_reroutes_to_cpu_reference_pixels() {
+        let frame = gradient_frame(16, 16);
+        let wb = [1.6f32, 1.0, 1.25, 1.0];
+        let recipe = EditRecipe::default();
+        let expected = cpu_oracle(&frame, &recipe, Some(wb));
+
+        let Ok(ctx) = GpuContext::new() else {
+            eprintln!("GPU context init failed - routing assertion skipped");
+            return;
+        };
+        if !ctx.is_available() {
+            eprintln!("GPU adapter unavailable - routing assertion skipped");
+            return;
+        }
+        let routed = render_best_effort(Some(&ctx), &frame, &recipe, Some(wb))
+            .expect("WB-context render must succeed via the CPU route");
+        assert_eq!(
+            routed.pixels, expected.pixels,
+            "As-Shot context must render through the CPU reference pipeline"
+        );
+    }
 }
