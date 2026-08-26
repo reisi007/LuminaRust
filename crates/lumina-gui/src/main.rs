@@ -10,11 +10,23 @@ fn main() -> eframe::Result {
     logger::install_panic_hook();
     let _level = logger::init_logging(log::LevelFilter::Trace);
     let workdir = parse_workdir();
+    // GUI-WGPU-PRESENT-1: the wgpu renderer shares its Device/Queue with
+    // `lumina-gpu` (via `CreationContext::wgpu_render_state`), so the preview
+    // presents straight from VRAM without any CPU readback. The renderer is
+    // set explicitly to document the dependency of that path.
+    let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
+        ..Default::default()
+    };
     eframe::run_native(
         "Lumina",
-        eframe::NativeOptions::default(),
+        options,
         Box::new(move |creation_context| {
             let mut app = lumina_gui::LuminaApp::new(creation_context.egui_ctx.clone());
+            lumina_gui::attach_wgpu_render_state(
+                &mut app,
+                creation_context.wgpu_render_state.clone(),
+            );
             if let Some(dir) = workdir {
                 app.set_directory(dir);
             }

@@ -6,7 +6,12 @@ description = "Native and WASM Lumina raster preview GUI"
 
 [dependencies]
 blake3 = "1"
-eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }
+# GUI-WGPU-PRESENT-1: native desktop uses the **wgpu** renderer (was `glow`)
+# so `lumina-gpu`'s VRAM textures live on the same device that presents to the
+# swapchain — enabling the readback-free present path (`copy_vram_to_texture`
+# → registered egui user texture). WASM builds compile the wgpu backend too
+# (WebGL2/WebGPU); the lumina-gpu capability stays native-only via features.
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "x11", "wayland", "default_fonts"] }
 serde_json = "1"
 lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }

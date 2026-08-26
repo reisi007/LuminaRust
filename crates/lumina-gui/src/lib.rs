@@ -521,6 +521,31 @@ pub struct LuminaApp {
     brush_mask_plane: Option<Vec<u16>>,
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
     brush_mask_plane_dims: Option<(u32, u32)>,
+    /// GUI-WGPU-PRESENT-1: the eframe wgpu renderer's shared state. When
+    /// present, `lumina-gpu` was constructed on the *same* Device/Queue
+    /// (see `attach_wgpu_render_state`), so the VRAM overlay composite can be
+    /// registered as an egui user texture and presented without any CPU
+    /// readback.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    wgpu_render_state: Option<eframe::egui_wgpu::RenderState>,
+    /// Offscreen target the VRAM overlay pass composites into; registered once
+    /// as an egui user texture and re-created only when dimensions change.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    present_target: Option<PresentTarget>,
+    /// True while the VRAM output corresponds to the current recipe/source:
+    /// set right after a successful `render_to_vram`, cleared by every edit
+    /// ([`Self::mark_dirty`]) so a stale tone result can never be presented.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    vram_fresh: bool,
+    /// True while the VRAM mask texture carries the pipeline-*evaluated* layer
+    /// planes (pushed after a full render) rather than only live brush stamps —
+    /// then the shader overlay already shows what the CPU overlay would paint.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    vram_mask_is_evaluated: bool,
+    /// The egui user-texture id + size of the GPU-presented preview for THIS
+    /// frame (recomputed in `update_texture`, consumed in `draw_preview`).
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    gpu_present_frame: Option<(egui::TextureId, [usize; 2])>,
     /// GUI-SCROLL-200-1: per-frame diagnostic counters for `LUMINA_PERF_LOG=1`.
     /// `frame_thumb_enqueued` counts worker jobs enqueued (or cached previews
     /// loaded) this frame, `frame_thumbs_ready` counts worker results applied.
@@ -531,6 +556,62 @@ pub struct LuminaApp {
     frame_thumb_enqueued: usize,
     #[cfg(not(target_arch = "wasm32"))]
     frame_thumbs_ready: usize,
+}
+
+/// GUI-WGPU-PRESENT-1: offscreen present target + its egui registration.
+///
+/// The overlay pass composites the VRAM tone output and mask plane into
+/// `texture`; `texture` is registered with the eframe wgpu renderer as a user
+/// texture (`register_native_texture`) so `painter().image(id, ..)` draws it
+/// directly on screen. Re-created only when the VRAM dimensions change; the
+/// old registration is freed to avoid leaking GPU-side bind groups.
+#[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+struct PresentTarget {
+    texture: eframe::wgpu::Texture,
+    #[allow(dead_code)]
+    view: eframe::wgpu::TextureView,
+    id: egui::TextureId,
+    dims: (u32, u32),
+}
+
+/// GUI-WGPU-PRESENT-1: hand the eframe wgpu renderer's shared state to the app.
+///
+/// Called from `run_native`'s builder with `CreationContext::wgpu_render_state`.
+/// When present, [`lumina_gpu::GpuContext`] resources are re-based onto that
+/// device/queue so VRAM textures are shareable with the presenting surface.
+/// No-op under wasm32 or without the `gpu` feature (CPU present path stays).
+#[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+pub fn attach_wgpu_render_state(
+    app: &mut LuminaApp,
+    state: Option<eframe::egui_wgpu::RenderState>,
+) {
+    app.wgpu_render_state = state.clone();
+    // Re-base the GPU context onto the renderer's device/queue so VRAM
+    // textures share the presenting surface's device (the whole point of the
+    // migration). If that fails we keep the previously constructed standalone
+    // context and log loudly — no silent capability downgrade.
+    if let Some(rs) = &state {
+        match lumina_gpu::GpuContext::from_parts(
+            rs.instance.clone(),
+            rs.adapter.clone(),
+            rs.device.clone(),
+            rs.queue.clone(),
+        ) {
+            Ok(ctx) => {
+                log::info!(
+                    "GPU present path: sharing eframe wgpu device ({})",
+                    rs.adapter.get_info().name
+                );
+                app.gpu = Some(ctx);
+            }
+            Err(err) => {
+                log::warn!(
+                    "GPU present path: shared-device context unavailable ({err}); \
+                     falling back to the CPU present upload"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -758,6 +839,16 @@ impl LuminaApp {
             auto_load_attempted: false,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             gpu: lumina_gpu::GpuContext::new().ok(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            wgpu_render_state: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            present_target: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            vram_fresh: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            vram_mask_is_evaluated: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            gpu_present_frame: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             brush_mask_plane: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
@@ -2451,6 +2542,50 @@ impl LuminaApp {
             None
         };
         self.render_mask_layers = output.mask_layers;
+        // GUI-WGPU-PRESENT-1 / GPU-STAGE-1: make the *pipeline-evaluated* mask
+        // coverage visible in the GPU present composite by pushing the combined
+        // effective planes into the VRAM mask texture. Failures are loud but
+        // never break the CPU preview path.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        {
+            self.vram_mask_is_evaluated = false;
+            if !self.render_mask_layers.is_empty() {
+                let planes: Vec<lumina_core::MaskPlane> = self
+                    .render_mask_layers
+                    .iter()
+                    .map(|layer| layer.plane.clone())
+                    .collect();
+                match lumina_gpu::combine_mask_planes(&planes) {
+                    Ok(Some(combined))
+                        if combined.width
+                            == self.preview.as_ref().map(|p| p.width).unwrap_or(0)
+                            && combined.height
+                                == self.preview.as_ref().map(|p| p.height).unwrap_or(0) =>
+                    {
+                        if let Some(gpu) = self.gpu.as_ref() {
+                            if gpu.is_available()
+                                && gpu.ensure_vram(combined.width, combined.height).is_ok()
+                            {
+                                match gpu.upload_mask_plane(
+                                    combined.width,
+                                    combined.height,
+                                    &combined.values,
+                                ) {
+                                    Ok(()) => self.vram_mask_is_evaluated = true,
+                                    Err(err) => {
+                                        warn!("gpu evaluated-mask upload failed: {err}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!("gpu evaluated-mask combination failed: {err}");
+                    }
+                }
+            }
+        }
         self.error = None;
         self.last_stage_work = Some(work);
         self.status = if !mask_warnings.is_empty() {
@@ -2563,16 +2698,19 @@ impl LuminaApp {
     /// preview-area path only.
     #[cfg(not(target_arch = "wasm32"))]
     fn update_texture(&mut self, ctx: &egui::Context) {
+        // GUI-WGPU-PRESENT-1: when the wgpu renderer shares its device with
+        // `lumina-gpu` and the VRAM content is fresh, present straight from
+        // VRAM (overlay composite → registered user texture). No CPU readback,
+        // no `ColorImage` upload. Every fallback condition below drops to the
+        // historical CPU upload, which remains fully functional.
+        self.gpu_present_frame = None;
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        if let Some((id, size)) = self.gpu_present_if_ready() {
+            self.gpu_present_frame = Some((id, size));
+            return;
+        }
         // Before/After shows the original (never the recipe) so the toggle can
         // never mutate the recipe — it only swaps which frame is displayed.
-        //
-        // GPU-60FPS-1 H1 present: with `eframe` glow (GL) the `wgpu` VRAM path
-        // (Metal) is a separate `Instance` whose `wgpu::Texture`s cannot be
-        // shared with the glow surface, so `copy_vram_to_texture` is offscreen-
-        // only. The preview is therefore always presented via the CPU
-        // `ColorImage`/`load_texture` upload (the `queue.write_texture` hot path
-        // is only for the R16 mask tiles). A future `egui_wgpu` renderer could
-        // present directly via `copy_vram_to_texture` and skip this upload.
         let frame = if self.before_after {
             self.original.as_ref()
         } else {
@@ -2584,6 +2722,83 @@ impl LuminaApp {
             self.texture =
                 Some(ctx.load_texture("lumina-preview", image, egui::TextureOptions::LINEAR));
         }
+    }
+
+    /// GPU-present eligibility + composite + registration (GUI-WGPU-PRESENT-1).
+    ///
+    /// Returns the registered texture id and pixel size when the preview can
+    /// be presented readback-free this frame. Deliberately conservative: any
+    /// condition that would change visible pixels beyond the documented F-043
+    /// tolerance keeps the CPU present path (no silent divergence):
+    /// - Before/After displays the original — never in VRAM;
+    /// - zoomed ROI previews crop on the CPU — geometry must not jump;
+    /// - recipes with GPU-unsupported stages would render tone-only in VRAM
+    ///   (the documented GPU-STAGE-1 Restrisiko) — CPU pixels are exact;
+    /// - stale VRAM (`vram_fresh == false`) after any edit.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn gpu_present_if_ready(&mut self) -> Option<(egui::TextureId, [usize; 2])> {
+        if !self.vram_fresh || self.before_after || self.preview_roi.is_some() {
+            return None;
+        }
+        // The GUI binds no source-action artifacts; a recipe referencing them
+        // would lose the compositing on the GPU tone-only path → CPU route.
+        if !lumina_gpu::unsupported_gpu_stages(&self.recipe).is_empty() {
+            return None;
+        }
+        let render_state = self.wgpu_render_state.clone()?;
+        let dims = self.gpu.as_ref()?.vram_dimensions()?;
+        if !self.gpu.as_ref()?.is_available() {
+            return None;
+        }
+        // Composite output+mask into our present target (GPU-GPU, no readback).
+        if let Err(err) = self.ensure_present_target(&render_state, dims) {
+            log::warn!("gpu present target unavailable: {err}");
+            return None;
+        }
+        let texture = self.present_target.as_ref()?.texture.clone();
+        let id = self.present_target.as_ref()?.id;
+        if let Err(err) = self.gpu.as_ref()?.copy_vram_to_texture(&texture) {
+            log::warn!("gpu overlay present failed: {err}");
+            return None;
+        }
+        Some((id, [dims.0 as usize, dims.1 as usize]))
+    }
+
+    /// Create or resize the offscreen present target and keep it registered as
+    /// an egui user texture with the eframe wgpu renderer.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn ensure_present_target(
+        &mut self,
+        render_state: &eframe::egui_wgpu::RenderState,
+        dims: (u32, u32),
+    ) -> Result<(), String> {
+        if let Some(existing) = &self.present_target {
+            if existing.dims == dims {
+                return Ok(());
+            }
+            // Dimensions changed: free the old registration before replacing.
+            render_state.renderer.write().free_texture(&existing.id);
+            self.present_target = None;
+        }
+        let texture = lumina_gpu::shaders::create_output_texture(
+            &render_state.device,
+            dims.0,
+            dims.1,
+            "lumina-gui-present-target",
+        );
+        let view = texture.create_view(&eframe::wgpu::TextureViewDescriptor::default());
+        let id = render_state.renderer.write().register_native_texture(
+            &render_state.device,
+            &view,
+            eframe::wgpu::FilterMode::Linear,
+        );
+        self.present_target = Some(PresentTarget {
+            texture,
+            view,
+            id,
+            dims,
+        });
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -3119,7 +3334,19 @@ impl LuminaApp {
         // block — several helpers below (`handle_mask_tool_drag`,
         // `draw_mask_overlay`, `pick_white_balance_at`, `mark_dirty`) need
         // `&mut self` and would otherwise conflict with `&self.texture`.
+        //
+        // GUI-WGPU-PRESENT-1: when the frame was presented readback-free from
+        // VRAM (`gpu_present_frame`), the painted image is that registered user
+        // texture instead of the CPU `ColorImage`; its size (full frame) feeds
+        // the same geometry math. The CPU handle stays the fallback and is
+        // always present once any CPU render ran (warm-up before the very first
+        // render still shows the empty-state label).
         if let Some(texture) = self.texture.clone() {
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            let gpu_present = self.gpu_present_frame;
+            #[cfg(not(all(not(target_arch = "wasm32"), feature = "gpu")))]
+            #[allow(clippy::infallible_destructuring_match)]
+            let gpu_present: Option<(egui::TextureId, [usize; 2])> = None;
             // The preview pane is laid out somewhere inside the window, so its
             // origin is not (0,0). `available_size()` returns only the
             // dimensions, so building the draw rect relative to (0,0) places the
@@ -3129,8 +3356,13 @@ impl LuminaApp {
             // Use the true available rectangle (with the correct origin) and
             // center the image inside it.
             let pane = ui.available_rect_before_wrap();
-            let size = texture.size();
-            let (tw, th) = (size[0] as f32, size[1] as f32);
+            let (tw, th) = match gpu_present {
+                Some((_, size)) => (size[0] as f32, size[1] as f32),
+                None => {
+                    let size = texture.size();
+                    (size[0] as f32, size[1] as f32)
+                }
+            };
             // Un-cropped source dimensions backing the texture (the texture
             // itself is an ROI crop at zoom > 1, so its own fit scale depends
             // on the zoom and must never feed back into the zoom derivation —
@@ -3291,7 +3523,19 @@ impl LuminaApp {
             let rect = egui::Rect::from_center_size(center, draw);
             self.preview_effective_scale = scale;
 
-            ui.put(rect, egui::Image::from_texture(&texture));
+            // GUI-WGPU-PRESENT-1: the GPU-presented frame is a registered
+            // user texture — draw it via the painter directly (identical rect,
+            // full UVs). Otherwise the historical CPU `Image` widget.
+            if let Some((present_id, _)) = gpu_present {
+                ui.painter().image(
+                    present_id,
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            } else {
+                ui.put(rect, egui::Image::from_texture(&texture));
+            }
 
             // WB eyedropper needs the source-coordinate mapping, which is part
             // of the native (non-wasm) capability set.
@@ -3532,26 +3776,34 @@ impl LuminaApp {
     /// translucent tint over the source rect so the user sees exactly what the
     /// pipeline will evaluate.
     ///
-    /// GPU-60FPS-1 H1 present fix: the VRAM mask tiles are uploaded
-    /// incrementally via `gpu_upload_brush_tile` (`queue.write_texture` per dirty
-    /// 512² tile, `bytemuck::cast_slice` from the persistent `Vec<u16>` plane).
-    /// With the current `eframe` **glow** (GL) backend the `wgpu` VRAM textures
-    /// live in a separate `wgpu::Instance` (Metal) and their `wgpu::Texture`
-    /// handles cannot be shared with the glow surface, so `copy_vram_to_texture`
-    /// is **offscreen only** and the on-screen overlay still needs the CPU
-    /// `rasterize_prompt` → `egui::ColorImage`/`ctx.load_texture` present path.
-    /// No early `return` here — the overlay is always painted so the GPU path
-    /// cannot silently hide it. A future `egui_wgpu` renderer would composite via
-    /// `copy_vram_to_texture` directly and skip this CPU fallback.
+    /// GUI-WGPU-PRESENT-1: when the preview is presented readback-free from
+    /// VRAM, the overlay shader *already* composites the VRAM mask plane into
+    /// the presented texture — painting the CPU tint here would double-tint.
+    /// The CPU overlay therefore only runs for content that lives exclusively
+    /// on the CPU side:
+    ///
+    /// - gradient/radial prompts while drawing (never stamped into VRAM tiles),
+    /// - any overlay when the frame was CPU-presented.
+    ///
+    /// Live brush strokes and pipeline-evaluated planes
+    /// (`vram_mask_is_evaluated`, pushed after each full render via
+    /// `combine_mask_planes` + `upload_mask_plane`) are shown by the GPU
+    /// composite instead — same tint strength, same u16 coverage domain.
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_mask_overlay(&mut self, ui: &mut egui::Ui, full_rect: egui::Rect) {
         #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
-        if self.gpu.as_ref().is_some_and(|g| g.is_available()) {
-            trace!(
-                "draw_mask_overlay: gpu vram resident — tiles already uploaded via queue.write_texture; \
-                 painting CPU fallback for glow present (copy_vram_to_texture is offscreen-only until egui_wgpu)"
-            );
-            // Fall through to CPU overlay for the glow backend.
+        if self.gpu_present_frame.is_some() {
+            let live_brush_in_vram = self.drawing && self.mask_tool == MaskTool::Brush;
+            if live_brush_in_vram || self.vram_mask_is_evaluated {
+                trace!(
+                    "draw_mask_overlay: gpu present composites the vram mask \
+                     (live_brush={live_brush_in_vram}, evaluated={})",
+                    self.vram_mask_is_evaluated
+                );
+                return;
+            }
+            // Gradient/radial prompts have no VRAM representation — fall
+            // through to the CPU overlay below.
         }
         let Some(prompt) = self.current_overlay_prompt() else {
             return;
@@ -3689,6 +3941,13 @@ impl LuminaApp {
         // An edit occurred: a full-quality render will be needed (debounced on
         // pointer release / idle, PERF-GUI-3/4).
         self.pending_full_render = true;
+        // GUI-WGPU-PRESENT-1: the VRAM tone result no longer matches the
+        // recipe — never present it until the drag path re-renders it.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        {
+            self.vram_fresh = false;
+            self.vram_mask_is_evaluated = false;
+        }
     }
 
     /// Documented default for a flat adjustment key (identity is 0; WB Kelvin 6500).
@@ -6099,7 +6358,18 @@ impl eframe::App for LuminaApp {
                             .clone()
                             .or_else(|| self.original.clone())
                         {
-                            let _ = gpu.render_to_vram(&src, &self.recipe);
+                            match gpu.render_to_vram(&src, &self.recipe) {
+                                Ok(()) => {
+                                    // GUI-WGPU-PRESENT-1: the VRAM output now
+                                    // matches the current recipe/source — the
+                                    // present path may use it this frame.
+                                    self.vram_fresh = true;
+                                }
+                                Err(err) => {
+                                    warn!("gpu render_to_vram failed: {err}");
+                                    self.vram_fresh = false;
+                                }
+                            }
                         }
                     }
                 }

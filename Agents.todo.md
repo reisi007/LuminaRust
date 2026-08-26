@@ -106,60 +106,6 @@ Erstes vollständiges Review des gesamten bestehenden Codes (alle 10 Crates,
 dieser Datei entfernt; Code-Verifikationslauf 2026-08-25 bestätigt den unten
 stehenden Restbestand.
 
-### PRIO: mittel
-
-**Performance-Verfeinerung — Lightroom-artige interaktive Geschwindigkeit**
-
-
-
-
-
-
-
-
-
-**Performance-Verfeinerung — Lightroom-artige interaktive Geschwindigkeit**
-
-Ausgangslage (Nutzerbericht): Die GUI decodiert/rendert synchron im Main-
-Thread; Dateiwechsel und Regler-Drags müssen flüssig werden. Die verbleibenden
-Ticks adressieren die interaktive GUI-Latenz (die Batch-/Kernel-Ebene
-F-074-A1…A4 ist abgeschlossen). Verifiziert wird gegen
-`feature/architecture/pipeline.md`, `feature/quality/performance-benchmarks.md`,
-`feature/platform/cli-gui-wasm.md` sowie `crates/lumina-gui/src/lib.rs`.
-Draft/Full-Split, Coalescing, CPU-ROI, Async-Decode und Auto-Load sind
-implementiert und aus dieser Liste entfernt; offen:
-
-- [ ] **[PRIO: mittel] PERF-GUI-2** GPU-Pfad ausbauen (Uniforms/Stages, kein CPU-Readback im
-      Present-Pfad).
-  - **Teilstand 2026-08-25:** `crates/lumina-gpu` existiert (wgpu/Metal,
-    `GpuContext`, Uniforms, Tone+WB-Stage als inline WGSL gegen CPU-Golden-
-    Gates getestet, Mask-Overlay-Shader, `render_to_vram` ohne `map_async`).
-    **Aber:** keine dedizierten Masken-/SourceAction-Stufen auf GPU
-    (SourceActions steht auf der CPU-Route-Liste); VRAM-Output ist offscreen-
-    only — das On-Screen-Present läuft über CPU-Upload (`ColorImage`/
-    `load_texture`) im glow-Renderer; Vollbild-Pfad liest per `map_async`
-    zurück.
-  - **Verfeinerung nötig:** Masken-/SourceAction-Stufen auf GPU; egui_wgpu-
-    Migration bzw. Readback-freier Present-Pfad; CPU bleibt Referenz.
-  - **Abnahmekriterien:** GPU-Pfad liefert wert-identisches Ergebnis zum
-    CPU-Pfad (F-043-Toleranzen); aktivierbar ohne `lumina-core`-API-Bruch;
-    WASM-Build bleibt ohne GPU-Capability grün.
-
-**Offene Punkte aus manuellem Test / GPU-Follow-ups**
-
-- [ ] **[PRIO: mittel] GPU-STAGE-1** Masken-/WB-/SourceAction-Stufen auf GPU (derzeit nur
-      Tone(+WB)-Stage und Mask-Overlay; CPU bleibt Referenz). Nach GUI-60FPS-1.
-      Restrisiko bis dahin dokumentiert: VRAM-Vorschau rendert Unsupported-
-      Rezepte tone-only (mit Warnung).
-- [ ] **[PRIO: mittel] GUI-WGPU-PRESENT-1** Follow-up aus GUI-60FPS-1-Verifizierung:
-      `egui_wgpu`-Migration bzw. Upload-Pfad finalisieren (derzeit Present
-      unter glow CPU-seitig via `ColorImage`/`load_texture`; <16 ms gilt für
-      Masken-Tile-Upload, nicht Preview-Present; `copy_vram_to_texture` ist
-      offscreen-only). `VramState` LRU/Pool (45 MP+) fehlt (single-slot);
-      `warn!` bei `GpuContext::new` Adapter-Fehler fehlt (Fehler wird
-      verschluckt). Dokumentiert in `docs/gpu-bootstrap.md` (Dual-Backend
-      glow vs wgpu).
-
 **Phase 11: Qualität, Performance und Release**
 
 ### PRIO: niedrig

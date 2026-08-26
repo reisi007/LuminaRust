@@ -910,6 +910,40 @@ Rezeptstand gehören.
 > Benchmark-IDs; bestehende Baselines/Budgets sind von der Änderung nicht
 > betroffen (`render_frame` ist semantisch unverändert).
 
+### Implementierungsstatus GPU-Pfad (PERF-GUI-2 / GPU-STAGE-1 / GUI-WGPU-PRESENT-1)
+
+Der GPU-Beschleunigungspfad (`crates/lumina-gpu`; DAG-Spezifikation und
+Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
+
+- **Stufen auf GPU:** Tone+WB (Bestand), neu eine dedizierte
+  **SourceAction-Stufe** als WGSL-Pass — Compositing gebundener Artefakte
+  exakt mit der CPU-Oracle-Semantik (`out = replacement` bei
+  Regionsabdeckung `>= 32768`, exakter Integer-Vergleich per `textureLoad` auf
+  `R16Uint`; reine Texelkopie ⇒ mit neutralem Rezept **byte-identisch** zum
+  CPU-Pfad). Die Routing-Validierung kennt gebundene Artefakte
+  (`unsupported_gpu_stages_for`) und CPU-routet weiterhin laut sichtbar, wenn
+  keine/passende Artefakte fehlen. Der **Masken-Datenpfad**
+  (`combine_mask_planes` nach F-041-Schnittprodukt + `upload_mask_plane`,
+  Roundtrip byte-exakt getestet) macht evaluierte Ebenen im VRAM-Composite
+  sichtbar; Masken modulieren CPU-seitig noch keine Pixel (dokumentierte
+  F-042-Grenze), daher existiert dafür derzeit keine Pixel-Gleichheit zu
+  verifizieren.
+- **Present-Pfad:** `eframe` nutzt jetzt den **wgpu**-Renderer;
+  `GpuContext::from_parts` teilt sich Renderer-Device/Queue, sodass die
+  VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`
+  → registrierte egui-User-Textur). Der CPU-Fallback (ColorImage-Upload)
+  bleibt vollständig erhalten; die kittest-Goldens bleiben unverändert grün.
+- **VRAM-Pool:** dimensionsschlüsseltes LRU (Entry-Limit + Bytebudget,
+  env-konfigurierbar) ersetzt den Single-Slot.
+- **Kein `lumina-core`-API-Bruch:** Core blieb vollständig unverändert; alle
+  Erweiterungen sind additiv in `lumina-gpu`/`lumina-gui`.
+- **Restrisiken:** (1) Rezepte mit GPU-unterstützten Stufen rendern in der
+  interaktiven Drag-Vorschau weiter tone-only (mit Warnung) — Present bleibt
+  dort bewusst auf dem exakten CPU-Pfad; (2) >45-MP-Zoom nutzt weiterhin
+  Volltextur-Pooling statt 512²-Tile-Cache (M2); (3) der Present-Pfad ist
+  headless nicht automatisiert testbar und braucht den nächsten manuellen
+  GUI-Test (Block C).
+
 ## Abnahme
 
 - CPU und CLI liefern für identische Eingaben reproduzierbare Ergebnisse mit

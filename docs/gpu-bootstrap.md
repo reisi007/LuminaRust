@@ -122,71 +122,76 @@ fallback to the GPU DAG; the CPU path remains the fallback and the test oracle.
 - `lumina-gpu` is **optional and WASM-clean**: `--no-default-features` builds a pure-CPU crate,
   and `wasm32` consumers omit `lumina-gpu` entirely (no `wgpu` dependency graph).
 
-## Dual-Backend Native: `eframe` glow (present) vs `wgpu` (offscreen compute)
+## Dual-Backend Native: resolved — `eframe` wgpu renderer + shared device
+(GUI-WGPU-PRESENT-1)
 
-> **Versionsstand (DEP-EGUI-WGPU-1, 2026-08-23):** `lumina-gui` baut auf
-> `eframe`/`egui` **0.36** (weiterhin **glow**-Renderer), `lumina-gpu` auf
-> `wgpu` **30**. Alle Aussagen in diesem Abschnitt (getrennte GPU-Kontexte,
-> kein Surface-Sharing, `egui_wgpu` als offener Follow-up
-> `GUI-WGPU-PRESENT-1`) sind durch das Upgrade **unverändert** gültig.
+> **Versionsstand (2026-08-26):** `lumina-gui` baut auf `eframe`/`egui` **0.36**
+> mit dem **wgpu**-Renderer (Feature `wgpu`, `NativeOptions::renderer =
+> Renderer::Wgpu`), `lumina-gpu` auf **dieselbe** `wgpu`-30-Version, die auch
+> `egui-wgpu` 0.36 zieht. Der frühere Dual-Backend-Konflikt (glow-Present vs.
+> Metal-Compute) ist damit **aufgelöst**.
 
-The native GUI (`lumina-gui`) today renders its `egui` UI via `eframe` with the
-**glow** (GL) renderer (`eframe = { features = ["glow"] }`). `lumina-gpu` owns a
-**separate** `wgpu::Instance` (Metal on Apple Silicon, `Backends::METAL`) and its
-`Device`/`Queue` pair. They are **not the same GPU context and do not share a
-surface** — a `wgpu::Texture` created from `lumina-gpu`'s Metal instance cannot be
-handed to the glow swapchain or to an egui texture that will be sampled by the GL
-renderer.
+The native GUI now runs `eframe` with the **wgpu** renderer. In the app builder,
+`CreationContext::wgpu_render_state` hands the renderer's
+`Instance`/`Adapter`/`Device`/`Queue` to [`lumina_gpu::GpuContext::from_parts`]
+(`lumina_gui::attach_wgpu_render_state`). All VRAM textures therefore live on
+the *same* device that presents to the swapchain.
 
-| Plane | Owner | Backend | Surface / Context | Shareable with `eframe` glow? |
-|-------|-------|---------|-------------------|-------------------------------|
-| egui UI, preview `ColorImage` | `eframe` / `LuminaApp::update_texture` | **glow** (GL) | GL swapchain | — |
-| tone `output` + brush `mask` VRAM | `lumina-gpu::GpuContext::VramState` | **wgpu/Metal** | `wgpu::Instance::new(METAL)` | **No** |
+| Plane | Owner | Backend | Shared with presenting device? |
+|-------|-------|---------|-------------------------------|
+| egui UI | eframe wgpu renderer | wgpu (Metal on Apple Silicon) | yes |
+| tone `output` + brush/evaluated `mask` VRAM | `lumina_gpu::GpuContext::VramState` pool | same wgpu device | **yes** |
+| present target (`lumina-gui-present-target`) | GUI-owned `Rgba8Unorm` texture | same wgpu device | **yes** |
 
-### Consequences (GUI-60FPS-1)
+### Readback-free present path
 
-- **Mask tiles** are correctly GPU-accelerated: the GUI keeps a persistent
-  `Vec<u16>` R16 mask plane CPU-side (`LuminaApp::brush_mask_plane`), stamps each
-  dirty 512² tile via `lumina_core::mask_tiles::stamp_brush_mark` and uploads only
-  that tile with `queue.write_texture` → `bytemuck::cast_slice(&Vec<u16>)` → `&[u8]`
-  (H1 fix, no `vec![0u8; tw*th*2]` dummy). Errors are `warn!`-logged, not `let _ =`d.
-- **`copy_vram_to_texture(dest: wgpu::Texture)` is offscreen only today.** It
-  composites `output` + `mask` via its overlay shader into a `wgpu::Texture`
-  destination, but that destination must come from the *same* Metal instance. It
-  **cannot present into the glow-backed egui/swapchain texture** and therefore
-  cannot be called from `draw_preview` under the current renderer. It remains
-  useful for offscreen/CLI renders and for its test (whether the overlay pipeline
-  builds).
-- **On-screen present stays `ColorImage`/`load_texture`.** The tone render path
-  (`render_to_vram` for interactive drafts, `render_with_gpu` for full frames) can
-  stay VRAM-resident for compute, but presenting still copies via the CPU staging
-  (`egui::ColorImage::from_rgba_unmultiplied` + `ctx.load_texture` in
-  `LuminaApp::update_texture`). This keeps `lumina-core` wgpu-free per `Agents.md`
-  while providing the interactive < 16 ms mask-tile hot path (no `map_async`
-  readback per brush stamp).
-- **Future option: `egui_wgpu`.** Switching `eframe` from `glow` to `wgpu`
-  (`eframe = { features = ["wgpu"] }`) would give `egui` a shared `wgpu::Device`/
-  surface and allow a single-pass present: `render_to_vram` → `copy_vram_to_texture`
-  → swapchain, eliminating the CPU staging. That switch is a documented follow-up
-  (`GUI-60FPS-1` roadmap) and is **not** done in this fix to avoid a renderer
-  migration in the same commit. Until it lands, `copy_vram_to_texture` stays
-  documented as offscreen-only and the GUI comments point to the upgrade path.
+1. Drag hot path: `render_to_vram(frame, recipe)` renders tone (+ bound
+   source-action artifacts) into the pooled VRAM output and marks the app's
+   `vram_fresh` flag.
+2. `update_texture` → `gpu_present_if_ready`: eligibility gate (fresh VRAM, not
+   Before/After, no CPU ROI crop, recipe fully GPU-supported), then
+   `copy_vram_to_texture(&present_target)` composites output+mask on the GPU.
+3. The target is registered once per size via
+   `egui_wgpu::Renderer::register_native_texture`; `draw_preview` paints it via
+   `painter().image(id, …)`.
 
-### Roadmap: `VramState` → LRU tile pool
+**No `map_async`, no `ColorImage` upload on this path.** The CPU
+`ColorImage`/`load_texture` upload remains fully functional as fallback for:
+no adapter, Before/After (original is never in VRAM), zoomed ROI previews,
+recipes whose stages are not all GPU-supported (the documented GPU-STAGE-1
+Restrisiko — CPU pixels are exact there), and after any edit invalidates
+`vram_fresh` (`mark_dirty`).
 
-`VramState` today holds one full-resolution `output` + `mask` texture (acceptable
-for interactive preview at viewport resolution; creation is `MemoryBudget`-gated).
-For 45 MP sources and multi-layer masks it will become a `TiledCache`/`DraftPyramid`
-LRU pool (512² tiles, generation-counted eviction, hot-set resident in VRAM) as
-planned in `tiling.rs`. This is the `M2` roadmap item and remains a non-blocking
-enhancement.
+### Overlay & double-tint guard
+
+When a frame is GPU-presented, the overlay shader already composites the VRAM
+mask plane; the CPU overlay painter skips content that lives in VRAM (live
+brush strokes, evaluated planes pushed after each full render via
+`combine_mask_planes` + `upload_mask_plane`). Gradient/radial prompts have no
+VRAM representation and keep their CPU overlay.
+
+### `VramState` LRU pool
+
+`VramState` entries live in a dimension-keyed LRU pool ([`VramPool`]) bounded
+by entry count (`LUMINA_GPU_VRAM_POOL_ENTRIES`, default 4) and total resident
+bytes (`LUMINA_GPU_VRAM_BUDGET_MB`, default 1024 MiB; per entry
+`w·h·(4+2)` for RGBA8 output + R16Uint mask). Evictions are logged loudly; a
+single oversized entry is kept (a frame must always be renderable) but
+prevents pooling a second source. A full 512² `TiledCache`/`DraftPyramid`
+remains the M2 roadmap item for >45 MP interactive zoom.
+
+### Init-failure warning (no silent fallback)
+
+Adapter/device failures during context construction surface through
+`log_gpu_init_failure` (`warn!`) — regression-tested in
+`crates/lumina-gpu/tests/init_warning.rs`.
 
 ### WASM
 
-`lumina-gpu` is absent on `wasm32` (`--no-default-features` or omitted dependency).
-No `wgpu` code is compiled for the browser; the capability matrix in
-`feature/platform/cli-gui-wasm.md` records `lumina-gpu` as WASM-unavailable. See
-that document for the full matrix.
+`lumina-gpu` stays absent on `wasm32` (`--no-default-features`). eframe itself
+compiles its wgpu backend (WebGL2/WebGPU) for the browser; the capability
+matrix in `feature/platform/cli-gui-wasm.md` records `lumina-gpu` as
+WASM-unavailable.
 
 ## Equivalence verification (PERF-GUI-8)
 
@@ -229,17 +234,22 @@ Therefore:
   recipe: any adjustment key outside the implemented set (including
   vibrance/saturation, whose uniform fields exist but are not applied by the
   shader), non-neutral Curves/HSL/Presence, Color Grading, Noise Reduction,
-  Sharpening, Effects, Geometry, Lens Correction, Perspective and non-empty
-  SourceActions.
+  Sharpening, Effects, Geometry, Lens Correction and Perspective.
+  **GPU-STAGE-1:** non-empty SourceActions are flagged **unless** matching
+  artifacts are bound via `GpuContext::set_source_action_artifacts` (use
+  [`lumina_gpu::unsupported_gpu_stages_for`] with `source_actions_bound`);
+  more actions than the stage's slot limit (`MAX_SOURCE_ACTIONS = 7`, bounded
+  by wgpu's default per-stage sampled-texture limit of 16) keep the recipe on
+  the CPU route.
 - `GpuContext::render_with_gpu` validates before rendering: with an adapter
   bound and an unsupported recipe it **explicitly routes the render to the full
   CPU pipeline** and logs once per unique reason set (`log::info!`, never per
   frame). The GPU is an accelerator, never a semantic change (Agents.md: no
   silent fallbacks).
 - The CLI routing layer (`render_best_effort` in `lumina-cli`) additionally
-  checks context-level features that exist only on the CPU path — source-action
-  artifacts, active-copy mask layers and a non-identity Lensfun corrector — and
-  CPU-routes with the same visible log when any are present.
+  checks context-level features that exist only on the CPU path — active-copy
+  mask layers, source-action *context* artifacts and a non-identity Lensfun
+  corrector — and CPU-routes with the same visible log when any are present.
 - The VRAM interactive preview path (`render_to_vram`) cannot CPU-route without
   a readback; it warns once per reason set so a divergent interactive preview
   is never silent.
@@ -248,6 +258,34 @@ Not a divergence today: `RenderContext::camera_white_balance` is validated but
 never re-applied to pixels in `lumina-core` (the decoder has already applied
 the As-Shot gains), so it triggers no routing. If core semantics change, the
 validator must grow a corresponding check.
+
+### Dedicated GPU stages (GPU-STAGE-1)
+
+Two stages beyond tone/WB now run as real WGSL passes:
+
+- **Source-action stage** (`SOURCE_ACTION_STAGE_SRC`): composites up to
+  `MAX_SOURCE_ACTIONS` bound artifacts exactly like the CPU oracle —
+  `out = replacement` where the region coverage reaches `>= 32768`
+  (exact integer compare on an `R16Uint` texture read via `textureLoad`),
+  alpha included. All reads are pure texel copies, so with a neutral recipe the
+  output is **byte-identical** to the CPU render; behind the tone stage it
+  stays within the golden tolerances. Gated by
+  `crates/lumina-gpu/tests/stages.rs`.
+- **Mask plane data path**: evaluated layer planes are combined CPU-side with
+  `combine_mask_planes` (F-041 intersection-product weights, unit-tested) and
+  uploaded byte-exactly into the pooled VRAM mask texture
+  (`upload_mask_plane`, roundtrip-tested via `readback_mask_plane`). The
+  overlay pass composites them during present; mask *pixel modulation* does
+  not exist in the CPU pipeline yet (planes feed measurement + overlay only),
+  so when local-adjustment masking lands in core this plane is already the
+  modulation input.
+
+**Format decision:** mask/region textures use `R16Uint`, not `R16Unorm` — the
+unorm-16 family requires the optional `TEXTURE_FORMAT_16BIT_NORM` feature that
+neither our nor eframe's shared devices enable (found by the GPU-STAGE-1 test:
+creating the VRAM mask texture failed validation). Integer formats need no
+extra features and preserve the exact u16 domain; integer textures reject
+filtering samplers, so the shaders read them via `textureLoad`.
 
 ### GPU availability & headless CI
 

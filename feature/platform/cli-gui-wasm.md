@@ -44,11 +44,11 @@ Die langfristige Struktur sieht `lumina-sidecar` als verpflichtendes Modul und
 Der erste vertikale Raster-MVP stellt zusätzlich die direkt ausführbaren
 Befehle `process` und `inspect` bereit. `process` verarbeitet aktuell PNG,
 JPEG und WebP, liest optional ein `Preset`, lässt `--exposure`, `--contrast`,
-`--highlights` und `--shadows` die Presetwerte überschreiben und schreibt Export
-sowie Sidecar jeweils atomar.
-Diese beiden Einzeldatei-Writes bilden keine atomare Zwei-Dateien-Transaktion;
-ein Abbruch zwischen ihnen kann daher einen bereits geschriebenen Export ohne
-aktualisiertes Sidecar (oder umgekehrt) hinterlassen. `inspect` zeigt den
+`--highlights` und `--shadows` die Presetwerte überschreiben. Der Export wird
+zunaechst in eine Staging-Temp-Datei geschrieben, dann das Sidecar committet;
+erst danach wird der Export atomar an seinen Zielpfad umbenannt. Scheitert das
+Sidecar-Schreiben, wird die Staging-Datei verworfen — Exit 1 OHNE erzeugten
+Export, das Sidecar bleibt byte-identisch (kein stiller Fallback). `inspect` zeigt den
 JSON-Status und die virtuellen Kopien ohne GUI. `inspect` zeigt auch Auto-Tone-
 und Matching-Status. `process` akzeptiert `--auto-tone`,
 `--match-total-exposure` und `--target-luminance 0..=1`; die Reihenfolge ist
@@ -310,36 +310,34 @@ Siehe `crates/lumina-gui/src/lib.rs` Dropped-File-Handling `#[cfg(target_arch =
 "wasm32")]`. File-Picker bleibt der WASM-Importpfad (Post-MVP: async-Brücke
 nachrüsten, dann `bytes_async().await` → `load_bytes`).
 
-### Capability-Matrix Native — `glow` vs `wgpu`/Metal (GUI-60FPS-1, M1)
+### Capability-Matrix Native — `wgpu`-Renderer mit Shared Device (GUI-WGPU-PRESENT-1, 2026-08-26)
 
-Der native Desktop nutzt bis auf Weiteres `eframe` mit dem **glow**-Renderer
-(GL); `lumina-gpu` betreibt eine **eigene** `wgpu::Instance` (Metal, Apple
-Silicon) mit separatem `Device`/`Queue`. Es gibt **kein shared surface** —
-eine `wgpu::Texture` aus `lumina-gpu` kann nicht direkt in eine glow-/Egui-
-Textur präsentiert werden.
+Der native Desktop nutzt `eframe` mit dem **wgpu**-Renderer;
+`lumina_gpu::GpuContext::from_parts` übernimmt Renderer-`Instance`/`Adapter`/
+`Device`/`Queue` (`attach_wgpu_render_state`). Alle VRAM-Texturen und das
+Present-Target liegen auf dem **dieselben** Device, das die Swapchain bedient —
+der frühere glow/wgpu-Dual-Backend-Konflikt ist aufgelöst.
 
-| Capability | CLI (nativ) | GUI Desktop — `glow` present | GUI Desktop — `wgpu` offscreen compute | WASM (Browser) |
-|------------|-------------|------------------------------|----------------------------------------|----------------|
-| `lumina-core` (CPU-Referenz) | ✅ verfügbar | ✅ verfügbar | ✅ Fallback | ✅ verfügbar |
-| `lumina-gpu` (`gpu` feature, `wgpu`/`bytemuck`/`pollster`) | ✅ optional (`--features gpu`) | ✅ optional (default on, `gpu` feature) | ✅ Metal `Instance` | ❌ nicht verfügbar (kein `wgpu` Stack) |
-| Decode/Demosaic (`lumina-raw` LibRaw) | ✅ | ✅ (Worker-Thread) | ✅ | ❌ `UnsupportedPlatform` (Post-MVP `libraw-wasm`/`wasm-js`) |
-| Color/Tone GPU Shader (`lumina-gpu::shaders`) | ✅ `render_with_gpu` / `render_to_vram` | ✅ VRAM-resident (`render_to_vram`, Uniform → UBO) | ✅ | ❌ |
-| Masken‑Brush VRAM‑Textur (`R16Unorm`, 512² Kacheln) | — | ✅ persistent `Vec<u16>` Plane → `stamp_brush_mark` per dirty Tile → `bytemuck::cast_slice` → `queue.write_texture` (`upload_mask_tile`), kein Dummy | ✅ | — |
-| Overlay‑Composite + Present | — | **glow‑Pfad:** `queue.write_texture` (Maske) + `egui::ColorImage`/`ctx.load_texture` (Preview) — `copy_vram_to_texture` ist **offscreen only** (wgpu‑Texture nicht mit glow‑Surface teilbar) | ✅ `copy_vram_to_texture` → `wgpu::Texture` (offscreen export / künftiger `egui_wgpu`‑Pfad) | — |
-| `VramState` Management | — | Single‑Slot (output+mask) heute → **LRU Tile‑Pool / Pool‑Roadmap** (M2): 512² `TiledCache` + `DraftPyramid` für 45 MP+ + Multi‑Mask, `MemoryBudget`‑gegated | — | — |
-| Fehlerreporting `gpu_upload_brush_tile` | — | `warn!` statt `let _ =` (N1) — sichtbarer Fallback | — | — |
-| `egui_wgpu`‑Migration (glow → wgpu renderer) | — | **Offen, dokumentierter Follow‑up** nach GUI‑60FPS‑1: `eframe` `wgpu`‑Feature + shared `Device`/Swapchain → `copy_vram_to_texture` wird on‑screen Present | — | — |
+| Capability | CLI (nativ) | GUI Desktop — `wgpu` present | WASM (Browser) |
+|------------|-------------|------------------------------|----------------|
+| `lumina-core` (CPU-Referenz) | ✅ verfügbar | ✅ Fallback (Before/After, ROI-Zoom, nicht-GPU-unterstützte Rezepte) | ✅ verfügbar |
+| `lumina-gpu` (`gpu` feature, `wgpu`/`bytemuck`/`pollster`) | ✅ optional (`--features gpu`) | ✅ default on, shared device via `from_parts` | ❌ nicht verfügbar (kein `wgpu` Stack für lumina-gpu) |
+| Decode/Demosaic (`lumina-raw` LibRaw) | ✅ | ✅ (Worker-Thread) | ❌ `UnsupportedPlatform` (Post-MVP `libraw-wasm`/`wasm-js`) |
+| Color/Tone GPU Shader (`lumina-gpu::shaders`) | ✅ `render_with_gpu` / `render_to_vram` | ✅ VRAM-resident (`render_to_vram`, Uniform → UBO) | ❌ |
+| SourceAction GPU Stage (`SOURCE_ACTION_STAGE_SRC`) | ✅ bei gebundenen Artefakten (`set_source_action_artifacts`), sonst CPU-Route | ✅ Drag-Pfad compositiert vor Tone; Present-Gate hält nicht unterstützte Rezepte auf CPU | ❌ |
+| Masken‑Brush + evaluierte Ebenen im VRAM (`R16Uint`) | — | ✅ persistente `Vec<u16>` Plane → dirty 512² Tiles (`upload_mask_tile`) + evaluierte Planes nach Full-Render (`combine_mask_planes` → `upload_mask_plane`, byte-exakt) | — |
+| Overlay‑Composite + Present | — | ✅ readback-frei: `copy_vram_to_texture(present_target)` → `register_native_texture` → `painter().image`; CPU-Upload als Fallback erhalten | — |
+| `VramState` Management | — | LRU-Pool dimensionsschlüsselt (`LUMINA_GPU_VRAM_POOL_ENTRIES`=4, `LUMINA_GPU_VRAM_BUDGET_MB`=1024); 512² `TiledCache`/`DraftPyramid` bleibt M2 | — |
+| Fehlerreporting | `warn!`/CPU-Route-Logs einmal pro Grundmenge | `warn!` bei Tile-/Plane-/Overlay-Fehlern; Init-Fehler via `log_gpu_init_failure` (getestet) | — |
 
-**Risiko `copy_vram_to_texture(dest: wgpu::Texture)` (M1):** `dest` muss aus
-demselben `wgpu::Instance` stammen wie `lumina-gpu`. Unter glow ist das nie der
-Fall — die Funktion ist deshalb heute ausschließlich für offscreen‑/CLI‑/
-Test‑Pfade nutzbar. Die GUI bleibt beim `ColorImage`/`load_texture`‑Upload.
-Ob der Upload‑Pfad langfristig bleibt oder durch `egui_wgpu` ersetzt wird, ist
-als ADR/Follow‑up vermerkt (kurzfristig bleibt Upload, `egui_wgpu` ist der
-präferierte nächste Schritt — kein Verhalten in diesem Fix).
+**Hinweis:** Der On-Screen-Present ist headless nicht automatisiert testbar
+(eframe-Laufzeit nötig); die Pixel-Gleichheit der Stufen ist gegen die
+CPU-Referenz getestet (`tests/golden.rs`, `tests/stages.rs`), der UI-Renderer-
+Wechsel durch unverändert grüne kittest-Snapshots abgesichert. Der nächste
+manuelle GUI-Test (Block C) verifiziert den Present-Pfad visuell.
 
 Eine ausführliche GPU‑DAG‑ und Present‑Diskussion steht in `docs/gpu-bootstrap.md`
-§ *Dual‑Backend Native: `eframe` glow (present) vs `wgpu` (offscreen compute)*.
+§ *Dual‑Backend Native: resolved — `eframe` wgpu renderer + shared device*.
 
 ### Erster visueller User-Test
 
