@@ -100,6 +100,47 @@ Masken-Neuberechnung und Render-Cache werden explizit angeboten.
   Content-Hash gegen ein bestehendes Sidecar; Verzeichnis-Walks sind
   symlink-/loopsicher.
 
+**Umgesetzter Stand (Review-R2-CLI-Fixes, 2026-08-26):**
+
+- **RAW-Erkennung single-source (R2-CLI-01):** Die 18 RAW-Extensions aus der
+  Formatliste oben liegen genau einmal vor — als
+  `lumina_raw::RAW_EXTENSIONS` / `lumina_raw::is_raw_extension`. Sowohl die
+  Decode-Route (`is_raw_path`) als auch die Batch-Kollektion
+  (`has_image_extension`) referenzieren dieselbe Liste; `lumina batch`
+  findet damit alle unterstützten Formate, nicht mehr nur eine Teilmenge.
+- **`inspect --json` (R2-CLI-03/-04):** Der SOLL-Satz „`inspect` zeigt den
+  JSON-Status" ist mit einem expliziten `--json`-Flag umgesetzt: eine
+  maschinenlesbare JSON-Ausgabe mit RAW-Metadaten (Maße, Orientierung,
+  Kamera/Lens/EXIF-Feldern), Sidecar-Status (`valid`/`missing`/`invalid`,
+  inklusive Quelle) und allen virtuellen Kopien mit Auto-Tone-, Matching-
+  und Target-Luminance-Stand. Freitext bleibt das Default-Ausgabeformat.
+  Der RAW-Zweig nutzt die Metadata-only-API `lumina_raw::read_metadata`
+  statt eines Voll-Decodes. Ehrliche Grenze: LibRaw verlangt `unpack()`
+  vor `adjust_sizes_info_only`, daher läuft die Entropie-Dekodierung
+  weiterhin; Demosaic, Farbumsetzung, Memory-Image und Promotion werden
+  übersprungen (keine Pixel-Allokation).
+- **Batch-Ausgabe (R2-CLI-06):** Jedes Batch-Item meldet seinen Abschluss
+  als Progresszeile auf stderr (`[batch i/n] <name> ok|failed|dry-run|
+  skipped`). Die Item-Einträge der JSON-Summary weisen `mask_warnings`
+  aus wie render/export; stderr trägt niemals JSON-Payload.
+- **Exit-Codes (R2-CLI-07):** Reproduzierbar und dokumentiert:
+
+  | Code | Bedeutung |
+  | ---- | --------- |
+  | 0 | Erfolg (auch „Batch vollständig erfolgreich“) |
+  | 1 | Laufzeitfehler eines Befehls (Decode-, Sidecar-, I/O-, Validierungsfehler) |
+  | 2 | CLI-Benutzungsfehler (unbekanntes Flag/falsche Argumente, clap) |
+  | 3 | Batch teilfehlerhaft: mindestens ein Item failed, Summary und Statusdateien sind dennoch vollständig geschrieben |
+
+- **Konsistenz-Details:** Korrupte `.lumina.zdata`-Bundles melden sich bei
+  Masken explizit als „unreadable or corrupt“ über denselben Warnungskanal
+  wie fehlende/stale Masken (R2-CLI-05); `develop` weist Out-of-Range-Werte
+  vorab mit erlaubter Range zurück (analog MCP, R2-CLI-09); `import`
+  akzeptiert nur noch seine tatsächlichen Flags (`--input`, `--json`,
+  `--migrate`) statt still ignorierteter Render-Flags (R2-CLI-10);
+  Batch-Inputs werden per Datei-Identität dedupliziert (Unix `(dev, inode)`;
+  R2-CLI-11).
+
 ## Desktop-GUI
 
 Die GUI zeigt Datei-, Sidecar-, Offline-, Masken- und Konfliktstatus. Vorschau

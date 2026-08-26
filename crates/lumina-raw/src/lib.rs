@@ -4,6 +4,31 @@ use lumina_core::ImageFrame;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// RAW file extensions supported by the native LibRaw adapter (R2-CLI-01).
+///
+/// Single source of truth for "which file names are RAW inputs", pinned to the
+/// SOLL format list in `feature/platform/cli-gui-wasm.md` ("Der native
+/// LibRaw-Adapter unterstützt CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2, CRW, PEF,
+/// SRW, 3FR, IIQ, RWL, MOS, ERF, KDC und X3F"). Consumers (CLI batch
+/// collection, decode routing, MCP) MUST reference this list instead of keeping
+/// private copies — the previous triple duplication drifted and silently
+/// skipped 9 of the 18 formats in `lumina batch`.
+///
+/// Values are lowercase, without the leading dot. Matching is ASCII-case-
+/// insensitive via [`is_raw_extension`]. This constant is plain data and stays
+/// available on WASM (the decoder itself does not).
+pub const RAW_EXTENSIONS: &[&str] = &[
+    "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr", "iiq",
+    "rwl", "mos", "erf", "kdc", "x3f",
+];
+
+/// Whether `extension` names a RAW format from [`RAW_EXTENSIONS`]
+/// (ASCII-case-insensitive, leading dot must already be stripped).
+pub fn is_raw_extension(extension: &str) -> bool {
+    let lowered = extension.to_ascii_lowercase();
+    RAW_EXTENSIONS.contains(&lowered.as_str())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum DemosaicMethod {
     #[default]
@@ -240,6 +265,58 @@ pub fn decode_bytes_with_options(
     }
 }
 
+/// Reads only the metadata of a RAW file — **without** decoding pixels
+/// (R2-CLI-04).
+///
+/// This is the metadata-only counterpart of [`decode_file`]: EXIF identity
+/// (camera, lens, exposure fields), orientation and the final visible output
+/// geometry are returned exactly as a full decode would report them in
+/// [`RawImage::metadata`], but demosaicing, colour conversion, the processed
+/// memory image and the RGBA promotion step never run. Consumers that need
+/// four lines of EXIF (`inspect`) no longer pay for a 24-megapixel frame.
+///
+/// # Honest LibRaw limit (documented, not hidden)
+/// The returned geometry is finalised by `libraw_adjust_sizes_info_only`,
+/// which LibRaw guards with `CHECK_ORDER_LOW(LIBRAW_PROGRESS_LOAD_RAW)`:
+/// it refuses to run before [`libraw_unpack`](raw's unpack). Compressed RAW
+/// entropy decoding therefore still happens here — it is required by the
+/// library's progress-order contract, not a LuminaRust choice. What is
+/// skipped is everything AFTER unpack: `dcraw_process` (demosaicing +
+/// colour pipeline), `dcraw_make_mem_image` (full-frame allocation) and the
+/// orientation promotion copy. No pixel-sized allocation occurs, so the
+/// [`MemoryBudget`](lumina_core::memory) decode gate does not apply.
+///
+/// The geometry/orientation values match a full [`decode_file`] of the same
+/// source bit-for-bit; this is pinned by tests against committed fixtures.
+pub fn read_metadata(path: impl AsRef<std::path::Path>) -> Result<RawMetadata, RawError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Err(RawError::UnsupportedPlatform)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        native::read_metadata_with_input(native::DecodeInput::File(path.as_ref().to_path_buf()))
+    }
+}
+
+/// Metadata-only variant of [`read_metadata`] for in-memory bytes.
+///
+/// `name` exists for signature parity with [`decode_bytes`] (see R2-RAW-03)
+/// and is currently unused by the decoder itself.
+pub fn read_metadata_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawMetadata, RawError> {
+    let _ = name;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = bytes;
+        Err(RawError::UnsupportedPlatform)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        native::read_metadata_with_input(native::DecodeInput::Buffer(bytes))
+    }
+}
+
 /// Returns the linked LibRaw version string (e.g. `"0.22.2"`) when native RAW
 /// decoding is available. On platforms without native LibRaw (WASM/browser)
 /// this returns `None`.
@@ -432,22 +509,17 @@ mod native {
         File(std::path::PathBuf),
     }
 
-    pub fn decode_with_options(
-        input: DecodeInput<'_>,
-        options: &RawDecodeOptions,
-    ) -> Result<RawImage, RawError> {
-        let file_display_path: Option<String> = match &input {
+    /// Initialises a fresh LibRaw handle and opens `input` on it.
+    ///
+    /// Shared by the full decode ([`decode_with_options`]) and the
+    /// metadata-only path ([`read_metadata_with_input`]) so both entry points
+    /// keep identical open semantics — including the `RawError::Io` error
+    /// shape for plain filesystem failures of `decode_file`/`read_metadata`.
+    fn open_handle(input: &DecodeInput<'_>) -> Result<Handle, RawError> {
+        let file_display_path = match input {
             DecodeInput::File(path) => Some(path.display().to_string()),
             DecodeInput::Buffer(_) => None,
         };
-        if let DecodeInput::Buffer(bytes) = &input {
-            if bytes.is_empty() {
-                return Err(RawError::InvalidData("empty input"));
-            }
-        }
-        if !matches!(options.output_bits, 8 | 16) {
-            return Err(RawError::InvalidData("output bit depth"));
-        }
         let handle = Handle(unsafe { raw::libraw_init(raw::LIBRAW_OPTIONS_NONE) });
         if handle.0.is_null() {
             return Err(RawError::InvalidData("LibRaw handle"));
@@ -499,7 +571,24 @@ mod native {
             }
             return Err(error("opening input", code));
         }
-        let data = unsafe { &*handle.0 };
+        Ok(handle)
+    }
+
+    /// Captures the source-level metadata (EXIF identity, colour context,
+    /// ICC profile) and the EXIF orientation from an OPENED handle, before
+    /// any unpack/processing happens.
+    ///
+    /// Returns the [`RawMetadata`] with width/height still zero (they are
+    /// finalised later: after `adjust_sizes_info_only` in the decode path,
+    /// respectively from the adjusted sizes in the metadata-only path) plus
+    /// the translated EXIF orientation that the pixel promotion step applies.
+    ///
+    /// Shared verbatim by both paths so full-decode and metadata-only reports
+    /// can never drift (R2-CLI-04).
+    fn capture_base_metadata(
+        handle: *mut raw::libraw_data_t,
+    ) -> Result<(RawMetadata, u8), RawError> {
+        let data = unsafe { &*handle };
         // The dcraw flip is captured BEFORE `user_flip` is forced to 0 below:
         // it records the source orientation that the promotion step must apply
         // itself, because LibRaw is deliberately told NOT to rotate. The raw
@@ -542,7 +631,7 @@ mod native {
             aperture: positive(data.other.aperture),
             lens: resolve_lens_name(text(&data.lens.Lens), text(&data.lens.makernotes.Lens)),
             focal_length: positive(data.other.focal_len),
-            timestamp: (data.other.timestamp != 0).then_some(data.other.timestamp as i64),
+            timestamp: (data.other.timestamp != 0).then_some(data.other.timestamp),
             artist: text(&data.other.artist),
             description: text(&data.other.desc),
             camera_matrix,
@@ -550,6 +639,23 @@ mod native {
             pre_multipliers,
             icc_profile,
         };
+        Ok((metadata, orientation))
+    }
+
+    pub fn decode_with_options(
+        input: DecodeInput<'_>,
+        options: &RawDecodeOptions,
+    ) -> Result<RawImage, RawError> {
+        if let DecodeInput::Buffer(bytes) = &input {
+            if bytes.is_empty() {
+                return Err(RawError::InvalidData("empty input"));
+            }
+        }
+        if !matches!(options.output_bits, 8 | 16) {
+            return Err(RawError::InvalidData("output bit depth"));
+        }
+        let handle = open_handle(&input)?;
+        let (metadata, orientation) = capture_base_metadata(handle.0)?;
         unsafe {
             // Direct field writes are safe only because the vendored bindings
             // are pinned to the linked LibRaw 0.22 ABI (see
@@ -645,6 +751,58 @@ mod native {
         metadata.width = frame.width;
         metadata.height = frame.height;
         Ok(RawImage { frame, metadata })
+    }
+
+    /// Metadata-only read (R2-CLI-04): opens the input, captures the source
+    /// metadata through the SAME helper as the full decode (so both reports
+    /// cannot drift), then finalises only the geometry.
+    ///
+    /// LibRaw's progress-order guard requires `libraw_unpack` before
+    /// `adjust_sizes_info_only` (`CHECK_ORDER_LOW(LIBRAW_PROGRESS_LOAD_RAW)`),
+    /// so the compressed entropy decode still runs here — see the honest-limit
+    /// note on the public [`read_metadata`]. Everything after unpack in the
+    /// decode path (processing parameters, `dcraw_process`, memory image,
+    /// promotion) is deliberately absent: no pixel-sized allocation happens,
+    /// so no MemoryBudget gate is required.
+    ///
+    /// `user_flip` is intentionally NOT touched: it only affects LibRaw's own
+    /// pixel rotation during processing, which never runs on this path. The
+    /// captured flip/orientation and the adjusted sizes fully determine the
+    /// visible output geometry via the same swap rule the promotion step uses
+    /// for orientations 5..=8 (90°/270° transpose family).
+    pub(super) fn read_metadata_with_input(
+        input: DecodeInput<'_>,
+    ) -> Result<RawMetadata, RawError> {
+        if let DecodeInput::Buffer(bytes) = &input {
+            if bytes.is_empty() {
+                return Err(RawError::InvalidData("empty input"));
+            }
+        }
+        let handle = open_handle(&input)?;
+        let (mut metadata, orientation) = capture_base_metadata(handle.0)?;
+        let code = unsafe { raw::libraw_unpack(handle.0) };
+        if code != raw::LIBRAW_SUCCESS {
+            return Err(error("unpacking input", code));
+        }
+        adjust_sizes_checked(handle.0)?;
+        let data = unsafe { &*handle.0 };
+        let width = u32::from(data.sizes.width);
+        let height = u32::from(data.sizes.height);
+        if width == 0 || height == 0 {
+            return Err(RawError::InvalidData("image dimensions"));
+        }
+        // Mirror the promotion step's orientation rule exactly: EXIF
+        // orientations 5..=8 (the 90°/270° family) swap width and height, so
+        // `metadata.width/height` report the same visible geometry a full
+        // [`decode_with_options`] would produce (pinned by fixture tests).
+        let (out_width, out_height) = if (5..=8).contains(&orientation) {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        metadata.width = out_width;
+        metadata.height = out_height;
+        Ok(metadata)
     }
 
     /// Promotes a LibRaw 8-bit RGB(A) processed image to an RGBA8 `ImageFrame`,
@@ -1057,6 +1215,110 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R2-CLI-01 drift guard: the exported extension list stays pinned to the
+    /// SOLL format list in `feature/platform/cli-gui-wasm.md` (18 formats) and
+    /// contains no duplicates.
+    #[test]
+    fn raw_extensions_match_the_soll_format_list() {
+        assert_eq!(
+            RAW_EXTENSIONS.len(),
+            18,
+            "extension list drifted from the SOLL; update feature/platform/cli-gui-wasm.md + this test"
+        );
+        let mut unique = RAW_EXTENSIONS.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), RAW_EXTENSIONS.len(), "duplicate extensions");
+        for expected in [
+            "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr",
+            "iiq", "rwl", "mos", "erf", "kdc", "x3f",
+        ] {
+            assert!(
+                RAW_EXTENSIONS.contains(&expected),
+                "SOLL format `{expected}` missing from RAW_EXTENSIONS"
+            );
+        }
+    }
+
+    /// R2-CLI-01: matching is ASCII-case-insensitive and rejects non-RAW
+    /// extensions (including Lumina's own sidecar suffixes).
+    #[test]
+    fn is_raw_extension_is_case_insensitive_and_strict() {
+        for extension in RAW_EXTENSIONS {
+            assert!(is_raw_extension(extension), "`{extension}` must match");
+            let upper = extension.to_ascii_uppercase();
+            assert!(is_raw_extension(&upper), "`{upper}` must match");
+        }
+        for foreign in [
+            "png",
+            "jpg",
+            "jpeg",
+            "webp",
+            "txt",
+            "lumina.json",
+            "",
+            "RAWS",
+        ] {
+            assert!(
+                !is_raw_extension(foreign),
+                "`{foreign}` must NOT be treated as RAW"
+            );
+        }
+    }
+
+    /// R2-CLI-04: `read_metadata_bytes` must report the same geometry,
+    /// orientation and EXIF identity as a FULL decode of the same fixture —
+    /// without running demosaic/processing. The portrait fixture carries dcraw
+    /// flip 5 → EXIF orientation 8, so this also pins the width/height swap
+    /// rule for the 90° family on the metadata-only path.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn read_metadata_matches_full_decode_on_portrait_fixture() {
+        let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
+        let metadata = read_metadata_bytes(bytes, "aircraft-portrait.cr3").unwrap();
+        // Pinned by the full-decode test `aircraft_portrait_fixture_applies_exif_orientation`.
+        assert_eq!(metadata.orientation, 8);
+        assert_eq!((metadata.width, metadata.height), (4024, 6032));
+        assert_eq!(
+            metadata.lens.as_deref(),
+            Some("RF200-800mm F6.3-9 IS USM"),
+            "metadata-only path must expose the same EXIF lens as a full decode"
+        );
+        assert_eq!(
+            metadata
+                .camera_make
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("canon")
+        );
+    }
+
+    /// R2-CLI-04 landscape counterpart: identity orientation must keep
+    /// width/height unswapped on the metadata-only path.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn read_metadata_matches_full_decode_on_landscape_fixture() {
+        let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
+        let metadata = read_metadata_bytes(bytes, "aircraft-landscape.cr3").unwrap();
+        // Pinned by `aircraft_landscape_fixture_has_expected_geometry_and_metadata`.
+        assert_eq!(metadata.orientation, 1);
+        assert_eq!((metadata.width, metadata.height), (6032, 4024));
+    }
+
+    /// R2-CLI-04: garbage input fails loudly (never `UnsupportedPlatform`),
+    /// mirroring the decode-path error contract.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn read_metadata_reports_non_raw_input_as_decode_error() {
+        let error = read_metadata_bytes(b"not a raw", "bad.cr2").unwrap_err();
+        assert!(
+            !matches!(error, RawError::UnsupportedPlatform),
+            "unexpected error shape: {error:?}"
+        );
+        assert!(read_metadata_bytes(&[], "empty.nef").is_err());
+    }
 
     #[test]
     fn non_raw_bytes_are_reported_as_decode_errors() {

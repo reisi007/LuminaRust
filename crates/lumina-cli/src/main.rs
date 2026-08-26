@@ -213,7 +213,12 @@ struct Cli {
 enum Command {
     Process(ProcessArgs),
     Inspect(InspectArgs),
-    Import(FileArgs),
+    // R2-CLI-10: `import` has its own slim argument set. It previously reused
+    // [`FileArgs`], silently accepting render-only flags (`--output`,
+    // `--format`, `--quality`, `--force-render`, `--virtual-copy`,
+    // `--mask-policy`) that had NO effect on the import — users could believe
+    // the import had converted something.
+    Import(ImportArgs),
     Develop(DevelopArgs),
     Render(FileArgs),
     Export(ExportArgs),
@@ -269,6 +274,19 @@ struct DevelopArgs {
     migrate: bool,
     #[arg(long)]
     json: bool,
+}
+
+/// R2-CLI-10: slim argument set for `import` — only the flags the command
+/// actually consumes. Import writes/validates a sidecar; it never renders, so
+/// render-only flags would be silently ignored (see [`Command::Import`]).
+#[derive(Debug, Clone, Args)]
+struct ImportArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    migrate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -443,9 +461,15 @@ struct ProcessArgs {
     target_luminance: f64,
 }
 
+/// R2-CLI-03: `inspect` accepts `--json` for a machine-readable report
+/// (RAW metadata, sidecar status, every virtual copy incl. auto-tone and
+/// matching state). Free text remains the default output.
 #[derive(Debug, Args)]
 struct InspectArgs {
     input: PathBuf,
+    /// Print a machine-readable JSON status instead of free text.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Error)]
@@ -462,13 +486,33 @@ enum CliError {
     Raw(#[from] RawError),
     #[error("invalid preset JSON: {0}")]
     Preset(String),
+    /// R2-CLI-07: at least one batch item failed while the run itself stayed
+    /// structurally sound (summary/status files complete). Distinct process
+    /// exit code so scripts can distinguish "nothing worked" (1) from
+    /// "partial success" (3); see the exit-code table in
+    /// `feature/platform/cli-gui-wasm.md`.
+    #[error("batch finished with {failed} failed item(s)")]
+    BatchPartial { failed: usize },
+}
+
+impl CliError {
+    /// Process exit code for this error (R2-CLI-07): 1 for every runtime
+    /// failure, 3 for a partially failed batch. CLI usage errors exit with 2
+    /// via clap before `run` is ever reached. Documented in
+    /// `feature/platform/cli-gui-wasm.md`.
+    fn exit_code(&self) -> i32 {
+        match self {
+            CliError::BatchPartial { .. } => 3,
+            _ => 1,
+        }
+    }
 }
 
 fn main() {
     init_cli_logger();
     if let Err(error) = run(Cli::parse()) {
         eprintln!("error: {error}");
-        std::process::exit(1);
+        std::process::exit(error.exit_code());
     }
 }
 
@@ -496,7 +540,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
     }
 }
 
-fn import_file(args: FileArgs) -> Result<(), CliError> {
+fn import_file(args: ImportArgs) -> Result<(), CliError> {
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (frame, raw) = decode_input(&args.input, &bytes)?;
     let path = sidecar_path_for(&args.input);
@@ -532,7 +576,33 @@ fn import_file(args: FileArgs) -> Result<(), CliError> {
     )
 }
 
+/// R2-CLI-09: validates an adjustment value BEFORE it is inserted into a
+/// recipe, mirroring the MCP `lumina_edit` contract and the sidecar
+/// save-time validator (same ranges). Previously `develop --exposure 999`
+/// was accepted at insert time and only rejected later with a generic
+/// save-time error that did not name the allowed range.
+fn validate_adjustment_range(name: &str, value: f64) -> Result<(), CliError> {
+    let (minimum, maximum) = match name {
+        "exposure" => (-10.0, 10.0),
+        _ => (-1.0, 1.0),
+    };
+    if !value.is_finite() || !(minimum..=maximum).contains(&value) {
+        return Err(CliError::Message(format!(
+            "invalid adjustment `{name}`: value {value} outside allowed range {minimum}..={maximum}"
+        )));
+    }
+    Ok(())
+}
+
 fn develop(args: DevelopArgs) -> Result<(), CliError> {
+    // R2-CLI-09: fail BEFORE the sidecar is loaded or mutated so an invalid
+    // value can never produce a half-applied develop run.
+    if let Some(value) = args.exposure {
+        validate_adjustment_range("exposure", value)?;
+    }
+    if let Some(value) = args.contrast {
+        validate_adjustment_range("contrast", value)?;
+    }
     let path = sidecar_path_for(&args.input);
     if args.migrate {
         migrate_sidecar(&path)?;
@@ -1031,6 +1101,10 @@ fn batch(args: BatchArgs) -> Result<(), CliError> {
     validate_quality(args.quality)?;
     let mut inputs = Vec::new();
     collect_images(&args.input, &mut inputs)?;
+    // R2-CLI-11: drop same-file duplicates (hard links / inode aliases reached
+    // under two names) so `--jobs > 1` never processes one file twice in
+    // parallel and never appends duplicate history entries.
+    let inputs = dedup_same_file_inputs(inputs);
     // REVIEW-CLI-BATCHCOLLIDE-1: outputs are name-based inside ONE flat
     // directory, so distinct inputs can map onto the same target file name
     // (`a/x.arw` and `b/x.png` both write `x.png`). Refuse the whole run up
@@ -1038,31 +1112,38 @@ fn batch(args: BatchArgs) -> Result<(), CliError> {
     // later items silently overwrite earlier ones.
     reject_duplicate_batch_targets(&inputs, &args.format)?;
     fs::create_dir_all(&args.output).map_err(|e| io_error(&args.output, e))?;
+    let total = inputs.len();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs)
         .build()
         .map_err(|e| CliError::Message(e.to_string()))?;
+    // R2-CLI-06: per-item progress goes to stderr as items finish; the
+    // collected mask warnings of each item are reported in the item JSON
+    // below (same channel render/export use).
     let results = pool.install(|| {
         inputs
             .par_iter()
-            .map(|input| batch_one(input, &args))
+            .enumerate()
+            .map(|(index, input)| batch_one(input, index, total, &args))
             .collect::<Vec<_>>()
     });
     let failed = results.iter().filter(|r| r.is_err()).count();
     if args.json {
-        println!(
-            "{}",
-            serde_json::to_string(
-                &results
-                    .iter()
-                    .map(|r| match r {
-                        Ok(v) => serde_json::json!({"status":"ok","input":v}),
-                        Err(e) => serde_json::json!({"status":"failed","error":e.to_string()}),
-                    })
-                    .collect::<Vec<_>>()
-            )
-            .unwrap()
-        );
+        let items = results
+            .iter()
+            .map(|r| match r {
+                Ok(v) => serde_json::json!({"status":"ok","input":v.input,"mask_warnings":v.mask_warnings}),
+                Err(e) => serde_json::json!({"status":"failed","error":e.to_string()}),
+            })
+            .collect::<Vec<_>>();
+        // R2-CLI-08: serialization of a plain strings/arrays JSON value is
+        // practically infallible, but a worker panic must never be the
+        // failure mode. Fall back loudly instead of unwrapping.
+        let payload = serde_json::to_string(&items).unwrap_or_else(|error| {
+            eprintln!("warning: batch summary serialization failed: {error}");
+            String::from("[]")
+        });
+        println!("{payload}");
     } else {
         println!(
             "batch: {} succeeded, {} failed",
@@ -1071,9 +1152,20 @@ fn batch(args: BatchArgs) -> Result<(), CliError> {
         );
     }
     if failed != 0 {
-        return Err(CliError::Message(format!("batch failed: {failed} item(s)")));
+        // R2-CLI-07: partial batch failure exits with its own documented code
+        // (3) instead of being indistinguishable from a hard runtime error.
+        return Err(CliError::BatchPartial { failed });
     }
     Ok(())
+}
+
+/// One successfully processed (or resumed/skipped/dry-run) batch item. The
+/// collected mask warnings travel with the item so the batch summary can
+/// report them like render/export do (R2-CLI-06).
+#[derive(Debug, Clone)]
+struct BatchItemSuccess {
+    input: String,
+    mask_warnings: Vec<String>,
 }
 
 /// Rejects inputs whose name-based batch targets collide after the output
@@ -1107,10 +1199,63 @@ fn reject_duplicate_batch_targets(inputs: &[PathBuf], format: &str) -> Result<()
     Ok(())
 }
 
-fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
+/// Processes one batch item. `index`/`total` drive the stderr progress line
+/// (R2-CLI-06); the item's mask warnings are returned in
+/// [`BatchItemSuccess::mask_warnings`] instead of being discarded.
+/// R2-CLI-11: deduplicates batch inputs by filesystem identity so the same
+/// underlying file reached under two names (hard link, alias) is processed
+/// exactly once — previously `--jobs > 1` ran both names in parallel and the
+/// run produced duplicate history entries with last-write-wins outputs.
+///
+/// Unix identifies files by `(dev, inode)`; other platforms fall back to
+/// canonical-path identity (symlink aliases are collapsed there, but hard-link
+/// aliases are NOT detectable portably — documented limit). Entries whose
+/// metadata cannot be read are kept: the decode step reports them loudly.
+fn dedup_same_file_inputs(inputs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut kept = Vec::with_capacity(inputs.len());
+    #[cfg(unix)]
+    {
+        use std::collections::BTreeSet;
+        use std::os::unix::fs::MetadataExt;
+        let mut seen = BTreeSet::new();
+        for input in inputs {
+            let key = fs::metadata(&input)
+                .ok()
+                .map(|meta| (meta.dev(), meta.ino()));
+            let duplicate = match key {
+                Some(key) => !seen.insert(key),
+                // Unreadable stat: keep the entry; decoding fails loudly later.
+                None => false,
+            };
+            if !duplicate {
+                kept.push(input);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        use std::collections::BTreeSet;
+        let mut seen = BTreeSet::new();
+        for input in inputs {
+            let key = fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+            if seen.insert(key) {
+                kept.push(input);
+            }
+        }
+    }
+    kept
+}
+
+fn batch_one(
+    input: &Path,
+    index: usize,
+    total: usize,
+    args: &BatchArgs,
+) -> Result<BatchItemSuccess, CliError> {
     let name = input
         .file_name()
         .ok_or_else(|| CliError::Message("input has no file name".into()))?;
+    let label = format!("[batch {}/{}] {}", index + 1, total, name.to_string_lossy());
     let output = args
         .output
         .join(name)
@@ -1127,9 +1272,17 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
             .ok()
             .is_some_and(|state| state.status == "ok")
         {
-            return Ok(input.display().to_string());
+            eprintln!("{label}: skipped (resume)");
+            return Ok(BatchItemSuccess {
+                input: input.display().to_string(),
+                mask_warnings: Vec::new(),
+            });
         }
     }
+    // R2-CLI-06: this item's collected mask warnings survive the scope of the
+    // dry-run guard so they can be reported on the progress line and in the
+    // item JSON below.
+    let mut last_warnings = Vec::new();
     if !args.dry_run {
         if args.update_masks || args.force_render {
             let sidecar = sidecar_path_for(input);
@@ -1154,6 +1307,9 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
         }
         let mut last = None;
         for _ in 0..=args.retry {
+            // R2-CLI-06: collect this attempt's mask warnings instead of
+            // discarding them (`&mut Vec::new()`).
+            let mut mask_warnings = Vec::new();
             match process_selected(
                 ProcessArgs {
                     input: input.to_path_buf(),
@@ -1170,21 +1326,49 @@ fn batch_one(input: &Path, args: &BatchArgs) -> Result<String, CliError> {
                 args.quality,
                 args.virtual_copy.as_deref(),
                 args.mask_policy.to_policy(),
-                &mut Vec::new(),
+                &mut mask_warnings,
             ) {
                 Ok(()) => {
                     last = None;
+                    // Keep the warnings of the SUCCESSFUL attempt only.
+                    last_warnings = mask_warnings;
                     break;
                 }
                 Err(e) => last = Some(e),
             }
         }
         if let Some(e) = last {
+            eprintln!("{label}: failed: {e}");
             return Err(e);
         }
     }
-    write_atomically(&status, serde_json::to_vec(&serde_json::json!({"input":input,"output":output,"status":if args.dry_run {"dry-run"} else {"ok"}})).unwrap().as_slice())?;
-    Ok(input.display().to_string())
+    // R2-CLI-08: an unwritable/serializing status must fail THIS item loudly
+    // instead of panicking inside the rayon pool (which would tear down the
+    // whole batch). A plain string/number JSON value is practically
+    // infallible; the error branch is defense-in-depth.
+    let status_payload = serde_json::json!({
+        "input": input,
+        "output": output,
+        "status": if args.dry_run { "dry-run" } else { "ok" }
+    });
+    let status_bytes = serde_json::to_vec(&status_payload).map_err(|error| {
+        CliError::Message(format!(
+            "could not serialize batch status for `{}`: {error}",
+            input.display()
+        ))
+    })?;
+    write_atomically(&status, &status_bytes)?;
+    if args.dry_run {
+        eprintln!("{label}: dry-run");
+    } else if last_warnings.is_empty() {
+        eprintln!("{label}: ok");
+    } else {
+        eprintln!("{label}: ok ({} mask warning(s))", last_warnings.len());
+    }
+    Ok(BatchItemSuccess {
+        input: input.display().to_string(),
+        mask_warnings: last_warnings,
+    })
 }
 
 /// Shared recursive directory walk behind `collect_images` and
@@ -1236,15 +1420,18 @@ fn collect_images(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError
     collect_tree_files(path, output, has_image_extension)
 }
 
-/// Supported input extensions for batch collection.
+/// Supported input extensions for batch collection (R2-CLI-01): raster
+/// formats plus EVERY RAW extension exported by `lumina_raw::RAW_EXTENSIONS`.
+/// Referencing the single shared list here and in [`is_raw_path`] is the whole
+/// point of the fix — the previous private 9-extension copy silently skipped
+/// RAF/ORF/etc. in batch while single-file decode accepted them.
 fn has_image_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| {
-            matches!(
-                e.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "webp" | "arw" | "cr2" | "cr3" | "dng" | "nef"
-            )
+            let lowered = e.to_ascii_lowercase();
+            matches!(lowered.as_str(), "png" | "jpg" | "jpeg" | "webp")
+                || lumina_raw::is_raw_extension(&lowered)
         })
         .unwrap_or(false)
 }
@@ -1294,20 +1481,40 @@ fn zdata_mask_tile_id(copy_id: &str, mask_id: &str) -> String {
 }
 
 /// Loads every persisted source-mask plane from the optional `.lumina.zdata`
-/// bundle, keyed by `(copy_id, mask_id)` (REVIEW-CLI-N1). A missing or
-/// unreadable bundle yields an empty map; missing per-key tiles are decided
-/// by the F-051 decision layer in lumina-core (cache, re-inference or a loud
-/// error — never a silent fallback).
+/// bundle, keyed by `(copy_id, mask_id)` (REVIEW-CLI-N1). A MISSING bundle
+/// yields an empty map without any warning (nothing was persisted); missing
+/// per-key tiles are decided by the F-051 decision layer in lumina-core
+/// (cache, re-inference or a loud error — never a silent fallback).
+///
+/// R2-CLI-05: a bundle that EXISTS but cannot be read (truncated, malformed,
+/// unsupported version, checksum mismatch) is no longer treated silently like
+/// a missing bundle — that masked data loss as an ordinary "missing mask"
+/// situation. The load failure surfaces as an explicit
+/// "unreadable or corrupt" warning on stderr AND in `warnings_out` (the same
+/// channel the render's mask warnings travel through). Per-tile lookups after
+/// a clean load need no extra corruption handling: `load_zdata` already
+/// verifies every record checksum up front (REVIEW-SIDECAR-ZDATA-1), so a
+/// surviving tile miss is plain absence.
 fn load_persisted_mask_planes(
     document: &SidecarDocument,
     zdata_path: &Path,
+    warnings_out: &mut Vec<String>,
 ) -> BTreeMap<(String, String), MaskPlane> {
     let mut planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
     if !zdata_path.exists() {
         return planes;
     }
-    let Ok(container) = lumina_sidecar::load_zdata(zdata_path) else {
-        return planes;
+    let container = match lumina_sidecar::load_zdata(zdata_path) {
+        Ok(container) => container,
+        Err(error) => {
+            let warning = format!(
+                "mask/source-action bundle `{}` is unreadable or corrupt ({error}); persisted mask planes are treated as missing and will be re-decided by the mask layer",
+                zdata_path.display()
+            );
+            eprintln!("warning: {warning}");
+            warnings_out.push(warning);
+            return planes;
+        }
     };
     for copy in &document.virtual_copies {
         for mask in copy
@@ -1435,7 +1642,7 @@ fn process_selected(
                 .virtual_copies
                 .iter()
                 .position(|copy| copy.id == id)
-                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}")))
+                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))
         })
         .transpose()?
         .unwrap_or(0);
@@ -1518,8 +1725,10 @@ fn process_selected(
     // Load every persisted source-mask plane from the optional `.lumina.zdata`
     // bundle (regardless of status); the decision layer in lumina-core
     // validates identity and decides whether to use it, re-infer, or fail.
+    // R2-CLI-05: a corrupt bundle surfaces as an explicit warning through the
+    // same channel as the other mask warnings instead of being silent.
     let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
-    let loaded_planes = load_persisted_mask_planes(&document, &zdata_path);
+    let loaded_planes = load_persisted_mask_planes(&document, &zdata_path, mask_warnings_out);
 
     // Wire the ONNX adapter (StubBackend / BiRefNet descriptor) when available.
     // `None` means no inference engine is installed at all (F-051: the decision
@@ -1698,71 +1907,160 @@ fn process_selected(
     Ok(())
 }
 
+/// One virtual copy as reported by `inspect` (R2-CLI-03): rendered either as
+/// JSON or free text from the same data so the two outputs cannot drift.
+struct InspectCopy {
+    id: String,
+    name: String,
+    auto_tone: bool,
+    matching: bool,
+    target_luminance: f64,
+}
+
+/// Sidecar state behind an `inspect` report; the invalid variant carries the
+/// error that fails the command AFTER the report has been printed.
+enum InspectSidecarState {
+    Valid {
+        source: String,
+        copies: Vec<InspectCopy>,
+    },
+    Missing,
+    Invalid(lumina_sidecar::SidecarError),
+}
+
+/// R2-CLI-03/-04: shows the source's RAW metadata (via the metadata-only
+/// LibRaw path — no full-pixel decode for four EXIF lines) plus the sidecar
+/// status and every virtual copy incl. auto-tone/matching state. Free text is
+/// the default output; `--json` prints one machine-readable JSON object (the
+/// SOLL "JSON-Status"). An invalid sidecar keeps the historical behaviour:
+/// the report is still printed, then the command fails loudly.
 fn inspect(args: InspectArgs) -> Result<(), CliError> {
-    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
-    if is_raw_path(&args.input) {
-        let image = lumina_raw::decode_bytes(
-            &bytes,
-            args.input
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("input.raw"),
-        )?;
-        println!(
-            "raw: {}x{} orientation {}",
-            image.metadata.width, image.metadata.height, image.metadata.orientation
-        );
-        println!(
-            "camera: {} {}",
-            image.metadata.camera_make.as_deref().unwrap_or("unknown"),
-            image.metadata.camera_model.as_deref().unwrap_or("unknown")
-        );
-        println!(
-            "iso: {:?}, shutter: {:?}, aperture: {:?}, lens: {:?}",
-            image.metadata.iso,
-            image.metadata.shutter,
-            image.metadata.aperture,
-            image.metadata.lens
-        );
-    }
+    // Metadata-only pass (R2-CLI-04): open + unpack + size finalisation;
+    // demosaic, colour processing, memory image and promotion never run.
+    let raw_metadata = if is_raw_path(&args.input) {
+        Some(lumina_raw::read_metadata(&args.input)?)
+    } else {
+        None
+    };
+
     let path = sidecar_path_for(&args.input);
-    match load_sidecar(&path) {
-        Ok(document) => {
-            println!("sidecar: valid ({})", path.display());
-            println!("source: {}", document.source.relative_name);
-            for copy in document.virtual_copies {
-                println!("virtual-copy: {} [{}]", copy.name, copy.id);
-                println!(
-                    "auto-tone: {} matching: {} target-luminance: {}",
-                    copy.recipe.auto_features.enable_auto_tone,
-                    copy.recipe.auto_features.match_total_exposure,
-                    copy.recipe.auto_features.target_luminance
-                );
+    let sidecar_state = match load_sidecar(&path) {
+        Ok(document) => InspectSidecarState::Valid {
+            source: document.source.relative_name.clone(),
+            copies: document
+                .virtual_copies
+                .iter()
+                .map(|copy| InspectCopy {
+                    id: copy.id.clone(),
+                    name: copy.name.clone(),
+                    auto_tone: copy.recipe.auto_features.enable_auto_tone,
+                    matching: copy.recipe.auto_features.match_total_exposure,
+                    target_luminance: copy.recipe.auto_features.target_luminance,
+                })
+                .collect(),
+        },
+        Err(lumina_sidecar::SidecarError::Missing(_)) => InspectSidecarState::Missing,
+        Err(error) => InspectSidecarState::Invalid(error),
+    };
+
+    if args.json {
+        let raw_json = raw_metadata.as_ref().map(|metadata| {
+            serde_json::json!({
+                "width": metadata.width,
+                "height": metadata.height,
+                "orientation": metadata.orientation,
+                "camera_make": metadata.camera_make,
+                "camera_model": metadata.camera_model,
+                "iso": metadata.iso,
+                "shutter": metadata.shutter,
+                "aperture": metadata.aperture,
+                "lens": metadata.lens,
+            })
+        });
+        let sidecar_json = match &sidecar_state {
+            InspectSidecarState::Valid { source, copies } => serde_json::json!({
+                "path": path,
+                "status": "valid",
+                "source": source,
+                "virtual_copies": copies.iter().map(|copy| serde_json::json!({
+                    "id": copy.id,
+                    "name": copy.name,
+                    "auto_tone": copy.auto_tone,
+                    "match_total_exposure": copy.matching,
+                    "target_luminance": copy.target_luminance,
+                })).collect::<Vec<_>>(),
+            }),
+            InspectSidecarState::Missing => serde_json::json!({
+                "path": path,
+                "status": "missing",
+                "virtual_copies": [{
+                    "id": "vc-original",
+                    "name": "Original",
+                    "auto_tone": false,
+                    "match_total_exposure": false,
+                    "target_luminance": 0.5,
+                }],
+            }),
+            InspectSidecarState::Invalid(_) => {
+                serde_json::json!({"path": path, "status": "invalid"})
+            }
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "inspect",
+                "input": args.input,
+                "raw": raw_json,
+                "sidecar": sidecar_json,
+            })
+        );
+    } else {
+        if let Some(metadata) = &raw_metadata {
+            println!(
+                "raw: {}x{} orientation {}",
+                metadata.width, metadata.height, metadata.orientation
+            );
+            println!(
+                "camera: {} {}",
+                metadata.camera_make.as_deref().unwrap_or("unknown"),
+                metadata.camera_model.as_deref().unwrap_or("unknown")
+            );
+            println!(
+                "iso: {:?}, shutter: {:?}, aperture: {:?}, lens: {:?}",
+                metadata.iso, metadata.shutter, metadata.aperture, metadata.lens
+            );
+        }
+        match &sidecar_state {
+            InspectSidecarState::Valid { source, copies } => {
+                println!("sidecar: valid ({})", path.display());
+                println!("source: {source}");
+                for copy in copies {
+                    println!("virtual-copy: {} [{}]", copy.name, copy.id);
+                    println!(
+                        "auto-tone: {} matching: {} target-luminance: {}",
+                        copy.auto_tone, copy.matching, copy.target_luminance
+                    );
+                }
+            }
+            InspectSidecarState::Missing => {
+                println!("sidecar: missing ({})", path.display());
+                println!("virtual-copy: Original [vc-original] (default)");
+            }
+            InspectSidecarState::Invalid(_) => {
+                println!("sidecar: invalid ({})", path.display());
             }
         }
-        Err(lumina_sidecar::SidecarError::Missing(_)) => {
-            println!("sidecar: missing ({})", path.display());
-            println!("virtual-copy: Original [vc-original] (default)");
-        }
-        Err(error) => {
-            println!("sidecar: invalid ({})", path.display());
-            return Err(error.into());
-        }
     }
-    Ok(())
+    match sidecar_state {
+        InspectSidecarState::Invalid(error) => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 fn is_raw_path(path: &Path) -> bool {
-    let extension = path
-        .extension()
+    path.extension()
         .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    [
-        "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr", "iiq",
-        "rwl", "mos", "erf", "kdc", "x3f",
-    ]
-    .contains(&extension.as_str())
+        .is_some_and(lumina_raw::is_raw_extension)
 }
 
 fn decode_input(path: &Path, bytes: &[u8]) -> Result<(ImageFrame, Option<RawMetadata>), CliError> {
@@ -2151,6 +2449,29 @@ mod tests {
         }
     }
 
+    /// R2-CLI-01 drift guard: BOTH predicates must accept every RAW extension
+    /// exported by `lumina_raw` — the batch collector and the decode router
+    /// previously disagreed (batch silently skipped 9 of 18 formats).
+    #[test]
+    fn batch_collection_and_decode_routing_agree_on_every_raw_extension() {
+        for extension in lumina_raw::RAW_EXTENSIONS {
+            let path_string = format!("photo.{extension}");
+            let path = Path::new(&path_string);
+            assert!(
+                is_raw_path(path),
+                "`is_raw_path` must accept RAW extension `{extension}`"
+            );
+            assert!(
+                has_image_extension(path),
+                "`has_image_extension` (batch collection) must accept RAW extension `{extension}`"
+            );
+        }
+        // Non-image names stay out of the batch.
+        for foreign in ["notes.txt", "archive.zip", "x.lumina.json", "noext"] {
+            assert!(!has_image_extension(Path::new(foreign)), "{foreign}");
+        }
+    }
+
     #[test]
     fn rejects_identical_and_alias_paths_before_processing() {
         let directory = tempfile::tempdir().unwrap();
@@ -2367,7 +2688,98 @@ mod tests {
             0.0
         );
         assert_eq!(sidecar.virtual_copies[0].history.len(), 1);
-        inspect(InspectArgs { input }).unwrap();
+        inspect(InspectArgs { input, json: false }).unwrap();
+    }
+
+    /// R2-CLI-03: `inspect --json` reports the machine-readable status —
+    /// sidecar state and every virtual copy incl. auto-tone/matching values.
+    #[test]
+    fn inspect_json_reports_sidecar_status_and_virtual_copies() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 42);
+        // No sidecar yet → "missing" with the default copy.
+        let missing =
+            Cli::try_parse_from(["lumina", "inspect", &input.display().to_string()]).unwrap();
+        assert!(matches!(
+            missing.command,
+            Command::Inspect(InspectArgs { json: false, .. })
+        ));
+        inspect(InspectArgs {
+            input: input.clone(),
+            json: true,
+        })
+        .unwrap();
+
+        // With a sidecar the JSON path succeeds for the valid state too (the
+        // payload itself goes to stdout; here we pin that both states run).
+        let bytes = fs::read(&input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        inspect(InspectArgs { input, json: true }).unwrap();
+    }
+
+    /// R2-CLI-01 end-to-end guard: batch collection must FIND every RAW
+    /// extension the SOLL lists. The fixture files are synthetic (garbage
+    /// payloads are fine — `--dry-run` never decodes), which keeps the test
+    /// focused on exactly the regression: the old private 9-extension copy of
+    /// `has_image_extension` silently skipped RAF/ORF/etc., so no status files
+    /// would have been written for them.
+    #[test]
+    fn batch_finds_every_supported_raw_extension_in_a_directory_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let src = directory.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let raw_extensions = [
+            "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr",
+            "iiq", "rwl", "mos", "erf", "kdc", "x3f",
+        ];
+        for (index, extension) in raw_extensions.iter().enumerate() {
+            fs::write(
+                src.join(format!("IMG_{index:04}.{extension}")),
+                b"synthetic",
+            )
+            .unwrap();
+        }
+        // A non-image file must stay ignored.
+        fs::write(src.join("notes.txt"), b"ignore me").unwrap();
+
+        let out = directory.path().join("out");
+        batch(BatchArgs {
+            input: src,
+            output: out.clone(),
+            jobs: 1,
+            retry: 0,
+            resume: false,
+            dry_run: true,
+            update_masks: false,
+            force_render: false,
+            json: false,
+            format: "png".into(),
+            quality: 90,
+            virtual_copy: None,
+            mask_policy: CliMaskPolicy::Warn,
+        })
+        .expect("dry-run batch over synthetic RAW fixtures must succeed");
+
+        let mut statuses: Vec<String> = fs::read_dir(&out)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        statuses.sort();
+        assert_eq!(
+            statuses.len(),
+            raw_extensions.len(),
+            "every RAW extension must be collected: {statuses:?}"
+        );
+        for index in 0..raw_extensions.len() {
+            assert!(
+                statuses
+                    .iter()
+                    .any(|name| name.starts_with(&format!("IMG_{index:04}."))),
+                "missing status file for IMG_{index:04}: {statuses:?}"
+            );
+        }
+        assert!(!out.join("notes.txt.status.json").exists());
     }
 
     fn valid_mask_definition(
@@ -2683,7 +3095,9 @@ mod tests {
         let zdata_path = lumina_sidecar::zdata_path_for(&input);
         lumina_sidecar::save_zdata(&zdata_path, &container).unwrap();
 
-        let planes = load_persisted_mask_planes(&document, &zdata_path);
+        let mut warnings = Vec::new();
+        let planes = load_persisted_mask_planes(&document, &zdata_path, &mut warnings);
+        assert!(warnings.is_empty());
         assert_eq!(planes.len(), 2);
         assert_eq!(
             planes[&("vc-original".into(), "subject".into())].values,
@@ -2707,7 +3121,89 @@ mod tests {
         };
         let container = lumina_sidecar::ZDataContainer::new(vec![legacy]).unwrap();
         lumina_sidecar::save_zdata(&zdata_path, &container).unwrap();
-        assert!(load_persisted_mask_planes(&document, &zdata_path).is_empty());
+        let mut warnings = Vec::new();
+        assert!(load_persisted_mask_planes(&document, &zdata_path, &mut warnings).is_empty());
+        // Legacy plain-id tiles are ABSENCE (no record), not corruption: the
+        // decision layer reports them as missing — no corrupt warning here.
+        assert!(warnings.is_empty());
+    }
+
+    /// R2-CLI-05: a `.lumina.zdata` bundle that exists but is unreadable must
+    /// surface as an explicit "corrupt" warning (stderr + mask warnings
+    /// channel) instead of being silently treated like a missing bundle.
+    #[test]
+    fn render_with_corrupt_mask_zdata_warns_loudly_and_continues() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = png_input(directory.path(), "input.png", 100);
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // Corrupt payload in place of a valid bundle.
+        fs::write(
+            lumina_sidecar::zdata_path_for(&input),
+            b"definitely not zdata",
+        )
+        .unwrap();
+
+        let output = directory.path().join("output.png");
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output,
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+            },
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut warnings,
+        )
+        .expect("warn policy continues past the corrupt bundle");
+
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("unreadable or corrupt")),
+            "the corrupt bundle must be reported through the mask-warning channel: {warnings:?}"
+        );
+
+        // A MISSING bundle (nothing persisted) stays warning-free — only
+        // existing-but-unreadable bundles warn.
+        let (input2, frame2) = png_input(directory.path(), "clean.png", 101);
+        let bytes2 = fs::read(&input2).unwrap();
+        write_sidecar_with_valid_layer(&input2, &bytes2, &frame2);
+        let mut clean_warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input2,
+                output: directory.path().join("output-clean.png"),
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+            },
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut clean_warnings,
+        )
+        .unwrap();
+        assert!(
+            !clean_warnings
+                .iter()
+                .any(|warning| warning.contains("corrupt")),
+            "a missing bundle is not corruption: {clean_warnings:?}"
+        );
     }
 
     #[test]
@@ -2863,7 +3359,7 @@ mod tests {
         // failed here and reprocessed the item).
         fs::write(&status, r#"{ "input": "a.png", "status": "ok" }"#).unwrap();
         let before = fs::read_to_string(&status).unwrap();
-        batch_one(&input, &args).unwrap();
+        batch_one(&input, 0, 1, &args).unwrap();
         assert_eq!(fs::read_to_string(&status).unwrap(), before);
 
         // A parsed non-ok status means "not done": the item is reprocessed
@@ -2873,13 +3369,13 @@ mod tests {
             r#"{"note":"\"status\":\"ok\" decoy","status":"failed"}"#,
         )
         .unwrap();
-        batch_one(&input, &args).unwrap();
+        batch_one(&input, 0, 1, &args).unwrap();
         let rewritten = fs::read_to_string(&status).unwrap();
         assert!(rewritten.contains("\"dry-run\""), "{rewritten}");
 
         // Malformed JSON counts as not done, too.
         fs::write(&status, "not json at all").unwrap();
-        batch_one(&input, &args).unwrap();
+        batch_one(&input, 0, 1, &args).unwrap();
         let rewritten = fs::read_to_string(&status).unwrap();
         assert!(rewritten.contains("\"dry-run\""), "{rewritten}");
     }
@@ -3009,16 +3505,10 @@ mod tests {
     fn import_rejects_changed_source_against_existing_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let (input, _) = png_input(directory.path(), "input.png", 80);
-        let args = FileArgs {
+        let args = ImportArgs {
             input: input.clone(),
-            output: None,
-            format: "png".into(),
-            quality: 90,
             json: false,
             migrate: false,
-            force_render: false,
-            virtual_copy: None,
-            mask_policy: CliMaskPolicy::Warn,
         };
         import_file(args.clone()).unwrap();
 
@@ -3028,6 +3518,181 @@ mod tests {
         fs::write(&input, changed.encode(ImageFileFormat::Png).unwrap()).unwrap();
         let error = import_file(args).unwrap_err();
         assert!(error.to_string().contains("source changed"));
+    }
+
+    /// R2-CLI-10: `import` no longer accepts render-only flags that were
+    /// silently ignored before (`--output`, `--format`, `--quality`,
+    /// `--force-render`, `--virtual-copy`, `--mask-policy`).
+    #[test]
+    fn import_rejects_inherited_render_only_flags() {
+        for flag in [
+            "--output",
+            "--format",
+            "--quality",
+            "--force-render",
+            "--virtual-copy",
+            "--mask-policy",
+        ] {
+            let parsed = Cli::try_parse_from([
+                "lumina",
+                "import",
+                "--input",
+                "a.png",
+                flag,
+                if flag == "--format" || flag == "--mask-policy" || flag == "--virtual-copy" {
+                    "png"
+                } else if flag == "--quality" {
+                    "90"
+                } else {
+                    "b.png"
+                },
+            ]);
+            assert!(
+                parsed.is_err(),
+                "`lumina import {flag}` must be rejected as unknown"
+            );
+        }
+        // The slim set still parses.
+        let ok = Cli::try_parse_from(["lumina", "import", "--input", "a.png", "--json"]).unwrap();
+        assert!(matches!(
+            ok.command,
+            Command::Import(ImportArgs { json: true, .. })
+        ));
+    }
+
+    /// R2-CLI-09: out-of-range/non-finite develop values fail up front with
+    /// the allowed range in the message (mirroring MCP `lumina_edit`) — not
+    /// later as a generic save-time rejection.
+    #[test]
+    fn develop_rejects_out_of_range_values_before_touching_the_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 60);
+        import_file(ImportArgs {
+            input: input.clone(),
+            json: false,
+            migrate: false,
+        })
+        .unwrap();
+        let sidecar_path = sidecar_path_for(&input);
+        let before = fs::read_to_string(&sidecar_path).unwrap();
+
+        for (name, value) in [
+            ("exposure", 999.0),
+            ("exposure", -10.1),
+            ("exposure", f64::NAN),
+            ("contrast", 1.5),
+            ("contrast", -1.1),
+            ("contrast", f64::INFINITY),
+        ] {
+            let error = develop(DevelopArgs {
+                input: input.clone(),
+                virtual_copy: None,
+                exposure: (name == "exposure").then_some(value),
+                contrast: (name == "contrast").then_some(value),
+                update_masks: false,
+                migrate: false,
+                json: false,
+            })
+            .unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("invalid adjustment `{name}`"))
+                    && message.contains("outside allowed range"),
+                "{name}={value} must be rejected with the range, got: {message}"
+            );
+            if name == "exposure" {
+                assert!(message.contains("-10..=10"), "{message}");
+            } else {
+                assert!(message.contains("-1..=1"), "{message}");
+            }
+        }
+
+        // The failed runs never mutated the sidecar.
+        assert_eq!(fs::read_to_string(&sidecar_path).unwrap(), before);
+
+        // Boundary values stay valid and DO apply.
+        develop(DevelopArgs {
+            input: input.clone(),
+            virtual_copy: None,
+            exposure: Some(-10.0),
+            contrast: Some(1.0),
+            update_masks: false,
+            migrate: false,
+            json: false,
+        })
+        .unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            -10.0
+        );
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["contrast"],
+            1.0
+        );
+    }
+
+    /// R2-CLI-07: a partially failed batch exits with its own documented code
+    /// (3) instead of the generic runtime-error code (1).
+    #[test]
+    fn batch_partial_failure_maps_to_exit_code_three() {
+        let directory = tempfile::tempdir().unwrap();
+        let src = directory.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let (_, frame) = png_input(&src, "good.png", 10);
+        drop(frame);
+        // A corrupt payload fails at decode time → the item fails.
+        fs::write(src.join("broken.png"), b"not a png").unwrap();
+
+        let error = batch(BatchArgs {
+            input: src,
+            output: directory.path().join("out"),
+            jobs: 1,
+            retry: 0,
+            resume: false,
+            dry_run: false,
+            update_masks: false,
+            force_render: false,
+            json: false,
+            format: "png".into(),
+            quality: 90,
+            virtual_copy: None,
+            mask_policy: CliMaskPolicy::Warn,
+        })
+        .unwrap_err();
+        match &error {
+            CliError::BatchPartial { failed } => assert_eq!(*failed, 1),
+            other => panic!("expected BatchPartial, got {other:?}"),
+        }
+        assert_eq!(error.exit_code(), 3);
+        // Every other CLI error keeps the generic code 1.
+        assert_eq!(CliError::Message("x".into()).exit_code(), 1);
+    }
+
+    /// R2-CLI-11: batch inputs are deduplicated by filesystem identity so a
+    /// hard link under two names is processed once (unix).
+    #[cfg(unix)]
+    #[test]
+    fn batch_deduplicates_inputs_by_inode_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.arw");
+        let alias = directory.path().join("alias.arw");
+        fs::write(&original, b"synthetic").unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+        let distinct = directory.path().join("distinct.arw");
+        fs::write(&distinct, b"synthetic").unwrap();
+
+        let deduped = dedup_same_file_inputs(vec![original.clone(), alias, distinct.clone()]);
+        assert_eq!(
+            deduped,
+            vec![original, distinct],
+            "the inode alias must be dropped, first occurrence kept"
+        );
+
+        // Unreadable metadata entries are kept (they fail loudly at decode).
+        let missing = directory.path().join("missing.arw");
+        let kept = dedup_same_file_inputs(vec![missing]);
+        assert_eq!(kept.len(), 1);
     }
 
     #[test]

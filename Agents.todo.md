@@ -119,11 +119,6 @@ MVP-blockierend)**
 werden nach unabhängiger Verifizierung entfernt.
 
 
-- [ ] **[PRIO: hoch] R2-CLI-01** (MVP-blockierend, GAP/UX) `lumina batch` überspringt
-  still 9 von 18 RAW-Formaten (`has_image_extension` vs. `is_raw_path`-Drift,
-  main.rs:1228-1238 vs. 1743-1754). Fix: RAW-Extension-Liste einmalig (aus
-  lumina-raw exportieren), beide Prädikate referenzieren; Test: Batch findet
-  RAF. Aufwand S. **Erst nach F-101-F1-Commit (gleiches main.rs im WIP).**
 - [ ] **[PRIO: hoch] R2-MCP-01** GPU-Pfad verwirft `camera_white_balance` still ->
   build-abhängige Pixeldifferenz ohne Warnung (mcp/util.rs:334-368; Spiegel
   cli main.rs:127-175). Fix: `Some(camera_wb)` als CPU-Routing-Reason in
@@ -158,10 +153,13 @@ werden nach unabhängiger Verifizierung entfernt.
   setzt vram_fresh/gpu_stage_gate beim Bildwechsel nicht zurück — ≤1 Frame kann
   VRAM-Ergebnis des Vorgängerbilds zeigen (vorbestehend, Dims-Check greift bei
   alt-konsistenten Seiten nicht). Fix: beide Felder in apply_decoded_frame nullen.
-- [ ] **[PRIO: mittel] R2-CLI-BUNDLE** (nach F-101-F1-Commit): CLI-02 (SourceIdentity-
-  Duplikation CLI↔MCP + dreifache Extension-Listen), CLI-05 (korruptes zdata
-  still als fehlende Maske), CLI-06 (Batch ohne Fortschritt, mask_warnings
-  verworfen), CLI-03 (inspect --json), CLI-04 (inspect dekodiert Vollbild für 4 Zeilen EXIF).
+- [ ] **[PRIO: mittel] R2-CLI-02** Extension-/Identity-Unifikation MCP-Seite: mcp/util.rs
+  hält noch eine eigene 18er-Kopie UND die alt-gedriftete 9er-Liste
+  BATCH_IMAGE_EXTENSIONS (tools/batch.rs nutzt sie) — derselbe „9 von 18
+  übersprungen"-Bug wie R2-CLI-01 lebt im lumina_batch fort. Fix: mcp nutzt
+  lumina_raw::RAW_EXTENSIONS/is_raw_extension, private Listen löschen;
+  SourceIdentity-Bau an CLI-Semantik angleichen (laut statt
+  bytes.len()-Fallback); GUI is_raw_name-Teilkopie im Blick behalten.
 - [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-03 (SA-Texturen pro Render neu erstellt),
   GPU-06 (kein on_uncaptured_error/Device-Lost-Handling -> App-Panik möglich),
   GPU-07 (Backends::METAL hardcodet, Windows/Linux nie GPU), GPU-04 (GPU-Pfad
