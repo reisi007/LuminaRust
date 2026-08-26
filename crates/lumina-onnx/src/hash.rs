@@ -83,7 +83,7 @@ impl ModelHashStatus {
 }
 
 /// Lowercase hex encoding (used for SHA-256 digests; 32 bytes → 64 chars).
-fn to_hex(bytes: &[u8]) -> String {
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
@@ -135,8 +135,19 @@ pub fn verify_model_hash(expected: &str, actual: &str) -> ModelHashStatus {
 /// (an unreadable artifact is unavailable for inference), otherwise the
 /// resulting [`ModelHashStatus`]. No silent fallbacks: a mismatch is reported,
 /// never coerced into a success.
+///
+/// R2-ONNX-04 short-circuit: when `expected` is the documented
+/// [`PENDING_INTEGRATION_HASH`] placeholder, no pinned identity exists yet and
+/// the outcome is [`ModelHashStatus::Pending`] **regardless of the artifact
+/// bytes** — so the full streaming SHA-256 pass over a multi-hundred-MB
+/// checkpoint is skipped. The file is still opened so an absent/unreadable
+/// artifact keeps surfacing as [`OnnxError::MissingModel`] exactly as before.
 pub fn verify_model_file(path: &Path, expected: &str) -> Result<ModelHashStatus, OnnxError> {
     let path_display = path.display().to_string();
+    if expected == PENDING_INTEGRATION_HASH {
+        std::fs::File::open(path).map_err(|_| OnnxError::MissingModel { path: path_display })?;
+        return Ok(ModelHashStatus::Pending);
+    }
     let file = std::fs::File::open(path).map_err(|_| OnnxError::MissingModel {
         path: path_display.clone(),
     })?;
@@ -284,5 +295,24 @@ mod tests {
             ModelHashStatus::Mismatch { .. }
         ));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// R2-ONNX-04 — the pending short-circuit keeps the readable-artifact
+    /// contract: an absent file still surfaces `MissingModel` (never a silent
+    /// `Pending` for an artifact that is not even there). The skipped-work
+    /// property itself is structural: the short-circuit returns before any
+    /// byte of the file is read, which is what avoids the full SHA-256 pass
+    /// over multi-hundred-MB checkpoints.
+    #[test]
+    fn verify_model_file_pending_still_reports_missing_artifact() {
+        let err = verify_model_file(
+            Path::new("/nonexistent/lumina/pending.onnx"),
+            PENDING_INTEGRATION_HASH,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, OnnxError::MissingModel { .. }),
+            "pending expected + absent artifact must stay MissingModel, got {err:?}"
+        );
     }
 }

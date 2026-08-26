@@ -336,9 +336,14 @@ impl PromptMaskInference for StubSam2Backend {
         image: &ImageFrame,
         prompt: &SegmentationPrompt,
     ) -> Result<MaskPlane, OnnxError> {
+        // Same gate as the subject stub (`backend.rs`): a backend reporting
+        // itself unavailable must refuse inference instead of silently
+        // emitting a matte (REVIEW-ONNX-AVAIL-1). R2-ONNX-05: the flag-based
+        // absence carries no artifact path → dedicated `ModelUnavailable`
+        // variant, distinguishable from a genuinely missing `.onnx` file.
         if !self.available {
-            return Err(OnnxError::MissingModel {
-                path: self.manifest.model_name.clone(),
+            return Err(OnnxError::ModelUnavailable {
+                name: self.manifest.model_name.clone(),
             });
         }
         if image.width == 0 || image.height == 0 {
@@ -725,8 +730,10 @@ mod tests {
         assert!(matches!(err, OnnxError::InvalidPrompt { .. }), "{err:?}");
     }
 
+    // R2-ONNX-05 — a stub reporting itself unavailable must refuse inference
+    // via the dedicated `ModelUnavailable` variant (no artifact-path wording).
     #[test]
-    fn unavailable_model_surfaces_missing_model() {
+    fn unavailable_model_surfaces_model_unavailable() {
         let backend = stub_sam2(Sam2Variant::BasePlus)
             .unwrap()
             .with_availability(false);
@@ -740,9 +747,15 @@ mod tests {
             mask_logits: None,
         };
         let err = backend.infer_prompt(&img, &prompt).unwrap_err();
+        match &err {
+            OnnxError::ModelUnavailable { name } => {
+                assert_eq!(name, "sam2.1_hiera_base_plus");
+            }
+            other => panic!("expected ModelUnavailable, got {other:?}"),
+        }
         assert!(
-            matches!(err, OnnxError::MissingModel { .. }),
-            "unavailable model must surface as MissingModel, got {err:?}"
+            err.to_string().contains("reported unavailable"),
+            "display text must carry the availability wording, got {err}"
         );
     }
 

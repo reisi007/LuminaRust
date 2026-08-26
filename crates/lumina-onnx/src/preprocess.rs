@@ -102,6 +102,11 @@ fn invalid_dimensions(_: MaskError) -> OnnxError {
 /// ahead of real weight integration. Fails with
 /// [`OnnxError::InferenceFailed`] when `rgb` is not a multiple of 3 (never
 /// silently truncates).
+///
+/// R2-ONNX-07: the three per-channel passes over stride-3 memory were merged
+/// into one sequential pixel pass writing all three planes — same arithmetic
+/// per element (`(raw as f32 / 255.0 - mean) / std`, unchanged order of
+/// operations), hence bitidentical output with better cache locality.
 pub fn normalize_rgb_to_nchw(
     rgb_interleaved: &[u8],
     model_name: &str,
@@ -118,14 +123,12 @@ pub fn normalize_rgb_to_nchw(
     }
     let pixels = rgb_interleaved.len() / 3;
     let mut out = vec![0f32; pixels * 3];
-    for c in 0..3 {
-        let mean = norm.mean[c];
-        let std = norm.std[c];
-        let plane = &mut out[c * pixels..(c + 1) * pixels];
-        for (p, plane_value) in plane.iter_mut().enumerate() {
-            let raw = rgb_interleaved[p * 3 + c];
-            *plane_value = (raw as f32 / 255.0 - mean) / std;
-        }
+    let (r_plane, rest) = out.split_at_mut(pixels);
+    let (g_plane, b_plane) = rest.split_at_mut(pixels);
+    for (p, px) in rgb_interleaved.as_chunks::<3>().0.iter().enumerate() {
+        r_plane[p] = (px[0] as f32 / 255.0 - norm.mean[0]) / norm.std[0];
+        g_plane[p] = (px[1] as f32 / 255.0 - norm.mean[1]) / norm.std[1];
+        b_plane[p] = (px[2] as f32 / 255.0 - norm.mean[2]) / norm.std[2];
     }
     Ok(out)
 }
@@ -270,6 +273,98 @@ mod tests {
             matches!(err, OnnxError::InvalidDimensions { .. }),
             "{err:?}"
         );
+    }
+
+    // R2-ONNX-06 — the degeneration guards `dw <= 1` / `dh <= 1` of the
+    // nearest-neighbor coordinate mapping must clamp to source column/row 0
+    // instead of dividing by zero. Exercised per axis on a 2×2 source with
+    // four distinct pixels:
+    //   p00=(10,20,30) p10=(40,50,60) p01=(70,80,90) p11=(100,110,120)
+    fn two_by_two_frame() -> ImageFrame {
+        ImageFrame::new(
+            2,
+            2,
+            vec![
+                10, 20, 30, 255, // p00
+                40, 50, 60, 255, // p10
+                70, 80, 90, 255, // p01
+                100, 110, 120, 255, // p11
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn preprocess_one_pixel_target_hits_both_guards() {
+        let out = preprocess_rgb_to_model(
+            &two_by_two_frame(),
+            Resolution {
+                width: 1,
+                height: 1,
+            },
+        );
+        assert_eq!(
+            out,
+            vec![10, 20, 30],
+            "both guards must sample source (0,0)"
+        );
+    }
+
+    #[test]
+    fn preprocess_one_pixel_wide_target_clamps_x() {
+        // dw == 1 → sx forced to 0 for every output column; sy still maps.
+        let out = preprocess_rgb_to_model(
+            &two_by_two_frame(),
+            Resolution {
+                width: 1,
+                height: 3,
+            },
+        );
+        assert_eq!(out.len(), 3 * 3);
+        // sy = (y * 2) / 3 ∈ {0, 0, 1} over source rows; x always 0.
+        let rows: Vec<[u8; 3]> = out.as_chunks::<3>().0.to_vec();
+        assert_eq!(rows, vec![[10, 20, 30], [10, 20, 30], [70, 80, 90]]);
+    }
+
+    #[test]
+    fn preprocess_one_pixel_tall_target_clamps_y() {
+        // dh == 1 → sy forced to 0 for every output row; sx still maps.
+        let out = preprocess_rgb_to_model(
+            &two_by_two_frame(),
+            Resolution {
+                width: 3,
+                height: 1,
+            },
+        );
+        assert_eq!(out.len(), 3 * 3);
+        // sx = (x * 2) / 3 ∈ {0, 0, 1} over source columns; y always 0.
+        let cols: Vec<[u8; 3]> = out.as_chunks::<3>().0.to_vec();
+        assert_eq!(cols, vec![[10, 20, 30], [10, 20, 30], [40, 50, 60]]);
+    }
+
+    #[test]
+    fn rescale_degenerate_source_dimensions_hit_both_guards() {
+        // Inference plane 2×2 with distinct values [[1, 2], [3, 4]].
+        let model = MaskPlane::new(2, 2, vec![1, 2, 3, 4]).unwrap();
+        let inference = Resolution {
+            width: 2,
+            height: 2,
+        };
+
+        // Source 1×1 → both guards → top-left model value.
+        let one = rescale_model_matte(&model, inference, (1, 1)).unwrap();
+        assert_eq!((one.width, one.height), (1, 1));
+        assert_eq!(one.values, vec![1]);
+
+        // Source 1×2 → dw guard clamps sx to 0; sy still maps row 0→0, 1→1.
+        let tall = rescale_model_matte(&model, inference, (1, 2)).unwrap();
+        assert_eq!((tall.width, tall.height), (1, 2));
+        assert_eq!(tall.values, vec![1, 3]);
+
+        // Source 2×1 → dh guard clamps sy to 0; sx still maps col 0→0, 1→1.
+        let wide = rescale_model_matte(&model, inference, (2, 1)).unwrap();
+        assert_eq!((wide.width, wide.height), (2, 1));
+        assert_eq!(wide.values, vec![1, 2]);
     }
 
     // REVIEW-ONNX-PREPROC-1 — normalization comes from the manifest and the

@@ -259,10 +259,48 @@ impl SubjectInference for OrtBackend {
     }
 }
 
+/// Bridge the native ORT adapter to `lumina-core`'s platform-neutral
+/// [`lumina_core::MaskInference`] trait (R2-ONNX-03).
+///
+/// Previously only [`StubBackend`](crate::StubBackend) implemented this bridge,
+/// so the real backend could not be plugged into the F-048/F-051 mask-loading
+/// decision layer without additive caller code — an asymmetric contract. The
+/// mapping mirrors `backend.rs` exactly: adapter errors become
+/// [`lumina_core::CoreError::MaskInference`] with the full reason text, never a
+/// silent fallback.
+impl lumina_core::MaskInference for OrtBackend {
+    fn is_available(&self) -> bool {
+        // A successfully constructed `OrtBackend` holds a loaded session with
+        // manifest-verified tensor names; unavailability surfaces at
+        // construction time as `OnnxError::MissingModel`, so there is no
+        // post-construction "not available" state to report.
+        true
+    }
+
+    fn infer(&self, frame: &ImageFrame) -> Result<MaskPlane, lumina_core::CoreError> {
+        self.infer_inner(frame)
+            .map_err(|error| lumina_core::CoreError::MaskInference {
+                reason: error.to_string(),
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::birefnet_manifest;
+
+    /// R2-ONNX-03 — the real backend must satisfy the same `lumina-core`
+    /// bridge contract as the stub, so it can be plugged into the F-048/F-051
+    /// decision layer without additive caller code. (A behavioral test needs
+    /// real weights — pending F-048 — so the contract is pinned at the type
+    /// level here; the error mapping itself is identical to the unit-tested
+    /// `StubBackend` bridge.)
+    #[test]
+    fn ort_backend_implements_core_mask_inference_bridge() {
+        fn assert_mask_inference<T: lumina_core::MaskInference>() {}
+        assert_mask_inference::<OrtBackend>();
+    }
 
     #[test]
     fn reports_missing_model_artifact() {

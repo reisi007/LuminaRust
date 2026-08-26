@@ -47,7 +47,7 @@ pub use manifest::{
     birefnet_manifest, sam2_1_manifest, sam2_1_manifests, select_variant, ChannelLayout,
     DeviceProfile, InputNormalization, ModelCapabilities, ModelInputSpec, ModelManifest,
     Resolution, Sam2Variant, TensorFormat, BIREFNET_INFERENCE_HEIGHT, BIREFNET_INFERENCE_WIDTH,
-    SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
+    INPUT_SPEC_DIGEST_KEY, SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
 };
 pub use preprocess::{
     matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_rgb_to_model,
@@ -87,6 +87,14 @@ pub enum OnnxError {
     /// A model artifact required for inference is not available.
     #[error("model artifact `{path}` is not available")]
     MissingModel { path: String },
+    /// The configured model **reported itself unavailable** (availability
+    /// flag, e.g. the stub's simulated missing installation) — there is no
+    /// concrete artifact path to name. Deliberately distinct from
+    /// [`OnnxError::MissingModel`], whose `path` names a real file, so the
+    /// two causes are distinguishable in logs and user-facing messages
+    /// (R2-ONNX-05).
+    #[error("model `{name}` reported unavailable (not installed)")]
+    ModelUnavailable { name: String },
     /// The loaded artifact's hash differs from the manifest `model_hash`
     /// (stale/mismatched weights). Reported instead of silently inferring
     /// with the wrong weights (REVIEW-ONNX-HASH-1).

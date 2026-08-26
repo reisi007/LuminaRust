@@ -14,6 +14,26 @@ fn missing_model_variant_semantics() {
     );
 }
 
+/// R2-ONNX-05 — a model *reporting itself unavailable* (availability flag) is
+/// a distinct public error variant with no artifact-path wording, so it cannot
+/// be confused with a genuinely missing `.onnx` file.
+#[test]
+fn model_unavailable_variant_semantics() {
+    let e = OnnxError::ModelUnavailable {
+        name: "BiRefNet".into(),
+    };
+    assert!(matches!(e, OnnxError::ModelUnavailable { .. }));
+    let text = e.to_string();
+    assert!(
+        text.contains("BiRefNet") && text.contains("reported unavailable"),
+        "error must name the model and carry availability wording, got {text}"
+    );
+    assert!(
+        !text.contains("artifact"),
+        "the flag-based case must not suggest an artifact path, got {text}"
+    );
+}
+
 /// When the `onnx-rt` feature is enabled, the real backend reports an absent
 /// artifact as `MissingModel` without any weights (no silent fallback).
 #[cfg(feature = "onnx-rt")]

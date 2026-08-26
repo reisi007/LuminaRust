@@ -144,11 +144,6 @@ werden nach unabhängiger Verifizierung entfernt.
   zurück statt Key zu entfernen -> Rezept bleibt dauerhaft CPU-routed, obwohl
   Pixel identisch (lumina-gpu/src/lib.rs:177-194 + gui 2018/3948). Fix:
   Wert-Neutralität prüfen (Key==0.0 überspringen). S.
-- [ ] **[PRIO: hoch] R2-ONNX-01** ModelInputSpec (Vorverarbeitung/Auflösung) fehlt in
-  persistierter Maskenidentität (`to_model_identity` lässt extras immer leer,
-  manifest.rs:225-232) -> Stale-Erkennung umgehbar. Fix: deterministischen
-  Digest über ModelInputSpec in extras + Test „Normänderung ⇒ Identität ändert
-  sich“. S/M. **Zwingend vor echter Gewichts-Integration (F-048).**
 - [ ] **[PRIO: hoch] R2-PERF-01** `analyze_tone` allokiert pro Tick ein f64-Vec pro
   Pixel (~192 MB @24MP) + O(n log n)-Sortierung (~69 ms @2048²), obwohl
   LuminanceHistogram die O(n)-Alternative bereitstellt (tone.rs:111-145;
@@ -195,9 +190,6 @@ werden nach unabhängiger Verifizierung entfernt.
 - [ ] **[PRIO: mittel] R2-GAP-01** F-009 Presets: Feature-Matrix mappt auf
   virtual-copies.md, das Dokument erwähnt Presets nie; File-I/O nicht
   implementiert (nur In-Memory). Doku-first: SOLL beschreiben oder Post-MVP.
-- [ ] **[PRIO: mittel] R2-ONNX-BUNDLE**: ONNX-02 (StubBackend-Resize wird weggeworfen),
-  ONNX-03 (OrtBackend implementiert MaskInference-Trait nicht — asymmetrisch),
-  ONNX-04 (Pending-Hash ohne Short-circuit).
 
 ### PRIO: niedrig (R2, gebündelt)
 
@@ -205,9 +197,7 @@ werden nach unabhängiger Verifizierung entfernt.
   (inkonsistente Fehlerverträge ohne Adapter), GPU-10 (totes Gerüst DraftPyramid/
   bake_3d_lut), GPU-11 (Agents.md listet lumina-gpu/bench/lensfun/mcp nicht),
   GPU-12 (Overlay-Composite-Shader ohne Pixeltest), GPU-13 (lock().unwrap()
-  Poisoning), RAW-03 (toter name-Parameter der Decode-API), ONNX-05
-  (MissingModel-Displaytext irreführend), ONNX-06 (Degenerations-Guards
-  ungetestet), ONNX-07 (normalize: 3 stride-Pässe statt 1 Pass), LENS-03
+  Poisoning), RAW-03 (toter name-Parameter der Decode-API), LENS-03
   (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
   core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
   in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation

@@ -196,6 +196,50 @@ pub struct ModelManifest {
     pub capabilities: ModelCapabilities,
 }
 
+/// Canonical, versioned text form of an input spec, fed into the identity
+/// digest (R2-ONNX-01).
+///
+/// Encoded by hand — field order and separators fixed, leading schema tag —
+/// so the digest has **no error path** and stays stable independent of any
+/// serializer's float formatting. Every component of the spec is included:
+/// inference resolution, channel layout, tensor name, tensor format and both
+/// normalization vectors. Two specs yield the same text iff they are
+/// semantically equal.
+fn canonical_input_spec_text(spec: &ModelInputSpec) -> String {
+    format!(
+        "lumina-input-spec-v1|res={}x{}|layout={:?}|tensor_name={}|tensor_format={:?}|mean={:?}|std={:?}",
+        spec.resolution.width,
+        spec.resolution.height,
+        spec.channel_layout,
+        spec.tensor_name,
+        spec.tensor_format,
+        spec.normalization.mean,
+        spec.normalization.std,
+    )
+}
+
+impl ModelInputSpec {
+    /// Deterministic SHA-256 identity digest over this input spec
+    /// (R2-ONNX-01 / ai-masks.md: "Vorverarbeitung und Inferenzauflösung"
+    /// sind Identitätsbestandteile).
+    ///
+    /// The returned value has the form `sha256:<64 lowercase hex chars>`. Any
+    /// change to resolution, layouts, tensor names or the input normalization
+    /// flips the digest even when `model_name`/`model_version`/`model_hash`
+    /// stay untouched — exactly the stale-detection hole R2-ONNX-01 closes.
+    pub(crate) fn identity_digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(canonical_input_spec_text(self).as_bytes());
+        format!("sha256:{}", crate::hash::to_hex(&hasher.finalize()))
+    }
+}
+
+/// Extra key under which [`ModelInputSpec::identity_digest`] is persisted in
+/// the sidecar [`lumina_sidecar::ModelIdentity`] extras (see
+/// [`ModelManifest::to_model_identity`]).
+pub const INPUT_SPEC_DIGEST_KEY: &str = "input_spec_digest";
+
 impl ModelManifest {
     /// Validate the full manifest invariant set (REVIEW-ONNX-N2):
     ///
@@ -222,12 +266,44 @@ impl ModelManifest {
 
     /// Map this manifest's identity onto the sidecar [`ModelIdentity`] used by
     /// the mask-loading decision layer (F-048 / F-051) for stale-detection.
+    ///
+    /// Beyond name/version/hash the persisted identity carries a
+    /// deterministic digest over the full [`ModelInputSpec`] (inference
+    /// resolution, channel layout, tensor names, tensor format, input
+    /// normalization) under [`INPUT_SPEC_DIGEST_KEY`]. ai-masks.md lists
+    /// "Vorverarbeitung und Inferenzauflösung" explicitly as mask-identity
+    /// components; without the digest a normalization/resolution change would
+    /// keep cached masks `valid` despite changed inference semantics
+    /// (R2-ONNX-01).
+    ///
+    /// # Sidecar impact (documented decision per Agents.md)
+    ///
+    /// * The digest is an **additive optional** extras entry. Sidecars written
+    ///   before this change keep parsing unchanged (`extras` is
+    ///   `#[serde(default)]` and skipped when empty); no schema-version bump
+    ///   and no migration are required.
+    /// * Existing persisted masks do **not** change validity through this
+    ///   change: the decision-layer comparison (`lumina-core`
+    ///   `model_identity_matches`) currently compares name/version/hash only.
+    ///   That comparison MUST start honoring [`INPUT_SPEC_DIGEST_KEY`] before
+    ///   real weights land in F-048 — otherwise the stale-detection hole this
+    ///   digest enables stays closed only on the producer side (follow-up,
+    ///   outside this crate).
+    /// * All shipped descriptors still carry the
+    ///   [`crate::hash::PENDING_INTEGRATION_HASH`] placeholder, i.e. no
+    ///   hash-pinned valid identities exist yet that could be invalidated by
+    ///   the new extras entry.
     pub fn to_model_identity(&self) -> lumina_sidecar::ModelIdentity {
+        let mut extras = BTreeMap::new();
+        extras.insert(
+            INPUT_SPEC_DIGEST_KEY.to_owned(),
+            serde_json::Value::String(self.input.identity_digest()),
+        );
         lumina_sidecar::ModelIdentity {
             name: self.model_name.clone(),
             version: self.model_version.clone(),
             hash: self.model_hash.clone(),
-            extras: BTreeMap::new(),
+            extras,
         }
     }
 
@@ -569,6 +645,109 @@ mod tests {
         let json = m.to_json().unwrap();
         let back = ModelManifest::from_json(&json).unwrap();
         assert_eq!(m, back);
+    }
+
+    // R2-ONNX-01 — the persisted identity must carry a deterministic digest
+    // over the ModelInputSpec (ai-masks.md: preprocessing + inference
+    // resolution are identity components), not an empty extras map.
+    #[test]
+    fn model_identity_extras_carry_deterministic_input_spec_digest() {
+        let identity = birefnet_manifest().to_model_identity();
+        let digest = identity
+            .extras
+            .get(INPUT_SPEC_DIGEST_KEY)
+            .unwrap_or_else(|| panic!("identity extras must carry {INPUT_SPEC_DIGEST_KEY}"));
+        let serde_json::Value::String(digest) = digest else {
+            panic!("digest extra must be a string, got {digest:?}");
+        };
+        let Some(hex) = digest.strip_prefix("sha256:") else {
+            panic!("digest must be sha256-prefixed, got {digest}");
+        };
+        assert_eq!(hex.len(), 64, "sha256 hex length, got {hex}");
+        assert!(
+            hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "lowercase-hex digest expected, got {hex}"
+        );
+        // Deterministic across calls and instances.
+        assert_eq!(
+            identity.extras,
+            birefnet_manifest().to_model_identity().extras,
+            "the same spec must always produce the same digest"
+        );
+
+        // The SAM 2.1 family shares resolution/layout but differs in name —
+        // its digest must still be well-formed and stable.
+        let sam = sam2_1_manifest(Sam2Variant::Tiny).to_model_identity();
+        assert!(sam.extras.contains_key(INPUT_SPEC_DIGEST_KEY));
+    }
+
+    /// Direction test (analogous to the F-082-FOLLOWUP-HASH hash-direction
+    /// tests): changing **only** the input normalization must change the
+    /// persisted mask identity — this is exactly the stale-detection signal
+    /// that was previously bypassable.
+    #[test]
+    fn identity_changes_when_normalization_changes() {
+        let base = birefnet_manifest();
+        let mut changed = birefnet_manifest();
+        changed.input.normalization.mean[0] += 0.001;
+
+        let a = base.to_model_identity();
+        let b = changed.to_model_identity();
+
+        // Name/version/hash stay untouched — only the spec digest may differ.
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.version, b.version);
+        assert_eq!(a.hash, b.hash);
+        assert_ne!(
+            a.extras.get(INPUT_SPEC_DIGEST_KEY),
+            b.extras.get(INPUT_SPEC_DIGEST_KEY),
+            "a normalization change MUST flip the persisted input-spec digest"
+        );
+    }
+
+    /// Direction test: changing **only** the inference resolution must also
+    /// flip the persisted identity digest.
+    #[test]
+    fn identity_changes_when_resolution_changes() {
+        let base = birefnet_manifest();
+        let mut changed = birefnet_manifest();
+        changed.input.resolution = Resolution {
+            width: 512,
+            height: 512,
+        };
+
+        let a = base.to_model_identity();
+        let b = changed.to_model_identity();
+        assert_eq!((a.name, a.version, a.hash), (b.name, b.version, b.hash));
+        assert_ne!(
+            a.extras.get(INPUT_SPEC_DIGEST_KEY),
+            b.extras.get(INPUT_SPEC_DIGEST_KEY),
+            "a resolution change MUST flip the persisted input-spec digest"
+        );
+    }
+
+    /// Any other spec component participates too: tensor format and layout
+    /// are part of the inference contract.
+    #[test]
+    fn identity_changes_when_tensor_format_or_layout_change() {
+        let base = birefnet_manifest().to_model_identity();
+
+        let mut nhwc = birefnet_manifest();
+        nhwc.input.tensor_format = TensorFormat::Nhwc;
+        assert_ne!(
+            base.extras.get(INPUT_SPEC_DIGEST_KEY),
+            nhwc.to_model_identity().extras.get(INPUT_SPEC_DIGEST_KEY),
+        );
+
+        let mut other_tensor = birefnet_manifest();
+        other_tensor.input.tensor_name = "pixels".into();
+        assert_ne!(
+            base.extras.get(INPUT_SPEC_DIGEST_KEY),
+            other_tensor
+                .to_model_identity()
+                .extras
+                .get(INPUT_SPEC_DIGEST_KEY),
+        );
     }
 
     #[test]

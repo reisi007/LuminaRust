@@ -1,7 +1,7 @@
 //! Exchangeable inference surface and the deterministic stub backend.
 
 use crate::manifest::ModelManifest;
-use crate::preprocess::{preprocess_rgb_to_model, rescale_model_matte};
+use crate::preprocess::rescale_model_matte;
 use crate::OnnxError;
 use lumina_core::{ImageFrame, MaskPlane};
 
@@ -123,10 +123,12 @@ impl SubjectInference for StubBackend {
     fn infer(&self, image: &ImageFrame) -> Result<MaskPlane, OnnxError> {
         // Same gate as the SAM stub (`sam2.rs`): a backend reporting itself
         // unavailable must refuse inference instead of silently emitting a
-        // matte (REVIEW-ONNX-AVAIL-1, no silent fallbacks).
+        // matte (REVIEW-ONNX-AVAIL-1, no silent fallbacks). R2-ONNX-05: the
+        // simulated absence carries no artifact path, so it reports
+        // `ModelUnavailable` instead of abusing `MissingModel { path }`.
         if !self.available {
-            return Err(OnnxError::MissingModel {
-                path: self.manifest.model_name.clone(),
+            return Err(OnnxError::ModelUnavailable {
+                name: self.manifest.model_name.clone(),
             });
         }
         if image.width == 0 || image.height == 0 {
@@ -137,10 +139,12 @@ impl SubjectInference for StubBackend {
                 actual_height: image.height,
             });
         }
-        // Exercise the real adapter preprocessing path (documented boundary);
-        // the stub does not consume the resized RGB, but the dimension contract
-        // is validated and shared with the ORT backend.
-        let _rgb = preprocess_rgb_to_model(image, self.manifest.input.resolution);
+        // R2-ONNX-02: no throwaway full-frame resize here. The stub's matte is
+        // derived purely from the inference resolution and then rescaled to
+        // the source dimensions — resizing the source RGB first allocated and
+        // computed a nearest-neighbor copy of every pixel that was discarded.
+        // Dimension validation stays above; the real ORT backend owns actual
+        // preprocessing (`preprocess_rgb_to_model`) on its own inference path.
         let model_matte = self.generate_model_matte()?;
         rescale_model_matte(
             &model_matte,
@@ -229,9 +233,11 @@ mod tests {
     }
 
     // REVIEW-ONNX-AVAIL-1 — an unavailable stub must refuse inference instead
-    // of silently producing a matte.
+    // of silently producing a matte. R2-ONNX-05: the simulated absence is a
+    // dedicated `ModelUnavailable` variant (no artifact path exists to name),
+    // distinguishable from a genuinely missing `.onnx` file.
     #[test]
-    fn unavailable_stub_infer_surfaces_missing_model() {
+    fn unavailable_stub_infer_surfaces_model_unavailable() {
         let backend = StubBackend::new(birefnet_manifest())
             .unwrap()
             .with_availability(false);
@@ -239,11 +245,20 @@ mod tests {
         let img = frame(64, 64, [1, 2, 3]);
         let err = <StubBackend as SubjectInference>::infer(&backend, &img).unwrap_err();
         match &err {
-            OnnxError::MissingModel { path } => {
-                assert_eq!(path, "BiRefNet", "error must name the unavailable model");
+            OnnxError::ModelUnavailable { name } => {
+                assert_eq!(name, "BiRefNet", "error must name the unavailable model");
             }
-            other => panic!("expected MissingModel, got {other:?}"),
+            other => panic!("expected ModelUnavailable, got {other:?}"),
         }
+        let text = err.to_string();
+        assert!(
+            text.contains("reported unavailable"),
+            "display text must carry the availability wording, got {text}"
+        );
+        assert!(
+            !text.contains("artifact `"),
+            "no artifact path may be suggested for the flag-based case, got {text}"
+        );
     }
 
     #[test]
@@ -270,8 +285,8 @@ mod tests {
             "{err:?}"
         );
         assert!(
-            err.to_string().contains("not available"),
-            "core error must carry the missing-model reason, got {err}"
+            err.to_string().contains("unavailable"),
+            "core error must carry the unavailable-model reason, got {err}"
         );
     }
 }

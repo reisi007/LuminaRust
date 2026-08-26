@@ -43,7 +43,9 @@ fn stub_matte_spans_full_range() {
 }
 
 /// REVIEW-ONNX-AVAIL-1 — a stub reporting itself unavailable must refuse
-/// inference with `MissingModel` instead of silently emitting a matte.
+/// inference instead of silently emitting a matte. R2-ONNX-05: the flag-based
+/// absence uses the dedicated `ModelUnavailable` variant, not
+/// `MissingModel { path }`.
 #[test]
 fn unavailable_stub_refuses_inference() {
     use lumina_onnx::SubjectInference as _;
@@ -53,9 +55,10 @@ fn unavailable_stub_refuses_inference() {
     let img = solid_frame(64, 64, [5, 5, 5]);
     let err = backend.infer(&img).unwrap_err();
     match &err {
-        lumina_onnx::OnnxError::MissingModel { path } => {
-            assert_eq!(path, "BiRefNet");
+        lumina_onnx::OnnxError::ModelUnavailable { name } => {
+            assert_eq!(name, "BiRefNet");
         }
-        other => panic!("expected MissingModel, got {other:?}"),
+        other => panic!("expected ModelUnavailable, got {other:?}"),
     }
+    assert!(err.to_string().contains("reported unavailable"));
 }
