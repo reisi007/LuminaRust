@@ -261,6 +261,12 @@ pub enum Str {
     MaskUnavailableLayer,
     InferenceWaiting,
 
+    // GPU present-path routing feedback (R2-GUIMOD-06): the previously silent
+    // GPU→CPU fallback is surfaced here as a visible status badge / tooltip
+    // instead of only a stderr `log::warn!`.
+    CpuFallbackUnsupportedStages,
+    CpuFallbackTooltip,
+
     // Legacy parameterized patterns (use with `format!`)
     HuePattern,
     SatPattern,
@@ -505,6 +511,14 @@ impl Str {
                 "Warning: mask unavailable (layer {}); it is not applied in the preview"
             }
             Str::InferenceWaiting => "Mask {}: background job waiting for inference engine",
+
+            Str::CpuFallbackUnsupportedStages => {
+                "Render routed to CPU: GPU does not support all adjustments in this recipe"
+            }
+            Str::CpuFallbackTooltip => {
+                "The GPU present path is unavailable for this recipe, so the preview \
+                 falls back to the CPU renderer. The visible pixels are identical."
+            }
 
             Str::HuePattern => "{} Hue",
             Str::SatPattern => "{} Sat",

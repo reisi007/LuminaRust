@@ -596,6 +596,15 @@ pub struct LuminaApp {
     /// frame (recomputed in `update_texture`, consumed in `draw_preview`).
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
     gpu_present_frame: Option<(egui::TextureId, [usize; 2])>,
+    /// R2-GUIMOD-06: visible (non-stderr) feedback for the GPU→CPU routing
+    /// fallback. `Some(reason)` when a GPU context is available and usable but
+    /// the recipe references stages the VRAM tone path cannot evaluate, so the
+    /// preview is computed on the CPU — a silent fallback before this fix.
+    /// `None` while the GPU present path is usable (or when no GPU context
+    /// exists at all, in which case there is no "fallback" to report). Surfaced
+    /// as a status badge in the preview HUD; it never affects rendered pixels.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    gpu_route_fallback: Option<String>,
     /// GUI-SCROLL-200-1: per-frame diagnostic counters for `LUMINA_PERF_LOG=1`.
     /// `frame_thumb_enqueued` counts worker jobs enqueued (or cached previews
     /// loaded) this frame, `frame_thumbs_ready` counts worker results applied.
@@ -943,6 +952,9 @@ impl LuminaApp {
             vram_mask_is_evaluated: false,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             gpu_present_frame: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            // R2-GUIMOD-06: no routing fallback until a present decision runs.
+            gpu_route_fallback: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             brush_mask_plane: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
@@ -2095,6 +2107,14 @@ impl LuminaApp {
             // a fresh zeroed plane; stale dimensions would mis-align tile uploads.
             self.brush_mask_plane = None;
             self.brush_mask_plane_dims = None;
+            // R2-GUI-FOLLOWUP: a source switch must not reuse VRAM/present state
+            // from the previous image. `vram_fresh = false` drops any stale
+            // VRAM tone result and forces a fresh full render through the
+            // present gate; `gpu_stage_gate = None` clears the memoized
+            // `unsupported_gpu_stages` verdict so it is recomputed against the
+            // new recipe/source identity instead of serving a long-gone verdict.
+            self.vram_fresh = false;
+            self.gpu_stage_gate = None;
         }
         self.status = Str::Loaded.format_arg(&self.source_name);
         info!(
@@ -2826,9 +2846,21 @@ impl LuminaApp {
         // historical CPU upload, which remains fully functional.
         self.gpu_present_frame = None;
         #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
-        if let Some((id, size)) = self.gpu_present_if_ready() {
-            self.gpu_present_frame = Some((id, size));
-            return;
+        {
+            // R2-GUIMOD-06: record whether the GPU present path was taken or the
+            // preview was routed to the CPU. `gpu_present_if_ready` returns the
+            // texture only when every present condition (including the
+            // GPU-eligible recipe check) holds; a `None` here while a GPU context
+            // is bound may mean the render was silently routed to CPU.
+            match self.gpu_present_if_ready() {
+                Some((id, size)) => {
+                    self.gpu_present_frame = Some((id, size));
+                    self.gpu_route_fallback = None;
+                }
+                None => {
+                    self.gpu_route_fallback = self.routing_fallback_reason();
+                }
+            }
         }
         // Before/After shows the original (never the recipe) so the toggle can
         // never mutate the recipe — it only swaps which frame is displayed.
@@ -2954,6 +2986,31 @@ impl LuminaApp {
                 self.gpu_stage_gate = self.render_key.clone().map(|key| (key, has_unsupported));
                 has_unsupported
             }
+        }
+    }
+
+    /// R2-GUIMOD-06: classify *why* the GPU present path was not taken this
+    /// frame, so the silent GPU→CPU routing can be shown as a visible badge.
+    ///
+    /// Returns `Some(reason)` only when a GPU context exists **and** is usable
+    /// (`is_available`) **and** the recipe cannot be fully evaluated on the VRAM
+    /// tone path — i.e. the preview is being computed on the CPU for a
+    /// capability reason rather than because of an editorial state (stale VRAM,
+    /// Before/After toggle, zoomed ROI, or a missing present target). In all
+    /// other cases there is no "fallback" to report and `None` is returned.
+    ///
+    /// Reuses the memoized [`Self::recipe_has_unsupported_gpu_stages`] verdict,
+    /// so calling it every frame is cheap once the render key is stable.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn routing_fallback_reason(&mut self) -> Option<String> {
+        let gpu = self.gpu.as_ref()?;
+        if !gpu.is_available() {
+            return None;
+        }
+        if self.recipe_has_unsupported_gpu_stages() {
+            Some(Str::CpuFallbackUnsupportedStages.t().to_string())
+        } else {
+            None
         }
     }
 
@@ -6030,6 +6087,15 @@ impl LuminaApp {
             ));
         } else {
             ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
+        }
+        // R2-GUIMOD-06: surface the otherwise-silent GPU→CPU routing fallback
+        // as a visible status badge (with tooltip) instead of only a stderr
+        // `log::warn!`. No-op while `gpu_route_fallback` is `None` (GPU present
+        // path usable, or no GPU context bound at all).
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        if let Some(reason) = &self.gpu_route_fallback {
+            ui.colored_label(egui::Color32::YELLOW, reason)
+                .on_hover_text(Str::CpuFallbackTooltip.t().to_string());
         }
     }
 
