@@ -181,10 +181,7 @@ werden nach unabhängiger Verifizierung entfernt.
   (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
   core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
   in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation
-  Keys), CLI-07 (Exit-Codes undokumentiert), CLI-08 (serde_json-unwrap in
-  Batch-Workern), CLI-09 (develop ohne Range-Vorabcheck), CLI-10 (Import erbt
-  irrelevante Flags still), CLI-11 (kein Inode-Dedup im Batch), CLI-12
-  (Formatstring-Backtick), SIDECAR-ZDATA-WASM
+  Keys), SIDECAR-ZDATA-WASM
   (zstd-sys blockiert workspace-weites wasm32-Gate — Capability-Entscheidung nötig).
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
