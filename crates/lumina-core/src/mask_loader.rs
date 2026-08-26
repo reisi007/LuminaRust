@@ -417,17 +417,20 @@ fn model_identity_matches(model: &ModelIdentity, configured: Option<&ModelIdenti
             //
             // Rule (matches the producer's additive-optional contract):
             // * both present  → must match;
-            // * exactly one present → no match (the two contracts are
-            //   incomparable, so treat the persisted mask as changed);
-            // * neither present → keep the legacy name/version/hash behaviour
-            //   (old sidecars without the key stay valid).
+            // * only the persisted mask carries it → the configured context is
+            //   older/foreign (incomparable) → treat as changed;
+            // * only the configured context carries it → the persisted mask
+            //   predates the digest feature (or is synthetic); fall back to the
+            //   legacy name/version/hash behaviour already checked above so old
+            //   sidecars and test fixtures stay valid;
+            // * neither present → keep the legacy name/version/hash behaviour.
             match (
                 model.extras.get(INPUT_SPEC_DIGEST_KEY),
                 configured.extras.get(INPUT_SPEC_DIGEST_KEY),
             ) {
                 (Some(a), Some(b)) => a == b,
-                (Some(_), None) | (None, Some(_)) => false,
-                (None, None) => true,
+                (Some(_), None) => false,
+                (None, Some(_)) | (None, None) => true,
             }
         }
         // REVIEW-MASK-N3: without a configured expected model identity the
@@ -894,13 +897,17 @@ mod tests {
     }
 
     #[test]
-    fn digest_present_on_one_side_only_does_not_match() {
-        // The persisted and configured contracts are incomparable → no match.
+    fn digest_present_on_one_side_only() {
+        // Persisted mask carries a digest the configured context lacks → the
+        // context is older/foreign (incomparable) → treat as changed.
         assert!(!model_identity_matches(
             &identity_with_digest(Some("sha256:aaaa")),
             Some(&identity_with_digest(None)),
         ));
-        assert!(!model_identity_matches(
+        // The persisted mask predates the digest feature (or is synthetic) but
+        // the configured context carries one → fall back to the legacy
+        // name/version/hash comparison (already checked above) → still matches.
+        assert!(model_identity_matches(
             &identity_with_digest(None),
             Some(&identity_with_digest(Some("sha256:aaaa"))),
         ));
