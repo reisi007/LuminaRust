@@ -72,7 +72,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26 (R2):
-17 offene Tasks — Block A: 15, Block B: 1, Block C: 1.
+15 offene Tasks — Block A: 13, Block B: 1, Block C: 1.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -119,12 +119,7 @@ MVP-blockierend)**
 werden nach unabhängiger Verifizierung entfernt.
 
 
-- [ ] **[PRIO: hoch] R2-ONNX-01b** (Folge aus R2-ONNX-01-Implementierung): Consumer-seitige
-  Stale-Erkennung schließen — `model_identity_matches` (lumina-core/mask_loader.rs
-  ~383) vergleicht nur name/version/hash und muss den neuen
-  `INPUT_SPEC_DIGEST_KEY` aus extras honorieren, bevor echte Gewichte (F-048)
-  landen. Sonst bleibt die Umgehung der Stale-Erkennung consumer-seitig offen.
-  **Zwingend vor F-048.** (Producer-Seite inkl. Tests bereits umgesetzt.)
+
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
