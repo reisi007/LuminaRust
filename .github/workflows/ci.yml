@@ -136,6 +136,13 @@ jobs:
       - name: Run Clippy (lensfun feature)
         run: cargo clippy -p lumina-core --features lensfun -- -D warnings
 
+      # The `gpu`-gated path in lumina-gpu cannot be runtime-tested in CI
+      # (GitHub runners have no GPU/Metal compute). We at least compile-check
+      # it here so that changes to the GPU code do not silently bit-rot.
+      # Runtime GPU tests MUST be run locally (see Agents.md "GPU-Tests").
+      - name: Check GPU feature compiles
+        run: cargo check -p lumina-gpu --features gpu
+
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
 

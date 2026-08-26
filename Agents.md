@@ -258,6 +258,18 @@ AI-Modelle, RAW-Fixtures und Referenzbilder müssen reproduzierbar versioniert
 und lizenzrechtlich dokumentiert sein. Tests dürfen nicht von einem spontanen
 Modell-Download oder externen Netzwerkzugriff abhängen.
 
+- **GPU-Tests (lumina-gpu):** GitHub-Actions-Runner haben keinen GPU-Zugriff
+  (kein Metal-Compute), daher kann die CI den GPU-Pfad nur kompilieren
+  (`cargo check -p lumina-gpu --features gpu`), nicht zur Laufzeit testen.
+  **Daher gilt die Regel:** Bei jeder Änderung an `lumina-gpu/**` oder am
+  GPU-Pfad anderer Crates MUSS parallel zur CI lokal
+  `cargo test -p lumina-gpu --features gpu` ausgeführt werden (Mac mit
+  Metal-Adapter). Das Testergebnis ist im Abschlussbericht zu dokumentieren.
+  Erstes lokales Ergebnis dient als Baseline für Regressionen. Ohne lokalen
+  Lauf bleibt der GPU-Pfad CI-seitig ungetestet — das ist bewusst in Kauf
+  genommen und als CI-Gap in `feature/platform/capability-matrix.md`
+  dokumentiert.
+
 ## Definition of Done
 
 Eine Änderung ist erst fertig, wenn:
