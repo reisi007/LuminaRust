@@ -129,22 +129,6 @@ F-074-A1…A4 ist abgeschlossen). Verifiziert wird gegen
 Draft/Full-Split, Coalescing, CPU-ROI, Async-Decode und Auto-Load sind
 implementiert und aus dieser Liste entfernt; offen:
 
-- [ ] **[PRIO: mittel] PERF-GUI-1** DAG/Schritt-Trennung + demosaizierte Basiskachel cachen,
-      nur Color/Tone bei Exposure-Änderung invalidieren.
-  - **Teilstand 2026-08-25:** `render_draft`/`render_full`/`render_from` mit
-    ROI-Crop vorhanden; `draft_original` gecacht (Zero-Alloc beim Drag).
-    **Aber:** kein Stufen-Cache; die GUI nullt bei jeder Regleränderung den
-    gesamten `render_key` (`set_adjustment`/`mark_dirty`) statt nur der
-    Color/Tone-Stufe; `stage_digest` wird dafür nicht genutzt.
-  - **Verfeinerung nötig:** Demosaiced-Basis als `ImageFrame` im RAM halten
-    und stufenweise invalidieren, sodass Exposure-/Color-Änderungen nur die
-    Adjustments-Stufe neu rendern. GPU/VRAM-Variante langfristig via ADR
-    (`lumina-core` darf laut `Agents.md` keine GPU-/GUI-Abhängigkeit erhalten).
-  - **Abnahmekriterien:** Bei Exposure-Drag wird nur die Adjustments-Stufe neu
-    berechnet (nachweisbar über `render_frame`-Stufen-Timing + Golden-
-    Identität zu F-043); Decode/Demosaic wird bei Regleränderung **nicht**
-    wiederholt; kein stillschweigender Fallback bei Cache-Miss.
-
 - [ ] **[PRIO: mittel] PERF-GUI-2** GPU-Pfad ausbauen (Uniforms/Stages, kein CPU-Readback im
       Present-Pfad).
   - **Teilstand 2026-08-25:** `crates/lumina-gpu` existiert (wgpu/Metal,
