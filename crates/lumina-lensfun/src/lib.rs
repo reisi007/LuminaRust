@@ -52,27 +52,6 @@
 //! [`Corrector::has_distortion`]; the vignetting correction of such a
 //! corrector remains fully usable.
 //!
-//! # Row-block API and numerical equivalence (R2-LENS-01)
-//!
-//! [`Corrector::geometry_row`] and [`Corrector::apply_vignetting_row`] push a
-//! whole destination *row* through a single FFI call each (the per-pixel
-//! wrappers cost two transitions per pixel). They are **not** drop-in
-//! bit-identical to the per-pixel calls: lensfun 0.3.4's block entry points
-//! accumulate coordinates incrementally across the block
-//! (`ApplyGeometryDistortion`: `x += NormScale` per column;
-//! `ModifyColor_DeVignetting_PA`: `r2 += d1*x + d2`, `x += param[3]`),
-//! whereas a 1×1 call recomputes both axes directly
-//! (`x = x·NormScale − CenterX`, `r2 = x² + y²`). The results therefore agree
-//! only to floating-point accumulation noise (first column/pixel exactly,
-//! later columns within measured drift — see the
-//! `*_row_matches_per_pixel_*` tests). Measured against lensfun 0.3.4 on
-//! arm64 macOS: ≤ 7.4e-4 px geometry / ≤ 8.4e-5 gain drift at 257 columns,
-//! growing to ≈ 0.75 px / ≈ 2.8e-2 at 8192 columns. Any consumer switching
-//! from the per-pixel API to the row API must either accept that sub-pixel
-//! drift or re-baseline its goldens first; byte-exact rendering requires
-//! staying on [`Corrector::geometry`] / [`Corrector::color_gain`] (which is
-//! what the lumina-core loop does).
-
 #![cfg_attr(not(feature = "native"), allow(dead_code))]
 
 #[cfg(feature = "native")]
@@ -134,10 +113,6 @@ mod ffi {
     // ---- component roles (lfComponentRole) ----
     pub const LF_CR_END: c_int = 0;
     pub const LF_CR_NEXT: c_int = 1;
-    /// Component exists but its colour role does not matter: the callback
-    /// **skips** this slot without modifying it (needed to walk interleaved
-    /// RGBA buffers over the alpha byte).
-    pub const LF_CR_UNKNOWN: c_int = 2;
     pub const LF_CR_RED: c_int = 4;
     pub const LF_CR_GREEN: c_int = 5;
     pub const LF_CR_BLUE: c_int = 6;
@@ -156,12 +131,6 @@ mod ffi {
     /// **packed** RGB buffer (`LF_CR_3(R, G, B)`): consumes exactly three
     /// consecutive floats per pixel.
     pub const LF_CR_RGB: c_int = lf_cr_3(LF_CR_RED, LF_CR_GREEN, LF_CR_BLUE);
-
-    /// Component-role mask for **interleaved RGBA** buffers
-    /// (`LF_CR_4(R, G, B, UNKNOWN)`): multiplies R, G, B and skips the alpha
-    /// slot unmodified (`LF_CR_UNKNOWN`), then stops at the implicit
-    /// `LF_CR_END` padding.
-    pub const LF_CR_RGBA: c_int = lf_cr_4(LF_CR_RED, LF_CR_GREEN, LF_CR_BLUE, LF_CR_UNKNOWN);
 
     #[repr(C)]
     pub struct lfDatabase {
@@ -618,110 +587,14 @@ mod ffi {
             }
         }
 
-        /// Map a whole destination row to source coordinates in **one** FFI
-        /// call (R2-LENS-01). `out` must hold at least `2 * width` floats and
-        /// receives `(sx, sy)` pairs for the columns `0..width` of destination
-        /// row `y`.
-        ///
-        /// Returns `true` when lensfun applied its distortion callback and
-        /// wrote all pairs; `false` means the modifier has no geometry
-        /// callback (vignetting-only profile), in which case the prefilled
-        /// identity mapping is left untouched — exactly like per-pixel
-        /// [`Self::geometry`].
-        ///
-        /// # Panics
-        /// Panics if `out` cannot hold `2 * width` floats (caller contract,
-        /// never silently truncated).
-        ///
-        /// # Numerics
-        /// NOT bit-identical to per-pixel [`Self::geometry`] calls beyond the
-        /// first column: lensfun's block path steps `x += NormScale`
-        /// incrementally across the row instead of computing each column
-        /// directly. See the crate-level "Row-block API" section and the
-        /// `geometry_row_matches_per_pixel_calls_within_documented_drift`
-        /// test.
-        pub fn geometry_row(&self, y: f64, out: &mut [f32]) -> bool {
-            let w = self.width as usize;
-            assert!(
-                out.len() >= 2 * w,
-                "geometry_row: out needs 2 * width = {} floats, got {}",
-                2 * w,
-                out.len()
-            );
-            // Prefill with the identity mapping: on a `false` return lensfun
-            // leaves the buffer untouched (same passthrough contract as
-            // `geometry`).
-            for i in 0..w {
-                out[2 * i] = i as f32;
-                out[2 * i + 1] = y as f32;
-            }
-            unsafe {
-                lf_modifier_apply_geometry_distortion(
-                    self.modifier,
-                    0.0,
-                    y as c_float,
-                    self.width as c_int,
-                    1,
-                    out.as_mut_ptr(),
-                ) != 0
-            }
-        }
-
-        /// Apply the vignetting correction to one full row of interleaved
-        /// RGBA32F pixels in **one** FFI call (R2-LENS-01). `rgba` must hold
-        /// at least `4 * width` floats (`R,G,B,A` per column); only the RGB
-        /// components are modified (`LF_CR_RGBA` role mask = R,G,B multiply,
-        /// alpha slot skipped), alpha is left untouched — same contract as
-        /// per-pixel [`Self::color_gain`].
-        ///
-        /// Returns lensfun's `cbool` (`false` == no colour callback active,
-        /// buffer untouched).
-        ///
-        /// # Panics
-        /// Panics if `rgba` cannot hold `4 * width` floats.
-        ///
-        /// # Numerics
-        /// NOT bit-identical to per-pixel [`Self::color_gain`] calls beyond
-        /// the first pixel: lensfun's block path accumulates `r²` and `x`
-        /// incrementally across the row. See the crate-level "Row-block API"
-        /// section and the
-        /// `vignetting_row_matches_per_pixel_calls_within_documented_drift`
-        /// test.
-        pub fn apply_vignetting_row(&self, y: f64, rgba: &mut [f32]) -> bool {
-            let w = self.width as usize;
-            assert!(
-                rgba.len() >= 4 * w,
-                "apply_vignetting_row: rgba needs 4 * width = {} floats, got {}",
-                4 * w,
-                rgba.len()
-            );
-            unsafe {
-                lf_modifier_apply_color_modification(
-                    self.modifier,
-                    rgba.as_mut_ptr() as *mut c_void,
-                    0.0,
-                    y as c_float,
-                    self.width as c_int,
-                    1,
-                    LF_CR_RGBA,
-                    std::mem::size_of_val(rgba) as c_int,
-                ) != 0
-            }
-        }
-
-        /// Cheap check: does the modifier change anything at representative
-        /// points? Used so a profile that is identity for the requested
-        /// focal/aperture falls back to the manual model (graceful fallback).
+        /// Probe whether the correction is approximately the identity mapping
+        /// at the image centre and four corners. A near-identity correction is
+        /// treated as a no-op and the caller falls back to the manual model.
         pub fn is_identity(&self) -> bool {
-            let eps = 1e-3_f64;
-            let (w, h) = (self.width as f64, self.height as f64);
-            if w <= 0.0 || h <= 0.0 {
-                return true;
-            }
-            // Geometry at centre + four corners. Only probed when lensfun
-            // actually enabled a distortion callback — a vignetting-only
-            // modifier maps coordinates through unchanged (`geometry`),
-            // which would make every probe trivially pass anyway.
+            let w = f64::from(self.width);
+            let h = f64::from(self.height);
+            let eps = 1e-3;
+            // Distortion: sampled point must map back to itself.
             if self.has_distortion {
                 for (x, y) in [
                     (w / 2.0, h / 2.0),
@@ -737,15 +610,19 @@ mod ffi {
                 }
             }
             // Vignetting at the four corners (vs a flat 100 baseline).
-            for (x, y) in [
-                (0.0, 0.0),
-                (w - 1.0, 0.0),
-                (0.0, h - 1.0),
-                (w - 1.0, h - 1.0),
-            ] {
-                let (r, g, b) = self.color_gain(100.0, 100.0, 100.0, x, y);
-                if (r - 100.0).abs() > 0.5 || (g - 100.0).abs() > 0.5 || (b - 100.0).abs() > 0.5 {
-                    return false;
+            if self.has_vignetting {
+                for (x, y) in [
+                    (w / 2.0, h / 2.0),
+                    (0.0, 0.0),
+                    (w - 1.0, 0.0),
+                    (0.0, h - 1.0),
+                    (w - 1.0, h - 1.0),
+                ] {
+                    let (r, g, b) = self.color_gain(100.0, 100.0, 100.0, x, y);
+                    if (r - 100.0).abs() > 1.0 || (g - 100.0).abs() > 1.0 || (b - 100.0).abs() > 1.0
+                    {
+                        return false;
+                    }
                 }
             }
             true
@@ -1172,162 +1049,4 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // R2-LENS-01: row-block wrappers vs per-pixel calls.
-    //
-    // lensfun 0.3.4's block entry points accumulate coordinates INCREMENTALLY
-    // across the block (`ApplyGeometryDistortion`: `x += NormScale` per
-    // column; `ModifyColor_DeVignetting_PA`: `r2 += d1*x + d2`,
-    // `x += param[3]`), whereas every 1×1 call recomputes both axes directly.
-    // Row results therefore agree with per-pixel results only to fp
-    // accumulation noise: bit-exact in the first column/pixel, drifting by
-    // tiny amounts afterwards. These tests pin that relationship honestly:
-    // exact equality where it provably holds, documented drift bounds where
-    // it does not. Byte-exact rendering MUST keep using the per-pixel API
-    // (the lumina-core loop does; see crate docs "Row-block API").
-    // -----------------------------------------------------------------------
-
-    const ROW_W: u32 = 257; // odd width → exercises ragged SIMD tails on x86
-    const ROW_H: u32 = 61;
-
-    /// Documented drift bound for row-vs-pixel geometry coordinates, in
-    /// destination pixels, **at this test's probe width (`ROW_W = 257`)**.
-    /// Measured worst case over the full probe grid below: ≤ 7.4e-4 px
-    /// (synthetic fixture) / ≤ 2.3e-4 px (system DB profile). The bound
-    /// carries one order of magnitude of headroom for platform dispatch
-    /// differences (x86 SSE callback variants). NOTE the scaling: lensfun
-    /// accumulates incrementally across the row, so drift grows with width
-    /// (measured ≈ 0.75 px at 8192 columns) — see the crate-level
-    /// "Row-block API" section for why byte-exact rendering must not switch.
-    const GEOMETRY_ROW_DRIFT_PX: f64 = 1e-2;
-    /// Documented drift bound for row-vs-pixel vignetting gains, applied to a
-    /// 100.0 baseline (= 1/25500 of one 8-bit code value). Measured worst
-    /// case at `ROW_W = 257`: ≤ 8.4e-5 (fixture) / ≤ 3.1e-4 (system profile);
-    /// grows to ≈ 2.8e-2 at 8192 columns.
-    const VIGNETTING_ROW_DRIFT: f32 = 1e-2;
-
-    fn combined_fixture_corrector() -> Corrector {
-        let path = write_distortion_and_vignetting_fixture("rowequiv");
-        let db = LensfunDb::load_file(&path).expect("fixture database must load");
-        let _ = std::fs::remove_file(&path);
-        Corrector::for_camera(
-            &db,
-            FIXTURE_CAM_MAKE,
-            FIXTURE_CAM_MODEL,
-            None,
-            ROW_W,
-            ROW_H,
-            50.0,
-            2.8,
-            10.0,
-        )
-        .expect("combined-profile corrector must be built")
-    }
-
-    fn system_profile_corrector() -> Option<Corrector> {
-        let db = LensfunDb::load_system()?;
-        Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), ROW_W, ROW_H, 18.0, 5.6, 10.0)
-    }
-
-    #[test]
-    fn geometry_row_first_column_is_bit_identical_to_per_pixel_call() {
-        // Both call shapes evaluate the identical expression chain for
-        // column 0 (`x·NormScale − CenterX` with no accumulated steps yet),
-        // so the first pair must match EXACTLY for every row and every
-        // corrector kind.
-        for c in [
-            combined_fixture_corrector(),
-            system_profile_corrector().expect("system profile"),
-        ] {
-            assert!(c.has_distortion());
-            let mut out = vec![0f32; 2 * ROW_W as usize];
-            for y in 0..ROW_H {
-                let y = f64::from(y);
-                assert!(c.geometry_row(y, &mut out));
-                let (px, py) = c.geometry(0.0, y);
-                assert_eq!(out[0] as f64, px, "geometry row col-0 sx at y={y}");
-                assert_eq!(out[1] as f64, py, "geometry row col-0 sy at y={y}");
-            }
-        }
-    }
-
-    #[test]
-    fn geometry_row_matches_per_pixel_calls_within_documented_drift() {
-        let mut max_drift = 0.0f64;
-        for c in [
-            combined_fixture_corrector(),
-            system_profile_corrector().expect("system profile"),
-        ] {
-            let mut out = vec![0f32; 2 * ROW_W as usize];
-            for y in 0..ROW_H {
-                let y = f64::from(y);
-                assert!(c.geometry_row(y, &mut out));
-                for x in 0..ROW_W {
-                    let x = f64::from(x);
-                    let (px, py) = c.geometry(x, y);
-                    let dx = (f64::from(out[2 * x as usize]) - px).abs();
-                    let dy = (f64::from(out[2 * x as usize + 1]) - py).abs();
-                    max_drift = max_drift.max(dx).max(dy);
-                }
-            }
-        }
-        assert!(
-            max_drift <= GEOMETRY_ROW_DRIFT_PX,
-            "geometry row/pixel drift {max_drift} px exceeds documented bound \
-             {GEOMETRY_ROW_DRIFT_PX} px"
-        );
-    }
-
-    #[test]
-    fn vignetting_row_first_pixel_is_bit_identical_to_per_pixel_call() {
-        for c in [
-            combined_fixture_corrector(),
-            system_profile_corrector().expect("system profile"),
-        ] {
-            assert!(c.has_vignetting());
-            let mut row = vec![100.0f32; 4 * ROW_W as usize];
-            for y in 0..ROW_H {
-                let y = f64::from(y);
-                // Fresh 100.0 baseline per row: the correction multiplies in
-                // place, so a reused buffer would compound across rows.
-                row.fill(100.0);
-                assert!(c.apply_vignetting_row(y, &mut row));
-                let (pr, pg, pb) = c.color_gain(100.0, 100.0, 100.0, 0.0, y);
-                assert_eq!(row[0], pr, "vignetting row pixel-0 r at y={y}");
-                assert_eq!(row[1], pg, "vignetting row pixel-0 g at y={y}");
-                assert_eq!(row[2], pb, "vignetting row pixel-0 b at y={y}");
-                // Alpha untouched by the LF_CR_RGB role mask.
-                assert_eq!(row[3], 100.0, "alpha must stay untouched");
-            }
-        }
-    }
-
-    #[test]
-    fn vignetting_row_matches_per_pixel_calls_within_documented_drift() {
-        let mut max_drift = 0.0f32;
-        for c in [
-            combined_fixture_corrector(),
-            system_profile_corrector().expect("system profile"),
-        ] {
-            let mut row = vec![100.0f32; 4 * ROW_W as usize];
-            for y in 0..ROW_H {
-                let y = f64::from(y);
-                // Fresh 100.0 baseline per row (see first-pixel test).
-                row.fill(100.0);
-                assert!(c.apply_vignetting_row(y, &mut row));
-                for x in 0..ROW_W {
-                    let (pr, pg, pb) = c.color_gain(100.0, 100.0, 100.0, f64::from(x), y);
-                    let i = 4 * x as usize;
-                    for (got, want) in [(row[i], pr), (row[i + 1], pg), (row[i + 2], pb)] {
-                        max_drift = max_drift.max((got - want).abs());
-                    }
-                }
-            }
-        }
-        assert!(
-            max_drift <= VIGNETTING_ROW_DRIFT,
-            "vignetting row/pixel drift {max_drift} exceeds documented bound \
-             {VIGNETTING_ROW_DRIFT}"
-        );
-    }
 }
