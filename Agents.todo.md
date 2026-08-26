@@ -168,6 +168,13 @@ werden nach unabhängiger Verifizierung entfernt.
   Shader-Modul-Kompilierung) + Bindgroups bei jedem Present neu (lib.rs:
   1221-1223, shaders.rs:776-817). Fix: Pipeline je Zielformat cachen. M.
 
+- [ ] **[PRIO: hoch] R2-ONNX-01b** (Folge aus R2-ONNX-01-Implementierung): Consumer-seitige
+  Stale-Erkennung schließen — `model_identity_matches` (lumina-core/mask_loader.rs
+  ~383) vergleicht nur name/version/hash und muss den neuen
+  `INPUT_SPEC_DIGEST_KEY` aus extras honorieren, bevor echte Gewichte (F-048)
+  landen. Sonst bleibt die Umgehung der Stale-Erkennung consumer-seitig offen.
+  **Zwingend vor F-048.** (Producer-Seite inkl. Tests bereits umgesetzt.)
+
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
 - [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-03 (Drag-Clone ~180 MB/Tick),
