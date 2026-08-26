@@ -16,6 +16,12 @@ pub mod disk;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheStage {
     Decode,
+    /// PERF-GUI-1: the prepared, pre-adjustment base frame (post decode +
+    /// source actions, post interactive ROI crop). Its digest is recipe-blind
+    /// (`RenderKey::stage_digest(CacheStage::Base)`), so any slider change
+    /// reuses the entry while a new source/decoder/ROI/source-action artifact
+    /// misses. Upstream of every other stage except `Decode`.
+    Base,
     Preview,
     Histogram,
     Mask,
@@ -240,6 +246,13 @@ impl CacheStore {
 fn invalidated_by(changed: CacheStage, candidate: CacheStage) -> bool {
     match changed {
         CacheStage::Decode => true,
+        // PERF-GUI-1: a rebuilt base stage invalidates every stage that
+        // derives pixels from it, while decode (upstream) and masks
+        // (source-sized planes keyed by the mask identity) survive.
+        CacheStage::Base => matches!(
+            candidate,
+            CacheStage::Base | CacheStage::Preview | CacheStage::Histogram | CacheStage::Export
+        ),
         CacheStage::Mask => matches!(
             candidate,
             CacheStage::Preview | CacheStage::Histogram | CacheStage::Export
@@ -297,6 +310,62 @@ mod tests {
         cache.invalidate(CacheStage::Mask);
         assert!(cache.get(CacheStage::Decode, &key()).is_some());
         assert!(cache.get(CacheStage::Preview, &key()).is_none());
+    }
+
+    // PERF-GUI-1: the base stage sits between decode and masks. Mask/preview/
+    // histogram/export events must keep it, a decode/source change must drop
+    // it, and a base rebuild must not touch decode or mask entries.
+    #[test]
+    fn base_stage_invalidation_follows_the_stage_dag() {
+        let mut cache = CacheStore::new(100);
+        let stop = Cancellation::default();
+        cache.put(CacheStage::Base, &key(), vec![1], &stop).unwrap();
+
+        for event in [
+            CacheStage::Mask,
+            CacheStage::Preview,
+            CacheStage::Histogram,
+            CacheStage::Export,
+        ] {
+            cache.invalidate(event);
+            assert_eq!(
+                cache.get(CacheStage::Base, &key()),
+                Some(vec![1]),
+                "event {event:?} must not evict the base stage"
+            );
+        }
+
+        // A rebuilt base evicts downstream pixel stages but keeps decode and
+        // mask entries.
+        cache
+            .put(CacheStage::Decode, &key(), vec![2], &stop)
+            .unwrap();
+        cache.put(CacheStage::Mask, &key(), vec![3], &stop).unwrap();
+        cache
+            .put(CacheStage::Preview, &key(), vec![4], &stop)
+            .unwrap();
+        cache.invalidate(CacheStage::Base);
+        assert_eq!(cache.get(CacheStage::Decode, &key()), Some(vec![2]));
+        assert_eq!(cache.get(CacheStage::Mask, &key()), Some(vec![3]));
+        assert_eq!(cache.get(CacheStage::Preview, &key()), None);
+        cache.put(CacheStage::Base, &key(), vec![1], &stop).unwrap();
+
+        // A new decode invalidates everything downstream incl. the base.
+        cache.invalidate(CacheStage::Decode);
+        assert_eq!(cache.get(CacheStage::Base, &key()), None);
+
+        // The base digest itself is recipe-blind: an exposure-only recipe
+        // change (different recipe_hash/render digest) hits the SAME entry
+        // without any explicit invalidation.
+        cache.put(CacheStage::Base, &key(), vec![1], &stop).unwrap();
+        let mut dragged = key();
+        dragged.recipe_hash = "exposure-changed".into();
+        assert_ne!(key().digest(), dragged.digest());
+        assert_eq!(
+            key().stage_digest(CacheStage::Base),
+            dragged.stage_digest(CacheStage::Base)
+        );
+        assert_eq!(cache.get(CacheStage::Base, &dragged), Some(vec![1]));
     }
 
     #[test]

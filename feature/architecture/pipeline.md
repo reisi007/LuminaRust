@@ -884,6 +884,32 @@ Rezeptabschnitt einer abhängigen Stufe, wird die betroffene Stufe invalidiert.
 Parallele Preview-Ergebnisse werden verworfen, wenn sie nicht mehr zum aktuellen
 Rezeptstand gehören.
 
+> **Implementierungsstatus (PERF-GUI-1, 2026-08-26):** Interaktive
+> Stufen-Cache-Schicht für die GUI-Vorschau umgesetzt. Die demosaizierte Basis
+> (`Decode`/`SourceActions`/ROI-Crop, vor `Adjustments`) liegt als `ImageFrame`
+> im RAM ([`StageFrameCache`, crates/lumina-core/src/stage_cache.rs],
+> byte-budgetiert mit LRU; nativ 512 MiB, wasm32 48 MiB) und wird über einen
+> rezeptblinden Basis-Digest identifiziert:
+> `RenderKey::stage_digest(CacheStage::Base)` (= `digest_for("base")`; deckt
+> Quell-Hash, Decode-Version, Pipeline-Version, Virtual-Copy-ID,
+> Source-Action-Artefakt-Hashes, ROI-Fenster und Rahmengeometrie ab, niemals
+> das Rezept). Eine Exposure-/Contrast-/WB-/Farb-Änderung nullt nur die
+> finale Render-Identität und trifft danach denselben Basis-Eintrag; erneut
+> ausgeführt werden ausschließlich `Adjustments → Geometrie → Masken`
+> (`render_frame_from_base`), nachweisbar über `StageWork`-Zähler und
+> GUI-Tests (Cache-Hit/Miss). Decode/Demosaic wird bei Regleränderung nicht
+> wiederholt; der blake3-Quellhash wird pro geladener Datei memoisiert statt
+> pro Render-Tick berechnet. Ein Cache-Miss baut die Basis einfach neu auf
+> (reines Performance-Ereignis, kein Fallback-Pfad); eine neue Quellidentität
+> löscht den Cache vollständig. Pixel-Identität ist per Unit-Test bewiesen
+> (gestaffelter Pfad ≡ `render_frame`, byteweise). Grenzen: CPU/RAM-only als
+> MVP — eine GPU/VRAM-Variante bleibt GPU-STAGE-1 mit ADR vorbehalten
+> (`lumina-core` erhält keine GPU-Abhängigkeit); Masken-/Geometrie-Stufen
+> werden bei jedem Tick mit ausgeführt, solange sie downstream der Basis
+> liegen (korrekt, aber nicht separat gecacht). Keine neuen F-074-
+> Benchmark-IDs; bestehende Baselines/Budgets sind von der Änderung nicht
+> betroffen (`render_frame` ist semantisch unverändert).
+
 ## Abnahme
 
 - CPU und CLI liefern für identische Eingaben reproduzierbare Ergebnisse mit

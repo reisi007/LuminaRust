@@ -109,6 +109,14 @@ pub struct RenderKey {
     /// runtime artifacts so that changed repair artifacts cannot be served
     /// from stale cached pixels. Empty when no source actions were applied.
     pub source_action_artifact_hashes: Vec<String>,
+    /// PERF-GUI-1: source-space ROI `(x, y, w, h)` that was cropped **before**
+    /// the base stage (the interactive preview crop). It participates ONLY in
+    /// the [`CacheStage::Base`] digest (`with_base_roi`), never in the render
+    /// digest: the final render identity already distinguishes outputs by
+    /// dimensions/profile, while the cached demosaiced base must additionally
+    /// separate two windows of the same source with equal size but different
+    /// offset. `None` (the default) keeps every existing digest unchanged.
+    base_roi: Option<[u32; 4]>,
     pub output: OutputSpec,
     /// REVIEW-CORE-EXPORTKEY-1: full export parameters beyond
     /// [`OutputSpec`] (bit depth, quality, dithering, dither seed). They shape
@@ -169,6 +177,7 @@ impl RenderKey {
             // options MUST attach them via the `with_*` builders so the
             // digest covers them.
             source_action_artifact_hashes: Vec::new(),
+            base_roi: None,
             output,
             export_options: None,
         }
@@ -194,6 +203,16 @@ impl RenderKey {
         self
     }
 
+    /// PERF-GUI-1: attaches the pre-crop source ROI so it participates in the
+    /// [`CacheStage::Base`] digest. Like `with_export_options` this is opt-in:
+    /// call sites that do not cache a demosaiced base keep `None` and produce
+    /// byte-identical digests to before.
+    #[must_use]
+    pub fn with_base_roi(mut self, roi: Option<[u32; 4]>) -> Self {
+        self.base_roi = roi;
+        self
+    }
+
     pub fn digest(&self) -> String {
         self.digest_for("render")
     }
@@ -201,6 +220,7 @@ impl RenderKey {
     pub fn stage_digest(&self, stage: crate::cache::CacheStage) -> String {
         match stage {
             crate::cache::CacheStage::Decode => self.digest_for("decode"),
+            crate::cache::CacheStage::Base => self.digest_for("base"),
             crate::cache::CacheStage::Mask => self.digest_for("mask"),
             crate::cache::CacheStage::Histogram => self.digest_for("histogram"),
             crate::cache::CacheStage::Preview | crate::cache::CacheStage::Export => {
@@ -222,7 +242,33 @@ impl RenderKey {
             hasher.update(value.as_bytes());
             hasher.update(&[0]);
         }
-        if scope != "decode" {
+        if scope == "base" {
+            // PERF-GUI-1: the demosaiced/pre-adjustment base stage identity.
+            // It sits between decode and adjustments, so — like "decode" — it
+            // deliberately excludes the whole recipe (any slider change must
+            // reuse the base), but unlike "decode" it covers the resolved
+            // source-action artifacts composited INTO the base, the pre-crop
+            // ROI window and the resulting frame geometry.
+            for value in &self.source_action_artifact_hashes {
+                hasher.update(value.as_bytes());
+                hasher.update(&[0]);
+            }
+            match self.base_roi {
+                None => {
+                    hasher.update(&[0]);
+                }
+                Some([x, y, w, h]) => {
+                    hasher.update(&[1]);
+                    hasher.update(&x.to_le_bytes());
+                    hasher.update(&y.to_le_bytes());
+                    hasher.update(&w.to_le_bytes());
+                    hasher.update(&h.to_le_bytes());
+                }
+            }
+            hasher.update(&self.output.width.to_le_bytes());
+            hasher.update(&self.output.height.to_le_bytes());
+        }
+        if scope != "decode" && scope != "base" {
             // Crop and output are downstream of masks.  They are deliberately
             // not part of the mask identity: changing either must reuse the
             // decoded source and any source-sized matte.
@@ -668,6 +714,131 @@ mod tests {
         assert_eq!(
             key.stage_digest(crate::cache::CacheStage::Decode),
             changed.stage_digest(crate::cache::CacheStage::Decode)
+        );
+    }
+
+    // PERF-GUI-1: the base-stage digest must be recipe-blind (any slider drag
+    // reuses the cached demosaiced base) while separating every input that
+    // changes the base pixels themselves.
+    #[test]
+    fn adjustment_only_changes_reuse_the_base_stage_digest() {
+        let plain = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "vc",
+            &EditRecipe::default(),
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 100,
+                height: 80,
+                format: "rgba8".into(),
+            },
+        );
+        let mut exposure_drag = EditRecipe::default();
+        exposure_drag.adjustments.insert("exposure".into(), 1.25);
+        exposure_drag.adjustments.insert("contrast".into(), -0.4);
+        let dragged = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "vc",
+            &exposure_drag,
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 100,
+                height: 80,
+                format: "rgba8".into(),
+            },
+        )
+        .with_base_roi(Some([2, 3, 50, 40]));
+        let plain_with_same_roi = plain.clone().with_base_roi(Some([2, 3, 50, 40]));
+        assert_eq!(
+            plain_with_same_roi.stage_digest(crate::cache::CacheStage::Base),
+            dragged.stage_digest(crate::cache::CacheStage::Base),
+            "a pure exposure/color change must keep the base stage identity"
+        );
+        assert_ne!(
+            plain_with_same_roi.digest(),
+            dragged.digest(),
+            "the final render digest still separates the recipes"
+        );
+
+        let other_roi = plain.with_base_roi(Some([3, 2, 50, 40]));
+        assert_ne!(
+            plain_with_same_roi.stage_digest(crate::cache::CacheStage::Base),
+            other_roi.stage_digest(crate::cache::CacheStage::Base),
+            "same window size at a different offset is a different base"
+        );
+    }
+
+    #[test]
+    fn base_stage_digest_separates_source_actions_geometry_and_identity() {
+        let key = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "vc",
+            &EditRecipe::default(),
+            vec![],
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: 64,
+                height: 32,
+                format: "rgba8".into(),
+            },
+        )
+        .with_base_roi(Some([0, 0, 32, 32]));
+        // Changed repair artifacts composite into the base -> new identity.
+        assert_ne!(
+            key.stage_digest(crate::cache::CacheStage::Base),
+            key.clone()
+                .with_source_action_hashes(["blake3:repair-a".to_owned()])
+                .stage_digest(crate::cache::CacheStage::Base)
+        );
+        // A different source/decoder/pipeline/copy invalidates the base.
+        for mutate in [
+            |k: &mut RenderKey| k.source_content_hash = "other".into(),
+            |k: &mut RenderKey| k.decode_version = "other".into(),
+            |k: &mut RenderKey| k.pipeline_version = "other".into(),
+            |k: &mut RenderKey| k.virtual_copy_id = "other".into(),
+        ] {
+            let mut changed = key.clone();
+            mutate(&mut changed);
+            assert_ne!(
+                key.stage_digest(crate::cache::CacheStage::Base),
+                changed.stage_digest(crate::cache::CacheStage::Base)
+            );
+        }
+        // Frame geometry of the cropped base participates ...
+        let mut resized = key.clone();
+        resized.output.width = 48;
+        assert_ne!(
+            key.stage_digest(crate::cache::CacheStage::Base),
+            resized.stage_digest(crate::cache::CacheStage::Base)
+        );
+        // ... while output profile/format/export options stay render-only.
+        let mut rec2020 = key.clone();
+        rec2020.output.profile = "Rec2020".into();
+        rec2020.output.format = "png".into();
+        assert_eq!(
+            key.stage_digest(crate::cache::CacheStage::Base),
+            rec2020.stage_digest(crate::cache::CacheStage::Base)
+        );
+        assert_ne!(key.digest(), rec2020.digest());
+        let with_export = key
+            .clone()
+            .with_export_options(crate::ExportOptions::default());
+        assert_eq!(
+            key.stage_digest(crate::cache::CacheStage::Base),
+            with_export.stage_digest(crate::cache::CacheStage::Base)
+        );
+        // `None` ROI is reproducible and distinct from every attached ROI.
+        assert_eq!(
+            key.stage_digest(crate::cache::CacheStage::Base),
+            key.clone().stage_digest(crate::cache::CacheStage::Base)
         );
     }
 

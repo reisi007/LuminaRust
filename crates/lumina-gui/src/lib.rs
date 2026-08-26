@@ -22,10 +22,14 @@ use lumina_core::MaskPolicy;
 // REVIEW-GUI-WASM-FOLLOWUP: `export_image`/`ExportOptions` (Export module) and
 // `rasterize_prompt` (mask overlay) are only reachable on native.
 use lumina_core::{
-    analyze_tone, match_total_exposure_masked, render_frame, suggest_auto_tone, tone_fingerprint,
-    AutoToneConfig, ImageFileFormat, ImageFrame, MaskContext, MaskLayerResult, MaskPlane,
-    OutputSpec, RenderContext, RenderKey,
+    analyze_tone, match_total_exposure_masked, prepare_source_base, render_frame_from_base,
+    suggest_auto_tone, tone_fingerprint, AutoToneConfig, CacheStage, ImageFileFormat, ImageFrame,
+    MaskContext, MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache,
+    StageWork,
 };
+// PERF-FILMSTRIP only (native thumbnail worker); unused on wasm32.
+#[cfg(not(target_arch = "wasm32"))]
+use lumina_core::render_frame;
 #[cfg(not(target_arch = "wasm32"))]
 use lumina_core::{export_image, masks::rasterize_prompt, ExportOptions};
 use lumina_raw::RawError;
@@ -409,6 +413,19 @@ pub struct LuminaApp {
     /// Source downscaled to draft resolution, cached on load so draft renders
     /// never re-allocate during a slider drag (PERF-GUI-3 "zero alloc").
     draft_original: Option<ImageFrame>,
+    /// PERF-GUI-1: RAM cache of prepared base stages (`prepare_source_base`
+    /// output: post decode/source-actions/ROI-crop, pre-adjustment), keyed by
+    /// `CacheStage::Base` digests. Recipe-blind keys mean every slider change
+    /// reuses the cached demosaiced base and re-renders only the adjustment
+    /// stage downstream; a new source clears it in [`Self::apply_decoded_frame`].
+    base_stage_cache: StageFrameCache,
+    /// PERF-GUI-1: memoized blake3 content hash of `source_bytes`. Hashing the
+    /// whole RAW file per render tick was part of the old hot path; it is now
+    /// computed once per loaded source and invalidated with it.
+    source_hash_memo: Option<String>,
+    /// PERF-GUI-1: stage work counters of the last completed render
+    /// (diagnostics + cache-hit tests). `None` until the first staged render.
+    last_stage_work: Option<StageWork>,
     /// Long-edge cap (px) for the cached draft source (viewport resolution).
     draft_max_dim: u32,
     /// Timestamp (egui `ctx.input(|i| i.time)`) of the last frame that still
@@ -705,6 +722,9 @@ impl LuminaApp {
             thumbnails: ThumbnailManager::new(),
             preview_is_draft: false,
             draft_original: None,
+            base_stage_cache: StageFrameCache::new(BASE_STAGE_CACHE_MAX_BYTES),
+            source_hash_memo: None,
+            last_stage_work: None,
             draft_max_dim: 1280,
             last_edit_time: 0.0,
             preview_zoom: 1.0,
@@ -946,6 +966,24 @@ impl LuminaApp {
     }
     pub fn render_key(&self) -> Option<&RenderKey> {
         self.render_key.as_ref()
+    }
+
+    /// PERF-GUI-1: number of cached base-stage frames (diagnostics/tests).
+    pub fn base_stage_cache_len(&self) -> usize {
+        self.base_stage_cache.len()
+    }
+
+    /// PERF-GUI-1: drops every cached base-stage frame. Pure memory-pressure
+    /// hygiene — the next render rebuilds the base from the decoded source,
+    /// which changes no pixels (cache-miss is a performance event, never a
+    /// fallback).
+    pub fn clear_preview_stage_cache(&mut self) {
+        self.base_stage_cache.clear();
+    }
+
+    /// PERF-GUI-1: stage work counters of the last completed render.
+    pub fn last_stage_work(&self) -> Option<StageWork> {
+        self.last_stage_work
     }
     pub fn tone_analysis(&self) -> Option<lumina_core::ToneAnalysis> {
         self.tone_analysis
@@ -1858,6 +1896,12 @@ impl LuminaApp {
         self.recipe = EditRecipe::default();
         self.error = None;
         self.preview_is_draft = false;
+        // PERF-GUI-1: a new source identity invalidates every cached stage at
+        // once (the coarsest invalidation level of the stage DAG). Recipe
+        // changes never reach this point — they keep the base cache.
+        self.base_stage_cache.clear();
+        self.source_hash_memo = None;
+        self.last_stage_work = None;
         // PERF-GUI-3: cache a downscaled source for fast draft renders.
         self.draft_original = Some(frame.downscale(self.draft_max_dim));
         #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
@@ -1881,6 +1925,12 @@ impl LuminaApp {
             value
         );
         self.recipe.adjustments.insert(name.into(), value);
+        // PERF-GUI-1 stepwise invalidation: an adjustment is downstream of the
+        // base stage, so only the render identity and the derived tone panel
+        // are invalidated here. The cached demosaiced base
+        // (`base_stage_cache`) stays — its `CacheStage::Base` digest is
+        // recipe-blind, so the next render hits it and recomputes exactly the
+        // Adjustments(+geometry/masks) stages.
         self.render_key = None;
         self.tone_analysis = None;
         // Coalesce: the slider drag renders a draft live; the full render is
@@ -2175,6 +2225,17 @@ impl LuminaApp {
     /// whose source is downscaled and therefore misaligned with full-res masks).
     /// `roi` optionally crops the source to the visible region before the render
     /// (PERF-GUI-5).
+    ///
+    /// PERF-GUI-1 (staged invalidation): the pipeline runs as
+    /// `base → Adjustments → geometry → Masks`, and the **base stage** (post
+    /// decode/source-actions/ROI-crop, pre-adjustment) is cached in RAM keyed
+    /// by its recipe-blind [`CacheStage::Base`] digest. A slider change only
+    /// nulls the final-render identity (`set_adjustment`/`mark_dirty`), so the
+    /// next `render_from` hits that entry and re-executes exactly the stages
+    /// downstream of it — the crop, the source-action head and the full-file
+    /// blake3 hash are skipped on every interactive tick. A cache miss simply
+    /// rebuilds the base from the decoded source (performance event, never a
+    /// fallback); a new source clears the cache in [`Self::apply_decoded_frame`].
     fn render_from(
         &mut self,
         source: &ImageFrame,
@@ -2198,63 +2259,15 @@ impl LuminaApp {
             let h = h.min(source.height - y);
             [x, y, w, h]
         });
-        let cropped = match effective_roi {
-            Some([x, y, w, h]) => source.crop_region(x, y, w, h).ok(),
-            None => None,
-        };
-        let crop_applied = cropped.is_some();
-        let source = match &cropped {
-            Some(f) => f,
-            None => {
-                if roi.is_some() {
-                    warn!(
-                        "ROI crop {roi:?} failed; rendering the full frame and clearing preview_roi"
-                    );
-                }
-                source
-            }
-        };
-        // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
-        // (native only).  Missing or unreadable zdata is not a hard error:
-        // affected layers are reported through the `MaskPolicy::Warn` path.
-        #[cfg(not(target_arch = "wasm32"))]
-        let masks_context = if with_masks {
-            let planes = self.load_mask_planes();
-            match &self.document {
-                Some(document) => document
-                    .virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-                    .map(|_| MaskContext {
-                        copies: &document.virtual_copies,
-                        active_copy_id: &self.virtual_copy_id,
-                        planes,
-                        policy: MaskPolicy::Warn,
-                    }),
-                None => None,
-            }
+        // Identity inputs shared by the base-stage key and the final render key.
+        // The source hash is memoized per loaded file (PERF-GUI-1): hashing the
+        // whole RAW file used to run on EVERY preview tick.
+        let source_hash = self.resolved_source_hash();
+        let decode_version = if self.source_is_raw {
+            lumina_raw::libraw_decode_version()
         } else {
-            None
+            env!("CARGO_PKG_VERSION").into()
         };
-        #[cfg(target_arch = "wasm32")]
-        let masks_context: Option<MaskContext<'_>> = None;
-        let output = render_frame(
-            source,
-            &RenderContext {
-                recipe: &self.recipe,
-                camera_white_balance: self.camera_white_balance,
-                source_actions: &[],
-                masks: masks_context,
-                lensfun: None,
-            },
-        )?;
-        let preview = output.frame;
-        let mask_warnings = output.mask_warnings;
-        let source_hash = self
-            .source_bytes
-            .as_ref()
-            .map(|bytes| format!("blake3:{}", blake3::hash(bytes).to_hex()))
-            .unwrap_or_else(|| "blake3:unknown".into());
         let copy_id = {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -2288,6 +2301,113 @@ impl LuminaApp {
                 Vec::new()
             }
         };
+        // Base-stage identity (recipe-blind): source identity + decoder +
+        // virtual copy + ROI window + resulting frame geometry. Two recipes
+        // that differ only in exposure/color share this digest, which is what
+        // makes a slider drag hit the cached demosaiced base.
+        let (base_w, base_h) = match effective_roi {
+            Some([_, _, w, h]) => (w, h),
+            None => (source.width, source.height),
+        };
+        let base_digest = RenderKey::new(
+            source_hash.clone(),
+            decode_version.clone(),
+            "raster-mvp-1",
+            copy_id.clone(),
+            &EditRecipe::default(),
+            Vec::new(),
+            OutputSpec {
+                profile: "sRGB".into(),
+                width: base_w,
+                height: base_h,
+                format: "rgba8".into(),
+            },
+        )
+        .with_base_roi(effective_roi)
+        .stage_digest(CacheStage::Base);
+
+        // ---- Base stage (cacheable head of the pipeline) ----
+        let mut work = StageWork::default();
+        let mut crop_failed = false;
+        let base_frame = match self.base_stage_cache.get(&base_digest) {
+            Some(hit) => {
+                work.base_cache_hit = true;
+                trace!(
+                    "GUI render: base stage cache HIT ({base_w}x{base_h}, roi={effective_roi:?})"
+                );
+                hit
+            }
+            None => {
+                let cropped = match effective_roi {
+                    Some([x, y, w, h]) => source.crop_region(x, y, w, h).ok(),
+                    None => None,
+                };
+                if effective_roi.is_some() && cropped.is_none() {
+                    crop_failed = true;
+                    warn!(
+                        "ROI crop {roi:?} failed; rendering the full frame and clearing preview_roi"
+                    );
+                }
+                let cropped_source: &ImageFrame = match &cropped {
+                    Some(f) => f,
+                    None => source,
+                };
+                let prepared = prepare_source_base(cropped_source, &[], &mut work)?;
+                // Cache ONLY entries whose bytes match their digest identity
+                // exactly. A (defensively handled) failed ROI crop fell back
+                // to the full frame; caching it under the requested window's
+                // key could later serve mismatched geometry — it stays
+                // uncached instead (no silent fallback into the cache).
+                if !crop_failed {
+                    self.base_stage_cache
+                        .insert(base_digest.clone(), prepared.clone());
+                }
+                work.base_cache_hit = false;
+                trace!(
+                    "GUI render: base stage cache MISS — rebuilt ({base_w}x{base_h}, roi={effective_roi:?})"
+                );
+                prepared
+            }
+        };
+
+        // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
+        // (native only).  Missing or unreadable zdata is not a hard error:
+        // affected layers are reported through the `MaskPolicy::Warn` path.
+        #[cfg(not(target_arch = "wasm32"))]
+        let masks_context = if with_masks {
+            let planes = self.load_mask_planes();
+            match &self.document {
+                Some(document) => document
+                    .virtual_copies
+                    .iter()
+                    .find(|c| c.id == self.virtual_copy_id)
+                    .map(|_| MaskContext {
+                        copies: &document.virtual_copies,
+                        active_copy_id: &self.virtual_copy_id,
+                        planes,
+                        policy: MaskPolicy::Warn,
+                    }),
+                None => None,
+            }
+        } else {
+            None
+        };
+        #[cfg(target_arch = "wasm32")]
+        let masks_context: Option<MaskContext<'_>> = None;
+        // ---- Downstream stages: Adjustments → geometry → Masks ----
+        let output = render_frame_from_base(
+            base_frame,
+            &RenderContext {
+                recipe: &self.recipe,
+                camera_white_balance: self.camera_white_balance,
+                source_actions: &[],
+                masks: masks_context,
+                lensfun: None,
+            },
+            &mut work,
+        )?;
+        let preview = output.frame;
+        let mask_warnings = output.mask_warnings;
         // REVIEW-CORE-DIGEST-WIRING: this preview key deliberately stays on the
         // neutral `RenderKey::new` defaults instead of attaching the `with_*`
         // builders, because neither builder input exists at this site:
@@ -2305,11 +2425,7 @@ impl LuminaApp {
         //   that would claim repair content this frame does not contain.
         self.render_key = Some(RenderKey::new(
             source_hash,
-            if self.source_is_raw {
-                lumina_raw::libraw_decode_version()
-            } else {
-                env!("CARGO_PKG_VERSION").into()
-            },
+            decode_version,
             "raster-mvp-1",
             copy_id,
             &self.recipe,
@@ -2329,9 +2445,14 @@ impl LuminaApp {
         // the crop actually succeeded — a failed crop fell back to the full
         // frame, and recording the rejected request would corrupt every
         // subsequent coordinate mapping (REVIEW-GUI-N6).
-        self.preview_roi = if crop_applied { effective_roi } else { None };
+        self.preview_roi = if effective_roi.is_some() && !crop_failed {
+            effective_roi
+        } else {
+            None
+        };
         self.render_mask_layers = output.mask_layers;
         self.error = None;
+        self.last_stage_work = Some(work);
         self.status = if !mask_warnings.is_empty() {
             let layers: Vec<&str> = mask_warnings
                 .iter()
@@ -2346,6 +2467,23 @@ impl LuminaApp {
             Str::PreviewCurrent.t().to_string()
         };
         Ok(())
+    }
+
+    /// PERF-GUI-1: content hash of the currently loaded source bytes, computed
+    /// at most once per loaded file. The memo is cleared together with
+    /// `source_bytes` in [`Self::apply_decoded_frame`]; callers therefore never
+    /// re-hash the (potentially ~50 MB) RAW file per interactive render tick.
+    fn resolved_source_hash(&mut self) -> String {
+        if let Some(hash) = &self.source_hash_memo {
+            return hash.clone();
+        }
+        let hash = self
+            .source_bytes
+            .as_ref()
+            .map(|bytes| format!("blake3:{}", blake3::hash(bytes).to_hex()))
+            .unwrap_or_else(|| "blake3:unknown".into());
+        self.source_hash_memo = Some(hash.clone());
+        hash
     }
 
     /// Loads mask artifact planes from the optional `.lumina.zdata` sidecar for
@@ -3538,6 +3676,13 @@ impl LuminaApp {
     }
 
     fn mark_dirty(&mut self) {
+        // PERF-GUI-1 stepwise invalidation: like `set_adjustment`, this drops
+        // only the final-render identity and its derived panel state. The
+        // base-stage cache survives — its keys cover source/decode/ROI/source-
+        // action identity and are recipe-blind, so geometry/optics/mask edits
+        // reuse the cached base as well (they run downstream of it in the
+        // documented pipeline order). A new SOURCE clears the cache in
+        // `apply_decoded_frame`; nothing here can ever serve stale pixels.
         self.render_key = None;
         self.tone_analysis = None;
         self.error = None;
@@ -5694,6 +5839,17 @@ const FOLDER_SCAN_DEPTH: usize = 3;
 /// larger values trade render cost for smoother panning.
 const PREVIEW_ROI_MARGIN: f64 = 1.3;
 
+/// PERF-GUI-1: byte budget of the in-RAM base-stage cache
+/// ([`lumina_core::StageFrameCache`]). Holds prepared, pre-adjustment frames
+/// (post decode/source-actions/ROI-crop) so an exposure/color slider change
+/// re-renders only the adjustment stage instead of re-running the crop +
+/// source-action head and re-hashing the whole source file per tick. Native
+/// desktop gets a generous budget; wasm32 a small one (browser heap).
+#[cfg(not(target_arch = "wasm32"))]
+const BASE_STAGE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
+#[cfg(target_arch = "wasm32")]
+const BASE_STAGE_CACHE_MAX_BYTES: usize = 48 * 1024 * 1024;
+
 /// Number of RAW files under `dir`, descending at most `remaining_depth`
 /// directory levels (depth 0 scans nothing). Pure read-only helper used by the
 /// Library folder tree.
@@ -6355,6 +6511,166 @@ mod tests {
         app.render().unwrap();
         assert!(app.render_key().is_some());
         assert_eq!(app.tone_analysis().unwrap().sample_count, 2);
+    }
+
+    // ---- PERF-GUI-1: staged base cache (hit/miss, stepwise invalidation,
+    // pixel identity) ----
+
+    /// Deterministic RGBA gradient PNG so the render stages exercise real
+    /// per-pixel math over more than a handful of samples.
+    fn gradient_png(width: u32, height: u32) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let r = ((x * 255) / width) as u8;
+                let g = ((y * 255) / height) as u8;
+                let b = ((x + y) % 256) as u8;
+                pixels.extend_from_slice(&[r, g, b, 255]);
+            }
+        }
+        ImageFrame::new(width, height, pixels)
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap()
+    }
+
+    #[test]
+    fn exposure_change_hits_base_cache_and_stays_pixel_identical_to_cold_render() {
+        let mut app = new_app();
+        app.load_bytes(gradient_png(16, 12), "grad.png").unwrap();
+
+        // `load_bytes` renders once internally, so the base stage is warm:
+        // every recipe-only change below must be a pure downstream re-render.
+        assert_eq!(app.base_stage_cache_len(), 1);
+        app.set_adjustment("exposure", 1.0);
+        app.render().unwrap();
+        let first = app.last_stage_work().expect("stage work recorded");
+        assert!(
+            first.base_cache_hit,
+            "a pure exposure change must reuse the base built at load time"
+        );
+        assert_eq!(first.adjustments_passes, 1);
+
+        // A further drag tick keeps hitting without growing the cache.
+        app.set_adjustment("exposure", -0.5);
+        app.render().unwrap();
+        let warm = app.last_stage_work().expect("stage work recorded");
+        assert!(warm.base_cache_hit);
+        assert_eq!(warm.adjustments_passes, 1);
+        assert_eq!(
+            app.base_stage_cache_len(),
+            1,
+            "recipe-only changes must not create new base entries"
+        );
+        let warm_pixels = app.preview().unwrap().pixels.clone();
+
+        // Pixel identity proof: forcing the cold path (cache cleared) for the
+        // same recipe reproduces the warm output byte-for-byte.
+        app.clear_preview_stage_cache();
+        app.render().unwrap();
+        let forced_cold = app.last_stage_work().unwrap();
+        assert!(!forced_cold.base_cache_hit);
+        assert_eq!(
+            warm_pixels,
+            app.preview().unwrap().pixels,
+            "the base-stage shortcut must not change a single pixel"
+        );
+    }
+
+    #[test]
+    fn color_change_reuses_base_while_geometry_change_keeps_it_too() {
+        let mut app = new_app();
+        app.load_bytes(gradient_png(16, 12), "grad.png").unwrap();
+        app.set_adjustment("wb_temperature", 7000.0);
+        app.set_adjustment("saturation", 0.3);
+        app.render().unwrap();
+        assert!(app.last_stage_work().unwrap().base_cache_hit);
+
+        // A further WB/color tick is an adjustment like exposure: base stays.
+        app.set_adjustment("wb_tint", -0.2);
+        app.render().unwrap();
+        let color_tick = app.last_stage_work().unwrap();
+        assert!(color_tick.base_cache_hit);
+        assert_eq!(color_tick.adjustments_passes, 1);
+
+        // Geometry runs downstream of the base in the documented order, so it
+        // also reuses the cached base while invalidating the final render.
+        app.recipe.geometry = Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 90.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        app.mark_dirty();
+        app.render().unwrap();
+        let geometry_tick = app.last_stage_work().unwrap();
+        assert!(geometry_tick.base_cache_hit);
+        assert_eq!(app.base_stage_cache_len(), 1);
+    }
+
+    #[test]
+    fn roi_changes_get_separate_base_entries() {
+        let mut app = new_app();
+        app.load_bytes(gradient_png(16, 12), "grad.png").unwrap();
+        // The load-time render already populated the full-frame entry.
+        assert_eq!(app.base_stage_cache_len(), 1);
+
+        // A zoom ROI is part of the base identity → its own entry.
+        app.render_full([800, 600], Some([2, 2, 8, 6])).unwrap();
+        assert_eq!(app.base_stage_cache_len(), 2);
+        assert!(!app.last_stage_work().unwrap().base_cache_hit);
+
+        // The same window hits its entry without growing the cache.
+        app.render_full([800, 600], Some([2, 2, 8, 6])).unwrap();
+        assert_eq!(app.base_stage_cache_len(), 2);
+        assert!(app.last_stage_work().unwrap().base_cache_hit);
+
+        // A different offset with equal size is a different base window.
+        app.render_full([800, 600], Some([3, 2, 8, 6])).unwrap();
+        assert_eq!(app.base_stage_cache_len(), 3);
+    }
+
+    #[test]
+    fn draft_drag_ticks_share_the_base_stage_with_full_renders() {
+        let mut app = new_app();
+        app.load_bytes(gradient_png(64, 48), "grad.png").unwrap();
+        assert_eq!(app.base_stage_cache_len(), 1);
+
+        // Slider drag: draft renders use the same (sub-draft-cap) source, so
+        // the prepared base is identical to the full one and must be shared —
+        // the first tick already hits the entry built by the load render.
+        app.set_adjustment("exposure", 0.25);
+        app.render_draft([800, 600], None).unwrap();
+        let first_tick = app.last_stage_work().unwrap();
+        assert!(first_tick.base_cache_hit);
+        assert_eq!(app.base_stage_cache_len(), 1);
+
+        app.set_adjustment("exposure", 0.75);
+        app.render_draft([800, 600], None).unwrap();
+        assert!(app.last_stage_work().unwrap().base_cache_hit);
+
+        // Committing the drag (full-quality render) keeps hitting the same
+        // base instead of rebuilding it.
+        app.render().unwrap();
+        assert!(app.last_stage_work().unwrap().base_cache_hit);
+        assert_eq!(app.base_stage_cache_len(), 1);
+    }
+
+    #[test]
+    fn loading_a_new_source_clears_the_base_stage_cache() {
+        let mut app = new_app();
+        app.load_bytes(gradient_png(16, 12), "a.png").unwrap();
+        app.render_full([800, 600], Some([2, 2, 8, 6])).unwrap();
+        assert_eq!(app.base_stage_cache_len(), 2);
+
+        // A new source identity invalidates every cached stage at once.
+        app.load_bytes(gradient_png(12, 16), "b.png").unwrap();
+        assert_eq!(
+            app.base_stage_cache_len(),
+            1,
+            "the old source entries are gone; only b's own base remains"
+        );
     }
 
     /// REVIEW-CORE-DIGEST-WIRING: pins the contract of the single RenderKey

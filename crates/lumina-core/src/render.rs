@@ -93,6 +93,30 @@ pub struct RenderOutput {
     pub mask_warnings: Vec<String>,
 }
 
+/// PERF-GUI-1: stage work accounting for the staged render entry points.
+///
+/// Counters are incremented only when a stage actually executes, so a caller
+/// can prove that an adjustment-only change reused the prepared base stage
+/// (cache hit ⇒ no source-action pass, one adjustment pass). `base_cache_hit`
+/// is caller-supplied bookkeeping: set it to `true` before calling
+/// [`render_frame_from_base`] when the base frame came from a warm
+/// [`crate::StageFrameCache`] entry instead of being rebuilt from the decoded
+/// source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StageWork {
+    pub base_cache_hit: bool,
+    /// Number of source-action artifacts composited into a base frame by
+    /// [`prepare_source_base`] during this call chain (0 on a base cache hit).
+    pub source_action_artifacts_applied: u32,
+    /// Number of adjustment passes (white balance + tone LUT) executed.
+    pub adjustments_passes: u32,
+    /// Number of geometry passes executed (`apply_geometry` runs
+    /// unconditionally, mirroring [`render_frame`]).
+    pub geometry_passes: u32,
+    /// Number of mask layer evaluations attempted.
+    pub mask_layers_evaluated: u32,
+}
+
 /// Applies source actions, the recipe (adjustments incl. geometry/crop) and
 /// the mask stage in the documented order.
 ///
@@ -114,19 +138,62 @@ pub struct RenderOutput {
 /// `MaskGraph` evaluation (including Union/Intersect/Subtract/Invert) must
 /// succeed.  `MaskPolicy::Strict` turns each failure into
 /// [`CoreError::MaskUnavailable`] / [`CoreError::MaskEvaluation`];
-/// `MaskPolicy::Warn` skips the layer and records a warning instead.  Valid
-/// planes are bilinearly resampled to the current frame dimensions
-/// (coordinate alignment between mask and frame is a documented limit —
-/// `geometry_context` is not used for alignment yet).  A missing active copy
-/// or an empty `mask_layers` list leaves the stage identical and produces no
-/// warnings.
+/// [`MaskPolicy::Warn`](crate::MaskPolicy) skips the layer and records a
+/// warning instead.  Valid planes are bilinearly resampled to the current
+/// frame dimensions (coordinate alignment between mask and frame is a
+/// documented limit — `geometry_context` is not used for alignment yet).  A
+/// missing active copy or an empty `mask_layers` list leaves the stage
+/// identical and produces no warnings.
+///
+/// Implementation note (PERF-GUI-1): this is exactly
+/// [`prepare_source_base`] followed by [`render_frame_from_base`] with a
+/// discarded [`StageWork`]; callers that need stage accounting or want to
+/// reuse a cached base stage call those two directly.
 pub fn render_frame(
     frame: &ImageFrame,
     context: &RenderContext<'_>,
 ) -> Result<RenderOutput, CoreError> {
-    let mut frame = frame.clone();
-    apply_source_actions(&mut frame, context.source_actions)?;
-    frame.apply_recipe_with_white_balance(context.recipe, context.camera_white_balance)?;
+    let mut work = StageWork::default();
+    let base = prepare_source_base(frame, context.source_actions, &mut work)?;
+    render_frame_from_base(base, context, &mut work)
+}
+
+/// PERF-GUI-1: builds the cacheable base stage from a decoded source frame.
+///
+/// The base stage is the pipeline cut between `Decode`/`SourceActions` and
+/// `Adjustments`: it clones `source` and composites every source-action
+/// artifact, producing exactly the frame that [`render_frame`] would feed into
+/// its adjustment pass. Cache it keyed by
+/// [`crate::pipeline::RenderKey::stage_digest`] with
+/// [`crate::cache::CacheStage::Base`] (recipe-blind identity) so interactive
+/// exposure/color changes reuse it and re-render only the downstream stages.
+pub fn prepare_source_base(
+    source: &ImageFrame,
+    actions: &[SourceActionArtifact],
+    work: &mut StageWork,
+) -> Result<ImageFrame, CoreError> {
+    let mut base = source.clone();
+    apply_source_actions(&mut base, actions)?;
+    work.source_action_artifacts_applied += actions.len() as u32;
+    Ok(base)
+}
+
+/// PERF-GUI-1: continues a render from an already-prepared base frame.
+///
+/// Executes exactly the same stages in the same order as [`render_frame`]
+/// after its source-action head — `Adjustments` (white balance before tonal
+/// values) → geometry/lens/perspective/crop → mask-layer evaluation — so for a
+/// base produced by [`prepare_source_base`] on the same inputs the output is
+/// **byte-identical** to [`render_frame`] (proven by unit tests). The owned
+/// `base` is consumed and mutated in place; no extra full-frame clone happens
+/// on this path.
+pub fn render_frame_from_base(
+    mut base: ImageFrame,
+    context: &RenderContext<'_>,
+    work: &mut StageWork,
+) -> Result<RenderOutput, CoreError> {
+    base.apply_recipe_with_white_balance(context.recipe, context.camera_white_balance)?;
+    work.adjustments_passes += 1;
 
     // F-098-N1: geometry/distortion/vignette/perspective/crop/rotation are
     // always applied; a Lensfun corrector (when present) overrides the manual
@@ -135,7 +202,7 @@ pub fn render_frame(
     #[cfg(feature = "lensfun")]
     {
         let corrector = context.lensfun.map(|LensfunCorrectorRef(c)| c);
-        frame.apply_geometry(
+        base.apply_geometry(
             context.recipe.geometry.as_ref(),
             context.recipe.lens_correction.as_ref(),
             context.recipe.perspective.as_ref(),
@@ -144,19 +211,39 @@ pub fn render_frame(
     }
     #[cfg(not(feature = "lensfun"))]
     {
-        frame.apply_geometry(
+        base.apply_geometry(
             context.recipe.geometry.as_ref(),
             context.recipe.lens_correction.as_ref(),
             context.recipe.perspective.as_ref(),
         )?;
     }
+    work.geometry_passes += 1;
 
+    let (mask_layers, mask_warnings) =
+        evaluate_mask_stage(context.masks.as_ref(), base.width, base.height, work)?;
+
+    Ok(RenderOutput {
+        frame: base,
+        mask_layers,
+        mask_warnings,
+    })
+}
+
+/// Shared mask-stage evaluation used by both render entry points (verbatim
+/// code motion from the original [`render_frame`] body).
+fn evaluate_mask_stage(
+    masks: Option<&MaskContext<'_>>,
+    frame_width: u32,
+    frame_height: u32,
+    work: &mut StageWork,
+) -> Result<(Vec<MaskLayerResult>, Vec<String>), CoreError> {
     let mut mask_layers = Vec::new();
     let mut mask_warnings = Vec::new();
-    if let Some(masks) = &context.masks {
+    if let Some(masks) = masks {
         if let Some(copy) = masks.copies.iter().find(|c| c.id == masks.active_copy_id) {
             for layer in &copy.mask_layers {
-                match evaluate_layer(masks, layer, frame.width, frame.height) {
+                work.mask_layers_evaluated += 1;
+                match evaluate_layer(masks, layer, frame_width, frame_height) {
                     Ok(plane) => {
                         mask_layers.push(MaskLayerResult {
                             layer_id: layer.id.clone(),
@@ -198,11 +285,7 @@ pub fn render_frame(
         }
     }
 
-    Ok(RenderOutput {
-        frame,
-        mask_layers,
-        mask_warnings,
-    })
+    Ok((mask_layers, mask_warnings))
 }
 
 enum LayerFailure {
@@ -1125,6 +1208,131 @@ mod tests {
         assert_eq!(with_masks.frame, without_masks.frame);
         assert!(with_masks.mask_layers.is_empty());
         assert!(with_masks.mask_warnings.is_empty());
+    }
+
+    // ---- PERF-GUI-1: staged rendering ----
+
+    #[test]
+    fn staged_render_from_prepared_base_is_byte_identical() {
+        let frame = ImageFrame::new(
+            3,
+            2,
+            vec![
+                10, 20, 30, 255, 200, 180, 160, 7, 90, 90, 90, 255, 0, 128, 255, 128, 255, 255, 0,
+                255, 40, 40, 40, 255,
+            ],
+        )
+        .unwrap();
+        let recipe = EditRecipe {
+            adjustments: BTreeMap::from([
+                ("exposure".into(), 0.6),
+                ("contrast".into(), -0.25),
+                ("wb_temperature".into(), 4800.0),
+                ("vibrance".into(), 0.3),
+            ]),
+            geometry: Some(lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Aspect {
+                    preset: lumina_sidecar::AspectPreset::OneToOne,
+                }),
+                rotation_degrees: 90.0,
+                mirror_horizontal: true,
+                mirror_vertical: false,
+            }),
+            ..Default::default()
+        };
+        let action = SourceActionArtifact {
+            region: MaskPlane::new(3, 2, vec![65535, 0, 32768, 0, 65535, 40000]).unwrap(),
+            replacement: ImageFrame::new(3, 2, vec![1; 24]).unwrap(),
+        };
+        let context = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: Some([1.1, 1.0, 0.95, 1.0]),
+            source_actions: &[action],
+            lensfun: None,
+            masks: None,
+        };
+
+        let reference = render_frame(&frame, &context).unwrap();
+        let mut work = StageWork::default();
+        let base = prepare_source_base(&frame, context.source_actions, &mut work).unwrap();
+        assert_eq!(work.source_action_artifacts_applied, 1);
+        let staged = render_frame_from_base(base, &context, &mut work).unwrap();
+
+        assert_eq!(
+            reference.frame.pixels, staged.frame.pixels,
+            "the staged path must produce byte-identical pixels to render_frame"
+        );
+        assert_eq!((staged.frame.width, staged.frame.height), (2, 2));
+        assert_eq!(work.adjustments_passes, 1);
+        assert_eq!(work.geometry_passes, 1);
+        // The adjustment/geometry stages ran downstream of the base; the
+        // source-action head did NOT run again inside render_frame_from_base.
+        assert_eq!(work.source_action_artifacts_applied, 1);
+    }
+
+    #[test]
+    fn base_cache_hit_skips_source_actions_and_runs_adjustments_once() {
+        // The acceptance proof for PERF-GUI-1 at core level: a warm base
+        // (prepared once) continues with exactly one adjustment pass and no
+        // source-action work — and still yields the same pixels as a cold
+        // full render.
+        let frame = ImageFrame::new(
+            4,
+            1,
+            vec![
+                100, 110, 120, 255, 20, 30, 40, 255, 250, 240, 230, 255, 5, 5, 5, 9,
+            ],
+        )
+        .unwrap();
+        fn context_for(recipe: &EditRecipe) -> RenderContext<'_> {
+            RenderContext {
+                recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: None,
+            }
+        }
+        let recipe_a = EditRecipe {
+            adjustments: BTreeMap::from([("exposure".into(), -0.8), ("shadows".into(), 0.5)]),
+            ..Default::default()
+        };
+        let recipe_b = EditRecipe {
+            adjustments: BTreeMap::from([("exposure".into(), 0.2), ("shadows".into(), 0.5)]),
+            ..Default::default()
+        };
+
+        // Cold: build the base once (conceptually cached afterwards).
+        let mut cold = StageWork::default();
+        let base = prepare_source_base(&frame, &[], &mut cold).unwrap();
+        let cold_output =
+            render_frame_from_base(base.clone(), &context_for(&recipe_a), &mut cold).unwrap();
+        assert!(!cold.base_cache_hit);
+        assert_eq!(cold.source_action_artifacts_applied, 0);
+        assert_eq!(cold.adjustments_passes, 1);
+
+        // Warm hit: the SAME cached base renders again with a changed
+        // exposure; only the downstream stages may execute.
+        let mut warm = StageWork {
+            base_cache_hit: true,
+            ..Default::default()
+        };
+        let warm_output = render_frame_from_base(base, &context_for(&recipe_b), &mut warm).unwrap();
+        assert!(warm.base_cache_hit);
+        assert_eq!(warm.source_action_artifacts_applied, 0);
+        assert_eq!(warm.adjustments_passes, 1);
+        assert_ne!(
+            cold_output.frame.pixels, warm_output.frame.pixels,
+            "sanity: the exposure change must be visible"
+        );
+
+        // Control: the warm output equals a fresh full render of the same
+        // recipe — the cache shortcut never changes pixels.
+        assert_eq!(
+            render_frame(&frame, &context_for(&recipe_b)).unwrap().frame,
+            warm_output.frame
+        );
     }
 
     // ---- backward compatibility ----

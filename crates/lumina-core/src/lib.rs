@@ -17,6 +17,7 @@ pub mod masks;
 pub mod memory;
 pub mod pipeline;
 pub mod render;
+pub mod stage_cache;
 pub mod tone;
 #[cfg(test)]
 mod tone_props;
@@ -36,9 +37,10 @@ pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use memory::{MemoryBudget, MemoryBudgetError};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
 pub use render::{
-    render_frame, LensfunCorrectorRef, MaskContext, MaskLayerResult, MaskPolicy, RenderContext,
-    RenderOutput, SourceActionArtifact,
+    prepare_source_base, render_frame, render_frame_from_base, LensfunCorrectorRef, MaskContext,
+    MaskLayerResult, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, StageWork,
 };
+pub use stage_cache::StageFrameCache;
 pub use tone::{
     analyze_tone, match_total_exposure, match_total_exposure_masked, suggest_auto_tone,
     tone_fingerprint, AutoToneConfig, AutoToneResult, ToneAnalysis,
