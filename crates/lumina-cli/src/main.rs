@@ -1336,8 +1336,10 @@ fn load_persisted_mask_planes(
 ///   cache). Acceptable for the MVP, but repeated `process`/`render` invocations
 ///   each re-load the DB.
 /// * `lens_name` is intentionally `None`: the camera body alone selects a lens
-///   profile instead of risking a spurious match on an EXIF lens string. (The
-///   LibRaw decode path in this build does not populate `RawMetadata.lens`.)
+///   profile instead of risking a spurious match on an EXIF lens string. (LibRaw
+///   now populates `RawMetadata.lens` from EXIF-LensModel/Makernote, but the
+///   corrector deliberately uses body-match via Lensfun `GuessParameters` rather
+///   than the EXIF lens name — see REVIEW-RAW-N2.)
 /// * CA (transverse chromatic aberration) stays manual — documented F-098-N1
 ///   limit.
 ///
