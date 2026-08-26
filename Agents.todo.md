@@ -71,8 +71,8 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-25:
-84 offene Tasks — Block A: 80, Block B: 3, Block C: 1.
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26:
+25 offene Tasks — Block A: 23, Block B: 1, Block C: 1.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -106,12 +106,9 @@ Erstes vollständiges Review des gesamten bestehenden Codes (alle 10 Crates,
 dieser Datei entfernt; Code-Verifikationslauf 2026-08-25 bestätigt den unten
 stehenden Restbestand.
 
-
-
-
 ### PRIO: mittel
 
-**Review-Befunde Full-Repo-Review (2026-08-23) — Mittel**
+**Performance-Verfeinerung — Lightroom-artige interaktive Geschwindigkeit**
 
 
 
@@ -180,8 +177,6 @@ implementiert und aus dieser Liste entfernt; offen:
       glow vs wgpu).
 
 **Phase 11: Qualität, Performance und Release**
-
-
 
 ### PRIO: niedrig
 
