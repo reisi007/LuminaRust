@@ -7,6 +7,10 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod filmstrip;
 mod i18n;
+// F-009: file-backed user presets (`<name>.lumina-preset.json`) are a native
+// capability; wasm32 keeps the in-memory create/apply flow only.
+#[cfg(not(target_arch = "wasm32"))]
+mod presets;
 mod slider;
 mod theme;
 #[cfg(not(target_arch = "wasm32"))]
@@ -401,6 +405,15 @@ pub struct LuminaApp {
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
+    /// F-009: user-global presets directory; `None` means the platform config
+    /// base could not be determined and file presets are shown as unavailable
+    /// (no silent fallback directory).
+    #[cfg(not(target_arch = "wasm32"))]
+    presets_dir: Option<std::path::PathBuf>,
+    /// F-009: current snapshot of the presets directory. Failed files stay in
+    /// the list with their error text instead of being skipped silently.
+    #[cfg(not(target_arch = "wasm32"))]
+    preset_entries: Vec<presets::PresetEntry>,
     idle_queue: IdleQueue,
     /// PERF-FILMSTRIP: dedicated background thread pool for filmstrip
     /// thumbnails. `thumbnail_tx` enqueues jobs (unbounded mpsc, no capacity
@@ -848,6 +861,15 @@ impl LuminaApp {
                 ("shadows".into(), false),
             ]),
             preset_relative_exposure: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            presets_dir: presets::default_presets_dir(),
+            // F-009: initial directory scan so saved presets survive restarts.
+            // A scan error surfaces through the entry list, never silently.
+            #[cfg(not(target_arch = "wasm32"))]
+            preset_entries: presets::default_presets_dir()
+                .as_deref()
+                .map(presets::scan_presets_dir)
+                .unwrap_or_default(),
             idle_queue: IdleQueue::new(32),
             #[cfg(not(target_arch = "wasm32"))]
             thumbnail_tx,
@@ -5431,30 +5453,17 @@ impl LuminaApp {
         );
     }
 
-    /// Lightroom-style Presets section: presets saved in the sidecar document
-    /// (click to apply, hover highlight via `selectable_label`) with the
-    /// create-preset flow consolidated below the list.
+    /// Lightroom-style Presets section (F-009): the file-backed preset list
+    /// from the user-global presets directory (`<name>.lumina-preset.json`,
+    /// click to apply, failing files stay visible with their error text), the
+    /// save-to-file action, and the in-memory create/apply flow for the
+    /// current field selection.
     fn draw_presets_section(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::PresetsSection.t(), |ui| {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Clone to end the shared borrow before `apply_preset` needs
-                // `&mut self`.
-                let document = self.document.clone();
-                if let Some(document) = document {
-                    if document.presets.is_empty() {
-                        ui.label(Str::NoPresets.t());
-                    }
-                    for preset in &document.presets {
-                        if ui.selectable_label(false, &preset.name).clicked() {
-                            trace!("GUI interaction: panel preset apply {}", preset.id);
-                            if let Err(error) = self.apply_preset(preset) {
-                                self.show_error(error);
-                            }
-                        }
-                    }
-                    ui.separator();
-                }
+                self.draw_preset_file_list(ui);
+                ui.separator();
             }
             ui.text_edit_singleline(&mut self.preset_name);
             for field in ["exposure", "contrast", "highlights", "shadows"] {
@@ -5474,7 +5483,89 @@ impl LuminaApp {
                     Err(error) => self.show_error(error),
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            if ui.button(Str::SavePresetFile.t()).clicked() {
+                match self.save_current_selection_as_preset_file() {
+                    Ok(path) => {
+                        trace!("GUI interaction: saved preset file {}", path.display());
+                        self.status = Str::PresetSaved.format_arg(&path.display().to_string());
+                    }
+                    Err(error) => self.show_error(error),
+                }
+            }
         });
+    }
+
+    /// F-009: renders the file-backed preset list of `self.preset_entries`.
+    /// The folder is shown so the storage location stays visible; every entry
+    /// that failed validation is rendered with its error instead of being
+    /// skipped silently. Entries are cloned first so clicking can borrow
+    /// `self` mutably for [`Self::apply_preset`].
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_preset_file_list(&mut self, ui: &mut egui::Ui) {
+        let Some(directory) = self.presets_dir.clone() else {
+            ui.label(Str::PresetsUnavailable.t());
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label(Str::PresetsFolder.t());
+            ui.monospace(directory.display().to_string());
+        });
+        if ui.button(Str::Refresh.t()).clicked() {
+            self.reload_preset_entries();
+        }
+        if self.preset_entries.is_empty() {
+            ui.label(Str::NoPresets.t());
+            return;
+        }
+        let entries = self.preset_entries.clone();
+        for entry in &entries {
+            match entry {
+                presets::PresetEntry::Available { preset, .. } => {
+                    if ui.selectable_label(false, &preset.name).clicked() {
+                        trace!("GUI interaction: apply file preset {}", preset.name);
+                        match self.apply_preset(preset) {
+                            Ok(()) => self.status = Str::PresetApplied.format_arg(&preset.name),
+                            Err(error) => self.show_error(error),
+                        }
+                    }
+                }
+                presets::PresetEntry::Failed { path, error } => {
+                    let name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
+                    ui.colored_label(egui::Color32::LIGHT_RED, format!("{name}: {error}"));
+                }
+            }
+        }
+    }
+
+    /// F-009: rescans the user presets directory. Scan problems surface as
+    /// failed entries inside the list, never as silent drops.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reload_preset_entries(&mut self) {
+        if let Some(directory) = self.presets_dir.as_deref() {
+            self.preset_entries = presets::scan_presets_dir(directory);
+        }
+    }
+
+    /// F-009: persists the currently selected preset fields as
+    /// `<name>.lumina-preset.json` in the user presets directory and refreshes
+    /// the list. Overwriting an existing name is the documented update
+    /// semantics (the display name is the identity and the list above shows
+    /// the names before replacement); validation failures are loud errors.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_current_selection_as_preset_file(&mut self) -> Result<std::path::PathBuf, GuiError> {
+        let directory = self
+            .presets_dir
+            .clone()
+            .ok_or_else(|| GuiError::Io(Str::PresetsUnavailable.t().to_string()))?;
+        let preset = self.create_preset(self.preset_name.clone())?;
+        let path = presets::save_preset_file(&directory, &preset, true)
+            .map_err(|error| GuiError::Io(error.to_string()))?;
+        self.reload_preset_entries();
+        Ok(path)
     }
 
     /// Lightroom-style History section: reverse-chronological entries of the

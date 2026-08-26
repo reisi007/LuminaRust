@@ -13,6 +13,10 @@ blake3 = "1"
 # (WebGL2/WebGPU); the lumina-gpu capability stays native-only via features.
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "x11", "wayland", "default_fonts"] }
 serde_json = "1"
+# F-009: the `<name>.lumina-preset.json` envelope (`presets::PresetFile`) is
+# defined in the GUI and derives Serialize/Deserialize around the sidecar
+# `Preset` structure.
+serde = { version = "1", features = ["derive"] }
 lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar" }

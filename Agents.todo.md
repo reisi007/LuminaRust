@@ -167,9 +167,6 @@ werden nach unabhängiger Verifizierung entfernt.
 - [ ] **[PRIO: mittel] R2-LENSFUN-BUNDLE**: LENS-01 (pro-Pixel-FFI ~48 Mio. Übergänge
   @24MP, Row-API nutzen, M), LENS-02 (Corrector-'static Safety-Kommentar + Test),
   LENS-04 (build.rs rerun-if-changed auf Library-Datei).
-- [ ] **[PRIO: mittel] R2-GAP-01** F-009 Presets: Feature-Matrix mappt auf
-  virtual-copies.md, das Dokument erwähnt Presets nie; File-I/O nicht
-  implementiert (nur In-Memory). Doku-first: SOLL beschreiben oder Post-MVP.
 
 ### PRIO: niedrig (R2, gebündelt)
 
@@ -177,7 +174,9 @@ werden nach unabhängiger Verifizierung entfernt.
   (inkonsistente Fehlerverträge ohne Adapter), GPU-10 (totes Gerüst DraftPyramid/
   bake_3d_lut), GPU-11 (Agents.md listet lumina-gpu/bench/lensfun/mcp nicht),
   GPU-12 (Overlay-Composite-Shader ohne Pixeltest), GPU-13 (lock().unwrap()
-  Poisoning), RAW-03 (toter name-Parameter der Decode-API), LENS-03
+  Poisoning), RAW-03 (toter name-Parameter der Decode-API), PRESETS-FAIL-CLOSED
+  (recipe_scope_violation fail-open bei Serialisierungsfehler — praktisch
+  unerreichbar, optional fail-closed), LENS-03
   (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
   core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
   in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation

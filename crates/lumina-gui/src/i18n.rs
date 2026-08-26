@@ -237,6 +237,13 @@ pub enum Str {
     NoHistory,
     NoPresets,
 
+    // F-009 file-backed user presets (`<name>.lumina-preset.json`).
+    PresetsFolder,
+    PresetsUnavailable,
+    SavePresetFile,
+    PresetSaved,
+    PresetApplied,
+
     // Local-adjustment validation & status literals that were previously free-form
     // German strings. UI language is English (F-100); routed through these keys so
     // the panel code carries no literal text.
@@ -474,6 +481,14 @@ impl Str {
             Str::HistoryEntryMissing => "History entry not found",
             Str::NoHistory => "No history entries",
             Str::NoPresets => "No presets saved yet",
+
+            Str::PresetsFolder => "Folder:",
+            Str::PresetsUnavailable => {
+                "User presets unavailable: the config directory could not be determined"
+            }
+            Str::SavePresetFile => "Save as preset file",
+            Str::PresetSaved => "Preset saved: {}",
+            Str::PresetApplied => "Applied preset: {}",
 
             Str::RelativeExposureRequiresAutoTone => {
                 "Relative Exposure requires active Auto-Tone"
