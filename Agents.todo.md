@@ -124,13 +124,6 @@ werden nach unabhängiger Verifizierung entfernt.
   main.rs:1228-1238 vs. 1743-1754). Fix: RAW-Extension-Liste einmalig (aus
   lumina-raw exportieren), beide Prädikate referenzieren; Test: Batch findet
   RAF. Aufwand S. **Erst nach F-101-F1-Commit (gleiches main.rs im WIP).**
-- [ ] **[PRIO: mittel] R2-MCP-02** (Verifizierung hat das MVP-blockierende Schadens-
-  szenario EMPIRISCH widerlegt: POSIX-rename ersetzt den Directory-Entry statt
-  des Inode-Ziels; Extension-Gate blockt .lumina.json/.zdata laut — Aliase
-  blieben byte-identisch intakt.) Verbleibender Rest als Defense-in-Depth:
-  `reject_protected_target`/`write_output_guarded` auch in tools/save.rs
-  explizit nutzen (derzeit nur implizit über Gate+Rename geschützt) + 2
-  Regressionstests (Sidecar/zdata via Symlink/Hardlink-Alias nicht überschreiben).
 - [ ] **[PRIO: hoch] R2-MCP-01** GPU-Pfad verwirft `camera_white_balance` still ->
   build-abhängige Pixeldifferenz ohne Warnung (mcp/util.rs:334-368; Spiegel
   cli main.rs:127-175). Fix: `Some(camera_wb)` als CPU-Routing-Reason in
@@ -169,9 +162,6 @@ werden nach unabhängiger Verifizierung entfernt.
   Duplikation CLI↔MCP + dreifache Extension-Listen), CLI-05 (korruptes zdata
   still als fehlende Maske), CLI-06 (Batch ohne Fortschritt, mask_warnings
   verworfen), CLI-03 (inspect --json), CLI-04 (inspect dekodiert Vollbild für 4 Zeilen EXIF).
-- [ ] **[PRIO: mittel] R2-MCP-BUNDLE** (nach F-101-F1-Verifizierung): MCP-03
-  (SidecarConflict-Doku für save stimmt nicht), MCP-04 (load liest Datei
-  zweimal von Disk), MCP-05 (Preview-Dateien akkumulieren, kein Shutdown-Cleanup).
 - [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-03 (SA-Texturen pro Render neu erstellt),
   GPU-06 (kein on_uncaptured_error/Device-Lost-Handling -> App-Panik möglich),
   GPU-07 (Backends::METAL hardcodet, Windows/Linux nie GPU), GPU-04 (GPU-Pfad

@@ -2,7 +2,7 @@
 
 **Feature:** F-101 MCP AI-Agent-Schnittstelle
 **Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, 8 Tools inkl.
-`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 27 Tests grün).
+`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 43 Tests grün).
 **F-101-F1 erweiterter Scope (2026-08-26):** 4 zusätzliche CLI-Abdeckungs-
 Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
@@ -12,10 +12,20 @@ Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
 Zurückschreiben (`save_sidecar_if_unchanged` + Quell-Identitätsprüfung bei
-`lumina_load`; Konflikt → neuer Fehler `SidecarConflict`/-32010 statt
-Lost Update) und korrekte JSON-RPC-Codetrennung (-32700 Parse /
--32600 Invalid Request / -32602 Unknown Tool; Tool-Fehler als
+`lumina_load`; Konflikt beim Write-Through von `lumina_edit` → neuer Fehler
+`SidecarConflict`/-32010 statt Lost Update) und korrekte JSON-RPC-Codetrennung
+(-32700 Parse / -32600 Invalid Request / -32602 Unknown Tool; Tool-Fehler als
 `isError: true`-Result statt Transportfehler).
+Review-Verfeinerungen R2 (2026-08-26): `lumina_save` schreibt über denselben
+nicht-destruktiven Guard wie die Bulk-Tools (`write_output_guarded`) — Ziele,
+die auf Quelle oder `.lumina.*`-Bundle auflösen (inkl. Symlink- und Hardlink-
+Aliase), werden laut verweigert. Das Shutdown-Cleanup der Schnellvorschauen ist
+implementiert (session-geführte Liste, Default: löschen;
+`LUMINA_MCP_KEEP_PREVIEWS` opt-out). `lumina_load` dekodiert die bereits
+gelesenen Bytes direkt (`decode_bytes`, kein zweiter Disk-Read).
+Präzisierung (R2-MCP-03): `SidecarConflict` (-32010) entsteht ausschließlich
+in `lumina_edit` — `lumina_save` hat keinen Sidecar-Write-Pfad und kann
+diesen Fehler daher nicht auslösen.
 **MVP-Erklärung:** letzter vor MVP offener Punkt ist geschlossen
 
 ## Inhaltsverzeichnis
@@ -93,6 +103,7 @@ Der Server unterstützt im MVP eine optionale Umgebungsvariable:
 | --- | --- | --- |
 | `LUMINA_MCP_PREVIEW_DIR` | `$TMPDIR/lumina-previews/` | Verzeichnis für Schnellvorschauen |
 | `LUMINA_MCP_LOG` | `warn` | Log-Level (`error`, `warn`, `info`, `debug`) |
+| `LUMINA_MCP_KEEP_PREVIEWS` | nicht gesetzt | Auf `1`/`true`/`yes` gesetzt: Vorschau-Dateien bleiben nach dem Shutdown bestehen (Opt-out des Standard-Cleanups, siehe „Schnellvorschau“) |
 
 ## Tool-Set
 
@@ -246,6 +257,15 @@ Rendert und exportiert das Bild.
   (`1..=100`).
 - Der Export nutzt den gemeinsamen Render-Cache (im Gegensatz zur
   Schnellvorschau).
+- Nicht-destruktiv (Review R2, 2026-08-26): Ein `output_path`, der auf die
+  Quelle oder deren Lumina-Bundle (`<quelle>.lumina.json`,
+  `<quelle>.lumina.zdata`) auflöst — einschließlich Symlink- und
+  Hardlink-Aliase, die die Extension-Gate allein nicht erkennen kann — wird
+  vor dem Schreiben laut mit `EncodeError` verweigert (`write_output_guarded`,
+  derselbe Guard wie bei `lumina_batch`/`lumina_dust_removal`). Das
+  Bundle bleibt byte-identisch intakt.
+- `lumina_save` rendert/exportiert ausschließlich; er schreibt **keinen**
+  Sidecar. Daher kann hier kein `SidecarConflict` (-32010) auftreten.
 - Fehler: `RenderError`, `EncodeError`, ungültiges Format.
 
 ### `lumina_preview`
@@ -410,8 +430,15 @@ Agent: lumina_save(image_id="a1b2c3d4", output_path="/output/portrait.png", form
 4. **Lebensdauer:** Dateien bleiben bestehen, bis der Server beendet
    wird oder der nächste `lumina_preview` für dasselbe `image_id`
    überschreibt. Kein automatisches Pruning.
-5. **Cleanup:** Der Server kann beim Shutdown alle Vorschauen löschen
-   (optional, Default: ja).
+5. **Cleanup:** Implementiert (Review R2, 2026-08-26): Der Server führt
+   eine session-geführte Liste aller in dieser Sitzung geschriebenen
+   Vorschau-Dateien und löscht sie am Ende des Stdio-Loops (Shutdown/EOF).
+   Default: ja (löschen). Mit `LUMINA_MCP_KEEP_PREVIEWS=1` (oder
+   `true`/`yes`) bleibt die Löschung aus. Fehlschläge beim Löschen werden
+   als Warnung geloggt und brechen das Herunterfahren nie ab.
+6. **Verzeichnis-Anlage:** Schlägt das Anlegen von `preview_dir` beim Start
+   fehl (z. B. fehlende Rechte), wird das als Warnung geloggt (kein stiller
+   Fehlstart); der spätere `lumina_preview` meldet den Fehler laut.
 
 ## Architektur
 
@@ -488,7 +515,9 @@ Requests → `-32600` (id-Echo wenn erkennbar), unbekanntes Tool →
 `-32602`; Fehler **registrierter** Tools werden als normales Result mit
 `isError: true` + `structuredContent.error` gemeldet (MCP-Spec),
 nicht als Transportfehler. Seitdem auch neu: `SidecarConflict`
-(`-32010`) bei CAS-Konflikt in `lumina_edit`/`lumina_save`.
+(`-32010`) bei CAS-Konflikt in `lumina_edit` — dem einzigen Tool mit
+Sidecar-Write-Through. `lumina_save` rendert/exportiert nur und schreibt
+keinen Sidecar, daher kann `-32010` dort nicht auftreten (R2-MCP-03).
 
 ```json
 {

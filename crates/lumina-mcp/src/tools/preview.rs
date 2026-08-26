@@ -68,6 +68,10 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
             "could not write preview `{preview_path:?}`: {error}"
         ))
     })?;
+    // Track the artifact for the shutdown cleanup (REVIEW R2-MCP-05): the
+    // file persists until the server loop ends, then it is removed (unless
+    // `LUMINA_MCP_KEEP_PREVIEWS` opts out).
+    server.preview_files.insert(preview_path.clone());
 
     Ok(json!({
         "ok": true,

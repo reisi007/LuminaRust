@@ -51,10 +51,17 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let bytes =
         fs::read(path).map_err(|error| McpError::FileNotFound(format!("{path_str}: {error}")))?;
 
-    // Decode (RAW via libraw, raster via the image crate).
+    // Decode (RAW via libraw, raster via the image crate). RAW decoding uses
+    // the bytes already read above: `decode_file` would read the same file a
+    // second time from disk and keep both copies in memory (REVIEW R2-MCP-04).
+    // This mirrors the CLI's `decode_input` pattern.
     let (frame, raw_metadata): (ImageFrame, Option<RawMetadata>) = if is_raw_path(path) {
-        let image =
-            lumina_raw::decode_file(path).map_err(|error| McpError::Decode(format!("{error}")))?;
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("input.raw");
+        let image = lumina_raw::decode_bytes(&bytes, name)
+            .map_err(|error| McpError::Decode(format!("{error}")))?;
         (image.frame, Some(image.metadata))
     } else {
         let frame =

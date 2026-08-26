@@ -14,7 +14,9 @@ pub mod util;
 use error::{error_response, ok_response, tool_error_result, tool_result_response};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::env;
+use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
@@ -71,12 +73,30 @@ struct Request {
     params: Option<Value>,
 }
 
+/// Parses the `LUMINA_MCP_KEEP_PREVIEWS` opt-out. Unset, empty or any other
+/// value means "delete preview files on shutdown" — the documented default
+/// (F-101 SOLL: Shutdown-Cleanup, Default: ja).
+fn keep_previews_from_env(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| {
+        matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        )
+    })
+}
+
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// The MCP server: owns the single-image session and the preview directory.
 pub struct Server {
     pub session: McpSession,
     pub preview_dir: PathBuf,
+    /// Preview files written during this session. Removed at the end of the
+    /// stdio loop ([`Server::cleanup_previews`]) unless `keep_previews` is set
+    /// (REVIEW R2-MCP-05: previews no longer accumulate across sessions).
+    pub(crate) preview_files: BTreeSet<PathBuf>,
+    /// Opt-out switch for the shutdown cleanup (`LUMINA_MCP_KEEP_PREVIEWS`).
+    pub(crate) keep_previews: bool,
     counter: u64,
 }
 
@@ -98,12 +118,55 @@ impl Server {
                     .unwrap_or_else(|_| std::env::temp_dir());
                 tmpdir.join("lumina-previews")
             });
-        let _ = std::fs::create_dir_all(&preview_dir);
+        let keep_previews =
+            keep_previews_from_env(env::var("LUMINA_MCP_KEEP_PREVIEWS").ok().as_deref());
+        Self::with_preview_dir_and_policy(preview_dir, keep_previews)
+    }
+
+    /// Creates a server with an explicit preview directory (skips the
+    /// `LUMINA_MCP_PREVIEW_DIR` lookup; used by tests and embedders).
+    pub fn with_preview_dir(preview_dir: PathBuf) -> Self {
+        let keep_previews =
+            keep_previews_from_env(env::var("LUMINA_MCP_KEEP_PREVIEWS").ok().as_deref());
+        Self::with_preview_dir_and_policy(preview_dir, keep_previews)
+    }
+
+    fn with_preview_dir_and_policy(preview_dir: PathBuf, keep_previews: bool) -> Self {
+        // Initialize logging first so a failed directory creation warns
+        // instead of failing silently (REVIEW R2-MCP-07).
         init_logger();
+        if let Err(error) = fs::create_dir_all(&preview_dir) {
+            log::warn!(
+                "could not create preview directory `{}`: {error}; \
+                 lumina_preview will fail until it exists",
+                preview_dir.display()
+            );
+        }
         Self {
             session: McpSession::default(),
             preview_dir,
+            preview_files: BTreeSet::new(),
+            keep_previews,
             counter: 0,
+        }
+    }
+
+    /// Deletes every preview file written during this session (F-101 SOLL:
+    /// Shutdown-Cleanup, Default: ja). Files that no longer exist are skipped;
+    /// removal failures are logged as warnings and never abort shutdown.
+    pub fn cleanup_previews(&mut self) {
+        let tracked = std::mem::take(&mut self.preview_files);
+        if self.keep_previews {
+            return;
+        }
+        for path in tracked {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    log::warn!("could not remove preview `{}`: {error}", path.display())
+                }
+            }
         }
     }
 
@@ -225,6 +288,9 @@ fn tools_list_result() -> Value {
 /// Runs the newline-delimited stdio loop: reads JSON-RPC lines from stdin,
 /// dispatches them via [`Server::handle_line`], and writes each response as
 /// one JSON object per line on stdout. Notifications receive no response.
+/// When the loop ends (EOF, read error or closed stdout), all preview files
+/// the session wrote are removed ([`Server::cleanup_previews`], F-101 SOLL:
+/// Shutdown-Cleanup, Default: ja).
 ///
 /// Shared by the `lumina-mcp` binary and the `lumina mcp` CLI subcommand
 /// (F-101-F1) so both entry points run byte-identical transport code.
@@ -252,6 +318,10 @@ pub fn run_stdio() {
             let _ = out.flush();
         }
     }
+
+    // Shutdown cleanup (REVIEW R2-MCP-05): never let preview files from this
+    // session accumulate in $TMPDIR/lumina-previews/.
+    server.cleanup_previews();
 }
 
 #[cfg(test)]
@@ -271,5 +341,59 @@ mod tests {
         assert_eq!(response["id"], 1);
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(response["result"]["capabilities"]["tools"], json!({}));
+    }
+
+    /// R2-MCP-07: a preview directory that cannot be created (here: the path
+    /// is an existing file) must not abort startup — the condition is logged
+    /// as a warning instead of failing silently.
+    #[test]
+    fn failed_preview_dir_creation_does_not_abort_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("not-a-dir");
+        fs::write(&blocker, b"file").unwrap();
+        let server = Server::with_preview_dir(blocker.clone());
+        assert_eq!(server.preview_dir, blocker);
+        assert!(!blocker.is_dir(), "the file must not be replaced");
+    }
+
+    /// R2-MCP-05: tracked previews are deleted by `cleanup_previews` under
+    /// the default policy and kept when the opt-out is set.
+    #[test]
+    fn cleanup_previews_honors_the_keep_policy_and_removes_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let previews = dir.path().join("previews");
+        fs::create_dir_all(&previews).unwrap();
+
+        let mut server = Server::with_preview_dir(previews.clone());
+        let marker = previews.join("session.png");
+        fs::write(&marker, b"png-bytes").unwrap();
+        server.preview_files.insert(marker.clone());
+
+        // Opt-out: file survives, list is still reset.
+        server.keep_previews = true;
+        server.cleanup_previews();
+        assert!(marker.exists(), "LUMINA_MCP_KEEP_PREVIEWS keeps the file");
+        assert!(server.preview_files.is_empty());
+
+        // Default policy: a tracked file is removed.
+        server.preview_files.insert(marker.clone());
+        server.keep_previews = false;
+        server.cleanup_previews();
+        assert!(!marker.exists(), "default cleanup removes tracked previews");
+
+        // Idempotent: an empty list is a no-op (no spurious warnings).
+        server.cleanup_previews();
+    }
+
+    #[test]
+    fn keep_previews_env_values_are_parsed_strictly() {
+        assert!(!keep_previews_from_env(None));
+        assert!(!keep_previews_from_env(Some("")));
+        assert!(!keep_previews_from_env(Some("0")));
+        assert!(!keep_previews_from_env(Some("keep")));
+        assert!(keep_previews_from_env(Some("1")));
+        assert!(keep_previews_from_env(Some("true")));
+        assert!(keep_previews_from_env(Some("YES")));
+        assert!(keep_previews_from_env(Some(" yes ")));
     }
 }

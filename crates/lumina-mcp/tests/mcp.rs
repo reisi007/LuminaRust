@@ -814,6 +814,202 @@ fn save_overwrites_existing_output_and_leaves_no_temporaries() {
 }
 
 // ---------------------------------------------------------------------------
+// REVIEW R2-MCP-02: guarded export writes (symlink/hardlink aliases) +
+// REVIEW R2-MCP-05: shutdown preview cleanup
+//
+// Both alias tests assume `LUMINA_MCP_KEEP_PREVIEWS` is unset in the test
+// environment (it only influences preview cleanup, not these assertions).
+// ---------------------------------------------------------------------------
+
+/// A save whose output is a symlink onto the sidecar must be refused loudly
+/// and leave the authoritative bundle byte-identical intact.
+#[cfg(unix)]
+#[test]
+fn save_rejects_output_symlinked_onto_the_sidecar_bundle() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("photo.png");
+    make_png(&source, 16, 16);
+    let mut server = new_server(&dir.path().join("previews"));
+    let loaded = tool_ok(
+        &mut server,
+        "lumina_load",
+        json!({ "path": source.to_string_lossy() }),
+    );
+    let image_id = loaded["image_id"].as_str().unwrap().to_string();
+
+    // `lumina_load` materialized the sidecar; alias it under a valid image
+    // extension so the extension gate passes and the output guard has to
+    // catch the collision.
+    let sidecar_path = lumina_sidecar::sidecar_path_for(&source);
+    assert!(sidecar_path.is_file());
+    let sidecar_before = fs::read(&sidecar_path).unwrap();
+    let alias = dir.path().join("export.png");
+    symlink(&sidecar_path, &alias).unwrap();
+
+    let response = call_tool(
+        &mut server,
+        "lumina_save",
+        json!({
+            "image_id": image_id,
+            "output_path": alias.to_string_lossy(),
+            "format": "png",
+        }),
+    );
+    assert_eq!(response["result"]["isError"], true, "response: {response}");
+    assert_eq!(
+        response["result"]["structuredContent"]["error"],
+        "EncodeError"
+    );
+    let message = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        message.contains("refusing") && message.contains("sidecar"),
+        "message names the protected target: {message}"
+    );
+
+    // The bundle is byte-identical and the alias itself was not written to.
+    assert_eq!(fs::read(&sidecar_path).unwrap(), sidecar_before);
+    assert_eq!(fs::read(&alias).unwrap(), sidecar_before);
+}
+
+/// A save whose output is a hard link onto the `.lumina.zdata` bundle must be
+/// refused loudly (canonicalization cannot see hard links; the `(dev, inode)`
+/// check does) and leave the bundle byte-identically intact.
+#[cfg(unix)]
+#[test]
+fn save_rejects_output_hardlinked_onto_the_zdata_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("photo.png");
+    let replacement = dir.path().join("replacement.png");
+    // 2×2 sources/replacement keep the region validation trivial.
+    let mut pixels = vec![0u8; 4 * 4];
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel[..3].copy_from_slice(&[128, 128, 128]);
+        pixel[3] = 255;
+    }
+    let frame = ImageFrame::new(2, 2, pixels).unwrap();
+    fs::write(&source, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    let mut red = vec![0u8; 4 * 4];
+    for pixel in red.as_chunks_mut::<4>().0 {
+        pixel[..3].copy_from_slice(&[255, 0, 0]);
+        pixel[3] = 255;
+    }
+    let red_frame = ImageFrame::new(2, 2, red).unwrap();
+    fs::write(
+        &replacement,
+        red_frame.encode(ImageFileFormat::Png).unwrap(),
+    )
+    .unwrap();
+
+    let mut server = new_server(&dir.path().join("previews"));
+    tool_ok(
+        &mut server,
+        "lumina_import",
+        json!({ "path": source.to_string_lossy() }),
+    );
+    // Materialize a genuine zdata bundle via the documented F-042-N1 flow.
+    tool_ok(
+        &mut server,
+        "lumina_dust_removal",
+        json!({
+            "input": source.to_string_lossy(),
+            "repair_region": {
+                "id": "spot-1",
+                "region_width": 2,
+                "region_height": 2,
+                "region_values": [65535, 65535, 65535, 65535],
+                "replacement_path": replacement.to_string_lossy(),
+            },
+        }),
+    );
+    let bundle = lumina_sidecar::zdata_path_for(&source);
+    assert!(bundle.is_file(), "dust removal must create the bundle");
+    let bundle_before = fs::read(&bundle).unwrap();
+
+    // Hard-link the bundle under a valid image extension.
+    let alias = dir.path().join("export.png");
+    fs::hard_link(&bundle, &alias).unwrap();
+
+    // Load AFTER the bundle exists (the session needs the updated sidecar).
+    let loaded = tool_ok(
+        &mut server,
+        "lumina_load",
+        json!({ "path": source.to_string_lossy() }),
+    );
+    let image_id = loaded["image_id"].as_str().unwrap().to_string();
+
+    let response = call_tool(
+        &mut server,
+        "lumina_save",
+        json!({
+            "image_id": image_id,
+            "output_path": alias.to_string_lossy(),
+            "format": "png",
+        }),
+    );
+    assert_eq!(response["result"]["isError"], true, "response: {response}");
+    assert_eq!(
+        response["result"]["structuredContent"]["error"],
+        "EncodeError"
+    );
+    let message = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        message.contains("refusing") && message.contains("hard-link"),
+        "message names the alias: {message}"
+    );
+
+    // Bundle byte-identical; the alias still holds the same bytes.
+    assert_eq!(fs::read(&bundle).unwrap(), bundle_before);
+    assert_eq!(fs::read(&alias).unwrap(), bundle_before);
+}
+
+/// R2-MCP-05: preview files are tracked per session and removed when the
+/// server loop ends (`cleanup_previews`) instead of accumulating forever.
+#[test]
+fn shutdown_cleanup_removes_tracked_preview_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let preview_dir = dir.path().join("previews");
+    let source = dir.path().join("photo.png");
+    make_png(&source, 8, 8);
+    let mut server = new_server(&preview_dir);
+    let loaded = tool_ok(
+        &mut server,
+        "lumina_load",
+        json!({ "path": source.to_string_lossy() }),
+    );
+    let image_id = loaded["image_id"].as_str().unwrap().to_string();
+
+    let first = tool_ok(
+        &mut server,
+        "lumina_preview",
+        json!({ "image_id": image_id }),
+    );
+    let preview_path = first["preview_path"].as_str().unwrap().to_string();
+    assert!(Path::new(&preview_path).is_file());
+
+    // Loop end / shutdown: tracked previews disappear, untracked files stay.
+    let bystander = preview_dir.join("other-session.png");
+    fs::write(&bystander, b"not ours").unwrap();
+    server.cleanup_previews();
+    assert!(
+        !Path::new(&preview_path).exists(),
+        "shutdown cleanup removes the session preview"
+    );
+    assert!(bystander.exists(), "only session-written files are removed");
+
+    // A later preview of the same session recreates and re-tracks the file.
+    let again = tool_ok(
+        &mut server,
+        "lumina_preview",
+        json!({ "image_id": image_id }),
+    );
+    assert_eq!(again["preview_path"], first["preview_path"]);
+    server.cleanup_previews();
+    assert!(!Path::new(&preview_path).exists());
+}
+
+// ---------------------------------------------------------------------------
 // REVIEW-MCP-SESSION-1: compare-and-swap sidecar persistence
 // ---------------------------------------------------------------------------
 

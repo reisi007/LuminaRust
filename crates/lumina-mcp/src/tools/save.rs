@@ -3,10 +3,10 @@
 use crate::error::McpError;
 use crate::util::{
     encode_with_quality, get_str, parse_bounded_uint, parse_output_format, render_copy,
-    validate_output_extension,
+    validate_output_extension, write_output_guarded,
 };
 use crate::Server;
-use lumina_sidecar::{paths_resolve_equal, write_atomically};
+use lumina_sidecar::paths_resolve_equal;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -64,7 +64,7 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
 
     // Never overwrite the original image (non-destructive guarantee). Unlike
     // plain canonicalization this also catches not-yet-existing outputs that
-    // resolve onto the source's own name.
+    // resolve onto the source's own name. Runs before rendering (fail fast).
     match paths_resolve_equal(&state.source_path, output) {
         Ok(true) => {
             return Err(McpError::Encode(
@@ -88,9 +88,13 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let rendered = render_copy(state, copy, white_balance)?;
     let bytes = encode_with_quality(&rendered, format, quality)?;
 
-    // Atomic write: a crash mid-export can never leave a torn artifact behind.
-    write_atomically(output, &bytes)
-        .map_err(|error| McpError::Encode(format!("could not write `{output_path}`: {error}")))?;
+    // Guarded atomic write (REVIEW R2-MCP-02, defense in depth): beyond the
+    // extension gate and the pre-render source check above, the target must
+    // never resolve onto the source or one of its Lumina bundle files —
+    // including symlink and hard-link aliases (`reject_protected_target`
+    // via `write_output_guarded`, same guard as batch/dust-removal). A
+    // crash mid-export still cannot leave a torn artifact behind.
+    write_output_guarded(&state.source_path, output, &bytes)?;
 
     Ok(json!({
         "ok": true,
