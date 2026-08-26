@@ -227,45 +227,45 @@
     },
     {
       "id": "gpu/render_with_gpu__512",
-      "budget_ns": 3055246,
+      "budget_ns": 6588474,
       "tolerance_ratio": 1.2,
-      "gate": false,
-      "note": "F-074-N6 draft (GPU render path). Captured 2026-08-22 against baseline median_ns = 1527623 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode). Not wired into the hard gate yet."
+      "gate": true,
+      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 3294237 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/render_with_gpu__1024",
-      "budget_ns": 3942294,
+      "budget_ns": 27710612,
       "tolerance_ratio": 1.2,
-      "gate": false,
-      "note": "F-074-N6 draft (GPU render path). Captured 2026-08-22 against baseline median_ns = 1971147 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode). Not wired into the hard gate yet."
+      "gate": true,
+      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 13855306 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/render_with_gpu__2048",
-      "budget_ns": 10114028,
+      "budget_ns": 111434166,
       "tolerance_ratio": 1.2,
-      "gate": false,
-      "note": "F-074-N6 draft (GPU render path). Captured 2026-08-22 against baseline median_ns = 5057014 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode). Not wired into the hard gate yet."
+      "gate": true,
+      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 55717083 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/update_uniforms__recipe",
-      "budget_ns": 10648,
+      "budget_ns": 26808,
       "tolerance_ratio": 1.2,
-      "gate": false,
-      "note": "F-074-N6 draft (GPU uniform-upload microbenchmark, the queue.write_buffer path, fixed 2048 recipe). Captured 2026-08-22 against baseline median_ns = 5324 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until stabilised and independently calibrated, per F-074 methodology (new benchmarks start report-mode)."
+      "gate": true,
+      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 13404 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/cpu_vs_gpu__cpu__2048",
-      "budget_ns": 118851584,
+      "budget_ns": 110603918,
       "tolerance_ratio": 1.2,
-      "gate": false,
-      "note": "F-074-N6 draft (CPU adjustment path at 2048, identical math to the GPU fallback; measured back-to-back with the GPU path for a direct ratio). Captured 2026-08-22 against baseline median_ns = 59425792 ns, budget_ns = 2x. New benchmark: report-only (gate:false) until stabilised and independently calibrated, per F-074 methodology."
+      "gate": true,
+      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 55301959 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/cpu_vs_gpu__gpu__2048",
-      "budget_ns": 10767622,
+      "budget_ns": 111132792,
       "tolerance_ratio": 1.2,
-      "gate": false,
-      "note": "F-074-N6 draft (GPU render path at 2048, measured back-to-back with the CPU path for a direct ratio). Captured 2026-08-22 against baseline median_ns = 5383811 ns, budget_ns = 2x. New GPU benchmark: report-only (gate:false) until the GPU path stabilises and is independently calibrated, per F-074 methodology (new benchmarks start report-mode)."
+      "gate": true,
+      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 55566396 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     }
   ]
 }

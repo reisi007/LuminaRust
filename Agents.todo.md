@@ -178,12 +178,6 @@ quantitative Limits (Bildgröße/Speicher/Threads/GPU) nirgends dokumentiert.
 
 **Offene Punkte aus manuellem Test / GPU-Follow-ups (Fortsetzung)**
 
-- [ ] **[PRIO: niedrig] BENCH-BASELINE-1** Baseline-Capture 6 GPU-Benchmark-IDs
-      `perf/baseline.json` → `gate:true`. Ist-Stand 2026-08-25:
-      `perf/baseline.json` existiert (Core/Batch), `perf/budgets.json` hat
-      Core/Batch `gate:true`; GPU-Einträge bewusst `gate:false` (report-only,
-      „until the GPU path stabilises"). criterion-0.8-Ergebnisformate beim
-      Capture beachten.
 - [ ] **[PRIO: niedrig] GEN-EXPAND-1** Optionaler generativer Modus „Entfernen + Erweitern“:
       Objekte entfernen (inpainting) **und** das Bild über die ursprüngliche
       Bildfläche hinaus erweitern (outpainting/canvas expansion > 100 %).

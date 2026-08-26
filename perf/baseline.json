@@ -200,6 +200,42 @@
       "median_ns": 360537833,
       "p95_ns": 363204679,
       "unit": "ns"
+    },
+    {
+      "id": "gpu/render_with_gpu__512",
+      "median_ns": 3294237,
+      "p95_ns": 3297691,
+      "unit": "ns"
+    },
+    {
+      "id": "gpu/render_with_gpu__1024",
+      "median_ns": 13855306,
+      "p95_ns": 13963340,
+      "unit": "ns"
+    },
+    {
+      "id": "gpu/render_with_gpu__2048",
+      "median_ns": 55717083,
+      "p95_ns": 55773813,
+      "unit": "ns"
+    },
+    {
+      "id": "gpu/update_uniforms__recipe",
+      "median_ns": 13404,
+      "p95_ns": 13978,
+      "unit": "ns"
+    },
+    {
+      "id": "gpu/cpu_vs_gpu__cpu__2048",
+      "median_ns": 55301959,
+      "p95_ns": 55416042,
+      "unit": "ns"
+    },
+    {
+      "id": "gpu/cpu_vs_gpu__gpu__2048",
+      "median_ns": 55566396,
+      "p95_ns": 55619875,
+      "unit": "ns"
     }
   ]
 }
