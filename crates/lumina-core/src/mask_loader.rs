@@ -37,6 +37,21 @@ use lumina_sidecar::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Key under which the ONNX adapter (`lumina-onnx`) persists a deterministic
+/// SHA-256 digest over a model's input spec ([`ModelInputSpec`], i.e.
+/// inference resolution, channel layout, tensor name/format and input
+/// normalization) inside [`ModelIdentity::extras`].
+///
+/// This is a **cross-crate contract** with `lumina_onnx::manifest::
+/// INPUT_SPEC_DIGEST_KEY`; the two string literals MUST stay identical.
+/// `lumina-core` intentionally does not depend on `lumina-onnx` (platform-
+/// neutral domain crate, see `Agents.md` architecture boundaries), so the key
+/// is mirrored here rather than imported. ai-masks.md lists
+/// "Vorverarbeitung und Inferenzauflösung" explicitly as mask-identity
+/// components; the digest lets the decision layer detect a changed inference
+/// contract even when name/version/hash are untouched (R2-ONNX-01).
+const INPUT_SPEC_DIGEST_KEY: &str = "input_spec_digest";
+
 /// Re-inference surface for a subject mask.
 ///
 /// Implemented by the ONNX adapter (`lumina-onnx`); `lumina-core` is never
@@ -383,9 +398,37 @@ fn decode_context_matches(actual: &DecodeFingerprint, expected: &DecodeFingerpri
 fn model_identity_matches(model: &ModelIdentity, configured: Option<&ModelIdentity>) -> bool {
     match configured {
         Some(configured) => {
-            model.name == configured.name
+            // Legacy identity: every persisted mask identity carries at least
+            // name/version/hash, and they must all agree.
+            if !(model.name == configured.name
                 && model.version == configured.version
-                && model.hash == configured.hash
+                && model.hash == configured.hash)
+            {
+                return false;
+            }
+            // R2-ONNX-01: the persisted mask identity may additionally carry a
+            // deterministic digest over the model's input spec
+            // (`INPUT_SPEC_DIGEST_KEY` in `extras`; see ai-masks.md
+            // "Vorverarbeitung und Inferenzauflösung"). When the inference
+            // contract changes (resolution, normalization, layout, tensor
+            // name/format) the digest flips even though name/version/hash are
+            // identical — without this check a stale cached mask would silently
+            // stay `valid`.
+            //
+            // Rule (matches the producer's additive-optional contract):
+            // * both present  → must match;
+            // * exactly one present → no match (the two contracts are
+            //   incomparable, so treat the persisted mask as changed);
+            // * neither present → keep the legacy name/version/hash behaviour
+            //   (old sidecars without the key stay valid).
+            match (
+                model.extras.get(INPUT_SPEC_DIGEST_KEY),
+                configured.extras.get(INPUT_SPEC_DIGEST_KEY),
+            ) {
+                (Some(a), Some(b)) => a == b,
+                (Some(_), None) | (None, Some(_)) => false,
+                (None, None) => true,
+            }
         }
         // REVIEW-MASK-N3: without a configured expected model identity the
         // persisted artifact's model context CANNOT be confirmed. Per F-048
@@ -804,6 +847,139 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    /// Build a [`ModelIdentity`] whose `extras` optionally carries the
+    /// `INPUT_SPEC_DIGEST_KEY` digest — mirroring what the ONNX adapter's
+    /// `to_model_identity` writes. `None` produces a legacy identity without
+    /// the key (an old sidecar before R2-ONNX-01).
+    fn identity_with_digest(digest: Option<&str>) -> ModelIdentity {
+        let mut extras = Extras::new();
+        if let Some(digest) = digest {
+            extras.insert(
+                INPUT_SPEC_DIGEST_KEY.to_owned(),
+                serde_json::Value::String(digest.to_owned()),
+            );
+        }
+        ModelIdentity {
+            name: "BiRefNet".into(),
+            version: "1.0.0".into(),
+            hash: "h".into(),
+            extras,
+        }
+    }
+
+    // R2-ONNX-01 — the decision layer [`model_identity_matches`] must honor the
+    // persisted input-spec digest in `extras` exactly as the producer writes
+    // it, closing the stale-detection hole where a normalization/resolution
+    // change kept a cached mask `valid` despite changed inference semantics.
+
+    #[test]
+    fn same_input_spec_digest_matches() {
+        // Identical digests → the persisted mask stays confirmably valid.
+        assert!(model_identity_matches(
+            &identity_with_digest(Some("sha256:aaaa")),
+            Some(&identity_with_digest(Some("sha256:aaaa"))),
+        ));
+    }
+
+    #[test]
+    fn changed_input_spec_digest_does_not_match() {
+        // Only the inference contract (digest) differs; name/version/hash are
+        // identical — this is exactly the stale hole R2-ONNX-01 closes.
+        assert!(!model_identity_matches(
+            &identity_with_digest(Some("sha256:aaaa")),
+            Some(&identity_with_digest(Some("sha256:bbbb"))),
+        ));
+    }
+
+    #[test]
+    fn digest_present_on_one_side_only_does_not_match() {
+        // The persisted and configured contracts are incomparable → no match.
+        assert!(!model_identity_matches(
+            &identity_with_digest(Some("sha256:aaaa")),
+            Some(&identity_with_digest(None)),
+        ));
+        assert!(!model_identity_matches(
+            &identity_with_digest(None),
+            Some(&identity_with_digest(Some("sha256:aaaa"))),
+        ));
+    }
+
+    #[test]
+    fn legacy_identity_without_digest_still_matches() {
+        // Old sidecars (no digest key) fall back to the legacy comparison.
+        assert!(model_identity_matches(
+            &identity_with_digest(None),
+            Some(&identity_with_digest(None)),
+        ));
+        // ...and a legacy identity still fails when name/version/hash differ.
+        assert!(!model_identity_matches(
+            &ModelIdentity {
+                name: "Other".into(),
+                version: "1.0.0".into(),
+                hash: "h".into(),
+                extras: Extras::new(),
+            },
+            Some(&identity_with_digest(None)),
+        ));
+    }
+
+    #[test]
+    fn changed_input_spec_digest_triggers_reinference() {
+        // End-to-end: a persisted mask whose digest differs from the currently
+        // configured model must be re-inferred, never served as
+        // `LoadedPersisted`.
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            identity_with_digest(Some("sha256:OLD")),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(identity_with_digest(Some("sha256:NEW"))),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+    }
+
+    #[test]
+    fn same_input_spec_digest_prefers_persisted() {
+        // End-to-end mirror of the above: identical digest keeps the persisted
+        // plane (no re-inference).
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            identity_with_digest(Some("sha256:SAME")),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(identity_with_digest(Some("sha256:SAME"))),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::LoadedPersisted);
     }
 
     #[test]
