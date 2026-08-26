@@ -171,10 +171,14 @@ write-through.
     "whites": 0.0,
     "blacks": 0.1,
     "wb_temperature": 5500,
-    "wb_tint": 0.05
+    "wb_tint": 0.05,
+    "vibrance": 0.1,
+    "saturation": -0.2
   }
 }
 ```
+`vibrance` und `saturation` sind optionale Adjustments und folgen demselben
+`-1..=1`-Bereich wie die Tonwert-Regler.
 
 **Output:**
 ```json
@@ -191,6 +195,13 @@ write-through.
 - Wertebereiche entscheiden der Pipeline-Spezifikation (F-036):
   `exposure` in `-10..=10` EV, alle anderen in `-1..=1`,
   `wb_temperature` in `1500..=12000`.
+- `vibrance` und `saturation` sind unterstützte Adjustments (F-092,
+  Render-Pipeline wendet Vibrance vor globaler Sättigung an) und ebenfalls auf
+  `-1..=1` begrenzt; sie sind im JSON-Schema (schema-`properties` von
+  `lumina_edit`) ausgewiesen und werden vom Validator mit demselben Bereich
+  abgelehnt (kein stiller Clip). Bisher waren sie nur im Validator erlaubt,
+  aber im Schema und hier nicht dokumentiert (R2-MCP-09); die Pipeline
+  unterstützt sie bereits.
 - Ungültige Werte werden mit `InvalidAdjustment` abgelehnt, nicht
   still geclippt.
 - `virtual_copy` ist optional; Default ist die erste (Standard-)Kopie.

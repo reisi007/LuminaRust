@@ -36,7 +36,9 @@ pub fn schema() -> Value {
                     "whites": { "type": "number", "minimum": -1, "maximum": 1 },
                     "blacks": { "type": "number", "minimum": -1, "maximum": 1 },
                     "wb_temperature": { "type": "number", "minimum": 1500, "maximum": 12000 },
-                    "wb_tint": { "type": "number", "minimum": -1, "maximum": 1 }
+                    "wb_tint": { "type": "number", "minimum": -1, "maximum": 1 },
+                    "vibrance": { "type": "number", "minimum": -1, "maximum": 1 },
+                    "saturation": { "type": "number", "minimum": -1, "maximum": 1 }
                 }
             }
         },

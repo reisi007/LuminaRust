@@ -43,9 +43,15 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
 
     let tone = analyze_tone(&rendered);
     let histogram = LuminanceHistogram::new(&rendered);
-    let (red, green, blue) = channel_histograms(&rendered);
-    let channel = channel_stats(&rendered);
-    let dominant = dominant_colors(&rendered, 5);
+    // R2-MCP-08: the four per-channel/colour analyses below used to be four
+    // separate full-frame iterations; they are fused into a single pass in
+    // `frame_analysis` so `lumina_analyze` stays cheap in the agent feedback
+    // loop. `analyze_tone` and `LuminanceHistogram` remain separate core passes
+    // (their output is exact/independent and lives in `lumina-core`).
+    let analysis = frame_analysis(&rendered, tone.mean);
+    let (red, green, blue) = analysis.channel_histograms;
+    let channel = analysis.channel_stats;
+    let dominant = analysis.dominant_colors;
 
     // Exposure estimate: EV to reach a mid-gray (0.5) target from the median
     // luminance, clamped to the pipeline's -10..=10 EV range.
@@ -68,7 +74,7 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
             "median": tone.median,
             "p01": tone.p01,
             "p99": tone.p99,
-            "stddev": stddev_luminance(&rendered, tone.mean),
+            "stddev": analysis.luminance_stddev,
         },
         "per_channel": channel,
         "histogram": {
@@ -79,35 +85,61 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     }))
 }
 
-/// Per-channel 256-bin histograms.
-fn channel_histograms(frame: &ImageFrame) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+/// Aggregated single-pass statistics over an RGBA8 frame. Produced by
+/// [`frame_analysis`], which replaces the four separate full-frame iterations
+/// that previously computed these values (R2-MCP-08).
+struct FrameAnalysis {
+    /// Per-channel 256-bin histograms `(red, green, blue)`.
+    channel_histograms: (Vec<u64>, Vec<u64>, Vec<u64>),
+    /// Per-channel mean/stddev/min/max as a JSON object (mirrors the previous
+    /// `channel_stats` shape).
+    channel_stats: Value,
+    /// Standard deviation of Rec.709 luminance over the frame.
+    luminance_stddev: f64,
+    /// Most frequent quantized colours, sorted by frequency (then key).
+    dominant_colors: Vec<Value>,
+}
+
+/// Single-pass frame analysis (R2-MCP-08): computes the per-channel 256-bin
+/// histograms, per-channel mean/stddev/min/max, the Rec.709 luminance standard
+/// deviation and the dominant quantized colours in **one** iteration over the
+/// pixel buffer instead of four. The math is byte-identical to the previous
+/// `channel_histograms`/`channel_stats`/`stddev_luminance`/`dominant_colors`
+/// helpers — only the number of passes changes, so the emitted JSON is
+/// unchanged.
+fn frame_analysis(frame: &ImageFrame, mean_luminance: f64) -> FrameAnalysis {
+    let total = (frame.width as usize * frame.height as usize).max(1) as f64;
     let mut red = vec![0u64; 256];
     let mut green = vec![0u64; 256];
     let mut blue = vec![0u64; 256];
-    for pixel in frame.pixels.as_chunks::<4>().0 {
-        red[pixel[0] as usize] += 1;
-        green[pixel[1] as usize] += 1;
-        blue[pixel[2] as usize] += 1;
-    }
-    (red, green, blue)
-}
-
-/// Per-channel mean, stddev, min and max.
-fn channel_stats(frame: &ImageFrame) -> Value {
-    let total = (frame.width as usize * frame.height as usize).max(1) as f64;
     let mut sums = [0f64; 3];
     let mut sum_squares = [0f64; 3];
     let mut minimum = [255u8; 3];
     let mut maximum = [0u8; 3];
+    let mut sum_luminance_squares = 0.0;
+    let mut frequencies: HashMap<u32, u64> = HashMap::new();
     for pixel in frame.pixels.as_chunks::<4>().0 {
+        let r = pixel[0];
+        let g = pixel[1];
+        let b = pixel[2];
+        red[r as usize] += 1;
+        green[g as usize] += 1;
+        blue[b as usize] += 1;
+        let channels = [r, g, b];
         for channel in 0..3 {
-            let value = pixel[channel] as f64;
+            let value = channels[channel] as f64;
             sums[channel] += value;
             sum_squares[channel] += value * value;
-            minimum[channel] = minimum[channel].min(pixel[channel]);
-            maximum[channel] = maximum[channel].max(pixel[channel]);
+            minimum[channel] = minimum[channel].min(channels[channel]);
+            maximum[channel] = maximum[channel].max(channels[channel]);
         }
+        let luminance = (0.2126 * r as f64 + 0.7152 * g as f64 + 0.0722 * b as f64) / 255.0;
+        sum_luminance_squares += (luminance - mean_luminance) * (luminance - mean_luminance);
+        // Quantize each channel to its top 4 bits for a stable, coarse palette.
+        let key = ((r as u32 & 0xF0) << 16) | ((g as u32 & 0xF0) << 8) | (b as u32 & 0xF0);
+        *frequencies.entry(key).or_insert(0) += 1;
     }
+
     let mut means = [0f64; 3];
     let mut stddevs = [0f64; 3];
     for channel in 0..3 {
@@ -116,7 +148,7 @@ fn channel_stats(frame: &ImageFrame) -> Value {
         means[channel] = mean;
         stddevs[channel] = variance.max(0.0).sqrt();
     }
-    json!({
+    let channel_stats = json!({
         "r": {
             "mean": means[0], "stddev": stddevs[0],
             "min": minimum[0], "max": maximum[0],
@@ -129,46 +161,30 @@ fn channel_stats(frame: &ImageFrame) -> Value {
             "mean": means[2], "stddev": stddevs[2],
             "min": minimum[2], "max": maximum[2],
         },
-    })
-}
+    });
+    let luminance_stddev = (sum_luminance_squares / total).max(0.0).sqrt();
 
-/// Standard deviation of Rec.709 luminance over the frame.
-fn stddev_luminance(frame: &ImageFrame, mean: f64) -> f64 {
-    let total = (frame.width as usize * frame.height as usize).max(1) as f64;
-    let mut sum_squares = 0.0;
-    for pixel in frame.pixels.as_chunks::<4>().0 {
-        let luminance =
-            (0.2126 * pixel[0] as f64 + 0.7152 * pixel[1] as f64 + 0.0722 * pixel[2] as f64)
-                / 255.0;
-        sum_squares += (luminance - mean) * (luminance - mean);
-    }
-    (sum_squares / total).max(0.0).sqrt()
-}
-
-/// Most frequent quantized colors, sorted by frequency (then key for stability).
-fn dominant_colors(frame: &ImageFrame, count: usize) -> Vec<Value> {
-    let mut frequencies: HashMap<u32, u64> = HashMap::new();
-    for pixel in frame.pixels.as_chunks::<4>().0 {
-        // Quantize each channel to its top 4 bits for a stable, coarse palette.
-        let key = ((pixel[0] as u32 & 0xF0) << 16)
-            | ((pixel[1] as u32 & 0xF0) << 8)
-            | (pixel[2] as u32 & 0xF0);
-        *frequencies.entry(key).or_insert(0) += 1;
-    }
-    let total = frame.pixels.len() as u64 / 4;
+    let total_pixels = frame.pixels.len() as u64 / 4;
     let mut entries: Vec<(u32, u64)> = frequencies.into_iter().collect();
     entries.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    entries
+    let dominant_colors: Vec<Value> = entries
         .into_iter()
-        .take(count)
+        .take(5)
         .map(|(key, frequency)| {
             let red = ((key >> 16) & 0xFF) as u8;
             let green = ((key >> 8) & 0xFF) as u8;
             let blue = (key & 0xFF) as u8;
             json!({
                 "rgb": [red, green, blue],
-                "frequency": frequency as f64 / total as f64,
+                "frequency": frequency as f64 / total_pixels as f64,
             })
         })
-        .collect()
+        .collect();
+
+    FrameAnalysis {
+        channel_histograms: (red, green, blue),
+        channel_stats,
+        luminance_stddev,
+        dominant_colors,
+    }
 }

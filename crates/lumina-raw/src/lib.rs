@@ -229,9 +229,19 @@ pub fn decode_file(path: impl AsRef<std::path::Path>) -> Result<RawImage, RawErr
 }
 
 pub fn decode_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawImage, RawError> {
-    // `name` is currently unused by the decoder itself; removing the
-    // parameter is a deliberate breaking-API cleanup tracked separately
-    // (R2-RAW-03) and therefore NOT done here.
+    // R2-RAW-03 (API-Hygiene): the `name` parameter is currently unused by the
+    // decoder itself. Removing it is a *breaking* change because callers across
+    // crate boundaries rely on the current signature — `lumina-cli`
+    // (`main.rs`), `lumina-mcp` (`util.rs`, `tools/load.rs`), `lumina-gui`
+    // (`lib.rs`, three sites), `lumina-bench` and several tests all pass a
+    // filename here. **Decision: preserve for API stability.** The parameter is
+    // intentionally kept (not `#[deprecated]`, not removed) so the public
+    // contract stays stable until a deliberate breaking-version bump; a
+    // `#[deprecated]` attribute would instead push `warn(deprecated)` onto every
+    // caller — including `lumina-gui`/`lumina-bench` which are out of scope for
+    // this change and would fail the workspace-wide 0-warning clippy gate. If the
+    // parameter is ever dropped, all call sites listed above must be updated in
+    // the same breaking release.
     let _ = name;
     #[cfg(target_arch = "wasm32")]
     {

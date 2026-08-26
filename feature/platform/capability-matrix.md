@@ -37,6 +37,27 @@ Ergänzung zu `cli-gui-wasm.md` und zur `docs/adr/`-Entscheidung zum RAW-Backend
   `decode_bytes`-Vertrag (Orientierung, Metadaten, 8/16-bit) in beiden
   Backends gilt.
 
+## Binäre Sidecar-Artefakte (`zdata`) und zstd (native-only)
+
+- Das binäre Sidecar-Artefakt `<original>.lumina.zdata` (große Masken-/
+  Source-Action-Daten) wird mit `zstd` komprimiert. `zstd` bindet das native
+  C-Backend `zstd-sys` und ist **nicht WASM-kompilierbar** (F-006 /
+  R2-SIDECAR-ZDATA-WASM).
+- Die `zdata`-Funktion ist in `lumina-sidecar` als optionales, **nicht
+  default**-Feature hinterlegt (`[features] default = []; zdata = ["dep:zstd"]`).
+  Ein Standard-`wasm32`-Build des Workspace bleibt grün, solange `zdata` nicht
+  aktiviert wird.
+- **Workspace-weites `wasm32`-Gate:** Ein `cargo build --target
+  wasm32-unknown-unknown` des gesamten Workspace schlägt fehl, sobald irgendein
+  Crate das `zdata`-Feature einschaltet, weil dann transitiv `zstd-sys` (native)
+  gebaut werden müsste. **Capability-Entscheidung: `zdata` ist native-only** —
+  für WASM-Ziele darf das `zdata`-Feature nicht aktiviert werden. `--no-default-
+  features` reicht nicht, wenn ein anderes Crate `zdata` explizit einschaltet;
+  dann muss dieses Crate das Feature für WASM aus-`cfg`-gaten. Die
+  WASM-Pfade in `lumina-core`/`lumina-sidecar` sind bereits
+  `cfg(target_arch = "wasm32")`-gekapselt; `zdata`/`zstd` ist die einzige
+  bekannte native Bremswirkung fürs workspace-weite wasm32-Gate.
+
 ## Offene Browser-Punkte
 
 - ONNX/Masken/Export im Browser sind explizit **offen** und werden vor Freigabe
