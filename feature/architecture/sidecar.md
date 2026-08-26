@@ -139,10 +139,26 @@ konsumierenden Pipeline-Decoder nicht sound implementierbar:
 3. Die Zusammensetzung von Kacheln zu einer Maskenebene (Offsets, Kachelraster,
    Nachskalierung beim Lesen) ist Semantik des konsumierenden Loaders.
 
-Die tiefere Auflösungsvalidierung gehört deshalb in den ladenden Pfad
-(z. B. den Maskenloader von `lumina-core`), der Masken-ID und Dekontext kennt.
-Bis dahin bleibt die Lücke hier ausdrücklich dokumentiert; sie ist kein
-stiller Fallback, sondern eine abgegrenzte Verantwortungsgrenze.
+Die tiefere Auflösungsvalidierung gehört in den ladenden Pfad, der Masken-ID
+und Dekontext kennt.
+
+**Umgesetzt im ladenden Pfad (Stand 2026-08-26, REVIEW-SIDECAR-LOADER-RES):**
+Der Maskenloader `lumina-core::mask_loader` (`resolve_mask_planes`) führt
+diese Validierung aus: Die dekodierten Dimensionen jeder geladenen Maske
+müssen der in ihrem eigenen `ArtifactReference`-Record deklarierten Auflösung
+entsprechen. Bei Abweichung gilt das Artefakt als `Corrupt`: Es wird nie
+stillschweigend resampelt und nie als bestätigt gültig geladen, sondern — je
+nach Modellverfügbarkeit — neu inferiert oder gemäß F-051 mit expliziter
+Warnung aus dem Cache verwendet; ohne Cache und Modell folgt ein lauter
+Fehler. In den Ergebnis-Kopien wird der Maskenstatus auf `Corrupt` gesetzt
+(eine erfolgreiche Re-Inferenz löst das wieder auf). Fehlt ein
+ArtifactReference-Record, gibt es keine Referenzauflösung zum Vergleich — dann
+gilt unverändert das bisherige Verhalten (Artefakt nicht bestätigbar ⇒
+F-051-Pfade). Die Lücke bleibt damit bewusst auf `artifact_status` selbst
+begrenzt: Der Statuscheck meldet weiterhin nur `Missing`/`Available`/`Corrupt`
+anhand der obigen Dateiregeln und validiert keine Auflösungen; die
+Verantwortungsgrenze liegt dokumentiert zwischen Statuscheck (Datei-Ebene) und
+ladendem Pfad (Ebenen-Ebene).
 
 Der Container muss Random Access auf einzelne Kacheln erlauben und darf später
 weitere Artefakttypen aufnehmen. OpenEXR und 7z sind für dieses Arbeitsformat

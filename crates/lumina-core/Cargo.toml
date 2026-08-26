@@ -27,5 +27,13 @@ parallel = ["dep:rayon"]
 # feature so the FFI bindings and `liblensfun` linkage are active.
 lensfun = ["dep:lumina-lensfun", "lumina-lensfun/native"]
 
-[dev-dependencies]
+# REVIEW-CORE-WASM-FOLLOWUP: `proptest` transitively pulls `getrandom` and
+# `wait-timeout` (via rand/rusty-fork), neither of which compiles for
+# wasm32-unknown-unknown. Target-gating the dev-dependency keeps
+# `cargo check -p lumina-core --target wasm32-unknown-unknown --all-targets`
+# green; the only two consumers of the crate are cfg-gated identically
+# (`histogram.rs::tests::proptests`, `tone_props.rs`). Native builds/tests are
+# unaffected — on every non-wasm32 target the dependency resolves exactly as
+# before.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = "1"

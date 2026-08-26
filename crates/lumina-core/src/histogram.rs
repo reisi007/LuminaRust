@@ -207,7 +207,6 @@ impl LuminanceHistogram {
 mod tests {
     use super::*;
     use crate::tone::analyze_tone;
-    use proptest::prelude::*;
 
     /// Documented quantile consistency tolerance of the constructed test
     /// images: one bin width plus floating point slack. See module docs for
@@ -222,15 +221,6 @@ mod tests {
 
     fn gray(value: u8) -> [u8; 4] {
         [value, value, value, 255]
-    }
-
-    /// Strategy producing small random RGBA8 frames (1..=8 pixels per side)
-    /// with arbitrary per-channel values — including arbitrary alphas.
-    fn any_frame() -> impl Strategy<Value = ImageFrame> {
-        (1usize..=8usize, 1usize..=8usize).prop_flat_map(|(width, height)| {
-            prop::collection::vec(any::<u8>(), width * height * 4)
-                .prop_map(move |pixels| frame(width as u32, height as u32, pixels))
-        })
     }
 
     #[test]
@@ -456,52 +446,6 @@ mod tests {
         assert!(json.contains("\"width\":3"));
     }
 
-    proptest! {
-        /// Random frames of any RGB/alpha mixture: the histogram always counts
-        /// exactly width*height samples, all quantiles stay in 0..=1 (finite),
-        /// and the CDF is monotone and reaches exactly 1.0 at the upper bound.
-        #[test]
-        fn histogram_invariants_hold_for_random_frames(frame in any_frame()) {
-            let histogram = LuminanceHistogram::new(&frame);
-            let expected = frame.width as usize * frame.height as usize;
-            prop_assert_eq!(histogram.sample_count(), expected);
-            prop_assert_eq!(histogram.bins.iter().sum::<u64>() as usize, expected);
-            for quantile in [histogram.p01(), histogram.median(), histogram.p99(), histogram.mean()] {
-                prop_assert!(quantile.is_finite(), "quantile must be finite, got {quantile}");
-                prop_assert!((0.0..=1.0).contains(&quantile), "quantile in 0..=1, got {quantile}");
-            }
-            prop_assert!(histogram.p01() <= histogram.median() + 1e-15);
-            prop_assert!(histogram.median() <= histogram.p99() + 1e-15);
-
-            let mut previous = histogram.cdf_at(0.0).unwrap();
-            prop_assert_eq!(previous, 0.0);
-            for step in 1..=64u32 {
-                let value = f64::from(step) / 64.0;
-                let current = histogram.cdf_at(value).unwrap();
-                prop_assert!(
-                    current >= previous - 1e-12,
-                    "CDF must be monotone at {value}: {current} < {previous}"
-                );
-                prop_assert!((0.0..=1.0).contains(&current));
-                previous = current;
-            }
-            prop_assert!((histogram.cdf_at(1.0).unwrap() - 1.0).abs() < 1e-12);
-        }
-
-        /// Reconstructing the same image twice yields the identical histogram
-        /// and the identical digest (cache-safety of `CacheStage::Histogram`).
-        #[test]
-        fn digest_is_deterministic_for_identical_frames(frame in any_frame()) {
-            let first = LuminanceHistogram::new(&frame);
-            let second = LuminanceHistogram::new(&frame);
-            prop_assert_eq!(&first, &second);
-            let first_digest = first.digest();
-            let second_digest = second.digest();
-            prop_assert!(!first_digest.is_empty());
-            prop_assert_eq!(&first_digest, &second_digest);
-        }
-    }
-
     /// Consistency of quantile rank positions with `analyze_tone` at the
     /// single-sample boundary: a fully white pixel quantizes into the last bin
     /// and reports its lower edge (documented deviation of at most 1/256).
@@ -511,5 +455,74 @@ mod tests {
         let single = LuminanceHistogram::new(&image);
         assert_eq!(single.median(), 255.0 * BIN_WIDTH);
         assert!((single.median() - analyze_tone(&image).median).abs() <= 1.0 / 256.0 + 1e-9);
+    }
+
+    // REVIEW-CORE-WASM-FOLLOWUP: these properties depend on `proptest`, which
+    // is a non-wasm32 dev-dependency (its transitive `getrandom`/`wait-timeout`
+    // do not compile for wasm32-unknown-unknown). The module is gated with the
+    // exact same condition as the dependency in `Cargo.toml`, so test targets
+    // compile for every platform; on wasm32 only the deterministic unit tests
+    // above are built.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    mod proptests {
+        use super::super::LuminanceHistogram;
+        use super::frame;
+        use crate::ImageFrame;
+        use proptest::prelude::*;
+
+        /// Strategy producing small random RGBA8 frames (1..=8 pixels per side)
+        /// with arbitrary per-channel values — including arbitrary alphas.
+        fn any_frame() -> impl Strategy<Value = ImageFrame> {
+            (1usize..=8usize, 1usize..=8usize).prop_flat_map(|(width, height)| {
+                prop::collection::vec(any::<u8>(), width * height * 4)
+                    .prop_map(move |pixels| frame(width as u32, height as u32, pixels))
+            })
+        }
+
+        proptest! {
+            /// Random frames of any RGB/alpha mixture: the histogram always counts
+            /// exactly width*height samples, all quantiles stay in 0..=1 (finite),
+            /// and the CDF is monotone and reaches exactly 1.0 at the upper bound.
+            #[test]
+            fn histogram_invariants_hold_for_random_frames(frame in any_frame()) {
+                let histogram = LuminanceHistogram::new(&frame);
+                let expected = frame.width as usize * frame.height as usize;
+                prop_assert_eq!(histogram.sample_count(), expected);
+                prop_assert_eq!(histogram.bins.iter().sum::<u64>() as usize, expected);
+                for quantile in [histogram.p01(), histogram.median(), histogram.p99(), histogram.mean()] {
+                    prop_assert!(quantile.is_finite(), "quantile must be finite, got {quantile}");
+                    prop_assert!((0.0..=1.0).contains(&quantile), "quantile in 0..=1, got {quantile}");
+                }
+                prop_assert!(histogram.p01() <= histogram.median() + 1e-15);
+                prop_assert!(histogram.median() <= histogram.p99() + 1e-15);
+
+                let mut previous = histogram.cdf_at(0.0).unwrap();
+                prop_assert_eq!(previous, 0.0);
+                for step in 1..=64u32 {
+                    let value = f64::from(step) / 64.0;
+                    let current = histogram.cdf_at(value).unwrap();
+                    prop_assert!(
+                        current >= previous - 1e-12,
+                        "CDF must be monotone at {value}: {current} < {previous}"
+                    );
+                    prop_assert!((0.0..=1.0).contains(&current));
+                    previous = current;
+                }
+                prop_assert!((histogram.cdf_at(1.0).unwrap() - 1.0).abs() < 1e-12);
+            }
+
+            /// Reconstructing the same image twice yields the identical histogram
+            /// and the identical digest (cache-safety of `CacheStage::Histogram`).
+            #[test]
+            fn digest_is_deterministic_for_identical_frames(frame in any_frame()) {
+                let first = LuminanceHistogram::new(&frame);
+                let second = LuminanceHistogram::new(&frame);
+                prop_assert_eq!(&first, &second);
+                let first_digest = first.digest();
+                let second_digest = second.digest();
+                prop_assert!(!first_digest.is_empty());
+                prop_assert_eq!(&first_digest, &second_digest);
+            }
+        }
     }
 }

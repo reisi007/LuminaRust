@@ -11,6 +11,17 @@
 //! * **fall back to a cached (possibly stale) artifact** when the model is
 //!   unavailable (F-051: render still succeeds, but a warning is surfaced).
 //!
+//! Additionally (REVIEW-SIDECAR-LOADER-RES), every decoded persisted plane is
+//! checked against the resolution declared in its own artifact record
+//! ([`lumina_sidecar::ArtifactReference`]). `artifact_status` deliberately
+//! does not validate reference width/height against bundle records (see
+//! `feature/architecture/sidecar.md`, „Artefaktstatus-Prüfung"); this loading
+//! path can do so soundly because it knows the mask identity and holds the
+//! fully decoded plane. A plane whose dimensions contradict its own record is
+//! corrupt: it is reported as [`MaskStatus::Corrupt`] in the returned copies
+//! and routed through re-inference / cache-with-warning / hard error — never
+//! silently resampled and never served as confirmably valid.
+//!
 //! When neither a cached artifact nor a model is available, it reports a clear
 //! error instead of silently serving a stale or empty mask (F-051).
 //!
@@ -123,6 +134,11 @@ pub fn resolve_mask_planes(
     let mut model_unavailable = false;
     let mut outcomes: Vec<MaskLoadOutcome> = Vec::new();
     let mut resolved_sources: BTreeSet<(String, String)> = BTreeSet::new();
+    // REVIEW-SIDECAR-LOADER-RES: keys whose decoded plane contradicts the
+    // resolution declared in its own artifact record (see below). Successful
+    // re-inference removes a key again (the fresh matte replaces the corrupt
+    // artifact); everything left in the set is surfaced as `Corrupt`.
+    let mut dimension_mismatched: BTreeSet<(String, String)> = BTreeSet::new();
 
     for key in &reachable {
         let Some(definition) = find_definition(ctx.copies, &reference_from_key(key)) else {
@@ -136,11 +152,27 @@ pub fn resolve_mask_planes(
 
         let persisted = ctx.loaded_planes.get(key).cloned();
         let artifact_present = persisted.is_some() && definition.artifact.is_some();
+        // REVIEW-SIDECAR-LOADER-RES: compare the *decoded* plane dimensions
+        // with the reference resolution declared by the artifact record. The
+        // zdata loader hands planes through unscaled, so any difference means
+        // payload and declaration disagree → the artifact is corrupt. Without
+        // an artifact record there is nothing to compare against and the
+        // pre-existing behavior applies unchanged.
+        let dimension_mismatch = persisted
+            .as_ref()
+            .zip(definition.artifact.as_ref())
+            .is_some_and(|(plane, artifact)| {
+                plane.width != artifact.width || plane.height != artifact.height
+            });
+        if dimension_mismatch {
+            dimension_mismatched.insert(key.clone());
+        }
         let source_ok = definition.source_fingerprint.content_hash == ctx.source_hash;
         let decode_ok = decode_context_matches(&definition.decode_context, ctx.decode_context);
         let identity_ok = model_identity_matches(&definition.model, ctx.model_identity);
         let valid = definition.status == MaskStatus::Valid
             && artifact_present
+            && !dimension_mismatch
             && source_ok
             && decode_ok
             && identity_ok;
@@ -157,8 +189,8 @@ pub fn resolve_mask_planes(
             continue;
         }
 
-        // The persisted artifact is missing, outdated, or a refresh was
-        // requested. Try re-inference first.
+        // The persisted artifact is missing, outdated, corrupt (dimension
+        // mismatch) or a refresh was requested. Try re-inference first.
         let model_present = ctx
             .inference
             .map(|backend| backend.is_available())
@@ -178,6 +210,9 @@ pub fn resolve_mask_planes(
                     })?;
             planes.insert(key.clone(), plane);
             resolved_sources.insert(key.clone());
+            // The freshly inferred matte replaces the corrupt artifact; the
+            // layer is resolved again and is not left marked `Corrupt`.
+            dimension_mismatched.remove(key);
             outcomes.push(MaskLoadOutcome {
                 copy_id: key.0.clone(),
                 mask_id: key.1.clone(),
@@ -191,6 +226,18 @@ pub fn resolve_mask_planes(
         model_unavailable = true;
         if let Some(plane) = persisted {
             // F-051 (1): use the cached (possibly stale) artifact; mark it used.
+            // REVIEW-SIDECAR-LOADER-RES: when the plane contradicts its own
+            // artifact record, say so explicitly instead of only hinting at
+            // staleness — the cause must stay visible (kein stiller Fallback).
+            if let Some(artifact) = definition.artifact.as_ref() {
+                if plane.width != artifact.width || plane.height != artifact.height {
+                    warnings.push(format!(
+                        "mask `{}/{}` artifact dimensions {}x{} contradict the declared {}x{}; \
+                         marked Corrupt (no silent resample)",
+                        key.0, key.1, plane.width, plane.height, artifact.width, artifact.height
+                    ));
+                }
+            }
             planes.insert(key.clone(), plane);
             resolved_sources.insert(key.clone());
             outcomes.push(MaskLoadOutcome {
@@ -248,7 +295,13 @@ pub fn resolve_mask_planes(
     for copy in &mut copies {
         for mask in &mut copy.mask_library {
             let key = (copy.id.clone(), mask.id.clone());
-            if reachable.contains(&key) && blessed.contains(&key) {
+            // REVIEW-SIDECAR-LOADER-RES: a plane whose dimensions contradict
+            // its own artifact record is corrupt. It wins over the blessing
+            // pass so a dimension-mismatched artifact that had to be served
+            // from cache (F-051) is never reported as confirmably `Valid`.
+            if dimension_mismatched.contains(&key) {
+                mask.status = MaskStatus::Corrupt;
+            } else if reachable.contains(&key) && blessed.contains(&key) {
                 mask.status = MaskStatus::Valid;
             }
         }
@@ -432,6 +485,48 @@ mod tests {
             },
             &frame(),
         )
+    }
+
+    /// REVIEW-SIDECAR-LOADER-RES: like [`resolve_one`] but takes an explicit
+    /// [`MaskPlane`], so a test controls the *decoded* plane dimensions
+    /// independently of the artifact record (always declared 4x4).
+    fn resolve_with_plane(
+        definition: MaskDefinition,
+        plane: Option<MaskPlane>,
+        inference: Option<&dyn MaskInference>,
+        model_identity: Option<ModelIdentity>,
+    ) -> Result<MaskLoadResult, CoreError> {
+        let mut copy = copy_with("vc", vec![definition]);
+        copy.mask_layers = vec![layer_for("vc", "subject")];
+        let loaded_planes = plane
+            .map(|value| BTreeMap::from([(("vc".into(), "subject".into()), value)]))
+            .unwrap_or_default();
+        let model_ref = model_identity.as_ref();
+        resolve_mask_planes(
+            MaskLoadContext {
+                copies: &[copy],
+                active_copy_id: "vc",
+                source_hash: "src",
+                decode_context: &decode_context(),
+                loaded_planes,
+                inference,
+                model_identity: model_ref,
+                refresh: false,
+                policy: MaskPolicy::Warn,
+            },
+            &frame(),
+        )
+    }
+
+    /// Status of the single `vc`/`subject` mask in the result copies.
+    fn persisted_status(result: &MaskLoadResult) -> MaskStatus {
+        result
+            .copies
+            .iter()
+            .find(|copy| copy.id == "vc")
+            .and_then(|copy| copy.mask_library.iter().find(|mask| mask.id == "subject"))
+            .map(|mask| mask.status.clone())
+            .unwrap()
     }
 
     const PERSISTED_VALUE: u16 = 32768;
@@ -1216,5 +1311,151 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CoreError::MaskInference { .. }));
+    }
+
+    // --- REVIEW-SIDECAR-LOADER-RES: loading-path resolution validation ------
+
+    /// A decoded plane whose dimensions match the declared artifact record
+    /// loads normally: `LoadedPersisted`, no warning, confirmably valid.
+    #[test]
+    fn matching_dimensions_load_persisted_normally() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_with_plane(
+            definition,
+            Some(MaskPlane::new(4, 4, vec![PERSISTED_VALUE; 16]).unwrap()),
+            None,
+            Some(model_identity()),
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::LoadedPersisted);
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![PERSISTED_VALUE; 16]
+        );
+        assert!(result.warnings.is_empty());
+        assert_eq!(persisted_status(&result), MaskStatus::Valid);
+    }
+
+    /// Decoded 2x8 against a declared 4x4 record: the artifact cannot be
+    /// confirmed → with a model available it is re-inferred (never served as
+    /// confirmably valid and never silently resampled to the declared size).
+    #[test]
+    fn dimension_mismatch_is_reinferred_when_model_available() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_with_plane(
+            definition,
+            Some(MaskPlane::new(2, 8, vec![PERSISTED_VALUE; 16]).unwrap()),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![INFERRED_VALUE; 16]
+        );
+        // The fresh matte resolved the layer again — it is not left marked
+        // `Corrupt`, because the corrupt persisted artifact was replaced.
+        assert_eq!(persisted_status(&result), MaskStatus::Valid);
+    }
+
+    /// Same mismatch without a model (F-051): the cached plane is used with an
+    /// explicit dimension-mismatch warning and reported as `Corrupt` in the
+    /// result copies — visible, not a silent fallback or resample.
+    #[test]
+    fn dimension_mismatch_marks_corrupt_when_cached_without_model() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_with_plane(
+            definition,
+            Some(MaskPlane::new(8, 2, vec![PERSISTED_VALUE; 16]).unwrap()),
+            None,
+            Some(model_identity()),
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::CachedUnavailable);
+        assert!(result.model_unavailable);
+        // The plane is passed through byte-identical — no resampling.
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![PERSISTED_VALUE; 16]
+        );
+        assert!(result.warnings.iter().any(|warning| {
+            warning.contains("8x2")
+                && warning.contains("4x4")
+                && warning.contains("Corrupt")
+                && warning.contains("no silent resample")
+        }));
+        assert_eq!(persisted_status(&result), MaskStatus::Corrupt);
+    }
+
+    /// Without an artifact record there is no declared reference resolution to
+    /// compare against: the pre-existing behavior applies unchanged (artifact
+    /// absent ⇒ validity unconfirmable ⇒ F-051 paths). No dimension check and
+    /// no `Corrupt` override is invented from thin air.
+    #[test]
+    fn missing_artifact_reference_keeps_existing_behavior() {
+        // Plane present but `artifact: None`.
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Valid,
+            "src",
+            model_identity(),
+            decode_context(),
+            false,
+        );
+        let result = resolve_with_plane(
+            definition,
+            Some(MaskPlane::new(4, 4, vec![PERSISTED_VALUE; 16]).unwrap()),
+            None,
+            Some(model_identity()),
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::CachedUnavailable);
+        assert!(result.model_unavailable);
+        // Only the F-051 cache warning — no dimension-mismatch warning.
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("model is unavailable"));
+        // Existing blessing semantics apply untouched.
+        assert_eq!(persisted_status(&result), MaskStatus::Valid);
     }
 }

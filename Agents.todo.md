@@ -114,18 +114,6 @@ stehenden Restbestand.
 MVP-blockierend)**
 
 
-- [ ] **[PRIO: niedrig] REVIEW-CORE-WASM-FOLLOWUP** `cargo check -p lumina-core --target wasm32-unknown-unknown --all-targets` scheitert an Dev-Dependencies (wait-timeout/getrandom), identisch an HEAD — der dokumentierte lib-only-Capability-Gate ist grün; Dev-Deps für wasm32 cfg-gaten oder `--all-targets` offiziell als native-only dokumentieren.
-
-
-
-- [ ] **[PRIO: niedrig] REVIEW-SIDECAR-LOADER-RES** Auflösungsvalidierung im
-  ladenden Pfad: `artifact_status` validiert Reference-width/height bewusst
-  nicht gegen Bundle-Records (siehe sidecar.md „Artefaktstatus-Prüfung");
-  der Maskenloader (`lumina-core::mask_loader`) soll Dimensionen beim Laden
-  prüfen und bei Abweichung `Corrupt`/Re-Inferenz auslösen.
-
-
-
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
 
 - [ ] **[PRIO: niedrig] F-019** (deferriert auf Post-MVP) CLI `migrate_sidecar`

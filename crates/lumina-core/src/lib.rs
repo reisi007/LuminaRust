@@ -19,7 +19,11 @@ pub mod pipeline;
 pub mod render;
 pub mod stage_cache;
 pub mod tone;
-#[cfg(test)]
+// REVIEW-CORE-WASM-FOLLOWUP: this module holds real `proptest` properties;
+// `proptest` is a non-wasm32 dev-dependency (its transitive `getrandom`/
+// `wait-timeout` do not compile for wasm32-unknown-unknown), so the module is
+// gated with the same condition as the dependency in `Cargo.toml`.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tone_props;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::disk::{DiskCacheError, DiskFolderCache};
