@@ -23,6 +23,15 @@
 //!   [`OnnxError::ModelArtifactStale`] instead of silently running wrong
 //!   weights.
 //!
+//! ## Manifest ↔ artifact I/O contract (F-082-FOLLOWUP-ORT)
+//!
+//! The manifest declares the graph's tensor names, so loading validates them
+//! against the session's actual inputs/outputs: a mismatch fails at load with
+//! [`OnnxError::InferenceFailed`] instead of panicking at first inference.
+//! The runtime output lookup stays defensive as well — an unknown name maps
+//! to [`OnnxError::InferenceFailed`], never a panic (`ort`'s `Index` impl
+//! would panic; we use `SessionOutputs::get`).
+//!
 //! ## Preprocessing contract (REVIEW-ONNX-PREPROC-1)
 //!
 //! Input normalization (ImageNet mean/std), the input tensor name, the output
@@ -42,6 +51,35 @@ use lumina_core::{ImageFrame, MaskPlane};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+/// Build the shared, descriptive [`OnnxError::InferenceFailed`] for a
+/// manifest-declared tensor name that does not exist in the loaded graph
+/// (F-082-FOLLOWUP-ORT). Used by both the load-time validation and the
+/// defensive runtime output lookup, so every mismatch reports *what* was
+/// requested and *what the artifact actually provides*.
+fn tensor_name_error<T: AsRef<str>>(
+    kind: &str,
+    requested: &str,
+    available: &[T],
+    model_name: &str,
+) -> OnnxError {
+    let listed = if available.is_empty() {
+        "<none>".to_owned()
+    } else {
+        available
+            .iter()
+            .map(|name| format!("`{}`", name.as_ref()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    OnnxError::InferenceFailed {
+        name: model_name.to_owned(),
+        reason: format!(
+            "the loaded ONNX graph has no {kind} tensor `{requested}` \
+             (available {kind}s: {listed})"
+        ),
+    }
+}
+
 /// ONNX Runtime backed inference for an `.onnx` model artifact.
 pub struct OrtBackend {
     manifest: ModelManifest,
@@ -58,11 +96,14 @@ pub struct OrtBackend {
 impl OrtBackend {
     /// Load a session from `model_path`. Returns [`OnnxError::MissingModel`] if
     /// the artifact is absent/unreadable and [`OnnxError::InferenceFailed`] if
-    /// the session cannot be built. The artifact's SHA-256 digest is computed
-    /// here once and compared against `manifest.model_hash`
-    /// ([`Self::hash_status`]); a mismatch does not prevent loading but makes
-    /// every subsequent [`SubjectInference::infer`] fail with
-    /// [`OnnxError::ModelArtifactStale`] — stale weights never run silently.
+    /// the session cannot be built or if the manifest-declared input/output
+    /// tensor names do not exist in the graph (F-082-FOLLOWUP-ORT: a name
+    /// mismatch is a visible load error, never a panic at inference time).
+    /// The artifact's SHA-256 digest is computed here once and compared
+    /// against `manifest.model_hash` ([`Self::hash_status`]); a mismatch does
+    /// not prevent loading but makes every subsequent
+    /// [`SubjectInference::infer`] fail with [`OnnxError::ModelArtifactStale`]
+    /// — stale weights never run silently.
     pub fn new(model_path: impl AsRef<Path>, manifest: ModelManifest) -> Result<Self, OnnxError> {
         manifest.validate()?;
         let model_path = model_path.as_ref().to_path_buf();
@@ -78,6 +119,33 @@ impl OrtBackend {
                 name: manifest.model_name.clone(),
                 reason: format!("failed to load ONNX session: {e}"),
             })?;
+        // The manifest is the I/O contract: both declared tensor names must
+        // exist in the loaded graph, otherwise every later inference would be
+        // doomed (and `ort`'s output indexing would panic). Fail visibly here.
+        let input_names: Vec<&str> = session.inputs().iter().map(|io| io.name()).collect();
+        if !input_names
+            .iter()
+            .any(|name| *name == manifest.input.tensor_name)
+        {
+            return Err(tensor_name_error(
+                "input",
+                &manifest.input.tensor_name,
+                &input_names,
+                &manifest.model_name,
+            ));
+        }
+        let output_names: Vec<&str> = session.outputs().iter().map(|io| io.name()).collect();
+        if !output_names
+            .iter()
+            .any(|name| *name == manifest.output_tensor_name)
+        {
+            return Err(tensor_name_error(
+                "output",
+                &manifest.output_tensor_name,
+                &output_names,
+                &manifest.model_name,
+            ));
+        }
         Ok(Self {
             manifest,
             model_path,
@@ -96,14 +164,11 @@ impl OrtBackend {
 
     fn infer_inner(&self, image: &ImageFrame) -> Result<MaskPlane, OnnxError> {
         // Stale/mismatched weights are refused — visible failure instead of a
-        // silent fallback (REVIEW-ONNX-HASH-1).
-        if let ModelHashStatus::Mismatch { expected, actual } = &self.hash_status {
-            return Err(OnnxError::ModelArtifactStale {
-                name: self.manifest.model_name.clone(),
-                expected: expected.clone(),
-                actual: actual.clone(),
-            });
-        }
+        // silent fallback (REVIEW-ONNX-HASH-1). The shared gate is unit-tested
+        // feature-free in `crate::hash` / `tests/model_hash.rs` and end-to-end
+        // against a loadable artifact in `tests/ort_backend.rs`.
+        self.hash_status
+            .enforce_inference_allowed(&self.manifest.model_name)?;
         if image.width == 0 || image.height == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
@@ -139,12 +204,24 @@ impl OrtBackend {
                 reason: format!("inference failed: {e}"),
             })?;
         let output_name = self.manifest.output_tensor_name.as_str();
-        let (shape, raw) = outputs[output_name]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| OnnxError::InferenceFailed {
-                name: self.manifest.model_name.clone(),
-                reason: format!("failed to read output tensor `{output_name}`: {e}"),
-            })?;
+        // `SessionOutputs::get` returns an Option — unlike the `Index` impl,
+        // an unknown name can never panic here (F-082-FOLLOWUP-ORT).
+        let available_outputs: Vec<&str> = outputs.keys().collect();
+        let output = outputs.get(output_name).ok_or_else(|| {
+            tensor_name_error(
+                "output",
+                output_name,
+                &available_outputs,
+                &self.manifest.model_name,
+            )
+        })?;
+        let (shape, raw) =
+            output
+                .try_extract_tensor::<f32>()
+                .map_err(|e| OnnxError::InferenceFailed {
+                    name: self.manifest.model_name.clone(),
+                    reason: format!("failed to read output tensor `{output_name}`: {e}"),
+                })?;
         // The emitted matte must match what the manifest claims — no silent
         // reshapes/truncations of unexpected output shapes.
         validate_output_shape(shape, res, &self.manifest.model_name)?;
@@ -194,6 +271,26 @@ mod tests {
             matches!(backend, Err(OnnxError::MissingModel { .. })),
             "absent artifact must surface as MissingModel"
         );
+    }
+
+    /// The shared F-082-FOLLOWUP-ORT error always names the requested tensor
+    /// and lists what the artifact actually provides (or `<none>`).
+    #[test]
+    fn tensor_name_error_lists_requested_and_available() {
+        let available = vec!["alpha_matte".to_owned(), "aux".to_owned()];
+        let err = tensor_name_error("output", "missing_out", &available, "BiRefNet");
+        match &err {
+            OnnxError::InferenceFailed { name, reason } => {
+                assert_eq!(name, "BiRefNet");
+                assert!(reason.contains("`missing_out`"), "{reason}");
+                assert!(reason.contains("`alpha_matte`, `aux`"), "{reason}");
+            }
+            other => panic!("expected InferenceFailed, got {other:?}"),
+        }
+
+        let empty: Vec<String> = Vec::new();
+        let err = tensor_name_error("input", "x", &empty, "M");
+        assert!(err.to_string().contains("<none>"), "{err}");
     }
 
     /// A present-but-garbage artifact fails at hash/session level, never

@@ -313,10 +313,31 @@ CHW-Planes) mit Tensor-/Output-Namen aus dem Manifest und validierter
 Output-Shape, und `ModelManifest::validate` erzwingt non-empty
 hash/license sowie gültige Auflösungen/Tensor-Namen. SAM-Prompt-Typsystem
 deckt Labels −1/0/1/2/3 inklusive Source↔1024²-Mapping ab (76 Tests).
-Bekannte Grenzen bis F-082: ORT-Mismatch-Zweig ohne ausführbaren Test
-(benötigt hash-gepinntes `.onnx`-Fixture); unbekannter Output-Name panikt
-intern in ort statt sauberem `InferenceFailed` (Folgeaufgaben in
-`Agents.todo.md`).
+
+**Status (Review-Follow-ups F-082-FOLLOWUP-ORT/-HASH, 2026-08-26):**
+Umgesetzt, Testausführung lokal bestätigt (unabhängige Verifizierung steht
+aus). Beide Befunde sind behoben:
+
+- Kein Panic mehr bei unbekannten Tensor-Namen: `OrtBackend::new` validiert
+  die manifest-deklarierten Input-/Output-Tensor-Namen beim Laden gegen den
+  geladenen Graphen und liefert bei Abweichung einen beschreibenden
+  `OnnxError::InferenceFailed` (angefordertes + verfügbares Name-Set); der
+  Laufzeit-Zugriff auf den Output nutzt `SessionOutputs::get` defensiv statt
+  des panizierenden `Index`-Impls.
+- Der ORT-Mismatch-Refuse-Zweig ist ausführbar getestet: Die Gate-Logik
+  (`ModelHashStatus::enforce_inference_allowed` → `ModelArtifactStale`) ist
+  feature-frei unit-getestet; End-to-End läuft der Zweig gegen ein
+  **in-Test deterministisch generiertes, minimales ONNX-Modell**
+  (`ReduceMax(axes=[1], keepdims=1)`, Prototyp-Bytes handkodiert,
+  `crates/lumina-onnx/tests/ort_backend.rs`, Feature `onnx-rt`) mit von der
+  Pin-Abweichung echtem SHA-256 — ohne committetes Binär-Fixture und ohne
+  Downloads.
+
+Bekannte Grenze bis F-082: Für die **numerische** Validierung (Tensor-Namen,
+Wertebereiche, Matte-Qualität) echter Modelle werden weiterhin lokale,
+hash-gepinnte BiRefNet/SAM-2-`.onnx`-Fixtures benötigt (keine spontanen
+Downloads); das handgenerierte Testmodell dient ausschließlich der
+Verhaltensabsicherung der Backend-Pfade.
 
 ## Abnahme
 

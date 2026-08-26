@@ -78,3 +78,39 @@ fn missing_artifact_is_missing_model() {
         "{err:?}"
     );
 }
+
+// F-082-FOLLOWUP-HASH — the backend refuse branch (`ModelArtifactStale`) is
+// enforced through one shared, feature-free gate; these tests keep it covered
+// in the default build (the end-to-end ORT variant lives behind `onnx-rt` in
+// `tests/ort_backend.rs`).
+#[test]
+fn mismatch_status_enforces_model_artifact_stale() {
+    let status = ModelHashStatus::Mismatch {
+        expected: "pinned-identity".to_owned(),
+        actual: "artifact-digest".to_owned(),
+    };
+    assert!(!status.allows_inference());
+    match status.enforce_inference_allowed("BiRefNet") {
+        Err(lumina_onnx::OnnxError::ModelArtifactStale {
+            name,
+            expected,
+            actual,
+        }) => {
+            assert_eq!(name, "BiRefNet");
+            assert_eq!(expected, "pinned-identity");
+            assert_eq!(actual, "artifact-digest");
+        }
+        other => panic!("expected ModelArtifactStale, got {other:?}"),
+    }
+}
+
+#[test]
+fn verified_and_pending_statuses_allow_inference() {
+    let pinned = "cafe01";
+    assert!(verify_model_hash(pinned, pinned)
+        .enforce_inference_allowed("BiRefNet")
+        .is_ok());
+    assert!(verify_model_hash(PENDING_INTEGRATION_HASH, "any-digest")
+        .enforce_inference_allowed("BiRefNet")
+        .is_ok());
+}

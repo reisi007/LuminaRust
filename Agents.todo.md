@@ -181,12 +181,6 @@ MVP-blockierend)**
 - [ ] **[PRIO: niedrig] REVIEW-RAW-N2** `metadata.lens` ist immer `None`, obwohl Feld
   existiert und Lensfun-Integration ihn braucht (lib.rs:307). Befüllen
   oder Feld entfernen. Re-Check 2026-08-25: unverändert (`lens: None`).
-- [ ] **[PRIO: niedrig] F-082-FOLLOWUP-ORT** `OrtBackend` panickt bei
-  unbekanntem Output-Namen (`outputs[output_name]` unwrap) statt
-  `OnnxError::InferenceFailed`; mit echten Gewichten fixen (F-082).
-- [ ] **[PRIO: niedrig] F-082-FOLLOWUP-HASH** ORT-Mismatch-Refuse-Zweig
-  (`ModelArtifactStale`) ohne ausführbaren Test (benötigt ladbares
-  `.onnx` mit abweichendem Pin); hash-gepinnte ONNX-Fixture erfassen.
 - [ ] **[PRIO: niedrig] REVIEW-SIDECAR-LOADER-RES** Auflösungsvalidierung im
   ladenden Pfad: `artifact_status` validiert Reference-width/height bewusst
   nicht gegen Bundle-Records (siehe sidecar.md „Artefaktstatus-Prüfung");

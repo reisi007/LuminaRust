@@ -60,6 +60,26 @@ impl ModelHashStatus {
     pub fn allows_inference(&self) -> bool {
         matches!(self, ModelHashStatus::Verified | ModelHashStatus::Pending)
     }
+
+    /// Enforce this status as a gate in front of inference
+    /// (F-082-FOLLOWUP-HASH): `Verified`/`Pending` allow inference,
+    /// `Mismatch` is refused with [`OnnxError::ModelArtifactStale`] carrying
+    /// the pinned/actual digests — a visible error instead of silently
+    /// running wrong weights (REVIEW-ONNX-HASH-1).
+    ///
+    /// This is the single shared decision point for every backend that
+    /// verifies artifact identity, kept dependency-free so the refuse branch
+    /// stays unit-testable without ONNX Runtime or model weights.
+    pub fn enforce_inference_allowed(&self, model_name: &str) -> Result<(), OnnxError> {
+        match self {
+            ModelHashStatus::Verified | ModelHashStatus::Pending => Ok(()),
+            ModelHashStatus::Mismatch { expected, actual } => Err(OnnxError::ModelArtifactStale {
+                name: model_name.to_owned(),
+                expected: expected.clone(),
+                actual: actual.clone(),
+            }),
+        }
+    }
 }
 
 /// Lowercase hex encoding (used for SHA-256 digests; 32 bytes → 64 chars).
@@ -185,6 +205,41 @@ mod tests {
             other => panic!("expected Mismatch, got {other:?}"),
         }
         assert!(!status.allows_inference(), "mismatch must refuse inference");
+    }
+
+    // F-082-FOLLOWUP-HASH — the refuse branch itself must be executable: a
+    // `Mismatch` status enforces `ModelArtifactStale` with both digests.
+    #[test]
+    fn enforce_refuses_mismatch_with_model_artifact_stale() {
+        let status = ModelHashStatus::Mismatch {
+            expected: "pinned-digest".to_owned(),
+            actual: "on-disk-digest".to_owned(),
+        };
+        let err = status.enforce_inference_allowed("BiRefNet").unwrap_err();
+        match err {
+            OnnxError::ModelArtifactStale {
+                name,
+                expected,
+                actual,
+            } => {
+                assert_eq!(name, "BiRefNet");
+                assert_eq!(expected, "pinned-digest");
+                assert_eq!(actual, "on-disk-digest");
+            }
+            other => panic!("expected ModelArtifactStale, got {other:?}"),
+        }
+    }
+
+    /// `Verified` and `Pending` must never be refused by the gate — the
+    /// documented pre-integration placeholder is not a stale artifact.
+    #[test]
+    fn enforce_allows_verified_and_pending() {
+        assert!(ModelHashStatus::Verified
+            .enforce_inference_allowed("M")
+            .is_ok());
+        assert!(ModelHashStatus::Pending
+            .enforce_inference_allowed("M")
+            .is_ok());
     }
 
     fn scratch_path(tag: &str) -> std::path::PathBuf {
