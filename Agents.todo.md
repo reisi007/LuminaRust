@@ -114,6 +114,107 @@ stehenden Restbestand.
 MVP-blockierend)**
 
 
+**Review R2 (2026-08-26) — Bericht: docs/reviews/2026-08-26-full-review.md**
+60 Befunde (0 kritisch / 12 hoch / 22 mittel / 26 niedrig). Behobene IDs
+werden nach unabhängiger Verifizierung entfernt.
+
+- [ ] **[PRIO: hoch] R2-GUIMOD-01** (MVP-blockierend, UX) Preview bleibt nach Regler-
+  Release dauerhaft weich: `vram_fresh` wird im Full-Render nie invalidiert,
+  Present-Gate prüft weder Dims noch Draft-Herkunft (lumina-gui/src/lib.rs
+  6366/3948/2740/2137-2160). Fix: `vram_fresh=false` im render_full/render_from-
+  Erfolgspfad oder Gate um `vram_dims==preview_dims && !preview_is_draft`
+  erweitern. Aufwand S. **Vor manuellem Test zu beheben.**
+- [ ] **[PRIO: hoch] R2-CLI-01** (MVP-blockierend, GAP/UX) `lumina batch` überspringt
+  still 9 von 18 RAW-Formaten (`has_image_extension` vs. `is_raw_path`-Drift,
+  main.rs:1228-1238 vs. 1743-1754). Fix: RAW-Extension-Liste einmalig (aus
+  lumina-raw exportieren), beide Prädikate referenzieren; Test: Batch findet
+  RAF. Aufwand S. **Erst nach F-101-F1-Commit (gleiches main.rs im WIP).**
+- [ ] **[PRIO: hoch] R2-MCP-02** (MVP-blockierend, nicht-destruktive Garantie)
+  `lumina_save` nutzt keinen Output-Guard -> Symlink/Hardlink aufs Sidecar/
+  zdata würde Bundle mit PNG-Bytes überschreiben (tools/save.rs:63-88; Guard
+  `write_output_guarded` existiert in util.rs, wird nur in batch.rs genutzt).
+  Fix: Einzeiler. Läuft im F-101-F1-Verifizierungs-/Nachbesserungszyklus.
+- [ ] **[PRIO: hoch] R2-RAW-01** DemosaicMapping falsch: `Linear→1, Vng→2, Ppg→3,
+  Ahd→4, Dcb→11, Dht→12, Aahd→13`, dcraw_process erwartet aber 0/1/2/3/4/11/12,
+  alles andere = stiller Fallback AHD — jede explizite Wahl wählt den falschen
+  Algorithmus (lumina-raw/src/lib.rs:20-33). Fix: Mapping korrigieren +
+  Unit-Test-Pinning. S.
+- [ ] **[PRIO: hoch] R2-MCP-01** GPU-Pfad verwirft `camera_white_balance` still ->
+  build-abhängige Pixeldifferenz ohne Warnung (mcp/util.rs:334-368; Spiegel
+  cli main.rs:127-175). Fix: `Some(camera_wb)` als CPU-Routing-Reason in
+  `unsupported_gpu_stages_for`. S. **Nach F-101-F1-Commit.**
+- [ ] **[PRIO: hoch] R2-GPU-05** Wertblinde GPU-Routing-Gates: GUI schreibt Default 0.0
+  zurück statt Key zu entfernen -> Rezept bleibt dauerhaft CPU-routed, obwohl
+  Pixel identisch (lumina-gpu/src/lib.rs:177-194 + gui 2018/3948). Fix:
+  Wert-Neutralität prüfen (Key==0.0 überspringen). S.
+- [ ] **[PRIO: hoch] R2-ONNX-01** ModelInputSpec (Vorverarbeitung/Auflösung) fehlt in
+  persistierter Maskenidentität (`to_model_identity` lässt extras immer leer,
+  manifest.rs:225-232) -> Stale-Erkennung umgehbar. Fix: deterministischen
+  Digest über ModelInputSpec in extras + Test „Normänderung ⇒ Identität ändert
+  sich“. S/M. **Zwingend vor echter Gewichts-Integration (F-048).**
+- [ ] **[PRIO: hoch] R2-PERF-01** `analyze_tone` allokiert pro Tick ein f64-Vec pro
+  Pixel (~192 MB @24MP) + O(n log n)-Sortierung (~69 ms @2048²), obwohl
+  LuminanceHistogram die O(n)-Alternative bereitstellt (tone.rs:111-145;
+  GUI ruft es je Draft-Tick). Fix: Single-Pass über 256 Bins bzw. Histogramm;
+  optional tone_analysis an Render-Key koppeln (GUI-Seite separat). M.
+- [ ] **[PRIO: hoch] R2-GPU-01** `render_to_vram` erzeugt/lädt Input-Textur jeden Tick
+  neu (~96 MB CPU→GPU-Upload @24MP) entgegen docs/gpu-bootstrap.md:92-94
+  (lib.rs:896-920). Fix: Input-Textur pro Pool-Eintrag halten, Neu-Upload nur
+  bei Quellwechsel. M.
+- [ ] **[PRIO: hoch] R2-GUIMOD-02** CPU-Present: ColorImage-Vollbild-Memcpy +
+  load_texture-Reupload bei JEDEM Repaint ohne Dirty-Gate (lib.rs:2700-2724).
+  Fix: TextureHandle halten, set() nur bei neuer Preview-Generation. S.
+- [ ] **[PRIO: hoch] R2-GPU-02** `copy_vram_to_texture` baut Overlay-Pipeline (inkl.
+  Shader-Modul-Kompilierung) + Bindgroups bei jedem Present neu (lib.rs:
+  1221-1223, shaders.rs:776-817). Fix: Pipeline je Zielformat cachen. M.
+
+### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
+
+- [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-03 (Drag-Clone ~180 MB/Tick),
+  GUIMOD-04 (CPU-Draft läuft auf GPU-Pfaden redundant mit), GUIMOD-06
+  (Routing/Fallback nur stderr, kein Statusbadge/i18n), GUIMOD-07 (Logger-
+  Default Trace, Frame-Time-Faktor), GUIMOD-09 (doppelte GPU-Init beim Start).
+- [ ] **[PRIO: mittel] R2-CLI-BUNDLE** (nach F-101-F1-Commit): CLI-02 (SourceIdentity-
+  Duplikation CLI↔MCP + dreifache Extension-Listen), CLI-05 (korruptes zdata
+  still als fehlende Maske), CLI-06 (Batch ohne Fortschritt, mask_warnings
+  verworfen), CLI-03 (inspect --json), CLI-04 (inspect dekodiert Vollbild für 4 Zeilen EXIF).
+- [ ] **[PRIO: mittel] R2-MCP-BUNDLE** (nach F-101-F1-Verifizierung): MCP-03
+  (SidecarConflict-Doku für save stimmt nicht), MCP-04 (load liest Datei
+  zweimal von Disk), MCP-05 (Preview-Dateien akkumulieren, kein Shutdown-Cleanup).
+- [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-03 (SA-Texturen pro Render neu erstellt),
+  GPU-06 (kein on_uncaptured_error/Device-Lost-Handling -> App-Panik möglich),
+  GPU-07 (Backends::METAL hardcodet, Windows/Linux nie GPU), GPU-04 (GPU-Pfad
+  @2048 nicht schneller als CPU — gepoolte Ressourcen, L).
+- [ ] **[PRIO: mittel] R2-LENSFUN-BUNDLE**: LENS-01 (pro-Pixel-FFI ~48 Mio. Übergänge
+  @24MP, Row-API nutzen, M), LENS-02 (Corrector-'static Safety-Kommentar + Test),
+  LENS-04 (build.rs rerun-if-changed auf Library-Datei).
+- [ ] **[PRIO: mittel] R2-GAP-01** F-009 Presets: Feature-Matrix mappt auf
+  virtual-copies.md, das Dokument erwähnt Presets nie; File-I/O nicht
+  implementiert (nur In-Memory). Doku-first: SOLL beschreiben oder Post-MVP.
+- [ ] **[PRIO: mittel] R2-ONNX-BUNDLE**: ONNX-02 (StubBackend-Resize wird weggeworfen),
+  ONNX-03 (OrtBackend implementiert MaskInference-Trait nicht — asymmetrisch),
+  ONNX-04 (Pending-Hash ohne Short-circuit).
+
+### PRIO: niedrig (R2, gebündelt)
+
+- [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE**: GPU-08 (Env-Vars im Hot-Pfad), GPU-09
+  (inkonsistente Fehlerverträge ohne Adapter), GPU-10 (totes Gerüst DraftPyramid/
+  bake_3d_lut), GPU-11 (Agents.md listet lumina-gpu/bench/lensfun/mcp nicht),
+  GPU-12 (Overlay-Composite-Shader ohne Pixeltest), GPU-13 (lock().unwrap()
+  Poisoning), RAW-02 (decode_file: volle Datei im Heap statt libraw_open_file),
+  RAW-03 (toter name-Parameter der Decode-API), RAW-04 (16-bit-Decode nie
+  end-to-end getestet), RAW-WASM (3× unneeded-return wasm32-Clippy), ONNX-05
+  (MissingModel-Displaytext irreführend), ONNX-06 (Degenerations-Guards
+  ungetestet), ONNX-07 (normalize: 3 stride-Pässe statt 1 Pass), LENS-03
+  (crop_factor Null-Pfade ungetestet), MCP-06 (downscale_bilinear gehört nach
+  core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
+  in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation
+  Keys), CLI-07 (Exit-Codes undokumentiert), CLI-08 (serde_json-unwrap in
+  Batch-Workern), CLI-09 (develop ohne Range-Vorabcheck), CLI-10 (Import erbt
+  irrelevante Flags still), CLI-11 (kein Inode-Dedup im Batch), CLI-12
+  (Formatstring-Backtick), GAP-02 (gui.log nicht gitignored), SIDECAR-ZDATA-WASM
+  (zstd-sys blockiert workspace-weites wasm32-Gate — Capability-Entscheidung nötig).
+
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
 
 - [ ] **[PRIO: niedrig] F-019** (deferriert auf Post-MVP) CLI `migrate_sidecar`
