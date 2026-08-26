@@ -130,6 +130,16 @@ werden nach unabhängiger Verifizierung entfernt.
   skaliert mit Breite (≈0.75 px @8192). Erfordert Golden-Rebaseline (F-043).
   **Vor manuellem Test** — dokumentierter sub-pixel-Drift, Performance-Gewinn.
 
+- [ ] **[PRIO: mittel] PREVIEW-CACHE-FEATURE** (neu, vor manuellem Test):
+  Hybrid-Preview-Caching für sofortiges Scrollen durch 40+ Bilder. Aktives
+  Bild als GPU-Textur (VRAM), Nachbarn als **WebP-Cache** (Screen/1:1-Auflösung,
+  Alpha unterstützt, lossless oder hochwertig verlustbehaftet, lazy gerendert
+  + auf Disk/RAM gecached). WebP statt JPEG wegen Alpha-Kanal und besserer
+  Kompression. Doku-first: Feature-Dokument in feature/quality/ oder
+  feature/product/ (Preview-Cache-Architektur). User-Entscheidung: Hybrid
+  (GPU + WebP). Blockiert nicht F-103-N6, aber manuelle Test soll die
+  optimierte Version zeigen.
+
 ### PRIO: niedrig (R2, gebündelt)
 
 - [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE**: RAW-03 (toter name-Parameter der
