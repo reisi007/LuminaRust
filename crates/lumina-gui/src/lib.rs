@@ -338,6 +338,30 @@ pub struct LuminaApp {
     entries: Vec<FileBrowserEntry>,
     recipe: EditRecipe,
     texture: Option<egui::TextureHandle>,
+    /// R2-GUIMOD-02: identity of the pixels currently held by
+    /// [`Self::texture`] — `(preview generation, before_after, [w, h])`.
+    /// The CPU present path re-uploads only when this differs from what would
+    /// be displayed, instead of rebuilding a full-screen [`egui::ColorImage`]
+    /// and re-creating the texture on every repaint (mousemoves over panels
+    /// used to pay a full-frame memcpy + upload per frame).
+    #[cfg(not(target_arch = "wasm32"))]
+    texture_identity: Option<(u64, bool, [usize; 2])>,
+    /// R2-GUIMOD-02: bumped whenever `self.preview` receives new content.
+    /// Part of [`Self::texture_identity`]; together with the Before/After flag
+    /// and pixel size it gates the CPU texture upload to actual content
+    /// changes. A monotonic counter is deliberate: draft and full renders of
+    /// the same source can produce identical render keys while their pixels
+    /// differ (masks are skipped for drafts), so key-based identity would be
+    /// unsound.
+    ///
+    /// INVARIANT: every site that assigns `self.preview` MUST bump this
+    /// counter — otherwise the CPU present path keeps serving the previous
+    /// upload (`texture_identity` still matches). The only production
+    /// assignment today is `render_from`; a new source clears `preview`
+    /// implicitly by resetting render state before the next render bumps the
+    /// generation again.
+    #[cfg(not(target_arch = "wasm32"))]
+    preview_generation: u64,
     status: String,
     error: Option<String>,
     render_key: Option<RenderKey>,
@@ -535,8 +559,21 @@ pub struct LuminaApp {
     /// True while the VRAM output corresponds to the current recipe/source:
     /// set right after a successful `render_to_vram`, cleared by every edit
     /// ([`Self::mark_dirty`]) so a stale tone result can never be presented.
+    /// R2-GUIMOD-01: also cleared by every completed **full-quality** CPU
+    /// render (`render_from` on the non-draft path) — otherwise the debounced
+    /// full render after a drag would compute sharp pixels that are then never
+    /// shown because the gate kept presenting the superseded VRAM draft.
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
     vram_fresh: bool,
+    /// R2-GUIMOD-05: memoized `unsupported_gpu_stages(&self.recipe)` verdict,
+    /// keyed by the [`RenderKey`] of the render it was computed for. The gate
+    /// used to rebuild this `Vec<String>` (with `format!` allocations) every
+    /// frame although recipe/render identity rarely changes. `None` while no
+    /// key-backed verdict is stored; queried without a render key (dirty
+    /// preview) deliberately bypasses the memo because the recipe may have
+    /// drifted since the last render.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    gpu_stage_gate: Option<(RenderKey, bool)>,
     /// True while the VRAM mask texture carries the pipeline-*evaluated* layer
     /// planes (pushed after a full render) rather than only live brush stamps —
     /// then the shader overlay already shows what the CPU overlay would paint.
@@ -579,6 +616,12 @@ struct PresentTarget {
 /// Called from `run_native`'s builder with `CreationContext::wgpu_render_state`.
 /// When present, [`lumina_gpu::GpuContext`] resources are re-based onto that
 /// device/queue so VRAM textures are shareable with the presenting surface.
+/// R2-GUIMOD-09: this function is also the single construction point for the
+/// context — `LuminaApp::new` deliberately leaves `gpu` empty so startup
+/// performs at most one adapter/device request. When no renderer state is
+/// handed over, a standalone context is created here (same capability as the
+/// old eager constructor) so non-present GPU paths keep working; headless
+/// callers that never invoke this function simply stay CPU-only.
 /// No-op under wasm32 or without the `gpu` feature (CPU present path stays).
 #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
 pub fn attach_wgpu_render_state(
@@ -586,10 +629,14 @@ pub fn attach_wgpu_render_state(
     state: Option<eframe::egui_wgpu::RenderState>,
 ) {
     app.wgpu_render_state = state.clone();
+    // R2-GUIMOD-09: this is now the ONLY place that constructs a
+    // `GpuContext` during startup. `LuminaApp::new` leaves `gpu` empty, so a
+    // shared-device context is built exactly once here instead of paying a
+    // standalone init first and discarding it moments later.
     // Re-base the GPU context onto the renderer's device/queue so VRAM
     // textures share the presenting surface's device (the whole point of the
-    // migration). If that fails we keep the previously constructed standalone
-    // context and log loudly — no silent capability downgrade.
+    // migration). If that fails we fall back to a standalone context and log
+    // loudly — no silent capability downgrade.
     if let Some(rs) = &state {
         match lumina_gpu::GpuContext::from_parts(
             rs.instance.clone(),
@@ -609,8 +656,19 @@ pub fn attach_wgpu_render_state(
                     "GPU present path: shared-device context unavailable ({err}); \
                      falling back to the CPU present upload"
                 );
+                // Preserve the historical capability of the eager standalone
+                // context for non-present GPU paths (`render_to_vram`), but
+                // create it here so startup still performs only ONE adapter/
+                // device request.
+                app.gpu = lumina_gpu::GpuContext::new().ok();
             }
         }
+    } else {
+        // No renderer state was handed over (headless harnesses, tests). The
+        // historical eager constructor would have produced a standalone
+        // context; keep that capability available at the single construction
+        // point without any extra init cost when it is never used.
+        app.gpu = lumina_gpu::GpuContext::new().ok();
     }
 }
 
@@ -750,6 +808,11 @@ impl LuminaApp {
             entries: Vec::new(),
             recipe: EditRecipe::default(),
             texture: None,
+            // R2-GUIMOD-02: no CPU pixels uploaded yet (see `texture_identity`).
+            #[cfg(not(target_arch = "wasm32"))]
+            texture_identity: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            preview_generation: 0,
             status: Str::ReadyForImage.t().into(),
             error: None,
             render_key: None,
@@ -838,13 +901,22 @@ impl LuminaApp {
             #[cfg(not(target_arch = "wasm32"))]
             auto_load_attempted: false,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
-            gpu: lumina_gpu::GpuContext::new().ok(),
+            // R2-GUIMOD-09: deliberately `None` here. Constructing a standalone
+            // `GpuContext` performs a blocking adapter/device request that
+            // `attach_wgpu_render_state` immediately replaced with the
+            // renderer-shared context — two full GPU inits per startup. The
+            // context is now created exactly once, inside
+            // [`attach_wgpu_render_state`] (native entry point wires it right
+            // after construction; headless tests stay GPU-free).
+            gpu: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             wgpu_render_state: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             present_target: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             vram_fresh: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            gpu_stage_gate: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             vram_mask_is_evaluated: false,
             #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
@@ -2530,6 +2602,24 @@ impl LuminaApp {
         ));
         self.tone_analysis = Some(analyze_tone(&preview));
         self.preview = Some(preview);
+        // R2-GUIMOD-02: new preview content — any CPU-present identity cached
+        // in `texture_identity` is now stale and will re-upload once.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.preview_generation += 1;
+        }
+        // R2-GUIMOD-01 (MVP-blocking): a completed **full-quality** CPU render
+        // supersedes whatever sits in VRAM. During a drag the VRAM result was
+        // rendered from the *draft* source; after mouse-up the debounced full
+        // render used to leave `vram_fresh` set, so the gate went on
+        // presenting the soft draft and the freshly computed sharp pixels were
+        // never shown. Draft renders (which run *after* `render_to_vram` in
+        // the same tick, by design feeding the VRAM present path) must keep
+        // the flag — hence the `preview_is_draft` discriminator.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        if !self.preview_is_draft {
+            self.vram_fresh = false;
+        }
         // Record the crop this texture represents so pointer→source mapping in
         // `draw_preview` (WB eyedropper / mask tools) stays accurate when
         // zoomed. The *effective* (clamped) rect is recorded, and only when
@@ -2696,6 +2786,15 @@ impl LuminaApp {
 
     /// REVIEW-GUI-WASM-FOLLOWUP: the texture upload is driven by the native
     /// preview-area path only.
+    ///
+    /// R2-GUIMOD-02: the CPU upload used to run on **every** repaint —
+    /// `ColorImage::from_rgba_unmultiplied` (full-frame memcpy) plus
+    /// `ctx.load_texture` (full texture re-upload) even when neither the
+    /// preview nor the Before/After toggle had changed (e.g. mousemoves over
+    /// panels). The upload now happens only when the displayed content
+    /// identity changes; the [`egui::TextureHandle`] itself is retained and
+    /// updated in place (`handle.set`) so the egui texture id stays stable.
+    /// Pixel output is unchanged: identical RGBA bytes, identical options.
     #[cfg(not(target_arch = "wasm32"))]
     fn update_texture(&mut self, ctx: &egui::Context) {
         // GUI-WGPU-PRESENT-1: when the wgpu renderer shares its device with
@@ -2718,9 +2817,22 @@ impl LuminaApp {
         };
         if let Some(frame) = frame {
             let size = [frame.width as usize, frame.height as usize];
-            let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
-            self.texture =
-                Some(ctx.load_texture("lumina-preview", image, egui::TextureOptions::LINEAR));
+            let identity = (self.preview_generation, self.before_after, size);
+            if self.texture_identity != Some(identity) {
+                // Build the full-frame image while `frame` still borrows
+                // `self`; the handle mutation below needs `&mut self.texture`.
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
+                if let Some(handle) = self.texture.as_mut() {
+                    handle.set(image, egui::TextureOptions::LINEAR);
+                } else {
+                    self.texture = Some(ctx.load_texture(
+                        "lumina-preview",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+                self.texture_identity = Some(identity);
+            }
         }
     }
 
@@ -2734,22 +2846,36 @@ impl LuminaApp {
     /// - zoomed ROI previews crop on the CPU — geometry must not jump;
     /// - recipes with GPU-unsupported stages would render tone-only in VRAM
     ///   (the documented GPU-STAGE-1 Restrisiko) — CPU pixels are exact;
-    /// - stale VRAM (`vram_fresh == false`) after any edit.
+    /// - stale VRAM (`vram_fresh == false`) after any edit **or** after any
+    ///   completed full-quality CPU render (R2-GUIMOD-01);
+    /// - R2-GUIMOD-01 belt-and-braces: for a non-draft preview the VRAM
+    ///   dimensions must match the preview dimensions — a full-resolution CPU
+    ///   result whose geometry differs from the (draft-sized) VRAM content
+    ///   must win even if a stale freshness flag ever slipped through.
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
     fn gpu_present_if_ready(&mut self) -> Option<(egui::TextureId, [usize; 2])> {
         if !self.vram_fresh || self.before_after || self.preview_roi.is_some() {
             return None;
         }
-        // The GUI binds no source-action artifacts; a recipe referencing them
-        // would lose the compositing on the GPU tone-only path → CPU route.
-        if !lumina_gpu::unsupported_gpu_stages(&self.recipe).is_empty() {
-            return None;
-        }
-        let render_state = self.wgpu_render_state.clone()?;
         let dims = self.gpu.as_ref()?.vram_dimensions()?;
         if !self.gpu.as_ref()?.is_available() {
             return None;
         }
+        // R2-GUIMOD-01: geometry cross-check (see doc above). For drafts the
+        // VRAM tone output *is* the draft-source render the interactive path
+        // wants to present, so the check applies only to full-quality
+        // previews.
+        if !self.vram_content_matches_displayed_preview(dims) {
+            return None;
+        }
+        // The GUI binds no source-action artifacts; a recipe referencing them
+        // would lose the compositing on the GPU tone-only path → CPU route.
+        // R2-GUIMOD-05: memoized per render key instead of rebuilding a
+        // `Vec<String>` every frame.
+        if self.recipe_has_unsupported_gpu_stages() {
+            return None;
+        }
+        let render_state = self.wgpu_render_state.clone()?;
         // Composite output+mask into our present target (GPU-GPU, no readback).
         if let Err(err) = self.ensure_present_target(&render_state, dims) {
             log::warn!("gpu present target unavailable: {err}");
@@ -2762,6 +2888,51 @@ impl LuminaApp {
             return None;
         }
         Some((id, [dims.0 as usize, dims.1 as usize]))
+    }
+
+    /// R2-GUIMOD-01: does the VRAM content describe the pixels currently
+    /// displayed? For a **full-quality** preview only exact dimension equality
+    /// proves that preview and VRAM tone result show the same crop of the same
+    /// source; any mismatch keeps the (exact) CPU present path. A displayed
+    /// *draft* is exempt by design: the interactive drag path presents exactly
+    /// the draft-source VRAM render it just produced.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn vram_content_matches_displayed_preview(&self, dims: (u32, u32)) -> bool {
+        if self.preview_is_draft {
+            return true;
+        }
+        match self.preview.as_ref() {
+            Some(preview) => preview.width == dims.0 && preview.height == dims.1,
+            None => false,
+        }
+    }
+
+    /// R2-GUIMOD-05: `!lumina_gpu::unsupported_gpu_stages(&self.recipe)
+    /// .is_empty()`, memoized against the current render key. The verdict can
+    /// only change when the recipe/source/copy identity changes — exactly what
+    /// replaces the render key — so the per-frame `Vec<String>` rebuild with
+    /// its `format!` allocations collapses to one call per render.
+    ///
+    /// While no render key exists (dirty preview) the memo is deliberately
+    /// bypassed *and* not populated: the recipe may drift between edits
+    /// without ever producing an intermediate key, so a `None`-keyed entry
+    /// could serve a verdict for a long-gone recipe.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn recipe_has_unsupported_gpu_stages(&mut self) -> bool {
+        let cached = self
+            .gpu_stage_gate
+            .as_ref()
+            .filter(|(key, _)| Some(key) == self.render_key.as_ref())
+            .map(|(_, has_unsupported)| *has_unsupported);
+        match cached {
+            Some(verdict) => verdict,
+            None => {
+                let has_unsupported = !lumina_gpu::unsupported_gpu_stages(&self.recipe).is_empty();
+                // Memoize only against a concrete key (see doc above).
+                self.gpu_stage_gate = self.render_key.clone().map(|key| (key, has_unsupported));
+                has_unsupported
+            }
+        }
     }
 
     /// Create or resize the offscreen present target and keep it registered as
@@ -6353,12 +6524,15 @@ impl eframe::App for LuminaApp {
             {
                 if let Some(gpu) = self.gpu.as_ref() {
                     if gpu.is_available() {
-                        if let Some(src) = self
-                            .draft_original
-                            .clone()
-                            .or_else(|| self.original.clone())
-                        {
-                            match gpu.render_to_vram(&src, &self.recipe) {
+                        // R2-GUIMOD-03: borrow instead of clone. The fallback
+                        // branch (`draft_original` absent on the first tick
+                        // after a full render) used to memcpy the entire
+                        // full-resolution original (~180 MB worst case) into
+                        // a temporary that was dropped immediately after the
+                        // call — `render_to_vram` only needs `&ImageFrame`.
+                        let source = self.draft_original.as_ref().or(self.original.as_ref());
+                        if let Some(src) = source {
+                            match gpu.render_to_vram(src, &self.recipe) {
                                 Ok(()) => {
                                     // GUI-WGPU-PRESENT-1: the VRAM output now
                                     // matches the current recipe/source — the
@@ -9378,5 +9552,197 @@ mod tests {
             planes.contains_key(&("vc-original".to_string(), id)),
             "legacy bare-mask-id tiles must remain readable"
         );
+    }
+
+    // ---- R2-GUIMOD-01: the debounced full render must retire stale VRAM ----
+
+    /// Simulates the drag→release sequence at the state level: during the drag
+    /// `render_to_vram` marks VRAM fresh while the preview shows a draft; the
+    /// debounced full render that follows must invalidate that freshness so
+    /// the gate stops presenting the soft draft and the sharp CPU pixels get
+    /// uploaded instead (the reported "preview stays blurry forever" bug).
+    #[test]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn full_render_invalidates_stale_vram_but_draft_render_keeps_it() {
+        let mut app = new_app();
+        app.load_bytes(png(), "vram.png").unwrap();
+
+        // Drag state: VRAM carries a draft-source tone result.
+        app.preview_is_draft = true;
+        app.vram_fresh = true;
+        app.render_draft([800, 600], None).unwrap();
+        assert!(
+            app.vram_fresh,
+            "a draft render must keep the VRAM result presentable — it is what \
+             the interactive path just rendered into VRAM"
+        );
+
+        // Release: the debounced full-quality render supersedes VRAM.
+        app.render_full([800, 600], None).unwrap();
+        assert!(
+            !app.vram_fresh,
+            "the full render must invalidate vram_fresh or the present gate \
+             keeps showing the superseded draft"
+        );
+        assert!(!app.preview_is_draft());
+    }
+
+    /// R2-GUIMOD-01 belt-and-braces: even if a stale freshness flag ever
+    /// slipped through, the geometry cross-check must refuse to present VRAM
+    /// content whose dimensions do not describe the current full-quality
+    /// preview. Draft previews are exempt by design: the interactive path
+    /// presents exactly the draft-source VRAM render.
+    #[test]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn vram_geometry_gate_rejects_dimension_mismatch_for_full_previews() {
+        let mut app = new_app();
+        app.load_bytes(png(), "geom.png").unwrap(); // 2×1 source
+        app.render().unwrap(); // full-quality preview, not a draft
+
+        assert!(
+            !app.preview_is_draft() && app.vram_content_matches_displayed_preview((2, 1)),
+            "matching dimensions describe the same pixels"
+        );
+        assert!(
+            !app.vram_content_matches_displayed_preview((1280, 720)),
+            "draft-sized VRAM behind a full-quality preview must be rejected"
+        );
+
+        // Draft exemption: geometry mismatches are allowed while a draft is
+        // displayed (the VRAM tone output *is* the draft render).
+        app.preview_is_draft = true;
+        assert!(app.vram_content_matches_displayed_preview((1280, 720)));
+
+        // No preview at all → nothing may be presented from VRAM.
+        app.preview_is_draft = false;
+        app.preview = None;
+        assert!(!app.vram_content_matches_displayed_preview((2, 1)));
+    }
+
+    // ---- R2-GUIMOD-02: CPU present uploads only on content changes ----
+
+    /// The texture handle must survive repaints without new content (same egui
+    /// texture id) and be updated **in place** when the preview changes —
+    /// never re-created per frame (`load_texture` would mint a fresh id every
+    /// time and pay a full-frame upload even for pure mousemoves).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cpu_present_reuses_texture_handle_until_content_changes() {
+        let mut app = new_app();
+        let ctx = egui::Context::default();
+        app.load_bytes(png(), "tex.png").unwrap();
+        app.render().unwrap();
+
+        app.update_texture(&ctx);
+        let first_id = app
+            .texture
+            .as_ref()
+            .expect("texture after first upload")
+            .id();
+        assert_eq!(
+            app.texture_identity.map(|(gen, _, _)| gen),
+            Some(app.preview_generation),
+            "identity records the generation it was uploaded from"
+        );
+
+        // Repaint without any render change (e.g. mousemove over panels):
+        // neither the handle nor its pixels may be touched.
+        app.update_texture(&ctx);
+        assert_eq!(app.texture.as_ref().unwrap().id(), first_id);
+
+        // New preview content: same handle, updated in place, identity bumped.
+        app.set_adjustment("exposure", 0.5);
+        app.render().unwrap();
+        let generation_after_edit = app.preview_generation;
+        assert!(
+            generation_after_edit > 1,
+            "each completed render bumps the preview generation"
+        );
+        app.update_texture(&ctx);
+        assert_eq!(
+            app.texture.as_ref().unwrap().id(),
+            first_id,
+            "the handle must be reused (set), not replaced by load_texture"
+        );
+        assert_eq!(
+            app.texture_identity.map(|(gen, _, _)| gen),
+            Some(generation_after_edit)
+        );
+
+        // A follow-up repaint with unchanged content stays a no-op again.
+        app.update_texture(&ctx);
+        assert_eq!(app.texture.as_ref().unwrap().id(), first_id);
+    }
+
+    /// Before/After swaps which frame is displayed without touching the
+    /// preview generation — the identity must catch the flag change so the
+    /// toggle still swaps the visible pixels exactly once per flip.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cpu_present_uploads_again_when_before_after_flips() {
+        let mut app = new_app();
+        let ctx = egui::Context::default();
+        app.load_bytes(png(), "ba.png").unwrap();
+        app.render().unwrap();
+        app.update_texture(&ctx);
+        assert!(!app.texture_identity.unwrap().1, "preview shown initially");
+
+        app.before_after = true;
+        app.update_texture(&ctx);
+        assert!(app.texture_identity.unwrap().1, "original shown after flip");
+
+        // Flipping back re-uploads the preview once more.
+        app.before_after = false;
+        app.update_texture(&ctx);
+        assert!(!app.texture_identity.unwrap().1);
+    }
+
+    // ---- R2-GUIMOD-05: unsupported-stage verdict memoized per render key ----
+
+    #[test]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn unsupported_gpu_stage_verdict_is_memoized_per_render_key() {
+        let mut app = new_app();
+        app.load_bytes(png(), "stages.png").unwrap();
+        app.render().unwrap();
+        assert!(app.render_key.is_some());
+
+        let verdict = app.recipe_has_unsupported_gpu_stages();
+        assert!(
+            !verdict,
+            "plain exposure-only recipe is fully GPU-supported"
+        );
+        assert!(
+            app.gpu_stage_gate.is_some(),
+            "a keyed verdict must be stored once a render key exists"
+        );
+        // Repeat queries hit the memo and stay consistent.
+        assert_eq!(app.recipe_has_unsupported_gpu_stages(), verdict);
+
+        // Editing nulls the render key: the next query must NOT trust (nor
+        // store) a memo entry keyed by nothing — the recipe can drift across
+        // edits before the next render produces a new key.
+        app.set_adjustment("exposure", 1.0);
+        assert!(app.render_key.is_none());
+        let _ = app.recipe_has_unsupported_gpu_stages();
+        assert!(
+            app.gpu_stage_gate.is_none(),
+            "no memo entry may be cached without a render key"
+        );
+    }
+
+    // ---- R2-GUIMOD-09: GPU context construction is deferred to attach ----
+
+    #[test]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn gpu_context_is_not_created_eagerly_in_new() {
+        let app = LuminaApp::new(egui::Context::default());
+        assert!(
+            app.gpu.is_none(),
+            "LuminaApp::new must not perform a blocking adapter/device request; \
+             attach_wgpu_render_state owns the single GPU init (R2-GUIMOD-09)"
+        );
+        assert!(app.wgpu_render_state.is_none());
+        assert!(!app.vram_fresh);
     }
 }

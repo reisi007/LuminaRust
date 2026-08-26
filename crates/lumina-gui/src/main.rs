@@ -8,7 +8,11 @@ mod logger;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     logger::install_panic_hook();
-    let _level = logger::init_logging(log::LevelFilter::Trace);
+    // R2-GUIMOD-07: `Info` is the default so the per-line format!/Mutex/
+    // eprintln cost and the panic ring stay free of wgpu/naga/egui trace
+    // chatter. Verbose diagnosis is one env var away:
+    //   RUST_LOG=trace lumina-gui <dir> 2> gui.log
+    let _level = logger::init_logging(log::LevelFilter::Info);
     let workdir = parse_workdir();
     // GUI-WGPU-PRESENT-1: the wgpu renderer shares its Device/Queue with
     // `lumina-gpu` (via `CreationContext::wgpu_render_state`), so the preview

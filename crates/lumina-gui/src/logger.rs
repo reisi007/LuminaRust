@@ -39,20 +39,24 @@ impl Log for StderrLogger {
             record.target(),
             record.args()
         );
+        // R2-GUIMOD-07: emit first, then move the line into the ring — the
+        // previous `push_back(line.clone())` duplicated every formatted
+        // message on the hot logging path.
+        eprintln!("{line}");
         if let Ok(mut ring) = ring().lock() {
-            ring.push_back(line.clone());
+            ring.push_back(line);
             while ring.len() > RING_CAPACITY {
                 ring.pop_front();
             }
         }
-        eprintln!("{line}");
     }
 
     fn flush(&self) {}
 }
 
 /// Initialise stderr logging. Honours `RUST_LOG` for the level, falling back to
-/// `default_level`. Returns the effective level (for diagnostics).
+/// `default_level` (the binary passes `Info`; use `RUST_LOG=trace` for full
+/// diagnosis, R2-GUIMOD-07). Returns the effective level (for diagnostics).
 pub fn init_logging(default_level: LevelFilter) -> LevelFilter {
     let level = std::env::var("RUST_LOG")
         .ok()

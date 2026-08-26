@@ -118,12 +118,7 @@ MVP-blockierend)**
 60 Befunde (0 kritisch / 12 hoch / 22 mittel / 26 niedrig). Behobene IDs
 werden nach unabhängiger Verifizierung entfernt.
 
-- [ ] **[PRIO: hoch] R2-GUIMOD-01** (MVP-blockierend, UX) Preview bleibt nach Regler-
-  Release dauerhaft weich: `vram_fresh` wird im Full-Render nie invalidiert,
-  Present-Gate prüft weder Dims noch Draft-Herkunft (lumina-gui/src/lib.rs
-  6366/3948/2740/2137-2160). Fix: `vram_fresh=false` im render_full/render_from-
-  Erfolgspfad oder Gate um `vram_dims==preview_dims && !preview_is_draft`
-  erweitern. Aufwand S. **Vor manuellem Test zu beheben.**
+
 - [ ] **[PRIO: hoch] R2-CLI-01** (MVP-blockierend, GAP/UX) `lumina batch` überspringt
   still 9 von 18 RAW-Formaten (`has_image_extension` vs. `is_raw_path`-Drift,
   main.rs:1228-1238 vs. 1743-1754). Fix: RAW-Extension-Liste einmalig (aus
@@ -153,9 +148,6 @@ werden nach unabhängiger Verifizierung entfernt.
   neu (~96 MB CPU→GPU-Upload @24MP) entgegen docs/gpu-bootstrap.md:92-94
   (lib.rs:896-920). Fix: Input-Textur pro Pool-Eintrag halten, Neu-Upload nur
   bei Quellwechsel. M.
-- [ ] **[PRIO: hoch] R2-GUIMOD-02** CPU-Present: ColorImage-Vollbild-Memcpy +
-  load_texture-Reupload bei JEDEM Repaint ohne Dirty-Gate (lib.rs:2700-2724).
-  Fix: TextureHandle halten, set() nur bei neuer Preview-Generation. S.
 - [ ] **[PRIO: hoch] R2-GPU-02** `copy_vram_to_texture` baut Overlay-Pipeline (inkl.
   Shader-Modul-Kompilierung) + Bindgroups bei jedem Present neu (lib.rs:
   1221-1223, shaders.rs:776-817). Fix: Pipeline je Zielformat cachen. M.
@@ -169,10 +161,13 @@ werden nach unabhängiger Verifizierung entfernt.
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
-- [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-03 (Drag-Clone ~180 MB/Tick),
-  GUIMOD-04 (CPU-Draft läuft auf GPU-Pfaden redundant mit), GUIMOD-06
-  (Routing/Fallback nur stderr, kein Statusbadge/i18n), GUIMOD-07 (Logger-
-  Default Trace, Frame-Time-Faktor), GUIMOD-09 (doppelte GPU-Init beim Start).
+- [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-04 (CPU-Draft läuft auf GPU-Pfaden
+  redundant mit — Drosselung ist Verhaltensentscheidung, nach manuellem Test),
+  GUIMOD-06 (Routing/Fallback nur stderr, kein Statusbadge/i18n).
+- [ ] **[PRIO: niedrig] R2-GUI-FOLLOWUP** (aus GUI-Verifizierung): apply_decoded_frame
+  setzt vram_fresh/gpu_stage_gate beim Bildwechsel nicht zurück — ≤1 Frame kann
+  VRAM-Ergebnis des Vorgängerbilds zeigen (vorbestehend, Dims-Check greift bei
+  alt-konsistenten Seiten nicht). Fix: beide Felder in apply_decoded_frame nullen.
 - [ ] **[PRIO: mittel] R2-CLI-BUNDLE** (nach F-101-F1-Commit): CLI-02 (SourceIdentity-
   Duplikation CLI↔MCP + dreifache Extension-Listen), CLI-05 (korruptes zdata
   still als fehlende Maske), CLI-06 (Batch ohne Fortschritt, mask_warnings
@@ -204,7 +199,7 @@ werden nach unabhängiger Verifizierung entfernt.
   Keys), CLI-07 (Exit-Codes undokumentiert), CLI-08 (serde_json-unwrap in
   Batch-Workern), CLI-09 (develop ohne Range-Vorabcheck), CLI-10 (Import erbt
   irrelevante Flags still), CLI-11 (kein Inode-Dedup im Batch), CLI-12
-  (Formatstring-Backtick), GAP-02 (gui.log nicht gitignored), SIDECAR-ZDATA-WASM
+  (Formatstring-Backtick), SIDECAR-ZDATA-WASM
   (zstd-sys blockiert workspace-weites wasm32-Gate — Capability-Entscheidung nötig).
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
