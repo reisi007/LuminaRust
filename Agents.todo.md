@@ -72,7 +72,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26 (R2):
-15 offene Tasks — Block A: 13, Block B: 1, Block C: 1.
+12 offene Tasks — Block A: 10, Block B: 1, Block C: 1.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -124,33 +124,25 @@ werden nach unabhängiger Verifizierung entfernt.
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
 - [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-04 (CPU-Draft läuft auf GPU-Pfaden
-  redundant mit — Drosselung ist Verhaltensentscheidung, nach manuellem Test),
-  GUIMOD-06 (Routing/Fallback nur stderr, kein Statusbadge/i18n),
-  GUI-TONE-KOPPLUNG (analyze_tone_with_histogram nutzen → ein Pass statt zwei
-  pro Render; API steht seit R2-PERF-01 bereit).
+  redundant mit — Drosselung ist Verhaltensentscheidung, nach manuellem Test).
 - [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-01 (Input-Textur-Upload pro Tick
   ~96MB @24MP → cachen), GPU-02 (Overlay-Pipeline-Rebuild je Present → cachen),
   GPU-03 (SA-Texturen pro Render neu), GPU-04 (GPU-Pfad @2048 nicht schneller als
   CPU), GPU-06 (kein Device-Lost-Handling), GPU-07 (Backends::METAL hardcodet).
   **Vor manuellem Test** — beeinflusst direkt die Drag-Flüssigkeit.
-- [ ] **[PRIO: niedrig] R2-GUI-FOLLOWUP** (aus GUI-Verifizierung): apply_decoded_frame
-  setzt vram_fresh/gpu_stage_gate beim Bildwechsel nicht zurück — ≤1 Frame kann
-  VRAM-Ergebnis des Vorgängerbilds zeigen (vorbestehend, Dims-Check greift bei
-  alt-konsistenten Seiten nicht). Fix: beide Felder in apply_decoded_frame nullen.
+
 
 ### PRIO: niedrig (R2, gebündelt)
 
 - [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE**: RAW-03 (toter name-Parameter der
   Decode-API), PRESETS-FAIL-CLOSED (recipe_scope_violation fail-open bei
   Serialisierungsfehler — praktisch unerreichbar, optional fail-closed),
-  GUI-IS_RAW_NAME (letzte private Extension-Teilkopie in lumina-gui/lib.rs ~6288
-  auf RAW_EXTENSIONS umstellen), GPU-WB-GUI-GATE (gui gpu_present_if_ready sieht
-  keinen Kontext-WB — recipe-only; Restbefund aus R2-MCP-01), SIGTRAP-GPU-TESTS
-  (--features gpu cli/mcp: Rayon-Worker droppen thread_local GPU_CTX beim Exit,
-  Signal 5 trotz grüner Tests; vorbestehend), MCP-06 (downscale_bilinear gehört
-  nach core), MCP-08 (analyze: 6 Pässe in Vollauflösung), MCP-09 (edit akzeptiert
-  undokumentierte vibrance/saturation Keys), SIDECAR-ZDATA-WASM (zstd-sys blockiert
-  workspace-weites wasm32-Gate — Capability-Entscheidung nötig).
+  GPU-WB-GUI-GATE (gui gpu_present_if_ready sieht keinen Kontext-WB — recipe-only;
+  Restbefund aus R2-MCP-01), SIGTRAP-GPU-TESTS (--features gpu cli/mcp:
+  Rayon-Worker droppen thread_local GPU_CTX beim Exit, Signal 5 trotz grüner
+  Tests; vorbestehend), MCP-06 (downscale_bilinear gehört nach core),
+  SIDECAR-ZDATA-WASM (zstd-sys blockiert workspace-weites wasm32-Gate —
+  Capability-Entscheidung nötig).
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
 
