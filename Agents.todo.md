@@ -72,7 +72,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26 (R2):
-12 offene Tasks — Block A: 10, Block B: 1, Block C: 1.
+12 offene Tasks — Block A: 10, Block B: 1, Block C: 2.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -123,14 +123,12 @@ werden nach unabhängiger Verifizierung entfernt.
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
-- [ ] **[PRIO: mittel] R2-GUI-BUNDLE**: GUIMOD-04 (CPU-Draft läuft auf GPU-Pfaden
-  redundant mit — Drosselung ist Verhaltensentscheidung, nach manuellem Test).
-- [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-01 (Input-Textur-Upload pro Tick
-  ~96MB @24MP → cachen), GPU-02 (Overlay-Pipeline-Rebuild je Present → cachen),
-  GPU-03 (SA-Texturen pro Render neu), GPU-04 (GPU-Pfad @2048 nicht schneller als
-  CPU), GPU-06 (kein Device-Lost-Handling), GPU-07 (Backends::METAL hardcodet).
-  **Vor manuellem Test** — beeinflusst direkt die Drag-Flüssigkeit.
-
+- [ ] **[PRIO: mittel] R2-LENS-01-ADOPTION**: Row-Wrapper (geometry_row/
+  apply_vignetting_row) sind additiv in lumina-lensfun verfügbar (~48 Mio. → ~16k
+  FFI-Übergänge @24MP). Core-Loop umschalten (lumina-core/src/lib.rs ~1112-1127).
+  Nicht byteidentisch: erste Spalte bitidentisch, Drift ≤7.4e-4 px @257 Spalten,
+  skaliert mit Breite (≈0.75 px @8192). Erfordert Golden-Rebaseline (F-043).
+  **Vor manuellem Test** — dokumentierter sub-pixel-Drift, Performance-Gewinn.
 
 ### PRIO: niedrig (R2, gebündelt)
 
@@ -249,6 +247,10 @@ unabhängig verifiziert; Details in Git-Historie und Feature-Dokument.
 Vor F-103-N6 empfohlen: kleine Stabilitäts-Fixes aus den Review-Befunden
 (z. B. REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1),
 damit der manuelle Test aussagekräftig ist.
+
+- [ ] **[PRIO: mittel] R2-GUIMOD-04** (nach manuellem Test): CPU-Draft läuft auf
+  GPU-Pfaden redundant mit. Drosselung ist Verhaltensentscheidung — erst nach
+  Test entscheiden, ob der Draft-Throttle nötig ist.
 
 - [ ] **[PRIO: hoch] F-103-N6** Erster visueller User-Test: `cargo run -p lumina-gui` mit
   PNG/JPEG/WebP + nativen RAW per Pfad und Drag&drop; Preview + Exposure/
