@@ -2096,6 +2096,7 @@ dependencies = [
  "lumina-core",
  "lumina-gpu",
  "lumina-lensfun",
+ "lumina-mcp",
  "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",

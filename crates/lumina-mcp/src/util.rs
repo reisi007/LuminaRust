@@ -12,7 +12,7 @@ use lumina_raw::RawMetadata;
 use lumina_sidecar::{DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// RAW extensions accepted by [`lumina_raw`].
 const RAW_EXTENSIONS: &[&str] = &[
@@ -176,43 +176,132 @@ pub fn recipe_hash(recipe: &EditRecipe) -> String {
     blake3::hash(json.as_bytes()).to_hex().to_string()
 }
 
-/// Renders a virtual copy from the decoded source frame using the shared
-/// `render_frame` entry point. No masks or source actions are applied in the
-/// MVP (see F-101 architecture boundaries).
-///
-/// When the `gpu` feature is enabled this prefers the GPU adapter (via
-/// [`render_best_effort`]) and falls back to the CPU pipeline when no adapter is
-/// available; the chosen backend is logged once at startup.
+/// Reads the file bytes and decodes a source image by extension: RAW via
+/// `lumina-raw` (bytes-based, mirroring the CLI's `decode_input`), raster via
+/// [`ImageFrame::decode`]. Returns the bytes (needed for the source content
+/// hash) together with the decoded frame and optional RAW metadata.
+pub fn read_and_decode(
+    path: &Path,
+) -> Result<(Vec<u8>, ImageFrame, Option<RawMetadata>), McpError> {
+    let bytes =
+        fs::read(path).map_err(|error| McpError::FileNotFound(format!("{path:?}: {error}")))?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("input.raw");
+    let (frame, raw_metadata) = if is_raw_path(path) {
+        let image = lumina_raw::decode_bytes(&bytes, name)
+            .map_err(|error| McpError::Decode(format!("{error}")))?;
+        (image.frame, Some(image.metadata))
+    } else {
+        let frame =
+            ImageFrame::decode(&bytes).map_err(|error| McpError::Decode(format!("{error}")))?;
+        (frame, None)
+    };
+    Ok((bytes, frame, raw_metadata))
+}
+
+/// Image input extensions collected by `lumina_batch` (identical list to the
+/// CLI's `has_image_extension`).
+pub const BATCH_IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "arw", "cr2", "cr3", "dng", "nef",
+];
+
+/// Returns `true` when the path carries an extension accepted by batch
+/// collection.
+pub fn has_batch_image_extension(path: &Path) -> bool {
+    extension(path)
+        .map(|ext| BATCH_IMAGE_EXTENSIONS.contains(&ext.as_str()))
+        .unwrap_or(false)
+}
+
+/// Returns `true` when the path looks like a Lumina sidecar JSON
+/// (`*.lumina.json`) — the exact predicate of the CLI reindex scan.
+pub fn is_sidecar_json_path(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(".lumina.json")
+}
+
+/// Cycle-safe recursive file collection behind `lumina_batch` and
+/// `lumina_reindex`, mirroring the CLI's reviewed `collect_tree_files`
+/// behavior: the visited set holds canonical directory identities so
+/// filesystem cycles terminate instead of overflowing the stack, directory
+/// symlinks are never followed, and every directory level is walked in
+/// deterministic (sorted) order.
+pub fn collect_tree_files<F>(
+    path: &Path,
+    output: &mut Vec<PathBuf>,
+    keep: &F,
+) -> Result<(), McpError>
+where
+    F: Fn(&Path) -> bool,
+{
+    let mut visited = std::collections::BTreeSet::new();
+    collect_tree_files_inner(path, output, &mut visited, keep)
+}
+
+fn collect_tree_files_inner<F>(
+    path: &Path,
+    output: &mut Vec<PathBuf>,
+    visited: &mut std::collections::BTreeSet<PathBuf>,
+    keep: &F,
+) -> Result<(), McpError>
+where
+    F: Fn(&Path) -> bool,
+{
+    let identity = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(identity) {
+        return Ok(());
+    }
+    let entries: Vec<std::fs::DirEntry> = fs::read_dir(path)
+        .map_err(|error| McpError::FileNotFound(format!("{path:?}: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| McpError::FileNotFound(format!("{path:?}: {error}")))?;
+    // Deterministic order regardless of filesystem enumeration order.
+    let mut sorted = entries;
+    sorted.sort_by_key(|entry| entry.file_name());
+    for entry in sorted {
+        let entry_path = entry.path();
+        // `file_type()` never follows symlinks: symlinked directories are not
+        // recursed into, which removes cycles by construction.
+        let file_type = entry
+            .file_type()
+            .map_err(|error| McpError::FileNotFound(format!("{entry_path:?}: {error}")))?;
+        if file_type.is_dir() {
+            collect_tree_files_inner(&entry_path, output, visited, keep)?;
+        } else if keep(&entry_path) && entry_path.is_file() {
+            output.push(entry_path);
+        }
+    }
+    Ok(())
+}
+
+/// Renders `frame` with `recipe` through the shared `render_frame` entry
+/// point — the single choke point used by preview/save/analyze. With the
+/// `gpu` feature enabled this prefers the GPU adapter and falls back to the
+/// CPU pipeline when none is available (backend logged once per process).
 #[cfg(feature = "gpu")]
-pub fn render_copy(
-    state: &ImageState,
-    copy: &lumina_sidecar::VirtualCopy,
+pub fn render_recipe(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
     camera_white_balance: Option<[f32; 4]>,
 ) -> Result<ImageFrame, McpError> {
     GPU_CTX.with(|cell| {
         let ctx = cell.get_or_init(init_render_backend);
-        render_best_effort(
-            ctx.as_ref(),
-            &state.frame,
-            &copy.recipe,
-            camera_white_balance,
-        )
+        render_best_effort(ctx.as_ref(), frame, recipe, camera_white_balance)
     })
 }
 
-/// Renders a virtual copy from the decoded source frame using the shared
-/// `render_frame` entry point. No masks or source actions are applied in the
-/// MVP (see F-101 architecture boundaries).
+/// CPU-only variant of [`render_recipe`] (see the `gpu` feature).
 #[cfg(not(feature = "gpu"))]
-pub fn render_copy(
-    state: &ImageState,
-    copy: &lumina_sidecar::VirtualCopy,
+pub fn render_recipe(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
     camera_white_balance: Option<[f32; 4]>,
 ) -> Result<ImageFrame, McpError> {
     let output = render_frame(
-        &state.frame,
+        frame,
         &RenderContext {
-            recipe: &copy.recipe,
+            recipe,
             camera_white_balance,
             source_actions: &[],
             masks: None,
@@ -221,6 +310,17 @@ pub fn render_copy(
     )
     .map_err(map_core_error)?;
     Ok(output.frame)
+}
+
+/// Renders a virtual copy from the decoded source frame using the shared
+/// `render_frame` entry point. No masks or source actions are applied in the
+/// MVP (see F-101 architecture boundaries).
+pub fn render_copy(
+    state: &ImageState,
+    copy: &lumina_sidecar::VirtualCopy,
+    camera_white_balance: Option<[f32; 4]>,
+) -> Result<ImageFrame, McpError> {
+    render_recipe(&state.frame, &copy.recipe, camera_white_balance)
 }
 
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
@@ -319,6 +419,67 @@ pub fn encode_with_quality(
         seed: 0,
     };
     frame.encode_with_options(options).map_err(map_core_error)
+}
+
+/// Non-destructive output guard (F-101-F1 bulk tools).
+///
+/// Refuses when `target` resolves onto the source image or one of its Lumina
+/// bundle files (`<source>.lumina.json`, `<source>.lumina.zdata`) — canonical
+/// aliases including not-yet-existing targets are caught via the candidate
+/// resolution below. Called before any mutation by `lumina_dust_removal` and
+/// before every bulk write.
+pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpError> {
+    let target_resolved = resolve_candidate(target).map_err(|error| {
+        McpError::Encode(format!(
+            "could not resolve output path `{}`: {error}",
+            target.display()
+        ))
+    })?;
+    let protected: [(&str, PathBuf); 3] = [
+        ("source image", source.to_path_buf()),
+        ("sidecar", lumina_sidecar::sidecar_path_for(source)),
+        (
+            "mask/source-action bundle",
+            lumina_sidecar::zdata_path_for(source),
+        ),
+    ];
+    for (kind, path) in protected {
+        // Both sides use the candidate convention (existing paths are
+        // canonicalized; missing ones resolve against their canonical parent),
+        // mirroring the CLI's `reject_protected_output`. A plain
+        // canonicalize-the-first-argument comparison would fail on the
+        // not-yet-existing sidecar/zdata candidates.
+        let path_resolved = resolve_candidate(&path).map_err(|error| {
+            McpError::Encode(format!("could not resolve `{}`: {error}", path.display()))
+        })?;
+        if path_resolved == target_resolved {
+            return Err(McpError::Encode(format!(
+                "output `{}` would overwrite the {kind} `{}`; refusing (non-destructive guarantee)",
+                target.display(),
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Resolves `path` to a comparable identity (CLI `resolve_candidate` parity):
+/// existing paths are canonicalized, missing ones are resolved against their
+/// canonical parent directory.
+fn resolve_candidate(path: &Path) -> std::io::Result<PathBuf> {
+    if path.exists() {
+        fs::canonicalize(path)
+    } else {
+        let parent = fs::canonicalize(path.parent().unwrap_or_else(|| Path::new(".")))?;
+        Ok(parent.join(path.file_name().unwrap_or_default()))
+    }
+}
+
+/// Guard + atomic write (see [`reject_protected_target`]).
+pub fn write_output_guarded(source: &Path, target: &Path, bytes: &[u8]) -> Result<(), McpError> {
+    reject_protected_target(source, target)?;
+    lumina_sidecar::write_atomically(target, bytes)
+        .map_err(|error| McpError::Encode(format!("could not write `{target:?}`: {error}")))
 }
 
 /// Bilinear downscale of an RGBA8 frame so that the output width does not

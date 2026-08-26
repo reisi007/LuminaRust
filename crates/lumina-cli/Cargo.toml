@@ -22,12 +22,19 @@ lumina-gpu = { path = "../lumina-gpu", optional = true }
 # Logging for visible backend selection (see `Agents.md` capability separation).
 # `std` is required for `log::set_boxed_logger` (log 0.4 has no default features).
 log = { version = "0.4", features = ["std"] }
+# F-101-F1: `lumina mcp` subcommand runs the MCP server over stdio. Optional
+# capability (SOLL: feature-flagged integration); enabled by default so the
+# standard workspace build/test gates cover the subcommand.
+lumina-mcp = { path = "../lumina-mcp", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 
 [features]
+default = ["mcp"]
+# F-101-F1: enables the `lumina mcp` stdio-server subcommand.
+mcp = ["dep:lumina-mcp"]
 # GPU-first rendering with CPU fallback (lumina-gpu, wgpu/Metal). Enables the
 # `GpuContext` routing in `main.rs`; the GPU path is an optional capability that
 # degrades to the CPU pipeline when no adapter is present.

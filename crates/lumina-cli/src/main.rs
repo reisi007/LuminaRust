@@ -222,6 +222,10 @@ enum Command {
     Reindex(IndexArgs),
     Validate(IndexArgs),
     DustRemoval(DustRemovalArgs),
+    /// F-101-F1: run the Lumina MCP server over stdio (JSON-RPC on
+    /// stdin/stdout). Takes no arguments; see `feature/platform/mcp-server.md`.
+    #[cfg(feature = "mcp")]
+    Mcp,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -481,6 +485,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Reindex(args) => reindex(args),
         Command::Validate(args) => validate(args),
         Command::DustRemoval(args) => dust_removal(args),
+        #[cfg(feature = "mcp")]
+        // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
+        // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
+        // JSON-RPC stream on stdout is never corrupted.
+        Command::Mcp => {
+            lumina_mcp::run_stdio();
+            Ok(())
+        }
     }
 }
 
@@ -2018,6 +2030,28 @@ impl StagedArtifact {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F-101-F1 smoke test: the `lumina mcp` subcommand delegates to the
+    /// shared `lumina_mcp` server pipeline; assert the handshake and the full
+    /// documented tool set through that exact pipeline.
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools() {
+        std::env::set_var("LUMINA_MCP_PREVIEW_DIR", std::env::temp_dir());
+        let mut server = lumina_mcp::Server::new();
+        let handshake = server
+            .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+            .expect("initialize expects a response");
+        assert_eq!(handshake["result"]["serverInfo"]["name"], "lumina-mcp");
+
+        let listing = server
+            .handle_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+            .expect("tools/list expects a response");
+        let tools = listing["result"]["tools"].as_array().unwrap();
+        // Drift guard pinned to the SOLL (feature/platform/mcp-server.md):
+        // 7 editing tools + lumina_analyze + 4 F-101-F1 CLI-coverage tools.
+        assert_eq!(tools.len(), 12, "tool set drifted; update SOLL + tests");
+    }
 
     #[test]
     fn parses_process_arguments() {

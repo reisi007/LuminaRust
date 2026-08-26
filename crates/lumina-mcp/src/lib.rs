@@ -15,6 +15,7 @@ use error::{error_response, ok_response, tool_error_result, tool_result_response
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::env;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 pub use error::McpError;
@@ -219,4 +220,56 @@ fn initialize_result() -> Value {
 
 fn tools_list_result() -> Value {
     json!({ "tools": tools::list_tool_definitions() })
+}
+
+/// Runs the newline-delimited stdio loop: reads JSON-RPC lines from stdin,
+/// dispatches them via [`Server::handle_line`], and writes each response as
+/// one JSON object per line on stdout. Notifications receive no response.
+///
+/// Shared by the `lumina-mcp` binary and the `lumina mcp` CLI subcommand
+/// (F-101-F1) so both entry points run byte-identical transport code.
+pub fn run_stdio() {
+    let mut server = Server::new();
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(content) => content,
+            Err(_) => break,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(response) = server.handle_line(trimmed) {
+            let serialized = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+            if out.write_all(serialized.as_bytes()).is_err() {
+                break;
+            }
+            let _ = out.write_all(b"\n");
+            let _ = out.flush();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F-101-F1 smoke: one initialize roundtrip through the shared stdio
+    /// handler pipeline (parse → dispatch → serialize shape).
+    #[test]
+    fn handle_line_answers_initialize_handshake() {
+        std::env::set_var("LUMINA_MCP_PREVIEW_DIR", std::env::temp_dir());
+        let mut server = Server::new();
+        let response = server
+            .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+            .expect("initialize expects a response");
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(response["result"]["capabilities"]["tools"], json!({}));
+    }
 }

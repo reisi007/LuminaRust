@@ -3,6 +3,11 @@
 **Feature:** F-101 MCP AI-Agent-Schnittstelle
 **Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, 8 Tools inkl.
 `lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 27 Tests grün).
+**F-101-F1 erweiterter Scope (2026-08-26):** 4 zusätzliche CLI-Abdeckungs-
+Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
+`lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
+in `lumina-cli`, Default an). Insgesamt 12 Tools. Verträge und dokumentierte
+Grenzen: Abschnitt „Erweiterter MVP-Scope“.
 Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
@@ -22,6 +27,7 @@ Lost Update) und korrekte JSON-RPC-Codetrennung (-32700 Parse /
 - [Architektur](#architektur)
 - [Architekturgrenzen](#architekturgrenzen)
 - [Nicht-Ziele](#nicht-ziele)
+- [Erweiterter MVP-Scope](#erweiterter-mvp-scope-2026-08-19-user-anforderung-f-101-f1-umgesetzt-2026-08-26)
 - [Crate-Struktur](#crate-struktur)
 - [Abhängigkeiten](#abhängigkeiten)
 - [Test-Strategie](#test-strategie)
@@ -520,40 +526,153 @@ nicht als Transportfehler. Seitdem auch neu: `SidecarConflict`
 - Keine Multi-Image-Parallelverarbeitung.
 - Keine AI-Masken-Inferenz über MCP.
 - Keine Preset-Verwaltung über MCP (kein `lumina_apply_preset`).
-- Keine Batch-Befehle (ein Aufruf = ein Bild).
+- ~~Keine Batch-Befehle~~ **F-101-F1 (2026-08-26): aufgehoben** für
+  `lumina_batch` mit dokumentierten Grenzen (sequenziell, ohne Resume);
+  die Single-Image-*Session* bleibt weiterhin single-scoped.
 - Keine Authentifizierung oder Zugriffssteuerung (lokaler Prozess).
 - Keine `resources` oder `prompts` MCP-Capabilities.
 - Keine Virtual-Copy-Erstellung oder Löschung über MCP (nur Lesen
   und Rezept-Bearbeitung).
 
-## Erweiterter MVP-Scope (2026-08-19 User-Anforderung)
+## Erweiterter MVP-Scope (2026-08-19 User-Anforderung; F-101-F1 umgesetzt 2026-08-26)
 
-Der MCP-Server soll **alle CLI-Funktionalitäten** abbilden, nicht nur die
-aktuell spezifizierten 7 Tools. Zusätzliche Anforderungen:
+Der MCP-Server bildet **alle CLI-Funktionalitäten** ab, nicht nur die
+sieben ursprünglichen Editing-Tools. Zusätzliche Anforderungen:
 
-### Volle CLI-Abdeckung
-Jeder `lumina`-CLI-Befehl soll ein MCP-Tool werden:
-- `lumina import` → `lumina_import`
-- `lumina develop` / `lumina render` → `lumina_render` (bereits spezifiziert)
-- `lumina export` → `lumina_export` (bereits spezifiziert)
-- `lumina batch` → `lumina_batch` (ein Aufruf = ein Verzeichnis)
-- `lumina info` → `lumina_inspect` (bereits spezifiziert)
-- `lumina reindex` → `lumina_reindex`
-- `lumina dust-removal` → `lumina_dust_removal`
-- `lumina mcp` → Server-Selbstreferenz (nicht als Tool)
+### Volle CLI-Abdeckung (12 Tools)
 
-### Vision-fähiger Agent (Vorschau-analysieren)
-Der MCP-Server soll einen Weg bieten, den aktuellen Edit-Zustand visuell
-zu analysieren:
-- `lumina_preview` liefert den Pfad zur gerenderten Vorschau (PNG/JPEG).
-  Ein vision-fähiger Agent (z. B. Claude mit Vision, GPT-4V) kann das Bild
-  dann direkt analysieren.
-- **Alternativ:** `lumina_analyze` liefert strukturierte Bilddaten
-  (Histogramm, Farbstatistiken, Dominante Farben, Exposition) als JSON —
-  nützlich für Agents ohne Vision-Fähigkeit.
-- **Ziel:** Der Agent soll den aktuellen Bearbeitungszustand SEHEN und
-  darüber urteilen können (z. B. „die Belichtung ist zu hoch", „der
-  Himmel ist过曝").
+Jeder `lumina`-CLI-Befehl ist als MCP-Tool erreichbar:
+
+| CLI-Befehl | MCP-Tool | Status |
+| --- | --- | --- |
+| `lumina import` | `lumina_import` | F-101-F1 |
+| `lumina develop` / `lumina render` / `lumina export` | `lumina_edit` + `lumina_save` (Render/Export-Choke-Point) | bereits spezifiziert |
+| `lumina process` | `lumina_edit` + `lumina_save` (Rezept vor Render setzen) | bereits spezifiziert |
+| `lumina info` | `lumina_inspect` | bereits spezifiziert |
+| `lumina batch` | `lumina_batch` (ein Aufruf = ein Verzeichnis) | F-101-F1 |
+| `lumina reindex` | `lumina_reindex` | F-101-F1 |
+| `lumina dust-removal` | `lumina_dust_removal` | F-101-F1 |
+| `lumina mask` | Maskenstatus via `lumina_inspect` sichtbar; Re-Refresh über Sidecar-Rezept (`update_masks`), Inferenz selbst bewusst Post-MVP | Grenze dokumentiert |
+| `lumina validate` | `lumina_import`/`lumina_load` (Identitäts- und Validierungsprüfung beim Laden) | bereits spezifiziert |
+| `lumina mcp` | CLI-Subcommand, startet den Server (kein Tool) | F-101-F1 |
+
+#### Gemeinsame Eigenschaften der Bulk-/Pfad-Tools
+
+`lumina_import`, `lumina_batch`, `lumina_reindex` und
+`lumina_dust_removal` sind **pfadbasiert** (`input`-Pfad statt
+`image_id`): sie verändern die Single-Image-Session nicht und laufen
+neben einem geladenen Bild. Sie sind reine Orchestrierung über dieselben
+geprüften Bausteine wie die Session-Tools (Decode, Seitenidentität,
+`render_frame`, atomare Writes) — keine zweite Pipeline.
+
+#### `lumina_import`
+
+Spiegelt `lumina import`: stellt sicher, dass ein gültiger Standardsidecar
+existiert, ohne das Bild in die Session zu laden.
+
+- **Input:** `{ "path": string }`.
+- **Verhalten:** Datei lesen und decodieren (RAW/Raster). Existiert der
+  Sidecar, wird er geladen und gegen die aktuelle Quell-Identität
+  (Content-Hash, Byte-Länge) geprüft — Abweichung ist ein lauter
+  `SidecarError` („source changed“), niemals still verwendend. Existiert
+  er nicht, wird ein leerer Standardsidecar per Compare-and-Swap
+  materialisiert (konkurrierende Erstellung wird adoptiert).
+- **Output:** `{ ok: true, input, sidecar, status: "created"|"validated" }`.
+- Fehler: `FileNotFound`, `UnsupportedFormat`, `DecodeError`,
+  `SidecarError`.
+
+#### `lumina_batch`
+
+Ein Aufruf = ein Verzeichnis. Rendert jede Bilddatei des Verzeichnisses
+(rekursiv, deterministische Reihenfolge) mit dem aktiven Rezept ihres
+Sidecars über denselben Choke-Point wie `lumina_save` und schreibt
+atomar nach `<output>/<dateiname>.<format-extension>`.
+
+- **Input:** `{ input, output, format?, quality?, virtual_copy? }`
+  (`format` Default `"png"`; `quality` Default 90, nur JPEG/WebP;
+  `virtual_copy` wählt die Kopie, Default = Standardkopie).
+- **Kollisionsschutz:** Wie REVIEW-CLI-BATCHCOLLIDE-1 wird der Lauf
+  abgelehnt, bevor etwas geschrieben wird, wenn zwei Inputs auf
+  denselben Ziel-Dateinamen mappen.
+- **Nicht-destruktiv:** Ein Output, der auf Quelle oder deren
+  `.lumina.*`-Bundle auflöst, wird pro Item verweigert.
+- **Output:** `{ status: "ok"|"failed", succeeded, failed, results:
+  [{ input, status, output?, error? }] }`. Der Aufrufer MUSS auf
+  `status` verzweigen — Einzel-Fehlschläge machen das Ergebnis nie
+  still erfolgreich.
+- **Dokumentierte Grenzen gegenüber dem CLI-Batch:** sequenziell (kein
+  `--jobs`-Pool), keine `*.status.json`-Resume-Marker, keine
+  One-Shot-Flags `update_masks`/`force_render`, keine Presets/Auto-Tone
+  (das sind `process`-Features, kein Batch-Bestandteil im MVP). Fehlt
+  ein Sidecar, wird ein frisches Standard-Rezept (Defaultkopie ohne
+  Adjustments) **im Speicher** verwendet — `lumina_batch` schreibt
+  niemals Sidecars; wer Sidecars materialisieren will, ruft vorher
+  `lumina_import`. Diese Einschränkungen sind bewusst und keine
+  stillen Abweichungen; Resume/Parallelität bleibt Post-MVP.
+
+#### `lumina_reindex`
+
+Wrappt exakt das heutige CLI-Verhalten: rekursiver Scan nach
+`*.lumina.json` mit Validierung jedes Dokuments.
+
+- **Input:** `{ input }` (Verzeichnis).
+- **WICHTIGE GRENZE:** Es gibt im Workspace **kein Index-Modul** —
+  `reindex` ist und bleibt ein **Sidecar-Scan** (Sammeln, Laden,
+  Validieren, Zählen). Er baut keinen Katalog, schreibt nichts und
+  erzeugt keinen Cache. Ein echter Index-Adapter ist Post-MVP und muss
+  aus Sidecars vollständig rekonstruierbar sein.
+- **Output:** `{ input, sidecars, invalid, errors: [...], status:
+  "ok"|"invalid-sidecars" }`. Korrupte Sidecars werden einzeln mit
+  Pfad+Fehler gemeldet (niemals still ignoriert); `status` spiegelt den
+  CLI-Exitcode wider.
+
+#### `lumina_dust_removal`
+
+Wrappt die existierende F-042-N1-Funktionalität (`lumina dust-removal`):
+persistiert eine Reparatur-Region in das `.lumina.zdata`-Bundle und
+trägt sie als Source-Action in das Rezept einer virtuellen Kopie ein.
+Das Original bleibt unverändert.
+
+- **Input:** `{ input, repair_region: { id, kind?,
+  region_width, region_height, region_values (u16),
+  replacement_path }, virtual_copy?, render_out? }`
+  (`kind` Default `dust-removal`, alternativ `ai-replacement`;
+  Pixel `>= 32768` der Region werden durch das Replacement ersetzt).
+- **Ordnungsregel (REVIEW-CLI-N2, identisch zum CLI):** Sidecar laden,
+  virtuelle Kopie auflösen und Region/Replacement vollständig
+  validieren (Region-Dimensionen = Source-Frame, Replacement =
+  Region) **bevor** etwas ins Bundle angehängt wird. Erst dann
+  `append_repair_region`, Source-Action-Spec anfügen, Sidecar
+  validieren und atomar speichern.
+- **Optional `render_out`:** verifizierender Headless-Render mit
+  angewandter Source-Action (Auflösung aus dem Bundle inklusive
+  Prüfsummenkontrolle — fehlendes Artefakt oder Prüfsummen-Divergenz
+  ist ein lauter Fehler). `render_out` darf niemals auf die Quelle
+  oder deren Bundle-Dateien auflösen.
+- **Output:** `{ ok: true, input, virtual_copy, artifact_id, bundle,
+  checksum }`.
+- Fehler: `FileNotFound`, `UnsupportedFormat`, `DecodeError`,
+  `InvalidParams` (Dimensions-/Werte-Verstöße), `UnknownCopy`,
+  `SidecarError` (fehlender Sidecar → „run lumina_import first“),
+  `EncodeError`.
+
+### Vision-fähiger Agent (Vorschau analysieren) — UMGESETZT
+
+Zwei komplementäre Wege, den Bearbeitungszustand zu beurteilen:
+
+1. **Visuell:** `lumina_preview` liefert den Pfad zur gerenderten
+   Vorschau (PNG); ein vision-fähiger Agent analysiert das Bild direkt.
+2. **Strukturiert (vision-frei):** `lumina_analyze` liefert als JSON:
+   Luminanz-Histogramm (256 Bins) + RGB-Kanal-Histogramme, Per-Channel-
+   Statistiken (Mittelwert, StdDev, Min, Max), dominante Farben
+   (quantisiert, mit Häufigkeit) und einen Expositionsschätzwert
+   (EV bis Mitttelgrau 0.5, Median-basiert, geclampt auf ±10 EV) —
+   gerendert über denselben Choke-Point wie Preview/Save, also immer
+   der aktuelle Rezeptstand. Damit ist die SOLL-Anforderung
+   (Histogramm, Farbstatistiken, Dominante Farben, Exposition)
+   vollständig erfüllt; Auto-Tone-Vorschläge und Maskenstatus gehören
+   bewusst NICHT zu `lumina_analyze` (Maskenstatus: `lumina_inspect`;
+   Auto-Tone bleibt CLI-/Rezept-Feature).
 
 ### Agent-Skill für LuminaRust
 Ein OpenCode/Agent-Skill (`lumina.md` oder ähnlich), der AI-Agenten
@@ -676,15 +795,17 @@ cargo fmt -p lumina-mcp --check
 
 F-101 ist umgesetzt und abnahmefähig, wenn:
 
-- [ ] Alle sieben MCP-Tools (`lumina_load`, `lumina_edit`,
-      `lumina_get_recipe`, `lumina_save`, `lumina_preview`,
-      `lumina_list_virtual_copies`, `lumina_inspect`) funktionieren
-      und die dokumentierten Outputs liefern.
+- [ ] Alle zwölf MCP-Tools funktionieren: die sieben Editing-Tools
+      (`lumina_load`, `lumina_edit`, `lumina_get_recipe`, `lumina_save`,
+      `lumina_preview`, `lumina_list_virtual_copies`, `lumina_inspect`),
+      `lumina_analyze` sowie die F-101-F1-CLI-Abdeckung (`lumina_import`,
+      `lumina_batch`, `lumina_reindex`, `lumina_dust_removal`) und die
+      dokumentierten Outputs liefern.
 - [ ] `lumina_preview` erzeugt deterministische, cache-freie
       Vorschauen mit konfigurierbarer Breite.
 - [ ] `lumina_edit` schreibt Sidecars atomar und idempotent.
-- [ ] Der MCP-Server startet über `lumina mcp` (oder `lumina-mcp`)
-      und beendet sich sauber.
+- [ ] Der MCP-Server startet über `lumina mcp` (CLI-Subcommand, Feature
+      `mcp`, Default an) oder `lumina-mcp` und beendet sich sauber.
 - [ ] Der `initialize`-Handshake liefert korrekte MCP-Capabilities.
 - [ ] Unit-, Integration- und Fehlerpfadtests bestehen.
 - [ ] Clippy (`-D warnings`) und Formatprüfung laufen grün.

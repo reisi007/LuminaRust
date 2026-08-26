@@ -20,8 +20,8 @@ Assigns a process-local image_id and (re)loads the sidecar. A new lumina_load \
 discards the previously loaded image.";
 
 /// Pipeline identifier for sidecars materialized by this server (same value as
-/// the CLI's import path).
-const PIPELINE_VERSION: &str = "raster-mvp-1";
+/// the CLI's import path). `pub(crate)` for reuse by `lumina_import`.
+pub(crate) const PIPELINE_VERSION: &str = "raster-mvp-1";
 
 pub fn schema() -> Value {
     json!({
@@ -119,7 +119,9 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
 /// identity. A sidecar whose recorded content hash or byte length no longer
 /// matches the source is stale; per F-001/F-101 it is reported loudly and
 /// never silently used (same rule as the CLI develop/export path).
-fn open_existing_sidecar(
+///
+/// `pub(crate)` so `lumina_import` (F-101-F1) applies the identical guard.
+pub(crate) fn open_existing_sidecar(
     sidecar_path: &Path,
     identity: &SourceIdentity,
 ) -> Result<(SidecarDocument, String, String), McpError> {

@@ -6,12 +6,16 @@
 //! [`dispatch_tool`] aggregate them.
 
 pub mod analyze;
+pub mod batch;
 pub mod copies;
+pub mod dust_removal;
 pub mod edit;
+pub mod import;
 pub mod inspect;
 pub mod load;
 pub mod preview;
 pub mod recipe;
+pub mod reindex;
 pub mod save;
 
 use crate::error::McpError;
@@ -29,6 +33,15 @@ pub fn list_tool_definitions() -> Vec<Value> {
         tool_def(copies::NAME, copies::DESCRIPTION, copies::schema()),
         tool_def(inspect::NAME, inspect::DESCRIPTION, inspect::schema()),
         tool_def(analyze::NAME, analyze::DESCRIPTION, analyze::schema()),
+        // F-101-F1: full CLI coverage (path-based bulk tools).
+        tool_def(import::NAME, import::DESCRIPTION, import::schema()),
+        tool_def(batch::NAME, batch::DESCRIPTION, batch::schema()),
+        tool_def(reindex::NAME, reindex::DESCRIPTION, reindex::schema()),
+        tool_def(
+            dust_removal::NAME,
+            dust_removal::DESCRIPTION,
+            dust_removal::schema(),
+        ),
     ]
 }
 
@@ -51,6 +64,10 @@ pub fn dispatch_tool(server: &mut Server, name: &str, args: &Value) -> Result<Va
         copies::NAME => copies::run(server, args),
         inspect::NAME => inspect::run(server, args),
         analyze::NAME => analyze::run(server, args),
+        import::NAME => import::run(server, args),
+        batch::NAME => batch::run(server, args),
+        reindex::NAME => reindex::run(server, args),
+        dust_removal::NAME => dust_removal::run(server, args),
         other => Err(McpError::MethodNotFound(format!("unknown tool: {other}"))),
     }
 }

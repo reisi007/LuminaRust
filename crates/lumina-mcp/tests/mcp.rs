@@ -15,6 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const TOOL_NAMES: &[&str] = &[
+    // Editing session tools (original F-101 scope).
     "lumina_load",
     "lumina_edit",
     "lumina_get_recipe",
@@ -23,6 +24,11 @@ const TOOL_NAMES: &[&str] = &[
     "lumina_list_virtual_copies",
     "lumina_inspect",
     "lumina_analyze",
+    // F-101-F1: full CLI coverage (path-based bulk tools).
+    "lumina_import",
+    "lumina_batch",
+    "lumina_reindex",
+    "lumina_dust_removal",
 ];
 
 fn new_server(preview_dir: &Path) -> Server {
@@ -184,7 +190,7 @@ fn initialize_reports_capabilities_and_protocol() {
 }
 
 #[test]
-fn tools_list_returns_all_eight_tools_with_schemas() {
+fn tools_list_returns_all_twelve_tools_with_valid_schemas() {
     let dir = tempfile::tempdir().unwrap();
     let mut server = new_server(dir.path());
     let response = call(&mut server, "tools/list", json!({}));
@@ -199,9 +205,16 @@ fn tools_list_returns_all_eight_tools_with_schemas() {
             "missing tool `{expected}`"
         );
         let tool = tools.iter().find(|t| t["name"] == *expected).unwrap();
+        // Schema validation: every tool declares an object inputSchema with a
+        // required-array and a properties map (MCP `tools/list` shape).
+        assert_eq!(tool["inputSchema"]["type"], "object", "`{expected}`");
         assert!(
-            tool["inputSchema"].is_object(),
-            "`{expected}` has no schema"
+            tool["inputSchema"]["required"].is_array(),
+            "`{expected}` has no required array"
+        );
+        assert!(
+            tool["inputSchema"]["properties"].is_object(),
+            "`{expected}` has no properties map"
         );
         assert!(tool["description"].is_string());
     }
