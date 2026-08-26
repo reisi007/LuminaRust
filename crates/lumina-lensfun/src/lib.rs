@@ -1048,5 +1048,4 @@ mod tests {
             assert_eq!(got, good, "plausible crop factor {good} must pass through");
         }
     }
-
 }
