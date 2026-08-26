@@ -71,8 +71,8 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26:
-25 offene Tasks — Block A: 23, Block B: 1, Block C: 1.
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26 (R2):
+17 offene Tasks — Block A: 15, Block B: 1, Block C: 1.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -119,22 +119,6 @@ MVP-blockierend)**
 werden nach unabhängiger Verifizierung entfernt.
 
 
-- [ ] **[PRIO: hoch] R2-MCP-01** GPU-Pfad verwirft `camera_white_balance` still ->
-  build-abhängige Pixeldifferenz ohne Warnung (mcp/util.rs:334-368; Spiegel
-  cli main.rs:127-175). Fix: `Some(camera_wb)` als CPU-Routing-Reason in
-  `unsupported_gpu_stages_for`. S. **Nach F-101-F1-Commit.**
-- [ ] **[PRIO: hoch] R2-GPU-05** Wertblinde GPU-Routing-Gates: GUI schreibt Default 0.0
-  zurück statt Key zu entfernen -> Rezept bleibt dauerhaft CPU-routed, obwohl
-  Pixel identisch (lumina-gpu/src/lib.rs:177-194 + gui 2018/3948). Fix:
-  Wert-Neutralität prüfen (Key==0.0 überspringen). S.
-- [ ] **[PRIO: hoch] R2-GPU-01** `render_to_vram` erzeugt/lädt Input-Textur jeden Tick
-  neu (~96 MB CPU→GPU-Upload @24MP) entgegen docs/gpu-bootstrap.md:92-94
-  (lib.rs:896-920). Fix: Input-Textur pro Pool-Eintrag halten, Neu-Upload nur
-  bei Quellwechsel. M.
-- [ ] **[PRIO: hoch] R2-GPU-02** `copy_vram_to_texture` baut Overlay-Pipeline (inkl.
-  Shader-Modul-Kompilierung) + Bindgroups bei jedem Present neu (lib.rs:
-  1221-1223, shaders.rs:776-817). Fix: Pipeline je Zielformat cachen. M.
-
 - [ ] **[PRIO: hoch] R2-ONNX-01b** (Folge aus R2-ONNX-01-Implementierung): Consumer-seitige
   Stale-Erkennung schließen — `model_identity_matches` (lumina-core/mask_loader.rs
   ~383) vergleicht nur name/version/hash und muss den neuen
@@ -149,44 +133,29 @@ werden nach unabhängiger Verifizierung entfernt.
   GUIMOD-06 (Routing/Fallback nur stderr, kein Statusbadge/i18n),
   GUI-TONE-KOPPLUNG (analyze_tone_with_histogram nutzen → ein Pass statt zwei
   pro Render; API steht seit R2-PERF-01 bereit).
+- [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-01 (Input-Textur-Upload pro Tick
+  ~96MB @24MP → cachen), GPU-02 (Overlay-Pipeline-Rebuild je Present → cachen),
+  GPU-03 (SA-Texturen pro Render neu), GPU-04 (GPU-Pfad @2048 nicht schneller als
+  CPU), GPU-06 (kein Device-Lost-Handling), GPU-07 (Backends::METAL hardcodet).
+  **Vor manuellem Test** — beeinflusst direkt die Drag-Flüssigkeit.
 - [ ] **[PRIO: niedrig] R2-GUI-FOLLOWUP** (aus GUI-Verifizierung): apply_decoded_frame
   setzt vram_fresh/gpu_stage_gate beim Bildwechsel nicht zurück — ≤1 Frame kann
   VRAM-Ergebnis des Vorgängerbilds zeigen (vorbestehend, Dims-Check greift bei
   alt-konsistenten Seiten nicht). Fix: beide Felder in apply_decoded_frame nullen.
-- [ ] **[PRIO: mittel] R2-CLI-02** Extension-/Identity-Unifikation MCP-Seite: mcp/util.rs
-  hält noch eine eigene 18er-Kopie UND die alt-gedriftete 9er-Liste
-  BATCH_IMAGE_EXTENSIONS (tools/batch.rs nutzt sie) — derselbe „9 von 18
-  übersprungen"-Bug wie R2-CLI-01 lebt im lumina_batch fort. Fix: mcp nutzt
-  lumina_raw::RAW_EXTENSIONS/is_raw_extension, private Listen löschen;
-  SourceIdentity-Bau an CLI-Semantik angleichen (laut statt
-  bytes.len()-Fallback); GUI is_raw_name-Teilkopie im Blick behalten.
-- [ ] **[PRIO: mittel] R2-GPU-BUNDLE**: GPU-03 (SA-Texturen pro Render neu erstellt),
-  GPU-06 (kein on_uncaptured_error/Device-Lost-Handling -> App-Panik möglich),
-  GPU-07 (Backends::METAL hardcodet, Windows/Linux nie GPU), GPU-04 (GPU-Pfad
-  @2048 nicht schneller als CPU — gepoolte Ressourcen, L).
-- [ ] **[PRIO: mittel] R2-LENS-01-ADOPTION**: Row-Wrapper (geometry_row/apply_vignetting_row)
-  sind additiv in lumina-lensfun verfügbar (~48 Mio. → ~16k FFI-Übergänge @24MP),
-  ABER nicht byteidentisch zu den 1-Pixel-Calls (lensfuns Blockpfade akkumulieren
-  inkrementell; erste Spalte bitidentisch, Drift ≤7.4e-4 px @257 Spalten,
-  skaliert mit Breite). Adoption im Core-Loop erfordert bewusste Golden-
-  Rebaseline-Entscheidung (F-043-Toleranzen anfassen!) — nach manuellem Test
-  zusammen mit GPU-Bundle entscheiden.
 
 ### PRIO: niedrig (R2, gebündelt)
 
-- [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE**: GPU-08 (Env-Vars im Hot-Pfad), GPU-09
-  (inkonsistente Fehlerverträge ohne Adapter), GPU-10 (totes Gerüst DraftPyramid/
-  bake_3d_lut), GPU-11 (Agents.md listet lumina-gpu/bench/lensfun/mcp nicht),
-  GPU-12 (Overlay-Composite-Shader ohne Pixeltest), GPU-13 (lock().unwrap()
-  Poisoning), RAW-03 (toter name-Parameter der Decode-API), PRESETS-FAIL-CLOSED
-  (recipe_scope_violation fail-open bei Serialisierungsfehler — praktisch
-  unerreichbar, optional fail-closed), GUI-IS_RAW_NAME (letzte private
-  Extension-Teilkopie in lumina-gui/lib.rs ~6288 auf RAW_EXTENSIONS umstellen),
-  GPU-WB-GUI-GATE (gui gpu_present_if_ready sieht keinen Kontext-WB â recipe-only; Restbefund aus R2-MCP-01-HÃ¤rtung), SIGTRAP-GPU-TESTS (--features gpu cli/mcp: Rayon-Worker droppen thread_local GPU_CTX beim Exit, Signal 5 trotz grÃ¼ner Tests; vorbestehend), MCP-06 (downscale_bilinear gehört nach
-  core), MCP-07 (Preview-Dir-Anlage still ignoriert), MCP-08 (analyze: 6 Pässe
-  in Vollauflösung), MCP-09 (edit akzeptiert undokumentierte vibrance/saturation
-  Keys), SIDECAR-ZDATA-WASM
-  (zstd-sys blockiert workspace-weites wasm32-Gate — Capability-Entscheidung nötig).
+- [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE**: RAW-03 (toter name-Parameter der
+  Decode-API), PRESETS-FAIL-CLOSED (recipe_scope_violation fail-open bei
+  Serialisierungsfehler — praktisch unerreichbar, optional fail-closed),
+  GUI-IS_RAW_NAME (letzte private Extension-Teilkopie in lumina-gui/lib.rs ~6288
+  auf RAW_EXTENSIONS umstellen), GPU-WB-GUI-GATE (gui gpu_present_if_ready sieht
+  keinen Kontext-WB — recipe-only; Restbefund aus R2-MCP-01), SIGTRAP-GPU-TESTS
+  (--features gpu cli/mcp: Rayon-Worker droppen thread_local GPU_CTX beim Exit,
+  Signal 5 trotz grüner Tests; vorbestehend), MCP-06 (downscale_bilinear gehört
+  nach core), MCP-08 (analyze: 6 Pässe in Vollauflösung), MCP-09 (edit akzeptiert
+  undokumentierte vibrance/saturation Keys), SIDECAR-ZDATA-WASM (zstd-sys blockiert
+  workspace-weites wasm32-Gate — Capability-Entscheidung nötig).
 
 **Phase 2: Rezept, virtuelle Kopien und Migrationen**
 
