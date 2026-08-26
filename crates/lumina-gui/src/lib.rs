@@ -6286,33 +6286,15 @@ fn format_label(format: ImageFileFormat) -> &'static str {
 }
 
 fn is_raw_name(name: &str) -> bool {
-    matches!(
-        std::path::Path::new(name)
-            .extension()
-            .and_then(|v| v.to_str())
-            .map(|v| v.to_ascii_lowercase())
-            .as_deref(),
-        Some(
-            "cr2"
-                | "cr3"
-                | "nef"
-                | "arw"
-                | "dng"
-                | "orf"
-                | "raf"
-                | "rw2"
-                | "crw"
-                | "pef"
-                | "srw"
-                | "3fr"
-                | "iiq"
-                | "rwl"
-                | "mos"
-                | "erf"
-                | "kdc"
-                | "x3f"
-        )
-    )
+    // Single source of truth: delegate to `lumina_raw::is_raw_extension`
+    // (RAW_EXTENSIONS lives there). R2-CLI-01 already consolidated the same
+    // list for the CLI path; keeping one canonical extension list prevents the
+    // two crates from drifting and re-introducing the silent 9-of-18 skip the
+    // review flagged. Matching stays ASCII-case-insensitive.
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(lumina_raw::is_raw_extension)
 }
 
 /// Root of the Library folder tree: `$HOME` when the current directory lives
