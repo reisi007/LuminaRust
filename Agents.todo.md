@@ -115,18 +115,9 @@ MVP-blockierend)**
 
 
 - [ ] **[PRIO: niedrig] REVIEW-CORE-WASM-FOLLOWUP** `cargo check -p lumina-core --target wasm32-unknown-unknown --all-targets` scheitert an Dev-Dependencies (wait-timeout/getrandom), identisch an HEAD — der dokumentierte lib-only-Capability-Gate ist grün; Dev-Deps für wasm32 cfg-gaten oder `--all-targets` offiziell als native-only dokumentieren.
-- [ ] **[PRIO: niedrig] REVIEW-CLI-N6** Export geschrieben bevor Sidecar-Update; Fehler
-  → Exit 1 trotz existierendem Export (main.rs:1346). Re-Check
-  2026-08-25: unverändert (als v1-Umfang in sidecar lib.rs dokumentiert).
 
 
 
-- [ ] **[PRIO: niedrig] REVIEW-RAW-N1** Returncode von `libraw_adjust_sizes_info_only`
-  geschluckt — Budget-Gate könnte auf veralteten Maßen basieren
-  (lumina-raw/src/lib.rs:335). Re-Check 2026-08-25: `let _ = unsafe {...}`.
-- [ ] **[PRIO: niedrig] REVIEW-RAW-N2** `metadata.lens` ist immer `None`, obwohl Feld
-  existiert und Lensfun-Integration ihn braucht (lib.rs:307). Befüllen
-  oder Feld entfernen. Re-Check 2026-08-25: unverändert (`lens: None`).
 - [ ] **[PRIO: niedrig] REVIEW-SIDECAR-LOADER-RES** Auflösungsvalidierung im
   ladenden Pfad: `artifact_status` validiert Reference-width/height bewusst
   nicht gegen Bundle-Records (siehe sidecar.md „Artefaktstatus-Prüfung");
