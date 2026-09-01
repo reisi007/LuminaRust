@@ -71,8 +71,8 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-08-26 (R2):
-12 offene Tasks — Block A: 10, Block B: 1, Block C: 2.
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-01:
+15 offene Tasks — Block A: 12, Block B: 1, Block C: 2.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -96,47 +96,21 @@ Keine offenen Punkte. SOLL: `feature/architecture/pipeline.md` und
 sonstigen User-Interaktion bedarf, und hängt nicht vom nächsten manuellen
 GUI/User-Test ab.**
 
-### PRIO: hoch
-
-**Review-Befunde Full-Repo-Review (2026-08-23) — Hoch (Release-blockierend,
-vor MVP zu beheben)**
-
-Erstes vollständiges Review des gesamten bestehenden Codes (alle 10 Crates,
-~35k Zeilen, 8 parallele Teil-Reviews). Verifiziert behobene Befunde sind aus
-dieser Datei entfernt; Code-Verifikationslauf 2026-08-25 bestätigt den unten
-stehenden Restbestand.
-
-**Phase 11: Qualität, Performance und Release**
-
-### PRIO: niedrig
-
-**Review-Befunde Full-Repo-Review (2026-08-23) — Niedrig (Backlog, nicht
-MVP-blockierend)**
-
-
-**Review R2 (2026-08-26) — Bericht: docs/reviews/2026-08-26-full-review.md**
-60 Befunde (0 kritisch / 12 hoch / 22 mittel / 26 niedrig). Behobene IDs
-werden nach unabhängiger Verifizierung entfernt.
-
-
-
-
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
-
-- [ ] **[PRIO: mittel] R2-LENS-01-ADOPTION**: Row-Wrapper (geometry_row/
-  apply_vignetting_row) sind additiv in lumina-lensfun verfügbar (~48 Mio. → ~16k
-  FFI-Übergänge @24MP). Core-Loop umschalten (lumina-core/src/lib.rs ~1112-1127).
-  Nicht byteidentisch: erste Spalte bitidentisch, Drift ≤7.4e-4 px @257 Spalten,
-  skaliert mit Breite (≈0.75 px @8192). Erfordert Golden-Rebaseline (F-043).
-  **Vor manuellem Test** — dokumentierter sub-pixel-Drift, Performance-Gewinn.
 
 - [ ] **[PRIO: mittel] PREVIEW-CACHE-FEATURE** (neu, vor manuellem Test):
   Hybrid-Preview-Caching für sofortiges Scrollen durch 40+ Bilder. Aktives
   Bild als GPU-Textur (VRAM), Nachbarn als **WebP-Cache** (Screen/1:1-Auflösung,
   Alpha unterstützt, lossless oder hochwertig verlustbehaftet, lazy gerendert
   + auf Disk/RAM gecached). WebP statt JPEG wegen Alpha-Kanal und besserer
-  Kompression. Doku-first: Feature-Dokument in feature/quality/ oder
-  feature/product/ (Preview-Cache-Architektur). User-Entscheidung: Hybrid
+  Kompression. Asymmetrisches Prefetch-Fenster **+4 vorwärts / −2 rückwärts**
+  (aktiv + 6 Nachbarn = 7 im RAM-LRU; Priorität +1 > +2 > −1 > +3 > −2 > +4;
+  am Ordnerende weniger Nachbarn, kein Wrap). LRU-Eviction, Hintergrund-
+  Worker-Threads (nicht IdleQueue im UI-Thread), Cache-Key per
+  Content-Hash/Render-Key, kein stiller Fallback, Veraltung sichtbar.
+  Doku-first: Feature-Dokument in feature/quality/ oder
+  feature/product/ (Preview-Cache-Architektur) — **SOLL liegt vor:
+  feature/quality/preview-cache.md**. User-Entscheidung: Hybrid
   (GPU + WebP). Blockiert nicht F-103-N6, aber manuelle Test soll die
   optimierte Version zeigen.
 
@@ -217,8 +191,6 @@ quantitative Limits (Bildgröße/Speicher/Threads/GPU) nirgends dokumentiert.
     GUI-Flow (Prompt, Maske malen, Expand-Rahmen ziehen) nach
     GUI-STAGE-1/GUI-WGPU-PRESENT-1.
 
-**USER-ENTSCHEIDUNGEN 2026-08-25 (aus Block B freigegeben)**
-
 ## Block B – „Offene Rückfragen“
 
 Tasks, bei denen eine User-Entscheidung/Klärung fehlt (Produkt-, Naming-,
@@ -233,10 +205,6 @@ wo möglich, vor dem nächsten manuellen GUI-Test geklärt werden.
   (`docs/naming-brainstorm.md`). **User-Entscheidung 2026-08-25:** Brainstorm
   läuft bewusst weiter, Naming bleibt offen. Die übrigen F-101-F1-Anteile
   (MCP-Scope) wurden zur Umsetzung freigegeben und stehen in Block A.
-
-**Arbeitsbaumänderungen während des Reviews (in Arbeit)**
-
-
 
 ## Block C – „Nach dem nächsten manuellen GUI-Test“
 

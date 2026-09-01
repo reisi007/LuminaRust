@@ -9,23 +9,32 @@
 //!
 //! ## Native-only
 //!
-//! This crate is **native-only** and mirrors [`lumina_raw`]: the entire module
+//! This crate is **native-only** and mirrors `lumina_raw`: the entire module
 //! is gated out on `wasm32`, so no native code is ever compiled for the browser
 //! target. The real ONNX Runtime backend is additionally gated behind the
 //! non-default `onnx-rt` feature.
 //!
 //! ## Exchangeable surface
 //!
-//! The adapter boundary is the [`SubjectInference`] trait. The default, fully
-//! tested surface is the deterministic [`StubBackend`] (no weights, no network).
-//! A real ONNX Runtime backend lives in [`ort_backend`] behind `onnx-rt`
-//! (see [`README.md`](crate::README) / crate docs for the landing plan).
+//! The adapter boundary is
+//! [the `SubjectInference` trait](crate::SubjectInference).
+//! The default, fully tested surface is the deterministic [`StubBackend`]
+//! (no weights, no network).
+//! A real ONNX Runtime backend lives in `ort_backend` behind `onnx-rt`
+//! (see `README.md` / crate docs for the landing plan).
+//! [`try_load_onnx_engine`] is the capability surface for consumers (CLI/core):
+//! it loads the real engine when `onnx-rt` is compiled in and the artifact
+//! verifies, and otherwise reports the explicit states `RuntimeDisabled`,
+//! [`OnnxError::MissingModel`], [`OnnxError::ModelArtifactStale`] or
+//! [`OnnxError::InferenceFailed`] — **never a silent fallback to the stub**.
 //!
 //! ## Model identity
 //!
 //! [`ModelManifest`] and [`ModelCapabilities`] (F-080) declare a model's
-//! identity and capabilities. They do **not** depend on `lumina-sidecar`; the
-//! mapping to the sidecar `ModelIdentity` is deferred to F-048.
+//! identity and capabilities. The mapping to the sidecar `ModelIdentity`
+//! happens via [`ModelManifest::to_model_identity`] (F-048; `lumina-sidecar`
+//! is a dependency solely for that identity type — no native/ONNX concern
+//! leaks into the platform-neutral core).
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -33,6 +42,7 @@ pub mod backend;
 pub mod hash;
 pub mod manifest;
 pub mod preprocess;
+pub mod resolve;
 pub mod sam2;
 
 #[cfg(feature = "onnx-rt")]
@@ -53,6 +63,7 @@ pub use preprocess::{
     matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_rgb_to_model,
     rescale_model_matte, validate_output_shape,
 };
+pub use resolve::{try_load_onnx_engine, OnnxEngine};
 pub use sam2::{
     model_point_to_source, source_box_to_model, source_point_to_model, BoxPrompt, MaskPromptLogits,
     PointLabel, PromptMaskInference, PromptPoint, SegmentationPrompt, SourceBox, SourcePoint,

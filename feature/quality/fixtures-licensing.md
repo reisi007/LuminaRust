@@ -79,6 +79,21 @@ Noch nicht vorhanden (deferred F-043/F-073). Bei Einführung: selbe
 Versionierungs-/Determinismusregeln wie §3.1, explizite Lizenz (bevorzugt
 generiert/CC0).
 
+### 3.4 Hash-gepinntes ONNX-Behavior-Fixture (`lumina-onnx`)
+
+| Datei | Bytes | SHA-256-Pin | Verwendung |
+| --- | ---: | --- | --- |
+| `crates/lumina-onnx/tests/fixtures/lumina-crafted-reducemax.onnx` | 139 | `2a2ede6659e8c59b3fd972242b27677ef23cb98d3c422616a1c65f50dcaca18d` | `OrtBackend`-Verhalten: Tensor-Namen, Hash-Pin `Verified`, Output-Validierung, Inferenz; Resolver-Test |
+
+- **Provenance:** programmatisch erzeugt aus der dokumentierten
+  Proto3-Encoder-Quelle (`crates/lumina-onnx/tests/ort_backend.rs` +
+  `scripts/regenerate_onnx_fixture.rs`), kein Download, keine Modellgewichte,
+  daher **keine Lizenzpflicht** (trivialer, formelhaft generierter Graph).
+- Kein echtes Segmentierungsmodell: echte BiRefNet/SAM-2-Gewichte bleiben
+  weiterhin `pending-integration` (keine spontanen Downloads, Agents.md).
+- Regenerierung: `scripts/regenerate_onnx_fixture.sh`; ein Drift zwischen
+  Encoder und Fixture bzw. vom Pin ist ein harter Testfehler.
+
 ---
 
 ## 4. Rohdaten-Provenance & Lizenz — ✅ GELÖST (2026-08-20)
@@ -243,6 +258,7 @@ zählt zur F-078-Abnahme.
 | `libraw-sys` | `[patch.crates-io]` → `vendor/libraw-sys` | gepatcht `0.1.1` |
 | LibRaw (nativ) | CI-Image OCI-Label `lumina.libraw_version` | `0.22.2` |
 | Benchmark-Fixtures | eingefrorener `FIXTURE_SEED = 0x5EED` + `SplitMix64` | Änderung ⇒ Re-Baseline |
+| ONNX-Behavior-Fixture | SHA-256-Pin in `tests/fixtures/README.md` + `tests/ort_backend.rs` | `2a2ede66…` (committetes Binär-Fixture) |
 | Modellgewichte | `ModelManifest.model_hash` als Identität | BiRefNet aktuell `pending-integration` |
 
 Policy: `Cargo.lock` committet halten; native Abhängigkeiten über das immutable

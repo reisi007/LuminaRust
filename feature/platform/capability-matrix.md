@@ -64,3 +64,19 @@ Ergänzung zu `cli-gui-wasm.md` und zur `docs/adr/`-Entscheidung zum RAW-Backend
   einzeln als Capability bewertet und dokumentiert.
 - Die Capability-Anzeige im Browser muss RAW und die genannten Punkte klar als
   nicht verfügbar ausweisen, solange sie nicht implementiert sind.
+
+## ONNX-Adapter native-only (Capability-Entscheidung F-082-FOLLOWUP)
+
+- `lumina-onnx` ist **native-only** und über
+  `#![cfg(not(target_arch = "wasm32"))]` gekapselt — analog zu `lumina-raw`
+  liefert es im WASM-Build einen leeren Stub (`cargo check --target
+  wasm32-unknown-unknown -p lumina-onnx` bleibt grün).
+- Das `onnx-rt`-Feature (echte `ort`-Runtime, Prebuilt-Binaries) darf für
+  WASM-Ziele **nicht** aktiviert werden; `ort` ist eine native Abhängigkeit
+  und würde das workspace-weite wasm32-Gate brechen. Die Browser-Zeile in der
+  Matrix bleibt daher „offen" — die Fähigkeit existiert nativ, nicht im
+  Browser.
+- Backend-Auswahl ohne stillen Fallback: `lumina_onnx::try_load_onnx_engine`
+  liefert `RuntimeDisabled` (Feature aus), `OnnxRuntime` (Feature an,
+  Artefakt verifiziert) oder einen harten Fehler (fehlendes/stale/fehlbenanntes
+  Artefakt) — nie einen stillen Stub-Ersatz.

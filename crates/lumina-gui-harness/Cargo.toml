@@ -1,0 +1,30 @@
+[package]
+name = "lumina-gui-harness"
+version = "0.1.0"
+edition = "2021"
+description = "Autonomous macOS GUI verification harness for the native Lumina desktop app (enigo + screencapture)"
+
+# The harness binary is invoked as `gui-verify` (see README.md); the package
+# name stays `lumina-gui-harness` to keep the workspace crate unambiguous.
+[[bin]]
+name = "gui-verify"
+path = "src/main.rs"
+
+# This is an *out-of-band* developer/verification tool, deliberately isolated
+# from `lumina-gui` (see README.md). It is macOS-only: it drives the real
+# on-screen eframe window through the macOS Accessibility / Screen Recording
+# APIs via `enigo` and the `/usr/sbin/screencapture` CLI.
+#
+# The harness is NOT part of the GUI or the render pipeline and never links
+# into `lumina-gui`. It only ever builds on `target_os = "macos"`; anywhere
+# else the crate compiles to a stub `main` that exits with a clear message.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+enigo = "0.2"
+
+# `screencapture` and `osascript` are invoked via `std::process::Command` (they
+# ship with macOS), so no screenshots/image crates are needed.

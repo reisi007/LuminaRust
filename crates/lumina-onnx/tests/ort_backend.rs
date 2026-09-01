@@ -20,24 +20,46 @@
 //!   [`lumina_onnx::OnnxError::InferenceFailed`] instead of panicking;
 //! * **F-082-FOLLOWUP-HASH** — the `ModelArtifactStale` refuse branch runs
 //!   end-to-end against an artifact whose actual digest differs from the
-//!   pinned `model_hash`.
+//!   pinned `model_hash`;
+//! * **F-082-FOLLOWUP-Fixtures** — a committed, hash-pinned `.onnx` behavior
+//!   fixture (`tests/fixtures/lumina-crafted-reducemax.onnx`, SHA-256 pin in
+//!   `tests/fixtures/README.md`) is verified, loaded and inferred, and the
+//!   resolver [`lumina_onnx::try_load_onnx_engine`] surfaces it as
+//!   `OnnxRuntime` — or a hard `MissingModel` when the artifact is absent
+//!   (no silent fallback).
 
 #![cfg(feature = "onnx-rt")]
 
 use lumina_core::ImageFrame;
 use lumina_onnx::ort_backend::OrtBackend;
 use lumina_onnx::{
-    compute_sha256_hex, ChannelLayout, InputNormalization, ModelCapabilities, ModelHashStatus,
-    ModelInputSpec, ModelManifest, OnnxError, Resolution, SubjectInference, TensorFormat,
-    PENDING_INTEGRATION_HASH,
+    compute_sha256_hex, try_load_onnx_engine, ChannelLayout, InputNormalization, ModelCapabilities,
+    ModelHashStatus, ModelInputSpec, ModelManifest, OnnxEngine, OnnxError, Resolution,
+    SubjectInference, TensorFormat, PENDING_INTEGRATION_HASH,
 };
 use std::fs::File;
+use std::io::Cursor;
+use std::path::Path;
 
 /// Inference resolution of the crafted graph (kept tiny: fast ORT session).
 const W: u32 = 8;
 const H: u32 = 8;
 const INPUT_NAME: &str = "x";
 const OUTPUT_NAME: &str = "y";
+
+/// SHA-256 pin of the committed behavior fixture
+/// `tests/fixtures/lumina-crafted-reducemax.onnx` (see `tests/fixtures/README.md`).
+/// The bytes are generated deterministically by the encoder below and verified
+/// by `pinned_fixture_hash_matches_documented_pin` — a drift between encoder
+/// and committed fixture is a hard failure (F-082-FOLLOWUP-hash-gepinnte
+/// Fixtures).
+const FIXTURE_PIN: &str = "2a2ede6659e8c59b3fd972242b27677ef23cb98d3c422616a1c65f50dcaca18d";
+
+/// The committed, hash-pinned behavior fixture (part of the build via
+/// `include_bytes!`). Intentionally **not** a real BiRefNet/SAM-2 model — a
+/// minimal loadable graph that exercises the real ORT code paths with a
+/// pinned identity.
+const FIXTURE_BYTES: &[u8] = include_bytes!("fixtures/lumina-crafted-reducemax.onnx");
 
 // ---------------------------------------------------------------------------
 // Minimal protobuf encoding (proto3 wire format) for the crafted model.
@@ -238,6 +260,20 @@ fn solid_frame(width: u32, height: u32, rgb: [u8; 3]) -> ImageFrame {
     ImageFrame::new(width, height, pixels).unwrap()
 }
 
+/// Write the committed pinned fixture bytes to a unique temp `.onnx` file.
+fn write_pinned_fixture(tag: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "lumina-onnx-pinned-{tag}-{}-{}.onnx",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, FIXTURE_BYTES).expect("write pinned onnx fixture");
+    path
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -379,4 +415,94 @@ fn mismatched_pinned_hash_refuses_inference_end_to_end() {
         other => panic!("expected ModelArtifactStale, got {other:?}"),
     }
     let _ = std::fs::remove_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// Hash-pinned committed fixture (F-082-FOLLOWUP)
+// ---------------------------------------------------------------------------
+
+/// The committed fixture bytes must hash to the documented pin
+/// (`tests/fixtures/README.md`). Anyone who changes the fixture MUST update
+/// both pins deliberately; any drift — even from a regenerated-but-different
+/// artifact — is a hard failure here and in the load tests below.
+#[test]
+fn pinned_fixture_hash_matches_documented_pin() {
+    let digest = compute_sha256_hex(Cursor::new(FIXTURE_BYTES))
+        .expect("sha256 of in-memory fixture must not fail");
+    assert_eq!(
+        digest, FIXTURE_PIN,
+        "committed ONNX fixture drifted from its documented SHA-256 pin"
+    );
+}
+
+/// The committed fixture must stay byte-identical to the deterministic
+/// encoder output (`crafted_onnx_bytes()`) that the negative tests still use
+/// to build mutated graphs. A divergence means the encoder and the fixture
+/// are two different graphs — regenerate the fixture first.
+#[test]
+fn pinned_fixture_matches_encoder_source_of_truth() {
+    assert_eq!(
+        FIXTURE_BYTES,
+        crafted_onnx_bytes(),
+        "committed fixture diverged from the source-of-truth encoder"
+    );
+}
+
+/// The pinned fixture loads with `model_hash = FIXTURE_PIN`, reports
+/// `Verified`, and infers a uniform matte on a uniform frame — the committed
+/// artifact is genuinely loadable/runnable, so the resolver and negative
+/// tests exercise real code paths (not a well-formed-but-unusable blob).
+#[test]
+fn pinned_fixture_loads_verified_and_infers() {
+    let path = write_pinned_fixture("pinned-load");
+    let manifest = crafted_manifest(FIXTURE_PIN.to_owned(), INPUT_NAME, OUTPUT_NAME);
+    let backend = OrtBackend::new(&path, manifest).expect("pinned fixture must load");
+    assert_eq!(
+        backend.hash_status(),
+        &ModelHashStatus::Verified,
+        "pinned fixture must verify against its documented hash"
+    );
+
+    let img = solid_frame(4, 4, [64, 128, 192]);
+    let matte = backend.infer(&img).expect("pinned fixture must infer");
+    assert_eq!((matte.width, matte.height), (4, 4));
+    let first = matte.values[0];
+    assert!(
+        matte.values.iter().all(|&v| v == first),
+        "uniform frame → uniform matte from the pinned fixture"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The resolver (`try_load_onnx_engine`) surfaces the real engine for the
+/// pinned fixture as `OnnxEngine::OnnxRuntime` with a usable
+/// `MaskInference` box — the exact contract the CLI/core decision layer
+/// consumes, with no additive glue.
+#[test]
+fn resolver_loads_pinned_fixture_as_onnx_runtime() {
+    let path = write_pinned_fixture("pinned-resolve");
+    let manifest = crafted_manifest(FIXTURE_PIN.to_owned(), INPUT_NAME, OUTPUT_NAME);
+    let engine = try_load_onnx_engine(&path, &manifest).expect("pinned fixture must resolve");
+    match engine {
+        OnnxEngine::OnnxRuntime(backend) => {
+            assert!(backend.is_available());
+            let img = solid_frame(4, 4, [10, 20, 30]);
+            let matte = backend.infer(&img).expect("resolved engine must infer");
+            assert_eq!(matte.width * matte.height, 16);
+        }
+        other => panic!("expected OnnxRuntime for a present, verified artifact, got {other:?}"),
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The resolver must NOT fall back silently: with `onnx-rt` on, a missing
+/// artifact is a visible `MissingModel`, never a stub or a silent success.
+#[test]
+fn resolver_reports_missing_artifact_without_fallback() {
+    let manifest = crafted_manifest(FIXTURE_PIN.to_owned(), INPUT_NAME, OUTPUT_NAME);
+    let engine = try_load_onnx_engine(Path::new("/nonexistent/pinned/model.onnx"), &manifest);
+    assert!(
+        matches!(engine, Err(OnnxError::MissingModel { .. })),
+        "a requested real engine with a missing artifact must be a hard error, got {engine:?}"
+    );
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lumina-sidecar", "crates/lumina-core", "crates/lumina-raw", "crates/lumina-onnx", "crates/lumina-cli", "crates/lumina-gui", "crates/lumina-bench", "crates/lumina-mcp", "crates/lumina-lensfun", "crates/lumina-gpu"]
+members = ["crates/lumina-sidecar", "crates/lumina-core", "crates/lumina-raw", "crates/lumina-onnx", "crates/lumina-cli", "crates/lumina-gui", "crates/lumina-bench", "crates/lumina-mcp", "crates/lumina-lensfun", "crates/lumina-gpu", "crates/lumina-gui-harness"]
 
 [patch.crates-io]
 # libraw-sys 0.1.1 forwards pkg-config's C++ runtime metadata verbatim. The

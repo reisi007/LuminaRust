@@ -539,45 +539,10 @@ pub fn write_output_guarded(source: &Path, target: &Path, bytes: &[u8]) -> Resul
 
 /// Bilinear downscale of an RGBA8 frame so that the output width does not
 /// exceed `max_width`. Aspect ratio is preserved and upscaling never occurs.
-/// The operation is fully deterministic (pure math, no randomness), which makes
-/// `lumina_preview` reproducible.
-pub fn downscale_bilinear(frame: &ImageFrame, max_width: u32) -> ImageFrame {
-    let (width, height) = (frame.width, frame.height);
-    if width == 0 || height == 0 {
-        return frame.clone();
-    }
-    let new_width = width.min(max_width).max(1);
-    let new_height = ((new_width as f64 / width as f64) * height as f64)
-        .round()
-        .max(1.0) as u32;
-    if new_width == width && new_height == height {
-        return frame.clone();
-    }
-    let mut pixels = vec![0u8; new_width as usize * new_height as usize * 4];
-    for y in 0..new_height {
-        let source_y = (y as f64 + 0.5) * height as f64 / new_height as f64 - 0.5;
-        let y0 = source_y.floor().max(0.0) as u32;
-        let y1 = (y0 + 1).min(height - 1);
-        let ty = (source_y - y0 as f64).clamp(0.0, 1.0);
-        for x in 0..new_width {
-            let source_x = (x as f64 + 0.5) * width as f64 / new_width as f64 - 0.5;
-            let x0 = source_x.floor().max(0.0) as u32;
-            let x1 = (x0 + 1).min(width - 1);
-            let tx = (source_x - x0 as f64).clamp(0.0, 1.0);
-            for channel in 0..4 {
-                let p00 = frame.pixels[((y0 * width + x0) * 4 + channel) as usize];
-                let p01 = frame.pixels[((y0 * width + x1) * 4 + channel) as usize];
-                let p10 = frame.pixels[((y1 * width + x0) * 4 + channel) as usize];
-                let p11 = frame.pixels[((y1 * width + x1) * 4 + channel) as usize];
-                let top = p00 as f64 + (p01 as f64 - p00 as f64) * tx;
-                let bottom = p10 as f64 + (p11 as f64 - p10 as f64) * tx;
-                pixels[((y * new_width + x) * 4 + channel) as usize] =
-                    (top + (bottom - top) * ty).round().clamp(0.0, 255.0) as u8;
-            }
-        }
-    }
-    ImageFrame::new(new_width, new_height, pixels).expect("downscaled dimensions are consistent")
-}
+///
+/// Re-export of the canonical `lumina-core` implementation (R2-MCP-06): the
+/// MCP layer keeps the import path but holds no copy of the algorithm.
+pub use lumina_core::downscale_bilinear;
 
 #[cfg(all(test, feature = "gpu"))]
 mod routing_tests {

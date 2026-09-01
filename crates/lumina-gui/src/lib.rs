@@ -516,6 +516,10 @@ pub struct LuminaApp {
     /// (display only; computed once per folder).
     #[cfg(not(target_arch = "wasm32"))]
     folder_raw_counts: BTreeMap<String, usize>,
+    /// Library module: current thumbnail cell size (px) for the center grid,
+    /// driven by a toolbar slider (Lightroom-like resizable library thumbs).
+    #[cfg(not(target_arch = "wasm32"))]
+    library_thumb_size: f32,
     /// Develop history section: currently selected (last restored) history
     /// entry id of the active virtual copy.
     #[cfg(not(target_arch = "wasm32"))]
@@ -923,6 +927,8 @@ impl LuminaApp {
             #[cfg(not(target_arch = "wasm32"))]
             folder_raw_counts: BTreeMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            library_thumb_size: 132.0,
+            #[cfg(not(target_arch = "wasm32"))]
             history_selected: None,
             #[cfg(not(target_arch = "wasm32"))]
             decode_rx: None,
@@ -968,6 +974,14 @@ impl LuminaApp {
 
     pub fn recipe(&self) -> &EditRecipe {
         &self.recipe
+    }
+
+    /// Monotonic counter of how many times `self.preview` received new content
+    /// (bumped in `render_from`). Exposed read-only for headless integration
+    /// tests (F-103-N9 interaction tests) to assert that an edit re-renders.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn preview_generation(&self) -> u64 {
+        self.preview_generation
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2143,6 +2157,18 @@ impl LuminaApp {
         self.pending_full_render = true;
         self.status = Str::ChangePending.t().into();
         self.error = None;
+        // GFX-SLIDER-VRAM-FRESH: an adjustment is an edit, exactly like
+        // `mark_dirty` — the VRAM tone result no longer matches the recipe and
+        // must never be presented until the drag path re-renders it. `mark_dirty`
+        // cleared `vram_fresh` here, but `set_adjustment` (the interactive slider
+        // path) did not, so a stale VRAM frame could keep being presented after a
+        // slider change that did not immediately re-run `render_to_vram` (e.g.
+        // in headless tests / programmatic `set_adjustment` with no pointer drag).
+        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        {
+            self.vram_fresh = false;
+            self.vram_mask_is_evaluated = false;
+        }
     }
 
     /// Set a single Presence field (`texture`, `clarity` or `dehaze`). The value
@@ -2844,9 +2870,9 @@ impl LuminaApp {
         // VRAM (overlay composite → registered user texture). No CPU readback,
         // no `ColorImage` upload. Every fallback condition below drops to the
         // historical CPU upload, which remains fully functional.
-        self.gpu_present_frame = None;
         #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
         {
+            self.gpu_present_frame = None;
             // R2-GUIMOD-06: record whether the GPU present path was taken or the
             // preview was routed to the CPU. `gpu_present_if_ready` returns the
             // texture only when every present condition (including the
@@ -5332,9 +5358,27 @@ impl LuminaApp {
     /// Lightroom-like Library grid view (center): RAW files of the current
     /// directory rendered through the shared ThumbnailManager pipeline (no
     /// duplicate generation). Double-click opens a file and switches to
-    /// Develop (Loupe).
+    /// Develop (Loupe). The thumbnail cell size is user-adjustable via a
+    /// toolbar slider (Lightroom "Grid" thumbnails).
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_library_grid(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        // Toolbar: a thumbnail-size slider (Lightroom-like). Small/simple stub
+        // for now — it drives the cell size of the grid below.
+        ui.horizontal(|ui| {
+            ui.label(Str::LibraryThumbSize.t());
+            let mut size = self.library_thumb_size;
+            if ui
+                .add(
+                    egui::Slider::new(&mut size, 72.0..=240.0)
+                        .show_value(true)
+                        .fixed_decimals(0),
+                )
+                .changed()
+            {
+                self.library_thumb_size = size.round();
+            }
+        });
+        ui.separator();
         // GUI-SCROLL-200-1: index-based view over the RAW entries. Only the
         // visible rows are laid out (show_rows) and only the buffered window's
         // thumbnails are ensured per frame — never an O(n) loop over all
@@ -5351,11 +5395,10 @@ impl LuminaApp {
             ui.label(Str::ReadyForImage.t());
             return;
         }
-        const CELL_W: f32 = 132.0;
-        const CELL_H: f32 = 100.0;
-        const CELL_INNER_W: f32 = CELL_W - 8.0;
-        const CELL_INNER_H: f32 = CELL_H - 8.0;
-        let cols = ((ui.available_width() / CELL_W).floor() as usize).max(1);
+        let thumb = self.library_thumb_size;
+        const CELL_INNER_PAD: f32 = 8.0;
+        let cell_inner = (thumb - CELL_INNER_PAD).max(32.0);
+        let cols = ((ui.available_width() / thumb).floor() as usize).max(1);
         let count = raw_indices.len();
         let total_rows = count.div_ceil(cols);
         // The closure returns the laid-out row window so scheduling below runs
@@ -5364,7 +5407,7 @@ impl LuminaApp {
             egui::ScrollArea::vertical()
                 .show_rows(
                     ui,
-                    CELL_INNER_H,
+                    cell_inner,
                     total_rows,
                     |ui, rows: std::ops::Range<usize>| {
                         for row in rows.clone() {
@@ -5378,7 +5421,7 @@ impl LuminaApp {
                                     let placeholder_label =
                                         self.thumbnail_placeholder_label(&entry);
                                     let (rect, resp) = ui.allocate_exact_size(
-                                        egui::vec2(CELL_INNER_W, CELL_INNER_H),
+                                        egui::vec2(cell_inner, cell_inner),
                                         egui::Sense::click(),
                                     );
                                     if selected {
@@ -5764,68 +5807,6 @@ impl LuminaApp {
     /// lives in the Develop panel's Masking section; here the user picks which
     /// source copy to work on and can duplicate it.
     #[cfg(not(target_arch = "wasm32"))]
-    fn draw_library_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading(Str::Source.t());
-        if let Some(document) = self.document.clone() {
-            let copy_count = document.virtual_copies.len();
-            let copy_options: Vec<(String, String)> = document
-                .virtual_copies
-                .iter()
-                .map(|copy| (copy.id.clone(), copy.name.clone()))
-                .collect();
-            let missing_masks = document
-                .virtual_copies
-                .iter()
-                .flat_map(|copy| &copy.mask_library)
-                .filter(|mask| !matches!(mask.status, lumina_sidecar::MaskStatus::Valid))
-                .count();
-            let source_status =
-                lumina_sidecar::source_status(std::path::Path::new(&self.path), &document.source)
-                    .ok();
-            ui.separator();
-            ui.label(format!(
-                "{}: {} {}",
-                Str::Sidecar.t(),
-                Str::Copies.t(),
-                copy_count
-            ));
-            if let Some(source_status) = source_status {
-                ui.label(format!("Source: {:?}", source_status));
-            }
-            let mut selected = self.virtual_copy_id.clone();
-            egui::ComboBox::from_label(Str::Copies.t())
-                .selected_text(selected.clone())
-                .show_ui(ui, |ui| {
-                    for (id, name) in &copy_options {
-                        ui.selectable_value(&mut selected, id.clone(), name);
-                    }
-                });
-            if selected != self.virtual_copy_id {
-                // REVIEW-GUI-VCSWITCH-1: a failed copy switch (unknown id,
-                // missing sidecar) must be visible — never swallowed.
-                if let Err(error) = self.select_virtual_copy(&selected) {
-                    error!("virtual copy switch to `{selected}` failed: {error}");
-                    self.show_error(error);
-                }
-            }
-            if ui.button(Str::NewCopy.t()).clicked() {
-                let id = format!("vc-{}", copy_count + 1);
-                if let Err(error) = self.duplicate_virtual_copy(id, "New copy") {
-                    self.show_error(error);
-                }
-            }
-            ui.label(format!(
-                "{}: {} {}",
-                Str::Masking.t(),
-                missing_masks,
-                Str::NotAvailable.t()
-            ));
-        } else {
-            ui.label(Str::NoImage.t());
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_filmstrip(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.heading(Str::Filmstrip.t());
         ui.label(Str::FilmstripHint.t());
@@ -5843,8 +5824,10 @@ impl LuminaApp {
         // GUI-SCROLL-200-1: fixed-size cells let us lay out only the visible
         // window (+ a small buffer). Off-screen cells are never allocated,
         // painted or probed for thumbnails on this frame.
-        const CELL_W: f32 = 110.0;
-        const CELL_H: f32 = 84.0;
+        // Lightroom-like filmstrip cell: the larger 140x110 cell (was 110x84)
+        // keeps the strip readable on high-DPI displays ("switching too small").
+        const CELL_W: f32 = 140.0;
+        const CELL_H: f32 = 110.0;
         let step = CELL_W + ui.spacing().item_spacing.x;
         // The closure returns the visible window it laid out so thumbnail
         // scheduling below runs *after* drawing with no extra state.
@@ -5867,32 +5850,49 @@ impl LuminaApp {
                         count,
                         viewport::VISIBLE_BUFFER_CELLS,
                     );
-                    if buffered.start > 0 {
-                        ui.add_space(buffered.start as f32 * step);
-                    }
-                    for i in buffered.clone() {
-                        let entry = self.entries[raw_indices[i]].clone();
-                        let tex = self.thumbnails.get(&entry.thumb_key).cloned();
-                        let placeholder_label = self.thumbnail_placeholder_label(&entry);
-                        let (rect, resp) = ui
-                            .allocate_exact_size(egui::vec2(CELL_W, CELL_H), egui::Sense::click());
-                        if let Some(texture) = tex {
-                            ui.put(
-                                rect,
-                                egui::Image::from_texture(&texture).max_size(rect.size()),
+                    // R2-GUI-FILMSTRIP-ROW: the filmstrip must lay out as one
+                    // horizontal row inside the horizontally scrolled area.
+                    // `ScrollArea::horizontal()` only enables the horizontal
+                    // scrollbar — it does NOT change the child UI's layout
+                    // direction, which would otherwise stay top-down (vertical)
+                    // and stack the cells into a column. The horizontal wrapper
+                    // restores the single-row filmstrip (this was lost in the
+                    // GUI-SCROLL-200-1 virtualization refactor).
+                    ui.horizontal(|ui| {
+                        // Leading spacer positions the first *drawn* cell at its
+                        // absolute content position; `set_width` keeps the
+                        // scrollbar proportional to the full strip even though
+                        // only the window is laid out.
+                        if buffered.start > 0 {
+                            ui.add_space(buffered.start as f32 * step);
+                        }
+                        for i in buffered.clone() {
+                            let entry = self.entries[raw_indices[i]].clone();
+                            let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                            let placeholder_label = self.thumbnail_placeholder_label(&entry);
+                            let (rect, resp) = ui.allocate_exact_size(
+                                egui::vec2(CELL_W, CELL_H),
+                                egui::Sense::click(),
                             );
-                        } else {
-                            ui.painter()
-                                .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
-                            ui.put(rect, egui::Label::new(placeholder_label));
+                            if let Some(texture) = tex {
+                                ui.put(
+                                    rect,
+                                    egui::Image::from_texture(&texture).max_size(rect.size()),
+                                );
+                            } else {
+                                ui.painter()
+                                    .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+                                ui.put(rect, egui::Label::new(placeholder_label));
+                            }
+                            if resp.clicked() {
+                                trace!("GUI interaction: filmstrip click {}", entry.path.display());
+                                self.open_file(entry.path.display().to_string());
+                            }
                         }
-                        if resp.clicked() {
-                            trace!("GUI interaction: filmstrip click {}", entry.path.display());
-                            self.open_file(entry.path.display().to_string());
-                        }
-                    }
-                    let total_width = (count as f32 * step - ui.spacing().item_spacing.x).max(0.0);
-                    ui.set_width(total_width);
+                        let total_width =
+                            (count as f32 * step - ui.spacing().item_spacing.x).max(0.0);
+                        ui.set_width(total_width);
+                    });
                     visible
                 })
                 .inner
@@ -6363,24 +6363,20 @@ fn is_raw_name(name: &str) -> bool {
         .is_some_and(lumina_raw::is_raw_extension)
 }
 
-/// Root of the Library folder tree: `$HOME` when the current directory lives
-/// inside it (Lightroom shows the whole user tree), otherwise two ancestors
-/// above the directory (grandparent), with a final fallback to the directory
-/// itself. Pure path logic so headless tests can exercise every branch without
-/// mutating process environment state.
+/// Root of the Library folder tree — the **workdir** itself (the current
+/// `directory` field), per Lightroom-parity: the Folders panel shows the
+/// working directory as the root, not the whole `$HOME` tree. Pure path logic
+/// so headless tests can exercise it without mutating process environment
+/// state. Previously this rooted at `$HOME` (or a grandparent); the user asked
+/// for root = workdir so the Library only ever browses the opened folder.
 #[cfg(not(target_arch = "wasm32"))]
 fn library_root(directory: &str) -> PathBuf {
-    let dir = Path::new(directory);
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() && dir.starts_with(&home) {
-            return PathBuf::from(home);
-        }
+    let dir = Path::new(directory).to_path_buf();
+    if dir.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        dir
     }
-    dir.ancestors()
-        .nth(2)
-        .filter(|ancestor| !ancestor.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| dir.to_path_buf())
 }
 
 /// Short display label of a folder node: path relative to the tree root, or
@@ -6839,8 +6835,12 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| self.draw_navigator(&ctx, ui));
         }
 
-        // Right: Develop controls (eight sections), the Library sidecar/copy
-        // manager, or nothing extra for Export (placeholder shown centrally).
+        // Right: Develop controls (eight sections), or nothing extra for
+        // Export (placeholder shown centrally). The Library module is a
+        // two-pane layout (folder tree left, thumbnail grid center) with no
+        // right-hand Source panel — that source/sidecar/copy info belongs to
+        // the Develop/Export context (Lightroom-parity: the Source panel was
+        // removed from Library).
         egui::Panel::right("controls")
             .resizable(true)
             .default_size(320.0)
@@ -6848,7 +6848,9 @@ impl eframe::App for LuminaApp {
                 Module::Develop => self.draw_develop_panel(ui),
                 Module::Library => {
                     #[cfg(not(target_arch = "wasm32"))]
-                    self.draw_library_panel(ui);
+                    {
+                        // No right Source panel in Library — intentional.
+                    }
                     #[cfg(target_arch = "wasm32")]
                     {
                         ui.label(Str::NotAvailable.t());
@@ -8870,18 +8872,19 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn library_root_prefers_home_inside_and_grandparent_outside() {
-        // Outside `$HOME` the tree root is two ancestors above the directory
-        // (the grandparent); degenerate paths fall back to the path itself.
-        // Deterministic regardless of the environment because these paths are
-        // never inside a real `$HOME` prefix.
+    fn library_root_is_the_workdir() {
+        // Lightroom-parity: the Folders tree roots at the current workdir
+        // (`directory` field), never at `$HOME` or an ancestor. Deterministic
+        // regardless of the environment `$HOME`.
         assert_eq!(
             library_root("/var/folders/xy/ab/cd"),
-            PathBuf::from("/var/folders/xy")
+            PathBuf::from("/var/folders/xy/ab/cd")
         );
         assert_eq!(library_root("/etc"), PathBuf::from("/etc"));
         assert_eq!(library_root("/"), PathBuf::from("/"));
         assert_eq!(library_root("relative/dir"), PathBuf::from("relative/dir"));
+        // Empty workdir (unset) falls back to "." so the tree still has a root.
+        assert_eq!(library_root(""), PathBuf::from("."));
     }
 
     #[test]

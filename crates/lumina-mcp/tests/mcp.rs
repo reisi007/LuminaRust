@@ -160,14 +160,14 @@ fn recipe_hash_is_idempotent() {
 #[test]
 fn downscale_never_upsizes_and_is_deterministic() {
     let frame = ImageFrame::new(64, 48, vec![10u8; 64 * 48 * 4]).unwrap();
-    let small = downscale_bilinear(&frame, 1024);
+    let small = downscale_bilinear(&frame, 1024).unwrap();
     assert_eq!((small.width, small.height), (64, 48));
 
-    let scaled = downscale_bilinear(&frame, 32);
+    let scaled = downscale_bilinear(&frame, 32).unwrap();
     assert_eq!(scaled.width, 32);
     assert_eq!(scaled.height, 24);
 
-    let again = downscale_bilinear(&frame, 32);
+    let again = downscale_bilinear(&frame, 32).unwrap();
     assert_eq!(scaled.pixels, again.pixels);
 }
 

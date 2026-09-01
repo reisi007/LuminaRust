@@ -235,7 +235,8 @@ impl ModelInputSpec {
     }
 }
 
-/// Extra key under which [`ModelInputSpec::identity_digest`] is persisted in
+/// Extra key under which the `ModelInputSpec::identity_digest` (deterministic
+/// SHA-256 over the input spec) is persisted in
 /// the sidecar [`lumina_sidecar::ModelIdentity`] extras (see
 /// [`ModelManifest::to_model_identity`]).
 pub const INPUT_SPEC_DIGEST_KEY: &str = "input_spec_digest";
@@ -264,7 +265,8 @@ impl ModelManifest {
         )
     }
 
-    /// Map this manifest's identity onto the sidecar [`ModelIdentity`] used by
+    /// Map this manifest's identity onto the sidecar
+    /// [`lumina_sidecar::ModelIdentity`] used by
     /// the mask-loading decision layer (F-048 / F-051) for stale-detection.
     ///
     /// Beyond name/version/hash the persisted identity carries a

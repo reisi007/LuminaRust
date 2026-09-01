@@ -200,8 +200,6 @@ pub enum RawError {
     },
     #[error("LibRaw returned an invalid {0}")]
     InvalidData(&'static str),
-    #[error("RAW input name is required for byte decoding")]
-    MissingName,
     #[error("memory budget exceeded: {source}")]
     MemoryBudgetExceeded {
         source: lumina_core::memory::MemoryBudgetError,

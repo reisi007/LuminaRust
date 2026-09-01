@@ -339,6 +339,34 @@ hash-gepinnte BiRefNet/SAM-2-`.onnx`-Fixtures benötigt (keine spontanen
 Downloads); das handgenerierte Testmodell dient ausschließlich der
 Verhaltensabsicherung der Backend-Pfade.
 
+**Status (F-082-FOLLOWUP, 2026-09-01):** ORT-Pfad erweitert, unabhängige
+Verifizierung steht aus.
+
+- **Echter ORT-Pfad resolvable ohne stillen Fallback:** `lumina-onnx` bietet
+  nun die Konsumenten-Fläche `try_load_onnx_engine` (in
+  `lumina_onnx::resolve`, Enum `OnnxEngine`): bei aktiviertem `onnx-rt` und
+  vorhandenem, hash-verifiziertem Artefakt → `OnnxRuntime(Box<dyn MaskInference>)`
+  (exakt der Vertrag der `lumina-core`-Entscheidungsschicht F-048/F-051); bei
+  fehlendem/ stale/fehlbenanntem Artefakt → harter `OnnxError` (`MissingModel` /
+  `ModelArtifactStale` / `InferenceFailed`), **nie** ein Fallback auf den
+  Stub. Ohne `onnx-rt` → explizit `RuntimeDisabled` (Capability-Statement,
+  kein stiller Stub). `OrtBackend` implementiert `MaskInference` bereits, die
+  CLI kann den Pfad damit ohne additives Glue übernehmen.
+- **Hash-gepinntes ONNX-Fixture:** `crates/lumina-onnx/tests/fixtures/
+  lumina-crafted-reducemax.onnx` ist als committetes Behavior-Fixture
+  hinterlegt (139 B, SHA-256-Pin `2a2ede66…`, Provenienz in
+  `tests/fixtures/README.md`, Regenerierung via
+  `scripts/regenerate_onnx_fixture.sh`). Tests laden das Fixture per
+  `include_bytes!`, prüfen den Pin, laden es via `OrtBackend` mit
+  `model_hash` = Pin (`Verified`) und inferieren; ein Drift zwischen
+  Encoder-Quelle und Fixture ist ein harter Testfehler.
+- **Offen (unverändert):** die CLI/GUI-Einbindung in den ORT-Pfad (die CLI
+  verdrahtet weiterhin den `StubBackend`) und die committeten, hash-gepinnten
+  **echten** Modellgewichte (BiRefNet/SAM-2, weiterhin
+  `pending-integration`). Die `MaskGraph`-Auswertung nutzt die modellbasierte
+  Segmentierung erst, wenn ein Modell verfügbar ist (kein stiller Fallback) —
+  als nächster Schritt nach der Resolver-Fläche.
+
 ## Abnahme
 
 - Eine gültige Matte wird nach Neustart ohne Modell-Download verwendet.

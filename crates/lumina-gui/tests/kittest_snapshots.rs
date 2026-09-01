@@ -19,6 +19,7 @@
 //! it is a regression. Inspect the generated `<name>.diff.png` and, if the change
 //! is intended, re-run with `UPDATE_SNAPSHOTS=true`.
 
+use egui_kittest::kittest::NodeT;
 use egui_kittest::{kittest::Queryable, Harness};
 use lumina_gui::{LuminaApp, Module};
 
@@ -152,4 +153,128 @@ fn export_module() {
     load_sample(&mut harness);
     harness.run();
     harness.snapshot("export_module");
+}
+
+// ---------------------------------------------------------------------------
+// F-103-N9 interaction tests (deterministic state assertions, no snapshots).
+// Like the snapshots, these need a headless wgpu harness, so they are
+// `#[ignore]`d and run with the `-- --ignored` flag on a GPU machine.
+// ---------------------------------------------------------------------------
+
+/// Create a temporary folder with `count` dummy RAW files (content does not
+/// decode — the filmstrip/grid cells show placeholders, which is fine for
+/// geometry/layout assertions).
+fn temp_raw_dir(count: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("temp dir");
+    for i in 0..count {
+        std::fs::write(
+            dir.path().join(format!("IMG_{:04}.ARW", i)),
+            b"not a real raw file",
+        )
+        .expect("write dummy raw");
+    }
+    dir
+}
+
+/// The filmstrip is the bottom `Panel::bottom`, so its cells live in the lower
+/// band of the window. Each chip is an egui clickable area that surfaces in the
+/// accesskit tree as `Role::Unknown` with the full cell rect (`CELL_W x CELL_H`
+/// = 140x110). The row assertion verifies that all laid-out cells share (nearly)
+/// one y and advance strictly to the right — a single horizontal row, no
+/// wrapping/stacking.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn filmstrip_is_single_row_horizontal() {
+    let dir = temp_raw_dir(20);
+    let mut harness = build_harness();
+    harness
+        .state_mut()
+        .set_directory(dir.path().display().to_string());
+    harness.state_mut().set_module(Module::Develop);
+    // The app keeps requesting repaints while thumbnail jobs are scheduled, so
+    // `run()` would exceed max_steps; run a fixed number of frames instead.
+    harness.run_steps(3);
+
+    // Collect filmstrip cells: Unknown-role nodes sized like a cell (~110 tall)
+    // in the bottom band (y > 500 of a 720-high window).
+    let mut chips: Vec<eframe::egui::Rect> = harness
+        .query_all_by(|n| n.role() == eframe::egui::accesskit::Role::Unknown)
+        .filter(|n| n.accesskit_node().bounding_box().is_some())
+        .map(|n| n.rect())
+        .filter(|r| r.min.y > 500.0 && r.height() > 60.0 && r.width() > 60.0)
+        .collect();
+    assert!(
+        chips.len() >= 2,
+        "expected at least 2 visible filmstrip cells, got {chips:?}"
+    );
+    chips.sort_by(|a, b| a.min.x.partial_cmp(&b.min.x).unwrap());
+    let row_y = chips[0].center().y;
+    for (i, cell) in chips.iter().enumerate() {
+        assert!(
+            (cell.center().y - row_y).abs() < 12.0,
+            "cell {i} is vertically offset: {:?} (row y = {row_y})",
+            cell.center()
+        );
+        if i > 0 {
+            assert!(
+                cell.min.x > chips[i - 1].min.x,
+                "cell {i} does not advance x: {:?} then {:?}",
+                chips[i - 1].min,
+                cell.min
+            );
+        }
+    }
+}
+
+/// Changing an adjustment (`set_adjustment`) must invalidate the preview and
+/// produce a *new* render, i.e. bump `preview_generation` — even outside a
+/// pointer drag (the debounced full render path).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn slider_changes_preview_generation() {
+    let mut harness = build_harness();
+    load_sample(&mut harness);
+    harness.run();
+    let before = harness.state_mut().preview_generation();
+    assert!(before >= 1, "loaded sample must render at least once");
+
+    harness.state_mut().set_adjustment("exposure", 1.0);
+    harness.run();
+    let after = harness.state_mut().preview_generation();
+    assert!(
+        after > before,
+        "set_adjustment must re-render (preview_generation {before} -> {after})"
+    );
+}
+
+/// The Library Folders tree must be rooted at the current workdir (the
+/// `directory` field), not at `$HOME` — the tree root label is the workdir's
+/// basename.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_folders_root_is_workdir() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    // A subfolder ensures the tree has at least one child node so the root is
+    // clearly distinguishable.
+    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    let base = dir
+        .path()
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("basename")
+        .to_owned();
+
+    let mut harness = build_harness();
+    harness
+        .state_mut()
+        .set_directory(dir.path().display().to_string());
+    harness.state_mut().set_module(Module::Library);
+    harness.run_steps(3);
+
+    // The workdir's basename must appear as a folder node label in the tree.
+    let found = harness.query_all_by_label_contains(&base).next().is_some();
+    assert!(
+        found,
+        "Folder tree must show the workdir `{base}` as its root (not $HOME)"
+    );
 }

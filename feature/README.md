@@ -88,6 +88,10 @@ Sidecars vollständig wiederherstellbar sein.
 - [fixtures-licensing.md](quality/fixtures-licensing.md):
   Fixture-Inventar, Modell- und Abhängigkeitslizenzen, Distributionsaudit und
   Versionierungs-Policy (F-073, F-078)
+- [preview-cache.md](quality/preview-cache.md): Hybrid-Preview-Cache für
+  sofortiges Scrollen — GPU-Textur (VRAM) fürs aktive Bild, WebP-Cache
+  (Screen/1:1, Disk/RAM, Alpha) für Nachbarn, asymmetrisches +4/−2-Prefetch
+  (PREVIEW-CACHE-FEATURE)
 
 ## Feature-Matrix
 

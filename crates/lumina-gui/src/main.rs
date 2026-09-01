@@ -27,6 +27,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |creation_context| {
             let mut app = lumina_gui::LuminaApp::new(creation_context.egui_ctx.clone());
+            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
             lumina_gui::attach_wgpu_render_state(
                 &mut app,
                 creation_context.wgpu_render_state.clone(),

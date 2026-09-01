@@ -45,8 +45,6 @@ pub enum Str {
     Refresh,
     Load,
     ChooseFile,
-    NewCopy,
-    Source,
     Copies,
     Sidecar,
 
@@ -71,6 +69,7 @@ pub enum Str {
     ZoomFitWidth,
     Histogram,
     Filmstrip,
+    LibraryThumbSize,
 
     // Basic section
     WhiteBalance,
@@ -304,8 +303,6 @@ impl Str {
             Str::Refresh => "Refresh",
             Str::Load => "Load",
             Str::ChooseFile => "Choose file",
-            Str::NewCopy => "Duplicate copy",
-            Str::Source => "Source",
             Str::Copies => "copies",
             Str::Sidecar => "Sidecar",
 
@@ -329,6 +326,7 @@ impl Str {
             Str::ZoomFitWidth => "Fit Width",
             Str::Histogram => "Histogram",
             Str::Filmstrip => "Filmstrip",
+            Str::LibraryThumbSize => "Thumbnail Size",
 
             Str::WhiteBalance => "White Balance",
             Str::Temperature => "Temperature",

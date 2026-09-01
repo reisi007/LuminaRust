@@ -158,7 +158,8 @@ pub struct SegmentationPrompt {
 /// Interactive (prompted) segmentation surface.
 ///
 /// Implemented by the [`StubSam2Backend`] today and, later, by a real ORT-
-/// backed SAM 2.1 decoder. The model-agnostic [`SubjectInference`] surface in
+/// backed SAM 2.1 decoder. The model-agnostic
+/// [subject-inference surface](crate::SubjectInference) in
 /// `backend.rs` is separate: SAM 2 is interactive-only, so it exposes prompts
 /// instead of whole-image subject inference.
 pub trait PromptMaskInference {

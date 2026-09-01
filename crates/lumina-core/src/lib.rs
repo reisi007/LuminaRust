@@ -101,6 +101,57 @@ pub fn export_image(
     rendered.frame.encode_with_options(options)
 }
 
+/// Bilinear downscale of an RGBA8 frame so that the output **width** does not
+/// exceed `max_width`. Aspect ratio is preserved and upscaling never occurs.
+///
+/// The operation is fully deterministic (pure math, no randomness), which makes
+/// previews and other width-limited renderings reproducible.
+///
+/// Moved out of `lumina-mcp` (R2-MCP-06): this is platform-neutral image
+/// processing and belongs with the rest of the shared pipeline in `lumina-core`
+/// for reuse and golden-testing, not in the MCP orchestration layer. Unlike the
+/// old mcp helper it returns a `Result` instead of panicking via `expect` when
+/// the derived dimensions are inconsistent (which cannot happen for the exact
+/// `new_width * new_height * 4` allocation used here, but the fallible
+/// [`ImageFrame::new`] contract is surfaced rather than swallowed).
+pub fn downscale_bilinear(frame: &ImageFrame, max_width: u32) -> Result<ImageFrame, CoreError> {
+    let (width, height) = (frame.width, frame.height);
+    if width == 0 || height == 0 {
+        return Ok(frame.clone());
+    }
+    let new_width = width.min(max_width).max(1);
+    let new_height = ((new_width as f64 / width as f64) * height as f64)
+        .round()
+        .max(1.0) as u32;
+    if new_width == width && new_height == height {
+        return Ok(frame.clone());
+    }
+    let mut pixels = vec![0u8; new_width as usize * new_height as usize * 4];
+    for y in 0..new_height {
+        let source_y = (y as f64 + 0.5) * height as f64 / new_height as f64 - 0.5;
+        let y0 = source_y.floor().max(0.0) as u32;
+        let y1 = (y0 + 1).min(height - 1);
+        let ty = (source_y - y0 as f64).clamp(0.0, 1.0);
+        for x in 0..new_width {
+            let source_x = (x as f64 + 0.5) * width as f64 / new_width as f64 - 0.5;
+            let x0 = source_x.floor().max(0.0) as u32;
+            let x1 = (x0 + 1).min(width - 1);
+            let tx = (source_x - x0 as f64).clamp(0.0, 1.0);
+            for channel in 0..4 {
+                let p00 = frame.pixels[((y0 * width + x0) * 4 + channel) as usize];
+                let p01 = frame.pixels[((y0 * width + x1) * 4 + channel) as usize];
+                let p10 = frame.pixels[((y1 * width + x0) * 4 + channel) as usize];
+                let p11 = frame.pixels[((y1 * width + x1) * 4 + channel) as usize];
+                let top = p00 as f64 + (p01 as f64 - p00 as f64) * tx;
+                let bottom = p10 as f64 + (p11 as f64 - p10 as f64) * tx;
+                pixels[((y * new_width + x) * 4 + channel) as usize] =
+                    (top + (bottom - top) * ty).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    ImageFrame::new(new_width, new_height, pixels)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BitDepth {
     #[default]
@@ -1099,28 +1150,50 @@ fn apply_lens(
 ) {
     // F-098-N1: a Lensfun corrector (when present and non-identity) replaces the
     // manual radial-distortion Newton iteration and the vignette polynomial with
-    // the database profile, per pixel. The corrector's geometry maps a
-    // destination (corrected) pixel `(x, y)` in `[0, width-1] × [0, height-1]`
-    // to the source (distorted) pixel to sample — the same pixel space
-    // `apply_lens` iterates over. Vignetting is applied via `color_gain` on the
-    // RGB channels only; the alpha channel is left untouched (same structure as
-    // the manual model).
+    // the database profile. The corrector's geometry maps a destination
+    // (corrected) pixel `(x, y)` in `[0, width-1] × [0, height-1]` to the
+    // source (distorted) pixel to sample — the same pixel space `apply_lens`
+    // iterates over. Vignetting is applied on the RGB channels only; the alpha
+    // channel is left untouched (same structure as the manual model).
+    //
+    // R2-LENS-01: the loop is *row-wise* — every row crosses the lensfun FFI
+    // boundary exactly twice (once for the geometry via `geometry_row`, once
+    // for the vignetting via `apply_vignetting_row`) instead of twice per
+    // pixel (~48 Mio → ~16k FFI crossings @24 MP). The batch results are not
+    // byte-identical to the previous per-pixel `geometry`/`color_gain` calls:
+    // the first column is bit-identical, but later columns drift by float
+    // rounding that grows with the row width (≤ ~7.4e-4 px @257 columns on the
+    // review reference profile, ≈0.75 px @8192 — documented in the `lumina-
+    // lensfun` wrapper contract). That is why this switch deliberately changes
+    // the output and requires a Golden rebaseline (F-043), it is not a silent
+    // fallback.
     #[cfg(feature = "lensfun")]
     if let Some(corrector) = lensfun {
         if !corrector.is_identity() {
             let src = frame.clone();
+            let width = frame.width as usize;
+            let mut coords = vec![(0.0, 0.0); width];
+            let mut rgb = vec![0f32; width * 3];
             for y in 0..frame.height {
-                for x in 0..frame.width {
-                    let (sx, sy) = corrector.geometry(x as f64, y as f64);
-                    let i = (y * frame.width + x) as usize * 4;
-                    let r = sample(&src, sx as f32, sy as f32, 0);
-                    let g = sample(&src, sx as f32, sy as f32, 1);
-                    let b = sample(&src, sx as f32, sy as f32, 2);
-                    let (cr, cg, cb) = corrector.color_gain(r, g, b, x as f64, y as f64);
-                    frame.pixels[i] = (cr).round().clamp(0.0, 255.0) as u8;
-                    frame.pixels[i + 1] = (cg).round().clamp(0.0, 255.0) as u8;
-                    frame.pixels[i + 2] = (cb).round().clamp(0.0, 255.0) as u8;
-                    frame.pixels[i + 3] = sample(&src, sx as f32, sy as f32, 3)
+                // One batch FFI call maps the whole destination row to its
+                // source row (identical to `geometry` per pixel up to the
+                // documented sub-pixel drift).
+                corrector.geometry_row(0.0, y as f64, &mut coords);
+                for (i, (ref sx, ref sy)) in coords.iter().enumerate() {
+                    rgb[i * 3] = sample(&src, *sx as f32, *sy as f32, 0);
+                    rgb[i * 3 + 1] = sample(&src, *sx as f32, *sy as f32, 1);
+                    rgb[i * 3 + 2] = sample(&src, *sx as f32, *sy as f32, 2);
+                }
+                // One batch FFI call applies the vignetting gain to the whole
+                // sampled RGB row in place.
+                corrector.apply_vignetting_row(&mut rgb, 0.0, y as f64);
+                let row_base = y as usize * width * 4;
+                for (i, (ref sx, ref sy)) in coords.iter().enumerate() {
+                    let dst = row_base + i * 4;
+                    frame.pixels[dst] = rgb[i * 3].round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[dst + 1] = rgb[i * 3 + 1].round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[dst + 2] = rgb[i * 3 + 2].round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[dst + 3] = sample(&src, *sx as f32, *sy as f32, 3)
                         .round()
                         .clamp(0.0, 255.0) as u8;
                 }
@@ -2441,6 +2514,53 @@ mod tests {
             ),
             ..EditRecipe::default()
         }
+    }
+
+    // ---- R2-MCP-06: downscale_bilinear moved into core ----
+
+    /// Pins the invariants the MCP preview relied on: never upscales, keeps the
+    /// aspect ratio (width-driven), clamps to at least 1px, is deterministic,
+    /// and preserves pixels unchanged when no downscale is needed.
+    #[test]
+    fn downscale_bilinear_never_upsizes_and_is_deterministic() {
+        let frame = ImageFrame::new(64, 48, vec![10u8; 64 * 48 * 4]).unwrap();
+        let small = downscale_bilinear(&frame, 1024).unwrap();
+        assert_eq!((small.width, small.height), (64, 48), "must never upscale");
+        assert_eq!(small.pixels, frame.pixels, "no-op downscale keeps pixels");
+
+        let scaled = downscale_bilinear(&frame, 32).unwrap();
+        assert_eq!(scaled.width, 32, "output width must honour max_width");
+        assert_eq!(scaled.height, 24, "aspect ratio (64:48) preserved");
+
+        let again = downscale_bilinear(&frame, 32).unwrap();
+        assert_eq!(scaled.pixels, again.pixels, "deterministic bytes");
+
+        // Max-width smaller than one pixel still yields at least 1x1.
+        let tiny = downscale_bilinear(&frame, 0).unwrap();
+        assert_eq!(tiny.width, 1);
+        assert_eq!(tiny.height, 1);
+    }
+
+    /// Moved from the mcp helper's guarding semantics: the flat-colour mid-pixel
+    /// average stays inside the valid RGBA byte range even for maximal
+    /// downscales (no overflow/underflow in the f64 interpolation path).
+    #[test]
+    fn downscale_bilinear_averages_flat_colour_identically() {
+        let mut flat = vec![0u8; 128 * 64 * 4];
+        for px in flat.as_chunks_mut::<4>().0 {
+            px.copy_from_slice(&[50, 100, 150, 200]);
+        }
+        let frame = ImageFrame::new(128, 64, flat).unwrap();
+        let scaled = downscale_bilinear(&frame, 7).unwrap();
+        assert_eq!(scaled.width, 7);
+        assert!(
+            scaled
+                .pixels
+                .iter()
+                .all(|&b| b == 50 || b == 100 || b == 150 || b == 200),
+            "flat colour must stay flat: {:?}",
+            scaled.pixels
+        );
     }
 
     #[test]
@@ -4947,5 +5067,205 @@ mod tests {
         let original = frame.clone();
         apply_channel_lut_adjustments(&mut frame, &identity);
         assert_eq!(frame, original);
+    }
+
+    // -----------------------------------------------------------------------
+    // R2-LENS-01: the Lensfun path of `apply_lens` feeds the batch row
+    // wrappers (`geometry_row` / `apply_vignetting_row`, one FFI transition per
+    // row instead of two per pixel). These tests pin the observable contract of
+    // the switch:
+    //   - the rendered FIRST COLUMN is bit-identical to the previous per-pixel
+    //     model (`geometry` + `color_gain` + bilinear `sample`);
+    //   - the rest of the frame differs only by the documented sub-pixel
+    //     geometry/vignette drift — bounded in byte space, not a silent
+    //     behaviour change (Golden rebaseline territory, F-043);
+    //   - the row path still performs a real correction (no silent no-op).
+    // -----------------------------------------------------------------------
+    #[cfg(feature = "lensfun")]
+    mod lensfun_row {
+        use super::*;
+        use lumina_lensfun::{Corrector, LensfunDb};
+
+        const FIXTURE_CAM_MAKE: &str = "Lumina Test Corp";
+        const FIXTURE_CAM_MODEL: &str = "Lumina Test Body";
+
+        fn write_combined_fixture(tag: &str) -> std::path::PathBuf {
+            // Same minimal version_1 database as the lumina-lensfun tests: one
+            // camera + one lens with BOTH distortion (PTLens) and vignetting
+            // (PA) calibration, so the row path exercises both batch callbacks.
+            let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<lensdatabase>
+    <camera>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Test Body</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+    <lens>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Distortion+Vignetting 50mm f/2.8</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="50" a="0.08" b="-0.10" c="0.02"/>
+            <vignetting model="pa" focal="50" aperture="2.8" distance="10" k1="-0.08" k2="-0.03" k3="-0.01"/>
+        </calibration>
+    </lens>
+</lensdatabase>
+"#;
+            static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "lumina-core-lensfun-{tag}-{}-{seq}.xml",
+                std::process::id()
+            ));
+            std::fs::write(&path, xml).expect("write fixture database");
+            path
+        }
+
+        fn build_row_corrector(width: u32, height: u32) -> Corrector {
+            let path = write_combined_fixture("row");
+            let db = LensfunDb::load_file(&path).expect("fixture database must load");
+            let _ = std::fs::remove_file(&path);
+            Corrector::for_camera(
+                &db,
+                FIXTURE_CAM_MAKE,
+                FIXTURE_CAM_MODEL,
+                None,
+                width,
+                height,
+                50.0,
+                2.8,
+                10.0,
+            )
+            .expect("combined-profile corrector must be built")
+        }
+
+        /// Deterministic gradient + horizontal texture so the bilinear
+        /// resample and the vignette polynomial are actually exercised.
+        fn gradient_frame(w: u32, h: u32) -> ImageFrame {
+            let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+            for y in 0..h {
+                for x in 0..w {
+                    let r = (x * 255 / w.max(1)) as u8;
+                    let g = (y * 255 / h.max(1)) as u8;
+                    let b = ((x ^ y) & 0xff) as u8;
+                    pixels.extend_from_slice(&[r, g, b, 255]);
+                }
+            }
+            ImageFrame::new(w, h, pixels).unwrap()
+        }
+
+        /// The pre-R2-LENS-01 per-pixel render (exactly the old `apply_lens`
+        /// loop) as the oracle for the row switch.
+        fn apply_lens_per_pixel(frame: &mut ImageFrame, corrector: &Corrector) {
+            let src = frame.clone();
+            for y in 0..frame.height {
+                for x in 0..frame.width {
+                    let (sx, sy) = corrector.geometry(x as f64, y as f64);
+                    let i = (y * frame.width + x) as usize * 4;
+                    let r = sample(&src, sx as f32, sy as f32, 0);
+                    let g = sample(&src, sx as f32, sy as f32, 1);
+                    let b = sample(&src, sx as f32, sy as f32, 2);
+                    let (cr, cg, cb) = corrector.color_gain(r, g, b, x as f64, y as f64);
+                    frame.pixels[i] = cr.round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[i + 1] = cg.round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[i + 2] = cb.round().clamp(0.0, 255.0) as u8;
+                    frame.pixels[i + 3] = sample(&src, sx as f32, sy as f32, 3)
+                        .round()
+                        .clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+
+        #[test]
+        fn lensfun_row_first_column_is_bit_identical_to_per_pixel_rendered_reference() {
+            let corrector = build_row_corrector(257, 200);
+            let src = gradient_frame(257, 200);
+            let mut row_path = src.clone();
+            let mut per_pixel = src;
+            // Public pipeline entry: geometry identity + empty manual lens +
+            // row-path corrector (same route the pipeline takes, F-098-N1).
+            let geometry = Some(&lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            });
+            row_path
+                .apply_geometry(geometry, Some(&EMPTY_LENS), None, Some(&corrector))
+                .unwrap();
+            apply_lens_per_pixel(&mut per_pixel, &corrector);
+
+            let width = row_path.width as usize;
+            for y in 0..row_path.height as usize {
+                let base = y * width * 4;
+                assert_eq!(
+                    &row_path.pixels[base..base + 4],
+                    &per_pixel.pixels[base..base + 4],
+                    "first-column pixel at y={y} must stay bit-identical"
+                );
+            }
+        }
+
+        #[test]
+        fn lensfun_row_full_frame_drift_stays_bounded() {
+            let corrector = build_row_corrector(257, 200);
+            let src = gradient_frame(257, 200);
+            let mut row_path = src.clone();
+            let mut per_pixel = src;
+            apply_lens(&mut row_path, &EMPTY_LENS, Some(&corrector));
+            apply_lens_per_pixel(&mut per_pixel, &corrector);
+
+            // The whole frame differs from the per-pixel oracle only by the
+            // documented sub-pixel drift. In 8-bit byte space the drift surface
+            // is tiny: the sampling/vignette deltas must stay a few units, far
+            // below the ≥ 8–10 units a full-source-step coarsening would show.
+            // (Everything is deterministic, so the bound is stable for this
+            // fixture.)
+            let max_diff = row_path
+                .pixels
+                .iter()
+                .zip(&per_pixel.pixels)
+                .map(|(a, b)| (*a as i16 - *b as i16).abs())
+                .max()
+                .unwrap();
+            assert!(
+                max_diff <= 4,
+                "row path must stay within the documented sub-pixel drift, got max byte diff {max_diff}"
+            );
+        }
+
+        #[test]
+        fn lensfun_row_path_applies_a_real_correction() {
+            // A flat frame highlights both effects: the distortion maps the
+            // corner destinations to source pixels outside the image (→ sampled
+            // as black, `sample` clamps), and the vignette flattens the
+            // falloff. An all-passthrough/identity row path would leave the
+            // frame untouched, so this guards against a silent no-op.
+            let corrector = build_row_corrector(400, 300);
+            let mut frame = ImageFrame::new(400, 300, vec![100u8; 400 * 300 * 4]).unwrap();
+            apply_lens(&mut frame, &EMPTY_LENS, Some(&corrector));
+
+            // Centre pixel stays close to the flat input (identity geometry +
+            // centre vignette ≈ 1.0)…
+            let centre = {
+                let i = (150 * 400 + 200) as usize * 4;
+                frame.pixels[i]
+            };
+            assert!(
+                (centre as i16 - 100).abs() <= 2,
+                "centre should stay ~flat, got {centre}"
+            );
+            // …but the corners must move (distortion pushes the source sample
+            // out of range and/or the vignette scales the falloff) — the row
+            // path is a real correction, not a pass-through.
+            let corner = frame.pixels[0];
+            assert!(
+                (corner as i16 - 100).abs() > 2,
+                "corner should deviate from the flat input, got {corner}"
+            );
+        }
     }
 }

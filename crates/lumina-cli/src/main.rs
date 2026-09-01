@@ -1609,6 +1609,18 @@ fn build_lensfun_corrector(metadata: Option<&RawMetadata>) -> Option<(LensfunDb,
     Some((db, corrector))
 }
 
+/// Returns `Some(wb)` for a usable As-Shot white balance, `None` if any gain is
+/// NaN/infinite or non-positive. Mirrors the lumina-gui load/background-decode
+/// sanitisation (R2-WB) so CLI and GUI degrade identically instead of aborting
+/// the render on a corrupt CR3 `cam_mul`.
+fn sanitize_camera_white_balance(wb: [f32; 4]) -> Option<[f32; 4]> {
+    if wb.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        None
+    } else {
+        Some(wb)
+    }
+}
+
 fn process_selected(
     args: ProcessArgs,
     quality: u8,
@@ -1622,7 +1634,21 @@ fn process_selected(
     let format = output_format(&args.output)?;
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
-    let wb = raw_metadata.as_ref().map(|m| m.camera_white_balance);
+    // Parity with lumina-gui (R2-WB): an invalid As-Shot white balance (NaN,
+    // inf, or a non-positive gain) is dropped to `None` with a warning instead
+    // of aborting the whole render with CoreError::InvalidAdjustment. This is
+    // the same single-source behaviour the GUI applies at load and on the
+    // background decode path.
+    let wb = raw_metadata.as_ref().and_then(|m| {
+        let sanitized = sanitize_camera_white_balance(m.camera_white_balance);
+        if sanitized.is_none() {
+            eprintln!(
+                "lumina: warning: As-Shot white balance invalid {:?} for `{}` — dropping to None (recipe WB remains, image renders)",
+                m.camera_white_balance, args.input.display()
+            );
+        }
+        sanitized
+    });
     // F-098-N2: build the Lensfun corrector from EXIF when the feature is on.
     // The database handle and corrector are kept in two separate locals so the
     // corrector (declared last) is dropped before the database handle — the
@@ -2367,6 +2393,31 @@ mod tests {
         // Drift guard pinned to the SOLL (feature/platform/mcp-server.md):
         // 7 editing tools + lumina_analyze + 4 F-101-F1 CLI-coverage tools.
         assert_eq!(tools.len(), 12, "tool set drifted; update SOLL + tests");
+    }
+
+    /// R2-WB (parity with lumina-gui): non-finite or non-positive As-Shot gains
+    /// are dropped to `None` so the render degrades instead of aborting; a
+    /// healthy gain vector is kept verbatim.
+    #[test]
+    fn sanitize_camera_white_balance_rejects_non_finite_and_non_positive() {
+        assert_eq!(
+            sanitize_camera_white_balance([1.9, 1.0, 1.4, 1.0]),
+            Some([1.9, 1.0, 1.4, 1.0])
+        );
+        assert_eq!(sanitize_camera_white_balance([0.0, 1.0, 1.0, 1.0]), None);
+        assert_eq!(sanitize_camera_white_balance([-0.5, 1.0, 1.0, 1.0]), None);
+        assert_eq!(
+            sanitize_camera_white_balance([f32::NAN, 1.0, 1.0, 1.0]),
+            None
+        );
+        assert_eq!(
+            sanitize_camera_white_balance([f32::INFINITY, 1.0, 1.0, 1.0]),
+            None
+        );
+        assert_eq!(
+            sanitize_camera_white_balance([1.0, f32::NEG_INFINITY, 1.0, 1.0]),
+            None
+        );
     }
 
     /// R2-MCP-01 + R2-GPU-05: the CLI routing decision treats a decoder

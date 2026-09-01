@@ -16,7 +16,11 @@ use lumina_core::cache::PreviewKind;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Maximum edge length (px) of a generated filmstrip thumbnail.
-pub const THUMBNAIL_MAX_DIM: u32 = 160;
+///
+/// Filmstrip cells are Lightroom-like 140x110 — a 160px cap left the texture
+/// noticeably soft / "switching too small"; raised to 200px so the bigger cell
+/// keeps crisp pixels.
+pub const THUMBNAIL_MAX_DIM: u32 = 200;
 
 /// Holds generated thumbnail textures and remembers which sources have already
 /// been probed against the disk cache (so we enqueue a background job at most

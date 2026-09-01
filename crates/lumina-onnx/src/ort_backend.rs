@@ -8,7 +8,8 @@
 //! and handles the [`OnnxError::MissingModel`] case without weights; numeric
 //! correctness against an actual BiRefNet `.onnx` artifact (input/output tensor
 //! names, value ranges) is validated later in F-048/F-082 once model weights are
-//! provided. The default, fully tested surface remains the [`StubBackend`].
+//! provided. The default, fully tested surface remains the
+//! [`StubBackend`](crate::StubBackend).
 //!
 //! ## Artifact identity (REVIEW-ONNX-HASH-1)
 //!

@@ -5,10 +5,21 @@ backend for `BiRefNet` as the first automatic subject model, with the model
 capability surface from F-080.
 
 This crate is **native-only** (mirrors `lumina-raw`): it is gated out on
-`wasm32` and is never built for the browser. It intentionally does **not**
-depend on `lumina-sidecar` in this iteration — the mapping of
-`ModelManifest`/`ModelCapabilities` to the sidecar `ModelIdentity` is deferred
-to F-048.
+`wasm32` and is never built for the browser. It depends on `lumina-sidecar`
+solely for the identity mapping `ModelManifest → ModelIdentity`
+(F-048/`to_model_identity`); all native/ONNX concerns stay inside this crate.
+
+## Capability matrix (native-only)
+
+| Target | `onnx-rt` default | `onnx-rt` enabled |
+| --- | --- | --- |
+| native (macOS/Linux) | StubBackend, `resolve` reports `RuntimeDisabled` | `resolve` loads/verifies the real ORT engine or fails visibly |
+| `wasm32-unknown-unknown` | **not compiled** (`#![cfg(not(target_arch = "wasm32"))]`) | **not compiled** — `ort` is a native dependency and would break the WASM gate; `onnx-rt` must not be enabled for wasm targets |
+
+The wasm32 build of this crate is an empty stub (verified:
+`cargo check --target wasm32-unknown-unknown -p lumina-onnx`). This mirrors
+the capability decision in `feature/platform/capability-matrix.md`: ONNX
+inference is a native capability, the browser remains explicitly "offen".
 
 ## Layout
 
@@ -21,6 +32,11 @@ to F-048.
 - `backend.rs` — the `SubjectInference` trait and the deterministic
   `StubBackend` (centered radial matte, no weights/network). This is the
   complete, tested default surface.
+- `resolve.rs` — backend resolution for consumers (CLI/core):
+  [`try_load_onnx_engine`] loads the real ORT engine when `onnx-rt` is
+  compiled in and the artifact verifies; otherwise it reports the explicit
+  states `RuntimeDisabled` / `MissingModel` / `ModelArtifactStale` /
+  `InferenceFailed` — **never a silent fallback to the stub**.
 - `ort_backend.rs` — real ONNX Runtime backend, **gated behind the `onnx-rt`
   feature** (see below).
 
@@ -50,6 +66,29 @@ at runtime. Numeric correctness against an actual BiRefNet model (input/output
 tensor names, value ranges) is validated later in F-048/F-082 once model
 weights are available; until then the `OrtBackend` is compile-verified and
 handles the `MissingModel` case without weights.
+
+### Backend resolution (no silent fallback)
+
+Consumers (CLI/core) obtain the real engine via
+[`try_load_onnx_engine`](`crate::resolve::try_load_onnx_engine`):
+
+- `onnx-rt` **disabled** → `Ok(OnnxEngine::RuntimeDisabled)`: the caller
+  decides explicitly between `StubBackend` and no engine — the capability
+  statement, never a silent fallback.
+- `onnx-rt` **enabled** + present, identity-verified artifact → `Ok(OnnxEngine::OnnxRuntime(Box<dyn MaskInference>))`,
+  the exact contract `lumina-core`'s mask-loading decision layer consumes.
+- `onnx-rt` **enabled** + missing / hash-mismatched / wrong-tensor-name
+  artifact → `Err(MissingModel)` / `Err(ModelArtifactStale)` /
+  `Err(InferenceFailed)` — visible, hard errors; no fallback to the stub.
+
+### Hash-pinned ONNX behavior fixture
+
+`tests/fixtures/lumina-crafted-reducemax.onnx` is a committed, hash-pinned
+behavior fixture (SHA-256 pin in `tests/fixtures/README.md`): a minimal,
+deterministically generated ReduceMax graph (no downloads, no model weights)
+that exercises the real ORT load/verify/infer code paths under a pinned
+identity. Real BiRefNet/SAM-2 model weights remain `pending-integration`
+(Agents.md: no spontaneous downloads; hash-pinned fixtures required).
 
 ## Error handling
 

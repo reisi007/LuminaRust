@@ -587,6 +587,145 @@ mod ffi {
             }
         }
 
+        // -------------------------------------------------------------------
+        // Row-batch wrappers (R2-LENS-01).
+        //
+        // The per-pixel `geometry` / `color_gain` methods each cross the FFI
+        // boundary once per destination pixel (two transitions per pixel → ~48
+        // million FFI crossings for a 24 MP frame). Lensfun's batch API
+        // (`lf_modifier_apply_geometry_distortion` /
+        // `lf_modifier_apply_color_modification`) computes a whole *block* of
+        // points (`width × height`) in one call. Feeding it one row at a time
+        // (`height = 1`) reduces the FFI crossings to ~2 per row (~16k for
+        // 24 MP).
+        //
+        // # Documented numeric divergence (not byte-identical)
+        //
+        // Lensfun's batch paths are **not** bit-identical to the per-pixel
+        // calls, which is why switching the pipeline to them requires a Golden
+        // rebaseline (F-043), not a silent output change:
+        //
+        // - `geometry_row`: lensfun builds the row output by *accumulating*
+        //   the normalized x coordinate (`x += NormScale` per column,
+        //   `mod-coord.cpp::ApplyGeometryDistortion`), while the per-pixel
+        //   path computes each point from the fresh integer pixel coordinate.
+        //   The first column (`x_start`) is bit-identical; later columns drift
+        //   by float rounding that grows with the row width (measured
+        //   ≤ ~7.4e-4 px over 257 columns, ≈ 0.75 px over 8192).
+        // - `apply_vignetting_row`: the batch colour path advances the
+        //   vignette polynomial's `r²` incrementally (`r2 += 2·ns·x + ns²`)
+        //   instead of recomputing `x² + y²` per pixel
+        //   (`mod-color.cpp::ModifyColor_Vignetting_PA`). Same first-column
+        //   bit-identity, same float-rounding drift to the right.
+        //
+        // The drift stays sub-pixel for realistic row widths, so the visual
+        // result is unchanged within the resampling round-off, but the exact
+        // bytes differ from the per-pixel model (see the `apply_lens` comment
+        // in `lumina-core` and R2-LENS-01 in `docs/reviews/2026-08-26-full-review.md`).
+        // -------------------------------------------------------------------
+
+        /// Map a whole destination row to the source pixels it samples, in a
+        /// single lensfun batch call (R2-LENS-01).
+        ///
+        /// `out[i]` receives the destination→source mapping of the destination
+        /// pixel `(x_start + i, y)` (for `i` in `0..out.len()`), so one call
+        /// replaces `out.len()` calls to [`Self::geometry`]. `out` must have
+        /// exactly as many entries as the row has pixels (its length is the row
+        /// width).
+        ///
+        /// For a vignetting-only profile (`has_distortion() == false`) lensfun
+        /// reports `false` **without writing** its output buffer (as with
+        /// [`Self::geometry`], review REVIEW-LENSFUN-VIGN-1); the row is
+        /// filled with the exact identity mapping instead of collapsing onto
+        /// `(0, 0)`.
+        ///
+        /// See the module-level "Documented numeric divergence" block above for
+        /// the bit-identity vs. [`Self::geometry`] contract (first column
+        /// bit-identical, sub-pixel drift to the right).
+        pub fn geometry_row(&self, x_start: f64, y: f64, out: &mut [(f64, f64)]) {
+            let width = out.len();
+            debug_assert!(width > 0, "geometry_row requires at least one pixel");
+            // Prefill with the identity mapping: on a `false` return lensfun
+            // leaves the buffer untouched (vignetting-only profile), so the
+            // passthrough values below are correct even before we check the
+            // flag — exactly like [`Self::geometry`].
+            for (i, slot) in out.iter_mut().enumerate() {
+                *slot = (x_start + i as f64, y);
+            }
+            if !self.has_distortion {
+                return;
+            }
+            unsafe {
+                // lensfun output buffer for the batch geometry (f32 pairs).
+                let mut res = vec![0f32; width * 2];
+                let ok = lf_modifier_apply_geometry_distortion(
+                    self.modifier,
+                    x_start as c_float,
+                    y as c_float,
+                    width as c_int,
+                    1,
+                    res.as_mut_ptr(),
+                );
+                if ok != 0 {
+                    for (i, slot) in out.iter_mut().enumerate() {
+                        *slot = (res[i * 2] as f64, res[i * 2 + 1] as f64);
+                    }
+                }
+                // `ok == 0`: no distortion callback — keep the prefilled
+                // identity mapping (never a silent fallback onto (0, 0)).
+            }
+        }
+
+        /// Apply the vignetting correction to a whole row of packed RGB pixels
+        /// **in place**, in a single lensfun batch call (R2-LENS-01).
+        ///
+        /// `rgb` holds `width * 3` consecutive `f32`s (three channels per
+        /// pixel, RGB order — lensfun walks the buffer one RGB triple per
+        /// pixel via `LF_CR_RGB`); `x_start`/`y` are the destination
+        /// coordinates of the row's first pixel, used for the radial position.
+        /// One call replaces `width` calls to [`Self::color_gain`].
+        ///
+        /// The buffer is modified in place, exactly like lensfun's own
+        /// `lf_modifier_apply_color_modification`. Callers wanting to keep the
+        /// geometry pass separate must pass a buffer that holds only the RGB
+        /// of the row (not, e.g., an RGBA frame — `LF_CR_RGB` consumes three
+        /// components per pixel and would walk an RGBA buffer ragged).
+        ///
+        /// On a distortion-only profile (no colour callback) lensfun reports
+        /// `false` and leaves the buffer untouched, matching [`Self::color_gain`].
+        ///
+        /// See the module-level "Documented numeric divergence" block above for
+        /// the bit-identity vs. [`Self::color_gain`] contract.
+        pub fn apply_vignetting_row(&self, rgb: &mut [f32], x_start: f64, y: f64) {
+            debug_assert!(
+                rgb.len().is_multiple_of(3),
+                "apply_vignetting_row requires whole RGB triples, got {} floats",
+                rgb.len()
+            );
+            let width = rgb.len() / 3;
+            if width == 0 || !self.has_vignetting {
+                return;
+            }
+            unsafe {
+                // `row_stride = 0` → lensfun treats the block as packed;
+                // with `height = 1` the row stride is unused anyway (matches
+                // `color_gain`). The 16-byte alignment hint in the lensfun
+                // header is a performance note, not a correctness contract;
+                // `Vec<f32>`/`[f32]` buffers are fine (same as the per-pixel
+                // stack array today).
+                lf_modifier_apply_color_modification(
+                    self.modifier,
+                    rgb.as_mut_ptr() as *mut c_void,
+                    x_start as c_float,
+                    y as c_float,
+                    width as c_int,
+                    1,
+                    LF_CR_RGB,
+                    0,
+                );
+            }
+        }
+
         /// Probe whether the correction is approximately the identity mapping
         /// at the image centre and four corners. A near-identity correction is
         /// treated as a no-op and the caller falls back to the manual model.
@@ -909,6 +1048,255 @@ mod tests {
         // these parameters, so both callbacks must be enabled.
         assert!(c.has_distortion());
         assert!(c.has_vignetting());
+    }
+
+    // -----------------------------------------------------------------------
+    // R2-LENS-01: row-batch wrappers (`geometry_row` / `apply_vignetting_row`).
+    //
+    // The wrappers reduce the FFI crossings from two per pixel to two per row
+    // by feeding lensfun's batch API one row at a time (`height = 1`).
+    // Contract (documented on the wrappers):
+    //   - the FIRST COLUMN of a row is bit-identical to the per-pixel
+    //     `geometry` / `color_gain` calls;
+    //   - the remaining columns drift only by float rounding that grows with
+    //     the row width (measured ≤ ~7.4e-4 px over 257 columns, ≈ 0.75 px
+    //     over 8192 on the reference profiles) — never a whole pixel;
+    //   - vignetting-only profiles keep `geometry_row` at the exact identity
+    //     (review REVIEW-LENSFUN-VIGN-1).
+    // -----------------------------------------------------------------------
+
+    /// Max |drift| over any coordinate component between two coordinate
+    /// vectors of the same length.
+    fn max_coord_drift(row: &[(f64, f64)], reference: &[(f64, f64)]) -> f64 {
+        assert_eq!(row.len(), reference.len());
+        row.iter()
+            .zip(reference)
+            .map(|((sx, sy), (rx, ry))| (sx - rx).abs().max((sy - ry).abs()))
+            .fold(0.0_f64, f64::max)
+    }
+
+    #[test]
+    fn geometry_row_first_column_is_bit_identical_to_per_pixel_geometry() {
+        let path = write_distortion_and_vignetting_fixture("rowfirst");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            257,
+            200,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("combined-profile corrector must be built");
+        assert!(c.has_distortion());
+        assert!(c.has_vignetting());
+
+        let mut row = vec![(0.0, 0.0); 257];
+        c.geometry_row(0.0, 42.0, &mut row);
+        for (i, (sx, sy)) in row.iter().enumerate() {
+            let (rx, ry) = c.geometry(i as f64, 42.0);
+            // First column (i == 0) must be bit-identical; the rest must stay
+            // within the documented sub-pixel drift.
+            if i == 0 {
+                assert_eq!(*sx, rx, "first-column x must be bit-identical");
+                assert_eq!(*sy, ry, "first-column y must be bit-identical");
+            } else {
+                assert!(
+                    (sx - rx).abs() <= 1.0e-3 && (sy - ry).abs() <= 1.0e-3,
+                    "column {i} drifts too much: row ({sx}, {sy}) vs per-pixel ({rx}, {ry})"
+                );
+            }
+        }
+        // The row mapping must actually deviate from the identity at the right
+        // edge (the distorted profile is active), otherwise the row call silently
+        // degraded to the per-pixel-free identity.
+        assert!(
+            (row[256].0 - 256.0).abs() > 1e-2 || (row[256].1 - 42.0).abs() > 1e-2,
+            "geometry row must deviate from identity at the right edge"
+        );
+    }
+
+    #[test]
+    fn geometry_row_document_drift_magnitude_over_widths() {
+        // Pins the documented R2-LENS-01 magnitudes on a 4:3 image: the batch
+        // path drifts from the per-pixel path by fractions of a pixel at 257
+        // columns and stays below one pixel even at 8192 (measured on this
+        // synthetic profile: ~0.008 px @257, ~0.21 px @8192; the review's
+        // reference profile showed ~7.4e-4 px @257 / ≈0.75 px @8192 — the
+        // exact values depend on the lens calibration, the *ordering* is
+        // deterministic). Sub-pixel drift is the whole point of the task: it is
+        // why the pipeline change needs a Golden rebaseline (F-043) rather than
+        // being byte-identical.
+        let path = write_distortion_and_vignetting_fixture("rowdrift");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            8192,
+            6144,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("combined-profile corrector must be built");
+
+        let measure = |width: usize| -> f64 {
+            let mut row = vec![(0.0, 0.0); width];
+            let mut reference = vec![(0.0, 0.0); width];
+            c.geometry_row(0.0, 3000.0, &mut row);
+            reference
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, slot)| *slot = c.geometry(i as f64, 3000.0));
+            max_coord_drift(&row, &reference)
+        };
+
+        // First column must be bit-identical to the per-pixel path.
+        {
+            let mut row = vec![(0.0, 0.0); 257];
+            c.geometry_row(0.0, 3000.0, &mut row);
+            let (rx, ry) = c.geometry(0.0, 3000.0);
+            assert_eq!(row[0].0, rx, "first-column x must be bit-identical");
+            assert_eq!(row[0].1, ry, "first-column y must be bit-identical");
+        }
+
+        let drift_257 = measure(257);
+        let drift_8192 = measure(8192);
+        // Documented reference magnitudes (~7.4e-4 @257, ≈0.75 @8192); gate
+        // with generous headroom that keeps the claim honest: @257 far below
+        // one pixel, @8192 (well beyond any 24 MP row) still sub-pixel.
+        assert!(
+            drift_257 <= 0.05,
+            "drift @257 must be a tiny fraction of a pixel (measured {drift_257})"
+        );
+        assert!(
+            drift_8192 < 1.0,
+            "drift @8192 must stay sub-pixel (measured {drift_8192})"
+        );
+        assert!(
+            drift_8192 >= drift_257,
+            "drift must grow with row width, got {drift_257} @257 vs {drift_8192} @8192"
+        );
+    }
+
+    #[test]
+    fn geometry_row_vignetting_only_profile_is_exact_identity() {
+        let path = write_vignetting_only_fixture("rowvignonly");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            400,
+            300,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("vignetting-only corrector must be built");
+        assert!(!c.has_distortion());
+        assert!(c.has_vignetting());
+
+        // The batch wrapper must never collapse the row onto (0, 0) — it keeps
+        // the exact identity mapping for every column (review REVIEW-LENSFUN-VIGN-1).
+        let mut row = vec![(0.0, 0.0); 400];
+        c.geometry_row(0.0, 42.0, &mut row);
+        for (i, (sx, sy)) in row.iter().enumerate() {
+            assert_eq!(*sx, i as f64, "x deviates at column {i}");
+            assert_eq!(*sy, 42.0, "y deviates at column {i}");
+        }
+    }
+
+    #[test]
+    fn apply_vignetting_row_first_column_matches_color_gain_and_brightens_corners() {
+        let path = write_distortion_and_vignetting_fixture("rowcolor");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            257,
+            200,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("combined-profile corrector must be built");
+
+        // A full row of flat gray; the bottom *short* row is enough (height=1
+        // batch), x spans the whole width.
+        const Y: f64 = 199.0;
+        let mut rgb = vec![100.0_f32; 257 * 3];
+        c.apply_vignetting_row(&mut rgb, 0.0, Y);
+
+        for x in 0..257 {
+            let r = rgb[x * 3];
+            let (crc, _, _) = c.color_gain(100.0, 100.0, 100.0, x as f64, Y);
+            if x == 0 {
+                assert_eq!(r, crc, "first column vignetting gain must be bit-identical");
+            } else {
+                assert!(
+                    (r - crc).abs() <= 1.0e-3,
+                    "column {x} vignetting drifts too much: row {r} vs per-pixel {crc}"
+                );
+            }
+        }
+
+        // Correction *flattens* the lens vignette (brightens the left edge vs
+        // the centre): the row path must stay a real vignetting correction.
+        let centre = rgb[128 * 3];
+        assert!(
+            rgb[0] > centre + 1e-3,
+            "left edge gain {} should brighten vs centre {centre}",
+            rgb[0]
+        );
+    }
+
+    #[test]
+    fn apply_vignetting_row_handles_empty_rows_and_keeps_gain_sane() {
+        // Guard paths: an empty row is a strict no-op (width == 0 guard), and
+        // the correction must keep every gain finite and positive rather than
+        // introducing NaNs or negative brightness.
+        let path = write_vignetting_only_fixture("rownoop");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            64,
+            64,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("vignetting-only corrector must be built");
+
+        // Zero-length row: pure no-op (also covers the width==0 guard).
+        c.apply_vignetting_row(&mut [], 0.0, 0.0);
+
+        // The correction is a multiplicative gain (flattens the falloff); every
+        // value in a processed row must stay strictly positive and finite.
+        let mut rgb = vec![100.0_f32; 64 * 3];
+        c.apply_vignetting_row(&mut rgb, 0.0, 0.0);
+        for value in rgb {
+            assert!(
+                value.is_finite() && value > 0.0,
+                "gain {value} must stay sane"
+            );
+        }
     }
 
     #[test]
