@@ -72,7 +72,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-01:
-15 offene Tasks — Block A: 12, Block B: 1, Block C: 2.
+14 offene Tasks — Block A: 11, Block B: 1, Block C: 2.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -125,15 +125,6 @@ GUI/User-Test ab.**
   Tests; vorbestehend), MCP-06 (downscale_bilinear gehört nach core),
   SIDECAR-ZDATA-WASM (zstd-sys blockiert workspace-weites wasm32-Gate —
   Capability-Entscheidung nötig).
-
-**Phase 2: Rezept, virtuelle Kopien und Migrationen**
-
-- [ ] **[PRIO: niedrig] F-019** (deferriert auf Post-MVP) CLI `migrate_sidecar`
-  (crates/lumina-cli/src/main.rs) auf `lumina_sidecar::migrate_sidecar_file`
-  umstellen (`.bak`-Backup + Lock); erst nach MVP relevant, da bis dahin keine
-  Migrationen laufen. Verifikations-Hinweis: Library-Teil ist verifiziert.
-  Ist-Stand 2026-08-25: CLI nutzt lokal `migrate_json` + `write_atomically`
-  ohne `.bak`/Lock (`--migrate`-Flag in import/develop/render/export/validate).
 
 **Phase 6: Persistente AI-Masken**
 
