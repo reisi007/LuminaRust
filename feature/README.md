@@ -56,6 +56,9 @@ Sidecars vollständig wiederherstellbar sein.
 
 - [`architecture/sidecar.md`](architecture/sidecar.md): Sidecar-Bundle,
   Manifest, Persistenz, Migration und Dateisicherheit
+- [`architecture/index.md`](architecture/index.md): optionale zentrale
+  Indizierung — minimaler Indexumfang, SQLite-Adapter, Rebuild/Locking,
+  Löschsicherheit (F-064–F-067)
 - [`architecture/pipeline.md`](architecture/pipeline.md): Renderpipeline,
   Versionen, Farbraum, Render-Keys, Cache-Invalidierung und
   Bearbeitungsregler F-089–F-099
@@ -68,6 +71,10 @@ Sidecars vollständig wiederherstellbar sein.
   Modellidentität, Status und lokale Anpassungen
 - [`product/export.md`](product/export.md): sRGB-, PNG-, JPEG- und WebP-Export,
   Bit-Tiefe, Qualität, Profile, Metadaten und Dithering (F-037)
+- [`product/generative-expand.md`](product/generative-expand.md): optionaler
+  generativer Modus „Entfernen + Erweitern“ — `GenerativeEdit`-Rezept-Stufe,
+  Modell/Prompt/Seed/Prüfsumme, Canvas-Koordinatensystem und Crop-Interaktion
+  (GEN-EXPAND-1)
 
 ### Plattformen
 
@@ -77,6 +84,11 @@ Sidecars vollständig wiederherstellbar sein.
 - [`platform/mcp-server.md`](platform/mcp-server.md): MCP AI-Agent-
   Schnittstelle für programmatischen Bildzugriff, Rezept-Bearbeitung und
   Schnellvorschau (F-101)
+- [`platform/capability-matrix.md`](platform/capability-matrix.md):
+  Capability-Matrix native CLI / Desktop / Browser (F-006, F-069–F-071)
+- [`platform/wasm-limits.md`](platform/wasm-limits.md): Browser-Dateiimport,
+  temporärer Speicher (OPFS), Exportmodell, ONNX im Browser und quantitative
+  Limits Bildgröße/Speicher/Threads/GPU (F-069–F-071)
 
 ### Qualität
 
@@ -126,6 +138,14 @@ Sidecars vollständig wiederherstellbar sein.
 | F-099 | Upright und Perspektive | [Pipeline](architecture/pipeline.md) | hoch |
 | F-100 | Lightroom-UI-Konventionen | [Plattformen](platform/cli-gui-wasm.md) | mittel |
 | F-101 | MCP AI-Agent-Schnittstelle | [MCP Server](platform/mcp-server.md) | mittel |
+| F-064 | Minimaler Indexumfang | [Index](architecture/index.md) | mittel |
+| F-065 | SQLite-Adapter (optional) | [Index](architecture/index.md) | mittel |
+| F-066 | Index-Rebuild/Locking/corrupt DB | [Index](architecture/index.md) | mittel |
+| F-067 | Index-Löschsicherheit | [Index](architecture/index.md) | mittel |
+| F-069 | Browser-Import/Speicher/Export | [WASM Limits](platform/wasm-limits.md) | hoch |
+| F-070 | ONNX im Browser | [WASM Limits](platform/wasm-limits.md) | hoch |
+| F-071 | Quantitative Plattform-Limits | [WASM Limits](platform/wasm-limits.md) | mittel |
+| GEN-EXPAND-1 | Generatives Entfernen + Erweitern | [Generative Expand](product/generative-expand.md) | hoch |
 
 ## Arbeitsweise
 

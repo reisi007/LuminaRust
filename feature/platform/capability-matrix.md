@@ -1,24 +1,28 @@
 # Capability-Matrix: native CLI / Desktop / Browser (WASM)
 
-**Feature:** F-006 Capability-Matrix (native CLI, Desktop, Browser)
+**Features:** F-006 Capability-Matrix (native CLI, Desktop, Browser),
+F-069 Browser-Dateiimport/Speicher/Export, F-070 ONNX im Browser, F-071
+quantitative Limits
 
 Diese Matrix dokumentiert plattformabhängige Fähigkeiten getrennt nach nativem
 CLI, nativer Desktop-GUI und Browser/WASM. Sie ist die verbindliche
-Ergänzung zu `cli-gui-wasm.md` und zur `docs/adr/`-Entscheidung zum RAW-Backend.
+Ergänzung zu `cli-gui-wasm.md`, zum SOLL für Browser-Import/Speicher/Export und
+ONNX (`feature/platform/wasm-limits.md`, F-069…F-071) und zur
+`docs/adr/`-Entscheidung zum RAW-Backend.
 
 | Fähigkeit | native CLI | Desktop (eframe) | Browser (WASM) |
 | --- | --- | --- | --- |
-| Raster (PNG/JPEG/WebP) laden | ja | ja | ja (Upload) |
+| Raster (PNG/JPEG/WebP) laden | ja | ja | ja (F-069: File-Picker; Drag-and-drop erst nach Async-Brücke) |
 | Raster entwickeln (Exposure/Kontrast/Highlights/Shadows) | ja | ja | ja (portabler Core) |
 | Vorschau / Histogramm | nein (Headless) | ja | geplant (portabler Core) |
 | RAW dekodieren (LibRaw, nativ) | **ja (MVP)** | **ja (MVP)** | **nein (post-MVP)** |
 | RAW-Datei per Pfad/Drag-and-Drop öffnen | ja | ja | nein (Upload, RAW offen) |
 | Auto-Tone / Match Total Exposure | ja | ja | ja (portabler Core) |
 | Virtuelle Kopien / Presets | ja | ja | gleiches Rezeptmodell (post-MVP UI) |
-| Sidecar schreiben (nativ, neben Original) | ja | ja | nein (Browser-Speichern offen) |
-| ONNX-Inferenz (BiRefNet/SAM2) | ja (MVP) | ja (MVP) | offen |
-| Persistente AI-Masken | post-MVP | post-MVP | offen |
-| Export (PNG/JPEG/WebP) | ja | ja | offen |
+| Sidecar schreiben (nativ, neben Original) | ja | ja | nein — temporärer Speicher OPFS (F-069) |
+| ONNX-Inferenz (BiRefNet/SAM2) | ja (MVP) | ja (MVP) | optional, off by default (F-070, Feature `onnx-wasm`) |
+| Persistente AI-Masken | post-MVP | post-MVP | post-MVP (OPFS-Artefakte, F-069/F-070) |
+| Export (PNG/JPEG/WebP) | ja | ja | ja — Download-/OPFS-Modell, byte-identisch (F-069) |
 | Optionale zentrale Indizierung (`lumina-index`) | post-MVP (optional) | post-MVP (optional) | offen |
 
 ## RAW im Browser (post-MVP, vorbereitet)
@@ -60,10 +64,27 @@ Ergänzung zu `cli-gui-wasm.md` und zur `docs/adr/`-Entscheidung zum RAW-Backend
 
 ## Offene Browser-Punkte
 
-- ONNX/Masken/Export im Browser sind explizit **offen** und werden vor Freigabe
-  einzeln als Capability bewertet und dokumentiert.
+- ONNX/Masken im Browser sind **optionale** Fähigkeiten (F-070, Feature
+  `onnx-wasm`, off by default) und werden vor Freigabe einzeln als Capability
+  bewertet und dokumentiert — auch Lizenz und Hash-Pin der Modelle (F-078).
+- Browser-Dateiimport, temporärer Speicher (OPFS), Exportmodell und
+  quantitative Limits sind als SOLL in `feature/platform/wasm-limits.md`
+  (F-069…F-071) festgelegt.
 - Die Capability-Anzeige im Browser muss RAW und die genannten Punkte klar als
-  nicht verfügbar ausweisen, solange sie nicht implementiert sind.
+  nicht verfügbar beziehungsweise (bei F-069/F-070) als erst nach expliziter
+  Aktivierung verfügbar ausweisen, solange sie nicht implementiert sind.
+
+## Quantitative Limits (F-071)
+
+Die detaillierten quantitativen Grenzen für Bildgröße, Speicher, Threads und
+GPU stehen in `feature/platform/wasm-limits.md` (F-071). Kurzfassung:
+
+| Limit | native CLI | Desktop (eframe/wgpu) | Browser (WASM) |
+| --- | --- | --- | --- |
+| Bildgröße (interaktiv vollauflösend) | nur RAM-begrenzt | ≤ 45 MP empfohlen | Soft-Limit 24 MP, darüber Preview-only |
+| RAM-Budget (`StageFrameCache`) | 512 MiB (implementiert) | 512 MiB (implementiert) | 48 MiB (implementiert), Arbeitsbudget ≤ 2 GiB |
+| VRAM-Pool | n. a. (Headless) | 1024 MiB, 4 Einträge (implementiert) | n. a. (kein `lumina-gpu`) |
+| Threads | Rayon (`available_parallelism`) | Worker-Threads | 1 Haupt-Thread; Worker nur mit SharedArrayBuffer (COOP/COEP) |
 
 ## ONNX-Adapter native-only (Capability-Entscheidung F-082-FOLLOWUP)
 
@@ -73,10 +94,15 @@ Ergänzung zu `cli-gui-wasm.md` und zur `docs/adr/`-Entscheidung zum RAW-Backend
   wasm32-unknown-unknown -p lumina-onnx` bleibt grün).
 - Das `onnx-rt`-Feature (echte `ort`-Runtime, Prebuilt-Binaries) darf für
   WASM-Ziele **nicht** aktiviert werden; `ort` ist eine native Abhängigkeit
-  und würde das workspace-weite wasm32-Gate brechen. Die Browser-Zeile in der
-  Matrix bleibt daher „offen" — die Fähigkeit existiert nativ, nicht im
-  Browser.
+  und würde das workspace-weite wasm32-Gate brechen. Die Browser-Fähigkeit
+  existiert nativ nicht im MVP; als Post-MVP-Option (F-070) ist ein eigener
+  WASM-Backend-Pfad (`onnx-wasm`, off by default) vorgesehen.
 - Backend-Auswahl ohne stillen Fallback: `lumina_onnx::try_load_onnx_engine`
   liefert `RuntimeDisabled` (Feature aus), `OnnxRuntime` (Feature an,
   Artefakt verifiziert) oder einen harten Fehler (fehlendes/stale/fehlbenanntes
   Artefakt) — nie einen stillen Stub-Ersatz.
+- **ONNX im Browser (F-070):** optionaler WASM-Backend-Pfad hinter eigenem
+  Feature (`onnx-wasm`), off by default, mit klarer Capability-Anzeige und
+  denselben Identitäts-/Veraltungsregeln (Modellname/-version/-hash); siehe
+  `feature/platform/wasm-limits.md`. `lumina-onnx` bleibt native-only und
+  wird im WASM-Build nicht aktiviert.
