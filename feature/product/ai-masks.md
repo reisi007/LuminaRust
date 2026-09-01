@@ -339,8 +339,8 @@ hash-gepinnte BiRefNet/SAM-2-`.onnx`-Fixtures benötigt (keine spontanen
 Downloads); das handgenerierte Testmodell dient ausschließlich der
 Verhaltensabsicherung der Backend-Pfade.
 
-**Status (F-082-FOLLOWUP, 2026-09-01):** ORT-Pfad erweitert, unabhängige
-Verifizierung steht aus.
+**Status (F-082-FOLLOWUP, 2026-09-01):** ORT-Pfad erweitert, CLI-Einbindung
+umgesetzt, unabhängige Verifizierung steht aus.
 
 - **Echter ORT-Pfad resolvable ohne stillen Fallback:** `lumina-onnx` bietet
   nun die Konsumenten-Fläche `try_load_onnx_engine` (in
@@ -360,12 +360,32 @@ Verifizierung steht aus.
   `include_bytes!`, prüfen den Pin, laden es via `OrtBackend` mit
   `model_hash` = Pin (`Verified`) und inferieren; ein Drift zwischen
   Encoder-Quelle und Fixture ist ein harter Testfehler.
-- **Offen (unverändert):** die CLI/GUI-Einbindung in den ORT-Pfad (die CLI
-  verdrahtet weiterhin den `StubBackend`) und die committeten, hash-gepinnten
-  **echten** Modellgewichte (BiRefNet/SAM-2, weiterhin
-  `pending-integration`). Die `MaskGraph`-Auswertung nutzt die modellbasierte
-  Segmentierung erst, wenn ein Modell verfügbar ist (kein stiller Fallback) —
-  als nächster Schritt nach der Resolver-Fläche.
+- **CLI-Einbindung in den ORT-Pfad (F-082-FOLLOWUP-Rest):** `lumina-cli`
+  verdrahtet die F-048/F-051-Entscheidungsschicht nun über
+  `resolve_mask_inference_engine` (Feature `onnx-rt`, neu in `lumina-cli`,
+  forwarded zu `lumina-onnx/onnx-rt`). Ohne `onnx-rt` bleibt der
+  deterministische `StubBackend` der Default-Draht (unverändert). Mit
+  `onnx-rt` wird die echte Engine **nur dann angefordert, wenn der Lauf
+  Re-Inferenz brauchen kann** (aktive Kopie trägt `mask_layers` — exakt die
+  Erreichbarkeit der Entscheidungsschicht; ein `--update-masks`-Refresh auf
+  einer maskenlosen Kopie fordert nichts an). Das Artefakt kommt aus der
+  Umgebungsvariable `LUMINA_MODEL_PATH`; ein unsetter Pfad, ein fehlendes,
+  stale oder fehlbenanntes Artefakt ist ein **harter CLI-Fehler**
+  (`MissingModel`/`ModelArtifactStale`/`InferenceFailed` durchgereicht), nie
+  ein stiller Stub-Ersatz. Tests: CLI-Suite grün mit und ohne `onnx-rt`
+  (47 Unit- + 14 E2E-Tests); unter `onnx-rt` erzeugen die Tests ein
+  deterministisches, BiRefNet-kompatibles Crafted-ONNX-Modell (`input`/
+  `output`, 1024×1024, ReduceMax) zur Laufzeit und belegen damit „echte
+  Engine geladen und inferiert", „fehlendes Artefakt → harter Fehler",
+  „Müll-Artefakt → harter Fehler" und „ohne Maskenarbeit kein Engine-Request".
+  Der Resolver-MissingModel-Fall bleibt unverändert ein Fehler
+  (`resolver_reports_missing_artifact_without_fallback`).
+- **Offen (unverändert):** die committeten, hash-gepinnten **echten**
+  Modellgewichte (BiRefNet/SAM-2, weiterhin `pending-integration`) sowie die
+  **GUI**-Einbindung in den ORT-Pfad. Die `MaskGraph`-Auswertung nutzt die
+  modellbasierte Segmentierung erst, wenn ein Modell verfügbar ist (kein
+  stiller Fallback) — als nächster Schritt nach der CLI-Fläche (F-082-Phase-2,
+  GUI-Capability-Anzeige).
 
 ## Abnahme
 

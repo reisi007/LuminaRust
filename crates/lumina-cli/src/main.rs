@@ -7,7 +7,19 @@ use lumina_core::{
     ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
     RenderOutput, SourceActionArtifact,
 };
-use lumina_onnx::{birefnet_manifest, StubBackend};
+// F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
+// `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
+// never a stub). The deterministic `StubBackend` stays the wiring default for
+// default builds (no `onnx-rt`); it is never substituted for a requested real
+// engine. `birefnet_manifest` is the model identity/contract both paths share.
+#[cfg(not(target_arch = "wasm32"))]
+use lumina_onnx::birefnet_manifest;
+#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+use lumina_onnx::try_load_onnx_engine;
+#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+use lumina_onnx::OnnxEngine;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "onnx-rt")))]
+use lumina_onnx::StubBackend;
 use lumina_raw::{RawError, RawMetadata};
 // F-098-N2: the Lensfun corrector types are only available under the `lensfun`
 // feature (the `native` FFI bindings and `liblensfun` linkage are active then).
@@ -1622,6 +1634,92 @@ fn sanitize_camera_white_balance(wb: [f32; 4]) -> Option<[f32; 4]> {
     }
 }
 
+/// Resolve the subject-mask inference engine the CLI wires into the F-048 /
+/// F-051 mask-loading decision layer (F-082-FOLLOWUP, real ORT path).
+///
+/// # Contract (no silent fallback)
+///
+/// The CLI **requests** the real ONNX engine only when the current run can
+/// actually require re-inference (`needs_inference`: the active copy carries
+/// reachable mask layers — the same reachability the F-048/F-051 decision
+/// layer uses, so a `--update-masks` refresh on a mask-less copy requests
+/// nothing). Without mask work no model is needed, so no engine is requested
+/// and there is nothing to fail on.
+///
+/// | Build | `needs_inference` | Result |
+/// | --- | --- | --- |
+/// | `onnx-rt` off (default) | any | `Some(StubBackend)` — the documented default wiring |
+/// | `onnx-rt` on | true, `LUMINA_MODEL_PATH` set, artifact loadable and identity-verified | `Some(OnnxRuntime)` — the real engine |
+/// | `onnx-rt` on | true, `LUMINA_MODEL_PATH` unset | hard `CliError` |
+/// | `onnx-rt` on | true, artifact missing / stale / mismatched / wrong tensor names | hard `CliError` carrying the resolver's `OnnxError` |
+/// | `onnx-rt` on | false | `Ok(None)` — no engine is requested |
+///
+/// The deterministic [`StubBackend`] is only ever wired in default builds:
+/// under `onnx-rt` a requested real engine is **never** downgraded to the stub
+/// (Agents.md: „Fehlende oder inkompatible Artefakte werden sichtbar als
+/// veraltet oder nicht verfügbar gemeldet"; ai-masks.md F-082-FOLLOWUP).
+#[cfg(target_arch = "wasm32")]
+fn resolve_mask_inference_engine(
+    _needs_inference: bool,
+) -> Result<Option<Box<dyn MaskInference>>, CliError> {
+    Ok(None)
+}
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "onnx-rt")))]
+fn resolve_mask_inference_engine(
+    _needs_inference: bool,
+) -> Result<Option<Box<dyn MaskInference>>, CliError> {
+    // Default build: the deterministic, dependency-free stub backend is the
+    // documented default wiring (unchanged behavior).
+    match StubBackend::new(birefnet_manifest()) {
+        Ok(stub) => Ok(Some(Box::new(stub))),
+        Err(_) => Ok(None),
+    }
+}
+#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+fn resolve_mask_inference_engine(
+    needs_inference: bool,
+) -> Result<Option<Box<dyn MaskInference>>, CliError> {
+    if !needs_inference {
+        return Ok(None);
+    }
+    let model_path = std::env::var_os("LUMINA_MODEL_PATH").ok_or_else(|| {
+        CliError::Message(
+            "`onnx-rt` is compiled into this build and the run requires mask \
+             re-inference, but `LUMINA_MODEL_PATH` is not set; the real ONNX engine \
+             is unavailable and the deterministic stub is never a silent substitute \
+             (F-082-FOLLOWUP)"
+                .into(),
+        )
+    })?;
+    resolve_onnx_engine_from_path(Path::new(&model_path))
+}
+
+/// Resolve the real ONNX engine from an explicit artifact path (F-082-FOLLOWUP).
+///
+/// Path-parameterized so the onnx-rt wiring semantics are testable without
+/// touching the process-global `LUMINA_MODEL_PATH` (and thereby racing other
+/// render tests). The BiRefNet [`ModelManifest`](lumina_onnx::ModelManifest) is
+/// the identity/IO contract; the resolver reports `RuntimeDisabled` (feature
+/// off — impossible here), `OnnxRuntime` (artifact verified) or a hard
+/// [`OnnxError`](lumina_onnx::OnnxError): a missing/stale/mismatched artifact is
+/// a loud error, never a silent stub.
+#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+fn resolve_onnx_engine_from_path(
+    model_path: &Path,
+) -> Result<Option<Box<dyn MaskInference>>, CliError> {
+    match try_load_onnx_engine(model_path, &birefnet_manifest()) {
+        Ok(OnnxEngine::OnnxRuntime(engine)) => Ok(Some(engine)),
+        Ok(OnnxEngine::RuntimeDisabled) => unreachable!(
+            "`try_load_onnx_engine` must return `OnnxRuntime` when `onnx-rt` is compiled in"
+        ),
+        Err(error) => Err(CliError::Message(format!(
+            "the real ONNX engine could not be loaded from `{}`: {error} \
+             (no silent fallback to the deterministic stub)",
+            model_path.display()
+        ))),
+    }
+}
+
 fn process_selected(
     args: ProcessArgs,
     quality: u8,
@@ -1775,18 +1873,28 @@ fn process_selected(
     let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
     let loaded_planes = load_persisted_mask_planes(&document, &zdata_path, mask_warnings_out);
 
-    // Wire the ONNX adapter (StubBackend / BiRefNet descriptor) when available.
-    // `None` means no inference engine is installed at all (F-051: the decision
-    // layer then relies on cached artifacts or fails clearly).
-    let manifest = birefnet_manifest();
-    let backend = StubBackend::new(manifest.clone()).ok();
-    let (inference, model_identity) = match &backend {
-        Some(backend) => (
-            Some(backend as &dyn MaskInference),
-            Some(manifest.to_model_identity()),
-        ),
-        None => (None, None),
-    };
+    // F-082-FOLLOWUP: wire the ONNX inference engine into the F-048/F-051
+    // decision layer. Default builds wire the deterministic StubBackend; with
+    // `onnx-rt` the real engine is requested whenever this run can require
+    // re-inference — mirroring the decision layer's reachability, that is
+    // exactly when the active copy carries mask layers (a `--update-masks`
+    // refresh on a mask-less copy re-infers nothing). A missing/stale/
+    // unconfigurable request fails HARD — the stub is never silently
+    // substituted (see `resolve_mask_inference_engine`). Runs without mask
+    // work request no engine at all.
+    #[cfg(not(target_arch = "wasm32"))]
+    let can_need_inference = !document.virtual_copies[copy_index].mask_layers.is_empty();
+    #[cfg(not(target_arch = "wasm32"))]
+    let engine = resolve_mask_inference_engine(can_need_inference)?;
+    #[cfg(target_arch = "wasm32")]
+    let engine: Option<Box<dyn MaskInference>> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let model_identity = engine
+        .is_some()
+        .then(|| birefnet_manifest().to_model_identity());
+    #[cfg(target_arch = "wasm32")]
+    let model_identity: Option<lumina_sidecar::ModelIdentity> = None;
+    let inference = engine.as_deref();
 
     let resolved = resolve_mask_planes(
         MaskLoadContext {
@@ -2373,6 +2481,174 @@ impl StagedArtifact {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------
+    // F-082-FOLLOWUP — onnx-rt wiring test support.
+    //
+    // The process-level mask tests below all start in
+    // `write_sidecar_with_valid_layer`, which triggers the CLI's inference
+    // wiring gate. Under `onnx-rt` those renders request the REAL engine, so
+    // `LUMINA_MODEL_PATH` must point at a loadable AND runnable artifact. The
+    // deterministic BiRefNet-compatible crafted model below is generated at
+    // test runtime (no committed binary, no downloads — mirroring
+    // `crates/lumina-onnx/tests/ort_backend.rs`), so the whole CLI suite stays
+    // green with and without the feature.
+    // ------------------------------------------------------------------
+
+    /// Proto3 varint (mirrors `lumina-onnx/tests/ort_backend.rs`).
+    #[cfg(feature = "onnx-rt")]
+    fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                break;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    #[cfg(feature = "onnx-rt")]
+    fn push_tag(out: &mut Vec<u8>, field: u32, wire_type: u64) {
+        push_varint(out, ((field as u64) << 3) | wire_type);
+    }
+
+    #[cfg(feature = "onnx-rt")]
+    fn push_len_delimited(out: &mut Vec<u8>, field: u32, payload: &[u8]) {
+        push_tag(out, field, 2);
+        push_varint(out, payload.len() as u64);
+        out.extend_from_slice(payload);
+    }
+
+    #[cfg(feature = "onnx-rt")]
+    fn push_string(out: &mut Vec<u8>, field: u32, value: &str) {
+        push_len_delimited(out, field, value.as_bytes());
+    }
+
+    #[cfg(feature = "onnx-rt")]
+    fn push_varint_field(out: &mut Vec<u8>, field: u32, value: u64) {
+        push_tag(out, field, 0);
+        push_varint(out, value);
+    }
+
+    /// `TensorShapeProto.dim` (`dim_value`), `TypeProto.Tensor`,
+    /// `ValueInfoProto` and `AttributeProto` encodings for the crafted graph.
+    #[cfg(feature = "onnx-rt")]
+    fn shape_proto(dims: &[i64]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for dim in dims {
+            let mut entry = Vec::new();
+            push_varint_field(&mut entry, 1, *dim as u64);
+            push_len_delimited(&mut out, 1, &entry);
+        }
+        out
+    }
+
+    #[cfg(feature = "onnx-rt")]
+    fn value_info(name: &str, dims: &[i64]) -> Vec<u8> {
+        let mut tensor = Vec::new();
+        push_varint_field(&mut tensor, 1, 1); // FLOAT
+        push_len_delimited(&mut tensor, 2, &shape_proto(dims));
+        let mut type_info = Vec::new();
+        push_len_delimited(&mut type_info, 1, &tensor);
+        let mut out = Vec::new();
+        push_string(&mut out, 1, name);
+        push_len_delimited(&mut out, 2, &type_info);
+        out
+    }
+
+    #[cfg(feature = "onnx-rt")]
+    fn reduce_max_node(input: &str, output: &str) -> Vec<u8> {
+        // ReduceMax(axes=[1], keepdims=1), attributes-based (opset ≤ 17).
+        let mut axes = Vec::new();
+        push_string(&mut axes, 1, "axes");
+        push_varint_field(&mut axes, 20, 7); // AttributeType::INTS
+        let mut packed_axes = Vec::new();
+        push_varint(&mut packed_axes, 1);
+        push_len_delimited(&mut axes, 8, &packed_axes);
+
+        let mut keepdims = Vec::new();
+        push_string(&mut keepdims, 1, "keepdims");
+        push_varint_field(&mut keepdims, 20, 2); // AttributeType::INT
+        push_varint_field(&mut keepdims, 3, 1); // keepdims = true
+
+        let mut out = Vec::new();
+        push_string(&mut out, 1, input);
+        push_string(&mut out, 2, output);
+        push_string(&mut out, 4, "ReduceMax");
+        push_len_delimited(&mut out, 5, &axes);
+        push_len_delimited(&mut out, 5, &keepdims);
+        out
+    }
+
+    /// Deterministic bytes of a **BiRefNet-compatible** crafted ONNX graph:
+    /// `input [1,3,1024,1024] → ReduceMax(axes=[1], keepdims=1) →
+    /// output [1,1,1024,1024]` (ir_version 8 / opset 13). Same structure as
+    /// the committed `lumina-crafted-reducemax.onnx` behavior fixture, but with
+    /// the BiRefNet manifest's tensor names (`input`/`output`) and inference
+    /// resolution, so `lumina_onnx::OrtBackend` driven by `birefnet_manifest()`
+    /// can load **and run** it — the CLI's `onnx-rt` wiring gets a real engine
+    /// in tests without a committed binary or a download. `ReduceMax` over the
+    /// channel axis on a uniform frame yields a deterministic uniform matte
+    /// (the lumina-onnx fixture test proves the same graph family under ORT).
+    #[cfg(feature = "onnx-rt")]
+    fn birefnet_compatible_onnx_bytes() -> Vec<u8> {
+        const INPUT: &str = "input";
+        const OUTPUT: &str = "output";
+        const W: i64 = lumina_onnx::BIREFNET_INFERENCE_WIDTH as i64;
+        const H: i64 = lumina_onnx::BIREFNET_INFERENCE_HEIGHT as i64;
+
+        let mut opset = Vec::new();
+        push_varint_field(&mut opset, 2, 13); // OperatorSetIdProto { version: 13 }
+
+        let mut graph = Vec::new();
+        push_len_delimited(&mut graph, 1, &reduce_max_node(INPUT, OUTPUT));
+        push_string(&mut graph, 2, "lumina-cli-crafted-birefnet-compatible");
+        push_len_delimited(&mut graph, 11, &value_info(INPUT, &[1, 3, H, W]));
+        push_len_delimited(&mut graph, 12, &value_info(OUTPUT, &[1, 1, H, W]));
+
+        let mut out = Vec::new();
+        push_varint_field(&mut out, 1, 8); // ir_version 8
+        push_len_delimited(&mut out, 7, &graph); // graph
+        push_len_delimited(&mut out, 8, &opset); // opset_import
+        out
+    }
+
+    /// Path to a persistent BiRefNet-compatible ONNX test model (created once
+    /// per process). The backing temp directory is deliberately leaked so the
+    /// artifact stays alive for the whole test process.
+    #[cfg(feature = "onnx-rt")]
+    fn onnx_test_fixture_path() -> PathBuf {
+        use std::sync::OnceLock;
+        static FIXTURE_DIR: OnceLock<PathBuf> = OnceLock::new();
+        let dir = FIXTURE_DIR.get_or_init(|| {
+            let directory = tempfile::tempdir().expect("test fixture tempdir must be creatable");
+            let path = directory.path().to_path_buf();
+            // Test-only leak: the directory (and the fixture file below) must
+            // survive for the entire test process.
+            std::mem::forget(directory);
+            path
+        });
+        let fixture = dir.join("lumina-birefnet-compatible.onnx");
+        if !fixture.exists() {
+            fs::write(&fixture, birefnet_compatible_onnx_bytes())
+                .expect("test ONNX fixture must be writable");
+        }
+        fixture
+    }
+
+    /// Ensures `LUMINA_MODEL_PATH` points at the runnable BiRefNet-compatible
+    /// test model. Every env mutation in the suite writes the **same** value
+    /// (idempotent), so parallel render tests never observe a broken path. The
+    /// wiring-semantics tests use the path-parameterized
+    /// `resolve_onnx_engine_from_path` and do NOT touch the env var at all.
+    #[cfg(feature = "onnx-rt")]
+    fn ensure_onnx_test_engine() {
+        if std::env::var_os("LUMINA_MODEL_PATH").is_none() {
+            std::env::set_var("LUMINA_MODEL_PATH", onnx_test_fixture_path());
+        }
+    }
 
     /// F-101-F1 smoke test: the `lumina mcp` subcommand delegates to the
     /// shared `lumina_mcp` server pipeline; assert the handshake and the full
@@ -3019,6 +3295,12 @@ mod tests {
         bytes: &[u8],
         frame: &ImageFrame,
     ) -> lumina_sidecar::SidecarDocument {
+        // F-082-FOLLOWUP: every mask-work render reaches the CLI inference
+        // wiring gate; under `onnx-rt` this configures the real-engine test
+        // model so the render exercises the ORT path instead of hard-failing
+        // on an unset `LUMINA_MODEL_PATH` (default builds stay on the stub).
+        #[cfg(feature = "onnx-rt")]
+        ensure_onnx_test_engine();
         let identity = source_identity(input, bytes, frame, None).unwrap();
         let mut document = SidecarDocument::new(identity.clone(), "raster-mvp-1");
         let copy = &mut document.virtual_copies[0];
@@ -3045,6 +3327,106 @@ mod tests {
         }];
         save_sidecar(&sidecar_path_for(input), &document).unwrap();
         document
+    }
+
+    // ---- F-082-FOLLOWUP: onnx-rt wiring semantics ----
+
+    /// Default build: the deterministic StubBackend is the wiring default,
+    /// independent of the mask-work gate.
+    #[cfg(not(feature = "onnx-rt"))]
+    #[test]
+    fn default_build_wires_deterministic_stub_regardless_of_gate() {
+        let engine = resolve_mask_inference_engine(true).expect("stub must resolve");
+        let engine = engine.expect("default build must wire the stub");
+        assert!(engine.is_available());
+        let frame = ImageFrame::new(4, 4, vec![10u8; 4 * 4 * 4]).unwrap();
+        let plane = engine.infer(&frame).expect("stub must infer");
+        assert_eq!((plane.width, plane.height), (4, 4));
+        assert_eq!(plane.values.len(), 16);
+
+        // The gate flag is irrelevant without `onnx-rt`: the stub is the
+        // default even when the run could not request inference.
+        assert!(resolve_mask_inference_engine(false)
+            .expect("stub must resolve")
+            .is_some());
+    }
+
+    /// `onnx-rt`: a loadable, identity-compatible artifact wires the REAL
+    /// engine (not the stub), and the engine actually infers a matte.
+    #[cfg(feature = "onnx-rt")]
+    #[test]
+    fn onnx_rt_resolves_real_engine_from_working_artifact() {
+        let engine = resolve_onnx_engine_from_path(&onnx_test_fixture_path())
+            .expect("real engine must load")
+            .expect("real engine must be wired");
+        assert!(engine.is_available());
+        let frame = ImageFrame::new(4, 4, vec![120u8; 4 * 4 * 4]).unwrap();
+        // The crafted ReduceMax graph emits a deterministic, uniform matte on a
+        // uniform frame (same contract as the lumina-onnx fixture tests).
+        let plane = engine.infer(&frame).expect("real engine must infer");
+        assert_eq!((plane.width, plane.height), (4, 4));
+        let first = plane.values[0];
+        assert!(
+            plane.values.iter().all(|value| *value == first),
+            "uniform frame must yield a uniform matte from the real engine"
+        );
+    }
+
+    /// `onnx-rt`: the full env-var path (`resolve_mask_inference_engine(true)`)
+    /// wires the real engine when `LUMINA_MODEL_PATH` is the runnable test
+    /// model. All env mutations in the suite write the identical value, so this
+    /// cannot race other render tests.
+    #[cfg(feature = "onnx-rt")]
+    #[test]
+    fn onnx_rt_full_resolve_uses_real_engine_from_env() {
+        std::env::set_var("LUMINA_MODEL_PATH", onnx_test_fixture_path());
+        let engine = resolve_mask_inference_engine(true)
+            .expect("configured onnx-rt resolve must succeed")
+            .expect("real engine must be wired");
+        assert!(engine.is_available());
+        let frame = ImageFrame::new(2, 2, vec![90u8; 2 * 2 * 4]).unwrap();
+        let plane = engine.infer(&frame).expect("real engine must infer");
+        assert_eq!((plane.width, plane.height), (2, 2));
+    }
+
+    /// `onnx-rt`: a missing artifact is a HARD error carrying the resolver's
+    /// `MissingModel` text — never a stub masquerading as a real engine.
+    #[cfg(feature = "onnx-rt")]
+    #[test]
+    fn onnx_rt_missing_artifact_is_hard_error_never_stub() {
+        let error = resolve_onnx_engine_from_path(Path::new("/nonexistent/lumina-model.onnx"))
+            .err()
+            .expect("missing artifact must fail; an engine must never be returned");
+        let text = error.to_string();
+        assert!(text.contains("is not available"), "{text}");
+        assert!(text.contains("no silent fallback"), "{text}");
+    }
+
+    /// `onnx-rt`: a present-but-useless (garbage) artifact is a HARD error,
+    /// never silently replaced by the stub.
+    #[cfg(feature = "onnx-rt")]
+    #[test]
+    fn onnx_rt_garbage_artifact_is_hard_error_never_stub() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("garbage.onnx");
+        fs::write(&path, b"not an onnx model").unwrap();
+        let error = resolve_onnx_engine_from_path(&path)
+            .err()
+            .expect("garbage must fail; an engine must never be returned");
+        assert!(error.to_string().contains("no silent fallback"), "{error}");
+    }
+
+    /// `onnx-rt`: without mask work no engine is requested (the gate), so
+    /// nothing is loaded and nothing fails.
+    #[cfg(feature = "onnx-rt")]
+    #[test]
+    fn onnx_rt_no_mask_work_requests_no_engine() {
+        assert!(
+            resolve_mask_inference_engine(false)
+                .expect("no request must not fail")
+                .is_none(),
+            "without mask work the CLI must not request any engine"
+        );
     }
 
     #[test]

@@ -21,6 +21,116 @@ pub use zdata::{
     RepairRegionArtifact, ZDataContainer, ZDataError,
 };
 
+// WASM stub for zdata (native-only via zstd-sys, but consumers still import symbols).
+// On wasm32 the codec is unavailable — callers treat zdata as not available/unverifiable.
+#[cfg(all(feature = "zdata", target_arch = "wasm32"))]
+mod zdata_wasm_stub {
+    use super::{Path, PathBuf};
+    use std::vec::Vec;
+    #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+    pub enum ZDataError {
+        #[error("zdata is truncated or malformed: {0}")]
+        Invalid(String),
+        #[error("unsupported zdata format version {0}")]
+        UnsupportedVersion(u16),
+        #[error("zdata I/O failed while {operation} `{path}`: {message}")]
+        Io {
+            operation: String,
+            path: String,
+            message: String,
+        },
+        #[error("zdata checksum mismatch for tile `{0}`")]
+        Checksum(String),
+        #[error("duplicate zdata tile id `{0}`")]
+        DuplicateId(String),
+    }
+    #[derive(Debug, Clone)]
+    pub struct MaskTile {
+        pub id: String,
+        pub tile_x: u32,
+        pub tile_y: u32,
+        pub width: u32,
+        pub height: u32,
+        pub values: Vec<u16>,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RecordKind {
+        MaskTile = 0,
+        RepairRegion = 1,
+    }
+    #[derive(Debug, Clone)]
+    pub struct RepairRegionArtifact {
+        pub id: String,
+        pub width: u32,
+        pub height: u32,
+        pub region: Vec<u16>,
+        pub replacement: Vec<u8>,
+    }
+    #[derive(Debug, Clone)]
+    pub struct ZDataContainer;
+    impl ZDataContainer {
+        pub fn repair_region(&self, _id: &str) -> Result<RepairRegionArtifact, ZDataError> {
+            Err(ZDataError::Io {
+                operation: "repair_region".into(),
+                path: "".into(),
+                message: "zdata not available on wasm32".into(),
+            })
+        }
+        pub fn tile(&self, _id: &str, _x: u32, _y: u32) -> Result<MaskTile, ZDataError> {
+            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
+        }
+    }
+    impl RepairRegionArtifact {
+        pub fn checksum(&self) -> String {
+            String::new()
+        }
+        pub fn validate(&self) -> Result<(), ZDataError> {
+            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
+        }
+    }
+    impl MaskTile {
+        pub fn validate(&self) -> Result<(), ZDataError> {
+            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
+        }
+    }
+    pub fn zdata_path_for(source: &Path) -> PathBuf {
+        let filename = source
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+        source.with_file_name(format!("{filename}.lumina.zdata"))
+    }
+    pub fn load_zdata(path: &Path) -> Result<ZDataContainer, ZDataError> {
+        Err(ZDataError::Io {
+            operation: "load zdata".into(),
+            path: path.display().to_string(),
+            message: "zdata not available on wasm32".into(),
+        })
+    }
+    pub fn save_zdata(path: &Path, _container: &ZDataContainer) -> Result<(), ZDataError> {
+        Err(ZDataError::Io {
+            operation: "save zdata".into(),
+            path: path.display().to_string(),
+            message: "zdata not available on wasm32".into(),
+        })
+    }
+    pub fn append_repair_region(
+        _zdata_path: &Path,
+        _region: crate::RepairRegionArtifact,
+    ) -> Result<(), ZDataError> {
+        Err(ZDataError::Io {
+            operation: "append repair region".into(),
+            path: _zdata_path.display().to_string(),
+            message: "zdata not available on wasm32".into(),
+        })
+    }
+}
+#[cfg(all(feature = "zdata", target_arch = "wasm32"))]
+pub use zdata_wasm_stub::{
+    append_repair_region, load_zdata, save_zdata, zdata_path_for, MaskTile, RecordKind,
+    RepairRegionArtifact, ZDataContainer,
+};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
 

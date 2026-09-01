@@ -99,6 +99,17 @@ Masken-Neuberechnung und Render-Cache werden explizit angeboten.
   `reindex` beendet mit Exit ≠ 0 bei korrupten Sidecars; `import` prüft
   Content-Hash gegen ein bestehendes Sidecar; Verzeichnis-Walks sind
   symlink-/loopsicher.
+- **ONNX-Runtime-Einbindung (F-082-FOLLOWUP-Rest):** Mit dem CLI-Feature
+  `onnx-rt` (forwarded zu `lumina-onnx/onnx-rt`) fragt die CLI die echte
+  ONNX-Engine über `lumina_onnx::resolve::try_load_onnx_engine` an, sobald
+  ein Renderlauf Re-Inferenz brauchen kann (aktive Kopie trägt `mask_layers`);
+  das `.onnx`-Artefakt wird über `LUMINA_MODEL_PATH` konfiguriert. Ein
+  fehlendes/stale/unbenanntes Artefakt ist ein harter Fehler (`MissingModel` /
+  `ModelArtifactStale` / `InferenceFailed`) — nie ein stiller Fallback auf den
+  deterministischen `StubBackend`, der ohne `onnx-rt` der unveränderte Default
+  bleibt. Die onnx-rt-CLI-Suite läuft dagegen mit einem bei Testzeit
+  generierten, BiRefNet-kompatiblen Crafted-ONNX-Modell grün (keine
+  Downloads, keine committeten Gewichte).
 
 **Umgesetzter Stand (Review-R2-CLI-Fixes, 2026-08-26):**
 

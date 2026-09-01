@@ -16,6 +16,7 @@ pub mod mask_tiles;
 pub mod masks;
 pub mod memory;
 pub mod pipeline;
+pub mod preview_cache;
 pub mod render;
 pub mod stage_cache;
 pub mod tone;
@@ -40,6 +41,12 @@ pub use mask_modulation::modulate_mask_plane;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use memory::{MemoryBudget, MemoryBudgetError};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
+#[cfg(not(target_arch = "wasm32"))]
+pub use preview_cache::PreviewDiskCache;
+pub use preview_cache::{
+    decode_webp, encode_webp_lossless, prefetch_window, LruPreviewCache, PrefetchSlot,
+    PreviewEncode, PreviewKey, PreviewKind,
+};
 pub use render::{
     prepare_source_base, render_frame, render_frame_from_base, LensfunCorrectorRef, MaskContext,
     MaskLayerResult, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, StageWork,

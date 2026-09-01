@@ -55,3 +55,15 @@ web-sys = { version = "0.3", features = ["console", "Document", "HtmlCanvasEleme
 tempfile = "3"
 # F-103-N9: headless UI snapshot regression tests via egui_kittest.
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
+# PREVIEW-CACHE-FEATURE (F-074): Criterion bench for the hybrid neighbor preview
+# cache primitives (WebP hit/miss, RAM-LRU hit, prefetch-window planning). The
+# harness is a native-only target (`harness = false`); wasm CI checks only the
+# lib target (`--no-default-features`, no `--all-targets`), so this never
+# contaminates the wasm-checked path (ADR 0003 spirit — see
+# feature/quality/preview-cache.md, Akzeptanzkriterium 8).
+criterion = "0.8"
+
+[[bench]]
+name = "preview_cache"
+harness = false
+path = "benches/preview_cache.rs"

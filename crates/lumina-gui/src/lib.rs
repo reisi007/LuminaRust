@@ -11,6 +11,10 @@ mod i18n;
 // capability; wasm32 keeps the in-memory create/apply flow only.
 #[cfg(not(target_arch = "wasm32"))]
 mod presets;
+// PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk
+// LRU) is a native capability (background threads + native file IO).
+#[cfg(not(target_arch = "wasm32"))]
+mod preview_ctrl;
 mod slider;
 mod theme;
 #[cfg(not(target_arch = "wasm32"))]
@@ -619,6 +623,17 @@ pub struct LuminaApp {
     frame_thumb_enqueued: usize,
     #[cfg(not(target_arch = "wasm32"))]
     frame_thumbs_ready: usize,
+    /// PREVIEW-CACHE-FEATURE: neighbor-preview controller (worker pool + RAM/disk
+    /// LRU + prefetch window). Lazy-created on first navigation so unit tests
+    /// that never schedule neighbors stay thread-free.
+    #[cfg(not(target_arch = "wasm32"))]
+    preview_ctrl: Option<preview_ctrl::PreviewController>,
+    /// PREVIEW-CACHE-FEATURE: per-frame counters for the neighbor-preview work
+    /// (LUMINA_PERF_LOG diagnostics).
+    #[cfg(not(target_arch = "wasm32"))]
+    frame_previews_enqueued: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    frame_previews_ready: usize,
 }
 
 /// GUI-WGPU-PRESENT-1: offscreen present target + its egui registration.
@@ -969,6 +984,14 @@ impl LuminaApp {
             frame_thumb_enqueued: 0,
             #[cfg(not(target_arch = "wasm32"))]
             frame_thumbs_ready: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            // PREVIEW-CACHE-FEATURE: lazy — no worker pool until the first
+            // neighbor prefetch (keeps headless tests thread-free).
+            preview_ctrl: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            frame_previews_enqueued: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            frame_previews_ready: 0,
         }
     }
 
@@ -1021,6 +1044,14 @@ impl LuminaApp {
         // they neither resurface nor accumulate unboundedly across a session.
         self.thumbnails
             .ensure_directory(&directory.to_string_lossy());
+        // PREVIEW-CACHE-FEATURE: a *directory change* invalidates the neighbor
+        // cache state (RAM LRU, in-flight, failures) — stale entries of another
+        // folder must neither resurface nor ever be shown. Relisting the same
+        // directory during navigation keeps the warm LRU so a change-of-active
+        // is served as an instant cache hit (A1).
+        if let Some(ctrl) = self.preview_ctrl.as_mut() {
+            ctrl.ensure_directory(self.directory.trim());
+        }
         self.entries.clear();
         match std::fs::read_dir(&directory) {
             Ok(dir_entries) => {
@@ -2408,6 +2439,16 @@ impl LuminaApp {
         self.zoom_mode = mode;
         self.preview_pan = egui::Vec2::ZERO;
         self.mark_dirty();
+        // PREVIEW-CACHE-FEATURE (A6): a zoom-mode change to 1:1 (or back to Fit)
+        // changes the neighbor preview kind/resolution; the current source's
+        // cached neighbors no longer match the new key, so the +4/−2 window is
+        // re-planned at the new resolution. Only native (the neighbor cache is a
+        // native capability); no-op while nothing is loaded.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.path.is_empty() && self.original.is_some() {
+            let active = self.path.clone();
+            self.schedule_neighbor_previews(&active);
+        }
     }
 
     /// Scroll-wheel / keyboard continuous zoom (relative-to-fit multiplier).
@@ -3144,6 +3185,13 @@ impl LuminaApp {
                 .and_then(|n| n.to_str())
                 .unwrap_or("image")
         );
+        // PREVIEW-CACHE-FEATURE (A1/A4): if the target being navigated to was
+        // already prepared as a neighbor preview (change-of-active, same session
+        // or earlier prefetch), paint it immediately — RAM-LRU or disk hit —
+        // so the first frame shows no decode/render wait. The full-resolution
+        // decode below still runs in the background and `finish_decode` replaces
+        // this with the full render; a miss keeps the standard loading path.
+        self.paint_cached_neighbor_preview(&path);
         let (tx, rx) = std::sync::mpsc::channel();
         self.decode_rx = Some(rx);
         std::thread::spawn(move || {
@@ -3203,6 +3251,10 @@ impl LuminaApp {
         match result {
             Ok(frame) => {
                 self.path = frame.path.clone();
+                // PREVIEW-CACHE-FEATURE: the active image just changed — plan
+                // the +4/−2 neighbor window around it (lazy, on workers).
+                let active_path = self.path.clone();
+                self.schedule_neighbor_previews(&active_path);
                 self.apply_decoded_frame(
                     &frame.frame,
                     frame.orientation,
@@ -3304,6 +3356,173 @@ impl LuminaApp {
                 self.decode_rx = None;
             }
         }
+    }
+
+    // ---- PREVIEW-CACHE-FEATURE: neighbor-preview prefetch (native) ----
+    //
+    // The active image is always the full GPU/CPU texture; the neighbors in the
+    // +4/−2 window are prepared as WebP previews on background workers and kept
+    // in a RAM LRU + disk tier (see `feature/quality/preview-cache.md` and the
+    // `lumina_core::preview_cache` primitives). A miss is a *visible*
+    // preparation state, never a silently wrong/upscaled fallback.
+
+    /// Drain completed neighbor-preview results and request a repaint when work
+    /// arrived. Non-blocking; called every frame from `update`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_neighbor_previews(&mut self, ctx: &egui::Context) {
+        let Some(ctrl) = self.preview_ctrl.as_mut() else {
+            return;
+        };
+        let before = ctrl.lru().len();
+        ctrl.poll();
+        let ready = ctrl.lru().len().saturating_sub(before);
+        self.frame_previews_ready += ready;
+        // PREVIEW-CACHE-FEATURE: worker failures are never swallowed — they are
+        // surfaced visibly (the neighbor-preview cell UI shows them via the
+        // probe → message mapping) and logged here for the current slice.
+        let mut failure_count = 0;
+        for (probe, message) in ctrl.drain_failures() {
+            warn!("neighbor preview failed for {probe}: {message}");
+            failure_count += 1;
+        }
+        // A2: a ready frame or a (visible) failure changes per-cell badges — the
+        // next frame must redraw the navigator cells.
+        if ready > 0 || failure_count > 0 {
+            ctx.request_repaint();
+        }
+    }
+
+    /// Plan and enqueue the asymmetric +4/−2 neighbor-preview window around the
+    /// currently active image `active_path`. The worker pool is spawned lazily
+    /// on first navigation so headless tests stay thread-free. The authoritative
+    /// state of each neighbor (content hash, sidecar recipe) is resolved inside
+    /// the workers, never on the UI thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn schedule_neighbor_previews(&mut self, active_path: &str) -> usize {
+        if self.entries.is_empty() {
+            return 0;
+        }
+        let canonical = Path::new(active_path)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(active_path))
+            .to_string_lossy()
+            .into_owned();
+        let Some(active) = self.entries.iter().position(|e| e.thumb_key == canonical) else {
+            return 0;
+        };
+        // Pre-build arrays before touching `preview_ctrl` so the borrows stay
+        // disjoint (no `self` field overlap in the borrow checker).
+        let probe_ids: Vec<String> = self.entries.iter().map(|e| e.thumb_key.clone()).collect();
+        let sources: Vec<PathBuf> = self.entries.iter().map(|e| e.path.clone()).collect();
+        let names: Vec<String> = self.entries.iter().map(|e| e.name.clone()).collect();
+        let preview_ctrl = self.preview_ctrl.get_or_insert_with(|| {
+            // Pool clamped to a small dedicated size (the SOLL mandates a fixed
+            // small pool; thumbnails keep their own pool). The disk tier is
+            // rooted per-job at the source's own `.lumina/previews` folder.
+            let pool_size = thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .clamp(2, 4);
+            let (ctrl, _queue) = preview_ctrl::PreviewController::spawn(pool_size);
+            ctrl
+        });
+        // A6: inherit the folder / display option — a 1:1 zoom plans neighbors
+        // at 1:1 resolution, otherwise the (default) Screen preview is used.
+        // The worker keeps the decoded frame at full resolution for `OneToOne`
+        // (no downscaling), so the target here only drives the Screen path.
+        let (kind, target) = if self.zoom_mode == ZoomMode::OneToOne {
+            (lumina_core::preview_cache::PreviewKind::OneToOne, (0, 0))
+        } else {
+            (
+                lumina_core::preview_cache::PreviewKind::Screen,
+                (self.draft_max_dim, self.draft_max_dim),
+            )
+        };
+        // A6: when the kind/resolution changes (e.g. zoom → 1:1) the previously
+        // prepared neighbors are stale for the new key and are lazily re-rendered.
+        preview_ctrl.plan_kind(kind);
+        let jobs =
+            preview_ctrl::plan_window_jobs(&probe_ids, &sources, &names, active, target, kind);
+        let mut enqueued = 0;
+        for job in jobs {
+            if preview_ctrl.enqueue(job) {
+                enqueued += 1;
+            }
+        }
+        self.frame_previews_enqueued += enqueued;
+        preview_ctrl.set_active(&canonical);
+        enqueued
+    }
+
+    /// PREVIEW-CACHE-FEATURE (A1/A4): paint a cached neighbor preview for the
+    /// path being navigated to, so the first frame of a change-of-active shows
+    /// no decode/render wait. Serves first from the RAM LRU, then from the disk
+    /// tier; a miss is a genuine miss (the standard lazy loading path applies —
+    /// never a silently wrong/upscaled image).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paint_cached_neighbor_preview(&mut self, path: &str) {
+        let canonical = Path::new(path)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(path))
+            .to_string_lossy()
+            .into_owned();
+        let source = PathBuf::from(path);
+        // Ask the controller for the cached frame; the borrow on `preview_ctrl`
+        // ends here so the assignment to `self.preview` below is allowed.
+        let cached = self.preview_ctrl.as_mut().and_then(|ctrl| {
+            match ctrl.neighbor_preview(&canonical, &source) {
+                Ok(Some(frame)) => Some(frame),
+                Ok(None) => None,
+                Err(message) => {
+                    // A cache read failure is surfaced, not silently swallowed
+                    // (no silent fallback): it still proceeds with the real decode,
+                    // but the neighbour-preview error is logged visibly.
+                    log::warn!("neighbor preview cache read failed for {path}: {message}");
+                    None
+                }
+            }
+        });
+        if let Some(frame) = cached {
+            log::debug!("neighbor preview cache-hit, painting immediately: {path}");
+            self.preview = Some(frame);
+            self.preview_generation += 1;
+            // Force `update_texture` to (re-)upload the new pixels this frame.
+            self.texture_identity = None;
+        }
+    }
+
+    /// PREVIEW-CACHE-FEATURE (A2): a visible badge (label + color) for a source's
+    /// neighbor-preview state, or `None` when no state applies (e.g. the probe
+    /// was consumed/active). Maps the controller's per-probe state to a cell
+    /// overlay so „wird vorbereitet / Veraltet / Fehler" is never only a log.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn neighbor_preview_badge(&self, probe_id: &str) -> Option<(String, egui::Color32)> {
+        let ctrl = self.preview_ctrl.as_ref()?;
+        // The active image is never displayed via the neighbor cache — skip the
+        // badge there (SOLL: the active image stays a full texture).
+        if ctrl.active_probe_id() == Some(probe_id) {
+            return None;
+        }
+        let (label, color) = match ctrl.probe_state(probe_id) {
+            preview_ctrl::PreviewProbeState::Miss => return None,
+            preview_ctrl::PreviewProbeState::Loading => (
+                "wird vorbereitet…".to_owned(),
+                egui::Color32::from_rgb(0x44, 0x66, 0x88),
+            ),
+            preview_ctrl::PreviewProbeState::Ready => (
+                "Vorschau bereit".to_owned(),
+                egui::Color32::from_rgb(0x2e, 0x7d, 0x32),
+            ),
+            preview_ctrl::PreviewProbeState::Stale => (
+                "Veraltet".to_owned(),
+                egui::Color32::from_rgb(0xb0, 0x8a, 0x00),
+            ),
+            preview_ctrl::PreviewProbeState::Failed => (
+                format!("Fehler: {}", ctrl.failure(probe_id).unwrap_or("unbekannt")),
+                egui::Color32::from_rgb(0xb0, 0x2a, 0x2a),
+            ),
+        };
+        Some((label, color))
     }
 
     /// Persist the active virtual copy's recipe into the sidecar.
@@ -6199,6 +6418,26 @@ impl LuminaApp {
                             egui::StrokeKind::Middle,
                         );
                     }
+                    // PREVIEW-CACHE-FEATURE (A2): visible per-cell neighbor-preview
+                    // state („wird vorbereitet / Veraltet / Fehler"), never only in
+                    // logs. The thumb_key is the canonical path used as the probe id.
+                    if let Some((text, color)) = self.neighbor_preview_badge(&entry.thumb_key) {
+                        let corner_max = CELL_W.min(CELL_H) * 0.5;
+                        let badge_w = corner_max + text.len() as f32 * 5.5 + 8.0;
+                        let badge_h = corner_max + 8.0;
+                        let badge_rect = egui::Rect::from_min_size(
+                            egui::pos2(cell.min.x + 2.0, cell.min.y + 2.0),
+                            egui::vec2(badge_w, badge_h),
+                        );
+                        ui.painter().rect_filled(badge_rect, 3.0, color);
+                        ui.painter().text(
+                            badge_rect.min + egui::vec2(5.0, 5.0),
+                            egui::Align2::LEFT_TOP,
+                            text,
+                            egui::FontId::proportional(10.0),
+                            egui::Color32::WHITE,
+                        );
+                    }
                     if resp.clicked() {
                         trace!("GUI interaction: navigator open {}", entry.path.display());
                         self.open_file(entry.path.display().to_string());
@@ -6628,11 +6867,25 @@ impl eframe::App for LuminaApp {
             }
         }
 
+        // PREVIEW-CACHE-FEATURE: per-frame LUMINA_PERF_LOG counters reset before any
+        // neighbor work of this frame (a schedule inside `poll_decode` counts).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.frame_previews_enqueued = 0;
+            self.frame_previews_ready = 0;
+        }
+
         // PERF-GUI-7: drain any completed background RAW/raster decode without
         // blocking the UI (non-blocking `try_recv`). The decoded frame is applied
         // on the main thread here, so a slow decode never freezes interaction.
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_decode();
+
+        // PREVIEW-CACHE-FEATURE: drain neighbor-preview worker results (RAM LRU
+        // insert + visible failure states) on the main thread; the prefetch
+        // itself runs on dedicated background workers, never the IdleQueue.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_neighbor_previews(&ctx);
 
         // Derive `preview_zoom` from the active mode using the geometry cached by
         // the previous frame's `draw_preview`, so the render's ROI crop matches
@@ -6920,20 +7173,27 @@ impl eframe::App for LuminaApp {
             // with same-frame thumbnail work.
             let slow_frame = ms > 16.7;
             #[cfg(not(target_arch = "wasm32"))]
-            let counters = (self.frame_thumb_enqueued, self.frame_thumbs_ready);
+            let counters = (
+                self.frame_thumb_enqueued,
+                self.frame_thumbs_ready,
+                self.frame_previews_enqueued,
+                self.frame_previews_ready,
+            );
             #[cfg(target_arch = "wasm32")]
-            let counters = (0usize, 0usize);
+            let counters = (0usize, 0usize, 0usize, 0usize);
             log::info!(
-                "LUMINA_PERF frame={:.2}ms pointer_down={} thumb_jobs_enqueued={} thumbs_ready={} slow_frame={}",
+                "LUMINA_PERF frame={:.2}ms pointer_down={} thumb_jobs_enqueued={} thumbs_ready={} neighbor_previews_enqueued={} neighbor_previews_ready={} slow_frame={}",
                 ms,
                 ctx.input(|i| i.pointer.any_down()),
                 counters.0,
                 counters.1,
+                counters.2,
+                counters.3,
                 slow_frame
             );
             eprintln!(
-                "LUMINA_PERF frame={:.2}ms thumb_jobs_enqueued={} thumbs_ready={} slow_frame={}",
-                ms, counters.0, counters.1, slow_frame
+                "LUMINA_PERF frame={:.2}ms thumb_jobs_enqueued={} thumbs_ready={} neighbor_previews_enqueued={} neighbor_previews_ready={} slow_frame={}",
+                ms, counters.0, counters.1, counters.2, counters.3, slow_frame
             );
         }
     }
@@ -9163,6 +9423,84 @@ mod tests {
             app.thumbnails.failure(&key),
             Some("boom"),
             "exhausted retries must stay a visible error, never a silent fallback"
+        );
+    }
+
+    // ---- PREVIEW-CACHE-FEATURE: neighbor prefetch scheduling (native) ----
+
+    /// Scheduling the neighbor window around the active image must lazily spawn
+    /// the controller and enqueue exactly the available +4/−2 neighbors in the
+    /// mandated priority order (no wrap at the edges).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn neighbor_prefetch_schedules_asymmetric_window_around_active() {
+        let (mut app, _dir, indices) = app_with_entries(8);
+        let active_path = app.entries()[indices[3]].path.display().to_string();
+        app.schedule_neighbor_previews(&active_path);
+        let ctrl = app.preview_ctrl.as_ref().expect("lazily spawned");
+        let mut probes = ctrl.in_flight_probes();
+        probes.sort();
+        // Active pic3 of 8: window +1..+4, −1..−2 → indices 4,5,2,6,1,7.
+        let expected: Vec<String> = [1usize, 2, 4, 5, 6, 7]
+            .into_iter()
+            .map(|i| app.entries()[indices[i]].thumb_key().to_owned())
+            .collect();
+        assert_eq!(
+            probes.len(),
+            6,
+            "+4/−2 window on a mid folder = 6 neighbors"
+        );
+        for want in &expected {
+            assert!(probes.contains(want), "scheduled {want}");
+        }
+        // The active image itself is never a prefetch target (GPU texture only).
+        assert!(!probes
+            .iter()
+            .any(|p| *p == app.entries()[indices[3]].thumb_key()));
+
+        // A second schedule for the same active must not enqueue duplicates
+        // (one job per key: in-flight/done probes are skipped).
+        let again_enqueued = app.schedule_neighbor_previews(&active_path);
+        assert_eq!(again_enqueued, 0, "identical window is fully deduplicated");
+    }
+
+    /// At the folder start the window shrinks (no wrap-around).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn neighbor_prefetch_window_shrinks_at_folder_edge() {
+        let (mut app, _dir, indices) = app_with_entries(8);
+        let start_path = app.entries()[indices[0]].path.display().to_string();
+        let enqueued = app.schedule_neighbor_previews(&start_path);
+        assert_eq!(enqueued, 4, "+1..+4 only, no backward wrap");
+        let ctrl = app.preview_ctrl.as_ref().unwrap();
+        let probes = ctrl.in_flight_probes();
+        assert_eq!(probes.len(), 4);
+        let expected: Vec<String> = [1usize, 2, 3, 4]
+            .into_iter()
+            .map(|i| app.entries()[indices[i]].thumb_key().to_owned())
+            .collect();
+        for want in &expected {
+            assert!(probes.contains(want), "scheduled {want}");
+        }
+    }
+
+    /// A directory change discards the neighbor-cache state for the previous
+    /// folder (RAM LRU, jobs, failures) so stale entries never resurface.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn directory_change_resets_neighbor_cache() {
+        let (mut app, _dir, indices) = app_with_entries(4);
+        let active_path = app.entries()[indices[0]].path.display().to_string();
+        app.schedule_neighbor_previews(&active_path);
+        let ctrl = app.preview_ctrl.as_ref().unwrap();
+        assert!(!ctrl.in_flight_probes().is_empty(), "jobs enqueued");
+        let second = tempfile::tempdir().unwrap();
+        app.set_directory(second.path().display().to_string());
+        let ctrl = app.preview_ctrl.as_ref().unwrap();
+        assert!(ctrl.lru().is_empty(), "RAM LRU cleared on directory change");
+        assert!(
+            ctrl.in_flight_probes().is_empty(),
+            "in-flight jobs cleared on directory change"
         );
     }
 

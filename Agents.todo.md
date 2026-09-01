@@ -72,7 +72,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-01:
-14 offene Tasks — Block A: 11, Block B: 1, Block C: 2.
+17 offene Tasks — Block A: 14, Block B: 1, Block C: 2.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -96,6 +96,12 @@ Keine offenen Punkte. SOLL: `feature/architecture/pipeline.md` und
 sonstigen User-Interaktion bedarf, und hängt nicht vom nächsten manuellen
 GUI/User-Test ab.**
 
+### PRIO: hoch
+
+- [ ] **[PRIO: hoch] FOLLOWUP-PREVIEW-CACHE-VERIFY** (Phase 2, vor Commit): Display-Pfad (LRU/Disk-Hit vor Decode), Cell-UI sichtbar, Stale-Key statt Probe-ID, Disk-Load verdrahtet, Render-Failed statt stiller Fallback, OneToOne-Anbindung, F-074 Benchmarks — unabhängig verifizieren, dann PREVIEW-CACHE-FEATURE aus Todo entfernen.
+- [ ] **[PRIO: hoch] FOLLOWUP-WASM-ZDATA-CONSUMER** (vor Commit): wasm32 consumer gating für zdata (cli/mcp) + onnx wasm gating (birefnet_manifest/StubBackend) — cargo check wasm32 fehlerfrei (bereits gefixt in sidecar stub + cli cfg, Verifikation ausstehend).
+- [ ] **[PRIO: hoch] FOLLOWUP-R2-NIEDRIG-REST** (vor nächstem manuellen Test): PRESETS-FAIL-CLOSED (fail-closed), GPU-WB-GUI-GATE (Kontext-WB), SIGTRAP-GPU-TESTS (Rayon thread_local) — fehlerfrei stellen, gebündelt verifizieren.
+
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
 - [ ] **[PRIO: mittel] PREVIEW-CACHE-FEATURE** (neu, vor manuellem Test):
@@ -112,7 +118,7 @@ GUI/User-Test ab.**
   feature/product/ (Preview-Cache-Architektur) — **SOLL liegt vor:
   feature/quality/preview-cache.md**. User-Entscheidung: Hybrid
   (GPU + WebP). Blockiert nicht F-103-N6, aber manuelle Test soll die
-  optimierte Version zeigen.
+  optimierte Version zeigen. **Phase 1 Kern-Primitive implementiert (core/gui), verifiziert NICHT BESTANDEN (A1-A6/B7 offen: Display-Pfad, Cell-UI, Stale-Key, Disk-Load, 1:1, F-074, Render-Failed) — Folge-Welle läuft.**
 
 ### PRIO: niedrig (R2, gebündelt)
 

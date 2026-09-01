@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "environment": {
+    "host": "MacBook-Pro-von-Florian.local",
+    "os": "Darwin",
+    "arch": "arm64",
+    "rustc": "1.98.0",
+    "libraw": "0.22.2",
+    "recorded_at": "2026-09-01T18:48:01Z"
+  },
+  "benchmarks": [
+    {
+      "id": "preview_cache/webp_hit__512",
+      "median_ns": 2344232,
+      "p95_ns": 2349864,
+      "unit": "ns"
+    },
+    {
+      "id": "preview_cache/webp_hit__1024",
+      "median_ns": 9415233,
+      "p95_ns": 9492716,
+      "unit": "ns"
+    },
+    {
+      "id": "preview_cache/webp_miss__512",
+      "median_ns": 951675,
+      "p95_ns": 953709,
+      "unit": "ns"
+    },
+    {
+      "id": "preview_cache/webp_miss__1024",
+      "median_ns": 3787740,
+      "p95_ns": 3792397,
+      "unit": "ns"
+    },
+    {
+      "id": "preview_cache/lru_hit__7",
+      "median_ns": 218,
+      "p95_ns": 219,
+      "unit": "ns"
+    },
+    {
+      "id": "preview_cache/prefetch_window__40",
+      "median_ns": 11,
+      "p95_ns": 11,
+      "unit": "ns"
+    }
+  ]
+}

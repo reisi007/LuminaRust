@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "budgets": [
+    {
+      "id": "preview_cache/webp_hit__512",
+      "budget_ns": 4688464,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "PREVIEW-CACHE-FEATURE (F-074, 2026-09-01): WebP cache hit (decode stored lossless preview) @512. Calibrated against scripts/perf preview-cache-baseline.json (median 2344232 ns, budget 2x). gate:false — new benchmark, report-only until independently calibrated after Phase 1 stabilisation."
+    },
+    {
+      "id": "preview_cache/webp_hit__1024",
+      "budget_ns": 18830466,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "PREVIEW-CACHE-FEATURE (F-074, 2026-09-01): WebP cache hit (decode stored lossless preview) @1024. Calibrated against baseline (median 9415233 ns). gate:false — report-only."
+    },
+    {
+      "id": "preview_cache/webp_miss__512",
+      "budget_ns": 1903350,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "PREVIEW-CACHE-FEATURE (F-074, 2026-09-01): WebP cache miss (lossless encode of a rendered neighbor frame) @512. Calibrated against baseline (median 951675 ns). gate:false — report-only."
+    },
+    {
+      "id": "preview_cache/webp_miss__1024",
+      "budget_ns": 7575480,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "PREVIEW-CACHE-FEATURE (F-074, 2026-09-01): WebP cache miss (lossless encode of a rendered neighbor frame) @1024. Calibrated against baseline (median 3787740 ns). gate:false — report-only."
+    },
+    {
+      "id": "preview_cache/lru_hit__7",
+      "budget_ns": 436,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "PREVIEW-CACHE-FEATURE (F-074, 2026-09-01): RAM-LRU hit in the 7-slot neighbour cache (active + 6 neighbors). Calibrated against baseline (median 218 ns). gate:false — report-only."
+    },
+    {
+      "id": "preview_cache/prefetch_window__40",
+      "budget_ns": 22,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "PREVIEW-CACHE-FEATURE (F-074, 2026-09-01): asymmetric +4/−2 prefetch-window planning for a 40-image folder. Calibrated against baseline (median 11 ns). gate:false — report-only."
+    }
+  ]
+}

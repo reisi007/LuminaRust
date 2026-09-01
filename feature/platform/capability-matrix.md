@@ -124,6 +124,13 @@ GPU stehen in `feature/platform/wasm-limits.md` (F-071). Kurzfassung:
   liefert `RuntimeDisabled` (Feature aus), `OnnxRuntime` (Feature an,
   Artefakt verifiziert) oder einen harten Fehler (fehlendes/stale/fehlbenanntes
   Artefakt) — nie einen stillen Stub-Ersatz.
+- **CLI-Konsum (F-082-FOLLOWUP-Rest):** `lumina-cli` fragt die echte Engine
+  über `lumina_onnx::resolve::try_load_onnx_engine` an, sobald ein Lauf
+  Re-Inferenz brauchen kann; das `.onnx`-Artefakt kommt aus
+  `LUMINA_MODEL_PATH`. Ohne das CLI-Feature `onnx-rt` bleibt der
+  `StubBackend` der Default-Draht; mit `onnx-rt` ist ein fehlendes/stale/
+  unkonfiguriertes Artefakt ein harter CLI-Fehler — nie ein stiller
+  Stub-Ersatz (Details in `feature/product/ai-masks.md`, F-082-FOLLOWUP-Rest).
 - **ONNX im Browser (F-070):** optionaler WASM-Backend-Pfad hinter eigenem
   Feature (`onnx-wasm`), off by default, mit klarer Capability-Anzeige und
   denselben Identitäts-/Veraltungsregeln (Modellname/-version/-hash); siehe

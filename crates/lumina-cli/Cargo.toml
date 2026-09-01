@@ -43,3 +43,10 @@ gpu = ["dep:lumina-gpu"]
 # EXIF→Corrector wiring, and pulls the native liblensfun (default OFF; requires
 # the system library when enabled).
 lensfun = ["lumina-core/lensfun", "lumina-lensfun/native"]
+# F-082-FOLLOWUP: real ONNX Runtime engine for mask re-inference (forwards to
+# `lumina-onnx/onnx-rt`, `ort`). Non-default and network-gated (prebuilt ONNX
+# Runtime binaries). WITHOUT it the CLI wires the deterministic StubBackend
+# (documented default); WITH it the CLI requests the real engine via the
+# `LUMINA_MODEL_PATH` artifact and fails hard when the artifact is unusable —
+# never a silent stub substitute.
+onnx-rt = ["lumina-onnx/onnx-rt"]

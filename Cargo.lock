@@ -2184,6 +2184,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "bytemuck",
+ "criterion",
  "eframe",
  "egui_kittest",
  "log",
