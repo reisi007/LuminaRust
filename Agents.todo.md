@@ -72,7 +72,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-01:
-17 offene Tasks — Block A: 14, Block B: 1, Block C: 2.
+18 offene Tasks — Block A: 15, Block B: 1, Block C: 2.
 
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
@@ -100,6 +100,7 @@ GUI/User-Test ab.**
 
 - [ ] **[PRIO: hoch] FOLLOWUP-PREVIEW-CACHE-VERIFY** (Phase 2, vor Commit): Display-Pfad (LRU/Disk-Hit vor Decode), Cell-UI sichtbar, Stale-Key statt Probe-ID, Disk-Load verdrahtet, Render-Failed statt stiller Fallback, OneToOne-Anbindung, F-074 Benchmarks — unabhängig verifizieren, dann PREVIEW-CACHE-FEATURE aus Todo entfernen.
 - [ ] **[PRIO: hoch] FOLLOWUP-WASM-ZDATA-CONSUMER** (vor Commit): wasm32 consumer gating für zdata (cli/mcp) + onnx wasm gating (birefnet_manifest/StubBackend) — cargo check wasm32 fehlerfrei (bereits gefixt in sidecar stub + cli cfg, Verifikation ausstehend).
+- [ ] **[PRIO: hoch] CI-ONNX-RT** (vor nächstem CI-Push): `onnx-rt` aus CI-Ausnahme holen — `libssl-dev` (+ `pkg-config`, `clang`) in `docker/Dockerfile` / `ci.yml` ergänzen, dann `cargo test/clippy --features onnx-rt` in CI grün (heute lokal 91/105 grün, CI-exkludiert wegen fehlendem `openssl-sys`). **Nur GPU bleibt hartes CI-Nein** (kein Metal, nur `cargo check -p lumina-gpu --features gpu`), `onnx-rt` hat kein Runner-Hardware-Argument. Gepinnte Entscheidung „CI-Ausnahme onnx-rt" in `Agents.todo.md` danach korrigieren.
 - [ ] **[PRIO: hoch] FOLLOWUP-R2-NIEDRIG-REST** (vor nächstem manuellen Test): PRESETS-FAIL-CLOSED (fail-closed), GPU-WB-GUI-GATE (Kontext-WB), SIGTRAP-GPU-TESTS (Rayon thread_local) — fehlerfrei stellen, gebündelt verifizieren.
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
