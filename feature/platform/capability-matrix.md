@@ -49,18 +49,41 @@ ONNX (`feature/platform/wasm-limits.md`, F-069…F-071) und zur
   R2-SIDECAR-ZDATA-WASM).
 - Die `zdata`-Funktion ist in `lumina-sidecar` als optionales, **nicht
   default**-Feature hinterlegt (`[features] default = []; zdata = ["dep:zstd"]`).
-  Ein Standard-`wasm32`-Build des Workspace bleibt grün, solange `zdata` nicht
-  aktiviert wird.
-- **Workspace-weites `wasm32`-Gate:** Ein `cargo build --target
-  wasm32-unknown-unknown` des gesamten Workspace schlägt fehl, sobald irgendein
-  Crate das `zdata`-Feature einschaltet, weil dann transitiv `zstd-sys` (native)
-  gebaut werden müsste. **Capability-Entscheidung: `zdata` ist native-only** —
-  für WASM-Ziele darf das `zdata`-Feature nicht aktiviert werden. `--no-default-
-  features` reicht nicht, wenn ein anderes Crate `zdata` explizit einschaltet;
-  dann muss dieses Crate das Feature für WASM aus-`cfg`-gaten. Die
+- **Workspace-weites `wasm32`-Gate (gelöst, R2-SIDECAR-ZDATA-WASM):** Die
+  `zstd`-Dependency ist in `crates/lumina-sidecar/Cargo.toml` **per
+  `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` target-gegatet**.
+  Damit existiert `zstd`/`zstd-sys` nur in nativen Dependency-Graphen; selbst
+  wenn ein Konsument (CLI, MCP, GUI) das `zdata`-Feature einschaltet, zieht es
+  bei einem `cargo check --target wasm32-unknown-unknown` **kein** `zstd-sys`
+  mehr in den wasm32-Graphen. `cargo check --target wasm32-unknown-unknown
+  -p lumina-sidecar --features zdata` ist grün.
+- **Code-Gating:** Der Codec (`src/zdata.rs`) wird nur unter
+  `#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]` kompiliert; im
+  WASM-Build existiert auch mit aktiviertem `zdata`-Feature kein zstd-Code.
+  `artifact_status` hat dafür in jeder Konfiguration eine Definition: mit
+  Codec (einzig auf nativ+zdata) führt es die tiefe BLAKE3-/Container-Prüfung
+  aus, auf WASM/zdata-frei greift die strukturelle Variante ohne Codec
+  (dokumentierte Grenze, kein stiller Fallback — Verhalten identisch bis zur
+  eager-Checksummen-Pass).
+- **Browser (WASM):** persistierte Masken/Source-Actions aus `.lumina.zdata`
+  werden im Browser als **nicht verfügbar beziehungsweise unverifizierbar**
+  gemeldet (Artefaktstatus-Prüfung ohne Codec); eine Neuberechnung ist für
+  WASM ein separater, ausdrücklich aktivierter Schritt. Das entspricht dem
+  Prinzip „kein stiller Fallback bei fehlenden Artefakten“.
+- **Capability-Entscheidung:** `zdata`/`zstd` bleibt **native-only**; die
+  Target-Gating-Lösung macht das workspace-weite wasm32-Gate wieder grün, ohne
+  dass ein Konsument sein Feature-Verhalten für WASM umbauen muss. Die
   WASM-Pfade in `lumina-core`/`lumina-sidecar` sind bereits
-  `cfg(target_arch = "wasm32")`-gekapselt; `zdata`/`zstd` ist die einzige
-  bekannte native Bremswirkung fürs workspace-weite wasm32-Gate.
+  `cfg(target_arch = "wasm32")`-gekapselt; `zdata`/`zstd` ist damit keine
+  native Bremswirkung mehr fürs workspace-weite wasm32-Gate.
+- **Folgearbeit (offen, R2-SIDECAR-ZDATA-WASM-NEXT):** Die Konsumenten
+  `lumina-cli`, `lumina-mcp` und `lumina-gui` importieren zdata-Symbole
+  (`zdata_path_for`, `load_zdata`, `append_repair_region`, …) weiterhin
+  **unbedingt**. Sobald diese Crates in einem wasm32-Target gebaut werden,
+  melden sie `E0425` (Symbol fehlt, weil der Codec auf WASM aus-`cfg`-gegatet
+  ist). Diese Konsumenten müssen ihre zdata-Importe/`-Aufrufe separat
+  `cfg(target_arch = "wasm32")`-gaten; sie sind bewusst nicht Teil dieser
+  Änderung (konkurrierende Schreibzugriffe auf diese Crates).
 
 ## Offene Browser-Punkte
 

@@ -1435,7 +1435,13 @@ fn basic_artifact_file_check(
 /// mask plane and has no generic mapping onto bundle records either; see
 /// `feature/architecture/sidecar.md` ("Artefaktstatus-Prüfung") for why this
 /// validation belongs to the consuming pipeline loader, not this function.
-#[cfg(feature = "zdata")]
+/// R2-SIDECAR-ZDATA-WASM: the deep (codec) verification variant is only
+/// compiled when the `.lumina.zdata` codec is actually available, i.e. with
+/// the `zdata` feature **and** on a non-wasm32 target. On WASM the `zstd`
+/// dependency is target-gated away, so `load_zdata` does not exist there;
+/// the structural-only variant below takes over so `artifact_status` keeps
+/// a definition in every build configuration.
+#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
     let path = match basic_artifact_file_check(bundle_root, artifact) {
         BasicArtifactCheck::Missing => return ArtifactStatus::Missing,
@@ -1457,11 +1463,12 @@ pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> Arti
     ArtifactStatus::Available
 }
 
-/// Non-zdata build: without the container codec a magic-bearing file cannot be
-/// deep-verified here; it counts as usable once it passes the structural
-/// checks (documented limitation, not a silent fallback — the same rules as
-/// the `zdata` build apply up to the eager checksum pass).
-#[cfg(not(feature = "zdata"))]
+/// Non-zdata build OR wasm32+zdata (R2-SIDECAR-ZDATA-WASM): without the
+/// container codec a magic-bearing file cannot be deep-verified here; it
+/// counts as usable once it passes the structural checks (documented
+/// limitation, not a silent fallback — the same rules as the `zdata` build
+/// apply up to the eager checksum pass).
+#[cfg(not(all(feature = "zdata", not(target_arch = "wasm32"))))]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
     let path = match basic_artifact_file_check(bundle_root, artifact) {
         BasicArtifactCheck::Missing => return ArtifactStatus::Missing,
@@ -3845,7 +3852,11 @@ mod tests {
         assert!(!temp.exists());
     }
 
-    #[cfg(feature = "zdata")]
+    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
+    // exists on native targets with the `zdata` feature; on wasm32 (even with
+    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
+    // match.
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
     #[test]
     fn zdata_write_is_atomic_against_partial_temp_file() {
         let directory = tempfile::tempdir().unwrap();
@@ -4080,7 +4091,11 @@ mod tests {
         assert_eq!(std::fs::read(&source_path).unwrap(), original_bytes);
     }
 
-    #[cfg(feature = "zdata")]
+    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
+    // exists on native targets with the `zdata` feature; on wasm32 (even with
+    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
+    // match.
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
     #[test]
     fn zdata_bundle_can_be_deleted_without_affecting_sidecar() {
         let directory = tempfile::tempdir().unwrap();
@@ -4102,7 +4117,11 @@ mod tests {
         assert!(load_sidecar(&sidecar_path).is_ok());
     }
 
-    #[cfg(feature = "zdata")]
+    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
+    // exists on native targets with the `zdata` feature; on wasm32 (even with
+    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
+    // match.
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
     #[test]
     fn partial_zdata_is_detected_not_silent_garbage() {
         let directory = tempfile::tempdir().unwrap();
@@ -4239,9 +4258,9 @@ mod tests {
         assert_eq!(rb, document_revision(&b).unwrap());
     }
 
-    // ----- F-077: zdata-gated helpers -----
+    // ----- F-077: zdata-gated helpers (native-only, R2-SIDECAR-ZDATA-WASM) -----
 
-    #[cfg(feature = "zdata")]
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
     fn f077_tiles() -> Vec<MaskTile> {
         vec![MaskTile {
             mask_id: "subject".into(),
@@ -4760,7 +4779,11 @@ mod tests {
 
     // ----- REVIEW-SIDECAR-STATUS-1: corrupt artifacts are visible -----
 
-    #[cfg(feature = "zdata")]
+    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
+    // exists on native targets with the `zdata` feature; on wasm32 (even with
+    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
+    // match.
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
     #[test]
     fn artifact_status_verifies_container_content_not_just_existence() {
         let directory = tempfile::tempdir().unwrap();
@@ -4819,7 +4842,11 @@ mod tests {
     /// magic used to slip past the failed magic read as `Available`, and a
     /// `zdata`-declared file without the magic used to fall through as an
     /// unverifiable "opaque" payload.
-    #[cfg(feature = "zdata")]
+    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
+    // exists on native targets with the `zdata` feature; on wasm32 (even with
+    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
+    // match.
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
     #[test]
     fn artifact_status_rejects_undersized_and_magicless_declared_zdata() {
         let directory = tempfile::tempdir().unwrap();
