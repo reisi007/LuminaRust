@@ -101,12 +101,6 @@ GUI/User-Test ab.**
 
 _(keine weiteren offenen hoch-prio Tasks — CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
-### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
-
-### PRIO: niedrig (R2, gebündelt)
-
-_(keine offenen R2-Bündel — SIDECAR-ZDATA-WASM via target-gated `lumina-sidecar` + consumer-gating `lumina-cli`/`lumina-mcp`/`lumina-gui` verifiziert BESTANDEN am 2026-09-02 (9603059/e60a9ad): `cargo check --workspace --target wasm32-unknown-unknown` grün, `cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features` grün, `grep -n zdata crates/lumina-gui/Cargo.toml` nur target `cfg(not(wasm32))`)_
-
 **Phase 6: Persistente AI-Masken**
 
 _(keine offenen Tasks — F-082-FOLLOWUP BESTANDEN verifiziert 2026-09-02, 107p `onnx-rt`, wasm32 `onnx-rt` grün, Commit 49f4f76)_
