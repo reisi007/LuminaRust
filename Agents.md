@@ -246,6 +246,7 @@ Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
 - Masken-Cache-Hit-, Miss- und Invalidierungstests
 - Golden-Image-Tests mit dokumentierten Toleranzen
 - CLI-End-to-End-Tests inklusive Exit-Codes
+- GUI-Features: Jede sichtbare GUI-Funktion (Regler, Module, Shortcuts, Preview, Sidecar-Persistenz) wird mit automatischem headless GUI-Test (egui Context + LuminaApp, tempdir) abgedeckt; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram (byte-identisch/PSNR, kein stiller Fallback), kein manueller Test als einzige Absicherung. Tests laufen in `cargo test -p lumina-gui` grün ohne GPU/WASM.
 - native und, sofern betroffen, WASM-Build-/Smoke-Tests
 - Tests für fehlende Modelle, fehlende Maskenartefakte und veränderte Quellen
 - Performance-Methodik gemäß `feature/quality/performance-benchmarks.md`
@@ -284,6 +285,7 @@ Eine Änderung ist erst fertig, wenn:
 - `feature/README.md` auf das richtige Dokument verweist und das betroffene
   Feature-Dokument den erreichten Zustand sowie verbleibende Grenzen kennt;
 - der Abschlussbericht reproduzierbare Prüfkommandos nennt.
+- ein GUI-Feature nur als fertig gilt, wenn ein automatischer headless GUI-Test (egui Context + LuminaApp, tempdir; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram, byte-identisch/PSNR, kein stiller Fallback) vorliegt und `cargo test -p lumina-gui` ohne GPU/WASM grün ist (konsistent mit Produktprinzip „Jede sichtbare Funktion muss im Feature-Dokument beschrieben sein“ und der Verifizierungs-Pflicht für GUI-Features).
 
 ## Dokumentations- und Todo-Regeln
 
