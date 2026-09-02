@@ -36,9 +36,7 @@ Feature-Dokumenten und der Git-Historie.
   LibRaw 0.22.2 + Ubuntu-24.04-lensfun-Distro-Pin (Determinismus;
   Upgrade-Pfad skizziert: neuer Image-Tag parallel → Golden-Rebaseline wegen
   CR3-Dimensionen → alter Tag erst dann entfernen).
-- **CI-Ausnahme `onnx-rt`:** vom Clippy-Lauf ausgeschlossen (zieht `ort` →
-  `native-tls`/`openssl-sys`, im gepinnten CI-Container ohne libssl-dev nicht
-  baubar); der Pfad wird lokal gelintet.
+- **CI-Gate `onnx-rt` (2026-09-02, CI-ONNX-RT):** `onnx-rt` wird jetzt im CI geprüft — Image liefert `libssl-dev` + `clang` für `openssl-sys`, `ci.yml` führt `cargo clippy -p lumina-onnx --features onnx-rt` und `cargo test -p lumina-onnx --features onnx-rt` aus. Nur **GPU bleibt hartes CI-Nein** (kein Metal auf Runnern, nur `cargo check -p lumina-gpu --features gpu`).
 - **Toolchain:** CI fährt `@stable` → neue Clippy-Lints schlagen automatisch an
   (Beispiel `chunks_exact_to_as_chunks`). Lokal vor jedem Push `rustup update`
   + workspace-clippy laufen lassen.

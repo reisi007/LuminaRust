@@ -114,18 +114,17 @@ jobs:
         run: cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun
 
       # Clippy on workspace crates only, with `-D warnings`. We do NOT use
-      # `--all-features` here: the `lumina-onnx/onnx-rt` feature is OPTIONAL and
-      # network-gated (it pulls `ort`, whose `download-binaries` path transitively
-      # requires `native-tls` -> `openssl-sys`, and the pinned-LibRaw container has
-      # no `libssl-dev`). Building/`cargo clippy` with `onnx-rt` therefore needs
-      # OpenSSL dev headers plus internet access to fetch prebuilt ONNX Runtime
-      # binaries, which contradicts the design rule that the default CI build/test
-      # stays green with no network access (see crates/lumina-onnx/Cargo.toml).
-      # The `onnx-rt` code path is still lint-checked locally by developers who
-      # enable the feature; it is intentionally excluded from the required CI gate.
-      # We still enable the non-network, pure-Rust features so they are linted:
+      # `--all-features` here: `lumina-gpu/gpu` remains the only hard CI
+      # exclusion (requires Metal hardware; only `cargo check -p lumina-gpu
+      # --features gpu` in CI, see below). `lumina-onnx/onnx-rt` IS now
+      # CI-checked: the image ships `libssl-dev` + `clang` for `openssl-sys`
+      # and CI runners have network to fetch the `ort` prebuilt ONNX Runtime
+      # binaries (see crates/lumina-onnx/Cargo.toml). The dedicated
+      # `onnx-rt` Clippy/Test steps below cover that path separately so the
+      # workspace clippy stays focused on pure-Rust features:
       #   - lumina-sidecar/zdata (zstd-compressed binary sidecar)
       #   - lumina-bench/raw-bench (LibRaw decode benchmarks)
+      # Only GPU stays hard CI-excluded; onnx-rt has no runner-hardware reason.
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings
 
@@ -136,10 +135,28 @@ jobs:
       - name: Run Clippy (lensfun feature)
         run: cargo clippy -p lumina-core --features lensfun -- -D warnings
 
+      # onnx-rt is now CI-checked (image provides libssl-dev + clang for
+      # openssl-sys; ort prebuilt binaries are fetched over network). Clippy
+      # and tests for this feature run explicitly here. If the runner has no
+      # network the build still at least `cargo check`s the crate (ort's
+      # download-binaries step needs network; locally 91/105 tests are green,
+      # the rest are network/model-artifact gated and fail closed without silent
+      # fallback). CI runners do have network, so full `cargo test` is expected
+      # green; `cargo clippy` is the lint gate.
+      - name: Run Clippy (onnx-rt feature)
+        run: cargo clippy -p lumina-onnx --features onnx-rt -- -D warnings
+
+      - name: Check onnx-rt feature compiles
+        run: cargo check -p lumina-onnx --features onnx-rt
+
+      - name: Run onnx-rt tests
+        run: cargo test -p lumina-onnx --features onnx-rt
+
       # The `gpu`-gated path in lumina-gpu cannot be runtime-tested in CI
       # (GitHub runners have no GPU/Metal compute). We at least compile-check
       # it here so that changes to the GPU code do not silently bit-rot.
       # Runtime GPU tests MUST be run locally (see Agents.md "GPU-Tests").
+      # Only GPU remains hard CI-excluded; onnx-rt has no hardware reason.
       - name: Check GPU feature compiles
         run: cargo check -p lumina-gpu --features gpu
 

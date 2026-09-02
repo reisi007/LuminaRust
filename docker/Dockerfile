@@ -98,6 +98,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
         liblensfun-dev \
         libglib2.0-dev \
+        libssl-dev \
+        clang \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib /usr/local/lib
