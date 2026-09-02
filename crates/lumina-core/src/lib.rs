@@ -34,6 +34,11 @@ pub use cache::{
     CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
     StaleTracker,
 };
+pub use generative::{
+    effective_keep as effective_keep_generative, fill_transparent_heuristic, generative_canvas,
+    generative_edit, has_transparent_pixels, materialize_canvas_for_crop,
+    materialize_canvas_for_crop_with_source, resolve_canvas_for_recipe,
+};
 pub use histogram::LuminanceHistogram;
 pub use mask_loader::{
     resolve_mask_planes, MaskInference, MaskLoadContext, MaskLoadOutcome, MaskLoadResult,

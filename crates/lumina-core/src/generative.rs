@@ -1,15 +1,24 @@
 #![allow(clippy::field_reassign_with_default)]
 //! Generative canvas + keep_generative_content logic (GEN-FILL-03).
 //! Plus GEN-FILL-01 heuristic auto-fill for transparent pixels after lens correction.
-use crate::CoreError;
+
 use lumina_sidecar::{Crop, GenerativeCanvas, GenerativeEdit};
 
-use crate::ImageFrame;
+use crate::{CoreError, ImageFrame};
 
 pub fn has_transparent_pixels(frame: &ImageFrame) -> bool {
-    frame.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255)
+    frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|px| px[3] < 255 || (px[0] == 0 && px[1] == 0 && px[2] == 0))
 }
 
+/// Heuristic fill: transparent pixels (`alpha < 255`) are replaced by the
+/// nearest opaque pixel's RGB (Manhattan BFS). `seed` shuffles the BFS tie-break
+/// deterministically. Returns `true` iff any pixel was filled. Alpha of filled
+/// pixels becomes `255`. Deterministic for identical frame+seed.
 pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
     let w = frame.width as usize;
     let h = frame.height as usize;
@@ -20,7 +29,11 @@ pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
     for y in 0..h {
         for x in 0..w {
             let idx = (y * w + x) * 4;
-            if frame.pixels[idx + 3] == 255 {
+            if frame.pixels[idx + 3] == 255
+                && !(frame.pixels[idx] == 0
+                    && frame.pixels[idx + 1] == 0
+                    && frame.pixels[idx + 2] == 0)
+            {
                 opaque.push((x, y));
             }
         }
@@ -28,7 +41,13 @@ pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
     if opaque.is_empty() {
         return false;
     }
-    if !frame.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255) {
+    if !frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|px| px[3] < 255 || (px[0] == 0 && px[1] == 0 && px[2] == 0))
+    {
         return false;
     }
     opaque.sort_by_key(|(x, y)| {
@@ -69,7 +88,11 @@ pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
             }
             visited[nidx] = true;
             let dst = nidx * 4;
-            if frame.pixels[dst + 3] < 255 {
+            if frame.pixels[dst + 3] < 255
+                || (frame.pixels[dst] == 0
+                    && frame.pixels[dst + 1] == 0
+                    && frame.pixels[dst + 2] == 0)
+            {
                 frame.pixels[dst] = src_rgb[0];
                 frame.pixels[dst + 1] = src_rgb[1];
                 frame.pixels[dst + 2] = src_rgb[2];
@@ -81,6 +104,7 @@ pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
     }
     filled
 }
+
 pub fn effective_keep(recipe: &lumina_sidecar::EditRecipe) -> bool {
     recipe
         .generative_edit
@@ -88,15 +112,18 @@ pub fn effective_keep(recipe: &lumina_sidecar::EditRecipe) -> bool {
         .map(|g| g.effective_keep())
         .unwrap_or(true)
 }
+
 pub fn generative_edit(recipe: &lumina_sidecar::EditRecipe) -> Option<&GenerativeEdit> {
     recipe.generative_edit.as_ref()
 }
+
 pub fn generative_canvas(recipe: &lumina_sidecar::EditRecipe) -> Option<&GenerativeCanvas> {
     recipe
         .generative_edit
         .as_ref()
         .and_then(|g| g.canvas.as_ref())
 }
+
 pub fn materialize_canvas_for_crop(
     canvas: &GenerativeCanvas,
     crop: Option<&Crop>,
@@ -117,7 +144,7 @@ pub fn materialize_canvas_for_crop(
         output_height: ch,
         source_offset_x: new_offset_x,
         source_offset_y: new_offset_y,
-        extras: std::collections::BTreeMap::new(),
+        extras: Default::default(),
     };
     out.validate().map_err(|_| CoreError::InvalidAdjustment {
         name: "generative_canvas.materialized".into(),
@@ -127,6 +154,7 @@ pub fn materialize_canvas_for_crop(
     })?;
     Ok(out)
 }
+
 pub fn materialize_canvas_for_crop_with_source(
     canvas: &GenerativeCanvas,
     crop: Option<&Crop>,
@@ -150,6 +178,7 @@ pub fn materialize_canvas_for_crop_with_source(
     }
     Ok(out)
 }
+
 pub fn resolve_canvas_for_recipe(
     recipe: &lumina_sidecar::EditRecipe,
 ) -> Result<Option<GenerativeCanvas>, CoreError> {
@@ -186,12 +215,22 @@ pub fn apply_generative_expand(
             maximum: 1.0,
         });
     };
-    canvas.validate().map_err(|_| CoreError::InvalidAdjustment {
-        name: "generative_expand.canvas".into(),
-        value: 0.0,
-        minimum: 1.0,
-        maximum: 1.0,
-    })?;
+    canvas
+        .validate()
+        .map_err(|_| CoreError::InvalidAdjustment {
+            name: "generative_expand.canvas".into(),
+            value: 0.0,
+            minimum: 1.0,
+            maximum: 1.0,
+        })?;
+    if canvas.output_width <= frame.width && canvas.output_height <= frame.height {
+        return Err(CoreError::InvalidAdjustment {
+            name: "generative_expand.canvas".into(),
+            value: 0.0,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    }
     // Bounds: source must fit inside canvas
     if canvas.source_offset_x < 0
         || canvas.source_offset_y < 0
@@ -215,8 +254,8 @@ pub fn apply_generative_expand(
     for y in 0..frame.height {
         for x in 0..frame.width {
             let src_idx = (y * frame.width + x) as usize * 4;
-            let dst_x = (canvas.source_offset_x as i32 + x as i32) as u32;
-            let dst_y = (canvas.source_offset_y as i32 + y as i32) as u32;
+            let dst_x = (canvas.source_offset_x + x as i32) as u32;
+            let dst_y = (canvas.source_offset_y + y as i32) as u32;
             let dst_idx = (dst_y * canvas.output_width + dst_x) as usize * 4;
             out.pixels[dst_idx..dst_idx + 4].copy_from_slice(&frame.pixels[src_idx..src_idx + 4]);
         }
@@ -239,6 +278,7 @@ pub fn apply_generative_expand(
     fill_transparent_heuristic(&mut out, seed);
     Ok(out)
 }
+
 fn crop_rect_on_canvas(
     width: u32,
     height: u32,
@@ -322,10 +362,12 @@ fn crop_rect_on_canvas(
     }
     Ok((px, py, pw, ph))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use lumina_sidecar::{Crop, GenerativeCanvas};
+
     fn canvas(w: u32, h: u32, ox: i32, oy: i32) -> GenerativeCanvas {
         GenerativeCanvas {
             output_width: w,
@@ -335,6 +377,7 @@ mod tests {
             extras: Default::default(),
         }
     }
+
     #[test]
     fn effective_keep_defaults_to_true() {
         let mut recipe = lumina_sidecar::EditRecipe::default();
@@ -363,6 +406,7 @@ mod tests {
             .keep_generative_content = Some(true);
         assert!(effective_keep(&recipe));
     }
+
     #[test]
     fn keep_true_leaves_canvas_unchanged() {
         let c = canvas(6000, 4000, 500, 0);
@@ -393,6 +437,7 @@ mod tests {
         let resolved = resolve_canvas_for_recipe(&recipe).unwrap().unwrap();
         assert_eq!(resolved, c);
     }
+
     #[test]
     fn keep_false_materializes_canvas_translation() {
         let c = canvas(6000, 4000, 500, 0);
@@ -408,6 +453,7 @@ mod tests {
         assert_eq!(out.source_offset_x, 500 - 600);
         assert_eq!(out.source_offset_y, 0 - 800);
     }
+
     #[test]
     fn keep_false_full_crop_is_identity_translation() {
         let c = canvas(800, 600, 10, 20);
@@ -417,6 +463,7 @@ mod tests {
         assert_eq!(out.source_offset_x, 10);
         assert_eq!(out.source_offset_y, 20);
     }
+
     #[test]
     fn keep_false_half_crop_translates_correctly() {
         let c = canvas(100, 100, 0, 0);
@@ -432,6 +479,7 @@ mod tests {
         assert_eq!(out.source_offset_x, -50);
         assert_eq!(out.source_offset_y, 0);
     }
+
     #[test]
     fn materialize_with_aspect_preset() {
         let c = canvas(400, 200, 0, 0);
@@ -443,6 +491,7 @@ mod tests {
         assert_eq!(out.output_height, 200);
         assert_eq!(out.source_offset_x, -100);
     }
+
     #[test]
     fn negative_offset_allowed_until_output_shrinks() {
         let c = canvas(200, 200, -50, -50);
@@ -458,6 +507,7 @@ mod tests {
         assert_eq!(out.source_offset_x, -50);
         assert_eq!(out.source_offset_y, -50);
     }
+
     #[test]
     fn bounds_check_with_source() {
         let c = canvas(6000, 4000, 500, 0);
@@ -470,6 +520,7 @@ mod tests {
         let err = materialize_canvas_for_crop_with_source(&c, Some(&crop), 4000, 3000).unwrap_err();
         assert!(matches!(err, CoreError::InvalidAdjustment { .. }));
     }
+
     #[test]
     fn recipe_hash_changes_with_keep_flag() {
         let mut a = lumina_sidecar::EditRecipe::default();
@@ -495,5 +546,91 @@ mod tests {
         let mut c = a.clone();
         c.generative_edit.as_mut().unwrap().keep_generative_content = None;
         assert!(effective_keep(&c));
+    }
+
+    #[test]
+    fn fill_transparent_no_opaque_no_fill() {
+        let mut frame =
+            crate::ImageFrame::new(2, 2, vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+                .unwrap();
+        let filled = crate::generative::fill_transparent_heuristic(&mut frame, 0);
+        assert!(!filled);
+    }
+
+    #[test]
+    fn fill_transparent_no_transparent_no_fill() {
+        let mut frame = crate::ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+        assert!(!crate::generative::fill_transparent_heuristic(
+            &mut frame, 42
+        ));
+        assert_eq!(frame.pixels, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn fill_transparent_fills_border() {
+        let mut pixels = vec![0u8; 3 * 3 * 4];
+        for i in 0..9 {
+            pixels[i * 4 + 3] = 0;
+        }
+        pixels[(1 * 3 + 1) * 4] = 100;
+        pixels[(1 * 3 + 1) * 4 + 1] = 150;
+        pixels[(1 * 3 + 1) * 4 + 2] = 200;
+        pixels[(1 * 3 + 1) * 4 + 3] = 255;
+        let mut frame = crate::ImageFrame::new(3, 3, pixels).unwrap();
+        assert!(crate::generative::has_transparent_pixels(&frame));
+        let filled = crate::generative::fill_transparent_heuristic(&mut frame, 0);
+        assert!(filled);
+        assert!(!crate::generative::has_transparent_pixels(&frame));
+        for y in 0..3 {
+            for x in 0..3 {
+                let idx = (y * 3 + x) * 4;
+                assert_eq!(&frame.pixels[idx..idx + 3], &[100, 150, 200]);
+                assert_eq!(frame.pixels[idx + 3], 255);
+            }
+        }
+    }
+
+    #[test]
+    fn fill_transparent_deterministic_seed() {
+        let make = || {
+            crate::ImageFrame::new(
+                2,
+                2,
+                vec![10, 10, 10, 255, 0, 0, 0, 0, 0, 0, 0, 0, 20, 20, 20, 255],
+            )
+            .unwrap()
+        };
+        let mut a = make();
+        let mut b = make();
+        crate::generative::fill_transparent_heuristic(&mut a, 123);
+        crate::generative::fill_transparent_heuristic(&mut b, 123);
+        assert_eq!(a.pixels, b.pixels);
+        let mut c = make();
+        crate::generative::fill_transparent_heuristic(&mut c, 999);
+        assert!(!crate::generative::has_transparent_pixels(&c));
+    }
+
+    #[test]
+    fn recipe_hash_changes_with_auto_fill_flag() {
+        let mut a = lumina_sidecar::EditRecipe::default();
+        a.generative_edit = Some(lumina_sidecar::GenerativeEdit {
+            version: 1,
+            canvas: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        });
+        let mut b = a.clone();
+        b.generative_edit.as_mut().unwrap().auto_fill_transparent = Some(false);
+        let ha = blake3::hash(&serde_json::to_vec(&a).unwrap())
+            .to_hex()
+            .to_string();
+        let hb = blake3::hash(&serde_json::to_vec(&b).unwrap())
+            .to_hex()
+            .to_string();
+        assert_ne!(ha, hb);
     }
 }

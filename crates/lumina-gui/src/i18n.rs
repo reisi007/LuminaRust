@@ -25,6 +25,7 @@
 /// for that target only — not for the native build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[allow(dead_code)]
 pub enum Str {
     // Module bar
     Library,
@@ -267,6 +268,14 @@ pub enum Str {
     CpuFallbackTooltip,
 
     // Legacy parameterized patterns (use with `format!`)
+    // GEN-FILL-02: manual expand beyond image
+    ExpandBeyondImage,
+    ExpandCanvasLabel,
+    ExpandOffsetX,
+    ExpandOffsetY,
+    ExpandHint,
+    ExpandCanvasInvalid,
+
     HuePattern,
     SatPattern,
     UnsetPattern,
@@ -517,6 +526,13 @@ impl Str {
                 "The GPU present path is unavailable for this recipe, so the preview \
                  falls back to the CPU renderer. The visible pixels are identical."
             }
+
+            Str::ExpandBeyondImage => "Expand beyond image",
+            Str::ExpandHint => "When enabled, the canvas can be expanded beyond the original image",
+            Str::ExpandCanvasLabel => "Canvas size",
+            Str::ExpandOffsetX => "Offset X",
+            Str::ExpandOffsetY => "Offset Y",
+            Str::ExpandCanvasInvalid => "Invalid canvas",
 
             Str::HuePattern => "{} Hue",
             Str::SatPattern => "{} Sat",
