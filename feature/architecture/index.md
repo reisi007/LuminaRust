@@ -46,7 +46,7 @@ Renderdaten).
 
 ## Ist-Stand
 
-**Stand 2026-09-02:** Es gibt **kein** Index-Modul im Workspace (`Cargo.toml`
+**Stand 2026-09-02, verifiziert 2026-09-02 BESTANDEN (Commit 1520ac5, `cargo check --workspace` grün, Doc-only):** Es gibt **kein** Index-Modul im Workspace (`Cargo.toml`
 `[workspace].members` enthält kein `lumina-index`). Der CLI-Befehl `reindex`
 (`crates/lumina-cli/src/main.rs`, `fn reindex`) ist ausschließlich ein
 **Sidecar-Scan**: Er sammelt Sidecars unter der Eingabe-Root, zählt valide und
