@@ -96,28 +96,11 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] FOLLOWUP-PREVIEW-CACHE-VERIFY** (Phase 2, vor Commit): Display-Pfad (LRU/Disk-Hit vor Decode), Cell-UI sichtbar, Stale-Key statt Probe-ID, Disk-Load verdrahtet, Render-Failed statt stiller Fallback, OneToOne-Anbindung, F-074 Benchmarks — unabhängig verifizieren, dann PREVIEW-CACHE-FEATURE aus Todo entfernen.
 - [ ] **[PRIO: hoch] FOLLOWUP-WASM-ZDATA-CONSUMER** (vor Commit): wasm32 consumer gating für zdata (cli/mcp) + onnx wasm gating (birefnet_manifest/StubBackend) — cargo check wasm32 fehlerfrei (bereits gefixt in sidecar stub + cli cfg, Verifikation ausstehend).
 - [ ] **[PRIO: hoch] CI-ONNX-RT** (vor nächstem CI-Push): `onnx-rt` aus CI-Ausnahme holen — `libssl-dev` (+ `pkg-config`, `clang`) in `docker/Dockerfile` / `ci.yml` ergänzen, dann `cargo test/clippy --features onnx-rt` in CI grün (heute lokal 91/105 grün, CI-exkludiert wegen fehlendem `openssl-sys`). **Nur GPU bleibt hartes CI-Nein** (kein Metal, nur `cargo check -p lumina-gpu --features gpu`), `onnx-rt` hat kein Runner-Hardware-Argument. Gepinnte Entscheidung „CI-Ausnahme onnx-rt" in `Agents.todo.md` danach korrigieren.
 - [ ] **[PRIO: hoch] FOLLOWUP-R2-NIEDRIG-REST** (vor nächstem manuellen Test): PRESETS-FAIL-CLOSED (fail-closed), GPU-WB-GUI-GATE (Kontext-WB), SIGTRAP-GPU-TESTS (Rayon thread_local) — fehlerfrei stellen, gebündelt verifizieren.
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
-
-- [ ] **[PRIO: mittel] PREVIEW-CACHE-FEATURE** (neu, vor manuellem Test):
-  Hybrid-Preview-Caching für sofortiges Scrollen durch 40+ Bilder. Aktives
-  Bild als GPU-Textur (VRAM), Nachbarn als **WebP-Cache** (Screen/1:1-Auflösung,
-  Alpha unterstützt, lossless oder hochwertig verlustbehaftet, lazy gerendert
-  + auf Disk/RAM gecached). WebP statt JPEG wegen Alpha-Kanal und besserer
-  Kompression. Asymmetrisches Prefetch-Fenster **+4 vorwärts / −2 rückwärts**
-  (aktiv + 6 Nachbarn = 7 im RAM-LRU; Priorität +1 > +2 > −1 > +3 > −2 > +4;
-  am Ordnerende weniger Nachbarn, kein Wrap). LRU-Eviction, Hintergrund-
-  Worker-Threads (nicht IdleQueue im UI-Thread), Cache-Key per
-  Content-Hash/Render-Key, kein stiller Fallback, Veraltung sichtbar.
-  Doku-first: Feature-Dokument in feature/quality/ oder
-  feature/product/ (Preview-Cache-Architektur) — **SOLL liegt vor:
-  feature/quality/preview-cache.md**. User-Entscheidung: Hybrid
-  (GPU + WebP). Blockiert nicht F-103-N6, aber manuelle Test soll die
-  optimierte Version zeigen. **Phase 1 Kern-Primitive implementiert (core/gui), verifiziert NICHT BESTANDEN (A1-A6/B7 offen: Display-Pfad, Cell-UI, Stale-Key, Disk-Load, 1:1, F-074, Render-Failed) — Folge-Welle läuft.**
 
 ### PRIO: niedrig (R2, gebündelt)
 
