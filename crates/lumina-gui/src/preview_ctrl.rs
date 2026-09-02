@@ -309,6 +309,8 @@ pub struct PreviewController {
     /// probe_id -> attempts so far (also marks in-flight while > 0).
     attempts: BTreeMap<String, u32>,
     failed: BTreeMap<String, String>,
+    /// Pending failures not yet drained for logging (keeps `failed` persistent for the visible badge, A2).
+    pending_failed: BTreeMap<String, String>,
     in_flight: BTreeMap<String, ()>,
     /// probe_id -> the last successfully produced digest for that probe. This
     /// is what [`Self::needs_job`] and [`Self::neighbor_preview`] consult; it is
@@ -363,6 +365,7 @@ impl PreviewController {
             result_rx,
             attempts: BTreeMap::new(),
             failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
             in_flight: BTreeMap::new(),
             probe_digests: BTreeMap::new(),
             probe_stamps: BTreeMap::new(),
@@ -479,13 +482,15 @@ impl PreviewController {
                     }
                     self.in_flight.remove(&probe);
                     self.failed.remove(&probe);
+                    self.pending_failed.remove(&probe);
                 }
                 PreviewOutcome::Failed(message) => {
                     log::warn!("neighbor preview failed for {}: {message}", result.name);
                     self.in_flight.remove(&probe);
                     let attempts = self.attempts.get(&probe).copied().unwrap_or(0) + 1;
                     self.attempts.insert(probe.clone(), attempts);
-                    self.failed.insert(probe, message);
+                    self.failed.insert(probe.clone(), message.clone());
+                    self.pending_failed.insert(probe, message);
                 }
             }
         }
@@ -505,6 +510,7 @@ impl PreviewController {
         self.probe_digests.remove(probe_id);
         self.probe_stamps.remove(probe_id);
         self.failed.remove(probe_id);
+        self.pending_failed.remove(probe_id);
     }
 
     /// A6: announce the preview kind/resolution the next scheduling round will
@@ -582,11 +588,14 @@ impl PreviewController {
         self.failed.get(probe_id).map(String::as_str)
     }
 
-    /// Take all recorded worker failures since the last call (probe_id,
-    /// message). The UI shows them visibly (no silent fallback) and the retry
-    /// budget in [`Self::needs_job`] is consumed as failures accumulate.
+    /// Take all *pending* worker failures since the last call (probe_id,
+    /// message) for logging. The visible `Failed` badge stays via `failed` /
+    /// `probe_state` until the probe succeeds or is invalidated — draining does
+    /// not clear the visible badge (A2), only the pending log queue.
     pub fn drain_failures(&mut self) -> Vec<(String, String)> {
-        std::mem::take(&mut self.failed).into_iter().collect()
+        std::mem::take(&mut self.pending_failed)
+            .into_iter()
+            .collect()
     }
 
     /// Discard all state when the browsed directory changes (new source set).
@@ -601,6 +610,7 @@ impl PreviewController {
         self.lru.clear();
         self.in_flight.clear();
         self.failed.clear();
+        self.pending_failed.clear();
         self.attempts.clear();
         self.probe_digests.clear();
         self.probe_stamps.clear();
@@ -738,6 +748,7 @@ mod tests {
             result_rx: mpsc::channel::<PreviewResult>().1,
             attempts: BTreeMap::new(),
             failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
             in_flight: BTreeMap::new(),
             probe_digests: BTreeMap::new(),
             planned_kind: None,
@@ -771,13 +782,22 @@ mod tests {
         }
         assert!(!ctrl.needs_job("k"));
 
-        // Drain failures surfaces the visible message (no silent fallback).
+        // Drain failures surfaces the pending log message (no silent fallback) while the visible badge stays.
         ctrl.failed.insert("k".into(), "boom".into());
+        ctrl.pending_failed.insert("k".into(), "boom".into());
         assert_eq!(
             ctrl.drain_failures(),
             vec![("k".to_owned(), "boom".to_owned())]
         );
-        assert!(ctrl.drain_failures().is_empty(), "drain is consuming");
+        assert!(
+            ctrl.drain_failures().is_empty(),
+            "pending drain is consuming"
+        );
+        assert_eq!(
+            ctrl.failure("k"),
+            Some("boom"),
+            "visible badge persists after log drain (A2)"
+        );
     }
 
     /// A *miss* must be visible as a "needs job / wird vorbereitet" state and
@@ -793,6 +813,7 @@ mod tests {
             result_rx: mpsc::channel::<PreviewResult>().1,
             attempts: BTreeMap::new(),
             failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
             in_flight: BTreeMap::new(),
             probe_digests: BTreeMap::new(),
             planned_kind: None,
@@ -945,6 +966,7 @@ mod tests {
             result_rx: mpsc::channel::<PreviewResult>().1,
             attempts: BTreeMap::new(),
             failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
             in_flight: BTreeMap::new(),
             probe_digests: BTreeMap::new(),
             planned_kind: None,
@@ -993,6 +1015,7 @@ mod tests {
             result_rx: mpsc::channel::<PreviewResult>().1,
             attempts: BTreeMap::new(),
             failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
             in_flight: BTreeMap::new(),
             probe_digests: BTreeMap::new(),
             planned_kind: None,
