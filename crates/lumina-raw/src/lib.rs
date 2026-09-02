@@ -227,23 +227,23 @@ pub fn decode_file(path: impl AsRef<std::path::Path>) -> Result<RawImage, RawErr
 }
 
 pub fn decode_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawImage, RawError> {
-    // R2-RAW-03 (API-Hygiene): the `name` parameter is currently unused by the
-    // decoder itself. Removing it is a *breaking* change because callers across
-    // crate boundaries rely on the current signature — `lumina-cli`
-    // (`main.rs`), `lumina-mcp` (`util.rs`, `tools/load.rs`), `lumina-gui`
-    // (`lib.rs`, three sites), `lumina-bench` and several tests all pass a
-    // filename here. **Decision: preserve for API stability.** The parameter is
-    // intentionally kept (not `#[deprecated]`, not removed) so the public
-    // contract stays stable until a deliberate breaking-version bump; a
-    // `#[deprecated]` attribute would instead push `warn(deprecated)` onto every
-    // caller — including `lumina-gui`/`lumina-bench` which are out of scope for
-    // this change and would fail the workspace-wide 0-warning clippy gate. If the
-    // parameter is ever dropped, all call sites listed above must be updated in
-    // the same breaking release.
-    let _ = name;
+    // R2-RAW-03 (API-Hygiene): the `name` parameter was previously dead
+    // (`let _ = name`). It is now **used** for input validation and diagnostic
+    // context — an empty/missing name is rejected loudly instead of being
+    // silently ignored. The signature is intentionally preserved (no breaking
+    // removal) so the cross-crate `decode_bytes(bytes, filename)` contract stays
+    // stable until a deliberate version bump; a `#[deprecated]` would push
+    // `warn(deprecated)` onto every caller (cli/mcp/gui/bench) and break the
+    // workspace 0-warning gate. If the parameter is ever dropped, all call sites
+    // listed above must change in the same release.
+    let name_ref = name.as_ref();
+    if name_ref.trim().is_empty() {
+        return Err(RawError::InvalidData("missing file name"));
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = bytes;
+        let _ = name_ref;
         Err(RawError::UnsupportedPlatform)
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -260,11 +260,14 @@ pub fn decode_bytes_with_options(
     name: impl AsRef<str>,
     options: &RawDecodeOptions,
 ) -> Result<RawImage, RawError> {
-    // See `decode_bytes`: `name` stays in the signature until R2-RAW-03.
-    let _ = name;
+    let name_ref = name.as_ref();
+    if name_ref.trim().is_empty() {
+        return Err(RawError::InvalidData("missing file name"));
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (bytes, options);
+        let _ = name_ref;
         Err(RawError::UnsupportedPlatform)
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -310,13 +313,18 @@ pub fn read_metadata(path: impl AsRef<std::path::Path>) -> Result<RawMetadata, R
 
 /// Metadata-only variant of [`read_metadata`] for in-memory bytes.
 ///
-/// `name` exists for signature parity with [`decode_bytes`] (see R2-RAW-03)
-/// and is currently unused by the decoder itself.
+/// `name` exists for signature parity with [`decode_bytes`] (R2-RAW-03) and is
+/// now used for the same empty-name validation as the decode entry points
+/// (no silent fallback when the caller forgets the file name).
 pub fn read_metadata_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawMetadata, RawError> {
-    let _ = name;
+    let name_ref = name.as_ref();
+    if name_ref.trim().is_empty() {
+        return Err(RawError::InvalidData("missing file name"));
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = bytes;
+        let _ = name_ref;
         Err(RawError::UnsupportedPlatform)
     }
     #[cfg(not(target_arch = "wasm32"))]
