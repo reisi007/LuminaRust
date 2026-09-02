@@ -152,7 +152,6 @@ pub enum SpotMode {
     Generative,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MaskTool {
     #[default]
@@ -409,7 +408,6 @@ pub struct LuminaApp {
     selected_mask_id: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     mask_name_input: String,
-    #[cfg(not(target_arch = "wasm32"))]
     mask_tool: MaskTool,
     /// Normalized brush radius (0..=1 in source space). Driven by a slider.
     #[cfg(not(target_arch = "wasm32"))]
@@ -897,7 +895,6 @@ impl LuminaApp {
             selected_mask_id: None,
             #[cfg(not(target_arch = "wasm32"))]
             mask_name_input: String::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             mask_tool: MaskTool::None,
             #[cfg(not(target_arch = "wasm32"))]
             brush_radius: 0.05,
@@ -911,15 +908,10 @@ impl LuminaApp {
             drag_current: None,
             #[cfg(not(target_arch = "wasm32"))]
             drawing: false,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_tool: SpotTool::None,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_mode: SpotMode::Heuristic,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_radius: 18.0,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_feather: 0.5,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_opacity: 1.0,
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
@@ -1764,22 +1756,23 @@ impl LuminaApp {
         self.drawing = false;
     }
 
-        pub fn set_spot_tool(&mut self, tool: SpotTool) {
+    pub fn set_spot_tool(&mut self, tool: SpotTool) {
         self.spot_tool = tool;
         if tool != SpotTool::None {
             self.mask_tool = MaskTool::None;
         }
     }
-        pub fn spot_tool(&self) -> SpotTool {
+    pub fn spot_tool(&self) -> SpotTool {
         self.spot_tool
     }
-        pub fn set_spot_mode(&mut self, mode: SpotMode) {
+    pub fn set_spot_mode(&mut self, mode: SpotMode) {
         self.spot_mode = mode;
     }
-        pub fn spot_mode(&self) -> SpotMode {
+    pub fn spot_mode(&self) -> SpotMode {
         self.spot_mode
     }
-        pub fn commit_spot_heal(
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn commit_spot_heal(
         &mut self,
         center: lumina_sidecar::Point2,
         radius: f32,
@@ -1824,7 +1817,8 @@ impl LuminaApp {
         let _ = self.render();
         Ok(())
     }
-        pub fn clear_spot_heals(&mut self) {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn clear_spot_heals(&mut self) {
         self.recipe.extras.remove("spot_removals");
         self.mark_dirty();
         self.save_sidecar();

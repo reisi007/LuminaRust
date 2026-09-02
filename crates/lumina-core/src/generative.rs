@@ -1,3 +1,4 @@
+#![allow(clippy::identity_op)]
 #![allow(clippy::field_reassign_with_default)]
 //! Generative canvas + keep_generative_content logic (GEN-FILL-03).
 //! Plus GEN-FILL-01 heuristic auto-fill for transparent pixels after lens correction.
@@ -572,10 +573,10 @@ mod tests {
         for i in 0..9 {
             pixels[i * 4 + 3] = 0;
         }
-        pixels[(1 * 3 + 1) * 4] = 100;
-        pixels[(1 * 3 + 1) * 4 + 1] = 150;
-        pixels[(1 * 3 + 1) * 4 + 2] = 200;
-        pixels[(1 * 3 + 1) * 4 + 3] = 255;
+        pixels[4 * 4] = 100;
+        pixels[4 * 4 + 1] = 150;
+        pixels[4 * 4 + 2] = 200;
+        pixels[4 * 4 + 3] = 255;
         let mut frame = crate::ImageFrame::new(3, 3, pixels).unwrap();
         assert!(crate::generative::has_transparent_pixels(&frame));
         let filled = crate::generative::fill_transparent_heuristic(&mut frame, 0);

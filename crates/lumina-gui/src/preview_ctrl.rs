@@ -1066,7 +1066,7 @@ mod tests {
         let disk = PreviewDiskCache::in_folder(dir.path()).unwrap();
         disk.clear().unwrap();
         assert!(disk
-            .load(&ctrl.probe_digest("neighbor2").unwrap().to_owned())
+            .load(ctrl.probe_digest("neighbor2").unwrap())
             .unwrap()
             .is_none());
 
