@@ -31,6 +31,42 @@ Jede Maske referenziert mindestens:
 - Datenformat, Auflösung, Kanalzahl und Artefakt-Prüfsumme;
 - Erstellungszeitpunkt und Generatorversion.
 
+### Normative Details (F-082-FOLLOWUP, SOLL)
+
+Diese Bestandteile sind normativ und werden in `lumina-onnx`/`lumina-sidecar`
+über `ModelManifest` → `ModelIdentity` + `ArtifactReference` persistiert. Eine
+Maske ist nur gültig, wenn **alle** Bestandteile übereinstimmen; eine
+Abweichung markiert sie als `stale` (keine stille Neuberechnung).
+
+- **Modell-Hash (`model_hash`):** SHA-256 über die exakten Artefakt-Bytes
+  (`.onnx`-Datei), hex-kodiert `sha256:<64 hex>`. Der Pin steht in
+  `ModelManifest.model_hash` und wird beim Laden via
+  `lumina_onnx::hash::verify_model_file` geprüft. Bis echte Gewichte
+  committet sind trägt das Manifest den Platzhalter
+  `pending-integration` (`ModelHashStatus::Pending` — nicht verifizierbar,
+  aber nicht als `Verified` ausgebbar). Ein Mismatch ist
+  `ModelArtifactStale` (harter Fehler, nie stiller Fallback). Siehe
+  `crates/lumina-onnx/tests/fixtures/README.md` und
+  `feature/quality/fixtures-licensing.md` §3.4 für den hash-gepinnten
+  Behavior-Fixture.
+- **Inferenzauflösung:** dokumentiert `1024×1024` für alle v1-Modelle
+  (BiRefNet `BiRefNet`, SAM 2.1 `sam2.1_hiera_*`; Quelle:
+  `ModelInputSpec.resolution`). Die Auflösung ist Teil der
+  `ModelInputSpec` und fließt in den deterministischen
+  `input_spec_digest` (`sha256:<hex>` unter `ModelIdentity.extras[
+  "input_spec_digest"]`) ein — eine Auflösungsänderung macht persistierte
+  Masken `stale`, selbst wenn Name/Version/Hash gleich bleiben (R2-ONNX-01).
+- **Vorverarbeitung:** pro Manifest `InputNormalization` (ImageNet
+  `mean=[0.485,0.456,0.406]`, `std=[0.229,0.224,0.225]`), Kanal-Layout
+  `Rgb`, Tensor-Format `Nchw` und Tensor-Namen (`input`/`images` →
+  `output`/`masks`). Die Normalisierung wird im ORT-Pfad via
+  `normalize_rgb_to_nchw` angewendet (CHW-Order); Vorverarbeitung ist damit
+  Teil des `input_spec_digest` und jede Änderung (mean/std, Layout,
+  Tensor-Name) invalidiert persistierte Masken. Tests dürfen keine
+  Gewichte aus dem Netz laden — nur lokale, hash-gepinnte Fixtures unter
+  `crates/lumina-onnx/tests/fixtures/` (deterministisch, dokumentiert,
+  kein spontaner Download, sonst `#[ignore]`/Env-Gate).
+
 ## Artefakte
 
 Die JSON-Datei speichert Definition und Referenz. Die Matte selbst liegt als

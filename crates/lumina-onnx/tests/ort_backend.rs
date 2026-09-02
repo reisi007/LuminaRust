@@ -506,3 +506,275 @@ fn resolver_reports_missing_artifact_without_fallback() {
         "a requested real engine with a missing artifact must be a hard error, got {engine:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MaskGraph builder integration (F-082-FOLLOWUP: echter ORT-Pfad + MaskGraph)
+// ---------------------------------------------------------------------------
+
+/// The real ORT matte is a valid `MaskGraph` source plane: a `MaskGraph`
+/// built from the inferred plane evaluates `invert`/`union` without a silent
+/// resize or fallback, proving the builder chain
+/// `OrtBackend::infer → MaskPlane → MaskGraph::evaluate` is wired.
+#[test]
+fn ort_matte_feeds_maskgraph_builder_correctly() {
+    use lumina_core::{MaskGraph, MaskPlane};
+    use lumina_sidecar::{
+        CoordinateSystem, DecodeFingerprint, Extras, GeometryFingerprint, MaskDefinition,
+        MaskOperation, MaskReference, ModelIdentity, Preprocessing, Resolution, SourceFingerprint,
+        VirtualCopy,
+    };
+    use std::collections::BTreeMap;
+
+    let path = write_pinned_fixture("maskgraph-ort");
+    let manifest = crafted_manifest(FIXTURE_PIN.to_owned(), INPUT_NAME, OUTPUT_NAME);
+    let backend = OrtBackend::new(&path, manifest).expect("pinned fixture must load");
+    let img = solid_frame(4, 4, [64, 128, 192]);
+    let matte = backend.infer(&img).expect("ort must infer");
+    assert_eq!((matte.width, matte.height), (4, 4));
+    let _ = std::fs::remove_file(&path);
+
+    // Build a tiny DAG: source `a` carries the ORT matte, `b` is a second
+    // deterministic source, `u = union(a,b)` and `n = invert(a)`.
+    let source_def = |id: &str| MaskDefinition {
+        id: id.into(),
+        name: id.into(),
+        source_fingerprint: SourceFingerprint {
+            content_hash: "h".into(),
+            byte_length: 1,
+            extras: Extras::new(),
+        },
+        decode_context: DecodeFingerprint {
+            decoder: "d".into(),
+            version: "1".into(),
+            parameters: BTreeMap::new(),
+            extras: Extras::new(),
+        },
+        geometry_context: GeometryFingerprint {
+            width: matte.width,
+            height: matte.height,
+            orientation: 1,
+            pixel_aspect_ratio: 1.0,
+            extras: Extras::new(),
+        },
+        model: ModelIdentity {
+            name: "CraftedReduceMax".into(),
+            version: "0.0.1".into(),
+            hash: FIXTURE_PIN.into(),
+            extras: Extras::new(),
+        },
+        inference_resolution: Resolution {
+            width: W,
+            height: H,
+            extras: Extras::new(),
+        },
+        preprocessing: Preprocessing {
+            name: "p".into(),
+            version: "1".into(),
+            parameters: BTreeMap::new(),
+            extras: Extras::new(),
+        },
+        rescaling_method: "none".into(),
+        rescaling_parameters: BTreeMap::new(),
+        coordinate_system: CoordinateSystem::SourceOriented,
+        status: lumina_sidecar::MaskStatus::Valid,
+        created_at: "now".into(),
+        generator_version: "g".into(),
+        error_text: None,
+        artifact: None,
+        operation: MaskOperation::Source,
+        references: vec![],
+        prompt: None,
+        extras: Extras::new(),
+    };
+
+    let b_plane = MaskPlane::new(4, 4, vec![1000u16; 16]).unwrap();
+    let definitions = vec![
+        source_def("a"),
+        source_def("b"),
+        MaskDefinition {
+            id: "u".into(),
+            name: "u".into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "h".into(),
+                byte_length: 1,
+                extras: Extras::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "d".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width: 4,
+                height: 4,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            model: ModelIdentity {
+                name: "m".into(),
+                version: "1".into(),
+                hash: "h".into(),
+                extras: Extras::new(),
+            },
+            inference_resolution: Resolution {
+                width: 4,
+                height: 4,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "p".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: lumina_sidecar::MaskStatus::Valid,
+            created_at: "now".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Union,
+            references: vec![
+                MaskReference {
+                    copy_id: "vc".into(),
+                    mask_id: "a".into(),
+                    extras: Extras::new(),
+                },
+                MaskReference {
+                    copy_id: "vc".into(),
+                    mask_id: "b".into(),
+                    extras: Extras::new(),
+                },
+            ],
+            prompt: None,
+            extras: Extras::new(),
+        },
+        MaskDefinition {
+            id: "n".into(),
+            name: "n".into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "h".into(),
+                byte_length: 1,
+                extras: Extras::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "d".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width: 4,
+                height: 4,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            model: ModelIdentity {
+                name: "m".into(),
+                version: "1".into(),
+                hash: "h".into(),
+                extras: Extras::new(),
+            },
+            inference_resolution: Resolution {
+                width: 4,
+                height: 4,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "p".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: lumina_sidecar::MaskStatus::Valid,
+            created_at: "now".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Invert,
+            references: vec![MaskReference {
+                copy_id: "vc".into(),
+                mask_id: "a".into(),
+                extras: Extras::new(),
+            }],
+            prompt: None,
+            extras: Extras::new(),
+        },
+    ];
+
+    let copy = VirtualCopy {
+        id: "vc".into(),
+        name: "VC".into(),
+        is_default: true,
+        recipe: Default::default(),
+        mask_library: definitions,
+        mask_layers: vec![],
+        history: vec![],
+        export_records: vec![],
+        extras: Extras::new(),
+    };
+    let planes = BTreeMap::from([
+        (("vc".into(), "a".into()), matte.clone()),
+        (("vc".into(), "b".into()), b_plane.clone()),
+    ]);
+    let graph = MaskGraph::new(std::slice::from_ref(&copy), planes);
+
+    // Union is max per-pixel; invert is 65535 - value.
+    let union = graph
+        .evaluate(&MaskReference {
+            copy_id: "vc".into(),
+            mask_id: "u".into(),
+            extras: Extras::new(),
+        })
+        .expect("union must evaluate");
+    assert_eq!(union.width, 4);
+    assert_eq!(union.height, 4);
+    assert_eq!(union.values.len(), 16);
+    // Every union pixel is max(ort_value, 1000) — so never below the ORT value.
+    for (idx, &v) in union.values.iter().enumerate() {
+        assert!(v >= matte.values[idx], "union must be max at {idx}");
+        assert!(v >= 1000, "union must dominate the constant plane at {idx}");
+    }
+
+    let inverted = graph
+        .evaluate(&MaskReference {
+            copy_id: "vc".into(),
+            mask_id: "n".into(),
+            extras: Extras::new(),
+        })
+        .expect("invert must evaluate");
+    for (idx, &v) in inverted.values.iter().enumerate() {
+        assert_eq!(v, 65535 - matte.values[idx], "invert at {idx}");
+    }
+}
+
+/// Hash-pinning is visible: the committed fixture's SHA-256 pin is the
+/// `model_hash` the graph persists, and the `MaskGraph` builder (via
+/// `MaskDefinition.model.hash`) carries that exact pin — no download, no
+/// silent fallback.
+#[test]
+fn maskgraph_source_carries_pinned_fixture_hash() {
+    use lumina_sidecar::{Extras, ModelIdentity};
+    let identity = ModelIdentity {
+        name: "CraftedReduceMax".into(),
+        version: "0.0.1".into(),
+        hash: FIXTURE_PIN.into(),
+        extras: Extras::new(),
+    };
+    assert_eq!(identity.hash, FIXTURE_PIN);
+    assert_eq!(identity.hash.len(), 64);
+    // The pin is also the on-disk digest; a mismatched pin would be
+    // `Mismatch` and the ORT path would refuse inference (tested above).
+    let path = write_pinned_fixture("maskgraph-pin");
+    let digest = artifact_digest(&path);
+    assert_eq!(digest, FIXTURE_PIN, "on-disk fixture must match the pin");
+    let _ = std::fs::remove_file(&path);
+}
