@@ -7,10 +7,12 @@ publish = false
 
 [dependencies]
 lumina-core = { path = "../lumina-core" }
-# `zdata` enables the `.lumina.zdata` bundle codec required by
-# `lumina_dust_removal` (F-101-F1); the MCP server is native-only (libraw),
-# so the wasm32 gate inside lumina-sidecar never applies here.
-lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# `zdata` (native `.lumina.zdata` bundle codec via zstd) is native-only.
+# On wasm32 the codec is unavailable — dust_removal reports "not available".
+# The feature is therefore enabled only for non-wasm32 targets so a
+# workspace-wide `cargo check --target wasm32-unknown-unknown` never pulls
+# `zstd-sys` via this crate, even though the native MCP build uses `zdata`.
+lumina-sidecar = { path = "../lumina-sidecar" }
 lumina-raw = { path = "../lumina-raw" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,3 +34,6 @@ gpu = ["dep:lumina-gpu"]
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }

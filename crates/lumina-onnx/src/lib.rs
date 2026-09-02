@@ -36,38 +36,61 @@
 //! is a dependency solely for that identity type — no native/ONNX concern
 //! leaks into the platform-neutral core).
 
-#![cfg(not(target_arch = "wasm32"))]
-
+#[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod hash;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod manifest;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod preprocess;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod resolve;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sam2;
 
-#[cfg(feature = "onnx-rt")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
 pub mod ort_backend;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use backend::{StubBackend, SubjectInference};
+#[cfg(not(target_arch = "wasm32"))]
 pub use hash::{
     compute_sha256_hex, verify_model_file, verify_model_hash, ModelHashStatus,
     PENDING_INTEGRATION_HASH,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use manifest::{
     birefnet_manifest, sam2_1_manifest, sam2_1_manifests, select_variant, ChannelLayout,
     DeviceProfile, InputNormalization, ModelCapabilities, ModelInputSpec, ModelManifest,
     Resolution, Sam2Variant, TensorFormat, BIREFNET_INFERENCE_HEIGHT, BIREFNET_INFERENCE_WIDTH,
     INPUT_SPEC_DIGEST_KEY, SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use preprocess::{
     matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_rgb_to_model,
     rescale_model_matte, validate_output_shape,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use resolve::{try_load_onnx_engine, OnnxEngine};
+#[cfg(not(target_arch = "wasm32"))]
 pub use sam2::{
     model_point_to_source, source_box_to_model, source_point_to_model, BoxPrompt, MaskPromptLogits,
     PointLabel, PromptMaskInference, PromptPoint, SegmentationPrompt, SourceBox, SourcePoint,
     StubSam2Backend,
+};
+
+// ── wasm32 stub ──────────────────────────────────────────────────────────────
+// Native ONNX (ort) is not wasm-compilable. On wasm32 the crate still exists
+// so `cargo check --target wasm32-unknown-unknown` stays green, but every
+// real inference surface reports "not available" explicitly (no silent fallback).
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_stub;
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_stub::{
+    birefnet_manifest, sam2_1_manifest, sam2_1_manifests, select_variant, try_load_onnx_engine,
+    OnnxEngine, StubBackend, SubjectInference,
 };
 
 use thiserror::Error;

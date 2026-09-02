@@ -46,7 +46,7 @@ mod zdata_wasm_stub {
     }
     #[derive(Debug, Clone)]
     pub struct MaskTile {
-        pub id: String,
+        pub mask_id: String,
         pub tile_x: u32,
         pub tile_y: u32,
         pub width: u32,

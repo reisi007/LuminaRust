@@ -21,7 +21,13 @@ sha2 = "0.11"
 # `onnx-rt` feature so the default build/test stays green with no network
 # access. `ort` v2.0.0-rc.13 is fetchable and builds in this environment
 # (including its prebuilt-binary download); see README.md for the landing plan.
-[dependencies.ort]
+# R2-SIDECAR-ZDATA-WASM / FOLLOWUP-WASM-ZDATA-CONSUMER: `ort` (via `ort-sys`) has
+# no wasm32 prebuilt binaries, so it is target-gated to non-wasm32. On wasm32
+# the `onnx-rt` feature therefore resolves to the wasm stub (`wasm_stub.rs`)
+# and never pulls `ort-sys` into the wasm dependency graph; `cargo check
+# --target wasm32-unknown-unknown --features onnx-rt` stays green and reports
+# `RuntimeDisabled` instead of a native build-script failure.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.ort]
 version = "=2.0.0-rc.13"
 optional = true
 

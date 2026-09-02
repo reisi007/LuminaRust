@@ -12,10 +12,11 @@ use crate::error::McpError;
 use crate::util::{get_str, read_and_decode};
 use crate::Server;
 use lumina_core::{ImageFrame, MaskPlane, RenderContext};
+#[cfg(not(target_arch = "wasm32"))]
+use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
 use lumina_sidecar::{
-    append_repair_region, load_sidecar, load_zdata, save_sidecar, sidecar_path_for, zdata_path_for,
-    RepairRegionArtifact, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
-    SOURCE_ACTION_VERSION,
+    load_sidecar, save_sidecar, sidecar_path_for, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SOURCE_ACTION_VERSION,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -98,6 +99,14 @@ pub fn schema() -> Value {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn run(_server: &mut Server, _args: &Value) -> Result<Value, McpError> {
+    Err(McpError::Sidecar(
+        "zdata not available on wasm32: dust_removal requires the native `.lumina.zdata` bundle (zstd)".into(),
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let input_str = get_str(args, "input")?;
     let input = Path::new(input_str);
@@ -255,6 +264,18 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
 /// Resolves the recipe's persisted source actions from the `.lumina.zdata`
 /// bundle. A missing bundle/artifact or a checksum mismatch against the recipe
 /// reference is a loud error — no silent fallback (parity with the CLI).
+#[cfg(target_arch = "wasm32")]
+fn resolve_source_actions(
+    _recipe: &lumina_sidecar::EditRecipe,
+    _zdata_path: &Path,
+) -> Result<Vec<lumina_core::SourceActionArtifact>, McpError> {
+    Err(McpError::Render(
+        "zdata not available on wasm32: source actions require the native `.lumina.zdata` bundle"
+            .into(),
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_source_actions(
     recipe: &lumina_sidecar::EditRecipe,
     zdata_path: &Path,
