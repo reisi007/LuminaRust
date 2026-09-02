@@ -92,26 +92,53 @@ ONNX (`feature/platform/wasm-limits.md`, F-069…F-071) und zur
 ## Offene Browser-Punkte
 
 - ONNX/Masken im Browser sind **optionale** Fähigkeiten (F-070, Feature
-  `onnx-wasm`, off by default) und werden vor Freigabe einzeln als Capability
-  bewertet und dokumentiert — auch Lizenz und Hash-Pin der Modelle (F-078).
+  `onnx-wasm`, off by default, aktuell `RuntimeDisabled` auf WASM, e60a9ad) und
+  werden vor Freigabe einzeln als Capability bewertet und dokumentiert — auch
+  Lizenz und Hash-Pin der Modelle (F-078). `cargo check --target wasm32 -p lumina-onnx --features onnx-rt` ist grün (`RuntimeDisabled`).
 - Browser-Dateiimport, temporärer Speicher (OPFS), Exportmodell und
   quantitative Limits sind als SOLL in `feature/platform/wasm-limits.md`
-  (F-069…F-071) festgelegt.
-- Die Capability-Anzeige im Browser muss RAW und die genannten Punkte klar als
-  nicht verfügbar beziehungsweise (bei F-069/F-070) als erst nach expliziter
-  Aktivierung verfügbar ausweisen, solange sie nicht implementiert sind.
+  (F-069…F-071) normativ festgelegt (Akzeptanzkriterien/Testanforderungen/
+  Capability-Anzeige je Feature, konsistent zu dieser Matrix).
+- Die Capability-Anzeige im Browser muss RAW (`UnsupportedPlatform` bis `wasm-js`),
+  ONNX (`RuntimeDisabled` bis `onnx-wasm` + Modell), `zdata` („not available"),
+  Sidecar-nachbar-Original (OPFS) und die quantitativen Limits (45 MP/24 MP,
+  8 GB/512 MiB/48 MiB, Threads, VRAM, LibRaw 0.22.2) klar als nicht verfügbar
+  beziehungsweise (bei F-069/F-070) als erst nach expliziter Aktivierung
+  verfügbar ausweisen, solange sie nicht implementiert sind.
+
+## Ist-Stand 2026-09-02
+
+**Verifiziert (FOLLOWUP-WASM-ZDATA-CONSUMER e60a9ad):** `cargo check --workspace --target wasm32-unknown-unknown`
+(auch mit `--features zdata`/`onnx-rt`) grün; `cargo check -p lumina-core --target wasm32-unknown-unknown`
+grün, `cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features` grün;
+`lumina-sidecar` `zdata`/`zstd` target-gegatet (`[target.'cfg(not(wasm32))'.dependencies]` + `#[cfg(all(feature="zdata", not(wasm32)))]`),
+Konsumenten `lumina-cli`/`lumina-mcp`/`lumina-gui` consumer-gegatet; `lumina-onnx` native-only
+(`#![cfg(not(wasm32))]` + `ort` target-gegatet, `wasm_stub` `RuntimeDisabled`). Matrix und
+`wasm-limits.md` (F-069…F-071) sind konsistent: Browser-Import Upload/File-Picker + OPFS + Download-Export,
+ONNX optional `onnx-wasm` off, quantitative Budgets implementiert (GUI 8 GB/1,5 GiB LRU, CLI 512 MiB, WASM 48 MiB,
+VRAM 1024 MiB/4, 45 MP/24 MP, Rayon/1-Thread, LibRaw 0.22.2). `feature/README.md` verlinkt
+`platform/wasm-limits.md` (Zeile 90) konsistent; `feature/platform/cli-gui-wasm.md` WASM-Abschnitt
+führt dieselbe Capability-Grenze und Ist-Stand.
 
 ## Quantitative Limits (F-071)
 
 Die detaillierten quantitativen Grenzen für Bildgröße, Speicher, Threads und
-GPU stehen in `feature/platform/wasm-limits.md` (F-071). Kurzfassung:
+GPU stehen in `feature/platform/wasm-limits.md` (F-071). Kurzfassung
+(Stand 2026-09-02, Budgets aus `preview_cache.rs` / `feature/quality/preview-cache.md`
+implementiert):
 
 | Limit | native CLI | Desktop (eframe/wgpu) | Browser (WASM) |
 | --- | --- | --- | --- |
-| Bildgröße (interaktiv vollauflösend) | nur RAM-begrenzt | ≤ 45 MP empfohlen | Soft-Limit 24 MP, darüber Preview-only |
-| RAM-Budget (`StageFrameCache`) | 512 MiB (implementiert) | 512 MiB (implementiert) | 48 MiB (implementiert), Arbeitsbudget ≤ 2 GiB |
-| VRAM-Pool | n. a. (Headless) | 1024 MiB, 4 Einträge (implementiert) | n. a. (kein `lumina-gpu`) |
-| Threads | Rayon (`available_parallelism`) | Worker-Threads | 1 Haupt-Thread; Worker nur mit SharedArrayBuffer (COOP/COEP) |
+| Bildgröße (interaktiv vollauflösend) | nur RAM-begrenzt | ≤ 45 MP empfohlen (M2, Volltextur-Pooling darüber) | Soft-Limit 24 MP (≈ 96 MiB RGBA8/Frame), darüber Preview-only |
+| RAW-Backend / Decode | LibRaw 0.22.2 (gepinnt, `lumina-raw`, `lumina-ci:latest`) | LibRaw 0.22.2 (gepinnt) | nein — `UnsupportedPlatform` (Post-MVP `libraw-wasm`/`wasm-js`) |
+| RAM/Heap | `StageFrameCache` 512 MiB (implementiert) | **8 GB gesamt (RAM+VRAM, LRU)** — `LruPreviewCache` 7 Slots, **LRU-Cap 1,5 GiB** (implementiert; 7×24 MP ≈ 672 MiB) | 48 MiB `StageFrameCache` (implementiert), Arbeitsbudget ≤ 2 GiB (≤ 4 GiB Adressraum), Disk-Tier nativ-only |
+| VRAM-Pool | n. a. (Headless; GPU optional `--features gpu`) | 1024 MiB, 4 Einträge (implementiert, `LUMINA_GPU_VRAM_BUDGET_MB`/`POOL_ENTRIES`) | n. a. (kein `lumina-gpu`) |
+| Threads | Rayon (`available_parallelism`) + `batch --jobs` | Worker-Threads (Decode/Prefetch/Preview) | 1 Haupt-Thread; Worker nur mit SharedArrayBuffer (COOP/COEP) |
+| `zdata`/zstd | ja (Feature `zdata`, target-gegatet) | ja (Feature `zdata`) | nein (native-only, „not available" auf WASM) |
+| ONNX | ja (MVP `onnx-rt`) | ja (MVP `onnx-rt`) | optional (F-070 `onnx-wasm` off, aktuell `RuntimeDisabled` e60a9ad) |
+
+Siehe `wasm-limits.md` für Startwert-Hinweis (F-074-Kalibrierung, `compare.mjs`
+report/warn/gate) und detaillierte Bemerkungen zu 24 MP/45 MP/8 GB/LibRaw-Pin.
 
 ## ONNX-Adapter native-only (Capability-Entscheidung F-082-FOLLOWUP)
 

@@ -362,6 +362,22 @@ Siehe `crates/lumina-gui/src/lib.rs` Dropped-File-Handling `#[cfg(target_arch =
 "wasm32")]`. File-Picker bleibt der WASM-Importpfad (Post-MVP: async-Brücke
 nachrüsten, dann `bytes_async().await` → `load_bytes`).
 
+**Ist-Stand 2026-09-02 (F-069…F-071, e60a9ad):** Browser-Dateiimport ist
+Upload/File-Picker + OPFS + Download-Export (SOLL normativ in
+`feature/platform/wasm-limits.md` F-069); ONNX ist native-only (`lumina-onnx`
+`#![cfg(not(wasm32))]` + `wasm_stub` `RuntimeDisabled`, `ort` target-gegatet;
+`cargo check --target wasm32 -p lumina-onnx --features onnx-rt` grün; Browser-
+Option `onnx-wasm` off by default, F-070); `zdata`/`zstd` native-only target-gegatet
+(sidecar + cli/mcp/gui consumer gating). Quantitative Limits je Plattform sind in
+`feature/platform/wasm-limits.md` (F-071) und `feature/platform/capability-matrix.md`
+normativ dokumentiert (Bildgröße 45 MP/24 MP, RAM 8 GB gesamt / 512 MiB CLI /
+48 MiB WASM + LRU-Cap 1,5 GiB, VRAM 1024 MiB/4, Threads Rayon/1, RAW LibRaw 0.22.2).
+`cargo check -p lumina-core --target wasm32-unknown-unknown` und
+`cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features`
+sind grün; `cargo check --workspace --target wasm32-unknown-unknown` (auch mit
+`zdata`/`onnx-rt`) grün — `feature/README.md` verlinkt `platform/wasm-limits.md`
+(Zeile 90) konsistent.
+
 ### Capability-Matrix Native — `wgpu`-Renderer mit Shared Device (GUI-WGPU-PRESENT-1, 2026-08-26)
 
 Der native Desktop nutzt `eframe` mit dem **wgpu**-Renderer;
