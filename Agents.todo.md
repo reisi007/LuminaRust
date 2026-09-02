@@ -96,7 +96,10 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-_(keine offenen hoch-prio Tasks vor dem nächsten manuellen Test — CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
+- [ ] **[PRIO: hoch] F-103-INTEGRATION-PREVIEW-SIDECAR** (vor F-103-N6, headless, ohne GPU):
+  UI-Integrationstests, die verifizieren dass (1) Preview korrekt gerendert wird (Pipeline `render` gegen 8×8 synthetisches Frame, Pixel-Delta), (2) Regler-Bewegung (Exposure/Contrast/Whites/Blacks per `SliderSpec`/`EditRecipe`) die Preview ändert (`render_key`/`preview_generation` bump + Bild-Delta, Debounce/ROI stabil), (3) Änderungen spätestens beim Schließen der UI im Sidecar persistiert und nach Reload byte-identisch wiederhergestellt werden (`LuminaApp::save_sidecar` → `save_sidecar_if_unchanged` CAS, `load_sidecar` roundtrip, `virtual_copies[vc-original].recipe` == geändert, `document_revision` neu). Headless `LuminaApp` + `egui::Context` + tempdir-Sidecar, kein GPU (`--features gpu` nicht nötig), kein Netzwerk. SOLL: `feature/platform/cli-gui-wasm.md` (F-100, F-103), `feature/architecture/sidecar.md` + `feature/architecture/pipeline.md` (Render-Key, atomar, CAS, kein stiller Fallback). Abnahme: `cargo test -p lumina-gui` headless grün (≥3 neue Tests: preview_correct, slider_changes_preview, sidecar_persist_on_close+reload), `cargo clippy -D warnings`, `cargo fmt`, `cargo check --target wasm32-unknown-unknown --no-default-features` grün; unabhängiger Verifizierungs-Agent bestätigt, danach Task entfernen – dann steht F-103-N6 manueller Test an. Entdeckte Bugs als Folgeaufgaben fixen.
+
+_(keine weiteren offenen hoch-prio Tasks — CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
