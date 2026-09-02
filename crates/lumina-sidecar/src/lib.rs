@@ -17,8 +17,8 @@ use thiserror::Error;
 mod zdata;
 #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 pub use zdata::{
-    append_repair_region, load_zdata, save_zdata, zdata_path_for, MaskTile, RecordKind,
-    RepairRegionArtifact, ZDataContainer, ZDataError,
+    append_repair_region, load_zdata, save_zdata, zdata_path_for, GenerativeCanvasArtifact,
+    MaskTile, RecordKind, RepairRegionArtifact, ZDataContainer, ZDataError,
 };
 
 // WASM stub for zdata (native-only via zstd-sys, but consumers still import symbols).
@@ -57,6 +57,14 @@ mod zdata_wasm_stub {
     pub enum RecordKind {
         MaskTile = 0,
         RepairRegion = 1,
+        GenerativeCanvas = 2,
+    }
+    #[derive(Debug, Clone)]
+    pub struct GenerativeCanvasArtifact {
+        pub id: String,
+        pub width: u32,
+        pub height: u32,
+        pub pixels: Vec<u8>,
     }
     #[derive(Debug, Clone)]
     pub struct RepairRegionArtifact {
@@ -69,6 +77,13 @@ mod zdata_wasm_stub {
     #[derive(Debug, Clone)]
     pub struct ZDataContainer;
     impl ZDataContainer {
+        pub fn generative_canvas(&self, _id: &str) -> Result<GenerativeCanvasArtifact, ZDataError> {
+            Err(ZDataError::Io {
+                operation: "generative_canvas".into(),
+                path: "".into(),
+                message: "zdata not available on wasm32".into(),
+            })
+        }
         pub fn repair_region(&self, _id: &str) -> Result<RepairRegionArtifact, ZDataError> {
             Err(ZDataError::Io {
                 operation: "repair_region".into(),
@@ -81,6 +96,14 @@ mod zdata_wasm_stub {
         }
     }
     impl RepairRegionArtifact {
+        pub fn checksum(&self) -> String {
+            String::new()
+        }
+        pub fn validate(&self) -> Result<(), ZDataError> {
+            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
+        }
+    }
+    impl GenerativeCanvasArtifact {
         pub fn checksum(&self) -> String {
             String::new()
         }
@@ -127,8 +150,8 @@ mod zdata_wasm_stub {
 }
 #[cfg(all(feature = "zdata", target_arch = "wasm32"))]
 pub use zdata_wasm_stub::{
-    append_repair_region, load_zdata, save_zdata, zdata_path_for, MaskTile, RecordKind,
-    RepairRegionArtifact, ZDataContainer,
+    append_repair_region, load_zdata, save_zdata, zdata_path_for, GenerativeCanvasArtifact,
+    MaskTile, RecordKind, RepairRegionArtifact, ZDataContainer,
 };
 
 pub const FORMAT: &str = "lumina-sidecar";
@@ -453,8 +476,48 @@ pub struct MaskLayer {
     pub extras: Extras,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerativeCanvas {
+    pub output_width: u32,
+    pub output_height: u32,
+    pub source_offset_x: i32,
+    pub source_offset_y: i32,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerativeEdit {
+    pub version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas: Option<GenerativeCanvas>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_generative_content: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fill_transparent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expand_beyond_image: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+impl GenerativeEdit {
+    pub fn effective_keep(&self) -> bool { self.keep_generative_content.unwrap_or(true) }
+}
+impl GenerativeCanvas {
+    pub fn validate(&self) -> Result<(), SidecarError> {
+        if self.output_width == 0 || self.output_height == 0 { return invalid("generative canvas output dimensions must be > 0"); }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditRecipe {
+
     pub recipe_version: String,
     pub adjustments: BTreeMap<String, f64>,
     pub curves: Option<Curves>,
@@ -480,6 +543,7 @@ pub struct EditRecipe {
     /// replacement). Additive in schema v2; absent is the empty list and
     /// requires no migration.
     pub source_actions: Vec<SourceActionSpec>,
+    pub generative_edit: Option<GenerativeEdit>,
     pub options: BTreeMap<String, String>,
     pub auto_features: AutoFeatures,
     pub extras: Extras,
@@ -571,6 +635,12 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(&self.source_actions).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(generative_edit) = &self.generative_edit {
+            root.insert(
+                "generative_edit".into(),
+                serde_json::to_value(generative_edit).map_err(serde::ser::Error::custom)?,
+            );
+        }
         root.insert("adjustments".into(), Value::Object(adjustment));
         root.insert(
             "options".into(),
@@ -631,6 +701,11 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .transpose()
             .map_err(serde::de::Error::custom)?
             .unwrap_or_default();
+        let generative_edit = root
+            .remove("generative_edit")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
         if let Some(Value::Object(mut object)) = root.remove("adjustments") {
             if let Some(value) = object.remove("curves") {
                 curves = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
@@ -685,6 +760,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             perspective,
             effects,
             source_actions,
+            generative_edit,
             options,
             auto_features,
             extras: root.into_iter().collect(),
@@ -932,6 +1008,7 @@ impl Default for EditRecipe {
             perspective: None,
             effects: None,
             source_actions: Vec::new(),
+            generative_edit: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),

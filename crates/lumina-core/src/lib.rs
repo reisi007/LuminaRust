@@ -11,6 +11,7 @@ use thiserror::Error;
 pub mod cache;
 pub mod histogram;
 pub mod mask_loader;
+pub mod spot_heal;
 pub mod mask_modulation;
 pub mod mask_tiles;
 pub mod masks;
