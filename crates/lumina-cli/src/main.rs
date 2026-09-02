@@ -34,12 +34,14 @@ use lumina_lensfun::{Corrector, LensfunDb};
 use lumina_gpu::{unsupported_gpu_stages_with_context, Frame, GpuContext};
 // Visible backend-selection logging (no silent fallback to CPU).
 use log::info;
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(unused_imports)]
+use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
 use lumina_sidecar::{
-    append_repair_region, artifact_status, load_sidecar, load_zdata, save_sidecar,
-    sidecar_path_for, AnalysisFingerprint, ArtifactStatus, DecodeFingerprint, EditRecipe,
-    GeometryFingerprint, HistoryEntry, MaskOperation, MaskStatus, Preset, RepairRegionArtifact,
-    SidecarDocument, SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceIdentity,
-    SOURCE_ACTION_VERSION,
+    artifact_status, load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint,
+    ArtifactStatus, DecodeFingerprint, EditRecipe, GeometryFingerprint, HistoryEntry,
+    MaskOperation, MaskStatus, Preset, SidecarDocument, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SourceIdentity, SOURCE_ACTION_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -119,9 +121,17 @@ fn init_render_backend() -> Option<GpuContext> {
 // Per-thread cache for the [`GpuContext`], so the (potentially expensive)
 // adapter/device enumeration happens once per worker thread rather than per
 // image in a batch.
+//
+// SIGTRAP-GPU-TESTS: wgpu `Device`/`Queue` teardown on a Rayon worker thread
+// can raise SIGTRAP (Metal autorelease / thread-affine teardown). The context
+// is therefore intentionally leaked per worker thread — `ManuallyDrop` prevents
+// the thread_local destructor from running wgpu teardown on Rayon thread exit.
+// The OS reclaims the leaked allocation at process exit; this is safe because
+// `GpuContext` is process-scoped and never needs orderly drop on workers.
 #[cfg(feature = "gpu")]
 thread_local! {
-    static GPU_CTX: std::cell::OnceCell<Option<GpuContext>> = const { std::cell::OnceCell::new() };
+    static GPU_CTX: std::cell::OnceCell<std::mem::ManuallyDrop<Option<GpuContext>>> =
+        const { std::cell::OnceCell::new() };
 }
 
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
@@ -182,6 +192,23 @@ fn gpu_routing_reasons(recipe: &EditRecipe, render_ctx: &RenderContext<'_>) -> V
         false,
         render_ctx.camera_white_balance.as_ref(),
     );
+    // Invalid adjustments must also CPU-route so the CPU pipeline's strict
+    // validation (finite + range) runs and rejects them loudly. The GPU shader
+    // has no notion of pipeline ranges and would otherwise silently render
+    // `inf`/`nan`/out-of-range values instead of erroring (so
+    // `cargo test --features gpu` would greenly ignore contract violations).
+    for (key, value) in &recipe.adjustments {
+        let (minimum, maximum) = match key.as_str() {
+            "exposure" => (-10.0, 10.0),
+            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
+            | "vibrance" | "saturation" => (-1.0, 1.0),
+            "wb_temperature" => (1500.0, 12000.0),
+            _ => continue, // unknown keys already flagged above
+        };
+        if !value.is_finite() || *value < minimum || *value > maximum {
+            reasons.push(format!("invalid adjustment `{key}`"));
+        }
+    }
     if !render_ctx.source_actions.is_empty() {
         reasons.push("source_actions (context artifacts)".into());
     }
@@ -881,6 +908,15 @@ fn validate(args: IndexArgs) -> Result<(), CliError> {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
+fn dust_removal(_args: DustRemovalArgs) -> Result<(), CliError> {
+    Err(CliError::Message(
+        "zdata not available on wasm32: dust-removal requires the native `.lumina.zdata` bundle (zstd)"
+            .into(),
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     // Never overwrite the original — or its Lumina bundle files — with the
     // optional render output (REVIEW-CLI-WRITE-1).
@@ -1033,6 +1069,18 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
 /// reading the `.lumina.zdata` bundle.  A missing bundle, a missing artifact id
 /// or a checksum mismatch against the recipe reference is a hard error — there
 /// is no silent fallback (reproducibility over convenience).
+#[cfg(target_arch = "wasm32")]
+fn resolve_source_actions(
+    _recipe: &EditRecipe,
+    _zdata_path: &Path,
+) -> Result<Vec<SourceActionArtifact>, CliError> {
+    Err(CliError::Message(
+        "zdata not available on wasm32: source actions require the native `.lumina.zdata` bundle"
+            .into(),
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_source_actions(
     recipe: &EditRecipe,
     zdata_path: &Path,
@@ -1526,6 +1574,16 @@ fn zdata_mask_tile_id(copy_id: &str, mask_id: &str) -> String {
 /// a clean load need no extra corruption handling: `load_zdata` already
 /// verifies every record checksum up front (REVIEW-SIDECAR-ZDATA-1), so a
 /// surviving tile miss is plain absence.
+#[cfg(target_arch = "wasm32")]
+fn load_persisted_mask_planes(
+    _document: &SidecarDocument,
+    _zdata_path: &Path,
+    _warnings_out: &mut Vec<String>,
+) -> BTreeMap<(String, String), MaskPlane> {
+    BTreeMap::new()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn load_persisted_mask_planes(
     document: &SidecarDocument,
     zdata_path: &Path,
@@ -1870,8 +1928,19 @@ fn process_selected(
     // validates identity and decides whether to use it, re-infer, or fail.
     // R2-CLI-05: a corrupt bundle surfaces as an explicit warning through the
     // same channel as the other mask warnings instead of being silent.
-    let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
-    let loaded_planes = load_persisted_mask_planes(&document, &zdata_path, mask_warnings_out);
+    // On wasm32 the bundle codec (zstd) is unavailable — treat as missing.
+    #[cfg(not(target_arch = "wasm32"))]
+    let (zdata_path, loaded_planes) = {
+        let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
+        let loaded_planes = load_persisted_mask_planes(&document, &zdata_path, mask_warnings_out);
+        (zdata_path, loaded_planes)
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (zdata_path, loaded_planes) = {
+        let dummy_path = std::path::PathBuf::from("");
+        let loaded_planes = load_persisted_mask_planes(&document, &dummy_path, mask_warnings_out);
+        (dummy_path, loaded_planes)
+    };
 
     // F-082-FOLLOWUP: wire the ONNX inference engine into the F-048/F-051
     // decision layer. Default builds wire the deterministic StubBackend; with
@@ -1947,8 +2016,9 @@ fn process_selected(
     // the complete mask/WB/source-action pipeline runs on the CPU branch.
     #[cfg(feature = "gpu")]
     let render_output = GPU_CTX.with(|cell| {
-        let ctx = cell.get_or_init(init_render_backend);
-        render_best_effort(ctx.as_ref(), &frame, &recipe, &render_ctx)
+        let ctx = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
+        let inner: &Option<GpuContext> = ctx;
+        render_best_effort(inner.as_ref(), &frame, &recipe, &render_ctx)
     })?;
     #[cfg(not(feature = "gpu"))]
     let render_output = {
@@ -2351,13 +2421,13 @@ fn reject_same_path(input: &Path, output: &Path) -> Result<(), CliError> {
 fn reject_protected_output(input: &Path, output: &Path) -> Result<(), CliError> {
     reject_same_path(input, output)?;
     let output_resolved = resolve_candidate(output).map_err(|error| io_error(output, error))?;
-    let protected = [
-        ("sidecar", lumina_sidecar::sidecar_path_for(input)),
-        (
-            "mask/source-action bundle",
-            lumina_sidecar::zdata_path_for(input),
-        ),
-    ];
+    let mut protected: Vec<(&str, PathBuf)> =
+        vec![("sidecar", lumina_sidecar::sidecar_path_for(input))];
+    #[cfg(not(target_arch = "wasm32"))]
+    protected.push((
+        "mask/source-action bundle",
+        lumina_sidecar::zdata_path_for(input),
+    ));
     for (kind, target) in protected {
         let target_resolved =
             resolve_candidate(&target).map_err(|error| io_error(&target, error))?;

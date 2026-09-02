@@ -594,7 +594,7 @@ pub struct LuminaApp {
     /// preview) deliberately bypasses the memo because the recipe may have
     /// drifted since the last render.
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
-    gpu_stage_gate: Option<(RenderKey, bool)>,
+    gpu_stage_gate: Option<GpuStageGate>,
     /// True while the VRAM mask texture carries the pipeline-*evaluated* layer
     /// planes (pushed after a full render) rather than only live brush stamps —
     /// then the shader overlay already shows what the CPU overlay would paint.
@@ -635,6 +635,9 @@ pub struct LuminaApp {
     #[cfg(not(target_arch = "wasm32"))]
     frame_previews_ready: usize,
 }
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+type GpuStageGate = ((RenderKey, Option<[f32; 4]>), bool);
 
 /// GUI-WGPU-PRESENT-1: offscreen present target + its egui registration.
 ///
@@ -3040,17 +3043,28 @@ impl LuminaApp {
     /// could serve a verdict for a long-gone recipe.
     #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
     fn recipe_has_unsupported_gpu_stages(&mut self) -> bool {
+        let wb = self.camera_white_balance;
         let cached = self
             .gpu_stage_gate
             .as_ref()
-            .filter(|(key, _)| Some(key) == self.render_key.as_ref())
+            .filter(|((key, cached_wb), _)| {
+                Some(key) == self.render_key.as_ref() && *cached_wb == wb
+            })
             .map(|(_, has_unsupported)| *has_unsupported);
         match cached {
             Some(verdict) => verdict,
             None => {
-                let has_unsupported = !lumina_gpu::unsupported_gpu_stages(&self.recipe).is_empty();
+                let has_unsupported = !lumina_gpu::unsupported_gpu_stages_with_context(
+                    &self.recipe,
+                    false,
+                    wb.as_ref(),
+                )
+                .is_empty();
                 // Memoize only against a concrete key (see doc above).
-                self.gpu_stage_gate = self.render_key.clone().map(|key| (key, has_unsupported));
+                self.gpu_stage_gate = self
+                    .render_key
+                    .clone()
+                    .map(|key| ((key, wb), has_unsupported));
                 has_unsupported
             }
         }

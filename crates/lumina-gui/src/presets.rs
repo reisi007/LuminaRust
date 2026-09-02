@@ -347,8 +347,20 @@ fn validate_preset(preset: &Preset) -> Result<(), String> {
 /// a serialized comparison against the default so future additive recipe
 /// fields stay covered without touching this check.
 fn recipe_scope_violation(recipe: &EditRecipe) -> Option<String> {
-    let mut actual = serde_json::to_value(recipe).ok()?;
-    let mut default = serde_json::to_value(EditRecipe::default()).ok()?;
+    let actual = match serde_json::to_value(recipe) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(format!("failed to serialize recipe: {error}"));
+        }
+    };
+    let default = match serde_json::to_value(EditRecipe::default()) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(format!("failed to serialize default recipe: {error}"));
+        }
+    };
+    let mut actual = actual;
+    let mut default = default;
     for value in [&mut actual, &mut default] {
         if let serde_json::Value::Object(map) = value {
             map.remove("adjustments");

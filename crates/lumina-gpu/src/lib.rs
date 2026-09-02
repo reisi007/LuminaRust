@@ -743,10 +743,10 @@ impl GpuContext {
         queue: wgpu::Queue,
     ) -> Result<Self, GpuError> {
         let mut resources = GpuResources {
-            instance,
-            adapter,
-            device,
-            queue,
+            instance: std::mem::ManuallyDrop::new(instance),
+            adapter: std::mem::ManuallyDrop::new(adapter),
+            device: std::mem::ManuallyDrop::new(device),
+            queue: std::mem::ManuallyDrop::new(queue),
             device_lost: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         // The GUI shares eframe's device/queue (GUI-WGPU-PRESENT-1). A lost or
@@ -792,12 +792,12 @@ impl GpuContext {
 
     /// Borrow the bound [`wgpu::Device`], if any.
     pub fn device(&self) -> Option<&wgpu::Device> {
-        self.resources.as_ref().map(|r| &r.device)
+        self.resources.as_ref().map(|r| &*r.device)
     }
 
     /// Borrow the bound [`wgpu::Queue`], if any.
     pub fn queue(&self) -> Option<&wgpu::Queue> {
-        self.resources.as_ref().map(|r| &r.queue)
+        self.resources.as_ref().map(|r| &*r.queue)
     }
 
     /// Build (once) the color/tone render pipeline: uniform buffer, bind group
@@ -1942,16 +1942,23 @@ impl GpuContext {
 #[cfg(feature = "gpu")]
 struct GpuResources {
     #[allow(dead_code)]
-    instance: wgpu::Instance,
+    instance: std::mem::ManuallyDrop<wgpu::Instance>,
     #[allow(dead_code)]
-    adapter: wgpu::Adapter,
+    adapter: std::mem::ManuallyDrop<wgpu::Adapter>,
     #[allow(dead_code)]
-    device: wgpu::Device,
+    device: std::mem::ManuallyDrop<wgpu::Device>,
     #[allow(dead_code)]
-    queue: wgpu::Queue,
+    queue: std::mem::ManuallyDrop<wgpu::Queue>,
     /// Mirrors device loss into a flag the render methods poll, so a revoked
     /// adapter/device (driver update, GPU reset, monitor unplug) degrades to the
     /// CPU path instead of erroring or panicking (R2-GPU-06).
+    ///
+    /// SIGTRAP-GPU-TESTS: the wgpu handles above are intentionally leaked
+    /// (`ManuallyDrop`). On Metal the teardown is thread-affine and dropping
+    /// `Device`/`Queue` on a Rayon worker thread raises SIGTRAP (signal 5)
+    /// while the tests themselves stay green. Leaking the per-process handles
+    /// avoids that destructor on worker exit; the OS reclaims them at process
+    /// exit. `device_lost` stays droppable (plain `Arc`).
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -2398,10 +2405,10 @@ fn init_gpu_resources() -> Result<GpuResources, GpuError> {
     .map_err(|err| GpuError::DeviceUnavailable(err.to_string()))?;
 
     let mut resources = GpuResources {
-        instance,
-        adapter,
-        device,
-        queue,
+        instance: std::mem::ManuallyDrop::new(instance),
+        adapter: std::mem::ManuallyDrop::new(adapter),
+        device: std::mem::ManuallyDrop::new(device),
+        queue: std::mem::ManuallyDrop::new(queue),
         device_lost: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     register_device_handlers(&mut resources);

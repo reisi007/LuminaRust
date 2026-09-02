@@ -286,8 +286,9 @@ pub fn render_recipe(
     camera_white_balance: Option<[f32; 4]>,
 ) -> Result<ImageFrame, McpError> {
     GPU_CTX.with(|cell| {
-        let ctx = cell.get_or_init(init_render_backend);
-        render_best_effort(ctx.as_ref(), frame, recipe, camera_white_balance)
+        let ctx = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
+        let inner: &Option<GpuContext> = ctx;
+        render_best_effort(inner.as_ref(), frame, recipe, camera_white_balance)
     })
 }
 
@@ -342,7 +343,23 @@ fn render_best_effort(
     // stages alone would also be caught inside `render_with_gpu`; checking
     // here additionally covers the render-context half (As-Shot WB) and keeps
     // CLI/MCP byte-for-byte on the same decision function.
-    let reasons = unsupported_gpu_stages_with_context(recipe, false, camera_white_balance.as_ref());
+    let mut reasons =
+        unsupported_gpu_stages_with_context(recipe, false, camera_white_balance.as_ref());
+    // Invalid adjustment values have no GPU meaning and must CPU-route so the
+    // strict CPU validation rejects them loudly instead of silently rendering
+    // `inf`/`nan`/out-of-range (see the CLI twin in `gpu_routing_reasons`).
+    for (key, value) in &recipe.adjustments {
+        let (minimum, maximum) = match key.as_str() {
+            "exposure" => (-10.0, 10.0),
+            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
+            | "vibrance" | "saturation" => (-1.0, 1.0),
+            "wb_temperature" => (1500.0, 12000.0),
+            _ => continue,
+        };
+        if !value.is_finite() || *value < minimum || *value > maximum {
+            reasons.push(format!("invalid adjustment `{key}`"));
+        }
+    }
     match ctx {
         Some(ctx) if ctx.is_available() && reasons.is_empty() => ctx
             .render_with_gpu(frame, recipe)
@@ -370,9 +387,15 @@ fn render_best_effort(
 
 // Per-thread cache for the [`GpuContext`] (one adapter/device per worker
 // thread) and the once-per-process backend-selection log.
+//
+// SIGTRAP-GPU-TESTS: wgpu `Device`/`Queue` teardown on a Rayon/worker thread
+// can raise SIGTRAP (Metal autorelease / thread-affine teardown). The context
+// is therefore intentionally leaked per worker thread — `ManuallyDrop` prevents
+// the thread_local destructor from running wgpu teardown on thread exit.
 #[cfg(feature = "gpu")]
 thread_local! {
-    static GPU_CTX: std::cell::OnceCell<Option<GpuContext>> = const { std::cell::OnceCell::new() };
+    static GPU_CTX: std::cell::OnceCell<std::mem::ManuallyDrop<Option<GpuContext>>> =
+        const { std::cell::OnceCell::new() };
 }
 
 /// Lazily creates a [`GpuContext`] and logs the backend selection exactly once
@@ -455,14 +478,15 @@ pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpEr
             target.display()
         ))
     })?;
-    let protected: [(&str, PathBuf); 3] = [
+    let mut protected: Vec<(&str, PathBuf)> = vec![
         ("source image", source.to_path_buf()),
         ("sidecar", lumina_sidecar::sidecar_path_for(source)),
-        (
-            "mask/source-action bundle",
-            lumina_sidecar::zdata_path_for(source),
-        ),
     ];
+    #[cfg(not(target_arch = "wasm32"))]
+    protected.push((
+        "mask/source-action bundle",
+        lumina_sidecar::zdata_path_for(source),
+    ));
     for (kind, path) in protected {
         // Both sides use the candidate convention (existing paths are
         // canonicalized; missing ones resolve against their canonical parent),
