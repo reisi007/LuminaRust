@@ -102,15 +102,7 @@ _(keine offenen hoch-prio Tasks vor dem nächsten manuellen Test — CI-ONNX-RT 
 
 ### PRIO: niedrig (R2, gebündelt)
 
-- [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE (Rest: SIDECAR-ZDATA-WASM)**: zstd-sys blockiert
-  workspace-weites wasm32-Gate — `lumina-sidecar` ist target-gegatet
-  (`cargo check --target wasm32-unknown-unknown -p lumina-sidecar --features zdata` grün),
-  `lumina-cli`/`lumina-mcp` sind seit e60a9ad wasm-gegatet. **Offen:** `lumina-gui`
-  importiert `zdata` noch unbedingt (bewusst nicht angefasst, Ein-Crate-Regel;
-  `cargo check --target wasm32-unknown-unknown -p lumina-gui --no-default-features` bleibt grün,
-  workspace-weites wasm-Gate wartet auf GUI-Gating). RAW-03, PRESETS-FAIL-CLOSED,
-  GPU-WB-GUI-GATE, SIGTRAP-GPU-TESTS, MCP-06 am 2026-09-02 verifiziert BESTANDEN
-  (67690ec/c5e5e06/core pub use `downscale_bilinear`).
+_(keine offenen R2-Bündel — SIDECAR-ZDATA-WASM via target-gated `lumina-sidecar` + consumer-gating `lumina-cli`/`lumina-mcp`/`lumina-gui` verifiziert BESTANDEN am 2026-09-02 (9603059/e60a9ad): `cargo check --workspace --target wasm32-unknown-unknown` grün, `cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features` grün, `grep -n zdata crates/lumina-gui/Cargo.toml` nur target `cfg(not(wasm32))`)_
 
 **Phase 6: Persistente AI-Masken**
 
