@@ -76,14 +76,18 @@ ONNX (`feature/platform/wasm-limits.md`, F-069…F-071) und zur
   WASM-Pfade in `lumina-core`/`lumina-sidecar` sind bereits
   `cfg(target_arch = "wasm32")`-gekapselt; `zdata`/`zstd` ist damit keine
   native Bremswirkung mehr fürs workspace-weite wasm32-Gate.
-- **Folgearbeit (offen, R2-SIDECAR-ZDATA-WASM-NEXT):** Die Konsumenten
-  `lumina-cli`, `lumina-mcp` und `lumina-gui` importieren zdata-Symbole
-  (`zdata_path_for`, `load_zdata`, `append_repair_region`, …) weiterhin
-  **unbedingt**. Sobald diese Crates in einem wasm32-Target gebaut werden,
-  melden sie `E0425` (Symbol fehlt, weil der Codec auf WASM aus-`cfg`-gegatet
-  ist). Diese Konsumenten müssen ihre zdata-Importe/`-Aufrufe separat
-  `cfg(target_arch = "wasm32")`-gaten; sie sind bewusst nicht Teil dieser
-  Änderung (konkurrierende Schreibzugriffe auf diese Crates).
+- **Consumer-Gating (erledigt, FOLLOWUP-WASM-ZDATA-CONSUMER e60a9ad):** Die Konsumenten
+  `lumina-cli`/`lumina-mcp`/`lumina-gui` aktivieren `zdata` nur per
+  `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` (Cargo-Gate) und
+  gaten ihre zdata-Importe/Aufrufe per `cfg(not(target_arch = "wasm32"))`
+  (Code-Gate). Auf `wasm32` meldet der Sidecar-Stub (`zdata_wasm_stub`,
+  `cfg(all(feature = "zdata", wasm32))`) „zdata not available" statt `E0425`;
+  `lumina-onnx` gatet `ort` ebenso per Target und liefert auf `wasm32` den
+  `wasm_stub` (`RuntimeDisabled`/`DummyManifest`/`StubBackend`). Damit bleibt
+  `cargo check --workspace --target wasm32-unknown-unknown` auch mit
+  `--features zdata`/`onnx-rt` grün; `reject_protected_target`/`reject_protected_output`
+  nutzen auf `wasm32` ein `Vec` statt Array (Cfg-Push). Keine absolute Pfade,
+  kein stiller Fallback.
 
 ## Offene Browser-Punkte
 

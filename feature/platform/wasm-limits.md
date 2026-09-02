@@ -33,10 +33,11 @@ Fallback, Agents.md).
 
 ## Ist-Stand
 
-**Stand 2026-09-01:** Capability-Matrix existiert qualitativ
-(`feature/platform/capability-matrix.md`); Browser-Dateiimport/ONNX sind nicht
-implementiert; quantitative Limits (Bildgröße/Speicher/Threads/GPU) sind
-nirgends dokumentiert. Bekannte Browser-Eckpunkte aus dem MVP:
+**Stand 2026-09-02 (FOLLOWUP-WASM-ZDATA-CONSUMER verifiziert, e60a9ad):** Capability-Matrix qualitativ,
+`lumina-onnx` native-only mit `wasm_stub` (`RuntimeDisabled`/`DummyManifest`/`StubBackend`),
+`zdata`/`zstd` native-only target-gegatet (sidecar + cli/mcp/gui consumer gating);
+`cargo check --workspace --target wasm32-unknown-unknown` (auch mit `zdata`/`onnx-rt`) ist grün.
+Browser-Dateiimport/ONNX-Inferenz bleiben Post-MVP. Bekannte Browser-Eckpunkte aus dem MVP:
 
 - File-Picker ist der WASM-Importpfad; Drag-and-drop auf WASM ist bewusst
   **nicht** unterstützt (egui-`DroppedFile`-`bytes()` existiert auf wasm32

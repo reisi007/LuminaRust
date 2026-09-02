@@ -96,7 +96,6 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] FOLLOWUP-WASM-ZDATA-CONSUMER** (vor Commit): wasm32 consumer gating für zdata (cli/mcp) + onnx wasm gating (birefnet_manifest/StubBackend) — cargo check wasm32 fehlerfrei (bereits gefixt in sidecar stub + cli cfg, Verifikation ausstehend).
 - [ ] **[PRIO: hoch] CI-ONNX-RT** (vor nächstem CI-Push): `onnx-rt` aus CI-Ausnahme holen — `libssl-dev` (+ `pkg-config`, `clang`) in `docker/Dockerfile` / `ci.yml` ergänzen, dann `cargo test/clippy --features onnx-rt` in CI grün (heute lokal 91/105 grün, CI-exkludiert wegen fehlendem `openssl-sys`). **Nur GPU bleibt hartes CI-Nein** (kein Metal, nur `cargo check -p lumina-gpu --features gpu`), `onnx-rt` hat kein Runner-Hardware-Argument. Gepinnte Entscheidung „CI-Ausnahme onnx-rt" in `Agents.todo.md` danach korrigieren.
 - [ ] **[PRIO: hoch] FOLLOWUP-R2-NIEDRIG-REST** (vor nächstem manuellen Test): PRESETS-FAIL-CLOSED (fail-closed), GPU-WB-GUI-GATE (Kontext-WB), SIGTRAP-GPU-TESTS (Rayon thread_local) — fehlerfrei stellen, gebündelt verifizieren.
 
