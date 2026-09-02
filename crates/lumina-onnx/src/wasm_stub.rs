@@ -36,6 +36,11 @@ pub fn sam2_1_manifest(_v: u8) -> DummyManifest {
 pub fn sam2_1_manifests() -> Vec<DummyManifest> {
     Vec::new()
 }
+pub fn inpaint_heal_manifest() -> DummyManifest {
+    DummyManifest {
+        model_name: "inpaint-heal-xl".into(),
+    }
+}
 pub fn select_variant(_profile: &DummyManifest) -> u8 {
     0
 }

@@ -41,6 +41,8 @@ pub mod backend;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hash;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod inpaint;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod manifest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preprocess;
@@ -60,11 +62,13 @@ pub use hash::{
     PENDING_INTEGRATION_HASH,
 };
 #[cfg(not(target_arch = "wasm32"))]
+pub use inpaint::{InpaintRequest, StubInpaintBackend};
+#[cfg(not(target_arch = "wasm32"))]
 pub use manifest::{
-    birefnet_manifest, sam2_1_manifest, sam2_1_manifests, select_variant, ChannelLayout,
-    DeviceProfile, InputNormalization, ModelCapabilities, ModelInputSpec, ModelManifest,
-    Resolution, Sam2Variant, TensorFormat, BIREFNET_INFERENCE_HEIGHT, BIREFNET_INFERENCE_WIDTH,
-    INPUT_SPEC_DIGEST_KEY, SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
+    birefnet_manifest, inpaint_heal_manifest, sam2_1_manifest, sam2_1_manifests, select_variant,
+    ChannelLayout, DeviceProfile, InputNormalization, ModelCapabilities, ModelInputSpec,
+    ModelManifest, Resolution, Sam2Variant, TensorFormat, BIREFNET_INFERENCE_HEIGHT,
+    BIREFNET_INFERENCE_WIDTH, INPUT_SPEC_DIGEST_KEY, SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use preprocess::{
@@ -89,8 +93,8 @@ pub mod wasm_stub;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_stub::{
-    birefnet_manifest, sam2_1_manifest, sam2_1_manifests, select_variant, try_load_onnx_engine,
-    OnnxEngine, StubBackend, SubjectInference,
+    birefnet_manifest, inpaint_heal_manifest, sam2_1_manifest, sam2_1_manifests, select_variant,
+    try_load_onnx_engine, OnnxEngine, StubBackend, SubjectInference,
 };
 
 use thiserror::Error;

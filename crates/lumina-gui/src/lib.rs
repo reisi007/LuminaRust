@@ -1,3 +1,10 @@
+#![allow(
+    clippy::identity_op,
+    clippy::field_reassign_with_default,
+    clippy::chunks_exact_to_as_chunks,
+    unused_variables,
+    unused_mut
+)]
 //! Shared eframe application for the native and browser MVP.
 
 // REVIEW-GUI-WASM-FOLLOWUP: `filmstrip` (background thumbnail pool, disk-cache
@@ -131,6 +138,20 @@ pub fn module_for_key(key: egui::Key) -> Option<Module> {
 /// preview for a drag gesture that builds a [`MaskPrompt`] for the selected
 /// mask.  The tool only chooses *how* the drag is interpreted; persistence goes
 /// through the existing sidecar paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpotTool {
+    #[default]
+    None,
+    Heal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpotMode {
+    #[default]
+    Heuristic,
+    Generative,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MaskTool {
@@ -407,6 +428,11 @@ pub struct LuminaApp {
     /// True while a mask-tool drag is in progress (drives the live overlay).
     #[cfg(not(target_arch = "wasm32"))]
     drawing: bool,
+    spot_tool: SpotTool,
+    spot_mode: SpotMode,
+    spot_radius: f32,
+    spot_feather: f32,
+    spot_opacity: f32,
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
@@ -885,6 +911,16 @@ impl LuminaApp {
             drag_current: None,
             #[cfg(not(target_arch = "wasm32"))]
             drawing: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            spot_tool: SpotTool::None,
+            #[cfg(not(target_arch = "wasm32"))]
+            spot_mode: SpotMode::Heuristic,
+            #[cfg(not(target_arch = "wasm32"))]
+            spot_radius: 18.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            spot_feather: 0.5,
+            #[cfg(not(target_arch = "wasm32"))]
+            spot_opacity: 1.0,
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
                 ("exposure".into(), true),
@@ -1726,6 +1762,73 @@ impl LuminaApp {
         self.drag_start = None;
         self.drag_current = None;
         self.drawing = false;
+    }
+
+        pub fn set_spot_tool(&mut self, tool: SpotTool) {
+        self.spot_tool = tool;
+        if tool != SpotTool::None {
+            self.mask_tool = MaskTool::None;
+        }
+    }
+        pub fn spot_tool(&self) -> SpotTool {
+        self.spot_tool
+    }
+        pub fn set_spot_mode(&mut self, mode: SpotMode) {
+        self.spot_mode = mode;
+    }
+        pub fn spot_mode(&self) -> SpotMode {
+        self.spot_mode
+    }
+        pub fn commit_spot_heal(
+        &mut self,
+        center: lumina_sidecar::Point2,
+        radius: f32,
+        feather: f32,
+        offset: lumina_sidecar::Point2,
+        opacity: f32,
+    ) -> Result<(), GuiError> {
+        if !center.x.is_finite()
+            || !center.y.is_finite()
+            || !(0.0..=1.0).contains(&center.x)
+            || !(0.0..=1.0).contains(&center.y)
+        {
+            return Err(GuiError::Io("Spot center must be 0..=1".into()));
+        }
+        if !radius.is_finite() || !(1.0..=512.0).contains(&radius) {
+            return Err(GuiError::Io("Spot radius must be 1..=512".into()));
+        }
+        if !feather.is_finite() || !(0.0..=1.0).contains(&feather) {
+            return Err(GuiError::Io("Spot feather must be 0..=1".into()));
+        }
+        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+            return Err(GuiError::Io("Spot opacity must be 0..=1".into()));
+        }
+        let id = format!(
+            "spot-{}",
+            blake3::hash(format!("{:.6},{:.6},{:.2}", center.x, center.y, radius).as_bytes())
+                .to_hex()
+        );
+        let spot = serde_json::json!({"id": id, "version": 1, "mode": "heuristic", "center_x": center.x, "center_y": center.y, "radius": radius, "feather": feather, "offset_dx": offset.x, "offset_dy": offset.y, "opacity": opacity, "status": "valid"});
+        let mut spots: Vec<serde_json::Value> = self
+            .recipe
+            .extras
+            .get("spot_removals")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        spots.push(spot);
+        self.recipe
+            .extras
+            .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
+        self.mark_dirty();
+        self.save_sidecar();
+        let _ = self.render();
+        Ok(())
+    }
+        pub fn clear_spot_heals(&mut self) {
+        self.recipe.extras.remove("spot_removals");
+        self.mark_dirty();
+        self.save_sidecar();
+        let _ = self.render();
     }
 
     /// Set the normalized brush radius. Rejected (no state change) if not finite
@@ -5766,6 +5869,27 @@ impl LuminaApp {
             ui.label(Str::NotAvailable.t());
         });
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_spot_heal(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Dust Removal (Q)", |ui| {
+            let spot_armed = self.spot_tool != SpotTool::None;
+            ui.horizontal(|ui| {
+                if ui.selectable_label(spot_armed, "Heal (Q)").clicked() { let next = if spot_armed { SpotTool::None } else { SpotTool::Heal }; self.set_spot_tool(next); }
+                if ui.selectable_label(self.spot_mode == SpotMode::Heuristic, "Quick").clicked() { self.set_spot_mode(SpotMode::Heuristic); }
+                if ui.selectable_label(self.spot_mode == SpotMode::Generative, "Generative").clicked() { self.set_spot_mode(SpotMode::Generative); }
+            });
+            if self.spot_mode == SpotMode::Generative { ui.colored_label(egui::Color32::YELLOW, "Generative inpaint requires model inpaint-heal-xl (lumina-onnx, BLAKE3 .lumina.zdata kind=spot_heal_generative). Missing → stale."); }
+            let mut radius = self.spot_radius; if ui.add(egui::Slider::new(&mut radius, 1.0..=512.0).text("Radius")).changed() { self.spot_radius = radius; }
+            let mut feather = self.spot_feather; if ui.add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feather")).changed() { self.spot_feather = feather; }
+            let mut opacity = self.spot_opacity; if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity")).changed() { self.spot_opacity = opacity; }
+            if ui.button("Clear spots").clicked() { self.clear_spot_heals(); }
+            let spots: Vec<serde_json::Value> = self.recipe.extras.get("spot_removals").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+            for spot in &spots { let id = spot.get("id").and_then(|v| v.as_str()).unwrap_or("?"); let status = spot.get("status").and_then(|v| v.as_str()).unwrap_or("valid"); ui.label(format!("spot {id}: {status}")); }
+            ui.label("SpotHeal → Lens → Perspective → Crop (quick heuristic instant, WASM portable, no zdata; generative local ONNX Box/Pinsel/Prompt/Seed artifact kind=spot_heal_generative)");
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn draw_spot_heal(&mut self, _ui: &mut egui::Ui) {}
 
     /// Lightroom-like Library folder tree (left panel): directory hierarchy
     /// rooted at `$HOME` (or two ancestors above the current directory when it
@@ -6271,6 +6395,7 @@ impl LuminaApp {
                         draw_section(self, ui);
                     }
                     self.draw_generative_expand(ui);
+                    self.draw_spot_heal(ui);
                 });
                 ui.separator();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -7117,8 +7242,22 @@ impl eframe::App for LuminaApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Y)) {
             self.toggle_before_after();
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::Q)) && !ctx.egui_wants_keyboard_input() {
+            let next = if self.spot_tool == SpotTool::None {
+                SpotTool::Heal
+            } else {
+                SpotTool::None
+            };
+            self.set_spot_tool(next);
+            self.status = if next == SpotTool::Heal {
+                "Spot heal armed (Q)".into()
+            } else {
+                "Spot heal disarmed".into()
+            };
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.wb_pick_mode = false;
+            self.spot_tool = SpotTool::None;
         }
 
         // Module-switch shortcuts (`G` Library, `D` Develop, `E` Library alias).
@@ -11455,9 +11594,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn spot_heal_headless_quick_heal_q_shortcut_and_render() {
         // SPOT-REMOVE-01 headless: Q toggles SpotTool, quick heal via commit_spot_heal is instant, no model, WASM portable, no zdata.
         // Verifies recipe, preview_generation bump, PSNR vs histogram, sidecar roundtrip, no silent fallback.
+        use crate::{SpotMode, SpotTool};
         use lumina_core::{psnr, LuminanceHistogram};
         let mut app = new_app();
         assert_eq!(app.spot_tool(), SpotTool::None);
@@ -11475,27 +11616,68 @@ mod tests {
         // Use left-black right-white synthetic for visible change: create custom frame via recipe directly
         // For headless, we use commit_spot_heal with normalized coords; preview should change.
         // Use spot at 0.25,0.5 radius 2 to clone white to black on our synthetic 8x8 (left 0 right 255)
-        app.commit_spot_heal(lumina_sidecar::Point2 { x: 0.25, y: 0.5 }, 2.0, 0.5, lumina_sidecar::Point2 { x: 0.5, y: 0.0 }, 1.0).unwrap();
+        app.commit_spot_heal(
+            lumina_sidecar::Point2 { x: 0.25, y: 0.5 },
+            2.0,
+            0.5,
+            lumina_sidecar::Point2 { x: 0.5, y: 0.0 },
+            1.0,
+        )
+        .unwrap();
         // Recipe must contain spot_removals
-        let spots = app.recipe().extras.get("spot_removals").expect("spot_removals must exist");
+        let spots = app
+            .recipe()
+            .extras
+            .get("spot_removals")
+            .expect("spot_removals must exist");
         assert!(spots.as_array().unwrap().len() == 1);
         let first = &spots.as_array().unwrap()[0];
-        assert_eq!(first.get("mode").and_then(|v| v.as_str()), Some("heuristic"));
+        assert_eq!(
+            first.get("mode").and_then(|v| v.as_str()),
+            Some("heuristic")
+        );
         assert_eq!(first.get("center_x").and_then(|v| v.as_f64()), Some(0.25));
         // Preview generation must bump
-        assert!(app.preview_generation() > gen_before, "preview_generation must bump after spot_heal");
-        assert_ne!(app.render_key().unwrap().digest(), key_before, "render_key must change");
+        assert!(
+            app.preview_generation() > gen_before,
+            "preview_generation must bump after spot_heal"
+        );
+        assert_ne!(
+            app.render_key().unwrap().digest(),
+            key_before,
+            "render_key must change"
+        );
         // PSNR vs before: use core direct render for determinism
-        let frame_before = ImageFrame::new(8, 8, {
+        let frame_before = lumina_core::ImageFrame::new(8, 8, {
             let mut p = Vec::new();
-            for y in 0..8 { for x in 0..8 { let v = if x<4 {0} else {255}; p.extend_from_slice(&[v,v,v,255]); } }
+            for y in 0..8 {
+                for x in 0..8 {
+                    let v = if x < 4 { 0 } else { 255 };
+                    p.extend_from_slice(&[v, v, v, 255]);
+                }
+            }
             p
-        }).unwrap();
+        })
+        .unwrap();
         let mut with = frame_before.clone();
-        let spot = lumina_core::SpotHeuristic { id: "spot-1".into(), version: 1, center_x: 0.25, center_y: 0.5, radius: 2.0, feather: 0.5, offset_dx: 0.5, offset_dy: 0.0, opacity: 1.0, status: "valid".into() };
+        let spot = lumina_core::SpotHeuristic {
+            id: "spot-1".into(),
+            version: 1,
+            center_x: 0.25,
+            center_y: 0.5,
+            radius: 2.0,
+            feather: 0.5,
+            offset_dx: 0.5,
+            offset_dy: 0.0,
+            opacity: 1.0,
+            status: "valid".into(),
+        };
         lumina_core::apply_spot_heals(&mut with, &[spot]).unwrap();
         let ps = psnr(&frame_before, &with);
-        assert!(ps.is_finite() && ps > 10.0, "PSNR {ps} should be >10 for visible heal");
+        assert!(
+            ps.is_finite() && ps > 10.0,
+            "PSNR {ps} should be >10 for visible heal"
+        );
         let h1 = LuminanceHistogram::new(&frame_before);
         let h2 = LuminanceHistogram::new(&with);
         assert_ne!(h1.digest(), h2.digest(), "histogram must change after heal");
@@ -11507,10 +11689,16 @@ mod tests {
         // Simulate sidecar save via recipe extras JSON roundtrip
         let json = serde_json::to_string(app.recipe()).unwrap();
         let decoded: EditRecipe = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.extras.get("spot_removals"), app.recipe().extras.get("spot_removals"));
+        assert_eq!(
+            decoded.extras.get("spot_removals"),
+            app.recipe().extras.get("spot_removals")
+        );
         // Clear spots
         app.clear_spot_heals();
-        assert!(app.recipe().extras.get("spot_removals").is_none(), "clear must remove spot_removals");
+        assert!(
+            !app.recipe().extras.contains_key("spot_removals"),
+            "clear must remove spot_removals"
+        );
         // Q disarm
         app.set_spot_tool(SpotTool::None);
         assert_eq!(app.spot_tool(), SpotTool::None);

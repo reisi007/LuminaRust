@@ -14,6 +14,7 @@ pub enum PipelineFormat {
 pub enum PipelineStage {
     Decode,
     SourceActions,
+    SpotHeal,
     AutoAnalysis,
     Adjustments,
     Masks,
@@ -37,6 +38,11 @@ impl Default for Pipeline {
                 ),
                 (
                     PipelineStage::SourceActions,
+                    PipelineFormat::Rgba8Srgb,
+                    PipelineFormat::Rgba8Srgb,
+                ),
+                (
+                    PipelineStage::SpotHeal,
                     PipelineFormat::Rgba8Srgb,
                     PipelineFormat::Rgba8Srgb,
                 ),
@@ -398,6 +404,7 @@ mod tests {
             vec![
                 PipelineStage::Decode,
                 PipelineStage::SourceActions,
+                PipelineStage::SpotHeal,
                 PipelineStage::AutoAnalysis,
                 PipelineStage::Adjustments,
                 PipelineStage::Masks,

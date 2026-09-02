@@ -111,6 +111,9 @@ pub struct ModelCapabilities {
     pub class_detection: bool,
     /// Produces per-instance segmentations.
     pub instance_segmentation: bool,
+    /// Spot-heal generative inpaint (SPOT-REMOVE-01, local ONNX).
+    #[serde(default)]
+    pub inpaint_heal: bool,
 }
 
 impl ModelCapabilities {
@@ -122,6 +125,7 @@ impl ModelCapabilities {
             || self.mask_prompt
             || self.class_detection
             || self.instance_segmentation
+            || self.inpaint_heal
     }
 
     /// Validate that at least one capability is set.
@@ -135,7 +139,7 @@ impl ModelCapabilities {
                 name: name.to_owned(),
                 reason: "no model capabilities declared (at least one of subject_segmentation, \
                      box_prompt, point_prompt, mask_prompt, class_detection, \
-                     instance_segmentation must be true)"
+                     instance_segmentation, inpaint_heal must be true)"
                     .into(),
             });
         }
@@ -494,6 +498,36 @@ pub fn birefnet_manifest() -> ModelManifest {
             mask_prompt: false,
             class_detection: false,
             instance_segmentation: false,
+            inpaint_heal: false,
+        },
+    }
+}
+
+pub fn inpaint_heal_manifest() -> ModelManifest {
+    ModelManifest {
+        model_name: "inpaint-heal-xl".into(),
+        model_version: "1.0.0".into(),
+        model_hash: crate::hash::PENDING_INTEGRATION_HASH.into(),
+        license: "Apache-2.0".into(),
+        input: ModelInputSpec {
+            resolution: Resolution {
+                width: 512,
+                height: 512,
+            },
+            channel_layout: ChannelLayout::Rgb,
+            tensor_name: "image".into(),
+            tensor_format: TensorFormat::Nchw,
+            normalization: InputNormalization::IMAGENET,
+        },
+        output_tensor_name: "output".into(),
+        capabilities: ModelCapabilities {
+            subject_segmentation: false,
+            box_prompt: false,
+            point_prompt: false,
+            mask_prompt: false,
+            class_detection: false,
+            instance_segmentation: false,
+            inpaint_heal: true,
         },
     }
 }
@@ -538,6 +572,7 @@ pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
             mask_prompt: true,
             class_detection: false,
             instance_segmentation: false,
+            inpaint_heal: false,
         },
     }
 }
