@@ -73,8 +73,8 @@ Sidecars vollständig wiederherstellbar sein.
   Bit-Tiefe, Qualität, Profile, Metadaten und Dithering (F-037)
 - [`product/generative-expand.md`](product/generative-expand.md): optionaler
   generativer Modus „Entfernen + Erweitern“ — `GenerativeEdit`-Rezept-Stufe,
-  Modell/Prompt/Seed/Prüfsumme, Canvas-Koordinatensystem und Crop-Interaktion
-  (GEN-EXPAND-1)
+  Modell/Prompt/Seed/Prüfsumme, Auto-Fill Transparent nach Lens (GEN-EXPAND-1, erweitert), manueller Expand mit Checkbox `expand_beyond_image` und Crop-Entscheidung `keep_generative_content`
+- [`product/spot-removal.md`](product/spot-removal.md): Staub entfernen schnell (heuristisch, kein Modell, instant) vs. generativ lokal (ONNX Inpaint, `kind = "spot_heal_generative"`) — `SpotRemoval`-Rezept-Stufe, Identität wie AI-Masken, kein stiller Fallback (SPOT-REMOVE-1)
 
 ### Plattformen
 
@@ -146,6 +146,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-070 | ONNX im Browser | [WASM Limits](platform/wasm-limits.md) | hoch |
 | F-071 | Quantitative Plattform-Limits | [WASM Limits](platform/wasm-limits.md) | mittel |
 | GEN-EXPAND-1 | Generatives Entfernen + Erweitern | [Generative Expand](product/generative-expand.md) | hoch |
+| SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
 
 ## Arbeitsweise
 

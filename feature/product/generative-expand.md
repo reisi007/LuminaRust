@@ -8,6 +8,9 @@
 - [Ist-Stand](#ist-stand)
 - [Normative Invarianten](#normative-invarianten)
 - [Rezeptmodell `GenerativeEdit`](#rezeptmodell-generativeedit)
+  - [Auto-Fill Transparent nach Lens Correction](#auto-fill-transparent-nach-lens-correction-normativ)
+  - [Manueller Expand mit Checkbox `expand_beyond_image`](#manueller-expand-mit-checkbox-expand_beyond_image-normativ)
+  - [Crop-Entscheidung `keep_generative_content`](#crop-entscheidung-keep_generative_content-normativ)
 - [Binäres Sidecar-Artefakt und Prüfsumme](#binäres-sidecar-artefakt-und-prüfsumme)
 - [Identität und Veraltung](#identität-und-veraltung)
 - [Pipeline-Platzierung und Koordinatensystem](#pipeline-platzierung-und-koordinatensystem)
@@ -163,12 +166,16 @@ Schema- und Migrationsentscheidung vor Einführung, Agents.md
 | `created_at` | RFC3339 | ja | Erstellungszeitpunkt |
 | `status` | enum | ja | `valid` \| `stale` \| `missing` \| `corrupt` (analog AI-Masken) |
 | `error` | string \| null | nein | Optionaler Fehlertext bei `corrupt`/`missing` |
+| `auto_fill_transparent` | bool | nein | `false` Default; `true` = automatisches generatives Füllen transparenter Pixel nach Lens Correction (siehe unten); Teil von Identität und `recipe_hash` |
+| `expand_beyond_image` | bool | nein | `false` Default = „auf Bild beschneiden"; `true` = Canvas größer ziehen (manueller Expand); Teil von Identität und `recipe_hash` |
+| `keep_generative_content` | bool \| null | nein | `null`/Abwesenheit = `true` Default; `true` = generatives Canvas behalten auch wenn Crop schneidet; `false` = auf aktuelle Ansicht zuschneiden; Teil von Identität |
 
 Validierung: unbekannte Felder bleiben via `serde(flatten)` roundtrip-erhalten
 (pre-MVP, `feature/architecture/sidecar.md`), unbekannte `version` wird
-abgelehnt. `seed`/`canvas`/`prompt`/`model` gehen in `recipe_hash` und
+abgelehnt. `seed`/`canvas`/`prompt`/`model`/`auto_fill_transparent`/
+`expand_beyond_image`/`keep_generative_content` gehen in `recipe_hash` und
 `RenderKey` ein; jede Änderung invalidiert Preview/Export ab `GenerativeEdit`,
-nicht Decode.
+nicht Decode. `false`/`null` ist Identität (nicht implizit `true`).
 
 ### Canvas-Koordinaten > 100 % Expand (normativ)
 
@@ -193,6 +200,126 @@ nicht Decode.
 Ein `GenerativeEdit` ohne aktives Modell oder ohne gültiges Artefakt ist
 `missing`/`stale` und wird sichtbar gemeldet — es gibt **keinen** stillen
 Fallback (kein „weiter so, als wäre nichts generiert worden").
+
+### Auto-Fill Transparent nach Lens Correction (normativ)
+
+**Ziel:** Nach einer Objektivkorrektur (F-098, `lens_correction`) entstehen an
+den Rändern transparente Pixel (Keile/Lücken durch Entzerrung). Statt sie zu
+beschneiden oder schwarz zu füllen, kann die `GenerativeEdit`-Stufe sie
+**automatisch** generativ füllen.
+
+- **Trigger:** `auto_fill_transparent == true` **und** nach `LensCorrection`
+  existieren transparente Pixel (`alpha == 0` oder außerhalb des
+  entzerrten Quellbereichs). Kein Trigger bei `false` oder ohne transparente
+  Pixel → Identität (kein Artefakt, kein `missing`).
+- **Pipeline-Einordnung:** `LensCorrection → GenerativeEdit(auto-fill) → Perspective → Crop`.
+  Der Auto-Fill ist ein `GenerativeEdit`-Durchlauf **nach** Lens, **vor**
+  Perspektive/Crop. Er ist damit von einem manuellen Expand (siehe unten)
+  unterscheidbar, der ebenfalls `GenerativeEdit` nutzt, aber als
+  canvas-definierende Expand-Operation gilt.
+- **Modell/Prompt/Seed:** `model` ist pflichtig wenn `auto_fill_transparent == true`
+  (Validierung: Modellfähigkeit `inpaint` oder `outpaint` muss vorhanden sein,
+  sonst Ablehnung, kein stiller Fallback). `prompt`/`negative_prompt`/`seed`
+  sind optional; Default ist `prompt = ""`, `seed = 0` (deterministisch, in
+  Identität enthalten); `inference_resolution` pflichtig wie oben.
+  Die Region ist implizit: die transparente Maske nach Lens (kein `region`/
+  `mask_reference` nötig; falls gesetzt, wird sie als zusätzliche Inpainting-
+  Region interpretiert und in Canvas-Koordinaten translatiert).
+- **Artefakt:** Wie bei `GenerativeEdit` das vollständige kompositierte Canvas
+  (identische `ArtifactReference`-Semantik, `kind = "generative_canvas"`,
+  BLAKE3, relativ, atomar). Bei `auto_fill_transparent` ist
+  `canvas.output_*` initial `==` Quellabmessung nach Lens (kein Expand);
+  der gefüllte Bereich ersetzt nur transparente Pixel.
+- **Identität/Veraltung:** Zusätzlich zu den generellen Identitätsfeldern
+  gehört `auto_fill_transparent` + die transparente Maske nach Lens (implizit
+  aus `lens_correction` + Quellgeometrie abgeleitet) zur Identität. Änderung
+  von `lens_correction`, Quelle/Decode/Orientierung oder Modellkontext →
+  `stale`/`missing`/`corrupt` sichtbar, keine stille Neuberechnung.
+  Ohne transparente Pixel bleibt der Status `valid` mit unverändertem Canvas
+  (kein Artefakt nötig).
+- **Persistenz:** `auto_fill_transparent` liegt in `GenerativeEdit` pro
+  virtueller Kopie (eigenes Rezept, stabile ID). Relative Pfade, atomar
+  (`Temp + Rename` unter `.zdata.lock`), Schema `version` wie `GenerativeEdit`.
+
+### Manueller Expand mit Checkbox `expand_beyond_image` (normativ)
+
+**Ziel:** Der Benutzer kann den Bildrahmen **explizit** über die Quellfläche
+hinaus vergrößern (>100 %) und den neuen Rand generativ füllen. Die
+Entscheidung wird über eine Checkbox gesteuert.
+
+- **Feld `expand_beyond_image`:** `bool`, **Default `false`** = „auf Bild
+  beschneiden". Label in der GUI: „auf Bild beschneiden" (aus) vs. „Canvas
+  größer ziehen / Expand" (an). `false` → kein Expand, `GenerativeEdit` darf
+  dann nur Inpainting ohne Canvas-Vergrößerung (`canvas.output_* == source_*`);
+  ein Expand-Rahmen wird nicht persistiert. `true` → manueller Expand aktiv,
+  `canvas.output_* > source_*` pflichtig, sonst Validierungsfehler.
+- **UI-Flow „Rahmen ziehen":**
+  1. Checkbox aus (`false`) ist Ausgangszustand; Vorschau zeigt Lens-bereinigten
+     Frame, transparente Ränder würden beschnitten.
+  2. Benutzer aktiviert Checkbox → Expand-Modus an; ein ziehbarer Rahmen
+     erscheint über die Bildkante hinaus (skizzierter Rand, transparent).
+  3. Ziehen des Rahmens definiert `canvas.output_width`/`height` +
+     `source_offset_x`/`y` (Translation wie im Canvas-Abschnitt). Das Seiten-
+     verhältnis kann als Vorgabe dienen (z. B. 16:9), ist aber nicht bindend.
+  4. Optional Prompt/Negativ-Prompt/Seed eingeben; „Generieren" startet den
+     generativen Durchlauf (`model` pflichtig, Fähigkeit `outpaint`).
+  5. Bestätigen setzt die Rezept-Canvas-Geometrie und das Artefakt atomar;
+     Abbrechen verwirft sie (kein Schreiben pro Drag, kein stilles Verwerfen).
+  6. Deaktivieren der Checkbox setzt `expand_beyond_image = false` und macht
+     das Expand-Artefakt `stale` (sichtbar), löscht es aber nicht automatisch.
+- **Pipeline-Einordnung:** Manueller Expand ist eine `GenerativeEdit`-Stufe
+  **vor** `Crop` (und nach `LensCorrection`/`Perspective`): `LensCorrection →
+  (GenerativeEdit auto-fill falls an) → Perspective → GenerativeEdit(expand) → Crop`.
+  Vereinfacht dokumentiert als `Lens → GenerativeEdit(expand) → Perspective → Crop`,
+  wenn Auto-Fill und Expand nicht gleichzeitig aktiv sind; bei gleichzeitiger
+  Nutzung gilt die explizite Zweistufen-Reihenfolge oben (zwei
+  `GenerativeEdit`-Records mit unterschiedlicher Rolle, beide versioniert).
+  Für den MVP darf auch ein einzelner `GenerativeEdit`-Record beide Rollen
+  tragen (`auto_fill_transparent` + `expand_beyond_image` gleichzeitig);
+  die Reihenfolge bleibt Lens → GenerativeEdit → Perspective → Crop und die
+  transparente Maske wird vor dem Expand abgeleitet.
+- **Persistenz:** `expand_beyond_image` + `canvas` pro virtueller Kopie,
+  versioniert (`version` 1), relative Artefaktpfade, atomar, kein absoluter Pfad.
+
+### Crop-Entscheidung `keep_generative_content` (normativ)
+
+**Ziel:** Nach einem generativen Expand/Auto-Fill entscheidet der Benutzer,
+ob das generative Canvas erhalten bleibt oder auf die aktuelle Ansicht
+zugeschnitten wird.
+
+- **Feld `keep_generative_content`:** `bool` (nullable, Default `true`);
+  `null`/Abwesenheit ≡ `true`. `true` = „generatives Canvas behalten auch
+  wenn Crop schneidet" (generatives Artefakt bleibt volle Canvas-Größe,
+  Crop ist nur Ansicht/Export-Ausschnitt). `false` = „auf aktuelle Ansicht
+  zuschneiden" (Crop wird materialisiert: das persistierte Canvas wird auf
+  das normierte Crop-Rechteck zugeschnitten, `canvas.output_*` wird auf
+  Crop-Größe reduziert, `source_offset` neu berechnet, Artefakt neu
+  referenziert/präfixiert, alter Artefakt-Record bleibt bis explizites
+  Pruning erhalten — kein stilles Überschreiben).
+- **Rezept-Felder:** `canvas.output_width`/`height` + `source_offset_x`/`y`
+  beschreiben das **generative Canvas** (Zielrahmen vor Crop). `recipe.geometry.crop`
+  (`x/y/width/height` in `0..=1` auf dem post-GenerativeEdit-Canvas) beschreibt
+  den sichtbaren Ausschnitt. Bei `keep_generative_content == true` bleibt
+  `canvas` unverändert, Crop ist reine Ansicht. Bei `false` wird beim
+  Bestätigen `"auf Ansicht zuschneiden"` die Canvas-Geometrie **ersetzt**
+  durch die Crop-Geometrie: `new_canvas = crop_rect_in_canvas_pixels` (gerundet
+  auf ganze Pixel, `width >= 1 && height >= 1`), `source_offset` wird um
+  `crop.x * canvas_width`/`crop.y` translatiert (`new_source_offset = old_source_offset - crop_offset`);
+  das Ergebnis wird validiert (`0 <= source_offset + source_dim <= output_dim`),
+  in `recipe_hash` aufgenommen und atomar persistiert.
+- **Koordinaten-Translation:** Alle nachgelagerten normierten Koordinaten
+  (Crop, Masken, Perspektive-Shift, F-041-Messbereich, Vignette/Grain) wurden
+  bereits auf dem post-GenerativeEdit-Canvas definiert (siehe
+  Koordinatenreferenzrahmen). Ein Wechsel von `keep_generative_content`
+  invalidiert den Geometrie-Digest sichtbar (`recipe_hash` + `output_dimensions`
+  ändern sich); abhängige Werte werden nie still umgedeutet, sondern als
+  veraltet gemeldet und vom Benutzer neu bestätigt/migriert.
+- **Persistenz:** `keep_generative_content` gehört zur `GenerativeEdit`-Stufe
+  der virtuellen Kopie (eigenes Rezept, stabile ID). Together mit `canvas`
+  und `crop` versioniert; relative Pfade; atomar (`Temp + Rename`); Schema-
+  Migration via `version`-Bump, unbekannte Felder roundtrip-erhalten, unbekannte
+  Version abgelehnt. Ein Sidecar-Bundle-Verschieben hält alle Referenzen
+  gültig.
 
 ## Binäres Sidecar-Artefakt und Prüfsumme
 
@@ -264,10 +391,12 @@ anderes Modell oder auf „ohne generative Stufe rendern".
 ## Pipeline-Platzierung und Koordinatensystem
 
 `GenerativeEdit` ist eine eigene Pipeline-Stufe nach Decode/Source-Actions und
-**vor** Auto-Analyse/Adjustments/Masken/Crop:
+**vor** Auto-Analyse/Adjustments/Masken/Crop, mit einer für Auto-Fill vs.
+manuellen Expand differenzierten Geometrie-Einordnung:
 
 ```text
 Decode → SourceActions → GenerativeEdit → AutoAnalysis → Adjustments → Masks → Crop → Output
+  (generische Einordnung; für Geometrie siehe unten differenziert)
 ```
 
 Begründung: Die Stufe ändert (a) Pixelinhalte wie eine Source-Action und (b)
@@ -276,17 +405,35 @@ alle nachgelagerten Geometrie- und Messbezüge (Masken-Koordinaten, Crop,
 Perspektive, F-041-Messbereich) auf dem **post-GenerativeEdit-Canvas** laufen.
 
 Innerhalb der dokumentierten Geometrie-Unterreihenfolge aus
-`feature/architecture/pipeline.md` gilt verbindlich:
+`feature/architecture/pipeline.md` gilt verbindlich — differenziert nach
+Auto-Fill vs. manuellem Expand:
 
 ```text
-GenerativeEdit
-  → LensCorrection (F-098) → Perspective/Upright (F-099)
-  → Crop (F-093, inklusive Rotation/Spiegelung)
+LensCorrection (F-098)
+  → GenerativeEdit(auto-fill, wenn auto_fill_transparent == true,
+                    füllt transparente Pixel nach Lens)
+  → Perspective/Upright (F-099)
+  → GenerativeEdit(expand, wenn expand_beyond_image == true,
+                    vergrößert Canvas >100 %)
+  → Crop (F-093, inklusive Rotation/Spiegelung, gesteuert durch keep_generative_content)
   → Output
 ```
 
-`GenerativeEdit` definiert das Canvas; alle späteren geometrischen Stufen
-operieren auf diesem Canvas, nicht auf der ursprünglichen Quellgeometrie.
+Vereinfacht (wenn nur eine GenerativeEdit-Rolle aktiv ist):
+
+```text
+GenerativeEdit(auto-fill nach Lens) → Perspective → Crop
+GenerativeEdit(manueller Expand vor Crop) → Crop
+Kombiniert: Lens → GenerativeEdit(auto-fill) → Perspective → GenerativeEdit(expand) → Crop
+```
+
+Für den MVP darf ein einzelner `GenerativeEdit`-Record beide Flags tragen;
+die Reihenfolge bleibt dann `Lens → GenerativeEdit → Perspective → Crop` und
+die transparente Maske wird vor dem Expand abgeleitet. `GenerativeEdit`
+definiert das Canvas; alle späteren geometrischen Stufen operieren auf diesem
+Canvas, nicht auf der ursprünglichen Quellgeometrie. Widersprüche zu
+`pipeline.md` sind hiermit aufgelöst: Auto-Fill ist **nach** Lens,
+manueller Expand **vor** Crop (und nach Perspective).
 
 ### Koordinatenreferenzrahmen (normativ)
 
@@ -312,29 +459,48 @@ operieren auf diesem Canvas, nicht auf der ursprünglichen Quellgeometrie.
 
 ## Interaktion mit Crop/Geometry
 
-- **Crop (F-093):** Normierte Crop-Koordinaten referenzieren das
-  post-GenerativeEdit-Canvas. Das Erweitern über 100 % vergrößert den
-  verfügbaren Crop-Bereich; ein vorher gesetzter Crop behält seine normierten
-  Werte im Canvas-Rahmen, wird aber nicht automatisch verschoben — eine
-  Änderung von `canvas` invalidiert den Geometrie-Digest und macht den
-  sichtbaren Ausschnitt neu zu bestätigen (kein stilles Re-Interpretieren).
+- **Crop (F-093) und `keep_generative_content`:** Normierte Crop-Koordinaten
+  referenzieren das post-GenerativeEdit-Canvas. Bei
+  `keep_generative_content == true` (Default) bleibt das generative Canvas
+  vollständig erhalten — Crop ist nur Ansicht/Export-Ausschnitt; das Artefakt
+  (`generative_canvas`) behält `output_*` und wird nicht beschnitten. Bei
+  `false` („auf aktuelle Ansicht zuschneiden") wird Crop materialisiert:
+  `canvas.output_*` wird auf das normierte Crop-Rechteck reduziert und
+  `source_offset` translatiert (siehe Crop-Entscheidung oben); das neue
+  Canvas geht in `recipe_hash`/`output_dimensions` ein und invalidiert den
+  Geometrie-Digest sichtbar. In beiden Fällen gilt: Das Erweitern über 100 %
+  vergrößert den verfügbaren Crop-Bereich; ein vorher gesetzter Crop behält
+  seine normierten Werte im Canvas-Rahmen, wird aber nicht automatisch
+  verschoben — eine Änderung von `canvas` invalidiert den Geometrie-Digest
+  und macht den sichtbaren Ausschnitt neu zu bestätigen (kein stilles
+  Re-Interpretieren). `expand_beyond_image == false` verbietet
+  `output_* > source_*` (Validierungsfehler).
 - **Rotation/Perspektive (F-093/F-099):** Rotations- und Perspektive-Parameter
   beziehen sich auf das Canvas; der F-041-Messbereich (Match Total Exposure)
-  misst nach Crop/Geometrie auf dem erweiterten Canvas.
-- **Objektivkorrektur (F-098):** Verzeichnung/Vignette/CA werden auf dem
-  Canvas angewandt (nach `GenerativeEdit`, vor Perspektive/Crop). Eine
-  Lensfun-Capability bleibt dabei native-only.
-- **GUI-Interaktion „Expand-Rahmen":** Beim Ziehen des Erweiterungsrahmens
-  zeigt die Vorschau das vergrößerte Canvas mit transparentem/skizziertem
-  Randbereich; die Rezept-Canvas-Geometrie wird erst beim Bestätigen gesetzt
+  misst nach Crop/Geometrie auf dem erweiterten Canvas (bei `keep == false`
+  nach Materialisierung auf dem zugeschnittenen Canvas).
+- **Objektivkorrektur (F-098) und Auto-Fill:** Verzeichnung/Vignette/CA werden
+  auf dem Canvas angewandt; der Auto-Fill (`auto_fill_transparent == true`)
+  füllt transparente Pixel **nach** Lens und **vor** Perspektive/Crop (siehe
+  Pipeline). Ein manueller Expand (`expand_beyond_image == true`) vergrößert
+  das Canvas **vor** Crop. Eine Lensfun-Capability bleibt dabei native-only.
+- **GUI-Interaktion „Expand-Rahmen" und Checkbox:** Checkbox Default
+  `expand_beyond_image == false` („auf Bild beschneiden") — kein Expand.
+  Aktiviert (`true`) erscheint der ziehbare Expand-Rahmen (skizzierter Rand,
+  transparent); die Rezept-Canvas-Geometrie wird erst beim Bestätigen gesetzt
   (kein Schreiben bei jedem Drag, kein stilles Verwerfen bei Abbruch).
-- **Virtuelle Kopien:** `GenerativeEdit` gehört zur jeweiligen virtuellen Kopie
-  (eigenes Rezept). Das generierte Artefakt kann auf Quellbild-Ebene geteilt
-  werden, wenn Quellkontext, Modellkontext und Canvas-Geometrie identisch
-  sind; Masken-Layer, Invertierung und lokale Anpassungen bleiben kopienspezifisch
-  (Agents.md, „Virtuelle Kopien").
+  Danach bietet die Crop-Leiste die Entscheidung `keep_generative_content`
+  (behalten vs. zuschneiden); beide Werte sind persistiert und gehen in die
+  Identität ein.
+- **Virtuelle Kopien:** `GenerativeEdit` (inkl. `auto_fill_transparent`,
+  `expand_beyond_image`, `keep_generative_content`) gehört zur jeweiligen
+  virtuellen Kopie (eigenes Rezept, stabile ID). Das generierte Artefakt kann
+  auf Quellbild-Ebene geteilt werden, wenn Quellkontext, Modellkontext und
+  Canvas-Geometrie identisch sind; Masken-Layer, Invertierung und lokale
+  Anpassungen bleiben kopienspezifisch (Agents.md, „Virtuelle Kopien").
 - **History/Reproduzierbarkeit:** Ein Rezept-Snapshot rendert byte-identisch
-  erneut, wenn alle obigen Identitätsbestandteile unverändert sind.
+  erneut, wenn alle obigen Identitätsbestandteile (inkl. der drei neuen Flags)
+  unverändert sind.
 
 ## Modell, Capability und Lizenz
 
@@ -378,18 +544,44 @@ Nach GUI-STAGE-1/GUI-WGPU-PRESENT-1 (Native Desktop):
    „Entfernen + Erweitern".
 2. **Entfernen:** Objekt über Pinsel/Box auf dem Bild markieren (Maske),
    optional Prompt (und Negativ-Prompt) eingeben, „Generieren" starten.
-3. **Erweitern:** „Expand-Rahmen" über die Bildkante ziehen; Zielformat
+3. **Auto-Fill Transparent (Lens):** Ist `lens_correction` aktiv und
+   `auto_fill_transparent` angehakt, zeigt die Vorschau nach Lens
+   transparente Keile schraffiert/skizziert; „Generieren" füllt sie
+   generativ (implizite transparente Maske, kein manuelles `region`/
+   `mask_reference` nötig). Deaktiviert bleibt die Lücke
+   beschnitten/schwarz (kein Artefakt).
+4. **Erweitern (Checkbox + Rahmen ziehen):** Unter dem Expand-Panel steht
+   die Checkbox „auf Bild beschneiden" (Default **aus** → `expand_beyond_image
+   == false`). Aus: kein Expand, Rahmen nicht ziehbar, `canvas == source`.
+   An (`true`): „Canvas größer ziehen" — ein ziehbarer „Expand-Rahmen" über
+   die Bildkante erscheint (transparenter/skizzierter Rand); Zielformat
    (Seitenverhältnis, z. B. 16:9) kann als Orientierung dienen; optional
    Prompt für den Randbereich. Der Rahmen definiert die Canvas-Geometrie
    (`output_width`/`height` + `source_offset`); >100 % ist dabei explizit
-   erlaubt.
-4. Generierung läuft als sichtbarer Job (Jobstatus, kein Hintergrund-
+   erlaubt. Die Geometrie wird erst beim Bestätigen persistiert (kein
+   Schreiben pro Drag).
+5. **Crop-Entscheidung nach Expand/Auto-Fill:** Nach Bestätigen des
+   generativen Canvas bietet die Crop-Leiste die Wahl
+   `keep_generative_content`: „Generatives Canvas behalten" (`true`, Default)
+   — Crop ist nur Ansicht, Artefakt bleibt voll; vs. „auf aktuelle Ansicht
+   zuschneiden" (`false`) — Canvas wird auf das Crop-Rechteck
+   materialisiert (Translation `source_offset - crop_offset`, validiert,
+   `recipe_hash` ändert sich). Die Entscheidung bleibt persistiert und ist
+   jederzeit umschaltbar (sichtbare Invalidierung, keine stille
+   Re-Interpretation).
+6. Generierung läuft als sichtbarer Job (Jobstatus, kein Hintergrund-
    Stilllauf); bei fehlendem Modell/Artefakt wird die Capability-Abwesenheit
    (`missing`/`stale`/`corrupt`) angezeigt, nicht eine gefälschte Vorschau.
-5. Ergebnis wird als Artefakt (`.lumina.zdata`, `kind = "generative_canvas"`)
+7. Ergebnis wird als Artefakt (`.lumina.zdata`, `kind = "generative_canvas"`)
    persistiert und im Sidecar-Rezept referenziert; Vorschau/Export rendern
-  über die gemeinsame Pipeline auf dem erweiterten Canvas. „Verwerfen"
-   löscht nur das Rezept/das Artefakt, nie das Original.
+   über die gemeinsame Pipeline auf dem (ggf. zugeschnittenen) Canvas.
+   „Verwerfen" löscht nur das Rezept/das Artefakt, nie das Original.
+8. **Visuelle Analyse automatisch:** Jede der drei Aktionen (Auto-Fill,
+   Expand, Crop-Entscheidung) ist visuell verifizierbar: Vorher/Nachher-
+   Vergleich (`Y`), Navigator-Badge (`valid`/`stale`/`missing`/`corrupt`),
+   Histogramm-Overlay und automatische kittest-Snapshots (siehe
+   Testanforderungen, kein manueller Screenshot nötig).
+
 
 ## Abgrenzung zu Source-Actions und KI-Denoise
 
@@ -412,20 +604,24 @@ Prüfungen bestehen (Agents.md § Verifizierung und Tests; Analogie zu
 AI-Masken/virtuellen Kopien):
 
 - **Roundtrip und Schema:** JSON-Roundtrip für `GenerativeEdit` (alle Felder,
-  inkl. `negative_prompt`/`seed`/`canvas`/`region`/`artifact`), unbekannte
-  Felder bleiben erhalten, ungültige `version`/Bereiche werden abgelehnt;
-  Migration v1→v2 (sobald verschachtelte Felder hinzukommen) mit Backup/`migrate`.
+  inkl. `negative_prompt`/`seed`/`canvas`/`region`/`artifact` **plus**
+  `auto_fill_transparent`/`expand_beyond_image`/`keep_generative_content`),
+  unbekannte Felder bleiben erhalten, ungültige `version`/Bereiche werden
+  abgelehnt; Migration v1→v2 (sobald verschachtelte Felder hinzukommen) mit
+  Backup/`migrate`. Default-Werte (`false`/`true`/`null`) roundtrippen stabil
+  und sind Identität.
 - **Nicht-Destruktion:** Originalbytes unverändert nach Generierung, Speichern,
   Löschen und Re-Generierung; Export schreibt neue Datei.
 - **Determinismus:** Identische Eingaben (Quelle, Modell-Hash, Prompt,
-  Negativ-Prompt, Seed, Canvas, Region) → byte-identisches Artefakt (BLAKE3
-  über unkomprimierten RGBA8-Strom).
+  Negativ-Prompt, Seed, Canvas, Region, plus Flags) → byte-identisches Artefakt
+  (BLAKE3 über unkomprimierten RGBA8-Strom).
 - **Veraltung (stale/missing/corrupt):** Tests für jede einzelne
   Identitätsabweichung: Quell-Hash, Decode-Kontext/Orientierung, Modell-Hash,
   `input_spec_digest` (Auflösung/Vorverarbeitung), Prompt/Seed, Canvas-Geometrie,
   Region/Maskenref, Artefakt-Prüfsumme; sowie fehlendes Modell (`pending`),
   fehlendes Artefakt und bitflipped Artefakt (BLAKE3-Fehler). Kein stiller
-  Fallback, Status sichtbar, Neuberechnung nur explizit.
+  Fallback, Status sichtbar, Neuberechnung nur explizit. Zusätzlich: Änderung
+  von `lens_correction` invalidiert Auto-Fill-Artefakt (`stale`).
 - **Artefakt und zdata:** `artifact_status` (`Available`/`Missing`/`Corrupt`)
   für generative Artefakte (Pfad fehlt, keine reguläre Datei, Magic/Version/
   Prüfsummenfehler); relative Pfade bleiben nach Bundle-Verschiebung gültig;
@@ -435,15 +631,36 @@ AI-Masken/virtuellen Kopien):
   (negativ zulässig, Bounds geprüft); Crop/Perspektive/Lens-Koordinaten
   referenzieren das post-GenerativeEdit-Canvas; Canvas-Wechsel invalidiert
   Geometrie-Digest sichtbar.
+- **Auto-Fill Transparent (je Modus):** Trigger nur bei `auto_fill_transparent == true`
+  **und** transparenten Pixeln nach Lens; ohne transparente Pixel kein Artefakt
+  nötig (`valid` ohne Generierung); mit transparenten Pixeln generiert das
+  Artefakt exakt die Lücke (golden: synthetische Lens-Keile, byte-identische
+  Nicht-Transparent-Pixel). Änderung von `lens_correction` → `stale` sichtbar.
+- **Manueller Expand (je Modus):** `expand_beyond_image == false` (Default)
+  verbietet `output_* > source_*` (Validierungsfehler); `true` erfordert
+  `output_* > source_*` und setzt `canvas`; Ziehen des Rahmens ohne
+  Bestätigen schreibt nicht; `Expand-Rahmen`-Koordinaten-Translation getestet.
+- **Crop-Entscheidung (je Modus):** `keep_generative_content == true` (Default)
+  lässt `canvas` unverändert (Crop nur Ansicht); `false` materialisiert
+  `canvas = crop_rect_in_canvas_pixels` und translatiert `source_offset`
+  (`new = old - crop_offset`), validiert Bounds, geht in `recipe_hash` ein.
+  Umschalten `true↔false` invalidiert Geometrie-Digest sichtbar, kein stilles
+  Re-Interpretieren. `canvas.output_*` vs. `crop` rect getestet.
 - **Virtuelle Kopien:** Stabile ID, eigenes Rezept pro Kopie; Artefakt-Sharing
-  auf Quell-Ebene nur bei identischer Identität; Masken-Layer/Invertierung
-  bleiben kopienspezifisch.
+  auf Quell-Ebene nur bei identischer Identität (inkl. der drei neuen Flags);
+  Masken-Layer/Invertierung bleiben kopienspezifisch.
 - **Capability und Lizenz:** Fehlendes Modell wird ohne Crash gemeldet;
   Capability-Matrix trennt lokal ONNX vs. Cloud (kein Fallback); Lizenz/Hash-Pin
   vor Integration dokumentiert; Tests ohne Netz/Download, nur lokale Fixtures.
 - **CLI/GUI:** CLI warnt bei `stale`/`missing` (analog `--update-masks`,
   `strict` vs. Warn-and-continue); GUI zeigt Status sichtbar und bietet
   Neuberechnung explizit an. Kein Modell-Download im Test.
+- **Visuelle Analyse automatisch:** kittest-Snapshots für Expand-Rahmen
+  (vor/nach Bestätigen), Auto-Fill-Keile (mit/ohne `auto_fill_transparent`),
+  Crop-Entscheidung (`keep true` vs. `false`), plus Vorher/Nachher (`Y`),
+  Navigator-Badge (`valid`/`stale`/`missing`/`corrupt`), Histogramm-Overlay;
+  Goldens deterministisch, `UPDATE_SNAPSHOTS=true` dokumentiert, keine
+  manuellen Screenshots als Gate.
 
 ## Abnahme
 
@@ -462,8 +679,8 @@ AI-Masken/virtuellen Kopien):
   Bounds).
 - Crop/Geometry-Koordinaten referenzieren das post-GenerativeEdit-Canvas;
   ein Canvas-Wechsel invalidiert den Geometrie-Kontext sichtbar statt still
-  zu verschieben; Reihenfolge `GenerativeEdit → Lens → Perspective → Crop →
-  Rotation → Mirror` eingehalten.
+  zu verschieben; Reihenfolge `Lens → GenerativeEdit(auto-fill) → Perspective → GenerativeEdit(expand) → Crop →
+  Rotation → Mirror` eingehalten (vereinfacht `Lens → GenerativeEdit → Perspective → Crop` wenn nur eine Rolle aktiv; siehe Pipeline-Platzierung), sowie Abnahme für Auto-Fill (`auto_fill_transparent`), manuellen Expand (`expand_beyond_image`) und Crop-Entscheidung (`keep_generative_content`) — jeweils Roundtrip, Trigger/Bounds/Translation und sichtbare Invalidierung getestet.
 - Capability-Matrix trennt lokal ONNX vs. Cloud (kein stiller Fallback);
   Lizenz/Hash-Pin vor Integration dokumentiert (F-078).
 - Veraltungs-, Artefakt-, Canvas- und Geometrie-Interaktionstests sind durch

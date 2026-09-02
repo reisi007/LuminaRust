@@ -104,6 +104,17 @@ Die vollständige Pipeline verbleibt im Format `Rgba8Srgb` (sRGB-codiertes
 8-Bit-RGBA). Eine explizite Linearisierung in einen linearen Arbeitsraum
 erfolgt im aktuellen Raster-MVP **nicht**.
 
+> **Hinweis GenerativeEdit / Spot-Remove (GEN-EXPAND-1 / SPOT-REMOVE-1, Doku-first, 2026-09-02):**
+> Die generative Stufe `GenerativeEdit` (siehe `feature/product/generative-expand.md`) und die Spot-Stufe
+> `SpotHeal` (siehe `feature/product/spot-removal.md`) sind derzeit **nur dokumentiert, nicht implementiert**
+> (kein Code, `Pipeline::default()` unverändert). Ihre normative Ziel-Reihenfolge ist:
+> `Decode → SourceActions → SpotHeal(quick/generative) → LensCorrection(F-098) → GenerativeEdit(auto-fill) → Perspective(F-099) → GenerativeEdit(expand) → Crop(F-093) → Output`,
+> vereinfacht `Lens → GenerativeEdit → Perspective → Crop` bzw. `SpotHeal → Lens → Perspective → Crop`.
+> Auto-Fill Transparent liegt **nach** Lens, manueller Expand (`expand_beyond_image`) **vor** Crop (nach Perspective);
+> `keep_generative_content` steuert, ob Crop das generative Canvas materialisiert. Spot-Generativ (`kind = "spot_heal_generative"`)
+> ist von `generative_canvas` getrennt (eigene Capability `inpaint`/`inpaint_heal`). Bis zur Implementierung bleibt die
+> MVP-Reihenfolge oben verbindlich; ein Widerspruch wird durch dieses Dokument zugunsten der dokumentierten Ziel-Reihenfolge aufgelöst.
+
 ## Arbeitsfarbraum (normativ)
 
 - Der interne Arbeitsfarbraum des Raster-MVP ist **sRGB-codiertes RGBA8**

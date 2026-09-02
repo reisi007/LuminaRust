@@ -167,3 +167,17 @@ report/warn/gate) und detaillierte Bemerkungen zu 24 MP/45 MP/8 GB/LibRaw-Pin.
   denselben Identitäts-/Veraltungsregeln (Modellname/-version/-hash); siehe
   `feature/platform/wasm-limits.md`. `lumina-onnx` bleibt native-only und
   wird im WASM-Build nicht aktiviert.
+
+## Geplante generative Capabilities (Doku-first, 2026-09-02, GEN-EXPAND-1 / SPOT-REMOVE-1)
+
+Noch nicht implementiert — nur dokumentiert (kein Code, kein Gate-Bruch):
+
+| Fähigkeit | native CLI | Desktop (eframe) | Browser (WASM) |
+| --- | --- | --- | --- |
+| Generatives Entfernen (`inpaint`, lokal ONNX, `GenerativeEdit`) | geplant, `lumina-onnx` | geplant, `lumina-onnx` | nein (kein lokales ONNX ohne `onnx-wasm`) |
+| Generatives Erweitern (`outpaint`/`canvas expansion >100 %`, lokal ONNX) | geplant | geplant | nein |
+| Generatives Entfernen/Erweitern (Cloud-API) | nicht geplant — nur mit expliziter Capability-Entscheidung | nicht geplant | nicht geplant |
+| Staub schnell (heuristisch/Clone, kein ONNX) | geplant, `lumina-core` | geplant, `lumina-core` | geplant (portabler Core) |
+| Staub generativ (`inpaint_heal`, lokal ONNX, `kind = "spot_heal_generative"`) | geplant, `lumina-onnx` | geplant, `lumina-onnx` | nein (`onnx-wasm` off, `missing`/`RuntimeDisabled`) |
+
+Lokal ONNX vs. Cloud sind **getrennte** Capabilities (kein stiller Fallback, siehe `feature/product/generative-expand.md` und `feature/product/spot-removal.md`). `zdata`/`zstd` bleibt native-only (WASM `missing`/`not available`).
