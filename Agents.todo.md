@@ -96,22 +96,21 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] CI-ONNX-RT** (vor nächstem CI-Push): `onnx-rt` aus CI-Ausnahme holen — `libssl-dev` (+ `pkg-config`, `clang`) in `docker/Dockerfile` / `ci.yml` ergänzen, dann `cargo test/clippy --features onnx-rt` in CI grün (heute lokal 91/105 grün, CI-exkludiert wegen fehlendem `openssl-sys`). **Nur GPU bleibt hartes CI-Nein** (kein Metal, nur `cargo check -p lumina-gpu --features gpu`), `onnx-rt` hat kein Runner-Hardware-Argument. Gepinnte Entscheidung „CI-Ausnahme onnx-rt" in `Agents.todo.md` danach korrigieren.
-- [ ] **[PRIO: hoch] FOLLOWUP-R2-NIEDRIG-REST** (vor nächstem manuellen Test): PRESETS-FAIL-CLOSED (fail-closed), GPU-WB-GUI-GATE (Kontext-WB), SIGTRAP-GPU-TESTS (Rayon thread_local) — fehlerfrei stellen, gebündelt verifizieren.
+_(keine offenen hoch-prio Tasks vor dem nächsten manuellen Test — CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
 ### PRIO: mittel (R2, gebündelt je Crate — Details im Bericht)
 
 ### PRIO: niedrig (R2, gebündelt)
 
-- [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE**: RAW-03 (toter name-Parameter der
-  Decode-API), PRESETS-FAIL-CLOSED (recipe_scope_violation fail-open bei
-  Serialisierungsfehler — praktisch unerreichbar, optional fail-closed),
-  GPU-WB-GUI-GATE (gui gpu_present_if_ready sieht keinen Kontext-WB — recipe-only;
-  Restbefund aus R2-MCP-01), SIGTRAP-GPU-TESTS (--features gpu cli/mcp:
-  Rayon-Worker droppen thread_local GPU_CTX beim Exit, Signal 5 trotz grüner
-  Tests; vorbestehend), MCP-06 (downscale_bilinear gehört nach core),
-  SIDECAR-ZDATA-WASM (zstd-sys blockiert workspace-weites wasm32-Gate —
-  Capability-Entscheidung nötig).
+- [ ] **[PRIO: niedrig] R2-NIEDRIG-BUNDLE (Rest: SIDECAR-ZDATA-WASM)**: zstd-sys blockiert
+  workspace-weites wasm32-Gate — `lumina-sidecar` ist target-gegatet
+  (`cargo check --target wasm32-unknown-unknown -p lumina-sidecar --features zdata` grün),
+  `lumina-cli`/`lumina-mcp` sind seit e60a9ad wasm-gegatet. **Offen:** `lumina-gui`
+  importiert `zdata` noch unbedingt (bewusst nicht angefasst, Ein-Crate-Regel;
+  `cargo check --target wasm32-unknown-unknown -p lumina-gui --no-default-features` bleibt grün,
+  workspace-weites wasm-Gate wartet auf GUI-Gating). RAW-03, PRESETS-FAIL-CLOSED,
+  GPU-WB-GUI-GATE, SIGTRAP-GPU-TESTS, MCP-06 am 2026-09-02 verifiziert BESTANDEN
+  (67690ec/c5e5e06/core pub use `downscale_bilinear`).
 
 **Phase 6: Persistente AI-Masken**
 
