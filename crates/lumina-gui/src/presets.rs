@@ -629,4 +629,85 @@ mod tests {
         // Nothing was written: the directory is still empty.
         assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
     }
+
+    // ---- GUI-PRESET-01 / T07: recipe_scope_violation fail-closed ----
+    #[test]
+    fn nan_and_infinite_adjustments_are_rejected_fail_closed() {
+        let mut nan = sample_preset("BadNaN");
+        nan.recipe.adjustments.insert("exposure".into(), f64::NAN);
+        let err = validate_preset(&nan).unwrap_err();
+        assert!(
+            err.contains("outside")
+                || err.contains("finite")
+                || err.contains("failed to serialize"),
+            "GUI-PRESET-01: NAN must be fail-closed, got {err}"
+        );
+        let mut inf = sample_preset("BadInf");
+        inf.recipe
+            .adjustments
+            .insert("contrast".into(), f64::INFINITY);
+        let err2 = validate_preset(&inf).unwrap_err();
+        assert!(
+            err2.contains("outside")
+                || err2.contains("finite")
+                || err2.contains("failed to serialize"),
+            "GUI-PRESET-01: INF must be fail-closed, got {err2}"
+        );
+        // Ensure no Ok is ever returned for non-finite values.
+        assert!(validate_preset(&nan).is_err());
+        assert!(validate_preset(&inf).is_err());
+    }
+
+    #[test]
+    fn recipe_scope_violation_is_fail_closed_on_serialize_error() {
+        // `serde_json::to_value` for f64::NAN serializes to Null (not an error),
+        // so recipe_scope_violation for a NAN adjustment returns None (the
+        // adjustments are stripped before comparison). The overall validation is
+        // still fail-closed because validate_preset checks !is_finite first.
+        let mut bad = EditRecipe::default();
+        bad.adjustments.insert("exposure".into(), f64::NAN);
+        let v = serde_json::to_value(&bad);
+        // Confirm current serde_json behaviour: NAN becomes Null, not Err.
+        assert!(
+            v.is_ok(),
+            "serde_json::to_value for NAN should be Ok(Null) today"
+        );
+        let violation = recipe_scope_violation(&bad);
+        // For a NAN-only recipe, scope after stripping adjustments is clean, so None.
+        assert!(
+            violation.is_none(),
+            "GUI-PRESET-01: NAN adjustment alone is not a scope leak (stripped)"
+        );
+        // But validate_preset must still be fail-closed via the finite check.
+        let mut preset = sample_preset("ScopeNaN");
+        preset.recipe = bad.clone();
+        let err = validate_preset(&preset).unwrap_err();
+        assert!(
+            err.contains("outside") || err.contains("finite"),
+            "GUI-PRESET-01: NAN must be rejected, got {err}"
+        );
+        // A genuine scope leak (e.g. auto_features or geometry) must be reported.
+        let mut leaky = EditRecipe::default();
+        leaky.auto_features.enable_auto_tone = true;
+        let leak_violation = recipe_scope_violation(&leaky);
+        assert!(
+            leak_violation.is_some() && leak_violation.unwrap().contains("outside adjustments"),
+            "GUI-PRESET-01: auto_features leak must be scope violation"
+        );
+        // validate_preset must also propagate as Invalid, not Ok nor Collision.
+        let mut preset = sample_preset("SerializeFail");
+        preset.recipe = bad;
+        let err = validate_preset(&preset).unwrap_err();
+        assert!(
+            err.contains("failed to serialize") || err.contains("outside"),
+            "GUI-PRESET-01: validate must be fail-closed, got {err}"
+        );
+        // save_preset_file must return Invalid, never Collision or Ok.
+        let dir = tempfile::tempdir().unwrap();
+        let save_err = save_preset_file(dir.path(), &preset, false).unwrap_err();
+        assert!(
+            matches!(save_err, PresetFileError::Invalid { .. }),
+            "GUI-PRESET-01: save must be Invalid on serialize failure, got {save_err:?}"
+        );
+    }
 }

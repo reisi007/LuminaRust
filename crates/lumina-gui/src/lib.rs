@@ -10239,4 +10239,83 @@ mod tests {
         assert!(app.wgpu_render_state.is_none());
         assert!(!app.vram_fresh);
     }
+
+    // ---- GUI-GPU-01 / T06: camera_white_balance forces CPU route (no silent fallback) ----
+    #[test]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    fn camera_white_balance_forces_gpu_fallback() {
+        // Pure function: any present WB context is flagged as unsupported.
+        let recipe = EditRecipe::default();
+        let wb: [f32; 4] = [1.7, 1.0, 1.3, 1.0];
+        let reasons_with =
+            lumina_gpu::unsupported_gpu_stages_with_context(&recipe, false, Some(&wb));
+        assert!(
+            reasons_with
+                .iter()
+                .any(|r| r.contains("camera_white_balance")),
+            "GUI-GPU-01: present WB must be listed as unsupported, got {reasons_with:?}"
+        );
+        let reasons_without = lumina_gpu::unsupported_gpu_stages_with_context(&recipe, false, None);
+        assert!(
+            !reasons_without
+                .iter()
+                .any(|r| r.contains("camera_white_balance")),
+            "GUI-GPU-01: absent WB must not flag camera_white_balance"
+        );
+
+        // App-level memoized gate respects WB presence.
+        let mut app = new_app();
+        app.load_bytes(png(), "wb.png").unwrap();
+        app.render().unwrap();
+        app.camera_white_balance = None;
+        // Need fresh render key with WB=None already set; render again to key with None.
+        app.render().unwrap();
+        let fresh_key_none = app.render_key.clone();
+        assert!(fresh_key_none.is_some());
+        // With no WB, unsupported check is false for default recipe.
+        app.camera_white_balance = None;
+        assert!(
+            !app.recipe_has_unsupported_gpu_stages(),
+            "GUI-GPU-01: default recipe without WB must be GPU-eligible"
+        );
+        // Setting WB without new render keeps old key (memo still None-WB), but fresh
+        // check would include WB. To make WB affect gate, bump key via re-render.
+        app.camera_white_balance = Some(wb);
+        // Render key hasn't changed yet, so memo still keyed to None-WB; the
+        // next call must bypass memo (None-key) and compute fresh? Actually
+        // gate checks cached_wb == current wb, so mismatch forces recompute.
+        assert!(
+            app.recipe_has_unsupported_gpu_stages(),
+            "GUI-GPU-01: same render key with now-present WB must be flagged"
+        );
+        // Visible fallback reason only when a GPU context is available; headless
+        // tests have no adapter (gpu is None) so fallback is None even when WB
+        // forces CPU route — the important invariant is the stage gate itself.
+        if app.gpu.is_some() {
+            let fallback = app.routing_fallback_reason();
+            assert!(
+                fallback.is_some_and(|s| s.contains("CPU")
+                    || s.contains("unsupported")
+                    || s.contains("Fallback")),
+                "GUI-GPU-01: routing fallback must be visible when WB present and GPU available"
+            );
+        } else {
+            // No GPU context in headless harness: fallback stays None, but the
+            // gate verdict must still be unsupported.
+            assert!(
+                app.routing_fallback_reason().is_none(),
+                "GUI-GPU-01: no GPU context => no fallback even with WB"
+            );
+        }
+        // Clear WB again and verify gate restores eligibility.
+        app.camera_white_balance = None;
+        assert!(
+            !app.recipe_has_unsupported_gpu_stages(),
+            "GUI-GPU-01: clearing WB must restore GPU eligibility"
+        );
+        assert!(
+            app.routing_fallback_reason().is_none(),
+            "GUI-GPU-01: no fallback when WB cleared"
+        );
+    }
 }

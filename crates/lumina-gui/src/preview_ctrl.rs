@@ -1027,4 +1027,475 @@ mod tests {
         assert_eq!(ctrl.probe_state("p"), PreviewProbeState::Failed);
         assert_eq!(ctrl.failure("p"), Some("decode exploded"));
     }
+
+    // ---- T01 GUI-PREV-01: LRU hit vor Disk (A1) ----
+    #[test]
+    fn lru_hit_serves_without_disk_after_clear() {
+        use lumina_core::ImageFileFormat;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("neighbor2.png");
+        let png = make_frame(8, 8, 77).encode(ImageFileFormat::Png).unwrap();
+        std::fs::write(&source, &png).unwrap();
+
+        let (mut ctrl, _queue) = PreviewController::spawn(1);
+        ctrl.enqueue(PreviewJob {
+            probe_id: "neighbor2".into(),
+            source: source.clone(),
+            name: "neighbor2.png".into(),
+            virtual_copy: "vc-original".into(),
+            target: (8, 8),
+            kind: PreviewKind::Screen,
+            priority: 0,
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ctrl.lru().is_empty() && Instant::now() < deadline {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert!(!ctrl.lru().is_empty(), "GUI-PREV-01: worker must deliver");
+        let hit_before = ctrl
+            .neighbor_preview("neighbor2", &source)
+            .expect("lookup ok")
+            .expect("hit before clear");
+        assert_eq!((hit_before.width, hit_before.height), (8, 8));
+
+        // Clear disk tier: file under .lumina/previews must be removed.
+        let disk = PreviewDiskCache::in_folder(dir.path()).unwrap();
+        disk.clear().unwrap();
+        assert!(disk
+            .load(&ctrl.probe_digest("neighbor2").unwrap().to_owned())
+            .unwrap()
+            .is_none());
+
+        // LRU must still serve without needing disk.
+        let hit_after = ctrl
+            .neighbor_preview("neighbor2", &source)
+            .expect("lookup ok")
+            .expect("GUI-PREV-01: LRU hit must survive disk clear");
+        assert_eq!((hit_after.width, hit_after.height), (8, 8));
+        assert_eq!(ctrl.probe_state("neighbor2"), PreviewProbeState::Ready);
+        assert!(!ctrl.needs_job("neighbor2"));
+    }
+
+    // ---- T02 GUI-PREV-02: stale nach Rezept/Source-Change sichtbar ----
+    #[test]
+    fn probe_becomes_stale_after_source_modification() {
+        use lumina_core::ImageFileFormat;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("stale.png");
+        let png = make_frame(8, 8, 11).encode(ImageFileFormat::Png).unwrap();
+        std::fs::write(&source, &png).unwrap();
+
+        let (mut ctrl, _queue) = PreviewController::spawn(1);
+        ctrl.enqueue(PreviewJob {
+            probe_id: "stale".into(),
+            source: source.clone(),
+            name: "stale.png".into(),
+            virtual_copy: "vc-original".into(),
+            target: (8, 8),
+            kind: PreviewKind::Screen,
+            priority: 0,
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ctrl.lru().is_empty() && Instant::now() < deadline {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert_eq!(ctrl.probe_state("stale"), PreviewProbeState::Ready);
+        assert!(!ctrl.probe_is_stale("stale", &source));
+
+        // Touch source: change length/mtime so cheap fingerprint differs.
+        std::thread::sleep(Duration::from_millis(30));
+        let png2 = make_frame(8, 8, 99).encode(ImageFileFormat::Png).unwrap();
+        std::fs::write(&source, &png2).unwrap();
+        // Ensure mtime moved (sleep already); also verify length changed.
+        assert!(
+            ctrl.probe_is_stale("stale", &source),
+            "GUI-PREV-02: modified source must be stale"
+        );
+        // neighbor_preview must not silently serve old frame: it invalidates and returns Miss.
+        let stale_hit = ctrl.neighbor_preview("stale", &source).unwrap();
+        assert!(
+            stale_hit.is_none(),
+            "GUI-PREV-02: stale preview must not be served"
+        );
+        assert_eq!(ctrl.probe_state("stale"), PreviewProbeState::Miss);
+        assert!(ctrl.needs_job("stale"));
+
+        // Re-enqueue with new content must produce new digest and become Ready again.
+        ctrl.enqueue(PreviewJob {
+            probe_id: "stale".into(),
+            source: source.clone(),
+            name: "stale.png".into(),
+            virtual_copy: "vc-original".into(),
+            target: (8, 8),
+            kind: PreviewKind::Screen,
+            priority: 0,
+        });
+        let deadline2 = Instant::now() + Duration::from_secs(10);
+        while ctrl.probe_state("stale") != PreviewProbeState::Ready && Instant::now() < deadline2 {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert_eq!(ctrl.probe_state("stale"), PreviewProbeState::Ready);
+    }
+
+    // ---- T03 GUI-PREV-03: pending_failed persistiert nach drain ----
+    #[test]
+    fn pending_failed_badge_persists_after_drain() {
+        let mut ctrl = PreviewController {
+            lru: LruPreviewCache::default(),
+            queue: Arc::new(PreviewQueue::default()),
+            result_rx: mpsc::channel::<PreviewResult>().1,
+            attempts: BTreeMap::new(),
+            failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
+            in_flight: BTreeMap::new(),
+            probe_digests: BTreeMap::new(),
+            planned_kind: None,
+            active_probe_id: None,
+            probe_stamps: BTreeMap::new(),
+            directory: None,
+        };
+        ctrl.failed.insert("p".into(), "boom".into());
+        ctrl.pending_failed.insert("p".into(), "boom".into());
+        assert_eq!(ctrl.probe_state("p"), PreviewProbeState::Failed);
+        assert_eq!(ctrl.failure("p"), Some("boom"));
+        let drained = ctrl.drain_failures();
+        assert_eq!(drained, vec![("p".to_owned(), "boom".to_owned())]);
+        // GUI-PREV-03: visible badge must persist after log drain.
+        assert_eq!(ctrl.probe_state("p"), PreviewProbeState::Failed);
+        assert_eq!(ctrl.failure("p"), Some("boom"));
+        assert!(ctrl.drain_failures().is_empty());
+    }
+
+    // ---- T04 GUI-PREV-04: Prefetch-Fenster +4/-2 kein Wrap, Prio exakt ----
+    #[test]
+    fn prefetch_window_no_wrap_and_priority_order() {
+        // Active 0 of 40: only forward neighbors, priorities 0,1,3,5
+        let jobs = {
+            let probe = (0..40).map(|i| format!("probe-{i}")).collect::<Vec<_>>();
+            let sources: Vec<PathBuf> = (0..40).map(|i| PathBuf::from(format!("p{i}"))).collect();
+            let names: Vec<String> = (0..40).map(|i| format!("p{i}.png")).collect();
+            plan_window_jobs(&probe, &sources, &names, 0, (800, 600), PreviewKind::Screen)
+        };
+        assert_eq!(
+            jobs.len(),
+            4,
+            "GUI-PREV-04: active 0 of 40 must have 4 forward"
+        );
+        let prios: Vec<u8> = jobs.iter().map(|j| j.priority).collect();
+        assert_eq!(prios, vec![0, 1, 3, 5]);
+        for j in &jobs {
+            let idx: usize = j.probe_id.strip_prefix("probe-").unwrap().parse().unwrap();
+            assert!(idx < 40 && idx != 0, "no wrap, no active");
+        }
+
+        // Active 39 of 40: only backwards
+        let jobs_end = {
+            let probe = (0..40).map(|i| format!("probe-{i}")).collect::<Vec<_>>();
+            let sources: Vec<PathBuf> = (0..40).map(|i| PathBuf::from(format!("p{i}"))).collect();
+            let names: Vec<String> = (0..40).map(|i| format!("p{i}.png")).collect();
+            plan_window_jobs(
+                &probe,
+                &sources,
+                &names,
+                39,
+                (800, 600),
+                PreviewKind::Screen,
+            )
+        };
+        assert_eq!(jobs_end.len(), 2);
+        let offsets_end: Vec<i64> = jobs_end
+            .iter()
+            .map(|j| {
+                let idx: i64 = j.probe_id.strip_prefix("probe-").unwrap().parse().unwrap();
+                idx - 39
+            })
+            .collect();
+        assert_eq!(offsets_end, vec![-1, -2]);
+        assert_eq!(
+            jobs_end.iter().map(|j| j.priority).collect::<Vec<_>>(),
+            vec![2, 4]
+        );
+
+        // Active 10 of 40: full window +1>+2>-1>+3>-2>+4
+        let jobs_mid = {
+            let probe = (0..40).map(|i| format!("probe-{i}")).collect::<Vec<_>>();
+            let sources: Vec<PathBuf> = (0..40).map(|i| PathBuf::from(format!("p{i}"))).collect();
+            let names: Vec<String> = (0..40).map(|i| format!("p{i}.png")).collect();
+            plan_window_jobs(
+                &probe,
+                &sources,
+                &names,
+                10,
+                (800, 600),
+                PreviewKind::Screen,
+            )
+        };
+        assert_eq!(jobs_mid.len(), 6);
+        let prios_mid: Vec<u8> = jobs_mid.iter().map(|j| j.priority).collect();
+        assert_eq!(prios_mid, vec![0, 1, 2, 3, 4, 5]);
+        let ids_mid: Vec<&str> = jobs_mid.iter().map(|j| j.probe_id.as_str()).collect();
+        assert_eq!(
+            ids_mid,
+            vec!["probe-11", "probe-12", "probe-9", "probe-13", "probe-8", "probe-14"]
+        );
+
+        // Edge counts: 1,2,200, active at ends
+        let cases: Vec<(usize, usize, usize)> =
+            vec![(0, 1, 0), (0, 2, 1), (1, 2, 1), (0, 200, 4), (199, 200, 2)];
+        for (active, count, expected_len) in cases {
+            let jobs = {
+                let probe = (0..count).map(|i| format!("p{i}")).collect::<Vec<_>>();
+                let sources: Vec<PathBuf> =
+                    (0..count).map(|i| PathBuf::from(format!("s{i}"))).collect();
+                let names: Vec<String> = (0..count).map(|i| format!("n{i}.png")).collect();
+                plan_window_jobs(
+                    &probe,
+                    &sources,
+                    &names,
+                    active,
+                    (64, 64),
+                    PreviewKind::Screen,
+                )
+            };
+            assert_eq!(jobs.len(), expected_len, "active={active} count={count}");
+            for j in &jobs {
+                let idx: usize = j.probe_id.strip_prefix("p").unwrap().parse().unwrap();
+                assert!(idx < count);
+                assert!(idx != active || count == 1);
+            }
+        }
+    }
+
+    // ---- T05 GUI-PREV-05: Disk atomar + korrupt => Miss, .tmp nie Hit ----
+    #[test]
+    fn disk_corrupt_and_tmp_are_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = PreviewDiskCache::in_folder(dir.path()).unwrap();
+        let frame = make_frame(4, 4, 77);
+        let webp = encode_webp_pub(&frame).unwrap();
+        let digest = "test-digest-corrupt";
+
+        // Happy store/load
+        disk.store(digest, &webp).unwrap();
+        let hit = disk
+            .load(digest)
+            .unwrap()
+            .expect("GUI-PREV-05: stored must hit");
+        assert_eq!((hit.width, hit.height), (4, 4));
+
+        // Corrupt bytes => Miss, not Err
+        let path = dir
+            .path()
+            .join(".lumina")
+            .join("previews")
+            .join(format!("{digest}.preview.webp"));
+        std::fs::write(&path, b"not webp garbage").unwrap();
+        assert!(
+            disk.load(digest).unwrap().is_none(),
+            "GUI-PREV-05: corrupt webp must be Miss"
+        );
+
+        // Simulate interrupted write: .tmp file must never be served as hit, and is pruned.
+        let tmp_path = dir
+            .path()
+            .join(".lumina")
+            .join("previews")
+            .join(format!("{digest}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp_path, b"partial").unwrap();
+        assert!(tmp_path.exists());
+        assert!(disk.load(digest).unwrap().is_none());
+        let pruned = disk.prune_orphans(&[]).unwrap();
+        // At least the tmp is removed; corrupted preview also pruned when live empty.
+        assert!(pruned >= 1);
+        assert!(!tmp_path.exists(), "GUI-PREV-05: .tmp must be pruned");
+        assert!(disk.load(digest).unwrap().is_none());
+        // Store again correctly after prune
+        disk.store(digest, &webp).unwrap();
+        assert!(disk.load(digest).unwrap().is_some());
+    }
+
+    // ---- T08 GUI-FILM-01: Worker-Prio-Queue sortiert nach priority ----
+    #[test]
+    fn preview_queue_respects_priority_not_fifo() {
+        let queue = PreviewQueue::default();
+        // Push mixed priorities; insertion order deliberately shuffled.
+        for prio in [3u8, 0, 5, 2, 1, 4] {
+            queue.push(PreviewJob {
+                probe_id: format!("p{prio}"),
+                source: PathBuf::from(format!("/tmp/a{prio}")),
+                name: format!("a{prio}.png"),
+                virtual_copy: "vc-original".into(),
+                target: (64, 64),
+                kind: PreviewKind::Screen,
+                priority: prio,
+            });
+        }
+        let mut popped = Vec::new();
+        for _ in 0..6 {
+            popped.push(queue.pop().priority);
+        }
+        assert_eq!(
+            popped,
+            vec![0, 1, 2, 3, 4, 5],
+            "GUI-FILM-01: pop must be prio-sorted"
+        );
+
+        // Larger batch maintains sorting
+        let queue2 = PreviewQueue::default();
+        for prio in (0..20).rev() {
+            queue2.push(PreviewJob {
+                probe_id: format!("q{prio}"),
+                source: PathBuf::from(format!("/tmp/b{prio}")),
+                name: format!("b{prio}.png"),
+                virtual_copy: "vc-original".into(),
+                target: (32, 32),
+                kind: PreviewKind::Screen,
+                priority: (prio % 6) as u8,
+            });
+        }
+        let mut last = 0u8;
+        let mut first = true;
+        for _ in 0..20 {
+            let job = queue2.pop();
+            if !first {
+                assert!(
+                    job.priority >= last,
+                    "GUI-FILM-01: prio must be non-decreasing"
+                );
+            }
+            last = job.priority;
+            first = false;
+        }
+    }
+
+    // ---- T09 GUI-PREV-07: Disk löschbar + prune verwaister Einträge ----
+    #[test]
+    fn disk_prune_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = PreviewDiskCache::in_folder(dir.path()).unwrap();
+        let mut digests = Vec::new();
+        for i in 0..7u8 {
+            let frame = make_frame(4, 4, i);
+            let webp = encode_webp_pub(&frame).unwrap();
+            let d = format!("d{i}");
+            disk.store(&d, &webp).unwrap();
+            digests.push(d);
+        }
+        assert_eq!(
+            std::fs::read_dir(dir.path().join(".lumina").join("previews"))
+                .unwrap()
+                .count(),
+            7
+        );
+        // Prune to first 3 live
+        let live = digests[0..3].to_vec();
+        let removed = disk.prune_orphans(&live).unwrap();
+        assert_eq!(removed, 4, "GUI-PREV-07: 4 orphans must be pruned");
+        for d in &live {
+            assert!(disk.load(d).unwrap().is_some(), "live {d} still hits");
+        }
+        for d in &digests[3..] {
+            assert!(disk.load(d).unwrap().is_none(), "pruned {d} must miss");
+        }
+        disk.clear().unwrap();
+        for d in &digests {
+            assert!(disk.load(d).unwrap().is_none());
+        }
+        assert_eq!(
+            std::fs::read_dir(dir.path().join(".lumina").join("previews"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    // ---- T10 GUI-PREV-08: OneToOne Kind-Wechsel invalidiert ----
+    #[test]
+    fn kind_switch_invalidates_stale_neighbors() {
+        use lumina_core::ImageFileFormat;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("kind.png");
+        let png = make_frame(16, 16, 55).encode(ImageFileFormat::Png).unwrap();
+        std::fs::write(&source, &png).unwrap();
+
+        let (mut ctrl, _q) = PreviewController::spawn(1);
+        // First as Screen
+        ctrl.plan_kind(PreviewKind::Screen);
+        ctrl.enqueue(PreviewJob {
+            probe_id: "kind".into(),
+            source: source.clone(),
+            name: "kind.png".into(),
+            virtual_copy: "vc-original".into(),
+            target: (8, 8),
+            kind: PreviewKind::Screen,
+            priority: 0,
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ctrl.probe_state("kind") != PreviewProbeState::Ready && Instant::now() < deadline {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert_eq!(ctrl.probe_state("kind"), PreviewProbeState::Ready);
+        let digest_screen = ctrl.probe_digest("kind").unwrap().to_owned();
+        assert!(ctrl.lru().contains(&digest_screen));
+
+        // Switch to OneToOne must invalidate
+        ctrl.plan_kind(PreviewKind::OneToOne);
+        assert_eq!(
+            ctrl.probe_state("kind"),
+            PreviewProbeState::Miss,
+            "GUI-PREV-08: kind switch must invalidate"
+        );
+        assert!(
+            !ctrl.lru().contains(&digest_screen),
+            "GUI-PREV-08: old digest removed from LRU"
+        );
+        assert!(ctrl.needs_job("kind"));
+        assert!(
+            ctrl.neighbor_preview("kind", &source).unwrap().is_none(),
+            "no silent old hit"
+        );
+
+        // Enqueue OneToOne and verify new digest differs and is full 16x16
+        ctrl.enqueue(PreviewJob {
+            probe_id: "kind".into(),
+            source: source.clone(),
+            name: "kind.png".into(),
+            virtual_copy: "vc-original".into(),
+            target: (0, 0),
+            kind: PreviewKind::OneToOne,
+            priority: 0,
+        });
+        let deadline2 = Instant::now() + Duration::from_secs(10);
+        while ctrl.probe_state("kind") != PreviewProbeState::Ready && Instant::now() < deadline2 {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert_eq!(ctrl.probe_state("kind"), PreviewProbeState::Ready);
+        let digest_one = ctrl.probe_digest("kind").unwrap().to_owned();
+        assert_ne!(digest_screen, digest_one);
+        let frame = ctrl
+            .neighbor_preview("kind", &source)
+            .unwrap()
+            .expect("one-to-one hit");
+        assert_eq!(
+            (frame.width, frame.height),
+            (16, 16),
+            "GUI-PREV-08: OneToOne must keep full resolution"
+        );
+    }
 }
