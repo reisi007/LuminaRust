@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! Generative canvas + keep_generative_content logic (GEN-FILL-03).
 //! Plus GEN-FILL-01 heuristic auto-fill for transparent pixels after lens correction.
 use crate::CoreError;
@@ -6,7 +7,7 @@ use lumina_sidecar::{Crop, GenerativeCanvas, GenerativeEdit};
 use crate::ImageFrame;
 
 pub fn has_transparent_pixels(frame: &ImageFrame) -> bool {
-    frame.pixels.chunks_exact(4).any(|px| px[3] < 255)
+    frame.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255)
 }
 
 pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
@@ -27,7 +28,7 @@ pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
     if opaque.is_empty() {
         return false;
     }
-    if !frame.pixels.chunks_exact(4).any(|px| px[3] < 255) {
+    if !frame.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255) {
         return false;
     }
     opaque.sort_by_key(|(x, y)| {
@@ -47,7 +48,11 @@ pub fn fill_transparent_heuristic(frame: &mut ImageFrame, seed: u64) -> bool {
     let mut filled = false;
     while let Some((x, y)) = queue.pop_front() {
         let src_idx = (y * w + x) * 4;
-        let src_rgb = [frame.pixels[src_idx], frame.pixels[src_idx + 1], frame.pixels[src_idx + 2]];
+        let src_rgb = [
+            frame.pixels[src_idx],
+            frame.pixels[src_idx + 1],
+            frame.pixels[src_idx + 2],
+        ];
         let neighbors = [
             (x.wrapping_sub(1), y, x > 0),
             (x + 1, y, x + 1 < w),
@@ -160,6 +165,79 @@ pub fn resolve_canvas_for_recipe(
         let crop = recipe.geometry.as_ref().and_then(|g| g.crop.as_ref());
         Ok(Some(materialize_canvas_for_crop(canvas, crop)?))
     }
+}
+
+/// GEN-FILL-02 stub: expand canvas heuristically (no model). Validates canvas bounds.
+pub fn apply_generative_expand(
+    frame: &ImageFrame,
+    recipe: &lumina_sidecar::EditRecipe,
+) -> Result<ImageFrame, CoreError> {
+    let Some(ge) = recipe.generative_edit.as_ref() else {
+        return Ok(frame.clone());
+    };
+    if !ge.effective_expand() {
+        return Ok(frame.clone());
+    }
+    let Some(canvas) = ge.canvas.as_ref() else {
+        return Err(CoreError::InvalidAdjustment {
+            name: "generative_expand.canvas".into(),
+            value: 0.0,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    };
+    canvas.validate().map_err(|_| CoreError::InvalidAdjustment {
+        name: "generative_expand.canvas".into(),
+        value: 0.0,
+        minimum: 1.0,
+        maximum: 1.0,
+    })?;
+    // Bounds: source must fit inside canvas
+    if canvas.source_offset_x < 0
+        || canvas.source_offset_y < 0
+        || (canvas.source_offset_x as u32 + frame.width) > canvas.output_width
+        || (canvas.source_offset_y as u32 + frame.height) > canvas.output_height
+    {
+        return Err(CoreError::InvalidAdjustment {
+            name: "generative_expand.bounds".into(),
+            value: 0.0,
+            minimum: 0.0,
+            maximum: 1.0,
+        });
+    }
+    let mut out = ImageFrame::new(
+        canvas.output_width,
+        canvas.output_height,
+        vec![0; canvas.output_width as usize * canvas.output_height as usize * 4],
+    )
+    .unwrap();
+    // Copy source at offset
+    for y in 0..frame.height {
+        for x in 0..frame.width {
+            let src_idx = (y * frame.width + x) as usize * 4;
+            let dst_x = (canvas.source_offset_x as i32 + x as i32) as u32;
+            let dst_y = (canvas.source_offset_y as i32 + y as i32) as u32;
+            let dst_idx = (dst_y * canvas.output_width + dst_x) as usize * 4;
+            out.pixels[dst_idx..dst_idx + 4].copy_from_slice(&frame.pixels[src_idx..src_idx + 4]);
+        }
+    }
+    // Fill remaining (expanded) area with heuristic (nearest neighbor via fill_transparent)
+    // Mark expanded area as transparent then fill
+    for y in 0..out.height {
+        for x in 0..out.width {
+            let dst_idx = (y * out.width + x) as usize * 4;
+            let inside_source = x >= canvas.source_offset_x as u32
+                && x < canvas.source_offset_x as u32 + frame.width
+                && y >= canvas.source_offset_y as u32
+                && y < canvas.source_offset_y as u32 + frame.height;
+            if !inside_source {
+                out.pixels[dst_idx + 3] = 0; // transparent
+            }
+        }
+    }
+    let seed = ge.seed.unwrap_or(0);
+    fill_transparent_heuristic(&mut out, seed);
+    Ok(out)
 }
 fn crop_rect_on_canvas(
     width: u32,

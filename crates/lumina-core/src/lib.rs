@@ -9,9 +9,9 @@ use std::io::Cursor;
 use thiserror::Error;
 
 pub mod cache;
+pub mod generative;
 pub mod histogram;
 pub mod mask_loader;
-pub mod spot_heal;
 pub mod mask_modulation;
 pub mod mask_tiles;
 pub mod masks;
@@ -19,6 +19,7 @@ pub mod memory;
 pub mod pipeline;
 pub mod preview_cache;
 pub mod render;
+pub mod spot_heal;
 pub mod stage_cache;
 pub mod tone;
 // REVIEW-CORE-WASM-FOLLOWUP: this module holds real `proptest` properties;
@@ -52,6 +53,7 @@ pub use render::{
     prepare_source_base, render_frame, render_frame_from_base, LensfunCorrectorRef, MaskContext,
     MaskLayerResult, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, StageWork,
 };
+pub use spot_heal::{apply_spot_heals, psnr, spots_from_recipe, SpotHeuristic};
 pub use stage_cache::StageFrameCache;
 pub use tone::{
     analyze_tone, analyze_tone_with_histogram, match_total_exposure, match_total_exposure_masked,
@@ -492,6 +494,109 @@ impl ImageFrame {
         if let Some(l) = lens {
             apply_ca(self, l);
         }
+        let Some(geometry) = geometry else {
+            return Ok(());
+        };
+        if geometry.version != 1
+            || !geometry.rotation_degrees.is_finite()
+            || !(-180.0..=180.0).contains(&geometry.rotation_degrees)
+        {
+            return Err(CoreError::InvalidAdjustment {
+                name: "geometry.version/rotation".into(),
+                value: geometry.rotation_degrees as f64,
+                minimum: -180.0,
+                maximum: 180.0,
+            });
+        }
+        let (x, y, w, h) = crop_rect(self.width, self.height, geometry.crop.as_ref())?;
+        let cropped = crop_frame(self, x, y, w, h)?;
+        let mut transformed = rotate_frame(&cropped, geometry.rotation_degrees);
+        if geometry.mirror_horizontal {
+            flip_horizontal(&mut transformed);
+        }
+        if geometry.mirror_vertical {
+            flip_vertical(&mut transformed);
+        }
+        *self = transformed;
+        Ok(())
+    }
+
+    /// GEN-FILL-01: apply lens stage only (distortion+vignette) without perspective/crop.
+    pub fn apply_lens_stage(
+        &mut self,
+        lens: Option<&lumina_sidecar::LensCorrection>,
+        #[cfg(feature = "lensfun")] lensfun: Option<&lumina_lensfun::Corrector>,
+    ) -> Result<(), CoreError> {
+        #[cfg(feature = "lensfun")]
+        let use_corrector = lensfun.is_some();
+        #[cfg(feature = "lensfun")]
+        if use_corrector {
+            if let Some(l) = lens {
+                validate_lens(l)?;
+            }
+            let manual = lens.unwrap_or(&EMPTY_LENS);
+            apply_lens(self, manual, lensfun);
+        } else if let Some(l) = lens {
+            validate_lens(l)?;
+            apply_lens(
+                self,
+                l,
+                #[cfg(feature = "lensfun")]
+                None,
+            );
+        }
+        #[cfg(not(feature = "lensfun"))]
+        if let Some(l) = lens {
+            validate_lens(l)?;
+            apply_lens(self, l);
+        }
+        Ok(())
+    }
+
+    /// GEN-FILL-01: apply perspective stage (perspective + CA) without lens/crop.
+    pub fn apply_perspective_stage(
+        &mut self,
+        lens: Option<&lumina_sidecar::LensCorrection>,
+        perspective: Option<&lumina_sidecar::Perspective>,
+    ) -> Result<(), CoreError> {
+        if let Some(p) = perspective {
+            validate_perspective(p)?;
+            *self = apply_perspective(self, p)?;
+        }
+        if let Some(l) = lens {
+            apply_ca(self, l);
+        }
+        Ok(())
+    }
+
+    /// GEN-FILL-01: heuristic auto-fill for transparent pixels after lens correction.
+    pub fn apply_auto_fill_transparent(&mut self, auto_fill_transparent: bool, seed: u64) -> bool {
+        if !auto_fill_transparent {
+            return false;
+        }
+        if !crate::generative::has_transparent_pixels(self) {
+            return false;
+        }
+        crate::generative::fill_transparent_heuristic(self, seed)
+    }
+
+    /// GEN-FILL-01: full geometry with auto-fill insertion (Lens → Fill → Perspective → Crop).
+    pub fn apply_geometry_with_auto_fill(
+        &mut self,
+        geometry: Option<&lumina_sidecar::Geometry>,
+        lens: Option<&lumina_sidecar::LensCorrection>,
+        perspective: Option<&lumina_sidecar::Perspective>,
+        #[cfg(feature = "lensfun")] lensfun: Option<&lumina_lensfun::Corrector>,
+        auto_fill_transparent: bool,
+        seed: u64,
+    ) -> Result<(), CoreError> {
+        self.apply_lens_stage(
+            lens,
+            #[cfg(feature = "lensfun")]
+            lensfun,
+        )?;
+        self.apply_auto_fill_transparent(auto_fill_transparent, seed);
+        self.apply_perspective_stage(lens, perspective)?;
         let Some(geometry) = geometry else {
             return Ok(());
         };

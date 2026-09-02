@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! Versioned, portable domain types for a Lumina sidecar.
 
 use serde::{Deserialize, Serialize};
@@ -17,8 +18,8 @@ use thiserror::Error;
 mod zdata;
 #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 pub use zdata::{
-    append_repair_region, load_zdata, save_zdata, zdata_path_for, GenerativeCanvasArtifact,
-    MaskTile, RecordKind, RepairRegionArtifact, ZDataContainer, ZDataError,
+    append_repair_region, load_zdata, save_zdata, zdata_path_for, MaskTile, RecordKind,
+    RepairRegionArtifact, ZDataContainer, ZDataError,
 };
 
 // WASM stub for zdata (native-only via zstd-sys, but consumers still import symbols).
@@ -506,18 +507,27 @@ pub struct GenerativeEdit {
 }
 
 impl GenerativeEdit {
-    pub fn effective_keep(&self) -> bool { self.keep_generative_content.unwrap_or(true) }
+    pub fn effective_keep(&self) -> bool {
+        self.keep_generative_content.unwrap_or(true)
+    }
+    pub fn effective_expand(&self) -> bool {
+        self.expand_beyond_image.unwrap_or(false)
+    }
 }
 impl GenerativeCanvas {
+    pub fn validate_with_source(&self, _w: u32, _h: u32) -> Result<(), SidecarError> {
+        self.validate()
+    }
     pub fn validate(&self) -> Result<(), SidecarError> {
-        if self.output_width == 0 || self.output_height == 0 { return invalid("generative canvas output dimensions must be > 0"); }
+        if self.output_width == 0 || self.output_height == 0 {
+            return invalid("generative canvas output dimensions must be > 0");
+        }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditRecipe {
-
     pub recipe_version: String,
     pub adjustments: BTreeMap<String, f64>,
     pub curves: Option<Curves>,
@@ -2503,6 +2513,16 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         }
         validate_source_action_ref(&action.artifact)?;
     }
+    if let Some(g) = &a.generative_edit {
+        if g.version != 1 {
+            return invalid("unsupported generative_edit version");
+        }
+        if let Some(canvas) = &g.canvas {
+            if canvas.output_width == 0 || canvas.output_height == 0 {
+                return invalid("generative canvas output dimensions must be > 0");
+            }
+        }
+    }
     if let Some(e) = &a.effects {
         if let Some(v) = &e.vignette {
             if v.version != 1 {
@@ -2712,6 +2732,7 @@ mod tests {
                 lens_correction: None,
                 perspective: None,
                 effects: None,
+                generative_edit: None,
                 source_actions: Vec::new(),
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
@@ -2746,6 +2767,7 @@ mod tests {
                     lens_correction: None,
                     perspective: None,
                     effects: None,
+                    generative_edit: None,
                     source_actions: Vec::new(),
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
@@ -2779,6 +2801,7 @@ mod tests {
                 lens_correction: None,
                 perspective: None,
                 effects: None,
+                generative_edit: None,
                 source_actions: Vec::new(),
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
