@@ -106,8 +106,7 @@ _(keine offenen R2-Bündel — SIDECAR-ZDATA-WASM via target-gated `lumina-sidec
 
 **Phase 6: Persistente AI-Masken**
 
-- [ ] **[PRIO: niedrig] F-082-FOLLOWUP** (nicht MVP-blockierend): echter ORT-Pfad hinter
-  `onnx-rt`, MaskGraph/CLI-Einbindung, hash-gepinnte ONNX-Fixtures.
+_(keine offenen Tasks — F-082-FOLLOWUP BESTANDEN verifiziert 2026-09-02, 107p `onnx-rt`, wasm32 `onnx-rt` grün, Commit 49f4f76)_
 
 **Phase 9: Optionale zentrale Indizierung (Post-MVP)**
 

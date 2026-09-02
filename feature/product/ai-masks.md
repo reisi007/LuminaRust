@@ -375,8 +375,7 @@ hash-gepinnte BiRefNet/SAM-2-`.onnx`-Fixtures benötigt (keine spontanen
 Downloads); das handgenerierte Testmodell dient ausschließlich der
 Verhaltensabsicherung der Backend-Pfade.
 
-**Status (F-082-FOLLOWUP, 2026-09-01):** ORT-Pfad erweitert, CLI-Einbindung
-umgesetzt, unabhängige Verifizierung steht aus.
+**Status (F-082-FOLLOWUP, 2026-09-02):** ORT-Pfad + hash-gepinnte Fixtures + MaskGraph **BESTANDEN** (unabhängig verifiziert 2026-09-02, 107p unter `onnx-rt`, wasm32 `onnx-rt` grün, Commit 49f4f76, wasm-gating e60a9ad).
 
 - **Echter ORT-Pfad resolvable ohne stillen Fallback:** `lumina-onnx` bietet
   nun die Konsumenten-Fläche `try_load_onnx_engine` (in
