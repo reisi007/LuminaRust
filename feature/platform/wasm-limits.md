@@ -33,7 +33,7 @@ Fallback, Agents.md).
 
 ## Ist-Stand
 
-**Stand 2026-09-02 (FOLLOWUP-WASM-ZDATA-CONSUMER verifiziert, e60a9ad):** Capability-Matrix qualitativ
+**Stand 2026-09-02 (F-069…F-071 BESTANDEN verifiziert 2026-09-02, 287fe75/e60a9ad):** Capability-Matrix qualitativ
 erweitert um quantitative Kurzfassung (8 GB GUI / 512 MiB CLI / 48 MiB WASM, VRAM-Pool 1024 MiB/4,
 45 MP/24 MP, LibRaw 0.22.2, Threads),
 `lumina-onnx` native-only mit `wasm_stub` (`RuntimeDisabled`/`DummyManifest`/`StubBackend`,
@@ -45,7 +45,7 @@ erweitert um quantitative Kurzfassung (8 GB GUI / 512 MiB CLI / 48 MiB WASM, VRA
 `StageFrameCache`-Budgets implementiert (GUI 8 GB gesamt, LRU-Cap 1,5 GiB, CLI 512 MiB, WASM 48 MiB;
 `crates/lumina-core/src/preview_cache.rs`), RAW-Backend LibRaw 0.22.2 (Docker `lumina-ci:latest`,
 Homebrew lokal).
-Browser-Dateiimport/ONNX-Inferenz bleiben Post-MVP. Bekannte Browser-Eckpunkte aus dem MVP:
+Browser-Dateiimport/ONNX-Inferenz bleiben Post-MVP. F-069 (File-Picker vs `bytes_async`, OPFS 2-stufig löschbar `zdata not available`, Export byte-identisch), F-070 (onnx-wasm off-by-default `RuntimeDisabled` Capability-Anzeige) und F-071 (quantitative Limits je Plattform) sind normativ vervollständigt und unabhängig verifiziert BESTANDEN (Doku-first, kein Code, alle Gates grün). Bekannte Browser-Eckpunkte aus dem MVP:
 
 - File-Picker ist der WASM-Importpfad; Drag-and-drop auf WASM ist bewusst
   **nicht** unterstützt (egui-`DroppedFile`-`bytes()` existiert auf wasm32

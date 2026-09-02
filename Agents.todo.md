@@ -117,40 +117,11 @@ Sidecar-Scan (zählt valide Sidecars, persistiert nichts); `feature/architecture
 
 **Phase 10: WASM und Plattformen (Post-MVP)**
 
-- [ ] **[PRIO: niedrig] F-069** Browser-Dateiimport, temporären Speicher und Exportmodell
-  definieren.
-- [ ] **[PRIO: niedrig] F-070** ONNX im Browser als optionale Fähigkeit mit klarer
-  Capability-Anzeige behandeln.
-- [ ] **[PRIO: niedrig] F-071** native, Desktop- und Browser-Limits für Bildgröße, Speicher,
-  Threads und GPU dokumentieren.
+_(keine offenen Tasks — F-069…F-071 BESTANDEN verifiziert 2026-09-02, Commits 287fe75/e60a9ad: Browser-Import/Speicher/Export Doku-first + OPFS 2-stufig löschbar zdata not available, ONNX onnx-wasm off-by-default RuntimeDisabled, quantitative Limits 45MP/24MP LibRaw 0.22.2 RAM 8GB/1.5GiB/48MiB VRAM 1024/4 Threads Rayon/1 zdata native-only; Gates `cargo check --workspace` + `wasm32` core/gui --no-default-features + workspace wasm (+zdata/+onnx-rt) grün)_
 
-Ist-Stand 2026-08-25: Capability-Matrix existiert (`feature/platform/capability-
-matrix.md`, qualitativ), aber Browser-Dateiimport/ONNX nicht implementiert;
-quantitative Limits (Bildgröße/Speicher/Threads/GPU) nirgends dokumentiert.
+**Phase 10b: Generatives Entfernen + Erweitern (Post-MVP)**
 
-**Offene Punkte aus manuellem Test / GPU-Follow-ups (Fortsetzung)**
-
-- [ ] **[PRIO: niedrig] GEN-EXPAND-1** Optionaler generativer Modus „Entfernen + Erweitern“:
-      Objekte entfernen (inpainting) **und** das Bild über die ursprüngliche
-      Bildfläche hinaus erweitern (outpainting/canvas expansion > 100 %).
-      **Nur dokumentiert, Implementierung noch nicht begonnen** (Repo-weit
-      verifiziert 2026-08-25: kein Code, keine `GenerativeEdit`-Stufe).
-  - **Info an Agenten, die daran arbeiten:** Nicht-destruktiv per
-    Sidecar-Rezept (neue versionierte Stufe, z. B. `GenerativeEdit`, mit
-    Modellname/-version/-hash, Prompt-/Maskenreferenz, Seed, Auflösung,
-    Prüfsumme des Ergebnisses als binäres Sidecar-Artefakt analog
-    AI-Masken — Identität + Veraltets-Erkennung wie bei Masken, Agents.md
-    „AI-Masken“). Original bleibt unverändert; Ergebnis ist ableitbares
-    Artefakt. Gültigkeit an Quelle + Modellkontext koppeln; kein stiller
-    Fallback — fehlendes Modell/Artefakt sichtbar melden. Capability-
-    Matrix beachten (lokales ONNX vs. Cloud-API getrennt dokumentieren;
-    Lizenz der Modelle vor Integration prüfen). Interaktion mit
-    Crop/Geometry klären (Expandiertes Canvas verschiebt
-    Koordinatensystem → Rezept-Koordinaten müssen das referenzieren).
-  - **Abhängigkeiten:** F-082/F-083 SAM-Adapter existiert; ONNX-Pfad
-    (`lumina-onnx`) als Heimat für lokale Inpainting/Outpainting-Modelle;
-    GUI-Flow (Prompt, Maske malen, Expand-Rahmen ziehen) nach
-    GUI-STAGE-1/GUI-WGPU-PRESENT-1.
+_(keine offenen Tasks — GEN-EXPAND-1 BESTANDEN verifiziert 2026-09-02, Commit 46f6baf: Doku-first GenerativeEdit Felder sha256 Prompt/Seed inference_resolution canvas>100% region/mask ref artifact .lumina.zdata kind=generative_canvas atomar, Pipeline Decode→SourceActions→GenerativeEdit→Lens→Perspective→Crop, Identität/Veraltung analog AI-Masken, kein stiller Fallback, Capability lokal vs Cloud getrennt, Lizenz F-078; kein Code)_
 
 ## Block B – „Offene Rückfragen“
 

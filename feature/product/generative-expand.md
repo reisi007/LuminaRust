@@ -43,16 +43,15 @@ Agents.md „AI-Masken").
 
 ## Ist-Stand
 
-**Stand 2026-09-01:** Nur dokumentiert, Implementierung **nicht** begonnen
-(repo-weit verifiziert: kein Code, keine `GenerativeEdit`-Stufe). Es gibt
+**Stand 2026-09-02 (GEN-EXPAND-1 BESTANDEN verifiziert 2026-09-02, 46f6baf):** Nur dokumentiert, Implementierung **nicht** begonnen
+(repo-weit verifiziert: kein Code, keine `GenerativeEdit`-Stufe; Doku-first). Es gibt
 keine Inpainting-/Outpainting-Modelle im Workspace; `lumina-onnx` ist die
 vorgesehene Heimat lokaler Modelle (F-082/F-083-SAM-Adapter existiert, echte
 Modellgewichte weiterhin `pending-integration`). Dieses Dokument ist das
-normative SOLL für die spätere Umsetzung. Die Implementierung erfolgt später in
+normative SOLL für die spätere Umsetzung (Feldbestand `GenerativeEdit`, Canvas >100% Expand, Pipeline Decode→SourceActions→GenerativeEdit→Lens→Perspective→Crop, `.lumina.zdata` `kind=generative_canvas` atomar, Identität/Veraltung analog AI-Masken, kein stiller Fallback, Capability lokal vs Cloud, Lizenz F-078 — unabhängig verifiziert BESTANDEN, kein Code). Die Implementierung erfolgt später in
 `lumina-onnx` (Modellverwaltung, Inferenz) und `lumina-core` (Pipeline-Stufe)
 sowie `lumina-sidecar` (Schema, Validierung, Migration) nach GUI-STAGE-1.
-Bis dahin wird **kein Crate-Code** angelegt — diese Datei ist die
-Doku-first-Vervollständigung.
+Bis dahin wird **kein Crate-Code** angelegt.
 
 ## Normative Invarianten
 
