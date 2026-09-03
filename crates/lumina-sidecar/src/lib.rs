@@ -319,6 +319,105 @@ pub enum SourceActionKind {
     AiReplacement,
 }
 
+/// GEN-ZDATA-LINK-1: link from a recipe to a generative RGBA8 record inside
+/// the sidecar's `.lumina.zdata` bundle.
+///
+/// `id` is the record id inside the bundle (`kind = 2 generative_canvas` or
+/// `kind = 3 spot_heal_generative`); the remaining fields are the portable
+/// `ArtifactReference` payload (relative path, format, BLAKE3 checksum over
+/// the uncompressed RGBA8 stream, resolution, channel type, data version).
+/// Absolute paths are forbidden; the bundle stays valid when moved as a whole.
+///
+/// Expected producer values: `format = "lumina-zdata"` (contains `zdata`, so
+/// [`artifact_status`] deep-verifies magic-bearing bundles instead of
+/// treating a mislabeled file as opaque), `channels = "rgba8"`,
+/// `data_version = "1"` (RGBA encoding version 1, see `zdata` module).
+/// Deviations are rejected loudly — never silently reinterpreted.
+///
+/// Recipe-identity note (core follow-up, not implemented here): every field
+/// of this link (id, checksum, dimensions, format/channels/data_version) is
+/// part of the recipe identity and MUST be included in the core
+/// `recipe_hash`/`RenderKey`. Any change invalidates preview/export from the
+/// generative stage on; a missing/corrupt bundle is reported visibly
+/// (`missing`/`corrupt`), never silently re-generated or skipped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerativeArtifactRef {
+    pub id: String,
+    pub relative_path: String,
+    pub format: String,
+    pub checksum: String,
+    pub width: u32,
+    pub height: u32,
+    pub channels: String,
+    pub data_version: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
+impl GenerativeArtifactRef {
+    /// View this link as a plain [`ArtifactReference`] so [`artifact_status`]
+    /// (including its eager `Available`/`Missing`/`Corrupt` verification)
+    /// applies unchanged to generative links.
+    pub fn as_artifact_reference(&self) -> ArtifactReference {
+        ArtifactReference {
+            relative_path: self.relative_path.clone(),
+            format: self.format.clone(),
+            checksum: self.checksum.clone(),
+            width: self.width,
+            height: self.height,
+            channels: self.channels.clone(),
+            data_version: self.data_version.clone(),
+            extras: self.extras.clone(),
+        }
+    }
+
+    /// Eager bundle status for this link: `Available` only if the referenced
+    /// bundle file exists and (for `LUMZDATA` containers, with the `zdata`
+    /// feature on native) parses with intact BLAKE3 checksums; `Missing` when
+    /// absent, `Corrupt` when present but unusable. Callers must treat any
+    /// non-`Available` status as visible, never as a silent fallback.
+    pub fn artifact_status(&self, bundle_root: &Path) -> ArtifactStatus {
+        artifact_status(bundle_root, &self.as_artifact_reference())
+    }
+}
+
+/// GEN-ZDATA-LINK-1: current schema version for a persisted spot-removal
+/// spec. Independent of `SCHEMA_VERSION`; an unknown `version` is rejected
+/// during validation rather than silently ignored.
+pub const SPOT_REMOVAL_VERSION: u8 = 1;
+
+/// SPOT-REMOVE-1: the mode of a persisted spot removal. `Heuristic` is the
+/// instant CPU heal (recipe parameters only, no model, no bundle record);
+/// `Generative` is the local ONNX inpaint whose replaced tile lives in the
+/// `.lumina.zdata` bundle as a `kind = 3 spot_heal_generative` record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpotRemovalMode {
+    Heuristic,
+    Generative,
+}
+
+/// SPOT-REMOVE-1: a persisted spot-removal recipe operation. Additive
+/// schema-v2 field (see `EditRecipe::spot_removals`): an absent
+/// `spot_removals` key deserializes as the empty list, requires no migration
+/// and does not change `schema_version`.
+///
+/// Exclusion rules (validated loudly): a `Heuristic` spot MUST NOT carry an
+/// `artifact` (it has no bundle record); a `Generative` spot carries the
+/// `kind = 3` record link after generation (`None` before generation means
+/// `missing`, never a silent heuristic fallback).
+///
+/// Recipe-identity note (core follow-up, not implemented here): `mode` and,
+/// for generative spots, every field of `artifact` MUST be included in the
+/// core `recipe_hash`/`RenderKey`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpotRemoval {
+    pub version: u8,
+    pub mode: SpotRemovalMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<GenerativeArtifactRef>,
+}
+
 /// F-042-N1: a persisted source-action recipe operation. This is an additive
 /// pre-MVP schema field: an absent `source_actions` key is interpreted as an
 /// empty list, requires no migration and does not change `schema_version`.
@@ -540,6 +639,13 @@ pub struct GenerativeEdit {
     pub version: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas: Option<GenerativeCanvas>,
+    /// GEN-ZDATA-LINK-1 (GEN-EXPAND-1 `generative_canvas`, zdata `kind = 2`):
+    /// link to the full composited canvas record. Additive schema-v2 field;
+    /// absent (`None`) means no persisted canvas yet (`missing`, never a
+    /// silent fallback). Part of the recipe identity (see
+    /// [`GenerativeArtifactRef`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<GenerativeArtifactRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_generative_content: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -621,6 +727,12 @@ pub struct EditRecipe {
     /// replacement). Additive in schema v2; absent is the empty list and
     /// requires no migration.
     pub source_actions: Vec<SourceActionSpec>,
+    /// GEN-ZDATA-LINK-1 (SPOT-REMOVE-1 `spot_heal_generative`, zdata
+    /// `kind = 3`): persisted spot removals of this virtual copy. Additive
+    /// in schema v2; absent is the empty list and requires no migration.
+    /// Serialized as a top-level key (like `source_actions`) so the entries
+    /// flow into the `recipe_hash`/`RenderKey` on the core side (follow-up).
+    pub spot_removals: Vec<SpotRemoval>,
     pub generative_edit: Option<GenerativeEdit>,
     pub options: BTreeMap<String, String>,
     pub auto_features: AutoFeatures,
@@ -713,6 +825,15 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(&self.source_actions).map_err(serde::ser::Error::custom)?,
             );
         }
+        // GEN-ZDATA-LINK-1: `spot_removals` is a top-level additive key,
+        // skipped entirely when empty so legacy documents without the key
+        // deserialize as empty.
+        if !self.spot_removals.is_empty() {
+            root.insert(
+                "spot_removals".into(),
+                serde_json::to_value(&self.spot_removals).map_err(serde::ser::Error::custom)?,
+            );
+        }
         if let Some(generative_edit) = &self.generative_edit {
             root.insert(
                 "generative_edit".into(),
@@ -779,6 +900,13 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .transpose()
             .map_err(serde::de::Error::custom)?
             .unwrap_or_default();
+        // GEN-ZDATA-LINK-1: an absent `spot_removals` key is the empty list.
+        let spot_removals = root
+            .remove("spot_removals")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
         let generative_edit = root
             .remove("generative_edit")
             .map(serde_json::from_value)
@@ -838,6 +966,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             perspective,
             effects,
             source_actions,
+            spot_removals,
             generative_edit,
             options,
             auto_features,
@@ -1086,6 +1215,7 @@ impl Default for EditRecipe {
             perspective: None,
             effects: None,
             source_actions: Vec::new(),
+            spot_removals: Vec::new(),
             generative_edit: None,
             options: BTreeMap::new(),
             auto_features: AutoFeatures::default(),
@@ -2233,6 +2363,9 @@ impl SidecarDocument {
                 if let Some(canvas) = &ge.canvas {
                     canvas.validate()?;
                 }
+                if let Some(link) = &ge.artifact {
+                    validate_generative_ref(link)?;
+                }
             }
         }
         self.validate_mask_graph(&copy_ids)
@@ -2429,6 +2562,54 @@ fn validate_source_action_ref(a: &SourceActionArtifactRef) -> Result<(), Sidecar
     validate_name("source_action id", &a.id)?;
     validate_relative_path("source_action relative_path", &a.relative_path)?;
     validate_name("source_action checksum", &a.checksum)
+}
+
+/// GEN-ZDATA-LINK-1: validates a generative bundle link (zdata `kind = 2/3`).
+/// The id selects the record inside the bundle; the remaining fields are the
+/// portable `ArtifactReference` payload. `format` must declare a zdata bundle
+/// (so `artifact_status` deep-verifies instead of passing an opaque file),
+/// `channels`/`data_version` pin the RGBA8 encoding (`rgba8`/`1`), and the
+/// declared resolution must be non-zero. Anything else is rejected loudly.
+fn validate_generative_ref(a: &GenerativeArtifactRef) -> Result<(), SidecarError> {
+    validate_name("generative artifact id", &a.id)?;
+    validate_relative_path("generative artifact relative_path", &a.relative_path)?;
+    if !a.format.contains("zdata") {
+        return invalid("generative artifact format must declare a zdata bundle");
+    }
+    validate_name("generative artifact checksum", &a.checksum)?;
+    if a.width == 0 || a.height == 0 {
+        return invalid("generative artifact width/height must be non-zero");
+    }
+    if a.channels != "rgba8" {
+        return invalid("generative artifact channels must be `rgba8`");
+    }
+    if a.data_version != "1" {
+        return invalid("generative artifact data_version must be `1`");
+    }
+    Ok(())
+}
+
+/// GEN-ZDATA-LINK-1: validates one spot removal, including the per-mode
+/// exclusion rules — a heuristic spot has no bundle record and MUST NOT
+/// carry an artifact link; a generative spot MAY carry the `kind = 3` link
+/// (`None` = not generated yet, i.e. `missing` downstream).
+fn validate_spot_removal(spot: &SpotRemoval) -> Result<(), SidecarError> {
+    if spot.version != SPOT_REMOVAL_VERSION {
+        return invalid("unsupported spot_removal version");
+    }
+    match spot.mode {
+        SpotRemovalMode::Heuristic => {
+            if spot.artifact.is_some() {
+                return invalid("heuristic spot_removal must not carry an artifact");
+            }
+        }
+        SpotRemovalMode::Generative => {
+            if let Some(link) = &spot.artifact {
+                validate_generative_ref(link)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
@@ -2632,12 +2813,18 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         }
         validate_source_action_ref(&action.artifact)?;
     }
+    for spot in &a.spot_removals {
+        validate_spot_removal(spot)?;
+    }
     if let Some(g) = &a.generative_edit {
         if g.version != 1 {
             return invalid("unsupported generative_edit version");
         }
         if let Some(canvas) = &g.canvas {
             canvas.validate()?;
+        }
+        if let Some(link) = &g.artifact {
+            validate_generative_ref(link)?;
         }
         let expand = g.expand_beyond_image.unwrap_or(false);
         if expand {
@@ -2861,6 +3048,7 @@ mod tests {
                 effects: None,
                 generative_edit: None,
                 source_actions: Vec::new(),
+                spot_removals: Vec::new(),
                 options: BTreeMap::from([("profile".into(), "neutral".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::from([("future_recipe".into(), Value::from(42))]),
@@ -2896,6 +3084,7 @@ mod tests {
                     effects: None,
                     generative_edit: None,
                     source_actions: Vec::new(),
+                    spot_removals: Vec::new(),
                     options: BTreeMap::from([("source".into(), "preset".into())]),
                     auto_features: AutoFeatures::default(),
                     extras: Extras::new(),
@@ -2930,6 +3119,7 @@ mod tests {
                 effects: None,
                 generative_edit: None,
                 source_actions: Vec::new(),
+                spot_removals: Vec::new(),
                 options: BTreeMap::from([("curve".into(), "film".into())]),
                 auto_features: AutoFeatures::default(),
                 extras: Extras::new(),
@@ -4203,6 +4393,344 @@ mod tests {
         assert!(d3.validate().is_err());
     }
 
+    // ---- GEN-ZDATA-LINK-1: generative zdata recipe links ----
+
+    fn generative_link() -> GenerativeArtifactRef {
+        GenerativeArtifactRef {
+            id: "gen-canvas-1".into(),
+            relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: "blake3:abc123".into(),
+            width: 6000,
+            height: 4000,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        }
+    }
+
+    fn generative_edit_with_link() -> GenerativeEdit {
+        GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: Some(generative_link()),
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: None,
+            seed: Some(42),
+            prompt: Some("extend the sky".into()),
+            extras: Extras::new(),
+        }
+    }
+
+    fn spot_removal(mode: SpotRemovalMode, artifact: Option<GenerativeArtifactRef>) -> SpotRemoval {
+        SpotRemoval {
+            version: SPOT_REMOVAL_VERSION,
+            mode,
+            artifact,
+        }
+    }
+
+    #[test]
+    fn generative_artifact_link_roundtrips() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.generative_edit = Some(generative_edit_with_link());
+        let json = d.to_json().unwrap();
+        assert!(json.contains("gen-canvas-1"));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.generative_edit,
+            Some(generative_edit_with_link())
+        );
+    }
+
+    #[test]
+    fn generative_link_and_spot_removals_absent_keys_are_identity() {
+        // Legacy documents without the additive keys read as no link / empty
+        // list and require no migration.
+        let json = r#"{"format":"lumina-sidecar","schema_version":2,"source":{"relative_name":"x","content_hash":"h","byte_length":1,"raw_format":"PNG","orientation":1,"decode_fingerprint":{"decoder":"d","version":"1","parameters":{}},"geometry_fingerprint":{"width":1,"height":1,"orientation":1,"pixel_aspect_ratio":1.0}},"pipeline_version":"p","presets":[],"virtual_copies":[{"id":"vc-original","name":"Original","is_default":true,"recipe":{"generative_edit":{"version":1}},"mask_library":[],"mask_layers":[],"history":[],"export_records":[]}]}"#;
+        let doc = SidecarDocument::from_json(json).unwrap();
+        let recipe = &doc.virtual_copies[0].recipe;
+        assert_eq!(recipe.generative_edit.as_ref().unwrap().artifact, None);
+        assert!(recipe.spot_removals.is_empty());
+    }
+
+    #[test]
+    fn generative_and_spot_unknown_versions_are_rejected() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        let mut bad = generative_edit_with_link();
+        bad.version = 99;
+        d.virtual_copies[0].recipe.generative_edit = Some(bad);
+        assert!(d.validate().is_err());
+
+        let mut d2 = SidecarDocument::new(source(), "pipeline-1");
+        d2.virtual_copies[0].recipe.spot_removals = vec![spot_removal(
+            SpotRemovalMode::Generative,
+            Some(generative_link()),
+        )];
+        d2.virtual_copies[0].recipe.spot_removals[0].version = 99;
+        assert!(d2.validate().is_err());
+    }
+
+    #[test]
+    fn generative_bad_link_is_rejected() {
+        let mut bad_cases = Vec::new();
+        let mut empty_id = generative_link();
+        empty_id.id.clear();
+        bad_cases.push(empty_id);
+        let mut absolute = generative_link();
+        absolute.relative_path = "/abs/a.zdata".into();
+        bad_cases.push(absolute);
+        let mut opaque_format = generative_link();
+        opaque_format.format = "opaque".into();
+        bad_cases.push(opaque_format);
+        let mut empty_checksum = generative_link();
+        empty_checksum.checksum.clear();
+        bad_cases.push(empty_checksum);
+        let mut zero_dims = generative_link();
+        zero_dims.width = 0;
+        bad_cases.push(zero_dims);
+        let mut wrong_channels = generative_link();
+        wrong_channels.channels = "f32".into();
+        bad_cases.push(wrong_channels);
+        let mut wrong_data_version = generative_link();
+        wrong_data_version.data_version = "2".into();
+        bad_cases.push(wrong_data_version);
+        for link in bad_cases {
+            let mut d = SidecarDocument::new(source(), "pipeline-1");
+            let mut edit = generative_edit_with_link();
+            edit.artifact = Some(link);
+            d.virtual_copies[0].recipe.generative_edit = Some(edit);
+            assert!(d.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn spot_heuristic_rejects_artifact_generative_roundtrips() {
+        // Heuristic + artifact is a loud exclusion violation.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.spot_removals = vec![spot_removal(
+            SpotRemovalMode::Heuristic,
+            Some(generative_link()),
+        )];
+        assert!(d.validate().is_err());
+
+        // Generative with link and heuristic without link roundtrip.
+        let mut d2 = SidecarDocument::new(source(), "pipeline-1");
+        d2.virtual_copies[0].recipe.spot_removals = vec![
+            spot_removal(SpotRemovalMode::Generative, Some(generative_link())),
+            spot_removal(SpotRemovalMode::Heuristic, None),
+        ];
+        let json = d2.to_json().unwrap();
+        assert!(json.contains("spot_removals"));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.spot_removals,
+            d2.virtual_copies[0].recipe.spot_removals
+        );
+    }
+
+    #[test]
+    fn spot_removals_empty_list_is_absent_when_empty() {
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.spot_removals = vec![];
+        let json = d.to_json().unwrap();
+        assert!(!json.contains("spot_removals"));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert!(decoded.virtual_copies[0].recipe.spot_removals.is_empty());
+    }
+
+    #[test]
+    fn save_load_atomic_roundtrip_preserves_generative_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.lumina.json");
+        let mut document = SidecarDocument::new(source(), "pipeline-1");
+        document.virtual_copies[0].recipe.generative_edit = Some(generative_edit_with_link());
+        document.virtual_copies[0].recipe.spot_removals = vec![spot_removal(
+            SpotRemovalMode::Generative,
+            Some(generative_link()),
+        )];
+        save_sidecar(&path, &document).unwrap();
+        assert_eq!(load_sidecar(&path).unwrap(), document);
+        // No partial atomic-write temporary may linger.
+        for entry in std::fs::read_dir(directory.path()).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_string_lossy().starts_with(".image.lumina.json.tmp"),
+                "orphaned temporary: {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generative_link_status_delegates_to_artifact_status() {
+        // Missing: nothing on disk.
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            generative_link().artifact_status(directory.path()),
+            ArtifactStatus::Missing
+        );
+        // Corrupt: undersized file can never be a bundle.
+        std::fs::write(directory.path().join("IMG_0001.ARW.lumina.zdata"), b"short").unwrap();
+        assert_eq!(
+            generative_link().artifact_status(directory.path()),
+            ArtifactStatus::Corrupt
+        );
+        // Corrupt: zdata-declared format without container magic is mislabeled.
+        std::fs::write(
+            directory.path().join("IMG_0001.ARW.lumina.zdata"),
+            b"definitely not a container, long enough",
+        )
+        .unwrap();
+        assert_eq!(
+            generative_link().artifact_status(directory.path()),
+            ArtifactStatus::Corrupt
+        );
+        // Available (structural): opaque non-container payloads pass checks
+        // 1-2; deep checksum verification of real bundles is covered by the
+        // zdata-gated end-to-end test below.
+        let opaque = ArtifactReference {
+            relative_path: "payload.bin".into(),
+            format: "opaque".into(),
+            checksum: "c".into(),
+            width: 1,
+            height: 1,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        std::fs::write(directory.path().join("payload.bin"), b"12345678").unwrap();
+        assert_eq!(
+            artifact_status(directory.path(), &opaque),
+            ArtifactStatus::Available
+        );
+    }
+
+    // R2-SIDECAR-ZDATA-WASM: end-to-end bundle linkage needs the native codec.
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[test]
+    fn generative_links_resolve_against_real_bundle_eager() {
+        use crate::{GenerativeCanvasArtifact, SpotHealGenerativeArtifact};
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("IMG_0001.ARW.lumina.zdata");
+        let canvas = GenerativeCanvasArtifact {
+            id: "gen-canvas-1".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 1, 2, 3, 255,
+            ],
+        };
+        let spot = SpotHealGenerativeArtifact {
+            id: "spot-1".into(),
+            width: 1,
+            height: 1,
+            pixels: vec![9, 9, 9, 255],
+        };
+        let container = ZDataContainer::new(vec![]).unwrap();
+        let container = container.add_generative_canvas(canvas.clone()).unwrap();
+        let container = container.add_spot_heal_generative(spot.clone()).unwrap();
+        save_zdata(&bundle, &container).unwrap();
+
+        let canvas_link = GenerativeArtifactRef {
+            id: canvas.id.clone(),
+            relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: canvas.checksum(),
+            width: canvas.width,
+            height: canvas.height,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        let spot_link = GenerativeArtifactRef {
+            id: spot.id.clone(),
+            relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: spot.checksum(),
+            width: spot.width,
+            height: spot.height,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        // Recipe carrying both links validates.
+        let mut document = SidecarDocument::new(source(), "pipeline-1");
+        let mut edit = generative_edit_with_link();
+        edit.artifact = Some(canvas_link.clone());
+        document.virtual_copies[0].recipe.generative_edit = Some(edit);
+        document.virtual_copies[0].recipe.spot_removals = vec![spot_removal(
+            SpotRemovalMode::Generative,
+            Some(spot_link.clone()),
+        )];
+        document.validate().unwrap();
+        // Eager status: intact bundle is Available for both links.
+        assert_eq!(
+            canvas_link.artifact_status(directory.path()),
+            ArtifactStatus::Available
+        );
+        assert_eq!(
+            spot_link.artifact_status(directory.path()),
+            ArtifactStatus::Available
+        );
+        // Kind separation is strict: neither id resolves under the other kind.
+        let loaded = load_zdata(&bundle).unwrap();
+        assert!(loaded.spot_heal_generative(&canvas.id).is_err());
+        assert!(loaded.generative_canvas(&spot.id).is_err());
+        // Bitflip => eager Corrupt (never Available).
+        let mut bytes = std::fs::read(&bundle).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 1;
+        std::fs::write(&bundle, &bytes).unwrap();
+        assert_eq!(
+            canvas_link.artifact_status(directory.path()),
+            ArtifactStatus::Corrupt
+        );
+        // Deleted bundle => Missing.
+        std::fs::remove_file(&bundle).unwrap();
+        assert_eq!(
+            spot_link.artifact_status(directory.path()),
+            ArtifactStatus::Missing
+        );
+    }
+
+    // R2-SIDECAR-ZDATA-WASM: bundle moves keep relative links valid (native).
+    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[test]
+    fn generative_links_survive_bundle_move() {
+        use crate::GenerativeCanvasArtifact;
+        let directory = tempfile::tempdir().unwrap();
+        let from_dir = directory.path().join("a");
+        std::fs::create_dir(&from_dir).unwrap();
+        let bundle = from_dir.join("IMG_0001.ARW.lumina.zdata");
+        let canvas = GenerativeCanvasArtifact {
+            id: "gen-canvas-1".into(),
+            width: 1,
+            height: 1,
+            pixels: vec![1, 2, 3, 255],
+        };
+        let container = ZDataContainer::new(vec![])
+            .unwrap()
+            .add_generative_canvas(canvas.clone())
+            .unwrap();
+        save_zdata(&bundle, &container).unwrap();
+        let link = GenerativeArtifactRef {
+            id: canvas.id.clone(),
+            relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: canvas.checksum(),
+            width: 1,
+            height: 1,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        assert_eq!(link.artifact_status(&from_dir), ArtifactStatus::Available);
+        // Move the whole bundle directory; the relative link stays valid.
+        let to_dir = directory.path().join("b");
+        std::fs::rename(&from_dir, &to_dir).unwrap();
+        assert_eq!(link.artifact_status(&to_dir), ArtifactStatus::Available);
+    }
     // =====================================================================
     // F-077: Backup / Recovery / Conflict / Data-loss release-gate tests.
     //
