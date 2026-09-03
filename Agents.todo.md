@@ -94,6 +94,8 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
+- [ ] **[PRIO: hoch] GUI-LIBRARY-LUMINA-DIR-1** Verifizierungs-Befund B3 (hoch, out of scope aus STARTUP-Verifizierung): rekursiver Scan steigt in `.lumina/` ab und listet Cache-WebPs (`.lumina/previews`) als Bilder (Sync/Match-fähig). Fix: `.lumina/` vom Scan ausschließen + Regressionstest. Abnahme: Cache-Dateien nie im Grid, `cargo test -p lumina-gui` grün.
+- [ ] **[PRIO: niedrig] GUI-STARTUP-FOLLOWUP-1** Verifizierungs-Befunde B2/B4 (nicht-blockierend): Prozess-Test `--module bogus` → Exit 2 (Parse liegt vor `run_native`, ohne Display testbar); JPEG/WebP-Startup-Test ergänzen. Abnahme: Tests grün.
 - [ ] **[PRIO: hoch] AGENT-HARNESS-2** Semantische AccessKit-Knoten: Teillücke Painter-Inhalte (Badges, Navigator-Rect) bleiben für AccessKit unsichtbar — ehrlich als OPEN dokumentiert (`agent-harness/README.md`), F-100-Entscheid oder Painter-Test-Heimat noch offen.
 - [ ] **[PRIO: mittel] AGENT-HARNESS-3** Green-Path-Matrix (F-100, alle Module): Library (Open/Select/Toggle/Range), Develop (jede Slider-Klasse Edit→Commit→Sidecar→Reload, Auto-Tone, Match, WB-Pick, Rotate, Reset, Render), Sync/Match-Selection (N Sidecars, Fehler isoliert laut), Navigator/Zoom/Pan (alle Stufen, Custom-Pin), Export (Datei byte-valide), Fehlerpfade laut ohne stillen Fallback. Abnahme: pro Zeile ein headless Test + DoD-§7-Mapping.
 - [ ] **[PRIO: mittel] AGENT-HARNESS-4** Bildkorrektheit (F-100 Preview): opaque Alpha, Center-Pixel-Delta, Fit-Rahmen=Background, Luminanz-Toleranz (sRGB-Fang), Thumbnail-Hash/PSNR gegen 1–2 Fixtures, Stale-Generation-Guard nach Bildwechsel. Abnahme: Pixel-Asserts in Harness-Tests, kein reiner Layout-Nachweis.

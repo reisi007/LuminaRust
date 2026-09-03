@@ -308,6 +308,22 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 - Oben befinden sich die Modul-Leiste mit den Lightroom-Entsprechungen
   **Bibliothek**, **Entwickeln** und **Exportieren** (Library, Develop,
   Export).
+- **Startverhalten (F-100, User-Vorgabe 2026-09-04):**
+  - Enthält das geöffnete Verzeichnis mindestens ein unterstütztes Bild und
+    ist nichts geladen/ausgewählt, wird das erste Bild (Grid-Sortierung)
+    automatisch selektiert **und** geladen — die Auswahl steht danach nie
+    leer, solange Bilder existieren. Das gilt für alle unterstützten Formate
+    (nicht nur RAW); der bestehende RAW-only-Auto-Load ist die Untergrenze.
+  - Das Startmodul ist Develop (Default). Quelle der Wahrheit für einen
+    deterministischen Start sind CLI-Flags: `--module
+    library|develop|export` und `--fullscreen` (Lights-Out-Arbeitsansicht,
+    kein OS-Vollbild). Eine Persistenz der letzten Sitzung (Modul/Ansicht)
+    gibt es in v1 bewusst nicht (Sidecar-first, keine zentrale Session-DB).
+  - `Modulwechsel mutieren niemals Rezept oder Sidecar` (bleibt).
+- **Ist-Stand 2026-09-04:** Auto-Select (erstes Bild alle Formate, Selektion nie
+  leer), `--module`/`--fullscreen`-Flags umgesetzt + verifiziert BESTANDEN
+  (281p lib, 7p bins, kittest 11/11, Vision Golden-BESTANDEN); Folgearbeit:
+  `.lumina/`-Scan-Ausschluss (Befund B3, hoch).
 - Das Histogramm ist eine echte Grafik (gefüllte 256-Bin-Luminanzkurve per
   Painter, P01/P99 als schmale Marker, Mean/Median-Text) in einer eigenen
   einklappbaren Sektion (Default offen) und wird immer aus dem **gesamten

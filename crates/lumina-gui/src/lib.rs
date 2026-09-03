@@ -1512,6 +1512,18 @@ impl LuminaApp {
             let dir = parent.display().to_string();
             if dir != self.directory || self.entries.is_empty() {
                 self.directory = dir;
+                // GUI-STARTUP-SELECTION-1: an explicit open discharges the
+                // startup load itself — the scan's auto-load is suppressed so
+                // it can neither start a second decode nor select a different
+                // first entry (selection and the loading path stay consistent,
+                // like the click path, which sets the selection beforehand).
+                // Seeding keeps any multi-selection; `p` is ensured a member
+                // (the file dialog / drop path never sets it).
+                if !self.filmstrip_selection.contains(&p) {
+                    self.filmstrip_selection.insert(p.clone());
+                    self.filmstrip_anchor = Some(p.clone());
+                }
+                self.auto_load_attempted = true;
                 self.list_directory();
             } else {
                 self.directory = dir;
@@ -1655,12 +1667,38 @@ impl LuminaApp {
         match std::fs::read_dir(&directory) {
             Ok(_) => {
                 entries.sort_by(|a, b| a.name.cmp(&b.name));
+                // GUI-STARTUP-SELECTION-1: remember the grid position of a
+                // single selection so a rescan that prunes it (e.g. the
+                // selected file was deleted on disk) can fall back to its
+                // successor instead of going empty while images remain.
+                let removed_index = if self.filmstrip_selection.len() == 1 {
+                    let selected = self
+                        .filmstrip_selection
+                        .iter()
+                        .next()
+                        .expect("single selection has one element");
+                    self.entries
+                        .iter()
+                        .map(|e| e.path.display().to_string())
+                        .position(|path| &path == selected)
+                } else {
+                    None
+                };
                 self.entries = entries;
                 self.status = Str::ImagesInDirectory.format_arg(&self.entries.len().to_string());
+                self.stabilize_selection(removed_index);
                 // PERF-GUI-6: when no specific file was requested (e.g. the user
                 // picked a directory, not a single image) and nothing is loaded
-                // yet, auto-load the first RAW entry so the Develop module shows
-                // an image immediately — no manual click required.
+                // yet, auto-load the first grid entry so the Develop module
+                // shows an image immediately — no manual click required.
+                //
+                // GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): this covers
+                // ALL supported formats (not just RAW — `entries` only ever
+                // holds `is_supported_image` paths) and selects exactly like a
+                // plain click (single selection + anchor) so selection and the
+                // loading path can never desync. Decode failures surface loudly
+                // through `finish_decode`/`show_error` — never a silent
+                // fallback.
                 //
                 // Robustness guards:
                 // * `!self.auto_load_attempted` — run the auto-load at most once
@@ -1669,29 +1707,21 @@ impl LuminaApp {
                 // * `self.decode_rx.is_none()` — a decode is already pending
                 //   (async), so we must not start a second one; `original` stays
                 //   `None` until the in-flight decode's `finish_decode` runs.
-                // * `is_raw_name(&e.name)` — RAW-only, so jpg/png/webp never
-                //   enter the Develop preview.
-                // If no RAW entry exists yet we deliberately leave
+                // If no entry exists yet we deliberately leave
                 // `auto_load_attempted` unset so a later, now-populated scan can
                 // still auto-load.
                 if !self.auto_load_attempted
                     && self.path.is_empty()
                     && self.original.is_none()
                     && self.decode_rx.is_none()
+                    && !self.entries.is_empty()
                 {
-                    if let Some(first) = self
-                        .entries
-                        .iter()
-                        .find(|e| is_raw_name(&e.name))
-                        .map(|e| e.path.clone())
-                    {
-                        debug!(
-                            "auto-loading first raw entry after list_directory: {}",
-                            first.display()
-                        );
-                        self.begin_load_path(first.display().to_string());
-                        self.auto_load_attempted = true;
-                    }
+                    let first = self.entries[0].path.display().to_string();
+                    debug!("auto-loading first entry after list_directory: {}", first);
+                    self.filmstrip_selection = BTreeSet::from([first.clone()]);
+                    self.filmstrip_anchor = Some(first.clone());
+                    self.begin_load_path(first);
+                    self.auto_load_attempted = true;
                 }
             }
             Err(error) => {
@@ -1699,6 +1729,49 @@ impl LuminaApp {
                 self.status = Str::DirectoryNotReadable.format_arg(&error.to_string());
             }
         }
+    }
+
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): keep the selection
+    /// non-empty while images exist. Prunes paths that no longer list
+    /// (deleted/moved on disk), then — only when the prune emptied the
+    /// selection — re-selects: the still-listed loaded image first (path vs.
+    /// selection consistency, without triggering a resync decode), otherwise
+    /// the successor at the removed grid position (clamped to the new last
+    /// entry), otherwise the first grid entry. Clears everything only when no
+    /// entries remain. Never starts a decode itself; loading stays with the
+    /// auto-load in [`Self::apply_listing`] and the explicit
+    /// [`Self::open_file`] path.
+    fn stabilize_selection(&mut self, removed_index: Option<usize>) {
+        let live: BTreeSet<String> = self
+            .entries
+            .iter()
+            .map(|entry| entry.path.display().to_string())
+            .collect();
+        self.filmstrip_selection.retain(|path| live.contains(path));
+        if self
+            .filmstrip_anchor
+            .as_ref()
+            .is_some_and(|anchor| !live.contains(anchor))
+        {
+            self.filmstrip_anchor = None;
+        }
+        if self.entries.is_empty() {
+            self.filmstrip_selection.clear();
+            self.filmstrip_anchor = None;
+            return;
+        }
+        if !self.filmstrip_selection.is_empty() {
+            return;
+        }
+        if !self.path.is_empty() && live.contains(&self.path) {
+            self.filmstrip_anchor = Some(self.path.clone());
+            self.filmstrip_selection.insert(self.path.clone());
+            return;
+        }
+        let index = removed_index.unwrap_or(0).min(self.entries.len() - 1);
+        let target = self.entries[index].path.display().to_string();
+        self.filmstrip_anchor = Some(target.clone());
+        self.filmstrip_selection.insert(target);
     }
 
     /// Re-scan a single file into `self.entries` (in place, order-preserving).
@@ -2322,6 +2395,28 @@ impl LuminaApp {
             self.set_zoom_mode(ZoomMode::Fit);
         }
         self.status = if self.fullscreen {
+            Str::FullscreenOn.t().into()
+        } else {
+            Str::FullscreenOff.t().into()
+        };
+    }
+
+    /// Set the fullscreen preview deterministically (F-100 Startverhalten,
+    /// `--fullscreen` CLI flag). Display-only like [`Self::toggle_fullscreen`]:
+    /// hides the same chrome as lights-out (see [`Self::chrome_hidden`]) and
+    /// settles the zoom on Fit when enabling. Never mutates the recipe.
+    /// No-op when already in the requested state (so a default `false` at
+    /// startup leaves the status line untouched).
+    pub fn set_fullscreen(&mut self, enabled: bool) {
+        if self.fullscreen == enabled {
+            return;
+        }
+        trace!("GUI interaction: set_fullscreen -> {enabled}");
+        self.fullscreen = enabled;
+        if enabled {
+            self.set_zoom_mode(ZoomMode::Fit);
+        }
+        self.status = if enabled {
             Str::FullscreenOn.t().into()
         } else {
             Str::FullscreenOff.t().into()
@@ -10952,6 +11047,237 @@ mod tests {
         app.panels_hidden = true;
         assert!(app.shows_filmstrip(), "Tab panels-hide keeps the filmstrip");
     }
+    /// GUI-STARTUP-SELECTION-1: pump the background decode until the directory
+    /// auto-load settles (loaded frame or loud error). Mirrors
+    /// `open_and_decode` without opening a file first — the load was started
+    /// by the scan itself.
+    fn drain_auto_load(app: &mut LuminaApp) {
+        for _ in 0..2000 {
+            app.poll_decode();
+            if app.original.is_some() || app.error().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): an empty directory
+    /// selects nothing and loads nothing — no phantom selection, no decode.
+    #[test]
+    fn startup_empty_directory_selects_nothing_and_loads_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        assert!(app.entries().is_empty());
+        assert!(
+            app.filmstrip_selection().is_empty(),
+            "empty directory must leave the selection empty"
+        );
+        assert!(app.original.is_none());
+        assert!(
+            app.decode_rx.is_none(),
+            "empty directory must not start a decode"
+        );
+        assert!(app.error().is_none());
+    }
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): a single image is
+    /// selected synchronously (like the click path) and loaded through the
+    /// existing background decode — selection and path stay consistent.
+    #[test]
+    fn startup_single_image_is_selected_and_loaded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("a.png");
+        std::fs::write(&path, png()).unwrap();
+        let wanted = path.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![wanted.clone()],
+            "single image must be selected right after the scan"
+        );
+        drain_auto_load(&mut app);
+        assert!(
+            app.error().is_none(),
+            "unexpected decode error: {:?}",
+            app.error()
+        );
+        assert!(app.original.is_some());
+        assert_eq!(app.path, wanted);
+        assert_eq!(app.filmstrip_selection(), vec![wanted]);
+    }
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): with several images the
+    /// first in grid (name) sort order is selected and loaded — for every
+    /// supported format, not just RAW. The fake RAW lists (extension-only
+    /// scan, no decode at scan time) but is never picked over the earlier
+    /// PNG.
+    #[test]
+    fn startup_first_in_grid_order_is_selected_and_loaded_mixed_formats() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a-first.png");
+        let raw = directory.path().join("m-middle.arw");
+        let last = directory.path().join("z-last.png");
+        std::fs::write(&first, png()).unwrap();
+        std::fs::write(&raw, b"not a real raw file").unwrap();
+        std::fs::write(&last, png()).unwrap();
+        let wanted = first.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(app.entries().len(), 3);
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![wanted.clone()],
+            "first grid entry must be selected right after the scan"
+        );
+        drain_auto_load(&mut app);
+        assert!(
+            app.error().is_none(),
+            "unexpected decode error: {:?}",
+            app.error()
+        );
+        assert_eq!(app.path, wanted);
+        assert_eq!(app.filmstrip_selection(), vec![wanted]);
+    }
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): rescanning a populated
+    /// directory starts no second decode and never desyncs path vs.
+    /// selection — through both the flat and the recursive collector.
+    #[test]
+    fn rescan_is_stable_without_second_decode_or_selection_desync() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a.png");
+        let second = directory.path().join("b.png");
+        std::fs::write(&first, png()).unwrap();
+        std::fs::write(&second, png()).unwrap();
+        let wanted = first.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        drain_auto_load(&mut app);
+        assert!(app.error().is_none());
+        assert!(app.preview_generation() > 0);
+        let generation = app.preview_generation();
+        for _ in 0..2 {
+            app.list_directory();
+            assert!(
+                app.decode_rx.is_none(),
+                "rescan must not start a second decode"
+            );
+            assert_eq!(app.path, wanted);
+            assert_eq!(app.filmstrip_selection(), vec![wanted.clone()]);
+            assert_eq!(app.preview_generation(), generation);
+            app.list_directory_flat();
+            assert!(
+                app.decode_rx.is_none(),
+                "flat rescan must not start a second decode"
+            );
+            assert_eq!(app.path, wanted);
+            assert_eq!(app.filmstrip_selection(), vec![wanted.clone()]);
+            assert_eq!(app.preview_generation(), generation);
+        }
+    }
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): deleting the selected
+    /// image on disk falls back to its successor on rescan; the selection is
+    /// empty only once no images remain. The loaded preview itself is
+    /// untouched by the rescan (no unload, no second decode).
+    #[test]
+    fn deleting_selected_image_falls_back_to_successor() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a.png");
+        let second = directory.path().join("b.png");
+        std::fs::write(&first, png()).unwrap();
+        std::fs::write(&second, png()).unwrap();
+        let second_path = second.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        drain_auto_load(&mut app);
+        assert!(app.error().is_none());
+        std::fs::remove_file(&first).unwrap();
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(app.entries().len(), 1);
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![second_path.clone()],
+            "selection must fall back to the successor, never go empty"
+        );
+        assert!(
+            app.decode_rx.is_none(),
+            "fallback selection must not trigger a decode"
+        );
+        assert!(app.original.is_some(), "loaded preview stays");
+        std::fs::remove_file(&second).unwrap();
+        app.set_directory(directory.path().display().to_string());
+        assert!(app.entries().is_empty());
+        assert!(
+            app.filmstrip_selection().is_empty(),
+            "selection is empty only when no images remain"
+        );
+        assert!(app.decode_rx.is_none());
+    }
+    /// GUI-STARTUP-SELECTION-1 (F-100 Startverhalten): an unloadable image is
+    /// a loud error, never a silent fallback — and the selection still covers
+    /// it while the image exists.
+    #[test]
+    fn startup_decode_failure_is_loud_and_keeps_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("corrupt.png");
+        std::fs::write(&path, b"not an image at all").unwrap();
+        let wanted = path.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(app.filmstrip_selection(), vec![wanted.clone()]);
+        drain_auto_load(&mut app);
+        assert!(app.original.is_none());
+        assert!(app.path.is_empty());
+        let message = app.error().unwrap_or("").to_string();
+        assert!(
+            message.contains("corrupt.png"),
+            "decode failure must name the file loudly, got: {message:?}"
+        );
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![wanted],
+            "selection stays while the image exists, even unloadable"
+        );
+    }
+    /// GUI-STARTUP-MODULEFLAGS-1 (F-100 Startverhalten): the default start is
+    /// Develop without fullscreen.
+    #[test]
+    fn startup_default_is_develop_without_fullscreen() {
+        let app = new_app();
+        assert_eq!(app.active_module, Module::Develop);
+        assert!(!app.fullscreen);
+        assert!(!app.chrome_hidden());
+    }
+    /// GUI-STARTUP-MODULEFLAGS-1 (F-100 Startverhalten): every `--module`
+    /// value maps to its module through the existing setter (no recipe or
+    /// sidecar side effects by construction of `set_module`).
+    #[test]
+    fn start_module_values_map_to_all_three_modules() {
+        for module in [Module::Library, Module::Develop, Module::Export] {
+            let mut app = new_app();
+            app.set_module(module);
+            assert_eq!(app.active_module, module);
+        }
+    }
+    /// GUI-STARTUP-MODULEFLAGS-1 (F-100 Startverhalten): `set_fullscreen`
+    /// hides the working chrome exactly like the `F` toggle (zoom settles on
+    /// Fit on entry) and restores it on exit; repeating the current state is
+    /// a no-op that leaves the status line untouched.
+    #[test]
+    fn set_fullscreen_hides_working_chrome_and_restores() {
+        let mut app = new_app();
+        app.set_zoom_mode(ZoomMode::OneToOne);
+        app.set_fullscreen(true);
+        assert!(app.fullscreen);
+        assert!(app.chrome_hidden());
+        assert!(!app.shows_filmstrip());
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        let status = app.status().to_string();
+        app.set_fullscreen(true);
+        assert_eq!(app.status(), status, "re-setting must be a no-op");
+        app.set_fullscreen(false);
+        assert!(!app.fullscreen);
+        assert!(!app.chrome_hidden());
+        assert!(app.shows_filmstrip());
+    }
     /// GUI-VISION-1: drive one headless egui frame (`Context::run_ui`, no GPU
     /// needed) and return the painted shapes. Layout-overflow regressions
     /// (buttons clipped at the panel edge) fail here in
@@ -12321,6 +12647,11 @@ mod tests {
         save_png(&source);
         let mut app = new_app();
         open_and_decode(&mut app, source.display().to_string());
+        // GUI-STARTUP-SELECTION-1 (F-100): opening the only image of a fresh
+        // session auto-selects it — clear back to empty to exercise the
+        // no-selection no-op below.
+        app.filmstrip_selection.clear();
+        app.filmstrip_anchor = None;
         app.set_adjustment("exposure", 1.0);
         assert!(app.filmstrip_selection.is_empty());
         let generation = app.preview_generation();
@@ -19390,6 +19721,10 @@ mod tests {
     fn grid_click_routes_through_shared_selection() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = new_app();
+        // Same-directory clicks never rescan (the rescan in `open_file` only
+        // runs on directory change) — pin the workdir so the fabricated
+        // entries below survive the double-click's open path.
+        app.directory = dir.path().display().to_string();
         app.entries = vec![
             raw_entry(dir.path(), "a.cr3"),
             raw_entry(dir.path(), "b.cr3"),
