@@ -36,17 +36,26 @@ fn main() -> eframe::Result {
                 &mut app,
                 creation_context.wgpu_render_state.clone(),
             );
-            // GUI-STARTUP-MODULEFLAGS-1 (F-100 Startverhalten): deterministic
-            // start state from CLI flags — no session persistence in v1.
-            // Neither setter touches recipe or sidecar (display-only state).
-            app.set_module(config.module);
-            app.set_fullscreen(config.fullscreen);
-            if let Some(dir) = config.workdir {
-                app.set_directory(dir);
-            }
+            apply_startup_config(&mut app, &config);
             Ok(Box::new(app))
         }),
     )
+}
+
+/// Apply the parsed startup state to a fresh app (F-100 Startverhalten).
+/// Factored out of the `run_native` closure so headless tests can drive the
+/// exact production wiring without a display: deterministic start state from
+/// CLI flags, no session persistence in v1. Neither setter touches recipe or
+/// sidecar (display-only state).
+fn apply_startup_config(app: &mut lumina_gui::LuminaApp, config: &StartupConfig) {
+    // GUI-STARTUP-MODULEFLAGS-1 (F-100 Startverhalten): deterministic
+    // start state from CLI flags — no session persistence in v1.
+    // Neither setter touches recipe or sidecar (display-only state).
+    app.set_module(config.module);
+    app.set_fullscreen(config.fullscreen);
+    if let Some(dir) = &config.workdir {
+        app.set_directory(dir.clone());
+    }
 }
 
 /// Usage line printed to stderr when `--module` is unusable.
@@ -206,5 +215,34 @@ mod tests {
     fn missing_module_value_is_an_error() {
         assert!(parse_startup_args(&args(&["--module"])).is_err());
         assert!(parse_startup_args(&args(&["--module="])).is_err());
+    }
+
+    /// GUI-STARTUP-FOLLOWUP-1: the production `run_native` wiring applies the
+    /// default config headless (Develop, no fullscreen, no directory
+    /// override) — no display needed.
+    #[test]
+    fn startup_wiring_applies_default_config() {
+        let mut app = lumina_gui::LuminaApp::new(eframe::egui::Context::default());
+        let config = parse_startup_args(&args(&[])).unwrap();
+        apply_startup_config(&mut app, &config);
+        assert_eq!(app.module(), Module::Develop);
+        assert!(!app.is_fullscreen());
+    }
+
+    /// GUI-STARTUP-FOLLOWUP-1: the production `run_native` wiring applies
+    /// module + fullscreen + workdir headless (empty directory, so no decode
+    /// starts and no display is needed).
+    #[test]
+    fn startup_wiring_applies_full_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path().display().to_string();
+        let config =
+            parse_startup_args(&args(&["--module", "export", "--fullscreen", dir.as_str()]))
+                .unwrap();
+        let mut app = lumina_gui::LuminaApp::new(eframe::egui::Context::default());
+        apply_startup_config(&mut app, &config);
+        assert_eq!(app.module(), Module::Export);
+        assert!(app.is_fullscreen());
+        assert_eq!(app.directory(), dir.as_str());
     }
 }

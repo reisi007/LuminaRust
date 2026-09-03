@@ -1266,6 +1266,12 @@ impl LuminaApp {
         self.active_module = module;
     }
 
+    /// Current top-level module (read-only accessor for the `main()` startup
+    /// wiring and headless tests; mirrors [`Self::set_module`]).
+    pub fn module(&self) -> Module {
+        self.active_module
+    }
+
     pub fn new(_ctx: egui::Context) -> Self {
         // PERF-FILMSTRIP: spin up the dedicated thumbnail thread pool. The pool
         // size is the available parallelism clamped to [2, 8] (M5 Pro reports 12
@@ -1543,6 +1549,12 @@ impl LuminaApp {
         self.directory = directory.into();
         info!("directory set: {}", self.directory);
         self.list_directory_flat();
+    }
+
+    /// Current working directory (read-only accessor for the `main()` startup
+    /// wiring and headless tests; mirrors [`Self::set_directory`]).
+    pub fn directory(&self) -> &str {
+        &self.directory
     }
 
     /// Recursive aggregation (F-100 Library): images of the chosen folder
@@ -2438,6 +2450,13 @@ impl LuminaApp {
         } else {
             Str::FullscreenOff.t().into()
         };
+    }
+
+    /// Whether the fullscreen working view is armed (read-only accessor for
+    /// the `main()` startup wiring and headless tests; mirrors
+    /// [`Self::set_fullscreen`]).
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
     }
 
     /// Whether side chrome (panels, navigator, filmstrip) is hidden: `Tab`
@@ -10998,6 +11017,22 @@ mod tests {
             .encode(ImageFileFormat::Png)
             .unwrap()
     }
+    /// GUI-STARTUP-FOLLOWUP-1 (B4): JPEG fixture through the real encoder so
+    /// the startup test below decodes genuine JPEG bytes (not a renamed PNG).
+    fn jpeg() -> Vec<u8> {
+        ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
+            .unwrap()
+            .encode(ImageFileFormat::Jpeg)
+            .unwrap()
+    }
+    /// GUI-STARTUP-FOLLOWUP-1 (B4): WebP fixture through the real encoder so
+    /// the startup test below decodes genuine WebP bytes (not a renamed PNG).
+    fn webp() -> Vec<u8> {
+        ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
+            .unwrap()
+            .encode(ImageFileFormat::WebP)
+            .unwrap()
+    }
     /// F-100 / F-103-N10 (user decision 2026-08-25): the Develop sections are
     /// drawn in Lightroom Classic panel order — **Detail BEFORE Effects**.
     /// `draw_develop_panel` renders exactly this table, so this pins the real
@@ -11162,6 +11197,64 @@ mod tests {
             "unexpected decode error: {:?}",
             app.error()
         );
+        assert_eq!(app.path, wanted);
+        assert_eq!(app.filmstrip_selection(), vec![wanted]);
+    }
+    /// GUI-STARTUP-FOLLOWUP-1 (B4, F-100 Startverhalten): a leading JPEG is
+    /// selected in grid order and really decoded — same shape as the PNG
+    /// startup test, but with genuine JPEG bytes through `ImageFrame::decode`.
+    #[test]
+    fn startup_first_in_grid_order_is_selected_and_loaded_jpeg() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a-first.jpg");
+        let last = directory.path().join("z-last.png");
+        std::fs::write(&first, jpeg()).unwrap();
+        std::fs::write(&last, png()).unwrap();
+        let wanted = first.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(app.entries().len(), 2);
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![wanted.clone()],
+            "first grid entry (JPEG) must be selected right after the scan"
+        );
+        drain_auto_load(&mut app);
+        assert!(
+            app.error().is_none(),
+            "unexpected JPEG decode error: {:?}",
+            app.error()
+        );
+        assert!(app.original.is_some(), "JPEG must really decode");
+        assert_eq!(app.path, wanted);
+        assert_eq!(app.filmstrip_selection(), vec![wanted]);
+    }
+    /// GUI-STARTUP-FOLLOWUP-1 (B4, F-100 Startverhalten): a leading WebP is
+    /// selected in grid order and really decoded — same shape as the PNG
+    /// startup test, but with genuine WebP bytes through `ImageFrame::decode`.
+    #[test]
+    fn startup_first_in_grid_order_is_selected_and_loaded_webp() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a-first.webp");
+        let last = directory.path().join("z-last.png");
+        std::fs::write(&first, webp()).unwrap();
+        std::fs::write(&last, png()).unwrap();
+        let wanted = first.display().to_string();
+        let mut app = new_app();
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(app.entries().len(), 2);
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![wanted.clone()],
+            "first grid entry (WebP) must be selected right after the scan"
+        );
+        drain_auto_load(&mut app);
+        assert!(
+            app.error().is_none(),
+            "unexpected WebP decode error: {:?}",
+            app.error()
+        );
+        assert!(app.original.is_some(), "WebP must really decode");
         assert_eq!(app.path, wanted);
         assert_eq!(app.filmstrip_selection(), vec![wanted]);
     }

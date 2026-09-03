@@ -142,8 +142,8 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: mittel] AGENT-HARNESS-3 (→ Querschnitt, G-01/G-07/G-08/G-10)** Green-Path-Matrix (F-100, alle Module): Library (Open/Select/Toggle/Range), Develop (jede Slider-Klasse Edit→Commit→Sidecar→Reload, Auto-Tone, Match, WB-Pick, Rotate, Reset, Render), Sync/Match-Selection (N Sidecars, Fehler isoliert laut), Navigator/Zoom/Pan (alle Stufen, Custom-Pin), Export (Datei byte-valide), Fehlerpfade laut ohne stillen Fallback. Abnahme: pro Zeile ein headless Test + DoD-§7-Mapping.
-- [ ] **[PRIO: mittel] AGENT-HARNESS-4 (→ G-10)** Bildkorrektheit (F-100 Preview): opaque Alpha, Center-Pixel-Delta, Fit-Rahmen=Background, Luminanz-Toleranz (sRGB-Fang), Thumbnail-Hash/PSNR gegen 1–2 Fixtures, Stale-Generation-Guard nach Bildwechsel. Abnahme: Pixel-Asserts in Harness-Tests, kein reiner Layout-Nachweis.
+- [ ] **[PRIO: mittel] AGENT-HARNESS-3 (→ Querschnitt, G-01/G-07/G-08/G-10, Release: 1.0)** Green-Path-Matrix (F-100, alle Module): Library (Open/Select/Toggle/Range), Develop (jede Slider-Klasse Edit→Commit→Sidecar→Reload, Auto-Tone, Match, WB-Pick, Rotate, Reset, Render), Sync/Match-Selection (N Sidecars, Fehler isoliert laut), Navigator/Zoom/Pan (alle Stufen, Custom-Pin), Export (Datei byte-valide), Fehlerpfade laut ohne stillen Fallback. Abnahme: pro Zeile ein headless Test + DoD-§7-Mapping.
+- [ ] **[PRIO: mittel] AGENT-HARNESS-4 (→ G-10, Release: 1.0)** Bildkorrektheit (F-100 Preview): opaque Alpha, Center-Pixel-Delta, Fit-Rahmen=Background, Luminanz-Toleranz (sRGB-Fang), Thumbnail-Hash/PSNR gegen 1–2 Fixtures, Stale-Generation-Guard nach Bildwechsel. Abnahme: Pixel-Asserts in Harness-Tests, kein reiner Layout-Nachweis.
 
 **LR-Parität aus `.goal/Goal.md` (Batch 1 + User-Featureliste, Stand 2026-09-03, 16 Goals, Aggregat ~39,1 %)**
 
@@ -155,31 +155,35 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] LRPAR-G03-MASK** Maskierungs-Parität (G-03, ~30 %): AI-Auswahl Subject/Sky/Background/Objects/People (+ Teile bis Pupille/Sclera), Add/Subtract/Invert/Duplicate-Kombinatorik im Panel, Color-/Luminance-Range, Show + Color Overlay, Maskenliste mit Sichtbarkeits-Auge. Abnahme: CLI (Rezeptfelder, Roundtrip, Fehler laut, kein stiller Fallback) + `cargo test -p lumina-gui` headless (Panel, Overlay, Persistenz pro virtueller Kopie).
-- [ ] **[PRIO: hoch] LRPAR-G04-REMOVE** Remove-Parität (G-04, ~35 %): Visualize-Spots-Slider, Tool-Overlay-Modi (Always/Auto/Never), Detect-Objects, Distraction Removal (Reflections/People/Dust, Auto), generativ-Varianten neu generieren. Abnahme: CLI + GUI-headless wie G03, Golden/PSNR-Gates für Heal-Pfade.
-- [ ] **[PRIO: hoch] LRPAR-G05-LENSBLUR** Lens-Blur-Produktfunktion (G-05, ~10 %): Fokus-Rahmen, Focal Range, Blur Amount, Bokeh-Formen, Rezept + Persistenz. Abnahme: CLI + GUI-headless, kein stiller Fallback bei fehlendem Tiefenartefakt.
-- [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
+- [ ] **[PRIO: hoch] LRPAR-G03-MASK (Release: 1.0)** Maskierungs-Parität (G-03, ~30 %): AI-Auswahl Subject/Sky/Background/Objects/People (+ Teile bis Pupille/Sclera), Add/Subtract/Invert/Duplicate-Kombinatorik im Panel, Color-/Luminance-Range, Show + Color Overlay, Maskenliste mit Sichtbarkeits-Auge. Abnahme: CLI (Rezeptfelder, Roundtrip, Fehler laut, kein stiller Fallback) + `cargo test -p lumina-gui` headless (Panel, Overlay, Persistenz pro virtueller Kopie).
+- [ ] **[PRIO: hoch] LRPAR-G04-REMOVE (Release: 1.0)** Remove-Parität (G-04, ~35 %): Visualize-Spots-Slider, Tool-Overlay-Modi (Always/Auto/Never), Detect-Objects, Distraction Removal (Reflections/People/Dust, Auto), generativ-Varianten neu generieren. Abnahme: CLI + GUI-headless wie G03, Golden/PSNR-Gates für Heal-Pfade.
+- [ ] **[PRIO: hoch] LRPAR-G05-LENSBLUR (Release: 1.0)** Lens-Blur-Produktfunktion (G-05, ~10 %): Fokus-Rahmen, Focal Range, Blur Amount, Bokeh-Formen, Rezept + Persistenz. Abnahme: CLI + GUI-headless, kein stiller Fallback bei fehlendem Tiefenartefakt.
+- [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] LRPAR-G01-BASIC** Develop-Basis-Lücken (G-01, ~75 %): Treatment/Profile-Parität, „Original Photo“-Histogrammvergleich, „Reset Sliders Automatically“-Option, Previous-Button-Verhalten je Panel. Abnahme: CLI + GUI-headless.
-- [ ] **[PRIO: mittel] LRPAR-G02-COLOR** Kurve/Mixer/Grading-Lücken (G-02, ~60 %): Point Color, Color-Grading-Feinschliff (Schatten/Mitten/Lichter), parametrische + Punkt-Kurve je Kanal. Abnahme: CLI + GUI-headless, Render-Golden.
+- [ ] **[PRIO: mittel] LRPAR-G01-BASIC (Release: 1.0)** Develop-Basis-Lücken (G-01, ~75 %): Treatment/Profile-Parität, „Original Photo“-Histogrammvergleich, „Reset Sliders Automatically“-Option, Previous-Button-Verhalten je Panel. Abnahme: CLI + GUI-headless.
+- [ ] **[PRIO: mittel] LRPAR-G02-COLOR (Release: 1.0)** Kurve/Mixer/Grading-Lücken (G-02, ~60 %): Point Color, Color-Grading-Feinschliff (Schatten/Mitten/Lichter), parametrische + Punkt-Kurve je Kanal. Abnahme: CLI + GUI-headless, Render-Golden.
 - [ ] **[PRIO: mittel] LRPAR-G06-GEO (Release: 1.0)** Geometrie-MVP (G-06): Crop + Straighten + Aspect-Parität (History-sichtbar) + Lensfun-Vollausbau (User-Entscheid 2026-09-03). Abnahme: CLI + GUI-headless.
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] LRPAR-G08-PREVIOUS** Previous-Übernahme (G-08, ~55 %): Ein-Klick-Übernahme vom Vorbild (Previous) zusätzlich zu Sync/Match. Abnahme: CLI + GUI-headless, History-Schritt je Zielbild.
-- [ ] **[PRIO: mittel] LRPAR-G09-LIB** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
-- [ ] **[PRIO: mittel] LRPAR-G10-VIEWER** Viewer-Lücken (G-10, ~65 %): „Original Photo“-Histogramm, `S`-Softproof-Shortcut + Druck-/Farbraumsimulation-Scope. Abnahme: GUI-headless, kein reiner Layout-Nachweis.
-- [ ] **[PRIO: mittel] LRPAR-G11-OVERLAYS** Overlay-/Panel-Comfort (G-11, ~60 %): Tool-Overlay-Modi, Edit-Pins-Sichtbarkeit (Always/Auto/Never), Solo-Mode, `Shift+Tab`. Abnahme: GUI-headless.
-- [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-20** KI-Denoise (G-14-Abspaltung, Ziel 2.0, User-Entscheid 2026-09-03): Modell-/Lizenz-/Capability-Entscheid (F-078) + Doku-first, manuelles NR F-096 bleibt MVP. Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
-- [ ] **[PRIO: mittel] LRPAR-G15-META-MVP** Metadaten-MVP (G-15-Kern, MVP = 1.0, User-Entscheid 2026-09-03): Keywords, Filterungen (u. a. Brennweite/Kamera/ISO über `\`-Leiste hinaus), Sammlungen + Smart-Sammlungen, Stapel-Vollfunktion. Abnahme: CLI (Roundtrip, kein Datenverlust, Sidecar-first) + GUI-headless.
-- [ ] **[PRIO: mittel] LRPAR-G15-META-15** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
-- [ ] **[PRIO: mittel] LRPAR-G16-POWER** Power-Shortcut-Rest (G-16, ~40 %): `Shift`-Doppelklick Auto-Weiß-/Schwarzpunkt, Alt+Regler-Maskierungsvorschau, `S`-Belegung. Abnahme: GUI-headless je Shortcut, keine Kollision mit Bestand (`w2/w3`-Mapping-Tests erweitern).
+- [ ] **[PRIO: mittel] LRPAR-G08-PREVIOUS (Release: 1.0)** Previous-Übernahme (G-08, ~55 %): Ein-Klick-Übernahme vom Vorbild (Previous) zusätzlich zu Sync/Match. Abnahme: CLI + GUI-headless, History-Schritt je Zielbild.
+- [ ] **[PRIO: mittel] LRPAR-G09-LIB (Release: 1.0)** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
+- [ ] **[PRIO: mittel] LRPAR-G10-VIEWER (Release: 1.0)** Viewer-Lücken (G-10, ~65 %): „Original Photo“-Histogramm, `S`-Softproof-Shortcut + Druck-/Farbraumsimulation-Scope. Abnahme: GUI-headless, kein reiner Layout-Nachweis.
+- [ ] **[PRIO: mittel] LRPAR-G11-OVERLAYS (Release: 1.0)** Overlay-/Panel-Comfort (G-11, ~60 %): Tool-Overlay-Modi, Edit-Pins-Sichtbarkeit (Always/Auto/Never), Solo-Mode, `Shift+Tab`. Abnahme: GUI-headless.
+- [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
+- [ ] **[PRIO: mittel] LRPAR-G15-META-MVP (Release: 1.0)** Metadaten-MVP (G-15-Kern, MVP = 1.0, User-Entscheid 2026-09-03): Keywords, Filterungen (u. a. Brennweite/Kamera/ISO über `\`-Leiste hinaus), Sammlungen + Smart-Sammlungen, Stapel-Vollfunktion. Abnahme: CLI (Roundtrip, kein Datenverlust, Sidecar-first) + GUI-headless.
+- [ ] **[PRIO: mittel] LRPAR-G15-META-15 (Release: 1.5)** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
+- [ ] **[PRIO: mittel] LRPAR-G16-POWER (Release: 1.0)** Power-Shortcut-Rest (G-16, ~40 %): `Shift`-Doppelklick Auto-Weiß-/Schwarzpunkt, Alt+Regler-Maskierungsvorschau, `S`-Belegung. Abnahme: GUI-headless je Shortcut, keine Kollision mit Bestand (`w2/w3`-Mapping-Tests erweitern).
 
 ### PRIO: niedrig
 
-- [ ] **[PRIO: niedrig] LRPAR-G12-FACE-20** Gesichtserkennung (G-12-Abspaltung, Ziel 2.0, User-Entscheid 2026-09-03): Doku-first (Modell-/Lizenz-/Capability-Entscheid, ONNX-Detektion + Embedding + Clustering + UI + Persistenz-Scope). Abnahme: Entscheid in `feature/` + Folge-Implementierungstask. Karten-Modul/GPS ist explizit nie Ziel (kein Task, in `.goal/Goal.md` als Nicht-Ziel vermerkt).
-- [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-15** HDR-/Panorama-Merge (G-13, Ziel 1.5, User-Entscheid 2026-09-03): `Cmd/Ctrl+H` + `Cmd/Ctrl+M` → DNG — Doku-first (Pipeline-Einordnung, DNG-Schreibung, Ausrichtungs-Scope). Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
+- [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-20 (Release: 2.0)** KI-Denoise (G-14-Abspaltung, User-Entscheid 2026-09-03): Modell-/Lizenz-/Capability-Entscheid (F-078) + Doku-first, manuelles NR F-096 bleibt MVP. Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
+- [ ] **[PRIO: niedrig] LRPAR-G09-CULL-25 (Release: 2.5)** KI-Culling (G-09-Abspaltung, User-Entscheid 2026-09-03): Assisted-Culling-Automatik (Vorschlags-Sichtung) — Doku-first (Modell-/Capability-Scope). Manuelles Sichten (Sterne/Flags) bleibt MVP. Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
+
+- [ ] **[PRIO: niedrig] LRPAR-G12-FACE-20 (Release: 2.0)** Gesichtserkennung (G-12-Abspaltung, Ziel 2.0, User-Entscheid 2026-09-03): Doku-first (Modell-/Lizenz-/Capability-Entscheid, ONNX-Detektion + Embedding + Clustering + UI + Persistenz-Scope). Abnahme: Entscheid in `feature/` + Folge-Implementierungstask. Karten-Modul/GPS ist explizit nie Ziel (kein Task, in `.goal/Goal.md` als Nicht-Ziel vermerkt).
+- [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-15 (Release: 1.5)** HDR-/Panorama-Merge (G-13, Ziel 1.5, User-Entscheid 2026-09-03): `Cmd/Ctrl+H` + `Cmd/Ctrl+M` → DNG — Doku-first (Pipeline-Einordnung, DNG-Schreibung, Ausrichtungs-Scope). Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
+
+### PRIO: niedrig (Block A, nicht-LRPAR)
 
 _(Block A leer — FILMSTRIP-SYNC-1 BESTANDEN 229p + kittest 10/10 + Vision 7/7, Commit folgt; Details Git-Historie)_
 
@@ -220,7 +224,7 @@ wo möglich, vor dem nächsten manuellen GUI-Test geklärt werden.
 
 **Produktname (Rest von F-101-F1)**
 
-- [ ] **[PRIO: mittel] NAMING-F1 (kein Goal)** Produktname final entscheiden
+- [ ] **[PRIO: mittel] NAMING-F1 (kein Goal, Release: 1.0)** Produktname final entscheiden
   (`docs/naming-brainstorm.md`). **User-Entscheidung 2026-08-25:** Brainstorm
   läuft bewusst weiter, Naming bleibt offen. Die übrigen F-101-F1-Anteile
   (MCP-Scope) wurden zur Umsetzung freigegeben und stehen in Block A.
@@ -245,10 +249,10 @@ Vor F-103-N6 empfohlen: kleine Stabilitäts-Fixes aus den Review-Befunden
 (z. B. REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1),
 damit der manuelle Test aussagekräftig ist.
 
-- [ ] **[PRIO: mittel] R2-GUIMOD-04b (→ G-10)** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
-- [ ] **[PRIO: mittel] R2-GUIMOD-04c (→ G-10)** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).
+- [ ] **[PRIO: mittel] R2-GUIMOD-04b (→ G-10, Release: 1.0)** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
+- [ ] **[PRIO: mittel] R2-GUIMOD-04c (→ G-10, Release: 1.0)** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).
 
-- [ ] **[PRIO: hoch] F-103-N6 (→ Querschnitt, alle G)** Erster visueller User-Test: `RUST_LOG=trace cargo run -p lumina-gui` (Trace-Pflicht nach DoD §6) mit
+- [ ] **[PRIO: hoch] F-103-N6 (→ Querschnitt, alle G, Release: 1.0)** Erster visueller User-Test: `RUST_LOG=trace cargo run -p lumina-gui` (Trace-Pflicht nach DoD §6) mit
   PNG/JPEG/WebP + nativen RAW per Pfad und Drag&drop; Preview + Exposure/
   Contrast ändern den Renderstand; Sidecar wird geschrieben und beim Neustart
   wiederhergestellt. Abnahme:
