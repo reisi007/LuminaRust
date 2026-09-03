@@ -402,6 +402,14 @@ pub enum SpotRemovalMode {
 /// `spot_removals` key deserializes as the empty list, requires no migration
 /// and does not change `schema_version`.
 ///
+/// SPOT-SCHEMA-GEOMETRY: this typed view intentionally carries only
+/// version/mode/artifact. The heal geometry (center/radius/feather/offset/
+/// opacity/id/status) travels in the mirrored `extras["spot_removals"]` view
+/// (see `EditRecipe`'s `Deserialize` impl) and is validated by
+/// `validate_spot_removal_extras`. Extending this struct with geometry fields
+/// was rejected: it would break every existing struct literal in downstream
+/// crates without restoring the extras roundtrip the GUI detector relies on.
+///
 /// Exclusion rules (validated loudly): a `Heuristic` spot MUST NOT carry an
 /// `artifact` (it has no bundle record); a `Generative` spot carries the
 /// `kind = 3` record link after generation (`None` before generation means
@@ -828,6 +836,13 @@ impl Serialize for EditRecipe {
         // GEN-ZDATA-LINK-1: `spot_removals` is a top-level additive key,
         // skipped entirely when empty so legacy documents without the key
         // deserialize as empty.
+        // SPOT-SCHEMA-GEOMETRY: when the geometry-carrying extras mirror (see
+        // `Deserialize`) holds the same key, the extras loop below overwrites
+        // this lossy typed view with the full entry — that precedence is
+        // intentional: the typed `SpotRemoval` holds only
+        // version/mode/artifact, while the extras view carries the heal
+        // geometry. A typed-only recipe (no extras key) still serializes here
+        // with no silent key loss.
         if !self.spot_removals.is_empty() {
             root.insert(
                 "spot_removals".into(),
@@ -900,9 +915,18 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .transpose()
             .map_err(serde::de::Error::custom)?
             .unwrap_or_default();
+        // SPOT-SCHEMA-GEOMETRY: the raw `spot_removals` JSON value is mirrored
+        // into `extras` below (the typed parse reads from a clone). Rationale:
+        // `SpotRemoval` carries only version/mode/artifact and no heal geometry
+        // (center/radius/feather/offset/opacity/id/status), and serde drops
+        // unknown fields silently — so consuming the top-level key into the
+        // typed field alone irreversibly loses heuristic parameters (69dad91).
+        // Keeping the raw value preserves them; on serialize the extras view
+        // (geometry-carrying) shadows the lossy typed view for the same key.
         // GEN-ZDATA-LINK-1: an absent `spot_removals` key is the empty list.
-        let spot_removals = root
-            .remove("spot_removals")
+        let spot_removals_raw = root.remove("spot_removals");
+        let spot_removals = spot_removals_raw
+            .clone()
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?
@@ -952,6 +976,16 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .transpose()
             .map_err(serde::de::Error::custom)?
             .unwrap_or_default();
+        // SPOT-SCHEMA-GEOMETRY: mirror the raw `spot_removals` value into
+        // `extras` so heal geometry survives the roundtrip (see above). An
+        // absent key stays absent (additive, no migration); a present key is
+        // available both as the typed schema-v2 view and as the
+        // geometry-carrying extras view validated by
+        // `validate_spot_removal_extras`.
+        let mut extras: Extras = root.into_iter().collect();
+        if let Some(raw) = spot_removals_raw {
+            extras.insert("spot_removals".into(), raw);
+        }
         Ok(Self {
             recipe_version,
             adjustments,
@@ -970,7 +1004,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             generative_edit,
             options,
             auto_features,
-            extras: root.into_iter().collect(),
+            extras,
         })
     }
 }
@@ -2612,6 +2646,138 @@ fn validate_spot_removal(spot: &SpotRemoval) -> Result<(), SidecarError> {
     Ok(())
 }
 
+/// SPOT-SCHEMA-GEOMETRY: validates the geometry-carrying
+/// `extras["spot_removals"]` view of a recipe (heal parameters live here; the
+/// typed `EditRecipe::spot_removals` holds only version/mode/artifact and is
+/// checked by `validate_spot_removal`). Runs alongside the typed check from
+/// `validate_adjustments`, so both views stay consistent.
+///
+/// Every rule fails loudly — never a silent fallback or silent reinterpretation:
+/// - a present key must hold an array of objects (absent stays identity);
+/// - `version` must be present and equal `SPOT_REMOVAL_VERSION`;
+/// - `mode`, when absent, defaults to `heuristic` (legacy documents, mirroring
+///   the tolerant core reader); any other value than
+///   `heuristic`/`generative` is rejected;
+/// - a `heuristic` entry MUST carry the full heal geometry (`id` non-empty;
+///   `center_x`/`center_y` finite in `0..=1`; `radius` finite in `(0, 512]`;
+///   `offset_dx`/`offset_dy` finite in `-1..=1`; `feather`/`opacity` are
+///   optional with the core defaults `0.0`/`1.0` but must be finite in
+///   `0..=1` when present) and MUST NOT carry `artifact` (no bundle record);
+/// - a `generative` entry needs no geometry; an `artifact` link, when present
+///   and non-null, must parse as `GenerativeArtifactRef` and pass
+///   `validate_generative_ref` (absent/`None` = not generated yet, i.e.
+///   `missing` downstream).
+fn validate_spot_removal_extras(recipe: &EditRecipe) -> Result<(), SidecarError> {
+    let Some(value) = recipe.extras.get("spot_removals") else {
+        return Ok(());
+    };
+    let entries = value
+        .as_array()
+        .ok_or_else(|| SidecarError::Invalid("extras `spot_removals` must be an array".into()))?;
+    for entry in entries {
+        validate_spot_removal_extra_entry(entry)?;
+    }
+    Ok(())
+}
+
+fn extra_finite(object: &serde_json::Map<String, Value>, name: &str) -> Result<f64, SidecarError> {
+    object
+        .get(name)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| {
+            SidecarError::Invalid(format!(
+                "heuristic spot_removal `{name}` must be present and finite"
+            ))
+        })
+}
+
+fn extra_optional_finite(
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Option<f64>, SidecarError> {
+    match object.get(name) {
+        None => Ok(None),
+        Some(value) => value
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .map(Some)
+            .ok_or_else(|| {
+                SidecarError::Invalid(format!("heuristic spot_removal `{name}` must be finite"))
+            }),
+    }
+}
+
+fn validate_spot_removal_extra_entry(entry: &Value) -> Result<(), SidecarError> {
+    let object = entry
+        .as_object()
+        .ok_or_else(|| SidecarError::Invalid("spot_removal entry must be an object".into()))?;
+    let version = object
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SidecarError::Invalid("unsupported spot_removal version".into()))?;
+    if version != u64::from(SPOT_REMOVAL_VERSION) {
+        return invalid("unsupported spot_removal version");
+    }
+    let mode = object
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("heuristic");
+    match mode {
+        "heuristic" => {
+            if object.contains_key("artifact") {
+                return invalid("heuristic spot_removal must not carry an artifact");
+            }
+            let id = object.get("id").and_then(Value::as_str).unwrap_or_default();
+            if id.trim().is_empty() {
+                return invalid("heuristic spot_removal requires a non-empty `id`");
+            }
+            for name in ["center_x", "center_y"] {
+                let v = extra_finite(object, name)?;
+                if !(0.0..=1.0).contains(&v) {
+                    return invalid(format!(
+                        "heuristic spot_removal `{name}` must be within 0..=1"
+                    ));
+                }
+            }
+            let radius = extra_finite(object, "radius")?;
+            if !(radius > 0.0 && radius <= 512.0) {
+                return invalid("heuristic spot_removal `radius` must be within (0, 512]");
+            }
+            for name in ["offset_dx", "offset_dy"] {
+                let v = extra_finite(object, name)?;
+                if !(-1.0..=1.0).contains(&v) {
+                    return invalid(format!(
+                        "heuristic spot_removal `{name}` must be within -1..=1"
+                    ));
+                }
+            }
+            // `feather`/`opacity` fall back to the core defaults when absent.
+            let feather = extra_optional_finite(object, "feather")?.unwrap_or(0.0);
+            if !(0.0..=1.0).contains(&feather) {
+                return invalid("heuristic spot_removal `feather` must be within 0..=1");
+            }
+            let opacity = extra_optional_finite(object, "opacity")?.unwrap_or(1.0);
+            if !(0.0..=1.0).contains(&opacity) {
+                return invalid("heuristic spot_removal `opacity` must be within 0..=1");
+            }
+        }
+        "generative" => {
+            if let Some(link_value) = object.get("artifact") {
+                if !link_value.is_null() {
+                    let link: GenerativeArtifactRef = serde_json::from_value(link_value.clone())
+                        .map_err(|_| {
+                            SidecarError::Invalid("invalid generative spot_removal artifact".into())
+                        })?;
+                    validate_generative_ref(&link)?;
+                }
+            }
+        }
+        _ => return invalid(format!("unsupported spot_removal mode `{mode}`")),
+    }
+    Ok(())
+}
+
 fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     // REVIEW-SIDECAR-N3: auto-features persist analysis results; a non-finite
     // target luminance would poison every downstream tone computation.
@@ -2816,6 +2982,7 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     for spot in &a.spot_removals {
         validate_spot_removal(spot)?;
     }
+    validate_spot_removal_extras(a)?;
     if let Some(g) = &a.generative_edit {
         if g.version != 1 {
             return invalid("unsupported generative_edit version");
@@ -4515,18 +4682,43 @@ mod tests {
         )];
         assert!(d.validate().is_err());
 
-        // Generative with link and heuristic without link roundtrip.
+        // Generative with link roundtrips; the load carries the extras mirror of
+        // the same key (SPOT-SCHEMA-GEOMETRY) which stays valid (generative
+        // needs no geometry, link verified).
         let mut d2 = SidecarDocument::new(source(), "pipeline-1");
-        d2.virtual_copies[0].recipe.spot_removals = vec![
-            spot_removal(SpotRemovalMode::Generative, Some(generative_link())),
-            spot_removal(SpotRemovalMode::Heuristic, None),
-        ];
+        d2.virtual_copies[0].recipe.spot_removals = vec![spot_removal(
+            SpotRemovalMode::Generative,
+            Some(generative_link()),
+        )];
         let json = d2.to_json().unwrap();
         assert!(json.contains("spot_removals"));
         let decoded = SidecarDocument::from_json(&json).unwrap();
         assert_eq!(
             decoded.virtual_copies[0].recipe.spot_removals,
             d2.virtual_copies[0].recipe.spot_removals
+        );
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.extras.get("spot_removals"),
+            Some(&serde_json::to_value(&d2.virtual_copies[0].recipe.spot_removals).unwrap())
+        );
+    }
+
+    #[test]
+    fn spot_typed_heuristic_without_geometry_is_loudly_invalid_on_load() {
+        // SPOT-SCHEMA-GEOMETRY: params-lose typed heuristic entries (no heal
+        // geometry anywhere) serialize without key loss, but loading them is
+        // rejected loudly — the mirrored extras entry misses the mandatory
+        // geometry. Old entries stay recognizable as missing/invalid instead
+        // of rendering as if no spot existed.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.spot_removals =
+            vec![spot_removal(SpotRemovalMode::Heuristic, None)];
+        let json = d.to_json().unwrap();
+        assert!(json.contains("spot_removals"));
+        let err = SidecarDocument::from_json(&json).unwrap_err();
+        assert!(
+            err.to_string().contains("spot_removal"),
+            "loud geometry error expected, got {err}"
         );
     }
 
@@ -4538,6 +4730,170 @@ mod tests {
         assert!(!json.contains("spot_removals"));
         let decoded = SidecarDocument::from_json(&json).unwrap();
         assert!(decoded.virtual_copies[0].recipe.spot_removals.is_empty());
+        assert!(!decoded.virtual_copies[0]
+            .recipe
+            .extras
+            .contains_key("spot_removals"));
+    }
+
+    fn heuristic_spot_extra() -> Value {
+        serde_json::json!({
+            "id": "spot-1",
+            "version": 1,
+            "mode": "heuristic",
+            "center_x": 0.25,
+            "center_y": 0.5,
+            "radius": 2.0,
+            "feather": 0.5,
+            "offset_dx": 0.5,
+            "offset_dy": 0.0,
+            "opacity": 1.0,
+            "status": "valid"
+        })
+    }
+
+    #[test]
+    fn spot_removals_extras_heuristic_geometry_survives_roundtrip() {
+        // SPOT-SCHEMA-GEOMETRY detector (mirrors the GUI headless test
+        // `spot_heal_headless_quick_heal_q_shortcut_and_render` at sidecar
+        // level): producer-written extras heal geometry must survive
+        // save/load losslessly — the 69dad91 data loss may never return.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.extras.insert(
+            "spot_removals".into(),
+            Value::Array(vec![heuristic_spot_extra()]),
+        );
+        let json = d.to_json().unwrap();
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.extras.get("spot_removals"),
+            d.virtual_copies[0].recipe.extras.get("spot_removals")
+        );
+        assert_eq!(decoded.virtual_copies[0].recipe.spot_removals.len(), 1);
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.spot_removals[0].mode,
+            SpotRemovalMode::Heuristic
+        );
+        decoded.validate().unwrap();
+        // Second roundtrip is a fixed point (mirror of mirror is identical).
+        let decoded2 = SidecarDocument::from_json(&decoded.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded2.virtual_copies[0]
+                .recipe
+                .extras
+                .get("spot_removals"),
+            d.virtual_copies[0].recipe.extras.get("spot_removals")
+        );
+    }
+
+    #[test]
+    fn spot_removals_extras_generative_roundtrips_without_geometry() {
+        // Generative spots need no heal geometry; the extras view roundtrips
+        // with mode intact and the typed view carries version/mode.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id": "g1", "version": 1, "mode": "generative"}]),
+        );
+        let json = d.to_json().unwrap();
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.extras.get("spot_removals"),
+            d.virtual_copies[0].recipe.extras.get("spot_removals")
+        );
+        assert_eq!(decoded.virtual_copies[0].recipe.spot_removals.len(), 1);
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.spot_removals[0].mode,
+            SpotRemovalMode::Generative
+        );
+        decoded.validate().unwrap();
+    }
+
+    #[test]
+    fn spot_removals_extras_generative_bad_link_is_rejected() {
+        // A generative extras entry with a corrupt artifact link fails loudly.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        let mut bad_link = generative_link();
+        bad_link.checksum.clear();
+        d.virtual_copies[0].recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{
+                "id": "g1", "version": 1, "mode": "generative",
+                "artifact": serde_json::to_value(&bad_link).unwrap()
+            }]),
+        );
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn spot_removals_extras_validation_rejects_loudly() {
+        // Every malformed extras entry fails loudly — no silent fallback, no
+        // silent reinterpretation. Each case is a full entry array element.
+        let mut cases: Vec<(&str, Value)> = Vec::new();
+        // Unknown version.
+        let mut v = heuristic_spot_extra();
+        v["version"] = serde_json::json!(99);
+        cases.push(("version", v));
+        // Missing version.
+        let mut v = heuristic_spot_extra();
+        v.as_object_mut().unwrap().remove("version");
+        cases.push(("missing-version", v));
+        // Unknown mode.
+        let mut v = heuristic_spot_extra();
+        v["mode"] = serde_json::json!("clone");
+        cases.push(("mode", v));
+        // Missing geometry (params-lose shape).
+        for field in [
+            "id",
+            "center_x",
+            "center_y",
+            "radius",
+            "offset_dx",
+            "offset_dy",
+        ] {
+            let mut v = heuristic_spot_extra();
+            v.as_object_mut().unwrap().remove(field);
+            cases.push(("missing-geometry", v));
+        }
+        // Out-of-range geometry.
+        let mut v = heuristic_spot_extra();
+        v["radius"] = serde_json::json!(0.0);
+        cases.push(("radius-range", v));
+        let mut v = heuristic_spot_extra();
+        v["center_x"] = serde_json::json!(1.5);
+        cases.push(("center-range", v));
+        let mut v = heuristic_spot_extra();
+        v["opacity"] = serde_json::json!(2.0);
+        cases.push(("opacity-range", v));
+        // Wrong-typed geometry (JSON has no non-finite numbers; a string must
+        // fail loudly instead of being coerced or skipped).
+        let mut v = heuristic_spot_extra();
+        v["radius"] = serde_json::json!("wide");
+        cases.push(("radius-type", v));
+        // Heuristic must not carry an artifact (mirrors the typed exclusion rule).
+        let mut v = heuristic_spot_extra();
+        v["artifact"] = serde_json::to_value(generative_link()).unwrap();
+        cases.push(("heuristic-artifact", v));
+        // Non-object entry and non-array key.
+        cases.push(("non-object", serde_json::json!("spot-1")));
+        for (name, entry) in cases {
+            let mut d = SidecarDocument::new(source(), "pipeline-1");
+            d.virtual_copies[0]
+                .recipe
+                .extras
+                .insert("spot_removals".into(), Value::Array(vec![entry]));
+            assert!(
+                d.validate().is_err(),
+                "extras entry `{name}` must be rejected loudly"
+            );
+        }
+        // Non-array key shape.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!({"mode": "heuristic"}),
+        );
+        assert!(d.validate().is_err());
     }
 
     #[test]
@@ -4551,7 +4907,18 @@ mod tests {
             Some(generative_link()),
         )];
         save_sidecar(&path, &document).unwrap();
-        assert_eq!(load_sidecar(&path).unwrap(), document);
+        let loaded = load_sidecar(&path).unwrap();
+        assert_eq!(
+            loaded.virtual_copies[0].recipe.spot_removals,
+            document.virtual_copies[0].recipe.spot_removals
+        );
+        // SPOT-SCHEMA-GEOMETRY: the load carries the extras mirror of the
+        // typed key, so full-document equality no longer holds by design —
+        // assert the mirror instead (same raw value the typed view parsed).
+        assert_eq!(
+            loaded.virtual_copies[0].recipe.extras.get("spot_removals"),
+            Some(&serde_json::to_value(&document.virtual_copies[0].recipe.spot_removals).unwrap())
+        );
         // No partial atomic-write temporary may linger.
         for entry in std::fs::read_dir(directory.path()).unwrap() {
             let name = entry.unwrap().file_name();
