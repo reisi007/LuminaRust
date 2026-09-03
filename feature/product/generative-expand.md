@@ -46,6 +46,8 @@ Agents.md „AI-Masken").
 
 ## Ist-Stand
 
+**Stand 2026-09-03 (GEN-FILL-02 BESTANDEN verifiziert 2026-09-03, 0d3033d):** `GenerativeEdit` `canvas` + `expand_beyond_image` implementiert — `GenerativeCanvas` `validate_with_source` (`output_* > source_*` + `source_offset` Bounds), `GenerativeEdit::effective_expand` Default `false`, `validate` (`expand true→canvas pflichtig`, `expand false→canvas verboten`), GUI `set_expand_beyond_image` (false→`canvas=None`, true→`w+4/h+4 offset 2,2` validiert) + `set_expand_canvas` + `draw_generative_expand` (Checkbox „auf Bild beschneiden", DragValue W/H/X/Y, Apply-Frame), Preview/Export `apply_generative_expand` (inner byte-identisch, Checker-Rand ≠ Source), `recipe_hash`/`RenderKey` (`preview 12×12` vs `8×8`), `preview_generation` bump, 6 headless Tests (`core`/`sidecar`/`gui`); Pipeline heuristisch `Perspective→Expand→Crop` (GUI Apply nach Render, Core `apply_generative_expand` separat), noch nicht als entkoppelte `Pipeline::default` Stufe (5-in-1 `apply_geometry`), kein stiller Fallback, kein `zdata` yet.
+
 **Stand 2026-09-02 (GEN-EXPAND-1 BESTANDEN verifiziert 2026-09-02, 46f6baf):** Nur dokumentiert, Implementierung **nicht** begonnen
 (repo-weit verifiziert: kein Code, keine `GenerativeEdit`-Stufe; Doku-first). Es gibt
 keine Inpainting-/Outpainting-Modelle im Workspace; `lumina-onnx` ist die
