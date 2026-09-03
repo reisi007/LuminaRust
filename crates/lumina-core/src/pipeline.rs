@@ -22,6 +22,39 @@ pub enum PipelineStage {
     Output,
 }
 
+/// GEN-PIPELINE-DECOUPLE: decoupled geometry sub-stages executed inside the
+/// `Crop` pipeline stage (the former 5-in-1 `apply_geometry`, now five
+/// independently callable stages). The order is normative per
+/// `feature/product/generative-expand.md` §Pipeline-Platzierung:
+/// `LensCorrection(F-098) → GenerativeEdit(auto-fill) → Perspective(F-099) →
+/// GenerativeEdit(expand) → Crop(F-093, incl. rotation/mirror)`.
+///
+/// `Pipeline::default()` intentionally keeps the coarse top-level stages
+/// above: the sub-stages all operate `Rgba8Srgb → Rgba8Srgb` and share one
+/// cache/RenderKey scope, so splitting them into top-level stages would churn
+/// every `RenderKey`/`stage_digest` consumer without cache benefit. The render
+/// entry points ([`crate::render_frame_from_base`]) implement exactly this
+/// order via `apply_lens_stage` → `apply_auto_fill_transparent` →
+/// `apply_perspective_stage` → `apply_generative_expand` → `apply_crop_stage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometryStage {
+    LensCorrection,
+    AutoFillTransparent,
+    Perspective,
+    GenerativeExpand,
+    Crop,
+}
+
+/// Normative geometry sub-stage order. [`crate::render_frame_from_base`]
+/// executes the stages in exactly this sequence.
+pub const GEOMETRY_STAGE_ORDER: [GeometryStage; 5] = [
+    GeometryStage::LensCorrection,
+    GeometryStage::AutoFillTransparent,
+    GeometryStage::Perspective,
+    GeometryStage::GenerativeExpand,
+    GeometryStage::Crop,
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pipeline {
     stages: Vec<(PipelineStage, PipelineFormat, PipelineFormat)>,
@@ -897,5 +930,107 @@ mod tests {
             rec2020.stage_digest(crate::cache::CacheStage::Histogram)
         );
         assert_ne!(small.digest(), rec2020.digest());
+    }
+
+    // GEN-PIPELINE-DECOUPLE: the decoupled geometry sub-stage order is
+    // normative (Lens → Fill → Perspective → Expand → Crop).
+    #[test]
+    fn geometry_stage_order_is_lens_fill_perspective_expand_crop() {
+        assert_eq!(
+            super::GEOMETRY_STAGE_ORDER,
+            [
+                super::GeometryStage::LensCorrection,
+                super::GeometryStage::AutoFillTransparent,
+                super::GeometryStage::Perspective,
+                super::GeometryStage::GenerativeExpand,
+                super::GeometryStage::Crop,
+            ]
+        );
+    }
+
+    fn recipe_with_generative(seed: Option<u64>, expand: Option<bool>) -> EditRecipe {
+        EditRecipe {
+            generative_edit: Some(lumina_sidecar::GenerativeEdit {
+                version: 1,
+                canvas: None,
+                keep_generative_content: None,
+                auto_fill_transparent: Some(true),
+                expand_beyond_image: expand,
+                seed,
+                prompt: None,
+                extras: Default::default(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    // GEN-PIPELINE-DECOUPLE: every generative_edit field participates in the
+    // render identity (recipe_hash + digest).
+    #[test]
+    fn generative_edit_fields_change_render_digest() {
+        let output = OutputSpec {
+            profile: "sRGB".into(),
+            width: 10,
+            height: 10,
+            format: "png".into(),
+        };
+        let base = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_generative(Some(1), None),
+            vec![],
+            output.clone(),
+        );
+        for other in [
+            recipe_with_generative(Some(2), None),
+            recipe_with_generative(Some(1), Some(true)),
+            EditRecipe::default(),
+        ] {
+            let key = RenderKey::new("s", "d", "p", "v", &other, vec![], output.clone());
+            assert_ne!(base.recipe_hash, key.recipe_hash);
+            assert_ne!(base.digest(), key.digest());
+        }
+    }
+
+    // GEN-PIPELINE-DECOUPLE: generative_edit is intentionally kept in the
+    // mask identity (only geometry/lens/perspective are stripped there):
+    // a seed change must invalidate cached mask evaluations too.
+    #[test]
+    fn generative_edit_changes_mask_digest() {
+        let output = OutputSpec {
+            profile: "sRGB".into(),
+            width: 10,
+            height: 10,
+            format: "png".into(),
+        };
+        let a = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_generative(Some(1), None),
+            vec![],
+            output.clone(),
+        );
+        let b = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_generative(Some(2), None),
+            vec![],
+            output.clone(),
+        );
+        assert_ne!(
+            a.stage_digest(crate::cache::CacheStage::Mask),
+            b.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        // Decode stays shareable: generative work happens downstream.
+        assert_eq!(
+            a.stage_digest(crate::cache::CacheStage::Decode),
+            b.stage_digest(crate::cache::CacheStage::Decode)
+        );
     }
 }

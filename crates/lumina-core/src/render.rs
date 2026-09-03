@@ -111,8 +111,9 @@ pub struct StageWork {
     pub source_action_artifacts_applied: u32,
     /// Number of adjustment passes (white balance + tone LUT) executed.
     pub adjustments_passes: u32,
-    /// Number of geometry passes executed (`apply_geometry` runs
-    /// unconditionally, mirroring [`render_frame`]).
+    /// Number of geometry passes executed (the decoupled `Lens → Fill →
+    /// Perspective → Expand → Crop` stages run unconditionally, mirroring
+    /// [`render_frame`]).
     pub geometry_passes: u32,
     /// Number of mask layer evaluations attempted.
     pub mask_layers_evaluated: u32,
@@ -182,15 +183,62 @@ pub fn apply_spot_heals_from_recipe(
     frame: &mut ImageFrame,
     recipe: &EditRecipe,
 ) -> Result<(), CoreError> {
+    reject_unsupported_spot_modes(recipe)?;
     let spots = crate::spot_heal::spots_from_recipe(recipe);
     crate::spot_heal::apply_spot_heals(frame, &spots)
+}
+
+/// GEN-PIPELINE-DECOUPLE: rejects spot entries that the portable core cannot
+/// apply instead of silently skipping them. A `mode = "generative"` spot
+/// (local ONNX inpaint, `kind = "spot_heal_generative"`) needs a model and a
+/// persisted artifact; rendering it as healed — or as if it did not exist —
+/// would be a silent fallback, so it is a hard [`CoreError::InvalidAdjustment`].
+/// The same holds for a `mode = "heuristic"` entry that fails to parse or
+/// validate: dropping it silently would hide a corrupt recipe. Absent
+/// `spot_removals`, or entries without a `mode` key (legacy documents default
+/// to heuristic, mirroring [`crate::spot_heal::spots_from_recipe`]), that
+/// parse and validate are identity.
+fn reject_unsupported_spot_modes(recipe: &EditRecipe) -> Result<(), CoreError> {
+    let Some(value) = recipe.extras.get("spot_removals") else {
+        return Ok(());
+    };
+    let arr = value.as_array().ok_or(CoreError::InvalidAdjustment {
+        name: "spot_removals".into(),
+        value: -1.0,
+        minimum: 0.0,
+        maximum: 0.0,
+    })?;
+    for entry in arr {
+        let mode = entry
+            .get("mode")
+            .and_then(|m| m.as_str())
+            .unwrap_or("heuristic");
+        if mode != "heuristic" {
+            return Err(CoreError::InvalidAdjustment {
+                name: "spot_heal.mode".into(),
+                value: -1.0,
+                minimum: 0.0,
+                maximum: 0.0,
+            });
+        }
+        let spot: crate::spot_heal::SpotHeuristic =
+            serde_json::from_value(entry.clone()).map_err(|_| CoreError::InvalidAdjustment {
+                name: "spot_heal.entry".into(),
+                value: -1.0,
+                minimum: 0.0,
+                maximum: 0.0,
+            })?;
+        spot.validate()?;
+    }
+    Ok(())
 }
 
 /// PERF-GUI-1: continues a render from an already-prepared base frame.
 ///
 /// Executes exactly the same stages in the same order as [`render_frame`]
-/// after its source-action head — `Adjustments` (white balance before tonal
-/// values) → geometry/lens/perspective/crop → mask-layer evaluation — so for a
+/// after its source-action head — `SpotHeal` → `Adjustments` (white balance
+/// before tonal values) → decoupled geometry `Lens → Fill → Perspective →
+/// Expand → Crop` → mask-layer evaluation — so for a
 /// base produced by [`prepare_source_base`] on the same inputs the output is
 /// **byte-identical** to [`render_frame`] (proven by unit tests). The owned
 /// `base` is consumed and mutated in place; no extra full-frame clone happens
@@ -204,44 +252,42 @@ pub fn render_frame_from_base(
     base.apply_recipe_with_white_balance(context.recipe, context.camera_white_balance)?;
     work.adjustments_passes += 1;
 
-    // F-098-N1: geometry/distortion/vignette/perspective/crop/rotation are
-    // always applied; a Lensfun corrector (when present) overrides the manual
-    // distortion/vignette model, otherwise the manual model is used. No silent
-    // fallback when `lensfun` is None or the feature is off (REVIEW-CORE-GEO-1).
+    // GEN-PIPELINE-DECOUPLE: decoupled geometry order
+    // `Lens → Fill → Perspective → Expand → Crop`
+    // (see `crate::pipeline::GEOMETRY_STAGE_ORDER`). The legacy 5-in-1
+    // `apply_geometry` is intentionally NOT used here: auto-fill must run
+    // between lens and perspective (transparent wedges from undistortion are
+    // filled before perspective resamples them), and the generative expand
+    // must run before crop (crop coordinates reference the expanded canvas).
+    // A failing expand (missing canvas, out-of-bounds offsets) aborts the
+    // render with `InvalidAdjustment` — never a silent unexpanded render.
     #[cfg(feature = "lensfun")]
     {
         let corrector = context.lensfun.map(|LensfunCorrectorRef(c)| c);
-        base.apply_geometry(
-            context.recipe.geometry.as_ref(),
-            context.recipe.lens_correction.as_ref(),
-            context.recipe.perspective.as_ref(),
-            corrector,
-        )?;
+        base.apply_lens_stage(context.recipe.lens_correction.as_ref(), corrector)?;
     }
     #[cfg(not(feature = "lensfun"))]
     {
-        base.apply_geometry(
-            context.recipe.geometry.as_ref(),
-            context.recipe.lens_correction.as_ref(),
-            context.recipe.perspective.as_ref(),
-        )?;
+        base.apply_lens_stage(context.recipe.lens_correction.as_ref())?;
     }
-    // GEN-FILL-01: auto-fill transparent after lens if requested.
+    if let Some(ge) = context.recipe.generative_edit.as_ref() {
+        if ge.auto_fill_transparent.unwrap_or(false) {
+            base.apply_auto_fill_transparent(true, ge.seed.unwrap_or(0));
+        }
+    }
+    base.apply_perspective_stage(
+        context.recipe.lens_correction.as_ref(),
+        context.recipe.perspective.as_ref(),
+    )?;
     if context
         .recipe
         .generative_edit
         .as_ref()
-        .and_then(|g| g.auto_fill_transparent)
-        .unwrap_or(false)
+        .is_some_and(|ge| ge.effective_expand())
     {
-        let seed = context
-            .recipe
-            .generative_edit
-            .as_ref()
-            .and_then(|g| g.seed)
-            .unwrap_or(0);
-        crate::generative::fill_transparent_heuristic(&mut base, seed);
+        base = crate::generative::apply_generative_expand(&base, context.recipe)?;
     }
+    base.apply_crop_stage(context.recipe.geometry.as_ref())?;
     work.geometry_passes += 1;
 
     let (mask_layers, mask_warnings) =
@@ -2274,5 +2320,312 @@ mod tests {
                 .to_hex()
                 .to_string()
         );
+    }
+
+    // ---- GEN-PIPELINE-DECOUPLE: Lens → Fill → Perspective → Expand → Crop ----
+
+    fn decouple_lens() -> lumina_sidecar::LensCorrection {
+        lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(1.0),
+            distortion_k2: Some(0.0),
+            distortion_k3: Some(0.0),
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        }
+    }
+
+    fn expand_recipe() -> EditRecipe {
+        EditRecipe {
+            generative_edit: Some(lumina_sidecar::GenerativeEdit {
+                version: 1,
+                canvas: Some(lumina_sidecar::GenerativeCanvas {
+                    output_width: 40,
+                    output_height: 40,
+                    source_offset_x: 4,
+                    source_offset_y: 4,
+                    extras: Default::default(),
+                }),
+                keep_generative_content: None,
+                auto_fill_transparent: None,
+                expand_beyond_image: Some(true),
+                seed: Some(7),
+                prompt: None,
+                extras: Default::default(),
+            }),
+            geometry: Some(lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.5,
+                    height: 0.5,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn render_matches_manual_lens_fill_perspective_expand_crop_sequence() {
+        // Pins the decoupled order: render_frame must equal the manual
+        // per-stage sequence Lens → Fill → Perspective → Expand → Crop.
+        let frame = checker_8x8();
+        let mut recipe = expand_recipe();
+        recipe.lens_correction = Some(decouple_lens());
+        recipe.perspective = Some(lumina_sidecar::Perspective {
+            version: 1,
+            vertical: 0.0,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        });
+        recipe
+            .generative_edit
+            .as_mut()
+            .unwrap()
+            .auto_fill_transparent = Some(true);
+        let output = render_frame(&frame, &default_context(&recipe, None)).unwrap();
+        // Expand 32×32 → 40×40, then crop 0.5 → 20×20.
+        assert_eq!((output.frame.width, output.frame.height), (20, 20));
+
+        let mut manual = frame.clone();
+        manual
+            .apply_lens_stage(recipe.lens_correction.as_ref())
+            .unwrap();
+        let ge = recipe.generative_edit.as_ref().unwrap();
+        manual.apply_auto_fill_transparent(true, ge.seed.unwrap_or(0));
+        manual
+            .apply_perspective_stage(recipe.lens_correction.as_ref(), recipe.perspective.as_ref())
+            .unwrap();
+        manual = crate::generative::apply_generative_expand(&manual, &recipe).unwrap();
+        manual.apply_crop_stage(recipe.geometry.as_ref()).unwrap();
+        assert_eq!(output.frame.pixels, manual.pixels);
+    }
+
+    #[test]
+    fn staged_render_with_expand_matches_full_render() {
+        // PERF-GUI-1 byte-identity extended to the decoupled geometry tail.
+        let frame = checker_8x8();
+        let recipe = expand_recipe();
+        let context = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            lensfun: None,
+            masks: None,
+        };
+        let reference = render_frame(&frame, &context).unwrap();
+        let mut work = StageWork::default();
+        let base = prepare_source_base(&frame, context.source_actions, &mut work).unwrap();
+        let staged = render_frame_from_base(base, &context, &mut work).unwrap();
+        assert_eq!(reference.frame.pixels, staged.frame.pixels);
+        assert_eq!((staged.frame.width, staged.frame.height), (20, 20));
+    }
+
+    #[test]
+    fn render_with_expand_is_deterministic_and_differs_from_source() {
+        let frame = checker_8x8();
+        let recipe = expand_recipe();
+        let first = render_frame(&frame, &default_context(&recipe, None))
+            .unwrap()
+            .frame;
+        let second = render_frame(&frame, &default_context(&recipe, None))
+            .unwrap()
+            .frame;
+        assert_eq!(first.pixels, second.pixels);
+        // The crop window (top-left 20×20 of the 40×40 canvas, source at
+        // offset 4,4) contains generated border pixels: the heuristic expand
+        // fills every pixel, so none may stay transparent, and the histogram
+        // must move away from the source digest.
+        assert!(!first.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255));
+        let h_src = crate::LuminanceHistogram::new(&frame);
+        let h_out = crate::LuminanceHistogram::new(&first);
+        assert_ne!(h_src.digest(), h_out.digest());
+        // Re-rendering the output recipe snapshot is stable (history
+        // reproducibility): same recipe + same source → same bytes.
+        let third = render_frame(&frame, &default_context(&recipe, None))
+            .unwrap()
+            .frame;
+        assert_eq!(crate::spot_heal::psnr(&first, &third), f64::INFINITY);
+    }
+
+    #[test]
+    fn fill_runs_before_perspective_not_after() {
+        // True order discriminator: a frame with a transparent border is
+        // filled first and then perspective-resampled. If the fill ran
+        // after perspective, the tilt would smear the transparent border
+        // into the interior (dark halo + partial alpha) before the fill —
+        // different bytes. Byte-equality with the manual Fill→Perspective
+        // sequence and inequality with the reversed sequence pins the order.
+        let mut pixels = vec![0u8; 32 * 32 * 4];
+        for y in 0..32 {
+            for x in 0..32 {
+                let idx = (y * 32 + x) * 4;
+                let border = x < 4 || y < 4 || x >= 28 || y >= 28;
+                if border {
+                    pixels[idx + 3] = 0;
+                } else {
+                    let v = if (x + y) % 2 == 0 { 20 } else { 230 };
+                    pixels[idx] = v;
+                    pixels[idx + 1] = v;
+                    pixels[idx + 2] = v;
+                    pixels[idx + 3] = 255;
+                }
+            }
+        }
+        let frame = ImageFrame::new(32, 32, pixels).unwrap();
+        let perspective = lumina_sidecar::Perspective {
+            version: 1,
+            vertical: 0.3,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        };
+        let mut recipe = EditRecipe {
+            perspective: Some(perspective),
+            ..Default::default()
+        };
+        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
+            version: 1,
+            canvas: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: Some(11),
+            prompt: None,
+            extras: Default::default(),
+        });
+        let rendered = render_frame(&frame, &default_context(&recipe, None))
+            .unwrap()
+            .frame;
+
+        // Manual Fill → Perspective sequence.
+        let mut forward = frame.clone();
+        forward.apply_lens_stage(None).unwrap();
+        assert!(forward.apply_auto_fill_transparent(true, 11));
+        assert!(!crate::generative::has_transparent_pixels(&forward));
+        forward
+            .apply_perspective_stage(None, Some(&perspective))
+            .unwrap();
+        assert_eq!(rendered.pixels, forward.pixels);
+
+        // Reversed Perspective → Fill sequence must differ (halo proof).
+        let mut reversed = frame.clone();
+        reversed.apply_lens_stage(None).unwrap();
+        reversed
+            .apply_perspective_stage(None, Some(&perspective))
+            .unwrap();
+        reversed.apply_auto_fill_transparent(true, 11);
+        assert_eq!(
+            (reversed.width, reversed.height),
+            (rendered.width, rendered.height)
+        );
+        assert_ne!(
+            reversed.pixels, rendered.pixels,
+            "fill-after-perspective must leave a resampling halo"
+        );
+    }
+
+    #[test]
+    fn generative_spot_mode_is_hard_error_not_silent_skip() {
+        // SPOT-REMOVE-1: a generative spot needs model + artifact. Rendering
+        // it as healed (or as absent) would be a silent fallback.
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id":"g1","version":1,"mode":"generative","prompt":"x"}]),
+        );
+        let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
+    }
+
+    #[test]
+    fn malformed_heuristic_spot_entry_is_hard_error() {
+        // A corrupt heuristic entry (radius 0) must not be silently dropped.
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.5,"center_y":0.5,"radius":0.0,"feather":0.0,"offset_dx":0.0,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
+        );
+        assert!(matches!(
+            render_frame(&frame, &default_context(&recipe, None)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn expand_without_canvas_is_hard_error() {
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
+            version: 1,
+            canvas: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        });
+        assert!(matches!(
+            render_frame(&frame, &default_context(&recipe, None)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn canvas_without_expand_is_hard_error() {
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
+            version: 1,
+            canvas: Some(lumina_sidecar::GenerativeCanvas {
+                output_width: 40,
+                output_height: 40,
+                source_offset_x: 4,
+                source_offset_y: 4,
+                extras: Default::default(),
+            }),
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(false),
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        });
+        assert!(matches!(
+            render_frame(&frame, &default_context(&recipe, None)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_spot_mode_is_hard_error() {
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id":"s9","version":1,"mode":"clone-magic"}]),
+        );
+        assert!(matches!(
+            render_frame(&frame, &default_context(&recipe, None)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
     }
 }

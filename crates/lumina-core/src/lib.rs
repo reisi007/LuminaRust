@@ -499,6 +499,23 @@ impl ImageFrame {
         if let Some(l) = lens {
             apply_ca(self, l);
         }
+        self.apply_crop_stage(geometry)
+    }
+
+    /// GEN-PIPELINE-DECOUPLE: apply crop stage only (crop → rotation →
+    /// mirroring). Coordinates for the crop are normalized on the
+    /// perspective-transformed (and possibly generatively expanded) image.
+    /// This is the fifth geometry sub-stage (`Crop`); together with
+    /// [`Self::apply_lens_stage`], [`Self::apply_auto_fill_transparent`],
+    /// [`Self::apply_perspective_stage`] and
+    /// [`crate::generative::apply_generative_expand`] it forms the decoupled
+    /// order `Lens → Fill → Perspective → Expand → Crop`. [`Self::apply_geometry`]
+    /// and [`Self::apply_geometry_with_auto_fill`] delegate to these stages so
+    /// the legacy 5-in-1 entry points stay byte-identical.
+    pub fn apply_crop_stage(
+        &mut self,
+        geometry: Option<&lumina_sidecar::Geometry>,
+    ) -> Result<(), CoreError> {
         let Some(geometry) = geometry else {
             return Ok(());
         };
@@ -602,31 +619,7 @@ impl ImageFrame {
         )?;
         self.apply_auto_fill_transparent(auto_fill_transparent, seed);
         self.apply_perspective_stage(lens, perspective)?;
-        let Some(geometry) = geometry else {
-            return Ok(());
-        };
-        if geometry.version != 1
-            || !geometry.rotation_degrees.is_finite()
-            || !(-180.0..=180.0).contains(&geometry.rotation_degrees)
-        {
-            return Err(CoreError::InvalidAdjustment {
-                name: "geometry.version/rotation".into(),
-                value: geometry.rotation_degrees as f64,
-                minimum: -180.0,
-                maximum: 180.0,
-            });
-        }
-        let (x, y, w, h) = crop_rect(self.width, self.height, geometry.crop.as_ref())?;
-        let cropped = crop_frame(self, x, y, w, h)?;
-        let mut transformed = rotate_frame(&cropped, geometry.rotation_degrees);
-        if geometry.mirror_horizontal {
-            flip_horizontal(&mut transformed);
-        }
-        if geometry.mirror_vertical {
-            flip_vertical(&mut transformed);
-        }
-        *self = transformed;
-        Ok(())
+        self.apply_crop_stage(geometry)
     }
 
     pub fn measurement_domain(
@@ -1073,6 +1066,48 @@ fn validate_lens(l: &lumina_sidecar::LensCorrection) -> Result<(), CoreError> {
                 value: v as f64,
                 minimum: lo as f64,
                 maximum: hi as f64,
+            });
+        }
+    }
+    Ok(())
+}
+fn validate_generative_edit(g: &lumina_sidecar::GenerativeEdit) -> Result<(), CoreError> {
+    // GEN-PIPELINE-DECOUPLE: structural validation of the GenerativeEdit
+    // recipe stage (mirrors the sidecar rules). Any violation is
+    // `InvalidAdjustment` — never a silent fallback to "render as if the
+    // stage were absent".
+    if g.version != 1 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "generative_edit.version".into(),
+            value: g.version as f64,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    }
+    let expand = g.expand_beyond_image.unwrap_or(false);
+    if expand && g.canvas.is_none() {
+        return Err(CoreError::InvalidAdjustment {
+            name: "generative_edit.canvas".into(),
+            value: 0.0,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    }
+    if !expand && g.canvas.is_some() {
+        return Err(CoreError::InvalidAdjustment {
+            name: "generative_edit.canvas".into(),
+            value: 1.0,
+            minimum: 0.0,
+            maximum: 0.0,
+        });
+    }
+    if let Some(canvas) = &g.canvas {
+        if canvas.output_width == 0 || canvas.output_height == 0 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "generative_edit.canvas.output".into(),
+                value: 0.0,
+                minimum: 1.0,
+                maximum: f64::from(u32::MAX),
             });
         }
     }
@@ -1722,6 +1757,9 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
     }
     if let Some(p) = &recipe.perspective {
         validate_perspective(p)?;
+    }
+    if let Some(g) = &recipe.generative_edit {
+        validate_generative_edit(g)?;
     }
     if let Some(g) = &recipe.geometry {
         if g.version != 1
@@ -3914,6 +3952,205 @@ mod tests {
                 None
             )
             .is_err());
+    }
+
+    // GEN-PIPELINE-DECOUPLE: the extracted crop stage is byte-identical to
+    // the legacy 5-in-1 tail, and the legacy entry points delegate to the
+    // decoupled stages without changing a pixel.
+    #[test]
+    fn crop_stage_matches_legacy_apply_geometry_tail() {
+        fn frame() -> ImageFrame {
+            let mut pixels = Vec::with_capacity(12 * 8 * 4);
+            for y in 0..8 {
+                for x in 0..12 {
+                    let v = ((x * 17 + y * 31) % 256) as u8;
+                    pixels.extend_from_slice(&[v, 255 - v, v / 2, 255]);
+                }
+            }
+            ImageFrame::new(12, 8, pixels).unwrap()
+        }
+        let geometry = lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Aspect {
+                preset: lumina_sidecar::AspectPreset::OneToOne,
+            }),
+            rotation_degrees: 90.0,
+            mirror_horizontal: true,
+            mirror_vertical: false,
+        };
+        let mut legacy = frame();
+        legacy
+            .apply_geometry(
+                Some(&geometry),
+                None,
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
+        let mut staged = frame();
+        staged.apply_lens_stage(None).unwrap();
+        staged.apply_perspective_stage(None, None).unwrap();
+        staged.apply_crop_stage(Some(&geometry)).unwrap();
+        assert_eq!(legacy.pixels, staged.pixels);
+        assert_eq!((legacy.width, legacy.height), (8, 8));
+        assert_eq!((staged.width, staged.height), (8, 8));
+    }
+
+    #[test]
+    fn geometry_with_auto_fill_matches_manual_stage_sequence() {
+        fn frame() -> ImageFrame {
+            ImageFrame::new(8, 8, vec![140u8; 8 * 8 * 4]).unwrap()
+        }
+        let lens = lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: Some("wide-light".into()),
+            distortion_k1: None,
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        let geometry = lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Free {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: true,
+        };
+        let mut legacy = frame();
+        legacy
+            .apply_geometry_with_auto_fill(
+                Some(&geometry),
+                Some(&lens),
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+                true,
+                99,
+            )
+            .unwrap();
+        let mut manual = frame();
+        manual
+            .apply_lens_stage(
+                Some(&lens),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
+        manual.apply_auto_fill_transparent(true, 99);
+        manual.apply_perspective_stage(Some(&lens), None).unwrap();
+        manual.apply_crop_stage(Some(&geometry)).unwrap();
+        assert_eq!(legacy.pixels, manual.pixels);
+        assert_eq!((legacy.width, legacy.height), (4, 4));
+    }
+
+    #[test]
+    fn crop_stage_rejects_invalid_geometry() {
+        let mut frame = ImageFrame::new(4, 4, vec![1u8; 4 * 4 * 4]).unwrap();
+        assert!(frame.apply_crop_stage(None).is_ok());
+        assert_eq!(frame.pixels, vec![1u8; 4 * 4 * 4]);
+        for bad in [
+            lumina_sidecar::Geometry {
+                version: 2,
+                crop: None,
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            },
+            lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: f32::NAN,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            },
+            lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 200.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            },
+        ] {
+            assert!(frame.apply_crop_stage(Some(&bad)).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_generative_edit_is_rejected_not_silently_ignored() {
+        fn recipe_with(ge: lumina_sidecar::GenerativeEdit) -> lumina_sidecar::EditRecipe {
+            lumina_sidecar::EditRecipe {
+                generative_edit: Some(ge),
+                ..Default::default()
+            }
+        }
+        fn edit(
+            canvas: Option<lumina_sidecar::GenerativeCanvas>,
+            expand: Option<bool>,
+        ) -> lumina_sidecar::GenerativeEdit {
+            lumina_sidecar::GenerativeEdit {
+                version: 1,
+                canvas,
+                keep_generative_content: None,
+                auto_fill_transparent: None,
+                expand_beyond_image: expand,
+                seed: None,
+                prompt: None,
+                extras: Default::default(),
+            }
+        }
+        let canvas = lumina_sidecar::GenerativeCanvas {
+            output_width: 12,
+            output_height: 12,
+            source_offset_x: 2,
+            source_offset_y: 2,
+            extras: Default::default(),
+        };
+        let frame = ImageFrame::new(8, 8, vec![5u8; 8 * 8 * 4]).unwrap();
+        // expand=true without canvas, canvas without expand=true, bad
+        // version, and zero-size canvas are all hard errors.
+        for bad in [
+            edit(None, Some(true)),
+            edit(Some(canvas.clone()), Some(false)),
+            edit(Some(canvas.clone()), None),
+            lumina_sidecar::GenerativeEdit {
+                version: 2,
+                ..edit(Some(canvas.clone()), Some(true))
+            },
+            edit(
+                Some(lumina_sidecar::GenerativeCanvas {
+                    output_width: 0,
+                    output_height: 12,
+                    source_offset_x: 0,
+                    source_offset_y: 0,
+                    extras: Default::default(),
+                }),
+                Some(true),
+            ),
+        ] {
+            assert!(
+                frame.clone().apply_recipe(&recipe_with(bad)).is_err(),
+                "invalid generative_edit must be rejected"
+            );
+        }
+        // Valid combinations apply without error (identity without expand).
+        assert!(frame
+            .clone()
+            .apply_recipe(&recipe_with(edit(None, None)))
+            .is_ok());
+        assert!(frame
+            .clone()
+            .apply_recipe(&recipe_with(edit(None, Some(false))))
+            .is_ok());
     }
 
     #[test]
