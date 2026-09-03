@@ -224,12 +224,16 @@ fn filmstrip_is_single_row_horizontal() {
     harness.run_steps(3);
 
     // Collect filmstrip cells: Unknown-role nodes sized like a cell (~110 tall)
-    // in the bottom band (y > 500 of a 720-high window).
+    // in the bottom band (y > 500 of a 720-high window). GUI-VIEW-2: the
+    // navigator rail is open by default and shows its own 120x90 thumbnail
+    // column on the left — those nodes match the band filter too, so require
+    // the 140-wide filmstrip cell geometry to keep this a filmstrip-only
+    // single-row assertion.
     let mut chips: Vec<eframe::egui::Rect> = harness
         .query_all_by(|n| n.role() == eframe::egui::accesskit::Role::Unknown)
         .filter(|n| n.accesskit_node().bounding_box().is_some())
         .map(|n| n.rect())
-        .filter(|r| r.min.y > 500.0 && r.height() > 60.0 && r.width() > 60.0)
+        .filter(|r| r.min.y > 500.0 && r.height() > 60.0 && r.width() > 130.0)
         .collect();
     assert!(
         chips.len() >= 2,

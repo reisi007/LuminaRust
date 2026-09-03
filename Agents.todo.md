@@ -94,9 +94,7 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] GUI-VIEW-2** Manuell-Test-Runde 2 (F-103-N6): Fit weiter defekt, Bild überlappt beim Bewegen, Viewport-Rechteck im Navigator/Thumbnail nicht sichtbar, Navigator-/Hauptgrößen inkonsistent (Ausschnitt nicht festlegbar), Scroll im Basic-Panel scrollt das Bild mit (Scroll-Bleed: Wheel wirkt außerhalb der Preview), Develop→Library-Wechsel zu langsam. Abnahme je Teil: headless Test + kittest, `cargo test -p lumina-gui` grün.
-- [ ] **[PRIO: hoch] GUI-ROTATE-1** Bild nicht drehbar (Geometrie-Rotation in Code vorhanden `set_geometry_rotation`, UI-Wirkung fehlt oder unauffindbar). Diagnose + Fix + headless Test, `cargo test -p lumina-gui` grün.
-- [ ] **[PRIO: hoch] GUI-SIDECAR-READ-1** Edits sichtbar prüfen: N6-Session schrieb nur 1× `auto_tone` (Sidecar-Datei existiert) — Slider-Commits dieser Session fehlen im Log; klären ob Edits verloren oder nur nicht sichtbar, Fix + Reload-Test.
+- [ ] **[PRIO: hoch] GUI-VISION-1** Vision-Loop-Befunde (DoD §6, Goldens 2026-09-04): „Save Recipe/Status"-Button unten abgeschnitten (develop_basic, histogram_graphic), „Choose…"-Button rechts abgeschnitten (export_module), Filmstrip fehlt in Export (beabsichtigt? dann dokumentieren, sonst fixen). Abnahme: Vision-Re-Check + `cargo test -p lumina-gui` grün.
 - [ ] **[PRIO: mittel] GUI-FILMSTRIP-SYNC-1** Filmstrip-Mehrfachauswahl + Lightroom-Sync (Settings auf Auswahl anwenden, Match Total Exposures über Auswahl). SOLL: F-100-Sync-Semantik in `cli-gui-wasm.md` ergänzen, dann GUI + headless Tests.
 
 _(Block A leer — R2-GUIMOD-04a BESTANDEN 2026-09-04 575f834, WASM-REMOVE BESTANDEN; Details Git-Historie)_

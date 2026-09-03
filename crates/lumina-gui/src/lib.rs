@@ -1263,9 +1263,11 @@ impl LuminaApp {
             preview_src_w: 1.0,
             preview_src_h: 1.0,
             preview_effective_scale: 1.0,
-            // Navigator defaults to collapsed (hidden) and is revealed via the
-            // "Navigator" toggle button in the preview toolbar (Lightroom-like).
-            navigator_open: false,
+            // GUI-VIEW-2 (N6): the navigator rail (overview + viewport
+            // rectangle, F-100) is visible by default — Lightroom-like — and
+            // stays collapsible via the preview toolbar toggle. Default-hidden
+            // made the viewport rectangle unfindable.
+            navigator_open: true,
             open_folders: BTreeSet::new(),
             folder_children: BTreeMap::new(),
             folder_raw_counts: BTreeMap::new(),
@@ -1324,6 +1326,24 @@ impl LuminaApp {
         self.preview_generation
     }
 
+    /// GUI-SIDECAR-READ-1: flush an armed slider commit before the loaded
+    /// source changes. `apply_decoded_frame` drops `pending_slider_commit`
+    /// (fresh lineage), so switching images with an uncommitted drag — or
+    /// edits made while a background decode is in flight — would silently
+    /// lose the edit. Flushing here renders the current state and saves it
+    /// to the *currently loaded* path (which is still adopted at this
+    /// point). No-op unless a commit is armed on a loaded file-backed image.
+    fn flush_pending_edit(&mut self) {
+        if self.pending_slider_commit.is_none()
+            || self.original.is_none()
+            || self.path.trim().is_empty()
+        {
+            return;
+        }
+        trace!("GUI save: flushing pending edit before source change");
+        self.commit_pending_slider_save([0, 0]);
+    }
+
     pub fn open_file(&mut self, path: impl Into<String>) {
         let p = path.into();
         trace!("GUI interaction: open_file {}", p);
@@ -1334,11 +1354,26 @@ impl LuminaApp {
         // a failed decode the path would point at a file that never loaded.
         // `finish_decode` commits the path only after a successful decode, so
         // every write path stays consistent with original/document/recipe.
+        // GUI-SIDECAR-READ-1: flush an armed commit to the still-loaded image
+        // before the switch starts — otherwise the drag edit is dropped by
+        // `apply_decoded_frame` when the new frame lands.
+        self.flush_pending_edit();
         // Populate the file browser with the directory containing the opened file.
+        // GUI-VIEW-2: rescan only when actually navigating (new directory or
+        // no entries yet). A same-folder switch (filmstrip clicks) reuses the
+        // live entries — our own saves keep them fresh via `refresh_entry` —
+        // instead of re-reading + re-hashing every source (the N6 stall:
+        // ~224 ms per switch with hashed sidecars). External folder changes
+        // still surface via Open/Refresh/`set_directory` rescans.
         if let Some(parent) = Path::new(&p).parent() {
-            self.directory = parent.display().to_string();
+            let dir = parent.display().to_string();
+            if dir != self.directory || self.entries.is_empty() {
+                self.directory = dir;
+                self.list_directory();
+            } else {
+                self.directory = dir;
+            }
         }
-        self.list_directory();
         // PERF-GUI-7: decode off the main thread so switching files never
         // blocks the UI; the decoded frame is delivered via `decode_rx` and
         // applied in `update()`/`poll_decode()`.
@@ -1436,6 +1471,24 @@ impl LuminaApp {
             Err(error) => {
                 self.status = Str::DirectoryNotReadable.format_arg(&error.to_string());
             }
+        }
+    }
+
+    /// Re-scan a single file into `self.entries` (in place, order-preserving).
+    /// Used after a save so the browser reflects the new sidecar state
+    /// without a full directory rescan — `list_directory` re-reads and
+    /// re-hashes *every* source file via `source_status`, which stalls the UI
+    /// on folders with large RAWs on every slider-commit save (GUI-VIEW-2,
+    /// N6 Develop→Library/save stall class).
+    fn refresh_entry(&mut self, path: &Path) {
+        let Some(scanned) = Self::scan_entry(path) else {
+            return;
+        };
+        if let Some(slot) = self.entries.iter_mut().find(|e| e.path == scanned.path) {
+            *slot = scanned;
+        } else {
+            self.entries.push(scanned);
+            self.entries.sort_by(|a, b| a.name.cmp(&b.name));
         }
     }
 
@@ -3207,6 +3260,10 @@ impl LuminaApp {
 
     pub fn load_bytes(&mut self, bytes: Vec<u8>, name: impl Into<String>) -> Result<(), GuiError> {
         let name = name.into();
+        // GUI-SIDECAR-READ-1: same flush as `open_file` — a dropped file
+        // replaces the source through `apply_decoded_frame`, which drops an
+        // armed commit (no-op without a file-backed image loaded).
+        self.flush_pending_edit();
         let source_is_raw = is_raw_name(&name);
         let (frame, orientation, camera_white_balance) = if source_is_raw {
             let image = lumina_raw::decode_bytes(&bytes, &name)?;
@@ -3676,8 +3733,10 @@ impl LuminaApp {
     }
 
     /// Set the geometry rotation and record the save commit
-    /// (GUI-SLIDER-SAVE-1).
-    fn set_geometry_rotation(&mut self, degrees: f64) {
+    /// (GUI-SLIDER-SAVE-1). Public so headless/integration harnesses and
+    /// future shortcuts drive the same path as the Geometry slider
+    /// (GUI-ROTATE-1: one wired path, no shadow state).
+    pub fn set_geometry_rotation(&mut self, degrees: f64) {
         let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
             version: 1,
             crop: None,
@@ -3690,9 +3749,31 @@ impl LuminaApp {
         self.mark_recipe_dirty("geometry.rotation_degrees", degrees);
     }
 
+    /// Rotate by a relative step in degrees (GUI-ROTATE-1: the ±90° quick
+    /// buttons). Normalizes into `(-180.0, 180.0]` and commits through
+    /// [`Self::set_geometry_rotation`] so button, slider and (future)
+    /// shortcut share one save path.
+    pub fn rotate_step(&mut self, delta_degrees: f64) {
+        let current = self
+            .recipe
+            .geometry
+            .as_ref()
+            .map(|g| f64::from(g.rotation_degrees))
+            .unwrap_or(0.0);
+        let mut next = (current + delta_degrees) % 360.0;
+        if next <= -180.0 {
+            next += 360.0;
+        } else if next > 180.0 {
+            next -= 360.0;
+        }
+        trace!("GUI interaction: rotate_step {delta_degrees:+} -> {next}");
+        self.set_geometry_rotation(next);
+    }
+
     /// Set the geometry mirror flags and record the save commit
-    /// (GUI-SLIDER-SAVE-1).
-    fn set_geometry_mirror(&mut self, horizontal: bool, vertical: bool) {
+    /// (GUI-SLIDER-SAVE-1). Public for the same reason as
+    /// [`Self::set_geometry_rotation`].
+    pub fn set_geometry_mirror(&mut self, horizontal: bool, vertical: bool) {
         let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
             version: 1,
             crop: None,
@@ -3782,8 +3863,13 @@ impl LuminaApp {
         // (`commit_pending_slider_save`) persists the sidecar (CAS, loud
         // conflicts) with an INFO log — same as GUI-SLIDER-SAVE-1. The
         // exposure is the log representative (contrast persists alongside).
+        // GUI-SIDECAR-READ-1: commit synchronously (render + save + log) — a
+        // bare `render()` would clear `pending_full_render` while the commit
+        // stays armed, stranding the save until an unrelated later edit
+        // (N6: `auto_tone saved` only fired via a later pan).
         self.mark_recipe_dirty("auto_tone", result.exposure);
-        self.render()
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
     }
 
     pub fn match_total_exposure(&mut self, target: f64) -> Result<(), GuiError> {
@@ -3825,12 +3911,20 @@ impl LuminaApp {
         // (`commit_pending_slider_save`) persists the sidecar (CAS, loud
         // conflicts) with an INFO log — same as GUI-SLIDER-SAVE-1. Zoom/pan
         // view state is never recorded here; it stays GUI session state.
+        // GUI-SIDECAR-READ-1: commit synchronously (see `auto_tone`) — a bare
+        // `render()` would strand the armed commit (N6 lost-edit class).
         self.mark_recipe_dirty("match_total_exposure", value);
-        self.render()
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
     }
 
     pub fn reset(&mut self) {
         self.recipe = EditRecipe::default();
+        // GUI-SIDECAR-READ-1: the recipe was replaced wholesale — a commit
+        // armed by a pre-reset edit is stale (its `<key>=<value> saved` log
+        // would misattribute the reset state). Drop it; the reset itself
+        // re-renders below and persists on the next committed edit.
+        self.pending_slider_commit = None;
         if self.original.is_some() {
             let _ = self.render();
         }
@@ -4966,6 +5060,11 @@ impl LuminaApp {
     fn finish_decode(&mut self, result: DecodeResult) {
         match result {
             Ok(frame) => {
+                // GUI-SIDECAR-READ-1: edits made while this decode was in
+                // flight target the still-loaded image — flush them to its
+                // path now, before the new path is adopted below (a flush
+                // afterwards would write the old recipe under the new path).
+                self.flush_pending_edit();
                 self.path = frame.path.clone();
                 // PREVIEW-CACHE-FEATURE: the active image just changed — plan
                 // the +4/−2 neighbor window around it (lazy, on workers).
@@ -5317,10 +5416,10 @@ impl LuminaApp {
                 self.status = Str::SidecarSaved.t().into();
                 self.sidecar_revision = Some(new_revision);
                 self.document = Some(document);
-                self.list_directory();
-                // `list_directory` overwrites the status with its scan result;
-                // restore the success message so the final state is honest.
-                self.status = Str::SidecarSaved.t().into();
+                // GUI-VIEW-2: targeted single-file refresh instead of a full
+                // `list_directory` rescan (full-file hash per entry). The
+                // success status stands as set above.
+                self.refresh_entry(&path);
             }
             Err(save_error) => {
                 error!("sidecar save failed for {}: {save_error}", path.display());
@@ -5667,8 +5766,13 @@ impl LuminaApp {
             });
             let pointer = ui.input(|i| i.pointer.interact_pos());
             if wheel != egui::Vec2::ZERO {
+                // GUI-VIEW-2 (Scroll-Bleed): the wheel acts only when the
+                // pointer is over the preview *pane* — the image rect can
+                // extend under the side panels when zoomed (it is painted
+                // clipped below), and without the pane gate a wheel over the
+                // Basic panel would pan/zoom the image behind it.
                 if let Some(p) = pointer {
-                    if rect.contains(p) {
+                    if pane.contains(p) && rect.contains(p) {
                         if wheel_zoom {
                             let srect_w = rect.width().max(1e-6);
                             let srect_h = rect.height().max(1e-6);
@@ -5783,6 +5887,11 @@ impl LuminaApp {
             let rect = egui::Rect::from_center_size(center, draw);
             self.preview_effective_scale = scale;
 
+            // GUI-VIEW-2 (Overlap): the zoomed image rect can extend beyond
+            // the pane (toolbar/filmstrip/panel territory) — constrain all
+            // preview painting to the pane and restore the clip afterwards.
+            let previous_clip = ui.clip_rect();
+            ui.set_clip_rect(previous_clip.intersect(pane));
             // GUI-WGPU-PRESENT-1: the GPU-presented frame is a registered
             // user texture — draw it via the painter directly (identical rect,
             // full UVs). Otherwise the historical CPU `Image` widget.
@@ -5847,6 +5956,7 @@ impl LuminaApp {
                 );
                 self.draw_mask_overlay(ui, full_rect);
             }
+            ui.set_clip_rect(previous_clip);
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label(Str::NoImage.t());
@@ -6361,11 +6471,13 @@ impl LuminaApp {
         self.wb_pick_mode = false;
         // GUI-SLIDER-SAVE-1: the eyedropper pick commits like a slider (both
         // fields persist; the temperature is the log representative).
+        // GUI-SIDECAR-READ-1: commit synchronously — a bare `render()` would
+        // clear `pending_full_render` while the commit stays armed, stranding
+        // the save (same lost-edit class as `auto_tone` in N6). Render
+        // failures stay loud via `show_error` inside the commit path.
         self.mark_recipe_dirty("wb_temperature", temp);
         self.status = "White balance set from picked point".into();
-        if self.original.is_some() {
-            self.render()?;
-        }
+        self.commit_pending_slider_save([0, 0]);
         Ok(())
     }
 
@@ -7007,46 +7119,59 @@ impl LuminaApp {
 
     fn draw_geometry(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::Geometry.t(), |ui| {
+            // GUI-ROTATE-1: rotation + mirror are pure core-pipeline controls
+            // (no Lensfun stage involved), so they are always available — the
+            // N6 finding was "not rotatable / wiring missing or unfindable".
+            // Only crop/perspective stay behind the lensfun gate (see the
+            // `GeometryRequiresLensfun` message).
+            ui.label(Str::Crop.t());
+            // GUI-SLIDER-SAVE-1: geometry edits commit through the
+            // `set_geometry_*` setters (save at debounce); `geo` is only a
+            // control binding buffer.
+            let geo = self.recipe.geometry.clone().unwrap_or(Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            });
+            let mut rotation = geo.rotation_degrees;
+            if matches!(
+                lr_slider(
+                    ui,
+                    Str::Rotation.t(),
+                    &mut rotation,
+                    identity_spec(-180.0..=180.0, 0.0, 1.0)
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
+            ) {
+                self.set_geometry_rotation(f64::from(rotation));
+            }
+            ui.horizontal(|ui| {
+                if ui.button(Str::RotateLeft.t()).clicked() {
+                    self.rotate_step(-90.0);
+                }
+                if ui.button(Str::RotateRight.t()).clicked() {
+                    self.rotate_step(90.0);
+                }
+            });
+            let mut mh = geo.mirror_horizontal;
+            if ui.checkbox(&mut mh, Str::MirrorHorizontal.t()).changed() {
+                self.set_geometry_mirror(mh, geo.mirror_vertical);
+            }
+            let mut mv = geo.mirror_vertical;
+            if ui.checkbox(&mut mv, Str::MirrorVertical.t()).changed() {
+                // Re-read the horizontal flag: a same-frame horizontal
+                // change above already committed through the setter.
+                let horizontal = self
+                    .recipe
+                    .geometry
+                    .as_ref()
+                    .map(|g| g.mirror_horizontal)
+                    .unwrap_or(mh);
+                self.set_geometry_mirror(horizontal, mv);
+            }
             if cfg!(feature = "lensfun") {
-                ui.label(Str::Crop.t());
-                // GUI-SLIDER-SAVE-1: geometry edits commit through the
-                // `set_geometry_*` setters (save at debounce); `geo` is only a
-                // control binding buffer.
-                let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
-                    version: 1,
-                    crop: None,
-                    rotation_degrees: 0.0,
-                    mirror_horizontal: false,
-                    mirror_vertical: false,
-                });
-                let mut rotation = geo.rotation_degrees;
-                if matches!(
-                    lr_slider(
-                        ui,
-                        Str::Rotation.t(),
-                        &mut rotation,
-                        identity_spec(-180.0..=180.0, 0.0, 1.0)
-                    ),
-                    SliderAction::Changed | SliderAction::ResetRequested
-                ) {
-                    self.set_geometry_rotation(f64::from(rotation));
-                }
-                let mut mh = geo.mirror_horizontal;
-                if ui.checkbox(&mut mh, Str::MirrorHorizontal.t()).changed() {
-                    self.set_geometry_mirror(mh, geo.mirror_vertical);
-                }
-                let mut mv = geo.mirror_vertical;
-                if ui.checkbox(&mut mv, Str::MirrorVertical.t()).changed() {
-                    // Re-read the horizontal flag: a same-frame horizontal
-                    // change above already committed through the setter.
-                    let horizontal = self
-                        .recipe
-                        .geometry
-                        .as_ref()
-                        .map(|g| g.mirror_horizontal)
-                        .unwrap_or(mh);
-                    self.set_geometry_mirror(horizontal, mv);
-                }
                 ui.label(Str::Perspective.t());
                 // GUI-SLIDER-SAVE-1: perspective sliders commit through
                 // `set_perspective_value` (save at debounce); `persp` is only
@@ -12189,6 +12314,160 @@ mod tests {
         );
     }
 
+    /// GUI-VIEW-2 (Scroll-Bleed): the preview wheel acts only with the
+    /// pointer over the preview *pane*. A wheel over a side panel (pointer
+    /// outside the pane — e.g. over the Basic panel while the zoomed image
+    /// rect extends underneath it) must never zoom or pan the image.
+    #[test]
+    fn preview_wheel_ignores_pointer_outside_pane() {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase};
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        app.load_bytes(
+            ImageFrame::new(200, 150, [128_u8, 128, 128, 255].repeat(200 * 150))
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap(),
+            "wheel.png",
+        )
+        .unwrap();
+        app.render().unwrap();
+        app.texture = Some(ctx.load_texture(
+            "preview",
+            egui::ColorImage::filled([200, 150], egui::Color32::GRAY),
+            egui::TextureOptions::LINEAR,
+        ));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let wheel_ctrl = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 50.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        };
+        // Pointer in the window corner — inside the screen rect but outside
+        // the preview pane (panel territory): zoom and pan must not move.
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                events: vec![
+                    Event::PointerMoved(egui::pos2(2.0, 2.0)),
+                    wheel_ctrl.clone(),
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert_eq!(app.preview_zoom, 1.0);
+        assert_eq!(app.preview_pan, egui::Vec2::ZERO);
+        assert!(!app.pending_full_render, "no re-render may be armed");
+
+        // Same wheel over the image centre zooms as before (the gate only
+        // removes the bleed, not the feature).
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(2.0),
+                events: vec![Event::PointerMoved(egui::pos2(400.0, 300.0)), wheel_ctrl],
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.zoom_mode, ZoomMode::Custom);
+        assert!(
+            (app.preview_zoom - 1.1).abs() < 1e-4,
+            "ctrl-wheel over the preview zooms, got {}",
+            app.preview_zoom
+        );
+    }
+
+    /// GUI-VIEW-2 (N6): the navigator rail (overview + viewport rectangle,
+    /// F-100) is visible by default — default-hidden made the rectangle
+    /// unfindable.
+    #[test]
+    fn navigator_rail_open_by_default() {
+        assert!(new_app().navigator_open);
+    }
+
+    /// GUI-VIEW-2: saving refreshes the single browser entry in place —
+    /// no full directory rescan (which re-reads + re-hashes every source
+    /// file) and no unrelated entry churn.
+    #[test]
+    fn save_refreshes_single_browser_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_a = directory.path().join("a.png");
+        let source_b = directory.path().join("b.png");
+        save_png(&source_a);
+        save_png(&source_b);
+        let mut app = new_app();
+        open_and_decode(&mut app, source_a.display().to_string());
+        assert_eq!(app.entries().len(), 2);
+        let b_before = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "b.png")
+            .cloned()
+            .expect("b listed");
+        assert!(!b_before.has_sidecar);
+        app.set_adjustment("exposure", 1.0);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        assert_eq!(app.entries().len(), 2, "no entry churn on save");
+        let a_after = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "a.png")
+            .expect("a listed");
+        assert!(a_after.has_sidecar, "saved entry reflects the sidecar");
+        let b_after = app
+            .entries()
+            .iter()
+            .find(|e| e.name == "b.png")
+            .expect("b listed");
+        assert_eq!(
+            format!("{b_after:?}"),
+            format!("{b_before:?}"),
+            "unrelated entry untouched"
+        );
+        assert_eq!(app.status, Str::SidecarSaved.t());
+    }
+
+    /// GUI-VIEW-2: same-folder image switches reuse the live browser entries
+    /// (no rescan); an explicit `set_directory`/Refresh still rescans and
+    /// picks up external folder changes.
+    #[test]
+    fn same_folder_switch_skips_rescan_but_redirectory_rescans() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_a = directory.path().join("a.png");
+        let source_b = directory.path().join("b.png");
+        save_png(&source_a);
+        save_png(&source_b);
+        let mut app = new_app();
+        open_and_decode(&mut app, source_a.display().to_string());
+        assert_eq!(app.entries().len(), 2);
+        // External change while browsing: a new file appears on disk.
+        let source_c = directory.path().join("c.png");
+        save_png(&source_c);
+        // Same-folder switch: no rescan, C stays unlisted.
+        open_and_decode(&mut app, source_b.display().to_string());
+        assert_eq!(app.entries().len(), 2, "same-folder switch must not rescan");
+        assert!(app.entries().iter().all(|e| e.name != "c.png"));
+        // Explicit redirectory: full rescan picks C up.
+        app.set_directory(directory.path().display().to_string());
+        assert_eq!(app.entries().len(), 3);
+        assert!(app.entries().iter().any(|e| e.name == "c.png"));
+    }
+
     /// GUI-HISTOGRAM-1: stored 256-bin histograms map onto non-empty plot
     /// points inside the plot rect, with the peak reaching the top.
     #[test]
@@ -12623,8 +12902,13 @@ mod tests {
         let mut app = new_app();
         open_and_decode(&mut app, source.display().to_string());
         app.set_white_balance_from_point(0.5, 0.5, 0.5).unwrap();
-        assert!(app.pending_slider_commit.is_some(), "WB pick commits");
-        let document = commit_and_load_doc(&mut app, &source);
+        // GUI-SIDECAR-READ-1: the pick commits synchronously (render + save),
+        // so no commit stays armed and the sidecar file already holds both
+        // fields without a manual debounce drive.
+        assert_eq!(app.pending_slider_commit, None);
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        assert!(sidecar.is_file(), "WB pick must save the sidecar file");
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
         assert_eq!(
             document.virtual_copies[0].recipe.adjustments["wb_temperature"],
             6500.0
@@ -12667,10 +12951,19 @@ mod tests {
                 "{key}={value} outside {lo}..={hi}"
             );
         }
-        let exposure = values[0].1;
-        assert_eq!(
-            app.pending_slider_commit,
-            Some(("auto_tone".to_string(), exposure))
+        // GUI-SIDECAR-READ-1: `auto_tone` commits synchronously (render +
+        // save + INFO log) — no stranded commit stays armed, and the sidecar
+        // file already holds the values without a manual debounce drive.
+        assert_eq!(app.pending_slider_commit, None);
+        assert!(
+            app.error().is_none(),
+            "auto_tone commit must not fail, got {:?}",
+            app.error()
+        );
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&source);
+        assert!(
+            sidecar_path.is_file(),
+            "auto_tone must write the sidecar file synchronously"
         );
         // AUTO-TONE-2: the mirrors mark all six adjustments as auto-written.
         let mirrors = [
@@ -12766,9 +13059,18 @@ mod tests {
         assert!(app.recipe().auto_features.match_total_exposure);
         let delta = app.recipe().auto_features.matched_exposure.unwrap();
         let exposure = app.recipe().adjustments["exposure"];
-        assert_eq!(
-            app.pending_slider_commit,
-            Some(("match_total_exposure".to_string(), delta))
+        // GUI-SIDECAR-READ-1: synchronous commit — nothing stays armed and
+        // the sidecar file already holds the match without a debounce drive.
+        assert_eq!(app.pending_slider_commit, None);
+        assert!(
+            app.error().is_none(),
+            "match commit must not fail, got {:?}",
+            app.error()
+        );
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&source);
+        assert!(
+            sidecar_path.is_file(),
+            "match_total_exposure must write the sidecar file synchronously"
         );
         let document = commit_and_load_doc(&mut app, &source);
         let persisted = &document.virtual_copies[0].recipe;
@@ -12782,6 +13084,59 @@ mod tests {
             Some(delta)
         );
         assert_eq!(reopened.recipe().adjustments["exposure"], exposure);
+    }
+
+    /// GUI-SIDECAR-READ-1 (N6 regression): a flat slider edit
+    /// (`set_adjustment`, the Basic-panel path) must survive the full DoD
+    /// chain Edit → Commit → Sidecar-Datei → Reload.
+    #[test]
+    fn exposure_slider_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("exposure".to_string(), 1.5))
+        );
+        // The debounced update-loop path (`commit_pending_slider_save`) is
+        // driven here directly — headless has no pointer-release timer.
+        let document = commit_and_load_doc(&mut app, &source);
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            1.5
+        );
+        let reopened = reopen_app(&source);
+        assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+    }
+
+    /// GUI-SIDECAR-READ-1 (N6 regression): switching images with an
+    /// uncommitted slider drag must flush the edit to the old image's
+    /// sidecar instead of dropping it in `apply_decoded_frame`.
+    #[test]
+    fn switching_image_flushes_pending_slider_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_a = directory.path().join("a.png");
+        let source_b = directory.path().join("b.png");
+        save_png(&source_a);
+        save_png(&source_b);
+        let mut app = new_app();
+        open_and_decode(&mut app, source_a.display().to_string());
+        app.set_adjustment("exposure", 2.0);
+        assert!(app.pending_slider_commit.is_some());
+        // Switching arms the background decode of B; the flush to A's
+        // sidecar happens synchronously inside `open_file`.
+        open_and_decode(&mut app, source_b.display().to_string());
+        assert_eq!(app.pending_slider_commit, None);
+        let sidecar_a = lumina_sidecar::sidecar_path_for(&source_a);
+        assert!(sidecar_a.is_file(), "A's edit must be flushed on switch");
+        let document_a = lumina_sidecar::load_sidecar(&sidecar_a).unwrap();
+        assert_eq!(
+            document_a.virtual_copies[0].recipe.adjustments["exposure"],
+            2.0
+        );
     }
 
     /// GUI-SLIDER-SAVE-1: unknown struct field names warn loudly but record no
@@ -13371,6 +13726,81 @@ mod tests {
         assert!(
             !app.geometry_blocks_source_mapping(),
             "a neutral perspective is not blocking"
+        );
+    }
+
+    /// GUI-ROTATE-1: rotation is wired end to end — the setter and the ±90°
+    /// quick buttons share one commit path, the render honours the rotation
+    /// (90° swaps the frame dimensions), and the value persists through
+    /// Datei + Reload (DoD §1).
+    #[test]
+    fn geometry_rotation_renders_persists_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source); // 2×1 fixture: a 90° turn must swap dimensions.
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let (w, h) = app.image_dims().expect("image loaded");
+        assert_eq!((w, h), (2, 1));
+
+        // Quick button path: +90° from neutral.
+        app.rotate_step(90.0);
+        assert_eq!(app.recipe.geometry.as_ref().unwrap().rotation_degrees, 90.0);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("geometry.rotation_degrees".to_string(), 90.0))
+        );
+        app.render().unwrap();
+        let (rw, rh) = (
+            app.preview.as_ref().unwrap().width,
+            app.preview.as_ref().unwrap().height,
+        );
+        assert_eq!((rw, rh), (1, 2), "90° rotation must swap dimensions");
+
+        // Quarter turns accumulate and wrap into (-180, 180].
+        app.rotate_step(90.0);
+        assert_eq!(
+            app.recipe.geometry.as_ref().unwrap().rotation_degrees,
+            180.0
+        );
+        app.rotate_step(90.0);
+        assert_eq!(
+            app.recipe.geometry.as_ref().unwrap().rotation_degrees,
+            -90.0,
+            "270° must wrap to -90°"
+        );
+        app.rotate_step(-90.0);
+        assert_eq!(
+            app.recipe.geometry.as_ref().unwrap().rotation_degrees,
+            180.0
+        );
+        let wrapped = app.recipe.geometry.as_ref().unwrap().rotation_degrees;
+        assert!(
+            (-180.0..=180.0).contains(&wrapped),
+            "rotation stays in domain, got {wrapped}"
+        );
+
+        // Slider path persists through Datei + Reload.
+        app.set_geometry_rotation(-45.0);
+        let document = commit_and_load_doc(&mut app, &source);
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .geometry
+                .as_ref()
+                .unwrap()
+                .rotation_degrees,
+            -45.0
+        );
+        let reopened = reopen_app(&source);
+        assert_eq!(
+            reopened
+                .recipe()
+                .geometry
+                .as_ref()
+                .unwrap()
+                .rotation_degrees,
+            -45.0
         );
     }
 
