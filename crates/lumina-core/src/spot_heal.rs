@@ -1,5 +1,3 @@
-#![allow(clippy::identity_op)]
-#![allow(clippy::field_reassign_with_default, clippy::cloned_ref_to_slice_refs)]
 use crate::{CoreError, ImageFrame};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

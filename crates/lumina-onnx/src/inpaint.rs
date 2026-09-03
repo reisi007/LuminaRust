@@ -1,4 +1,3 @@
-#![allow(clippy::manual_checked_ops)]
 use crate::{manifest::inpaint_heal_manifest, OnnxError};
 #[derive(Debug, Clone)]
 pub struct InpaintRequest {
@@ -60,15 +59,11 @@ impl StubInpaintBackend {
                 cnt += 1;
             }
         }
-        let mean = if cnt > 0 {
-            [
-                (sum[0] / cnt) as u8,
-                (sum[1] / cnt) as u8,
-                (sum[2] / cnt) as u8,
-            ]
-        } else {
-            [128, 128, 128]
-        };
+        let mean = [
+            sum[0].checked_div(cnt).map(|v| v as u8).unwrap_or(128),
+            sum[1].checked_div(cnt).map(|v| v as u8).unwrap_or(128),
+            sum[2].checked_div(cnt).map(|v| v as u8).unwrap_or(128),
+        ];
         let mut seed_hash = {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};

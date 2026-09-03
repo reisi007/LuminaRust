@@ -428,8 +428,11 @@ pub struct LuminaApp {
     drawing: bool,
     spot_tool: SpotTool,
     spot_mode: SpotMode,
+    #[cfg(not(target_arch = "wasm32"))]
     spot_radius: f32,
+    #[cfg(not(target_arch = "wasm32"))]
     spot_feather: f32,
+    #[cfg(not(target_arch = "wasm32"))]
     spot_opacity: f32,
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
@@ -910,8 +913,11 @@ impl LuminaApp {
             drawing: false,
             spot_tool: SpotTool::None,
             spot_mode: SpotMode::Heuristic,
+            #[cfg(not(target_arch = "wasm32"))]
             spot_radius: 18.0,
+            #[cfg(not(target_arch = "wasm32"))]
             spot_feather: 0.5,
+            #[cfg(not(target_arch = "wasm32"))]
             spot_opacity: 1.0,
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
