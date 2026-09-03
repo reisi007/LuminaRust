@@ -402,6 +402,9 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `Cmd/Ctrl+Shift+I` / `Cmd/Ctrl+Shift+E` | Bibliothek (Import) / Exportieren anspringen (reiner Modulwechsel, Dialoge bleiben manuell) | Welle 3, LR-13 light; nie Rezept |
 | `F` | Vollbild-Vorschau (versteckt dieselbe Chrome wie Lights-Out, setzt beim Einschalten Zoom auf Fit) | Welle 3; nie Rezept |
 | `Num0`, `+` / `-` | Zoom Fit (ohne Dokument) / Zoomstufen | gebunden (`Num0` mit Dokument = Bewertung 0, LR-01) |
+| `Shift`+Doppelklick auf `Whites`/`Blacks`-Label | Auto-Weißpunkt / Auto-Schwarzpunkt (nur dieses Feld aus `suggest_auto_tone`, kein Zweit-Algorithmus) | G-16; `Shift`+Doppelklick auf anderen Labels = normaler Einzel-Reset; ohne `Shift` = normaler Einzel-Reset |
+| `Alt`+Regler (Track-Drag/Scroll an Ton-Reglern) | Maskierungsvorschau: Clipping-Badge (`J`-Pfad) solange `Alt` gehalten | G-16; Scope: `exposure`/`contrast`/`highlights`/`shadows`/`whites`/`blacks`; Label-`Alt`-Klick bleibt Einzel-Reset, `Alt`-Scroll-Feinjustierung bleibt |
+| `S` | Softproof-Vorschau umschalten (reines Anzeige-Badge, nie Rezept) | G-16; G-10-Reservierung: volle Druck-/Farbraumsimulation bleibt LRPAR-G10-VIEWER-Folgearbeit |
 
 Die Bibliotheks-Rasteransicht zeigt je Datei ein Bewertungs-Badge (Sterne der
 Standardkopie plus Pick-/Reject-Markierung); Details stehen im Hover-Text.
@@ -422,6 +425,39 @@ der aktiven Kopie über den normalen Save/Render-Pfad.
   Datenverlust gelöscht werden können und daher nie als Bilder im Grid,
   Sync/Match-fähig oder als Sidecar-Ziel erscheinen dürfen.
 - **Ist-Stand 2026-09-03:** umgesetzt + verifiziert BESTANDEN (236p lib, kittest 11/11 inkl. `library_subfolder_badges`-Golden, Vision: Badges korrekt zugeordnet; Kontrast-Nacharbeit s. GUI-LIBRARY-BADGE-CONTRAST-1).
+
+### Power-Shortcuts Rest (G-16, LRPAR-G16-POWER)
+
+GUI-contained, keine Kollision mit Bestand (vollständiger Kollisionscheck gegen
+die F-100-Tabelle oben: `S` war bisher nur als `Cmd/Ctrl+Alt+S`-Schnappschuss
+gebunden, plain-`S` war frei; `Shift`+Doppelklick und `Alt`+Track-Drag waren
+unbelegt — Label-`Alt`-Klick = Einzel-Reset und `Alt`-Scroll-Feinjustierung
+bleiben daneben unverändert bestehen).
+
+- **Auto-Weiß-/Schwarzpunkt (`Shift`+Doppelklick):** Scope-Entscheid
+  (Lightroom-konform): `Shift`+Doppelklick auf das **Whites**-Label setzt den
+  Auto-Weißpunkt, auf das **Blacks**-Label den Auto-Schwarzpunkt — jeweils nur
+  dieses eine Feld aus dem bestehenden `suggest_auto_tone`-Pfad (derselbe
+  Auto-Tone-Algorithmus und -Fingerprint wie der Auto-Button, kein
+  Zweit-Algorithmus; Persistenz über den normalen Save/Render-Pfad inkl.
+  Auto-Spiegel). `Shift`+Doppelklick auf allen anderen Labels fällt auf den
+  normalen Einzel-Reset zurück; ohne `Shift` ändert sich nichts.
+- **Maskierungsvorschau (`Alt`+Regler):** Scope-Entscheid: gilt für die sechs
+  Basic-Ton-Regler (`exposure`, `contrast`, `highlights`, `shadows`, `whites`,
+  `blacks`). Solange `Alt` während einer Track-/Scroll-Wertänderung gehalten
+  wird, zeigt die Vorschau-Kopfzeile das Clipping-Badge über den bestehenden
+  `J`-Clipping-Pfad (reiner Session-Display-State, nie Rezept/Sidecar; der
+  G-11-Overlay-Gate bleibt daneben unverändert). Disambiguierung: `Alt`-Klick
+  auf das **Label** bleibt Einzel-Reset, `Alt`-Scroll-Feinjustierung bleibt
+  Feinjustierung — die Vorschau ist additiv.
+- **`S`-Belegung (G-10-Verträglichkeit):** `S` war in keiner Welle gebunden;
+  LRPAR-G10-VIEWER beansprucht `S` für Softproof (noch offen). Entscheid: `S`
+  schaltet **jetzt** eine display-only Softproof-Vorschau (Anzeige-Badge, nie
+  Rezept/Sidecar) und reserviert damit die G-10-Bindung, statt sie zu
+  verbauen. Die volle Druck-/Farbraumsimulation (Profilwahl, Gamut-Warnung)
+  bleibt ausdrückliche Folgearbeit in LRPAR-G10-VIEWER.
+- **Test-Hinweis:** Shift-Doppelklick-/Alt-Drag-Verdrahtung ist dünn und
+  review-geprüft; Fein-Verhalten fährt im manuellen F-103-N6 nach.
 
 ### Maskierung
 

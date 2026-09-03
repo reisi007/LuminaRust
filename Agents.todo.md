@@ -167,9 +167,8 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G09-LIB (Release: 1.0)** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
 - [ ] **[PRIO: mittel] LRPAR-G10-VIEWER (Release: 1.0)** Viewer-Lücken (G-10, ~65 %): „Original Photo“-Histogramm, `S`-Softproof-Shortcut + Druck-/Farbraumsimulation-Scope. Abnahme: GUI-headless, kein reiner Layout-Nachweis.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] LRPAR-G15-META-MVP (Release: 1.0)** Metadaten-MVP (G-15-Kern, MVP = 1.0, User-Entscheid 2026-09-03): Keywords, Filterungen (u. a. Brennweite/Kamera/ISO über `\`-Leiste hinaus), Sammlungen + Smart-Sammlungen, Stapel-Vollfunktion. Abnahme: CLI (Roundtrip, kein Datenverlust, Sidecar-first) + GUI-headless.
+- [ ] **[PRIO: mittel] LRPAR-G15-META-MVP (Release: 1.0)** Metadaten-MVP (G-15-Kern, MVP = 1.0, User-Entscheid 2026-09-03): Keywords, Filterungen (u. a. Brennweite/Kamera/ISO über `\`-Leiste hinaus), Sammlungen + Smart-Sammlungen, Stapel-Vollfunktion. Abnahme: CLI (Roundtrip, kein Datenverlust, Sidecar-first) + GUI-headless. (Slice 1 sidecar BESTANDEN `ed2e054`; offen: Slice 2 CLI + Slice 3 GUI.)
 - [ ] **[PRIO: mittel] LRPAR-G15-META-15 (Release: 1.5)** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
-- [ ] **[PRIO: mittel] LRPAR-G16-POWER (Release: 1.0)** Power-Shortcut-Rest (G-16, ~40 %): `Shift`-Doppelklick Auto-Weiß-/Schwarzpunkt, Alt+Regler-Maskierungsvorschau, `S`-Belegung. Abnahme: GUI-headless je Shortcut, keine Kollision mit Bestand (`w2/w3`-Mapping-Tests erweitern).
 
 ### PRIO: niedrig
 

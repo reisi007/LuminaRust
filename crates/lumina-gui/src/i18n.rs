@@ -381,6 +381,13 @@ pub enum Str {
     AllPanelsHiddenOn,
     AllPanelsHiddenOff,
     SpotOverlayHint,
+
+    // G-16 power-shortcut rest (LRPAR-G16-POWER): Shift+double-click auto
+    // white/black point, Alt+slider masking preview, S softproof preview.
+    SoftproofOn,
+    SoftproofOff,
+    AutoEndpointAppliedPattern,
+    MaskingPreviewPattern,
 }
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
@@ -752,6 +759,10 @@ impl Str {
             Str::SpotOverlayHint => {
                 "Overlay/pins follow the global Tool overlay + Edit pins modes (Masking section)"
             }
+            Str::SoftproofOn => "Softproof preview on (S, full gamut simulation follows in G-10)",
+            Str::SoftproofOff => "Softproof preview off",
+            Str::AutoEndpointAppliedPattern => "Auto {} applied (Shift+double-click)",
+            Str::MaskingPreviewPattern => "Masking preview: {} (Alt held)"
         }
     }
 }

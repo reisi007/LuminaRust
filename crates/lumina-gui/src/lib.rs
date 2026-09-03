@@ -30,9 +30,9 @@ use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
     analyze_tone, analyze_tone_with_histogram, match_total_exposure_masked, prepare_source_base,
-    render_frame_from_base, suggest_auto_tone, tone_fingerprint, AutoToneConfig, CacheStage,
-    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
-    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
+    render_frame_from_base, suggest_auto_tone, tone_fingerprint, AutoToneConfig, AutoToneResult,
+    CacheStage, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult,
+    MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
@@ -460,6 +460,60 @@ pub fn import_export_for_key(
         egui::Key::E => Some(ImportExportAction::Export),
         _ => None,
     }
+}
+
+/// Power-shortcut rest (G-16, LRPAR-G16-POWER): `Shift`+double-click on a
+/// slider label applies the auto end point of exactly that slider, reusing the
+/// existing `suggest_auto_tone` path (no second algorithm). Scope decision
+/// (Lightroom-conform, F-100): only `whites` (auto white point) and `blacks`
+/// (auto black point) map; every other key — and any press without `Shift` or
+/// without a double-click — yields `None` (callers fall back to the normal
+/// single-control reset). Pure function, unit-tested without an
+/// [`egui::Context`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoEndpoint {
+    White,
+    Black,
+}
+
+pub fn auto_endpoint_for_slider(
+    key: &str,
+    shift: bool,
+    double_clicked: bool,
+) -> Option<AutoEndpoint> {
+    if !(shift && double_clicked) {
+        return None;
+    }
+    match key {
+        "whites" => Some(AutoEndpoint::White),
+        "blacks" => Some(AutoEndpoint::Black),
+        _ => None,
+    }
+}
+
+/// Power-shortcut rest (G-16): tone-slider scope of the `Alt`+slider masking
+/// preview. While `Alt` is held during a track/scroll value edit on one of
+/// these Basic tone keys, the preview header shows the clipping badge through
+/// the existing `J` clipping path (display-only, never recipe). Pure function,
+/// unit-tested headless. Note the disambiguation: `Alt`-click on the *label*
+/// stays the single-control reset (see `label_reset_requested`), `Alt`-scroll
+/// stays the fine step — the preview is purely additive.
+pub fn masking_preview_for_slider(key: &str) -> bool {
+    matches!(
+        key,
+        "exposure" | "contrast" | "highlights" | "shadows" | "whites" | "blacks"
+    )
+}
+
+/// Power-shortcut rest (G-16): plain `S` toggles the display-only softproof
+/// preview. This reserves the `S` binding claimed by LRPAR-G10-VIEWER (still
+/// open) instead of blocking it: the toggle is display-only, the full
+/// print/gamut simulation stays G-10 follow-up work. Any modifier (Ctrl/Cmd
+/// for copy-settings-adjacent chords, Alt for the `Cmd/Ctrl+Alt+S` snapshot,
+/// Shift) yields `false`, so no existing chord is hijacked. Pure function,
+/// unit-tested without an [`egui::Context`].
+pub fn softproof_for_key(key: egui::Key, ctrl_or_command: bool, alt: bool, shift: bool) -> bool {
+    matches!(key, egui::Key::S) && !ctrl_or_command && !alt && !shift
 }
 
 /// Simple Library filter match (Welle 3, LR-13 light) over metadata the
@@ -955,6 +1009,14 @@ pub struct LuminaApp {
     compare_mode: Option<CompareMode>,
     before_after_split: bool,
     fullscreen: bool,
+    /// G-16 (LRPAR-G16-POWER) session-only display state. Never persisted to
+    /// the sidecar and never part of the recipe (like `Tab`/`L`/`F`):
+    /// * `softproof_preview`: plain `S` softproof-preview badge (the G-10
+    ///   binding reservation; full print/gamut simulation is G-10 follow-up).
+    /// * `masking_preview`: `Alt`-held tone-slider edit transiently shows the
+    ///   clipping badge through the `J` path; holds the slider key while armed.
+    softproof_preview: bool,
+    masking_preview: Option<String>,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
     /// Generated filmstrip thumbnail textures.
@@ -1563,6 +1625,8 @@ impl LuminaApp {
             compare_mode: None,
             before_after_split: false,
             fullscreen: false,
+            softproof_preview: false,
+            masking_preview: None,
             wb_pick_mode: false,
             thumbnails: ThumbnailManager::new(),
             filmstrip_selection: BTreeSet::new(),
@@ -2460,6 +2524,120 @@ impl LuminaApp {
         } else {
             self.preview.as_ref().map(clip_fractions)
         }
+    }
+
+    /// Whether the clipping badge paints right now (G-16): the armed `J`
+    /// overlay OR the transient `Alt`+tone-slider masking preview. Single
+    /// draw-path gate shared by the preview header, so the preview reuses the
+    /// `J` rendering exactly. Read-only accessor for headless tests.
+    pub fn clipping_effective(&self) -> bool {
+        self.clipping_overlay || self.masking_preview.is_some()
+    }
+
+    /// Toggle the display-only softproof preview (plain `S`, G-16). Display-
+    /// only session state: advertises the badge in the preview header, never
+    /// mutates the recipe or the sidecar. This reserves the `S` binding for
+    /// LRPAR-G10-VIEWER (full print/gamut simulation is G-10 follow-up).
+    pub fn toggle_softproof_preview(&mut self) {
+        self.softproof_preview = !self.softproof_preview;
+        info!(
+            "GUI interaction: toggle_softproof_preview -> {}",
+            self.softproof_preview
+        );
+        self.status = if self.softproof_preview {
+            Str::SoftproofOn.t().into()
+        } else {
+            Str::SoftproofOff.t().into()
+        };
+    }
+
+    /// Whether the softproof preview badge is armed (read-only accessor for
+    /// headless tests).
+    pub fn softproof_preview(&self) -> bool {
+        self.softproof_preview
+    }
+
+    /// Arm or disarm the transient `Alt`+tone-slider masking preview (G-16).
+    /// `Some(key)` shows the clipping badge through [`Self::clipping_effective`]
+    /// while `Alt` is held during a tone-slider edit; `None` hides it again.
+    /// Display-only session state: never touches the recipe or the sidecar.
+    /// Only tone-scope keys arm (see [`masking_preview_for_slider`]) — other
+    /// keys are refused loudly instead of arming a nameless preview.
+    pub fn set_masking_preview(&mut self, key: Option<&str>) -> Result<(), GuiError> {
+        match key {
+            Some(key) => {
+                if !masking_preview_for_slider(key) {
+                    return Err(GuiError::Io(Str::UnknownAdjustment.format_arg(key)));
+                }
+                let changed = self.masking_preview.as_deref() != Some(key);
+                self.masking_preview = Some(key.to_string());
+                if changed {
+                    info!("GUI interaction: masking_preview -> {key}");
+                    self.status = Str::MaskingPreviewPattern.format_arg(key);
+                }
+                Ok(())
+            }
+            None => {
+                self.masking_preview = None;
+                Ok(())
+            }
+        }
+    }
+
+    /// Which tone slider currently arms the masking preview, if any
+    /// (read-only accessor for headless tests).
+    pub fn masking_preview_key(&self) -> Option<&str> {
+        self.masking_preview.as_deref()
+    }
+
+    /// Shared `suggest_auto_tone` evaluation over the loaded source frame
+    /// (G-16): the single auto-tone path used by both [`Self::auto_tone`]
+    /// (all six sliders) and [`Self::apply_auto_endpoint`] (one end point).
+    /// Returns the result plus the analysis input fingerprint. Loud without a
+    /// loaded image — never a silent no-op.
+    fn compute_auto_tone(&self) -> Result<(AutoToneResult, String), GuiError> {
+        let Some(frame) = &self.original else {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        };
+        let config = AutoToneConfig {
+            target_luminance: self.recipe.auto_features.target_luminance,
+            ..Default::default()
+        };
+        let result = suggest_auto_tone(frame, config)?;
+        Ok((result, tone_fingerprint(frame, config)))
+    }
+
+    /// Apply one auto end point (G-16, `Shift`+double-click on the
+    /// `whites`/`blacks` label): evaluates the shared auto-tone path and
+    /// persists exactly that field (value + auto mirror + analysis
+    /// fingerprint) through the normal save/render commit. Loud without a
+    /// loaded image.
+    pub fn apply_auto_endpoint(&mut self, endpoint: AutoEndpoint) -> Result<(), GuiError> {
+        let (result, input_fingerprint) = self.compute_auto_tone()?;
+        let (key, value) = match endpoint {
+            AutoEndpoint::White => ("whites", result.whites),
+            AutoEndpoint::Black => ("blacks", result.blacks),
+        };
+        self.recipe.adjustments.insert(key.into(), value);
+        self.recipe.auto_features.enable_auto_tone = true;
+        match endpoint {
+            AutoEndpoint::White => self.recipe.auto_features.auto_whites = Some(value),
+            AutoEndpoint::Black => self.recipe.auto_features.auto_blacks = Some(value),
+        }
+        self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
+            algorithm: "tone-rgba8-rec709".into(),
+            version: "1".into(),
+            input_fingerprint,
+            extras: BTreeMap::new(),
+        });
+        info!("GUI interaction: apply_auto_endpoint {key}={value}");
+        self.status = Str::AutoEndpointAppliedPattern.format_arg(key);
+        // Same commit discipline as `auto_tone` (GUI-AUTOTONE-SAVE-1 /
+        // GUI-SIDECAR-READ-1): record + synchronously persist (CAS, loud
+        // conflicts) instead of stranding the save on a later edit.
+        self.mark_recipe_dirty("auto_endpoint", value);
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
     }
 
     /// Toggle lights-out (`L`, Welle 2). Display-only: hides the side panels
@@ -4977,14 +5155,12 @@ impl LuminaApp {
     }
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
-        let Some(frame) = &self.original else {
+        if self.original.is_none() {
             return Ok(());
-        };
-        let config = AutoToneConfig {
-            target_luminance: self.recipe.auto_features.target_luminance,
-            ..Default::default()
-        };
-        let result = suggest_auto_tone(frame, config)?;
+        }
+        // G-16: single shared evaluation path (see `compute_auto_tone`) —
+        // `apply_auto_endpoint` reuses exactly this algorithm + fingerprint.
+        let (result, input_fingerprint) = self.compute_auto_tone()?;
         // AUTO-TONE-2: all six sliders persist 1:1 into `recipe.adjustments`
         // (domains match the sidecar validation: exposure ±10 EV, the other
         // five `-1..=1`).
@@ -5011,7 +5187,7 @@ impl LuminaApp {
         self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
             algorithm: "tone-rgba8-rec709".into(),
             version: "1".into(),
-            input_fingerprint: tone_fingerprint(frame, config),
+            input_fingerprint,
             extras: BTreeMap::new(),
         });
         // GUI-AUTOTONE-SAVE-1: record the save commit so the debounced path
@@ -7977,9 +8153,48 @@ impl LuminaApp {
             .copied()
             .unwrap_or(Self::default_for_adjustment(key));
         match lr_slider(ui, label, &mut v, spec) {
-            SliderAction::Changed => self.set_adjustment(key, v),
-            SliderAction::ResetRequested => self.reset_single_adjustment(key),
-            SliderAction::Nothing => {}
+            SliderAction::Changed => {
+                self.set_adjustment(key, v);
+                // G-16: an `Alt`-held value edit on a Basic tone slider arms
+                // the masking preview (additive: label `Alt`-click stays the
+                // single-control reset, `Alt`-scroll stays the fine step).
+                if ui.ctx().input(|i| i.modifiers.alt) {
+                    if masking_preview_for_slider(key) {
+                        if let Err(error) = self.set_masking_preview(Some(key)) {
+                            self.show_error(error);
+                        }
+                    }
+                } else if self.masking_preview_key().is_some() {
+                    let _ = self.set_masking_preview(None);
+                }
+            }
+            SliderAction::ResetRequested => {
+                // G-16: `Shift`+double-click on the whites/blacks label
+                // applies the auto end point through the shared auto-tone
+                // path; every other label (and any reset without `Shift`)
+                // keeps the normal single-control reset. An `Alt`-held label
+                // click always resets (the Welle-2 `Alt`-reset keeps priority
+                // over the `Shift` end point, so the two modifiers never
+                // compete for the same click).
+                let (shift, alt) = ui.ctx().input(|i| (i.modifiers.shift, i.modifiers.alt));
+                match auto_endpoint_for_slider(key, shift && !alt, true) {
+                    Some(endpoint) => {
+                        if let Err(error) = self.apply_auto_endpoint(endpoint) {
+                            self.show_error(error);
+                        }
+                    }
+                    None => self.reset_single_adjustment(key),
+                }
+                if self.masking_preview_key().is_some() {
+                    let _ = self.set_masking_preview(None);
+                }
+            }
+            SliderAction::Nothing => {
+                // `Alt` released without a value change: disarm silently.
+                if !ui.ctx().input(|i| i.modifiers.alt) && self.masking_preview_key().is_some() {
+                    let _ = self.set_masking_preview(None);
+                }
+            }
         }
     }
 
@@ -10245,7 +10460,7 @@ impl LuminaApp {
         if self.bw_active() {
             ui.label(Str::BlackWhiteOn.t());
         }
-        if self.clipping_overlay {
+        if self.clipping_effective() {
             match self.clipping_detail() {
                 Some((shadow, highlight)) => {
                     let text = Str::ClippingDetailPattern
@@ -10258,6 +10473,11 @@ impl LuminaApp {
                     ui.colored_label(egui::Color32::YELLOW, Str::ClippingOn.t());
                 }
             }
+        }
+        // G-16: the `S` softproof preview advertises its state in the preview
+        // header so the toggle is never silent (display-only, never recipe).
+        if self.softproof_preview {
+            ui.colored_label(egui::Color32::YELLOW, Str::SoftproofOn.t());
         }
         // R2-GUIMOD-06: surface the otherwise-silent GPU→CPU routing fallback
         // as a visible status badge (with tooltip) instead of only a stderr
@@ -11155,6 +11375,19 @@ impl eframe::App for LuminaApp {
                 if let Err(error) = self.toggle_black_white() {
                     self.show_error(error);
                 }
+            }
+            // G-16: plain `S` toggles the display-only softproof preview
+            // (G-10 binding reservation; full simulation is G-10 follow-up).
+            // Strictly modifier-free so the `Cmd/Ctrl+Alt+S` snapshot chord
+            // above never double-fires.
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::S)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.command
+                    && !i.modifiers.alt
+                    && !i.modifiers.shift
+            }) {
+                self.toggle_softproof_preview();
             }
             // Welle 3 (LR-17 light): stack-group proxy `Cmd/Ctrl+G` for the
             // active virtual copy. Failures surface via `show_error`, never
@@ -12697,6 +12930,12 @@ mod tests {
         );
         assert_eq!(panel_toggle_for_key(egui::Key::T), None);
         assert_eq!(panel_toggle_for_key(egui::Key::F), None);
+        // G-16 collision check: plain `S` belongs to the softproof preview —
+        // no Welle-2 mapping may claim it.
+        assert_eq!(color_label_for_key(egui::Key::S), None);
+        assert_eq!(clipboard_action_for_key(egui::Key::S, true, true), None);
+        assert_eq!(view_toggle_for_key(egui::Key::S), None);
+        assert_eq!(panel_toggle_for_key(egui::Key::S), None);
         // Label names route through i18n, never literals.
         assert_eq!(color_label_name(1), "Red");
         assert_eq!(color_label_name(2), "Yellow");
@@ -19054,6 +19293,285 @@ mod tests {
         assert_eq!(import_export_for_key(egui::Key::I, true, false), None);
         assert_eq!(import_export_for_key(egui::Key::E, true, false), None);
         assert_eq!(import_export_for_key(egui::Key::C, true, true), None);
+        // G-16 collision check: plain `S` is the softproof preview — no Welle-3
+        // mapping may claim it, and the snapshot chord keeps its modifiers.
+        assert_eq!(compare_mode_for_key(egui::Key::S), None);
+        assert_eq!(import_export_for_key(egui::Key::S, true, true), None);
+        assert_eq!(import_export_for_key(egui::Key::S, false, false), None);
+    }
+
+    // ---- LRPAR-G16-POWER (G-16 power-shortcut rest, lumina-gui only) -----
+    #[test]
+    fn g16_auto_endpoint_mapping_is_exact() {
+        // Only whites/blacks with Shift+double-click route to the auto end
+        // point; everything else falls back to the normal single reset.
+        assert_eq!(
+            auto_endpoint_for_slider("whites", true, true),
+            Some(AutoEndpoint::White)
+        );
+        assert_eq!(
+            auto_endpoint_for_slider("blacks", true, true),
+            Some(AutoEndpoint::Black)
+        );
+        // Without Shift: normal reset, never the auto path (negative test).
+        assert_eq!(auto_endpoint_for_slider("whites", false, true), None);
+        assert_eq!(auto_endpoint_for_slider("blacks", false, true), None);
+        // Without a double-click: normal path (negative test).
+        assert_eq!(auto_endpoint_for_slider("whites", true, false), None);
+        assert_eq!(auto_endpoint_for_slider("blacks", false, false), None);
+        // Every other slider keeps the plain reset under Shift+double-click.
+        for key in [
+            "exposure",
+            "contrast",
+            "highlights",
+            "shadows",
+            "wb_temperature",
+            "wb_tint",
+            "texture",
+            "",
+        ] {
+            assert_eq!(auto_endpoint_for_slider(key, true, true), None, "{key}");
+        }
+    }
+
+    #[test]
+    fn g16_masking_preview_mapping_scope_is_exact() {
+        // Scope decision (F-100): the six Basic tone sliders preview.
+        for key in [
+            "exposure",
+            "contrast",
+            "highlights",
+            "shadows",
+            "whites",
+            "blacks",
+        ] {
+            assert!(masking_preview_for_slider(key), "{key}");
+        }
+        // Everything else (WB, presence, effects, empty) stays out of scope.
+        for key in [
+            "wb_temperature",
+            "wb_tint",
+            "texture",
+            "clarity",
+            "saturation",
+            "vignette",
+            "",
+        ] {
+            assert!(!masking_preview_for_slider(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn g16_softproof_mapping_is_exact_and_collision_free() {
+        // Plain `S` arms the softproof preview; any modifier refuses it so no
+        // existing chord (`Cmd/Ctrl+Alt+S` snapshot, copy-settings-adjacent
+        // chords) is hijacked.
+        assert!(softproof_for_key(egui::Key::S, false, false, false));
+        assert!(!softproof_for_key(egui::Key::S, true, false, false));
+        assert!(!softproof_for_key(egui::Key::S, false, true, false));
+        assert!(!softproof_for_key(egui::Key::S, false, false, true));
+        // No other bound key routes to softproof.
+        for key in [
+            egui::Key::G,
+            egui::Key::D,
+            egui::Key::E,
+            egui::Key::Y,
+            egui::Key::Q,
+            egui::Key::K,
+            egui::Key::M,
+            egui::Key::P,
+            egui::Key::X,
+            egui::Key::U,
+            egui::Key::C,
+            egui::Key::N,
+            egui::Key::V,
+            egui::Key::J,
+            egui::Key::L,
+            egui::Key::R,
+            egui::Key::F,
+        ] {
+            assert!(!softproof_for_key(key, false, false, false), "{key:?}");
+        }
+        // Full collision sweep: `S` is claimed by no pre-existing mapping.
+        assert_eq!(module_for_key(egui::Key::S), None);
+        assert_eq!(rating_for_key(egui::Key::S), None);
+        assert_eq!(flag_for_key(egui::Key::S), None);
+        assert_eq!(mask_tool_for_key(egui::Key::S, false), None);
+        assert_eq!(mask_tool_for_key(egui::Key::S, true), None);
+    }
+
+    #[test]
+    fn g16_apply_auto_endpoint_sets_only_its_field() {
+        // Effect test: Shift+double-click on Whites applies exactly the auto
+        // white point from the shared auto-tone path (no second algorithm).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // A manual whites value without a mirror must be overwritten by the
+        // auto value (mirrors distinguish auto-written from manual edits).
+        app.set_adjustment("whites", 0.5);
+        let frame = app.original.clone().expect("decoded frame");
+        let expected = suggest_auto_tone(
+            &frame,
+            AutoToneConfig {
+                target_luminance: app.recipe.auto_features.target_luminance,
+                ..Default::default()
+            },
+        )
+        .expect("auto-tone evaluates");
+        app.apply_auto_endpoint(AutoEndpoint::White).unwrap();
+        assert_eq!(app.recipe().adjustments["whites"], expected.whites);
+        assert_eq!(
+            app.recipe().auto_features.auto_whites,
+            Some(expected.whites)
+        );
+        assert!(app.recipe().auto_features.enable_auto_tone);
+        assert!(
+            app.recipe().auto_features.analysis_fingerprint.is_some(),
+            "endpoint shares the auto-tone fingerprint"
+        );
+        // Only the white end point is mirrored; blacks stay manual.
+        assert_eq!(app.recipe().auto_features.auto_blacks, None);
+        assert_eq!(app.recipe().adjustments["whites"], expected.whites);
+        // Persisted through the normal save path (CAS, loud conflicts; the
+        // JSON roundtrip may re-round the last ulp, hence the tolerance).
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        let persisted = document.virtual_copies[0].recipe.adjustments["whites"];
+        assert!(
+            (persisted - expected.whites).abs() < 1e-12,
+            "persisted {persisted} vs computed {}",
+            expected.whites
+        );
+        // Reload leg (DoD §1): a fresh app restores value + mirror +
+        // fingerprint from the sidecar alone.
+        let mut reloaded = new_app();
+        open_and_decode(&mut reloaded, source.display().to_string());
+        let restored = &reloaded.recipe().adjustments["whites"];
+        assert!(
+            (*restored - expected.whites).abs() < 1e-12,
+            "reloaded {restored} vs computed {}",
+            expected.whites
+        );
+        let mirror = reloaded
+            .recipe()
+            .auto_features
+            .auto_whites
+            .expect("mirror reloaded");
+        assert!((mirror - expected.whites).abs() < 1e-12);
+        assert!(
+            reloaded
+                .recipe()
+                .auto_features
+                .analysis_fingerprint
+                .is_some(),
+            "fingerprint reloaded"
+        );
+    }
+
+    #[test]
+    fn g16_apply_auto_black_endpoint_sets_only_blacks() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let frame = app.original.clone().expect("decoded frame");
+        let expected = suggest_auto_tone(
+            &frame,
+            AutoToneConfig {
+                target_luminance: app.recipe.auto_features.target_luminance,
+                ..Default::default()
+            },
+        )
+        .expect("auto-tone evaluates");
+        app.apply_auto_endpoint(AutoEndpoint::Black).unwrap();
+        assert_eq!(app.recipe().adjustments["blacks"], expected.blacks);
+        assert_eq!(
+            app.recipe().auto_features.auto_blacks,
+            Some(expected.blacks)
+        );
+        assert_eq!(app.recipe().auto_features.auto_whites, None);
+        // Reload leg (DoD §1): a fresh app restores value + mirror +
+        // fingerprint from the sidecar alone (tolerance: JSON roundtrip).
+        let mut reloaded = new_app();
+        open_and_decode(&mut reloaded, source.display().to_string());
+        let restored = &reloaded.recipe().adjustments["blacks"];
+        assert!(
+            (*restored - expected.blacks).abs() < 1e-12,
+            "reloaded {restored} vs computed {}",
+            expected.blacks
+        );
+        let mirror = reloaded
+            .recipe()
+            .auto_features
+            .auto_blacks
+            .expect("mirror reloaded");
+        assert!((mirror - expected.blacks).abs() < 1e-12);
+        assert!(
+            reloaded
+                .recipe()
+                .auto_features
+                .analysis_fingerprint
+                .is_some(),
+            "fingerprint reloaded"
+        );
+    }
+
+    #[test]
+    fn g16_auto_endpoint_without_image_fails_loudly() {
+        // No silent no-op: the end point needs a loaded source frame.
+        let mut app = new_app();
+        assert!(app.apply_auto_endpoint(AutoEndpoint::White).is_err());
+        assert!(app.apply_auto_endpoint(AutoEndpoint::Black).is_err());
+    }
+
+    #[test]
+    fn g16_masking_preview_arms_clipping_badge_display_only() {
+        // Effect test: Alt+slider arms the clipping badge through the shared
+        // `J` gate; releasing disarms; out-of-scope keys are refused loudly.
+        let mut app = new_app();
+        assert!(!app.clipping_effective());
+        app.set_masking_preview(Some("exposure")).unwrap();
+        assert_eq!(app.masking_preview_key(), Some("exposure"));
+        assert!(
+            app.clipping_effective(),
+            "preview reuses the J clipping badge"
+        );
+        assert!(
+            app.recipe().adjustments.is_empty(),
+            "preview never touches the recipe"
+        );
+        app.set_masking_preview(None).unwrap();
+        assert_eq!(app.masking_preview_key(), None);
+        assert!(!app.clipping_effective());
+        // The armed `J` overlay keeps the gate independent of the preview.
+        app.toggle_clipping_overlay();
+        assert!(app.clipping_effective());
+        app.toggle_clipping_overlay();
+        assert!(!app.clipping_effective());
+        // Out-of-scope keys fail loudly instead of arming a nameless preview.
+        assert!(app.set_masking_preview(Some("texture")).is_err());
+        assert!(app.set_masking_preview(Some("")).is_err());
+        assert_eq!(app.masking_preview_key(), None);
+    }
+
+    #[test]
+    fn g16_softproof_toggle_is_display_only() {
+        // Effect test: `S` flips a session-only badge; recipe and disk stay
+        // untouched (full simulation is G-10 follow-up work).
+        let mut app = new_app();
+        assert!(!app.softproof_preview());
+        app.toggle_softproof_preview();
+        assert!(app.softproof_preview());
+        assert!(
+            app.recipe().adjustments.is_empty(),
+            "softproof never touches the recipe"
+        );
+        app.toggle_softproof_preview();
+        assert!(!app.softproof_preview());
     }
 
     #[test]
