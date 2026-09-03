@@ -96,7 +96,6 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] SPOT-REMOVE-01** Staub entfernen schnell wie Lightroom + lokal generativ (`feature/product/spot-removal.md` SPOT-REMOVE-1, Gap L-04): schneller Clone/Heal-Modus heuristisch (center/radius/feather/offset/opacity, kein Modell, instant, WASM portabel, kein `zdata`) vs generativ lokal ONNX Inpaint (Box/Pinsel/Prompt/Seed/`ArtifactReference` `kind=spot_heal_generative` BLAKE3 `.lumina.zdata`, Identität wie AI-Masken), Pipeline `SpotHeal → Lens → Perspective → Crop`, Shortcut `Q`, visuell `Golden PSNR` + Histogram. Tests: `lumina-core` + `lumina-gui` + `lumina-onnx`.
 - [ ] **[PRIO: hoch] LR-PARITY-01** Lightroom Bibliothek/Entwickeln Kern-Gaps (Doku `docs/plans/gap-lightroom-parity-2026-09-02.md` 153d4ba, 20 Lücken LR-01..20): Sterne 1-5, Farben 6-9, Flaggen P/X/U, Stapel Cmd+G, Filterleiste `\` (Brennweite/Kamera/ISO), Virtuelle Kopien Shortcut Cmd+', Compare/Survey C/N, Quick Develop; Develop Shortcuts D/R/Q/K/M/Shift+M/Y/V/J/L/Tab/F + Alt-Regler Reset + Shift+Doppelklick Auto, Visuelle Auto-Verifikation `kittest`/`PSNR`/`stage_digest`/`compare.mjs` je Gap maximal headless, `cargo test -p lumina-gui` 147p→Ziel ≥160p, `core 277+7`/`sidecar 86p`/`onnx 107p` grün halten.
 
 _(keine weiteren offenen hoch-prio Tasks — F-103-INTEGRATION-PREVIEW-SIDECAR verifiziert BESTANDEN am 2026-09-02, 147p (144→147 +3), core 277+7, sidecar 86p, clippy/fmt/wasm grün, Commit 43b1b73; CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_

@@ -1,7 +1,7 @@
 # Staub entfernen — schnell vs. generative KI (SPOT-REMOVE-1)
 
 **Feature:** SPOT-REMOVE-1 Staub entfernen (Spot Heal)
-**Status:** SOLL dokumentiert (Doku-first, 2026-09-02), Implementierung nicht begonnen — kein Crate-Code.
+**Status:** Implementiert + verifiziert BESTANDEN (2026-09-03, SPOT-REMOVE-01): heuristisch Clone/Heal in `lumina-core` (`spot_heal.rs`), generativ lokal Inpaint-Stub in `lumina-onnx` (`inpaint.rs`), GUI-Panel + Shortcut Q in `lumina-gui`; FOLLOWUP-Fix (kein `allow` statt Fix, WASM-`cfg`-Gating) enthalten.
 **Verwandt:** `feature/architecture/pipeline.md` (Pipeline-Reihenfolge, F-042 Source-Actions), `feature/architecture/sidecar.md` (Artifact, Kind, zdata, relative Pfade, atomar), `feature/product/generative-expand.md` (GEN-EXPAND-1 `GenerativeEdit`, Identität/Veraltung), `feature/product/ai-masks.md` (AI-Masken Identität), `feature/platform/capability-matrix.md` (lokal ONNX vs. Cloud), `feature/quality/fixtures-licensing.md` (F-078), `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (Gap G5/G6).
 
 ## Inhaltsverzeichnis
@@ -33,6 +33,8 @@ SPOT-REMOVE-1 beschreibt einen nicht-destruktiven **Staub-/Spot-Heal** in zwei M
 Beide Modi sind nicht-destruktiv: Das Original wird niemals überschrieben. Vorschauen/Exporte sind aus Original + Rezept + (bei generativ) Modell + Artefakt reproduzierbar (Agents.md Produktprinzipien).
 
 ## Ist-Stand
+
+**Stand 2026-09-03 (SPOT-REMOVE-01 BESTANDEN, Re-Verifizierung nach FOLLOWUP-Fix):** Implementiert — `lumina-core` `spot_heal.rs` (SpotHeuristic, `apply_spot_heals`, 10 Tests), Pipeline `SpotHeal → Lens → Perspective → Crop` (`pipeline.rs`, `render.rs`), `lumina-onnx` `inpaint.rs` (StubInpaintBackend deterministisch, `inpaint_heal`-Manifest) + `wasm_stub`, `lumina-gui` Spot-Panel (Radius/Feather/Opacity, Schnell vs. Generativ, Shortcut Q, headless Test). Gates grün: core 305p, sidecar 86p `--lib`, onnx 75p `onnx-rt`, gui 155p, `clippy --workspace --all-targets --features onnx-rt -- -D warnings` grün (kein `allow` statt Fix), `fmt --check` grün, wasm core / onnx `onnx-rt` / gui `--no-default-features` warnungsfrei (FOLLOWUP-Fix Commit 190b18b). Vorheriger Stand:
 
 **Stand 2026-09-02 (Doku-first):** Kein Code. `F-042 Source-Actions` existiert als `SourceActionArtifact { region: MaskPlane u16, replacement: ImageFrame RGBA8 }` mit Schwellwert `>= 32768` (50 %) und identischer Dimension Quelle==Region==Replacement (`crates/lumina-core/src/render.rs`, `lumina-sidecar` `SourceActionKind::DustRemoval | AiReplacement`), CLI `dust-removal` vorhanden, aber GUI hat kein Staub-Panel (`lumina-gui` kein Dust-Tool). `lumina-onnx` kennt `subject_segmentation` (BiRefNet) + `box/point/mask_prompt` (SAM 2.1), aber keine `inpaint`/`outpaint` Capability. Dieses Dokument ist das normative SOLL für die Umsetzung in `lumina-core` (Heal-Pass), `lumina-onnx` (Inpaint-Backend), `lumina-sidecar` (Schema/Validation/Migration) und `lumina-gui` (Panel). Bis dahin **kein Crate-Code**.
 
