@@ -2446,6 +2446,7 @@ impl LuminaApp {
             .unwrap_or(GenerativeEdit {
                 version: 1,
                 canvas: None,
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: None,
                 expand_beyond_image: None,
@@ -2530,6 +2531,7 @@ impl LuminaApp {
             .unwrap_or(GenerativeEdit {
                 version: 1,
                 canvas: None,
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: None,
                 expand_beyond_image: Some(true),
@@ -3471,14 +3473,16 @@ impl LuminaApp {
             },
             &mut work,
         )?;
-        let preview = match apply_generative_expand(&output.frame, &self.recipe) {
-            Ok(expanded) => expanded,
-            Err(msg) => {
-                self.error = Some(format!("Expand canvas error: {}", msg));
-                output.frame
-            }
-        };
+        // GEN-PIPELINE-DECOUPLE: `render_frame_from_base` already ran the
+        // `GenerativeEdit(expand)` stage internally
+        // (`Lens → Fill → Perspective → Expand → Crop`). The core frame is the
+        // preview — a second post-render expand must not run here: the canvas
+        // is no longer larger than the frame, so it would fail
+        // `validate_with_source` (double-expand), and the GUI must not keep a
+        // second checker-fill implementation beside the core heuristic
+        // (Agents.md: keine GUI-spezifische Bildlogik außerhalb der Pipeline).
         let mask_warnings = output.mask_warnings;
+        let preview = output.frame;
         // REVIEW-CORE-DIGEST-WIRING: this preview key deliberately stays on the
         // neutral `RenderKey::new` defaults instead of attaching the `with_*`
         // builders, because neither builder input exists at this site:
@@ -4538,19 +4542,12 @@ impl LuminaApp {
             masks: masks_context,
             lensfun: None,
         };
-        let encoded = if self
-            .recipe
-            .generative_edit
-            .as_ref()
-            .is_some_and(|ge| ge.effective_expand())
-        {
-            let rendered = lumina_core::render_frame(original, &context).map_err(GuiError::Core)?;
-            let expanded = apply_generative_expand(&rendered.frame, &self.recipe)
-                .map_err(|e| GuiError::Io(format!("Expand canvas error: {}", e)))?;
-            expanded.encode(options.format).map_err(GuiError::Core)?
-        } else {
-            export_image(original, &context, options).map_err(GuiError::Core)?
-        };
+        // GEN-PIPELINE-DECOUPLE: `export_image` renders via `render_frame`,
+        // which already contains the `GenerativeEdit(expand)` stage
+        // (`Lens → Fill → Perspective → Expand → Crop`). No post-render
+        // expand runs here — a second expand would fail `validate_with_source`
+        // (canvas no longer larger) and abort the export.
+        let encoded = export_image(original, &context, options).map_err(GuiError::Core)?;
         lumina_sidecar::write_atomically(&output, &encoded).map_err(GuiError::Sidecar)?;
         self.error = None;
         self.status = format!(
@@ -6128,6 +6125,7 @@ impl LuminaApp {
                     .unwrap_or(GenerativeEdit {
                         version: 1,
                         canvas: None,
+                        artifact: None,
                         keep_generative_content: None,
                         auto_fill_transparent: None,
                         expand_beyond_image: Some(true),
@@ -7859,60 +7857,13 @@ fn crop_overlay_rect(crop: Option<&Crop>, img_rect: egui::Rect) -> Option<egui::
     Some(egui::Rect::from_min_max(min, max))
 }
 
-pub fn apply_generative_expand(
-    frame: &ImageFrame,
-    recipe: &EditRecipe,
-) -> Result<ImageFrame, String> {
-    let ge = match &recipe.generative_edit {
-        Some(ge) => ge,
-        None => return Ok(frame.clone()),
-    };
-    if !ge.effective_expand() {
-        if ge.canvas.is_some() {
-            return Err("canvas present without expand_beyond_image true".into());
-        }
-        return Ok(frame.clone());
-    }
-    let canvas = ge
-        .canvas
-        .as_ref()
-        .ok_or("expand_beyond_image true requires canvas")?;
-    canvas
-        .validate_with_source(frame.width, frame.height)
-        .map_err(|e| e.to_string())?;
-    let ow = canvas.output_width;
-    let oh = canvas.output_height;
-    let ox = canvas.source_offset_x;
-    let oy = canvas.source_offset_y;
-    let mut out = vec![0u8; (ow as usize) * (oh as usize) * 4];
-    for y in 0..oh {
-        for x in 0..ow {
-            let idx = ((y as usize) * (ow as usize) + (x as usize)) * 4;
-            let checker = if (x / 8 + y / 8).is_multiple_of(2) {
-                128
-            } else {
-                160
-            };
-            out[idx] = checker;
-            out[idx + 1] = checker;
-            out[idx + 2] = checker;
-            out[idx + 3] = 255;
-        }
-    }
-    for y in 0..frame.height {
-        for x in 0..frame.width {
-            let dx = ox as i64 + x as i64;
-            let dy = oy as i64 + y as i64;
-            if dx < 0 || dy < 0 || dx >= ow as i64 || dy >= oh as i64 {
-                continue;
-            }
-            let src_idx = ((y as usize) * (frame.width as usize) + (x as usize)) * 4;
-            let dst_idx = ((dy as usize) * (ow as usize) + (dx as usize)) * 4;
-            out[dst_idx..dst_idx + 4].copy_from_slice(&frame.pixels[src_idx..src_idx + 4]);
-        }
-    }
-    ImageFrame::new(ow, oh, out).map_err(|e| e.to_string())
-}
+// NOTE (GUI-DOUBLE-EXPAND-FIX): the GUI-local checker-fill `apply_generative_expand`
+// was removed. `GenerativeEdit(expand)` runs once inside the shared core
+// pipeline (`render_frame` / `render_frame_from_base`,
+// `Lens → Fill → Perspective → Expand → Crop`); preview and export use that
+// core frame directly. A second post-render expand is a double-expand bug:
+// the canvas is no longer larger than the frame, so `validate_with_source`
+// fails and the export aborts.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
@@ -8619,6 +8570,56 @@ mod tests {
         let detail = order.iter().position(|s| *s == Str::Detail).unwrap();
         let effects = order.iter().position(|s| *s == Str::Effects).unwrap();
         assert!(detail < effects, "Detail must precede Effects");
+    }
+    /// Kittest table sync (F-103-N9, GPU-gated): `tests/kittest_snapshots.rs`
+    /// clicks Develop sections by label (`collapse_except`), so a label rename
+    /// or reorder here orphans those clicks. This headless test pins the same
+    /// table without a GPU harness. Panel rects (position/size) genuinely need
+    /// a laid-out harness and stay covered by the kittest interaction tests
+    /// (`filmstrip_is_single_row_horizontal`, …).
+    #[test]
+    fn develop_section_labels_match_kittest_table() {
+        let kittest_table = [
+            "Presets",
+            "History",
+            "Basic",
+            "Tone Curve",
+            "Color",
+            "Detail",
+            "Effects",
+            "Optics",
+            "Geometry",
+            "Masking",
+        ];
+        let mut labels = vec![Str::PresetsSection.t(), Str::History.t()];
+        labels.extend(LuminaApp::DEVELOP_SECTIONS.iter().map(|(s, _)| s.t()));
+        assert_eq!(labels, kittest_table);
+        let detail = labels.iter().position(|l| *l == "Detail").unwrap();
+        let effects = labels.iter().position(|l| *l == "Effects").unwrap();
+        assert!(detail < effects, "Detail must precede Effects");
+    }
+    /// Badge helpers (LR-01/LR-17 light): the Library grid badge composes
+    /// `stars_for_rating` + `flag_label` + `color_label_name`, and both the
+    /// grid scan and the rating section read via `color_label_of`. Pure
+    /// functions, pinned headless so badge visibility never regresses
+    /// silently.
+    #[test]
+    fn color_label_names_and_parsing_for_badges() {
+        assert_eq!(color_label_name(1), "Red");
+        assert_eq!(color_label_name(2), "Yellow");
+        assert_eq!(color_label_name(3), "Green");
+        assert_eq!(color_label_name(4), "Blue");
+        assert_eq!(color_label_name(0), "Color Label");
+        assert_eq!(color_label_name(9), "Color Label");
+        assert_eq!(color_label_of(&BTreeMap::new()), 0);
+        let labelled = BTreeMap::from([("color_label".to_string(), serde_json::Value::from(3))]);
+        assert_eq!(color_label_of(&labelled), 3);
+        let out_of_range =
+            BTreeMap::from([("color_label".to_string(), serde_json::Value::from(7))]);
+        assert_eq!(color_label_of(&out_of_range), 0);
+        let non_numeric =
+            BTreeMap::from([("color_label".to_string(), serde_json::Value::from("red"))]);
+        assert_eq!(color_label_of(&non_numeric), 0);
     }
     #[test]
     fn recipe_change_and_render() {
@@ -12411,6 +12412,7 @@ mod tests {
             r.generative_edit = Some(GenerativeEdit {
                 version: 1,
                 canvas: None,
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: Some(false),
                 expand_beyond_image: None,
@@ -12441,6 +12443,7 @@ mod tests {
             r.generative_edit = Some(GenerativeEdit {
                 version: 1,
                 canvas: None,
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: Some(true),
                 expand_beyond_image: None,
@@ -12501,6 +12504,7 @@ mod tests {
         app.recipe.generative_edit = Some(GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(false),
             expand_beyond_image: None,
@@ -12513,6 +12517,7 @@ mod tests {
         app.recipe.generative_edit = Some(GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(true),
             expand_beyond_image: None,
@@ -12534,6 +12539,7 @@ mod tests {
         recipe_without2.generative_edit = Some(GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(false),
             expand_beyond_image: None,
@@ -12559,7 +12565,18 @@ mod tests {
 
     #[test]
     fn generative_expand_synthetic_8x8_expand_true_creates_larger_canvas() {
-        let frame = ImageFrame::new(8, 8, vec![42u8; 8 * 8 * 4]).unwrap();
+        // GUI-DOUBLE-EXPAND-FIX: the expand runs ONCE inside the shared core
+        // pipeline (`render_frame`, `Lens → Fill → Perspective → Expand → Crop`);
+        // the GUI applies no post-render expand. Inner source pixels stay
+        // byte-identical at the canvas offset; the heuristic border is opaque
+        // (core nearest-neighbor fill, no GUI checker-fill). The source is
+        // fully opaque — a transparent source would stay transparent, as the
+        // heuristic only fills from opaque pixels.
+        let mut pixels = Vec::with_capacity(8 * 8 * 4);
+        for _ in 0..8 * 8 {
+            pixels.extend_from_slice(&[42, 42, 42, 255]);
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
         let mut recipe = EditRecipe::default();
         recipe.generative_edit = Some(GenerativeEdit {
             version: 1,
@@ -12570,6 +12587,7 @@ mod tests {
                 source_offset_y: 2,
                 extras: Default::default(),
             }),
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: Some(true),
@@ -12577,7 +12595,14 @@ mod tests {
             prompt: None,
             extras: Default::default(),
         });
-        let expanded = apply_generative_expand(&frame, &recipe).unwrap();
+        let ctx = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let expanded = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!(expanded.width, 12);
         assert_eq!(expanded.height, 12);
         for y in 0..8 {
@@ -12590,16 +12615,27 @@ mod tests {
                 );
             }
         }
-        assert_ne!(&expanded.pixels[0..4], &frame.pixels[0..4]);
+        assert!(
+            expanded
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px[3] == 255),
+            "heuristic expand fill must leave no transparent pixels"
+        );
     }
 
     #[test]
     fn generative_expand_false_is_cropped_to_image() {
+        // Expand off (Default „auf Bild beschneiden"): the shared core render
+        // leaves the frame untouched — no canvas, no second pass.
         let frame = ImageFrame::new(8, 8, vec![10u8; 8 * 8 * 4]).unwrap();
         let mut recipe = EditRecipe::default();
         recipe.generative_edit = Some(GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: Some(false),
@@ -12607,7 +12643,14 @@ mod tests {
             prompt: None,
             extras: Default::default(),
         });
-        let out = apply_generative_expand(&frame, &recipe).unwrap();
+        let ctx = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let out = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!(out.width, 8);
         assert_eq!(out.height, 8);
         assert_eq!(out.pixels, frame.pixels);
@@ -12650,6 +12693,7 @@ mod tests {
         doc.virtual_copies[0].recipe.generative_edit = Some(GenerativeEdit {
             version: 1,
             canvas: Some(canvas.clone()),
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: Some(true),
@@ -12764,6 +12808,9 @@ mod tests {
 
     #[test]
     fn generative_expand_golden_preview_headless() {
+        // GUI-DOUBLE-EXPAND-FIX: golden assertions run against the single core
+        // expand (`render_frame`); the removed GUI checker-fill is gone, so the
+        // border carries the deterministic core heuristic fill and stays opaque.
         let frame = ImageFrame::new(
             4,
             4,
@@ -12785,6 +12832,7 @@ mod tests {
                 source_offset_y: 1,
                 extras: Default::default(),
             }),
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: Some(true),
@@ -12792,7 +12840,14 @@ mod tests {
             prompt: None,
             extras: Default::default(),
         });
-        let expanded = apply_generative_expand(&frame, &recipe).unwrap();
+        let ctx = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let expanded = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!((expanded.width, expanded.height), (6, 6));
         let src_origin_idx = (1 * 6 + 1) * 4;
         let src_idx = 0;
@@ -12806,10 +12861,14 @@ mod tests {
             &expanded.pixels[center_idx..center_idx + 4],
             &frame.pixels[src_1_1_idx..src_1_1_idx + 4]
         );
-        let border_idx = 0;
-        assert_ne!(
-            &expanded.pixels[border_idx..border_idx + 4],
-            &frame.pixels[src_idx..src_idx + 4]
+        assert!(
+            expanded
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px[3] == 255),
+            "single core expand must leave no transparent pixels"
         );
         recipe.generative_edit.as_mut().unwrap().canvas = Some(GenerativeCanvas {
             output_width: 4,
@@ -12818,7 +12877,170 @@ mod tests {
             source_offset_y: 0,
             extras: Default::default(),
         });
-        assert!(apply_generative_expand(&frame, &recipe).is_err());
+        let ctx = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        assert!(lumina_core::render_frame(&frame, &ctx).is_err());
+    }
+
+    #[test]
+    fn generative_expand_preview_uses_single_core_expand() {
+        // GUI-DOUBLE-EXPAND-FIX: the app preview with an expand recipe is the
+        // core frame (8→12, inner source pixels byte-identical), rendered
+        // exactly once — no second post-render expand, no "Expand canvas error".
+        let (png, frame) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png, "expand-preview-test.png").unwrap();
+        let plain_key = app.render_key().cloned().unwrap().digest();
+        let gen_before = app.preview_generation();
+        app.set_expand_beyond_image(true).unwrap();
+        let preview = app.preview().unwrap().clone();
+        assert_eq!((preview.width, preview.height), (12, 12));
+        for y in 0..8 {
+            for x in 0..8 {
+                let src_idx = (y * 8 + x) * 4;
+                let dst_idx = ((y + 2) * 12 + (x + 2)) * 4;
+                assert_eq!(
+                    &preview.pixels[dst_idx..dst_idx + 4],
+                    &frame.pixels[src_idx..src_idx + 4]
+                );
+            }
+        }
+        assert!(
+            app.preview_generation() > gen_before,
+            "preview_generation must bump on expand"
+        );
+        assert_ne!(
+            app.render_key().cloned().unwrap().digest(),
+            plain_key,
+            "expand must change the render key"
+        );
+        assert!(
+            app.error().is_none(),
+            "single core expand must not set an expand error, got {:?}",
+            app.error()
+        );
+        // The preview equals one direct core render — applying the expand a
+        // second time would fail `validate_with_source`, so equality proves
+        // the GUI did not re-expand.
+        let ctx = RenderContext {
+            recipe: app.recipe(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let direct = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
+        assert_eq!(
+            preview.pixels, direct.pixels,
+            "app preview must equal a single core render with the expand recipe"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn generative_expand_export_is_single_core_expand() {
+        // GUI-DOUBLE-EXPAND-FIX: exporting with an expand recipe must succeed
+        // (the old post-render expand aborted the export at
+        // `validate_with_source`) and match the preview as well as the shared
+        // `export_image` path byte-identically.
+        let directory = tempfile::tempdir().unwrap();
+        let (png, frame) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png, "expand-export-test.png").unwrap();
+        app.set_expand_beyond_image(true).unwrap();
+        let preview = app.preview().unwrap().clone();
+        assert_eq!((preview.width, preview.height), (12, 12));
+        app.export_format = ImageFileFormat::Png;
+        let out = directory.path().join("expand_export.png");
+        app.export_to(out.clone()).unwrap();
+        let gui_bytes = std::fs::read(&out).unwrap();
+        let decoded = ImageFrame::decode(&gui_bytes).unwrap();
+        assert_eq!((decoded.width, decoded.height), (12, 12));
+        assert_eq!(
+            decoded.pixels, preview.pixels,
+            "export must match the app preview"
+        );
+        let context = RenderContext {
+            recipe: app.recipe(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let options = ExportOptions {
+            format: ImageFileFormat::Png,
+            quality: 90,
+            dither: false,
+            ..Default::default()
+        };
+        let cli_bytes = export_image(&frame, &context, options).unwrap();
+        assert_eq!(
+            cli_bytes, gui_bytes,
+            "GUI export with expand must be byte-identical to the shared path"
+        );
+    }
+
+    #[test]
+    fn generative_expand_without_canvas_fails_loudly() {
+        // Expand without a canvas is a hard error — never a silent unexpanded
+        // render (kein stiller Fallback).
+        let (png, _) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png, "expand-error-test.png").unwrap();
+        app.recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        });
+        let err = app.render().unwrap_err();
+        // Loud failure from the shared path (sidecar validation names it
+        // `generative_edit.canvas`, the core stage `generative_expand.canvas`).
+        assert!(
+            err.to_string().contains("generative"),
+            "expand without canvas must fail loudly, got {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn generative_expand_without_canvas_export_fails_loudly() {
+        // Same loud failure on the export path: no file, no silent fallback.
+        let directory = tempfile::tempdir().unwrap();
+        let (png, _) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png, "expand-error-export-test.png").unwrap();
+        app.recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        });
+        app.export_format = ImageFileFormat::Png;
+        let out = directory.path().join("expand_error.png");
+        let err = app.export_to(out.clone()).unwrap_err();
+        // Loud failure from the shared path (sidecar validation names it
+        // `generative_edit.canvas`, the core stage `generative_expand.canvas`).
+        assert!(
+            err.to_string().contains("generative"),
+            "expand export without canvas must fail loudly, got {err}"
+        );
+        assert!(!out.exists(), "failed export must not leave a file");
     }
 
     #[test]
