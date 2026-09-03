@@ -3,7 +3,10 @@
 Quelle: Read-only-Analyse (CLI `crates/lumina-cli/src/main.rs:270-531`,
 GUI-Sektionen `crates/lumina-gui/src/lib.rs`, SOLL `feature/README.md`,
 `feature/architecture/pipeline.md`, `feature/platform/cli-gui-wasm.md`).
-Kein Code in diesem Task; Lücken → Folge-Tasks unten.
+Kein Code in diesem Task; Lücken → Folge-Tasks unten. Scope: CLI↔GUI-Oberflächen-Parität;
+F-001/F-003/F-005/F-011/F-074/F-069–F-071 haben keine CLI↔GUI-Oberfläche und sind
+bewusst nicht matrixiert. F-007 (Import) und F-008 (Auto-Tone/Matching) sind in
+den F-036- bzw. Import-Zeilen implizit enthalten, ohne eigene Zeile.
 
 ## Matrix (Core-Feature × CLI × GUI × Rezept-Key)
 
@@ -20,13 +23,13 @@ Kein Code in diesem Task; Lücken → Folge-Tasks unten.
 | F-098 Lens | `recipe.lens_correction` | Render-Pfad, kein Set-Flag | `draw_optics` | ok (partiell) |
 | F-093/099 Crop/Persp. | `recipe.geometry/perspective` | nur Preset-JSON | `draw_geometry` | nur-GUI |
 | F-009 Presets | `<name>.lumina-preset.json` | `process --preset` | `draw_presets_section` | ok |
-| F-002/F-014 VCs | `virtual_copies[].id` | `--virtual-copy` überall | Selektor + Duplikat + Copy/Paste + Snapshot | ok |
-| F-004/F-012 Masken | `mask_layers` + zdata | `mask --update-masks`, `--mask-policy` | `draw_masking` + Overlay | ok (partiell) |
+| F-002/F-014 VCs | `virtual_copies[].id` | `--virtual-copy` in develop/render/export/batch/mask/dust-removal (`process`/`import`/`inspect` ohne) | Selektor + Duplikat + Copy/Paste + Snapshot | ok |
+| F-004/F-012 Masken | `mask_layers` + zdata | `mask --update-masks`; `--mask-policy` nur an render/export/batch | `draw_masking` + Overlay | ok (partiell) |
 | SPOT-REMOVE-1 | CLI `source_actions`+zdata / GUI `extras["spot_removals"]` | `dust-removal` (persistiert) | `draw_spot_heal` Quick instant | Key-Split, Folge-Task |
 | GEN-EXPAND-1 | `recipe.generative_edit` | kein Zugang | `draw_generative_expand` | nur-GUI (+ Doku-Widerspruch `pipeline.md:107-116`) |
 | F-037 Export | RenderKey + `export_image` | `export/batch/render/process` | `draw_export_panel` | ok |
 | F-006/F-064-67 Index | — (rebuildbar) | `reindex`/`validate` | nur Scan/Filter | nur-CLI (per Design ok) |
-| F-101 MCP | Rezept via Tools | `mcp` (stdio) | — | nur-CLI (per Design ok) |
+| F-101 MCP | Rezept via Tools | `mcp` (stdio, nur mit Feature `mcp`) | — | nur-CLI (per Design ok) |
 | History | `copy.history[]` | schreibt, kein Show/Clear | `draw_history_section` | nur-GUI-sichtbar |
 | F-100 Shortcuts | `extras` | n/a | Module/Shortcuts/Navigator/Filmstrip | nur-GUI (per Design) |
 

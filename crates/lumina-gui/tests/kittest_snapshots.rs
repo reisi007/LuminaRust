@@ -103,11 +103,39 @@ fn collapse_except(harness: &mut Harness<'_, LuminaApp>, keep: &[&str]) {
     }
 }
 
+/// Fixture directory for the deterministic Library snapshots below.
+///
+/// `library_empty` / `library_with_image` used to render with the default
+/// workdir (`"."` = the live crate checkout), so the Folders tree listed
+/// whatever the checkout contained (`src/`, `benches/`, …) and the goldens
+/// broke on every unrelated file addition (e.g. a 415px diff from a single
+/// `benches/` row).
+///
+/// A `tempfile::tempdir` was considered (preferred option in GUI-KIT-01-REFRESH)
+/// but rejected: the folder tree renders both the full directory string (path
+/// text field) and the root basename, so a random `tmp.XXXXXX` path would leak
+/// nondeterministic pixels into every snapshot. This committed, read-only
+/// fixture with a *relative* path keeps every rendered string fixed:
+/// `is_supported_image` ignores `.gitkeep`, so the grid stays empty, the RAW
+/// count stays 0, and the tree shows only the fixed root label `library`.
+/// Cargo runs integration tests with CWD = the package root, so the relative
+/// path resolves on every machine. The fixture is never written to (both
+/// tests only list it), hence sharing it between the two tests is race-free.
+const LIBRARY_FIXTURE_DIR: &str = "tests/fixtures/library";
+
+/// Point the app at the deterministic fixture directory (see above).
+fn use_library_fixture(harness: &mut Harness<'_, LuminaApp>) {
+    harness
+        .state_mut()
+        .set_directory(LIBRARY_FIXTURE_DIR.to_owned());
+}
+
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_empty() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
     harness.run();
     harness.snapshot("library_empty");
 }
@@ -117,6 +145,7 @@ fn library_empty() {
 fn library_with_image() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
     load_sample(&mut harness);
     harness.run();
     harness.snapshot("library_with_image");
