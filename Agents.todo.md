@@ -94,7 +94,7 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] R2-GUIMOD-04a** Drag-Render-Instrumentierung (lumina-gui): pro-Tick-Timings CPU-Draft/GPU/Analyse ins Log (trace), damit F-103-N6 Zahlen liefert. Kein Verhalten ändern. Abnahme: headless Test (Timings fallen an), `cargo test -p lumina-gui` grün.
+_(Block A leer — R2-GUIMOD-04a BESTANDEN 2026-09-04 575f834, WASM-REMOVE BESTANDEN; Details Git-Historie)_
 
 _(weitere ehemals offene hoch-prio Tasks BESTANDEN s. Git-Historie: GUI-AUTOTONE-SAVE-1 204p c29e609a/5e36133, GUI-KIT-01-REFRESH kittest 10/10 a75b42f, CLI-GUI-PARITY-1 Matrix-Doc a75b42f; F-103-INTEGRATION-PREVIEW-SIDECAR 147p 43b1b73; CI-ONNX-RT 953987e/c5e5e06/67690ec)_
 
