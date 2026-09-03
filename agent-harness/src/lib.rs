@@ -19,6 +19,11 @@ use std::path::{Path, PathBuf};
 use egui_kittest::kittest::{NodeT, Queryable};
 use lumina_gui::{LuminaApp, Module};
 
+/// Painter-home helpers (AGENT-HARNESS-2): pixel evidence for Painter-composited
+/// content that AccessKit cannot see (badge chips, navigator rect stroke,
+/// in-app preview frames). See `painter.rs` for the analysis.
+pub mod painter;
+
 /// Window size for all scenarios (matches AGENT-HARNESS-1).
 pub const WINDOW_W: f32 = 1280.0;
 pub const WINDOW_H: f32 = 800.0;

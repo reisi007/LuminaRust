@@ -5,7 +5,11 @@
 //! Headless checks: `entries()` count flat (1) vs recursive (3), symlink loop
 //! terminates, badge labels appear in the Library tree.
 
-use agent_harness::{artifact_dir, save_report, GuiProbe, Verdict};
+use agent_harness::{
+    artifact_dir,
+    painter::{badge_chip_pixels, MIN_BADGE_CHIP_PIXELS},
+    save_report, GuiProbe, Verdict,
+};
 use lumina_gui::Module;
 
 #[test]
@@ -53,9 +57,16 @@ fn subfolders() {
     probe.wait_quiescent(120, 8);
     let shot = dir.join("shot.png");
     let (w, h) = probe.render_png(&shot).expect("render PNG");
+    let img = image::open(&shot).expect("shot readable").to_rgba8();
     let tree = probe.ui_tree_json();
     let nodes = probe.tree_nodes();
     let badge_hit = nodes.iter().any(|n| n.text_contains("sub"));
+    // Painter-home (HARNESS-2): the path badge is `painter().text()` over a
+    // 118x16 `LIBRARY_BADGE_BG` chip — no AccessKit node. The chip fill IS in
+    // the composited readback (vector paint, not a GPU texture). Rating badges
+    // share the chip colour but need rated/flagged/labeled copies; these
+    // fixtures have no sidecars, so chip pixels here are path badges.
+    let chips = badge_chip_pixels(&img);
 
     let mut verdicts = vec![
         Verdict::pass(
@@ -86,6 +97,21 @@ fn subfolders() {
         verdicts.push(Verdict::open(
             "path badge",
             "no 'sub' label in AccessKit tree headless; PNG needs vision review for per-cell path badges",
+        ));
+    }
+    if chips >= MIN_BADGE_CHIP_PIXELS {
+        verdicts.push(Verdict::pass(
+            "path badge pixels (painter-home)",
+            format!(
+                "{chips} badge-chip pixels (need >={MIN_BADGE_CHIP_PIXELS}); fixtures carry no ratings/flags/labels, so chips are the recursive-aggregation path badges"
+            ),
+        ));
+    } else {
+        verdicts.push(Verdict::open(
+            "path badge pixels (painter-home)",
+            format!(
+                "only {chips} badge-chip pixels (need >={MIN_BADGE_CHIP_PIXELS}); badge cells may be unscrolled headless — PNG needs vision review"
+            ),
         ));
     }
     save_report(&dir, &verdicts, &tree);

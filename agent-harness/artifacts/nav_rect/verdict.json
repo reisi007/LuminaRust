@@ -17,6 +17,11 @@
   {
     "check": "navigator rect vs ROI",
     "result": "OPEN",
-    "detail": "rect is Painter-drawn (0 navigator tree nodes); PNG needs vision review: rect must be smaller than overview and track the visible preview area"
+    "detail": "rect is Painter-drawn (2 navigator tree nodes); PNG needs vision review: rect must be smaller than overview and track the visible preview area"
+  },
+  {
+    "check": "navigator rect stroke painted (painter-home)",
+    "result": "PASS",
+    "detail": "1223 accent-stroke pixels (need >=200); nav_open=true custom_pinned=true — presence proof only, geometry stays OPEN above"
   }
 ]

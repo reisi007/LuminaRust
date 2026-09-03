@@ -18,5 +18,10 @@
     "check": "path badge",
     "result": "PASS",
     "detail": "a 'sub' path label is present in the Library tree"
+  },
+  {
+    "check": "path badge pixels (painter-home)",
+    "result": "PASS",
+    "detail": "3915 badge-chip pixels (need >=800); fixtures carry no ratings/flags/labels, so chips are the recursive-aggregation path badges"
   }
 ]

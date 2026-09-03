@@ -47,23 +47,23 @@
     "label": "",
     "rect": {
       "x0": 8.0,
-      "x1": 740.96875,
+      "x1": 732.09375,
       "y0": 24.0,
       "y1": 38.0
     },
     "role": "Label",
-    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0/top.ARW: LibRaw opening input failed (-100009): Input/output error"
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpt6TIPj/top.ARW: LibRaw opening input failed (-100009): Input/output error"
   },
   {
     "label": "",
     "rect": {
       "x0": 8.0,
-      "x1": 740.96875,
+      "x1": 732.09375,
       "y0": 24.0,
       "y1": 38.0
     },
     "role": "TextRun",
-    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0/top.ARW: LibRaw opening input failed (-100009): Input/output error"
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpt6TIPj/top.ARW: LibRaw opening input failed (-100009): Input/output error"
   },
   {
     "label": "Library (G)",
@@ -151,18 +151,18 @@
       "y1": 451.5
     },
     "role": "TextInput",
-    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0"
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpt6TIPj"
   },
   {
     "label": "",
     "rect": {
       "x0": 12.0,
-      "x1": 378.84375,
+      "x1": 369.9375,
       "y0": 435.5,
       "y1": 449.5
     },
     "role": "TextRun",
-    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0"
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpt6TIPj"
   },
   {
     "label": "Refresh",
@@ -187,10 +187,10 @@
     "value": ""
   },
   {
-    "label": ".tmpyEUuJ0 (3)",
+    "label": ".tmpt6TIPj (3)",
     "rect": {
       "x0": 26.0,
-      "x1": 115.71875,
+      "x1": 106.8125,
       "y0": 834.0,
       "y1": 852.0
     },
@@ -286,10 +286,10 @@
     "value": "Click a thumbnail to open it"
   },
   {
-    "label": "Sync Settings",
+    "label": "Sync Settings (1)",
     "rect": {
       "x0": 228.0,
-      "x1": 306.5625,
+      "x1": 323.53125,
       "y0": 666.0,
       "y1": 684.0
     },
@@ -299,8 +299,8 @@
   {
     "label": "Match Total Exposures",
     "rect": {
-      "x0": 312.5625,
-      "x1": 441.25,
+      "x0": 329.53125,
+      "x1": 458.21875,
       "y0": 666.0,
       "y1": 684.0
     },

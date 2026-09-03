@@ -5,7 +5,11 @@
 //! pins the preconditions (navigator open, Custom zoom active) and the PNG is
 //! the vision-review input for rect-vs-ROI agreement.
 
-use agent_harness::{artifact_dir, save_report, GuiProbe, Verdict};
+use agent_harness::{
+    artifact_dir,
+    painter::{nav_accent_pixels, texts_containing, MIN_NAV_ACCENT_PIXELS},
+    save_report, GuiProbe, Verdict,
+};
 
 #[test]
 #[ignore = "headless GPU required; run: cargo test --test nav_rect -- --ignored"]
@@ -21,30 +25,20 @@ fn nav_rect() {
 
     let shot = dir.join("shot.png");
     let (w, h) = probe.render_png(&shot).expect("render PNG");
+    let img = image::open(&shot).expect("shot readable").to_rgba8();
     let tree = probe.ui_tree_json();
     let nodes = probe.tree_nodes();
 
-    let zoom_labels: Vec<_> = nodes
-        .iter()
-        .filter(|n| n.text_contains("Zoom"))
-        .map(|n| {
-            if n.label.is_empty() {
-                n.value.clone()
-            } else if n.value.is_empty() {
-                n.label.clone()
-            } else {
-                format!("{} | {}", n.label, n.value)
-            }
-        })
-        .collect();
+    let zoom_labels = texts_containing(&nodes, "Zoom");
+    let nav_labels = texts_containing(&nodes, "Navigator");
     let custom_pinned = zoom_labels.iter().any(|l| l.contains("Custom"));
-    let nav_nodes: Vec<_> = nodes
-        .iter()
-        .filter(|n| {
-            n.label.to_lowercase().contains("navigator")
-                || n.label.to_lowercase().contains("navigation")
-        })
-        .collect();
+    let nav_open = !nav_labels.is_empty();
+    // Painter-home (HARNESS-2): the viewport rect is a 2px ACCENT
+    // `rect_stroke` — no AccessKit node. The stroke IS in the composited
+    // readback (vector paint, not a GPU texture), so accent pixels are the
+    // presence proof; exact rect-vs-ROI geometry stays OPEN below.
+    let accents = nav_accent_pixels(&img);
+    let nav_nodes = nav_labels.len();
 
     let mut verdicts = vec![
         Verdict::pass(
@@ -70,10 +64,24 @@ fn nav_rect() {
     verdicts.push(Verdict::open(
         "navigator rect vs ROI",
         format!(
-            "rect is Painter-drawn ({} navigator tree nodes); PNG needs vision review: rect must be smaller than overview and track the visible preview area",
-            nav_nodes.len()
+            "rect is Painter-drawn ({nav_nodes} navigator tree nodes); PNG needs vision review: rect must be smaller than overview and track the visible preview area"
         ),
     ));
+    if accents >= MIN_NAV_ACCENT_PIXELS {
+        verdicts.push(Verdict::pass(
+            "navigator rect stroke painted (painter-home)",
+            format!(
+                "{accents} accent-stroke pixels (need >={MIN_NAV_ACCENT_PIXELS}); nav_open={nav_open} custom_pinned={custom_pinned} — presence proof only, geometry stays OPEN above"
+            ),
+        ));
+    } else {
+        verdicts.push(Verdict::open(
+            "navigator rect stroke painted (painter-home)",
+            format!(
+                "only {accents} accent-stroke pixels (need >={MIN_NAV_ACCENT_PIXELS}); PNG needs vision review"
+            ),
+        ));
+    }
     save_report(&dir, &verdicts, &tree);
     assert!(shot.is_file());
 }

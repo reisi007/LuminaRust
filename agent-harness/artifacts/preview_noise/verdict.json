@@ -18,5 +18,25 @@
     "check": "app preview frame has content",
     "result": "PASS",
     "detail": "4x3 mean=0.437 std=0.315"
+  },
+  {
+    "check": "app preview frame is opaque",
+    "result": "PASS",
+    "detail": "4x3 opaque_fraction=1.0"
+  },
+  {
+    "check": "app preview center holds image content",
+    "result": "PASS",
+    "detail": "center mean=0.858 std=0.142"
+  },
+  {
+    "check": "app preview frame is deterministic",
+    "result": "PASS",
+    "detail": "gen=1 identical bytes across 5 idle frames"
+  },
+  {
+    "check": "edit changes preview pixels",
+    "result": "PASS",
+    "detail": "exposure 0→2.0 re-rendered content (PSNR=9.2dB vs pre-edit)"
   }
 ]

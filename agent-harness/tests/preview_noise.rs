@@ -5,7 +5,11 @@
 //! (variance + non-gray), plus the in-app `preview()` frame stats. The PNG is
 //! the vision-review input (landscape sample).
 
-use agent_harness::{artifact_dir, center_stats, frame_stats, save_report, GuiProbe, Verdict};
+use agent_harness::{
+    artifact_dir, center_stats, frame_stats,
+    painter::{app_frame_center_stats, app_frame_stats, frame_psnr},
+    save_report, GuiProbe, Verdict,
+};
 
 #[test]
 #[ignore = "headless GPU required; run: cargo test --test preview_noise -- --ignored"]
@@ -93,6 +97,107 @@ fn preview_noise() {
             "app preview frame has content",
             "no preview frame present",
         )),
+    }
+    // Painter-home (HARNESS-2): the composited photo is a GPU texture (black
+    // headless), so content proofs live on the in-app RGBA frame instead.
+    if let Some(frame) = probe.app().preview() {
+        let (fw, fh) = (frame.width, frame.height);
+        match app_frame_stats(fw, fh, &frame.pixels) {
+            Some(s) if s.opaque_fraction >= 1.0 => verdicts.push(Verdict::pass(
+                "app preview frame is opaque",
+                format!("{fw}x{fh} opaque_fraction=1.0"),
+            )),
+            Some(s) => verdicts.push(Verdict::fail(
+                "app preview frame is opaque",
+                format!(
+                    "{fw}x{fh} opaque_fraction={:.4} — transparent pixels reach composition",
+                    s.opaque_fraction
+                ),
+            )),
+            None => verdicts.push(Verdict::fail(
+                "app preview frame is opaque",
+                format!("{fw}x{fh} len={} mismatches RGBA8", frame.pixels.len()),
+            )),
+        }
+        match app_frame_center_stats(fw, fh, &frame.pixels, 0.5) {
+            Some(c) if c.std_luma > 0.05 && c.mean_luma > 0.05 && c.mean_luma < 0.95 => {
+                verdicts.push(Verdict::pass(
+                    "app preview center holds image content",
+                    format!("center mean={:.3} std={:.3}", c.mean_luma, c.std_luma),
+                ));
+            }
+            Some(c) => verdicts.push(Verdict::fail(
+                "app preview center holds image content",
+                format!(
+                    "center mean={:.3} std={:.3} looks empty",
+                    c.mean_luma, c.std_luma
+                ),
+            )),
+            None => verdicts.push(Verdict::fail(
+                "app preview center holds image content",
+                "center crop failed on a present frame",
+            )),
+        }
+        // Determinism: consecutive frames without edits must be byte-identical.
+        let before = frame.pixels.clone();
+        let gen_before = probe.app().preview_generation();
+        probe.run_steps(5);
+        let after = probe.app().preview().map(|f| f.pixels.clone());
+        match after {
+            Some(after) => match frame_psnr(&before, &after) {
+                Some(psnr) if psnr.is_infinite() => verdicts.push(Verdict::pass(
+                    "app preview frame is deterministic",
+                    format!("gen={gen_before} identical bytes across 5 idle frames"),
+                )),
+                Some(psnr) => verdicts.push(Verdict::fail(
+                    "app preview frame is deterministic",
+                    format!("gen={gen_before} idle frames differ (PSNR={psnr:.1}dB)"),
+                )),
+                None => verdicts.push(Verdict::fail(
+                    "app preview frame is deterministic",
+                    "frame length changed across idle frames",
+                )),
+            },
+            None => verdicts.push(Verdict::fail(
+                "app preview frame is deterministic",
+                "preview frame vanished across idle frames",
+            )),
+        }
+        // Edit response: an exposure lift must change frame bytes (content
+        // follows the recipe — the gray-noise fault would not).
+        probe.app_mut().set_adjustment("exposure", 2.0);
+        probe.run_steps(150);
+        probe.wait_quiescent(150, 8);
+        let edited = probe.app().preview().map(|f| f.pixels.clone());
+        match edited {
+            Some(edited) => match frame_psnr(&before, &edited) {
+                Some(psnr) if psnr.is_finite() => verdicts.push(Verdict::pass(
+                    "edit changes preview pixels",
+                    format!("exposure 0→2.0 re-rendered content (PSNR={psnr:.1}dB vs pre-edit)"),
+                )),
+                Some(_) => verdicts.push(Verdict::fail(
+                    "edit changes preview pixels",
+                    "exposure 0→2.0 left frame bytes identical — edit did not reach the pipeline",
+                )),
+                None => verdicts.push(Verdict::fail(
+                    "edit changes preview pixels",
+                    "frame length changed after edit",
+                )),
+            },
+            None => verdicts.push(Verdict::fail(
+                "edit changes preview pixels",
+                "no preview frame after edit",
+            )),
+        }
+    } else {
+        for check in [
+            "app preview frame is opaque",
+            "app preview center holds image content",
+            "app preview frame is deterministic",
+            "edit changes preview pixels",
+        ] {
+            verdicts.push(Verdict::fail(check, "no preview frame present"));
+        }
     }
     save_report(&dir, &verdicts, &probe.ui_tree_json());
     assert!(shot.is_file());
