@@ -1,0 +1,157 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/develop_sliders/shot.png"
+  },
+  {
+    "check": "tone exposure persists",
+    "result": "PASS",
+    "detail": "session=1.5 sidecar=1.5"
+  },
+  {
+    "check": "tone contrast persists",
+    "result": "PASS",
+    "detail": "session=0.4 sidecar=0.4"
+  },
+  {
+    "check": "tone highlights persists",
+    "result": "PASS",
+    "detail": "session=-0.3 sidecar=-0.3"
+  },
+  {
+    "check": "tone shadows persists",
+    "result": "PASS",
+    "detail": "session=0.2 sidecar=0.2"
+  },
+  {
+    "check": "tone whites persists",
+    "result": "PASS",
+    "detail": "session=0.1 sidecar=0.1"
+  },
+  {
+    "check": "tone blacks persists",
+    "result": "PASS",
+    "detail": "session=-0.1 sidecar=-0.1"
+  },
+  {
+    "check": "presence texture persists",
+    "result": "PASS",
+    "detail": "session=0.5 sidecar=0.5"
+  },
+  {
+    "check": "presence clarity persists",
+    "result": "PASS",
+    "detail": "session=-0.30000001192092896 sidecar=-0.30000001192092896"
+  },
+  {
+    "check": "presence dehaze persists",
+    "result": "PASS",
+    "detail": "session=0.20000000298023224 sidecar=0.20000000298023224"
+  },
+  {
+    "check": "color vibrance persists",
+    "result": "PASS",
+    "detail": "session=0.3 sidecar=0.3"
+  },
+  {
+    "check": "color saturation persists",
+    "result": "PASS",
+    "detail": "session=-0.2 sidecar=-0.2"
+  },
+  {
+    "check": "wb_temperature persists",
+    "result": "PASS",
+    "detail": "sidecar=5500"
+  },
+  {
+    "check": "geometry rotation persists",
+    "result": "PASS",
+    "detail": "session=15 sidecar=15"
+  },
+  {
+    "check": "geometry mirror persists",
+    "result": "PASS",
+    "detail": "horizontal=true in session + sidecar"
+  },
+  {
+    "check": "single-slider reset commits default",
+    "result": "PASS",
+    "detail": "exposure=0"
+  },
+  {
+    "check": "reload restores contrast",
+    "result": "PASS",
+    "detail": "0.4"
+  },
+  {
+    "check": "reload restores vibrance",
+    "result": "PASS",
+    "detail": "0.3"
+  },
+  {
+    "check": "reload restores saturation",
+    "result": "PASS",
+    "detail": "-0.2"
+  },
+  {
+    "check": "reload restores wb_temperature",
+    "result": "PASS",
+    "detail": "5500"
+  },
+  {
+    "check": "reload restores presence.texture",
+    "result": "PASS",
+    "detail": "0.5"
+  },
+  {
+    "check": "reload restores geometry.rotation",
+    "result": "PASS",
+    "detail": "15"
+  },
+  {
+    "check": "tone curve: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_tone_curve_region(&mut self, region: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4195 (derzeit privat `fn`)"
+  },
+  {
+    "check": "HSL mixer: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_hsl_value(&mut self, channel: &str, field: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4220 (derzeit privat `fn`)"
+  },
+  {
+    "check": "color grading: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_color_grading_value(&mut self, range: &str, field: &str, value: f64)` (:4250) + `pub fn set_color_grading_balance(&mut self, value: f64)` (:4290), derzeit privat"
+  },
+  {
+    "check": "effects (vignette/grain): Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_effects_value(&mut self, group: &str, field: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4315 (derzeit privat `fn`)"
+  },
+  {
+    "check": "sharpening: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_sharpening_value(&mut self, field: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4383 (derzeit privat `fn`)"
+  },
+  {
+    "check": "noise reduction: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_noise_reduction_value(&mut self, field: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4407 (derzeit privat `fn`)"
+  },
+  {
+    "check": "lens correction: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_lens_correction_value(&mut self, field: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4427 (derzeit privat `fn`)"
+  },
+  {
+    "check": "perspective: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Setter; Folgeaufgabe: `pub fn set_perspective_value(&mut self, field: &str, value: f64)` in crates/lumina-gui/src/lib.rs:4524 (derzeit privat `fn`)"
+  },
+  {
+    "check": "crop: Edit→Commit→Sidecar→Reload unbelegbar",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Crop-Setter auffindbar (nur `toggle_crop_mode` öffentlich); Folgeaufgabe: öffentlicher Crop-Edit-Pfad in crates/lumina-gui/src/lib.rs definieren (Geometrie-Sektion)"
+  }
+]

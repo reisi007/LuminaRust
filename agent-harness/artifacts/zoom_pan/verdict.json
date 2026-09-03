@@ -1,0 +1,62 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/zoom_pan/shot.png"
+  },
+  {
+    "check": "zoom maps to Fit",
+    "result": "PASS",
+    "detail": "[\"Zoom: Fit\", \"Zoom: Fit\"]"
+  },
+  {
+    "check": "zoom maps to 25%",
+    "result": "PASS",
+    "detail": "[\"Zoom: 25%\", \"Zoom: 25%\"]"
+  },
+  {
+    "check": "zoom maps to 50%",
+    "result": "PASS",
+    "detail": "[\"Zoom: 50%\", \"Zoom: 50%\"]"
+  },
+  {
+    "check": "zoom maps to 75%",
+    "result": "PASS",
+    "detail": "[\"Zoom: 75%\", \"Zoom: 75%\"]"
+  },
+  {
+    "check": "zoom maps to 100%",
+    "result": "PASS",
+    "detail": "[\"Zoom: 100%\", \"Zoom: 100%\"]"
+  },
+  {
+    "check": "zoom maps to 200%",
+    "result": "PASS",
+    "detail": "[\"Zoom: 200%\", \"Zoom: 200%\"]"
+  },
+  {
+    "check": "zoom maps to Fit Width",
+    "result": "PASS",
+    "detail": "[\"Zoom: Fit Width\", \"Zoom: Fit Width\"]"
+  },
+  {
+    "check": "zoom_step pins Custom",
+    "result": "PASS",
+    "detail": "[\"Zoom: Custom\", \"Zoom: Custom\"]"
+  },
+  {
+    "check": "navigator open",
+    "result": "PASS",
+    "detail": "[\"Navigator\", \"Navigator\"]"
+  },
+  {
+    "check": "navigator rect stroke painted (painter-home)",
+    "result": "PASS",
+    "detail": "1195 accent pixels (need >=200)"
+  },
+  {
+    "check": "pan pins Custom",
+    "result": "OPEN",
+    "detail": "kein öffentlicher Pan-Setter: `preview_pan` ist privat (crates/lumina-gui/src/lib.rs:835), `pan_gesture_pins_custom` (:4906) und `pan_for_navigator_drag` (:5033) sind privat; Folgeaufgabe: `pub fn pan_by(&mut self, dx: f32, dy: f32)` + lesende Getter (`preview_roi` :842, `preview_pan`) für den Rect-vs-ROI-Geometrienachweis"
+  }
+]

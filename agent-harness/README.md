@@ -45,6 +45,13 @@ No tokio, no networking — in-process harness.
 | `sidecar_restore.rs` | GUI-SIDECAR-RESTORE-1 |
 | `optics.rs`          | GUI-OPTICS-1          |
 | `subfolders.rs`      | GUI-LIBRARY-SUBFOLDERS-1 |
+| `library_greenpath.rs` | AGENT-HARNESS-3 Library (Open/Select/Toggle/Range) |
+| `develop_sliders.rs` | AGENT-HARNESS-3 Develop Slider-Klassen |
+| `develop_actions.rs` | AGENT-HARNESS-3 Develop Aktionen (Auto-Tone/Match/WB/Rotate/Reset/Render) |
+| `sync_match.rs`      | AGENT-HARNESS-3 Sync/Match-Selection |
+| `zoom_pan.rs`        | AGENT-HARNESS-3 Navigator/Zoom/Pan |
+| `export_greenpath.rs` | AGENT-HARNESS-3 Export |
+| `error_paths.rs`     | AGENT-HARNESS-3 Fehlerpfade |
 
 GPU scenarios are `#[ignore]`d (upstream convention — CI without GPU stays
 green); run locally with e.g.:
@@ -158,6 +165,98 @@ machine, headless wgpu, `cargo test --test <scenario> -- --ignored`):
 `nav_open=true`, Custom pinned (presence PASS, geometry OPEN);
 `preview_noise` → opaque 1.0, center mean=0.858/std=0.142, determinism
 PSNR=inf, edit-delta PSNR=9.2dB (all PASS, composited content OPEN).
+
+## AGENT-HARNESS-3 Green-Path-Matrix (F-100, alle Module)
+
+Pro Matrix-Zeile ein headless Test + DoD-§7-Mapping. GPU-Szenarien sind
+`#[ignore]` (Upstream-Konvention); lokal verifiziert auf dieser Maschine
+(headless wgpu), Stand der Läufe s. Tabelle. `crates/` wurde nur LESEND
+genutzt; fehlende Prod-Getter sind Folgeaufgaben (s. unten), keine
+Workarounds.
+
+| Zeile (Task-Vorgabe) | Szenario/Test | Status (lokal `-- --ignored`) |
+| --- | --- | --- |
+| Library Open | `library_greenpath.rs`: `set_directory`, 3 PNGs gelistet | **PASS** |
+| Library Select (Erstbild auto) | dto.: Auswahl = erstes Grid-Bild, Preview geladen, kein Fehler | **PASS** |
+| Library Toggle/Range | dto. auf echten RAW-Kopien (`sample-data/raw/*.cr3` → tempdir, Originale nur gelesen): Toggle-Add {A,B}, Range A..C, Toggle-Remove {A,C} | **PASS** |
+| Library Click-Matrix (ohne GPU) | `filmstrip_click_matrix_no_gpu` über `apply_filmstrip_click` (plain/toggle/range/unknown) | **PASS** (`cargo test`) |
+| Library RAW Full-Res-Load | dto. | **OPEN**: 6032x4024-Preview > headless-Texture-Cap 2048 (echte GPUs: 8192+) — Decode+Auswahl belegt, Present braucht GPU-Maschine/kleinere Fixture |
+| Develop Tonwerte (alle 6) | `develop_sliders.rs`: exposure/contrast/highlights/shadows/whites/blacks je Edit→Commit→Sidecar→Reload | **PASS** |
+| Develop Präsenz (alle 3) | dto.: texture/clarity/dehaze | **PASS** |
+| Develop Vibrance/Saturation | dto. | **PASS** |
+| Develop WB flach + Geometrie (Rotation/Spiegel) + Einzel-Reset | dto. | **PASS** |
+| Develop Kurve/HSL/Grading/Effekte/Schärfen/NR/Lens/Perspektive/Crop | dto. | **OPEN** (9 Klassen): kein öffentlicher Setter — Folgeaufgaben F-HARNESS3-1…9 |
+| Develop Auto-Tone | `develop_actions.rs`: 6 Regler + Spiegel + Sidecar im Aufruf, Reload | **PASS** |
+| Develop Match (Ziel) | dto.: `match_total_exposure(0.5)`, Delta persistiert | **PASS** |
+| Develop WB-Pick | dto.: Punkt→Temperatur (Domäne), persistiert; Fehlerpfad s. Error-Zeile | **PASS** |
+| Develop Rotate/Reset/Render | dto.: ±90° + Normalisierung (-70°), Reset→nächster Commit, `render()` Generation-Bump | **PASS** |
+| Sync N Sidecars | `sync_match.rs`: {A,B}-Auswahl, Rezept auf 2 Sidecars, Status | **PASS** |
+| Match N Sidecars | dto.: Median-Angleich, `match_total_exposure=true` je Sidecar | **PASS** |
+| Sync/Match Fehler isoliert | dto. auf frischen Zielen {C,D} (D gelöscht): 1 applied + 1 laut, Rest läuft | **PASS** |
+| Sync-Wiederholung (Befund) | dto.: 2. Sync identischer Ziele → laut `duplicate history entry id` (nicht idempotent) | **PASS (Befund)**: laut, aber legitime Wiederholung scheitert — Folgeaufgabe F-HARNESS3-10 |
+| Zoom alle Stufen | `zoom_pan.rs`: Fit/25/50/75/100/200/Fit-Breite je Mapping-Test Eingabe→Tree | **PASS** (7/7) |
+| Custom-Pin | dto.: `zoom_step` pinnt Custom; Navigator offen + Rect-Stroke (Painter, 1195px) | **PASS** |
+| Pan pinnt Custom | dto. | **OPEN**: kein öffentlicher Pan-Setter — Folgeaufgabe F-HARNESS3-11 |
+| Export byte-valide | `export_greenpath.rs`: lesbar (4x3), Quelle byte-identisch, PNG-Determinismus | **PASS** |
+| Fehler: Bild fehlt | `error_paths.rs`: laut, kein Preview, kein Phantom-Sidecar | **PASS** |
+| Fehler: Sidecar fehlt | dto.: Defaults per Design, kein Fehler, Status benennt Stand | **PASS** |
+| Fehler: Export ohne Bild | dto.: harter Fehler, keine Datei | **PASS** |
+| Fehler: Maske/Modell | dto.: Recalc ohne Auswahl → Err; frische Maske → Pending + Recalc-Angebot (nie still valide) | **PASS** |
+| Fehler: WB-Punkt schwarz | dto.: Err, kein Fallback-Wert | **PASS** |
+| Fehler: Auto-Tone ohne Bild | dto. | **OPEN**: `Ok(())` mit generischem Status — Folgeaufgabe F-HARNESS3-12 |
+
+### DoD-§7-Mapping pro Zeile
+
+1. **End-to-End-Kette (Edit→Commit→Datei→Reload):** `develop_sliders`
+   (15 persistente + 6 Reload-Verdicts), `develop_actions`
+   (Auto-Tone/Match/WB-Pick/Rotate/Reset je mit Sidecar- + Reload-Glied),
+   `sidecar_restore` (Bestand). Klassen ohne Setter haben kein
+   Edit-Glied → OPEN (s. Tabelle).
+2. **Zeitbasierte Pfade:** 150-ms-Debounce (`pending_full_render`,
+   `commit_pending_slider_save`, `crates/lumina-gui/src/lib.rs:6312`)
+   wird via `run_steps`/`wait_quiescent` getrieben — jeder persistente
+   Verdict oben hängt an einem Sidecar-Read NACH den Frames; ohne
+   Commit kein PASS. Async-Decode (`begin_load_path`) ebenso
+   (Library-Select, Fehler-Bild).
+3. **Klassen-Vollständigkeit:** Tonwerte 6/6, Präsenz 3/3,
+   Vibrance/Saturation 2/2, Zoom 7/7 + Custom, Filmstrip-Click
+   plain/toggle/range/unknown; Kurve/HSL/Grading/Effekte/Schärfen/NR/
+   Lens/Perspektive/Crop je als eigene OPEN-Zeile (keine Stichprobe).
+4. **Log-Level:** keine neue User-Aktion harness-seitig (nur lesende/
+   bestehende Aufrufe); geprüfte Aktionen loggen prod-seitig `info!`
+   (Sync/Match je Bild) bzw. `trace!` (Slider-Commits) — kein neues
+   `trace!`-only sichtbares Verhalten eingeführt.
+5. **Spez→Test:** F-100-Sätze → Tests: „Slider speichern Sidecar"
+   → `develop_sliders`; „Auto-Tone/Match/WB/Rotate/Reset/Render" →
+   `develop_actions`; „Sync/Match je eigenes Sidecar, Fehler laut" →
+   `sync_match`; „Zoomstufen/Custom/Navigator" → `zoom_pan`;
+   „Export byte-identisch, nicht-destruktiv" → `export_greenpath`;
+   „Fehler laut, nie still" → `error_paths`; „Open/Select/Toggle/Range"
+   → `library_greenpath`.
+6. **Gates:** `cargo test`, `cargo clippy --all-targets -- -D warnings`,
+   `cargo fmt --check` (in `agent-harness/`), alle grün; GPU-Szenarien
+   zusätzlich lokal `-- --ignored` grün (s. Tabelle; OPENs sind
+   Verdicts, keine Gate-Failures).
+
+### Folgeaufgaben (Prod-Getter/Setter, NICHT vom Harness geschrieben)
+
+- **F-HARNESS3-1…9** (Slider-Klassen öffentlich machen, je `pub fn`
+  statt privat `fn` in `crates/lumina-gui/src/lib.rs`): `set_tone_curve_region`
+  (:4195), `set_hsl_value` (:4220), `set_color_grading_value` (:4250) +
+  `set_color_grading_balance` (:4290), `set_effects_value` (:4315),
+  `set_sharpening_value` (:4383), `set_noise_reduction_value` (:4407),
+  `set_lens_correction_value` (:4427), `set_perspective_value` (:4524),
+  Crop-Edit-Pfad (derzeit nur `toggle_crop_mode` öffentlich).
+- **F-HARNESS3-10** (Sync-Idempotenz): Zweit-Sync identischer Ziele
+  scheitert an `duplicate history entry id` (`apply_recipe_to_path`,
+  :3875) — History-IDs pro Lauf eindeutig machen (z. B. Zähler/UUID
+  statt `sync-{index}`).
+- **F-HARNESS3-11** (Pan/Navigator-Geometrie): `pub fn pan_by(&mut self,
+  dx: f32, dy: f32)` + lesende Getter für `preview_pan` (:835) und
+  `preview_roi` (:842); ergänzt HARNESS-2-`preview_roi`/`navigator_rect_debug`.
+- **F-HARNESS3-12** (Auto-Tone ohne Bild): `pub fn auto_tone` (:4552)
+  gibt `Ok(())` ohne Signal zurück — `Err` oder Status statt
+  generischem Default.
 
 ## Gates
 

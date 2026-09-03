@@ -1,0 +1,57 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/sync_match/shot.png"
+  },
+  {
+    "check": "selection holds N images",
+    "result": "PASS",
+    "detail": "[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_A.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_B.cr3\"]"
+  },
+  {
+    "check": "sync applies to all",
+    "result": "PASS",
+    "detail": "applied=2 status=\"Synced settings to 2 image(s)\""
+  },
+  {
+    "check": "sync sidecars carry recipe",
+    "result": "PASS",
+    "detail": "[Some(0.5), Some(0.5)]"
+  },
+  {
+    "check": "match applies to all",
+    "result": "PASS",
+    "detail": "applied=[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_A.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_B.cr3\"] status=\"Matched exposures of 2 image(s) to median luminance 0.6392\""
+  },
+  {
+    "check": "match tags sidecars",
+    "result": "PASS",
+    "detail": "[Some(true), Some(true)]"
+  },
+  {
+    "check": "repeat sync fails loudly (non-idempotent history ids — Befund)",
+    "result": "PASS",
+    "detail": "failed=[(\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_A.cr3\", \"invalid sidecar: duplicate history entry id `sync-0`\"), (\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_B.cr3\", \"invalid sidecar: duplicate history entry id `sync-1`\")]"
+  },
+  {
+    "check": "sync failure isolated and loud",
+    "result": "PASS",
+    "detail": "failed=[(\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3: No such file or directory (os error 2)\")] error=Some(\"Sync failed for 1 image(s): /var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3: /var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3: No such file or directory (os error 2)\")"
+  },
+  {
+    "check": "sync survivor carries recipe",
+    "result": "PASS",
+    "detail": "0.9"
+  },
+  {
+    "check": "match failure isolated and loud",
+    "result": "PASS",
+    "detail": "applied=[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_C.cr3\"] failed=[(\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3: No such file or directory (os error 2)\")] error=Some(\"Match exposures failed for 1 image(s): /var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3: /var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpnp5dnE/s_D.cr3: No such file or directory (os error 2)\")"
+  },
+  {
+    "check": "match tags survivor",
+    "result": "PASS",
+    "detail": "s_C carries match_total_exposure=true"
+  }
+]

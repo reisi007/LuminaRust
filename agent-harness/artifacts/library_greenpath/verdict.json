@@ -1,0 +1,57 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/library_greenpath/shot.png"
+  },
+  {
+    "check": "library open lists folder",
+    "result": "PASS",
+    "detail": "3 entries, thumb_keys=[\"/private/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpHLbf3A/a_photo.png\", \"/private/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpHLbf3A/b_photo.png\", \"/private/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpHLbf3A/c_photo.png\"] status=\"Preview current\""
+  },
+  {
+    "check": "first grid entry auto-selected",
+    "result": "PASS",
+    "detail": "selection=[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpHLbf3A/a_photo.png\"]"
+  },
+  {
+    "check": "first image auto-loaded",
+    "result": "PASS",
+    "detail": "preview present, no error"
+  },
+  {
+    "check": "same-folder open preserves selection (documented)",
+    "result": "PASS",
+    "detail": "selection=[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpHLbf3A/a_photo.png\"]"
+  },
+  {
+    "check": "RAW folder lists + first auto-selected (no bg decode)",
+    "result": "PASS",
+    "detail": "selection=[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_A.cr3\"]"
+  },
+  {
+    "check": "RAW first auto-loaded full-res",
+    "result": "OPEN",
+    "detail": "headless-wgpu cap: 6032x4024 preview exceeds max texture side 2048 (real GPUs: 8192+); decode+selection proven above, on-screen present needs GPU machine or smaller fixture"
+  },
+  {
+    "check": "toggle adds (multi-select)",
+    "result": "PASS",
+    "detail": "[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_A.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_B.cr3\"]"
+  },
+  {
+    "check": "range selects span",
+    "result": "PASS",
+    "detail": "[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_A.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_B.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_C.cr3\"]"
+  },
+  {
+    "check": "toggle removes",
+    "result": "PASS",
+    "detail": "[\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_A.cr3\", \"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpmCLYwv/r_C.cr3\"]"
+  },
+  {
+    "check": "undecodable RAW fails loudly",
+    "result": "PASS",
+    "detail": "error=\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpXFB6cH/m_A.ARW: LibRaw opening input failed (-100009): Input/output error\""
+  }
+]

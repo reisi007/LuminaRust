@@ -1,0 +1,706 @@
+[
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 56.75,
+      "y0": 2.5,
+      "y1": 19.5
+    },
+    "role": "Label",
+    "value": "Lumina"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 56.75,
+      "y0": 2.5,
+      "y1": 19.5
+    },
+    "role": "TextRun",
+    "value": "Lumina"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 74.75,
+      "x1": 243.09375,
+      "y0": 4.0,
+      "y1": 18.0
+    },
+    "role": "Label",
+    "value": "Ready for a PNG, JPEG or WebP"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 74.75,
+      "x1": 243.09375,
+      "y0": 4.0,
+      "y1": 18.0
+    },
+    "role": "TextRun",
+    "value": "Ready for a PNG, JPEG or WebP"
+  },
+  {
+    "label": "Library (G)",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.71875,
+      "y0": 25.0,
+      "y1": 43.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Develop (D)",
+    "rect": {
+      "x0": 76.71875,
+      "x1": 147.4375,
+      "y0": 25.0,
+      "y1": 43.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Export",
+    "rect": {
+      "x0": 153.4375,
+      "x1": 197.3125,
+      "y0": 25.0,
+      "y1": 43.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Before / After (Y)",
+    "rect": {
+      "x0": 215.3125,
+      "x1": 315.125,
+      "y0": 25.0,
+      "y1": 43.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 73.40625,
+      "y0": 48.5,
+      "y1": 65.5
+    },
+    "role": "Label",
+    "value": "Navigator"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 73.40625,
+      "y0": 48.5,
+      "y1": 65.5
+    },
+    "role": "TextRun",
+    "value": "Navigator"
+  },
+  {
+    "label": "‹",
+    "rect": {
+      "x0": 129.6875,
+      "x1": 141.0,
+      "y0": 48.0,
+      "y1": 66.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.25,
+      "y0": 80.0,
+      "y1": 94.0
+    },
+    "role": "Label",
+    "value": "Not current"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.25,
+      "y0": 80.0,
+      "y1": 94.0
+    },
+    "role": "TextRun",
+    "value": "Not current"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 115.75,
+      "y0": 108.0,
+      "y1": 136.0
+    },
+    "role": "Label",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 115.75,
+      "y0": 108.0,
+      "y1": 122.0
+    },
+    "role": "TextRun",
+    "value": "Click a thumbnail to "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 45.65625,
+      "y0": 122.0,
+      "y1": 136.0
+    },
+    "role": "TextRun",
+    "value": "open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 147.0,
+      "x1": 153.0,
+      "y0": 46.0,
+      "y1": 800.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "Save Recipe / Sidecar",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1088.8125,
+      "y0": 778.0,
+      "y1": 796.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Reset",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1007.34375,
+      "y0": 756.0,
+      "y1": 774.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Render / Apply",
+    "rect": {
+      "x0": 1013.34375,
+      "x1": 1100.4375,
+      "y0": 756.0,
+      "y1": 774.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Match Total Exposure",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1092.5625,
+      "y0": 734.0,
+      "y1": 752.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Histogram",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1038.75,
+      "y0": 48.0,
+      "y1": 66.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 979.0,
+      "x1": 1041.25,
+      "y0": 70.0,
+      "y1": 84.0
+    },
+    "role": "Label",
+    "value": "Not current"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 979.0,
+      "x1": 1041.25,
+      "y0": 70.0,
+      "y1": 84.0
+    },
+    "role": "TextRun",
+    "value": "Not current"
+  },
+  {
+    "label": "Presets",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1022.65625,
+      "y0": 98.0,
+      "y1": 116.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "History",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1021.34375,
+      "y0": 120.0,
+      "y1": 138.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Rating",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1017.71875,
+      "y0": 142.0,
+      "y1": 160.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Basic",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1010.15625,
+      "y0": 174.0,
+      "y1": 192.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Tone Curve",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1043.28125,
+      "y0": 196.0,
+      "y1": 214.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Color",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1011.8125,
+      "y0": 218.0,
+      "y1": 236.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Detail",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1014.65625,
+      "y0": 240.0,
+      "y1": 258.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Effects",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1020.5625,
+      "y0": 262.0,
+      "y1": 280.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Optics",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1017.4375,
+      "y0": 284.0,
+      "y1": 302.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Geometry",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1036.46875,
+      "y0": 306.0,
+      "y1": 324.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Masking",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1027.125,
+      "y0": 328.0,
+      "y1": 346.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Generative Expand",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1083.71875,
+      "y0": 350.0,
+      "y1": 368.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Dust Removal (Q)",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1076.25,
+      "y0": 372.0,
+      "y1": 390.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Load",
+    "rect": {
+      "x0": 1237.875,
+      "x1": 1272.0,
+      "y0": 553.0,
+      "y1": 571.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1231.875,
+      "y0": 553.0,
+      "y1": 571.0
+    },
+    "role": "TextInput",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 973.0,
+      "x1": 973.0,
+      "y0": 555.0,
+      "y1": 569.0
+    },
+    "role": "TextRun",
+    "value": ""
+  },
+  {
+    "label": "Choose file",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1036.53125,
+      "y0": 724.0,
+      "y1": 742.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 1262.0,
+      "x1": 1272.0,
+      "y0": 48.0,
+      "y1": 720.0
+    },
+    "role": "ScrollBar",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 957.0,
+      "x1": 963.0,
+      "y0": 46.0,
+      "y1": 800.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 216.25,
+      "y0": 627.0,
+      "y1": 644.0
+    },
+    "role": "Label",
+    "value": "Filmstrip"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 216.25,
+      "y0": 627.0,
+      "y1": 644.0
+    },
+    "role": "TextRun",
+    "value": "Filmstrip"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 303.4375,
+      "y0": 648.0,
+      "y1": 662.0
+    },
+    "role": "Label",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 303.4375,
+      "y0": 648.0,
+      "y1": 662.0
+    },
+    "role": "TextRun",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "Sync Settings",
+    "rect": {
+      "x0": 158.0,
+      "x1": 236.5625,
+      "y0": 666.0,
+      "y1": 684.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Match Total Exposures",
+    "rect": {
+      "x0": 242.5625,
+      "x1": 371.25,
+      "y0": 666.0,
+      "y1": 684.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 200.65625,
+      "y0": 56.0,
+      "y1": 70.0
+    },
+    "role": "Label",
+    "value": "Preview"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 200.65625,
+      "y0": 56.0,
+      "y1": 70.0
+    },
+    "role": "TextRun",
+    "value": "Preview"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 218.65625,
+      "x1": 269.0,
+      "y0": 56.0,
+      "y1": 70.0
+    },
+    "role": "Label",
+    "value": "Zoom: Fit"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 218.65625,
+      "x1": 269.0,
+      "y0": 56.0,
+      "y1": 70.0
+    },
+    "role": "TextRun",
+    "value": "Zoom: Fit"
+  },
+  {
+    "label": "Fit",
+    "rect": {
+      "x0": 275.0,
+      "x1": 296.71875,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "25%",
+    "rect": {
+      "x0": 302.71875,
+      "x1": 334.21875,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "50%",
+    "rect": {
+      "x0": 340.21875,
+      "x1": 371.71875,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "75%",
+    "rect": {
+      "x0": 377.71875,
+      "x1": 409.21875,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "1:1",
+    "rect": {
+      "x0": 415.21875,
+      "x1": 439.71875,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "200%",
+    "rect": {
+      "x0": 445.71875,
+      "x1": 484.0,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Fit Width",
+    "rect": {
+      "x0": 490.0,
+      "x1": 546.8125,
+      "y0": 54.0,
+      "y1": 72.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 952.0,
+      "y0": 76.0,
+      "y1": 616.0
+    },
+    "role": "Label",
+    "value": "Drop an image here or load a path"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 465.0,
+      "x1": 645.8125,
+      "y0": 339.0,
+      "y1": 353.0
+    },
+    "role": "TextRun",
+    "value": "Drop an image here or load a path"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 308.71875,
+      "y0": 620.0,
+      "y1": 634.0
+    },
+    "role": "Label",
+    "value": "Render state stale / pending"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 308.71875,
+      "y0": 620.0,
+      "y1": 634.0
+    },
+    "role": "TextRun",
+    "value": "Render state stale / pending"
+  }
+]

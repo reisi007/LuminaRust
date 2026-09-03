@@ -1,0 +1,52 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/develop_actions/shot.png"
+  },
+  {
+    "check": "render/apply",
+    "result": "PASS",
+    "detail": "ok, generation 1->2, preview=true"
+  },
+  {
+    "check": "auto-tone persists",
+    "result": "PASS",
+    "detail": "enable_auto_tone=true exposure=Some(0.45310554011236326)"
+  },
+  {
+    "check": "match total exposure persists",
+    "result": "PASS",
+    "detail": "session delta=-0.03433689250679751 file delta=-0.03433689250679751"
+  },
+  {
+    "check": "wb pick sets temperature",
+    "result": "PASS",
+    "detail": "8267.857142857143"
+  },
+  {
+    "check": "wb pick persists",
+    "result": "PASS",
+    "detail": "session=8267.857142857143 sidecar=8267.857142857143"
+  },
+  {
+    "check": "rotate_step +90",
+    "result": "PASS",
+    "detail": "90"
+  },
+  {
+    "check": "rotate_step normalizes",
+    "result": "PASS",
+    "detail": "-70"
+  },
+  {
+    "check": "reset clears in session",
+    "result": "PASS",
+    "detail": "exposure=0"
+  },
+  {
+    "check": "reset persists via next commit",
+    "result": "PASS",
+    "detail": "exposure=0 contrast=0.3"
+  }
+]

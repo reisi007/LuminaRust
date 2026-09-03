@@ -1,0 +1,22 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/export_greenpath/shot.png"
+  },
+  {
+    "check": "export file byte-valid",
+    "result": "PASS",
+    "detail": "readable 4x3"
+  },
+  {
+    "check": "export leaves source untouched",
+    "result": "PASS",
+    "detail": "119 bytes identical"
+  },
+  {
+    "check": "export deterministic (PNG)",
+    "result": "PASS",
+    "detail": "119 bytes identical"
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "shot=artifacts/error_paths/shot.png"
+  },
+  {
+    "check": "missing image fails loudly",
+    "result": "PASS",
+    "detail": "error=\"/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmp8X93mK/missing.png: /var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmp8X93mK/missing.png: No such file or directory (os error 2)\", no preview, no phantom sidecar"
+  },
+  {
+    "check": "missing sidecar loads defaults (by design)",
+    "result": "PASS",
+    "detail": "status=\"Preview current\", no error, default recipe"
+  },
+  {
+    "check": "export without image fails loudly",
+    "result": "PASS",
+    "detail": "No image loaded; open or drop an image first, no file created"
+  },
+  {
+    "check": "mask recalc without selection fails loudly",
+    "result": "PASS",
+    "detail": "No mask selected"
+  },
+  {
+    "check": "wb pick from black fails loudly",
+    "result": "PASS",
+    "detail": "Cannot derive white balance from this point"
+  },
+  {
+    "check": "fresh mask offered for recalc (never silently valid)",
+    "result": "PASS",
+    "detail": "id=mask-fab4724ed02a2e68bd34216a7bbfb4fbb1d6e0d733ab2473c25bca21d9bf2ac6 status=\"Mask stale/unavailable; start recalculation?\""
+  },
+  {
+    "check": "auto-tone without image is loud",
+    "result": "OPEN",
+    "detail": "returns Ok(()) with generic status=\"Ready for a PNG, JPEG or WebP\", error=None — no action-specific signal; Folgeaufgabe: Err(GuiError) oder Status in crates/lumina-gui/src/lib.rs:4552 (`pub fn auto_tone`)"
+  }
+]

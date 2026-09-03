@@ -142,7 +142,7 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: mittel] AGENT-HARNESS-3 (→ Querschnitt, G-01/G-07/G-08/G-10, Release: 1.0)** Green-Path-Matrix (F-100, alle Module): Library (Open/Select/Toggle/Range), Develop (jede Slider-Klasse Edit→Commit→Sidecar→Reload, Auto-Tone, Match, WB-Pick, Rotate, Reset, Render), Sync/Match-Selection (N Sidecars, Fehler isoliert laut), Navigator/Zoom/Pan (alle Stufen, Custom-Pin), Export (Datei byte-valide), Fehlerpfade laut ohne stillen Fallback. Abnahme: pro Zeile ein headless Test + DoD-§7-Mapping.
+- [ ] **[PRIO: hoch] CI-MCP-PREVIEW-FLAKY-1** CI-Run `33783930840` (auf `d3724cb`, gui-only Commit) rot in `lumina-mcp --test mcp`: `shutdown_cleanup_removes_tracked_preview_files` (mcp.rs:988, `preview_path`-unwrap auf None), lokal 2× grün (einzeln + volle Suite 30/30). Verdacht: `new_server` setzt prozess-globales `LUMINA_MCP_PREVIEW_DIR` per `set_var` bei parallelen Test-Threads (Race). Fix: Preview-Dir-Injektion race-frei machen (expliziter Konstruktor-Param statt Env-Mutation o. ä.) + Regression (wiederholte Läufe, Thread-Variation). Abnahme: `cargo test -p lumina-mcp` mehrfach grün, Clippy/Fmt sauber, CI grün.
 - [ ] **[PRIO: mittel] AGENT-HARNESS-4 (→ G-10, Release: 1.0)** Bildkorrektheit (F-100 Preview): opaque Alpha, Center-Pixel-Delta, Fit-Rahmen=Background, Luminanz-Toleranz (sRGB-Fang), Thumbnail-Hash/PSNR gegen 1–2 Fixtures, Stale-Generation-Guard nach Bildwechsel. Abnahme: Pixel-Asserts in Harness-Tests, kein reiner Layout-Nachweis.
 
 **LR-Parität aus `.goal/Goal.md` (Batch 1 + User-Featureliste, Stand 2026-09-03, 16 Goals, Aggregat ~39,1 %)**

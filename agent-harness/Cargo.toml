@@ -56,3 +56,31 @@ path = "tests/optics.rs"
 [[test]]
 name = "subfolders"
 path = "tests/subfolders.rs"
+
+[[test]]
+name = "library_greenpath"
+path = "tests/library_greenpath.rs"
+
+[[test]]
+name = "develop_sliders"
+path = "tests/develop_sliders.rs"
+
+[[test]]
+name = "develop_actions"
+path = "tests/develop_actions.rs"
+
+[[test]]
+name = "sync_match"
+path = "tests/sync_match.rs"
+
+[[test]]
+name = "zoom_pan"
+path = "tests/zoom_pan.rs"
+
+[[test]]
+name = "export_greenpath"
+path = "tests/export_greenpath.rs"
+
+[[test]]
+name = "error_paths"
+path = "tests/error_paths.rs"
