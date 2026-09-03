@@ -5591,10 +5591,10 @@ mod tests {
             let mut coords = vec![(0.0f64, 0.0f64); w];
             for y in 0..h {
                 corrector.geometry_row(0.0, y as f64, &mut coords);
-                for x in 0..w {
+                for (x, coord) in coords.iter().enumerate().take(w) {
                     let (sx, sy) = corrector.geometry(x as f64, y as f64);
-                    let dx = (coords[x].0 - sx).abs();
-                    let dy = (coords[x].1 - sy).abs();
+                    let dx = (coord.0 - sx).abs();
+                    let dy = (coord.1 - sy).abs();
                     if dx > max_coord_drift {
                         max_coord_drift = dx;
                         max_coord_at = (x, y);
@@ -5625,7 +5625,7 @@ mod tests {
                         ]
                     })
                     .collect();
-                let mut expected = row.clone();
+                let expected = row.clone();
                 corrector.apply_vignetting_row(&mut row, 0.0, y as f64);
                 for x in 0..w {
                     let (er, eg, eb) = corrector.color_gain(
