@@ -146,6 +146,18 @@ obligations that MUST be honored in any distributed build:
      `ort-sys`); optional `onnx-rt` feature, not in default builds. ORT
      prebuilt-binary redistribution terms to be re-checked before release
      (R4).
+   - **Inpaint-Heal / Outpaint (generative, SPOT-REMOVE-1 / GEN-EXPAND-1):**
+     descriptors `inpaint-heal-xl` (`inpaint_heal`, 512×512) and
+     `inpaint-outpaint-xl` (`outpaint`, 1024×1024) in `lumina-onnx`
+     (`manifest.rs` / `inpaint.rs` / `outpaint.rs`), both
+     `model_hash = "pending-integration"`, license placeholder `Apache-2.0`
+     — **no weights committed, no download performed, stub-only tests (no
+     network)**. Many SOTA inpaint/outpaint weights are non-commercial:
+     license + hash pin against the actual weight source are mandatory
+     before integration (F-078; same caution as the `ultralytics` AGPL note
+     in `feature/quality/fixtures-licensing.md` §5). Local ONNX vs.
+     Cloud-API are separate capabilities (Cloud not planned — explicit
+     capability decision required, no silent fallback).
    - **Obligation:** bundle the respective license texts (MIT / Apache-2.0)
      with any distributed weights or binaries — provided verbatim in
      `licenses/models/` together with provenance pointers

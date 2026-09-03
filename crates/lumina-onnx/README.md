@@ -25,8 +25,18 @@ inference is a native capability, the browser remains explicitly "offen".
 
 - `manifest.rs` — `ModelManifest` (serde identity + I/O contract) and
   `ModelCapabilities` (F-080: `subject_segmentation`, `box_prompt`,
-  `point_prompt`, `mask_prompt`, `class_detection`, `instance_segmentation`).
-  At least one capability must be set; unknown fields are rejected.
+  `point_prompt`, `mask_prompt`, `class_detection`, `instance_segmentation`,
+  plus the generative `inpaint_heal` (SPOT-REMOVE-1) and `outpaint`
+  (GEN-EXPAND-1) flags). At least one capability must be set; unknown fields
+  are rejected.
+- `inpaint.rs` — deterministic `StubInpaintBackend` for spot-heal inpaint
+  (`inpaint_heal_manifest`, 512×512, `pending-integration`).
+- `outpaint.rs` — deterministic `StubOutpaintBackend` for generative canvas
+  expansion (`outpaint_expand_manifest`, 1024×1024, `pending-integration`):
+  source block copied at `source_offset`, border filled from source mean plus
+  a prompt/seed/canvas hash offset. `available == false` reports
+  `ModelUnavailable`, a manifest without `outpaint` is rejected with
+  `UnsupportedModel` — never a silent fallback.
 - `preprocess.rs` — pure, deterministic, dependency-free resize /
   rescale helpers (nearest-neighbor, documented integer mapping).
 - `backend.rs` — the `SubjectInference` trait and the deterministic
@@ -82,13 +92,33 @@ Consumers (CLI/core) obtain the real engine via
   `Err(InferenceFailed)` — visible, hard errors; no fallback to the stub.
 
 ### Hash-pinned ONNX behavior fixture
-
 `tests/fixtures/lumina-crafted-reducemax.onnx` is a committed, hash-pinned
 behavior fixture (SHA-256 pin in `tests/fixtures/README.md`): a minimal,
 deterministically generated ReduceMax graph (no downloads, no model weights)
 that exercises the real ORT load/verify/infer code paths under a pinned
 identity. Real BiRefNet/SAM-2 model weights remain `pending-integration`
 (Agents.md: no spontaneous downloads; hash-pinned fixtures required).
+
+## Generative outpaint (GEN-EXPAND-1, local vs. Cloud)
+
+`outpaint_expand_manifest()` declares the planned local ONNX outpaint model
+(`inpaint-outpaint-xl` 1.0.0, 1024×1024, capability `outpaint`):
+
+- **Local vs. Cloud are separate capabilities** (no silent fallback):
+  local ONNX inference lives in this crate (native); a Cloud-API path is
+  **not planned** and needs an explicit capability decision first
+  (`feature/product/generative-expand.md`, capability matrix). The stub never
+  calls a network.
+- **License / hash pin (F-078, pre-integration):** no weights are committed;
+  `model_hash` is `pending-integration` and the `Apache-2.0` license entry is
+  a placeholder declaration only. Many state-of-the-art inpaint/outpaint
+  weights are non-commercial — the license MUST be verified against the actual
+  weight source before any hash pin lands (same caution as the `ultralytics`
+  AGPL note in `feature/quality/fixtures-licensing.md` §5). Tests run against
+  the deterministic stub only and require no network access.
+- **Browser (WASM):** outpaint is unavailable (`wasm_stub::StubOutpaintBackend`
+  reports `ModelUnavailable`, engine resolves to `RuntimeDisabled` until the
+  optional `onnx-wasm` capability exists — F-070, off by default).
 
 ## Error handling
 

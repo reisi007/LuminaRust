@@ -93,9 +93,11 @@ pub struct ModelInputSpec {
 /// Model capabilities (F-080).
 ///
 /// `subject_segmentation` is the *base* capability (automatic subject
-/// segmentation, e.g. BiRefNet) with no prompts. The remaining five flags are
-/// the interactive/advanced capabilities enumerated in F-080. **At least one
-/// capability must be set** — see [`ModelCapabilities::validate`].
+/// segmentation, e.g. BiRefNet) with no prompts. The box/point/mask/class/
+/// instance flags are the interactive/advanced capabilities enumerated in
+/// F-080; `inpaint_heal` (SPOT-REMOVE-1) and `outpaint` (GEN-EXPAND-1) are the
+/// generative capabilities. **At least one capability must be set** — see
+/// [`ModelCapabilities::validate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCapabilities {
@@ -114,6 +116,14 @@ pub struct ModelCapabilities {
     /// Spot-heal generative inpaint (SPOT-REMOVE-01, local ONNX).
     #[serde(default)]
     pub inpaint_heal: bool,
+    /// Generative canvas expansion / outpainting (GEN-EXPAND-1, local ONNX).
+    ///
+    /// Declares that the model can extend the image beyond its original
+    /// surface (`canvas.output_* > source_*`, ">100 %"). Checked by the
+    /// outpaint stub backend before inference; a model without this flag is
+    /// rejected visibly (no silent substitution by another model).
+    #[serde(default)]
+    pub outpaint: bool,
 }
 
 impl ModelCapabilities {
@@ -126,6 +136,7 @@ impl ModelCapabilities {
             || self.class_detection
             || self.instance_segmentation
             || self.inpaint_heal
+            || self.outpaint
     }
 
     /// Validate that at least one capability is set.
@@ -139,7 +150,7 @@ impl ModelCapabilities {
                 name: name.to_owned(),
                 reason: "no model capabilities declared (at least one of subject_segmentation, \
                      box_prompt, point_prompt, mask_prompt, class_detection, \
-                     instance_segmentation, inpaint_heal must be true)"
+                     instance_segmentation, inpaint_heal, outpaint must be true)"
                     .into(),
             });
         }
@@ -499,6 +510,7 @@ pub fn birefnet_manifest() -> ModelManifest {
             class_detection: false,
             instance_segmentation: false,
             inpaint_heal: false,
+            outpaint: false,
         },
     }
 }
@@ -528,6 +540,60 @@ pub fn inpaint_heal_manifest() -> ModelManifest {
             class_detection: false,
             instance_segmentation: false,
             inpaint_heal: true,
+            outpaint: false,
+        },
+    }
+}
+
+/// Inference resolution width for the generative outpaint model.
+pub const OUTPAINT_INFERENCE_WIDTH: u32 = 1024;
+/// Inference resolution height for the generative outpaint model.
+pub const OUTPAINT_INFERENCE_HEIGHT: u32 = 1024;
+
+/// Outpaint descriptor: generative canvas expansion beyond the original
+/// surface (GEN-EXPAND-1, `GenerativeEdit` expand role).
+///
+/// - Declares only the `outpaint` capability (separately testable per
+///   `feature/product/generative-expand.md`; a model may declare just one of
+///   `inpaint_heal` / `outpaint`).
+/// - Documented inference resolution 1024x1024 (square resize, same contract
+///   as `GenerativeEdit.inference_resolution`).
+/// - License `Apache-2.0` is a **placeholder pre-integration declaration**,
+///   mirroring `inpaint_heal_manifest`: no weights are committed, no download
+///   is performed, and `model_hash` is `pending-integration` until real
+///   weights are hash-pinned in a follow-up (F-078,
+///   `feature/quality/fixtures-licensing.md`). Many state-of-the-art
+///   inpaint/outpaint weights are non-commercial — the license MUST be
+///   verified against the actual weight source before pinning (same
+///   AGPL-trap caution as the `ultralytics` note in
+///   `feature/quality/fixtures-licensing.md` section 5). Tests never touch
+///   the network; they run against the deterministic stub backend only.
+pub fn outpaint_expand_manifest() -> ModelManifest {
+    ModelManifest {
+        model_name: "inpaint-outpaint-xl".into(),
+        model_version: "1.0.0".into(),
+        model_hash: crate::hash::PENDING_INTEGRATION_HASH.into(),
+        license: "Apache-2.0".into(),
+        input: ModelInputSpec {
+            resolution: Resolution {
+                width: OUTPAINT_INFERENCE_WIDTH,
+                height: OUTPAINT_INFERENCE_HEIGHT,
+            },
+            channel_layout: ChannelLayout::Rgb,
+            tensor_name: "image".into(),
+            tensor_format: TensorFormat::Nchw,
+            normalization: InputNormalization::IMAGENET,
+        },
+        output_tensor_name: "output".into(),
+        capabilities: ModelCapabilities {
+            subject_segmentation: false,
+            box_prompt: false,
+            point_prompt: false,
+            mask_prompt: false,
+            class_detection: false,
+            instance_segmentation: false,
+            inpaint_heal: false,
+            outpaint: true,
         },
     }
 }
@@ -573,6 +639,7 @@ pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
             class_detection: false,
             instance_segmentation: false,
             inpaint_heal: false,
+            outpaint: false,
         },
     }
 }

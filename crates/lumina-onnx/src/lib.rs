@@ -45,6 +45,8 @@ pub mod inpaint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod manifest;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod outpaint;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod resolve;
@@ -65,11 +67,15 @@ pub use hash::{
 pub use inpaint::{InpaintRequest, StubInpaintBackend};
 #[cfg(not(target_arch = "wasm32"))]
 pub use manifest::{
-    birefnet_manifest, inpaint_heal_manifest, sam2_1_manifest, sam2_1_manifests, select_variant,
-    ChannelLayout, DeviceProfile, InputNormalization, ModelCapabilities, ModelInputSpec,
-    ModelManifest, Resolution, Sam2Variant, TensorFormat, BIREFNET_INFERENCE_HEIGHT,
-    BIREFNET_INFERENCE_WIDTH, INPUT_SPEC_DIGEST_KEY, SAM2_INFERENCE_HEIGHT, SAM2_INFERENCE_WIDTH,
+    birefnet_manifest, inpaint_heal_manifest, outpaint_expand_manifest, sam2_1_manifest,
+    sam2_1_manifests, select_variant, ChannelLayout, DeviceProfile, InputNormalization,
+    ModelCapabilities, ModelInputSpec, ModelManifest, Resolution, Sam2Variant, TensorFormat,
+    BIREFNET_INFERENCE_HEIGHT, BIREFNET_INFERENCE_WIDTH, INPUT_SPEC_DIGEST_KEY,
+    OUTPAINT_INFERENCE_HEIGHT, OUTPAINT_INFERENCE_WIDTH, SAM2_INFERENCE_HEIGHT,
+    SAM2_INFERENCE_WIDTH,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use outpaint::{OutpaintCanvas, OutpaintRequest, StubOutpaintBackend};
 #[cfg(not(target_arch = "wasm32"))]
 pub use preprocess::{
     matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_rgb_to_model,
@@ -93,8 +99,9 @@ pub mod wasm_stub;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_stub::{
-    birefnet_manifest, inpaint_heal_manifest, sam2_1_manifest, sam2_1_manifests, select_variant,
-    try_load_onnx_engine, OnnxEngine, StubBackend, SubjectInference,
+    birefnet_manifest, inpaint_heal_manifest, outpaint_expand_manifest, sam2_1_manifest,
+    sam2_1_manifests, select_variant, try_load_onnx_engine, OnnxEngine, OutpaintCanvas,
+    OutpaintRequest, StubBackend, StubOutpaintBackend, SubjectInference,
 };
 
 use thiserror::Error;
