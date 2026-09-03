@@ -598,6 +598,8 @@ mod tests {
             id: id.into(),
             name: id.into(),
             is_default: id == "vc-original",
+            rating: 0,
+            flag: lumina_sidecar::Flag::Unflagged,
             recipe: EditRecipe::default(),
             mask_library: definitions,
             mask_layers: layers,

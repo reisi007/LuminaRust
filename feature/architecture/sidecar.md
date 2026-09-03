@@ -74,6 +74,23 @@ beschränkt.
 Alle Felder benötigen definierte Einheiten, Wertebereiche, optionale Zustände
 und eine Migrationsstrategie, bevor das Schema eingefroren wird.
 
+### Bewertung und Flaggen (LR-01)
+
+Jede virtuelle Kopie trägt Lightroom-ähnliche Organisationsmetadaten (keine
+Bilddaten, keine Rezeptwerte):
+
+- `rating: u8` — Sternebewertung `0..=5`, wobei `0` „unbewertet“ bedeutet.
+  Werte `> 5` werden beim Laden laut abgelehnt (kein Clamping, kein stiller
+  Fallback).
+- `flag` — Pick-Status: `unflagged` (Default), `pick` oder `reject`.
+
+Beide Felder sind je virtueller Kopie gespeichert (nicht je Quelle): Zwei
+Kopien desselben Originals können unterschiedliche Bewertungen tragen.
+`duplicate_virtual_copy` übernimmt Bewertung und Flag der Quellkopie als
+Startwerte; danach sind sie unabhängig. Fehlende Felder in älteren Sidecars
+werden als `rating = 0` / `flag = unflagged` gelesen (additive Erweiterung,
+`schema_version` bleibt in der Pre-Alpha-Phase 1).
+
 ## Binärdaten
 
 `.lumina.zdata` ist ein eigener, versionierter Container. Er enthält einen

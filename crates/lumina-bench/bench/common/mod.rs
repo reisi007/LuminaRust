@@ -183,6 +183,8 @@ pub fn make_mask_fixture(size: u32) -> MaskFixture {
         id: "vc-original".into(),
         name: "vc-original".into(),
         is_default: true,
+        rating: 0,
+        flag: lumina_sidecar::Flag::Unflagged,
         recipe: EditRecipe::default(),
         mask_library: definitions,
         mask_layers: vec![MaskLayer {

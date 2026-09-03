@@ -519,7 +519,7 @@ fn resolver_reports_missing_artifact_without_fallback() {
 fn ort_matte_feeds_maskgraph_builder_correctly() {
     use lumina_core::{MaskGraph, MaskPlane};
     use lumina_sidecar::{
-        CoordinateSystem, DecodeFingerprint, Extras, GeometryFingerprint, MaskDefinition,
+        CoordinateSystem, DecodeFingerprint, Extras, Flag, GeometryFingerprint, MaskDefinition,
         MaskOperation, MaskReference, ModelIdentity, Preprocessing, Resolution, SourceFingerprint,
         VirtualCopy,
     };
@@ -714,6 +714,8 @@ fn ort_matte_feeds_maskgraph_builder_correctly() {
         id: "vc".into(),
         name: "VC".into(),
         is_default: true,
+        rating: 0,
+        flag: Flag::Unflagged,
         recipe: Default::default(),
         mask_library: definitions,
         mask_layers: vec![],

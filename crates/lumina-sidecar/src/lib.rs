@@ -1110,11 +1110,27 @@ pub struct ExportRecord {
     pub extras: Extras,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Flag {
+    #[default]
+    Unflagged,
+    Pick,
+    Reject,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VirtualCopy {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    /// Lightroom-style star rating `0..=5` (`0` = unrated). Per virtual copy
+    /// (LR-01); values `> 5` are rejected loudly by [`SidecarDocument::validate`].
+    #[serde(default)]
+    pub rating: u8,
+    /// Lightroom-style pick flag (LR-01). Per virtual copy.
+    #[serde(default)]
+    pub flag: Flag,
     pub recipe: EditRecipe,
     pub mask_library: Vec<MaskDefinition>,
     pub mask_layers: Vec<MaskLayer>,
@@ -1818,6 +1834,8 @@ impl SidecarDocument {
                 id: "vc-original".into(),
                 name: "Original".into(),
                 is_default: true,
+                rating: 0,
+                flag: Flag::Unflagged,
                 recipe: EditRecipe::default(),
                 mask_library: vec![],
                 mask_layers: vec![],
@@ -2003,6 +2021,14 @@ impl SidecarDocument {
             validate_name("virtual copy name", &copy.name)?;
             validate_name("recipe_version", &copy.recipe.recipe_version)?;
             validate_adjustments(&copy.recipe)?;
+            // LR-01: star ratings are 0..=5 (0 = unrated); anything else is a
+            // schema violation, never silently clamped.
+            if copy.rating > 5 {
+                return invalid(format!(
+                    "virtual copy `{}` rating must be 0..=5, got {}",
+                    copy.id, copy.rating
+                ));
+            }
             if !copy_ids.insert(&copy.id) {
                 return invalid(format!("duplicate virtual copy id `{}`", copy.id));
             }
@@ -2770,6 +2796,8 @@ mod tests {
             id: "vc-bw".into(),
             name: "B&W".into(),
             is_default: false,
+            rating: 0,
+            flag: Flag::Unflagged,
             recipe: EditRecipe {
                 recipe_version: "1".into(),
                 adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
@@ -3130,6 +3158,8 @@ mod tests {
             id: "vc-target".into(),
             name: "Target".into(),
             is_default: false,
+            rating: 0,
+            flag: Flag::Unflagged,
             recipe: EditRecipe::default(),
             mask_library: vec![MaskDefinition {
                 operation: MaskOperation::Invert,
@@ -3164,6 +3194,8 @@ mod tests {
             id: "vc-target".into(),
             name: "Target".into(),
             is_default: false,
+            rating: 0,
+            flag: Flag::Unflagged,
             recipe: EditRecipe::default(),
             mask_library: vec![MaskDefinition {
                 operation: MaskOperation::Invert,
@@ -3416,6 +3448,45 @@ mod tests {
             d,
             SidecarDocument::from_json(&d.to_json().unwrap()).unwrap()
         );
+    }
+
+    #[test]
+    fn rating_and_flag_roundtrip_per_copy() {
+        // LR-01: rating (0..=5) and flag are per-copy metadata with a JSON
+        // roundtrip; legacy documents without the fields read as unrated.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].rating = 4;
+        d.virtual_copies[0].flag = Flag::Pick;
+        d.duplicate_virtual_copy("vc-original", "vc-copy", "Copy")
+            .unwrap();
+        // The duplicate inherits the source rating/flag as starting values.
+        assert_eq!(d.virtual_copies[1].rating, 4);
+        assert_eq!(d.virtual_copies[1].flag, Flag::Pick);
+        d.virtual_copies[1].rating = 2;
+        d.virtual_copies[1].flag = Flag::Reject;
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.virtual_copies[0].rating, 4);
+        assert_eq!(decoded.virtual_copies[0].flag, Flag::Pick);
+        assert_eq!(decoded.virtual_copies[1].rating, 2);
+        assert_eq!(decoded.virtual_copies[1].flag, Flag::Reject);
+        // Legacy JSON without the additive fields still loads as unrated.
+        let mut legacy: Value = serde_json::from_str(&d.to_json().unwrap()).unwrap();
+        for copy in legacy["virtual_copies"].as_array_mut().unwrap() {
+            copy.as_object_mut().unwrap().remove("rating");
+            copy.as_object_mut().unwrap().remove("flag");
+        }
+        let decoded = SidecarDocument::from_json(&serde_json::to_string(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.virtual_copies[0].rating, 0);
+        assert_eq!(decoded.virtual_copies[0].flag, Flag::Unflagged);
+    }
+
+    #[test]
+    fn rating_above_five_is_rejected_loudly() {
+        // LR-01: no silent clamping — 6 stars is a schema violation.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].rating = 6;
+        assert!(matches!(d.validate(), Err(SidecarError::Invalid(_))));
+        assert!(matches!(d.to_json(), Err(SidecarError::Invalid(_))));
     }
 
     #[test]
@@ -5401,6 +5472,8 @@ mod tests {
             id: "vc-target".into(),
             name: "Target".into(),
             is_default: false,
+            rating: 0,
+            flag: Flag::Unflagged,
             recipe: EditRecipe::default(),
             mask_library: vec![mask("target-mask")],
             mask_layers: vec![],

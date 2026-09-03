@@ -279,6 +279,17 @@ pub enum Str {
     HuePattern,
     SatPattern,
     UnsetPattern,
+
+    // LR-01 rating / flag (Library badge + rating section + shortcuts).
+    Rating,
+    FlagLabel,
+    Pick,
+    Reject,
+    Unflagged,
+    InvalidRating,
+    RatingSetPattern,
+    FlagSetPattern,
+    VirtualCopyDuplicatedPattern,
 }
 
 impl Str {
@@ -537,6 +548,16 @@ impl Str {
             Str::HuePattern => "{} Hue",
             Str::SatPattern => "{} Sat",
             Str::UnsetPattern => "{} (unset)",
+
+            Str::Rating => "Rating",
+            Str::FlagLabel => "Flag",
+            Str::Pick => "Pick",
+            Str::Reject => "Reject",
+            Str::Unflagged => "Unflagged",
+            Str::InvalidRating => "Rating must be 0..=5",
+            Str::RatingSetPattern => "Rating set to {}",
+            Str::FlagSetPattern => "Flag set to {}",
+            Str::VirtualCopyDuplicatedPattern => "Duplicated virtual copy as {}",
         }
     }
 }

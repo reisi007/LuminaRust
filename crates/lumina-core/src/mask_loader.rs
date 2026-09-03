@@ -662,6 +662,8 @@ mod tests {
             id: copy_id.into(),
             name: copy_id.into(),
             is_default: copy_id == "vc",
+            rating: 0,
+            flag: lumina_sidecar::Flag::Unflagged,
             recipe: EditRecipe::default(),
             mask_library: definitions,
             mask_layers: vec![],

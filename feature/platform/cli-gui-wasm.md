@@ -314,6 +314,27 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Pipette (White Balance Eyedropper), die einen Punkt aus Navigator oder
   Vorschau übernimmt.
 
+### Tastaturkürzel (F-100, LR-01/LR-09/LR-10)
+
+Alle Kürzel werden ignoriert, solange ein Widget Tastatureingaben erwartet
+(z. B. ein fokussiertes Textfeld), damit sie keinen eingegebenen Text
+kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
+
+| Taste | Aktion | Anmerkung |
+| --- | --- | --- |
+| `G` / `D` / `E` | Bibliothek / Entwickeln / Lupe (Alias für Bibliothek) | gebunden |
+| `1`–`5` | Sternebewertung der aktiven virtuellen Kopie setzen | LR-01; ersetzt die frühere Zoom-Belegung von `Num1`/`Num2` (1:1/2:1 bleiben über die Vorschau-Werkzeugleiste erreichbar) |
+| `0` | Bewertung zurücksetzen (unbewertet) | LR-01; nur mit geladener virtueller Kopie, sonst Zoom-Fit wie bisher |
+| `P` / `X` / `U` | Pick / Reject / Unflag der aktiven Kopie | LR-01 |
+| `K` / `M` / `Shift+M` | Maskenwerkzeug Pinsel / Verlauf / Radial scharfschalten | LR-10; `Esc` entschärft; bei aktiver Rezept-Geometrie laut verweigert |
+| `Q` | Spot-Heal-Werkzeug umschalten | bereits gebunden |
+| `Cmd/Ctrl+'` | Aktive virtuelle Kopie duplizieren und auswählen | LR-09; vorheriges `save_sidecar` sichert ungespeicherte Edits, damit das Duplikat den aktuellen Stand erbt |
+| `Y` | Vorher/Nachher | gebunden |
+| `F` / `Num0`, `+` / `-` | Vorschau-Zoom Fit / Zoomstufen | gebunden |
+
+Die Bibliotheks-Rasteransicht zeigt je Datei ein Bewertungs-Badge (Sterne der
+Standardkopie plus Pick-/Reject-Markierung); Details stehen im Hover-Text.
+
 ### Maskierung
 
 Die Sektion **Maskierung** (Masking) enthält eine Liste der Masken und einen

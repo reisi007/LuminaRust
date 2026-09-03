@@ -57,7 +57,7 @@ use lumina_sidecar::{
 };
 use lumina_sidecar::{
     AnalysisFingerprint, ColorGrading, ColorGradingRange, Crop, CurveChannels, CurvePoint, Curves,
-    EditRecipe, Effects, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
+    EditRecipe, Effects, Flag, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
     HslChannel, LensCorrection, NoiseReduction, Perspective, Presence, Preset, Sharpening,
     Vignette,
 };
@@ -130,6 +130,68 @@ pub fn module_for_key(key: egui::Key) -> Option<Module> {
         egui::Key::D => Some(Module::Develop),
         egui::Key::E => Some(Module::Library),
         _ => None,
+    }
+}
+
+/// Maps a number key to a Lightroom-style star rating (LR-01).
+///
+/// `1`–`5` set the rating of the active virtual copy, `0` clears it back to
+/// unrated. This is a pure function so the mapping can be unit-tested without
+/// an [`egui::Context`]. Note this intentionally shadows the previous zoom
+/// bindings on `Num1`/`Num2` (1:1/2:1 stay reachable through the preview
+/// toolbar buttons); ratings are the documented MVP priority (gap plan
+/// LR-01) and sharing the keys would make one of the two a silent victim.
+pub fn rating_for_key(key: egui::Key) -> Option<u8> {
+    match key {
+        egui::Key::Num0 => Some(0),
+        egui::Key::Num1 => Some(1),
+        egui::Key::Num2 => Some(2),
+        egui::Key::Num3 => Some(3),
+        egui::Key::Num4 => Some(4),
+        egui::Key::Num5 => Some(5),
+        _ => None,
+    }
+}
+
+/// Maps a key to a Lightroom-style pick flag (LR-01): `P` pick, `X` reject,
+/// `U` unflag. Pure function, unit-tested without an [`egui::Context`].
+pub fn flag_for_key(key: egui::Key) -> Option<Flag> {
+    match key {
+        egui::Key::P => Some(Flag::Pick),
+        egui::Key::X => Some(Flag::Reject),
+        egui::Key::U => Some(Flag::Unflagged),
+        _ => None,
+    }
+}
+
+/// Maps a key (+ Shift state) to an interactive masking tool (LR-10):
+/// `K` brush, `M` linear gradient, `Shift+M` radial gradient. Pure function,
+/// unit-tested without an [`egui::Context`]. Arming itself still goes through
+/// [`LuminaApp::set_mask_tool`] so the geometry block stays enforced.
+pub fn mask_tool_for_key(key: egui::Key, shift: bool) -> Option<MaskTool> {
+    match (key, shift) {
+        (egui::Key::K, _) => Some(MaskTool::Brush),
+        (egui::Key::M, false) => Some(MaskTool::LinearGradient),
+        (egui::Key::M, true) => Some(MaskTool::Radial),
+        _ => None,
+    }
+}
+
+/// Renders a star rating as a fixed-width 5-glyph badge (LR-01), e.g.
+/// `3 → "★★★☆☆"`, `0 → "☆☆☆☆☆"`. Pure display helper shared by the Library
+/// grid badge and the rating section; unit-tested headless.
+pub fn stars_for_rating(rating: u8) -> String {
+    let rating = rating.min(5) as usize;
+    "★".repeat(rating) + &"☆".repeat(5 - rating)
+}
+
+/// User-visible label for a pick flag (LR-01), routed through [`Str`] so no
+/// panel carries a free-form literal.
+pub fn flag_label(flag: Flag) -> &'static str {
+    match flag {
+        Flag::Pick => Str::Pick.t(),
+        Flag::Reject => Str::Reject.t(),
+        Flag::Unflagged => Str::Unflagged.t(),
     }
 }
 
@@ -758,6 +820,12 @@ pub struct FileBrowserEntry {
     conflict: bool,
     virtual_copies: usize,
     missing_models: usize,
+    /// Star rating (`0..=5`, `0` = unrated) of the default virtual copy
+    /// (LR-01). `0` when no sidecar exists or it carries no copies.
+    rating: u8,
+    /// Pick flag of the default virtual copy (LR-01); `Unflagged` without a
+    /// sidecar.
+    flag: lumina_sidecar::Flag,
 }
 
 /// REVIEW-GUI-THUMB-1: stable thumbnail cache key. The canonicalized absolute
@@ -1177,10 +1245,23 @@ impl LuminaApp {
         let has_sidecar = sidecar_path.is_file();
         let mut virtual_copies = 0usize;
         let mut missing_models = 0usize;
+        // LR-01: the grid badge shows the default copy's rating/flag — the
+        // canonical per-image organization state.
+        let mut rating = 0u8;
+        let mut flag = lumina_sidecar::Flag::Unflagged;
         let source_status = if path.is_file() {
             match lumina_sidecar::load_sidecar(&sidecar_path) {
                 Ok(document) => {
                     virtual_copies = document.virtual_copies.len();
+                    if let Some(default) = document
+                        .virtual_copies
+                        .iter()
+                        .find(|copy| copy.is_default)
+                        .or_else(|| document.virtual_copies.first())
+                    {
+                        rating = default.rating;
+                        flag = default.flag;
+                    }
                     let bundle_root = path.parent().unwrap_or_else(|| Path::new("."));
                     for copy in &document.virtual_copies {
                         for mask in &copy.mask_library {
@@ -1223,6 +1304,8 @@ impl LuminaApp {
             conflict,
             virtual_copies,
             missing_models,
+            rating,
+            flag,
         })
     }
     pub fn status(&self) -> &str {
@@ -1388,6 +1471,98 @@ impl LuminaApp {
         };
         document.duplicate_virtual_copy(&self.virtual_copy_id, id, name)?;
         Ok(())
+    }
+
+    /// Set the star rating (`0..=5`, `0` = unrated) of the active virtual copy
+    /// (LR-01). Persists through [`Self::save_sidecar`] so the value survives
+    /// restarts; values `> 5` are rejected loudly, never clamped.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_rating(&mut self, rating: u8) -> Result<(), GuiError> {
+        if rating > 5 {
+            return Err(GuiError::Io(Str::InvalidRating.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        self.active_copy_mut()?.rating = rating;
+        self.save_sidecar();
+        self.status = Str::RatingSetPattern.format_arg(&rating.to_string());
+        Ok(())
+    }
+
+    /// Set the pick flag of the active virtual copy (LR-01). Persists through
+    /// [`Self::save_sidecar`] so the value survives restarts.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_flag(&mut self, flag: Flag) -> Result<(), GuiError> {
+        self.ensure_document_loaded()?;
+        self.active_copy_mut()?.flag = flag;
+        self.save_sidecar();
+        self.status = Str::FlagSetPattern.format_arg(flag_label(flag));
+        Ok(())
+    }
+
+    /// Current rating and flag of the active virtual copy (LR-01). Returns
+    /// `None` when no document is loaded; read-only accessor for the rating
+    /// section and headless tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn active_rating_flag(&self) -> Option<(u8, Flag)> {
+        self.document.as_ref().and_then(|document| {
+            document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == self.virtual_copy_id)
+                .map(|copy| (copy.rating, copy.flag))
+        })
+    }
+
+    /// Duplicate the active virtual copy under a fresh stable id (LR-09,
+    /// `Cmd/Ctrl+'` shortcut path). Unstored session edits are saved first so
+    /// the duplicate inherits the currently visible recipe rather than the
+    /// last saved one; the new copy is then selected (Lightroom behaviour).
+    /// Fails loudly when no image/document is loaded.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn duplicate_active_copy(&mut self) -> Result<String, GuiError> {
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        // Persist unsaved edits first: `duplicate_virtual_copy` clones the
+        // *stored* copy, so without this save the duplicate would silently
+        // drop what the user currently sees.
+        self.save_sidecar();
+        let new_id = {
+            let document = self.document.as_ref().expect("document was ensured");
+            let mut counter = document.virtual_copies.len() + document.deleted_virtual_copies.len();
+            loop {
+                counter += 1;
+                let candidate = format!("vc-copy-{counter}");
+                let taken = document
+                    .virtual_copies
+                    .iter()
+                    .any(|copy| copy.id == candidate)
+                    || document
+                        .deleted_virtual_copies
+                        .iter()
+                        .any(|copy| copy.id == candidate);
+                if !taken {
+                    break candidate;
+                }
+            }
+        };
+        let source_name = self
+            .document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == self.virtual_copy_id)
+            })
+            .map(|copy| format!("{} copy", copy.name))
+            .unwrap_or_else(|| new_id.clone());
+        self.duplicate_virtual_copy(new_id.clone(), source_name)?;
+        self.save_sidecar();
+        self.select_virtual_copy(&new_id)?;
+        self.status = Str::VirtualCopyDuplicatedPattern.format_arg(&new_id);
+        Ok(new_id)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -6093,16 +6268,56 @@ impl LuminaApp {
                                         self.open_file(entry.path.display().to_string());
                                         self.active_module = Module::Develop;
                                     }
+                                    // LR-01: rating/flag badge of the default
+                                    // copy, painted over the cell's bottom
+                                    // edge (display-only; edits go through the
+                                    // rating section or the 1-5/P/X/U keys).
+                                    // Unrated + unflagged cells stay clean.
+                                    if entry.rating > 0
+                                        || entry.flag != lumina_sidecar::Flag::Unflagged
+                                    {
+                                        let badge = match entry.flag {
+                                            lumina_sidecar::Flag::Pick => {
+                                                format!("{} P", stars_for_rating(entry.rating))
+                                            }
+                                            lumina_sidecar::Flag::Reject => {
+                                                format!("{} X", stars_for_rating(entry.rating))
+                                            }
+                                            lumina_sidecar::Flag::Unflagged => {
+                                                stars_for_rating(entry.rating)
+                                            }
+                                        };
+                                        let badge_pos = rect.left_bottom() + egui::vec2(4.0, -16.0);
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                badge_pos - egui::vec2(2.0, 2.0),
+                                                egui::vec2(76.0, 16.0),
+                                            ),
+                                            2.0,
+                                            egui::Color32::from_black_alpha(160),
+                                        );
+                                        ui.painter().text(
+                                            badge_pos,
+                                            egui::Align2::LEFT_TOP,
+                                            badge,
+                                            egui::FontId::monospace(11.0),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
                                     // Sidecar/copy status on hover (kept from the former
                                     // text file-browser).
                                     resp.on_hover_text(format!(
-                                        "{}\n[{}] {}:{} {}:{}",
+                                        "{}\n[{}] {}:{} {}:{} {}:{} {}:{}",
                                         entry.name,
                                         entry.status_label(),
                                         Str::Copies.t(),
                                         entry.virtual_copies,
                                         Str::Masking.t(),
-                                        entry.missing_models
+                                        entry.missing_models,
+                                        Str::Rating.t(),
+                                        stars_for_rating(entry.rating),
+                                        Str::FlagLabel.t(),
+                                        flag_label(entry.flag),
                                     ));
                                 }
                             });
@@ -6345,6 +6560,54 @@ impl LuminaApp {
         });
     }
 
+    /// Lightroom-style Rating section (LR-01): star buttons `1`–`5` plus clear
+    /// (`0` = unrated) and Pick/Reject/Unflag buttons for the active virtual
+    /// copy. Every button routes through [`Self::set_rating`]/[`Self::set_flag`]
+    /// — the same paths the `1-5`/`P`/`X`/`U` shortcuts use — so panel and
+    /// keyboard can never diverge.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_rating_section(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::Rating.t(), |ui| {
+            let Some((rating, flag)) = self.active_rating_flag() else {
+                ui.label(Str::NoSidecarLoaded.t());
+                return;
+            };
+            ui.horizontal(|ui| {
+                ui.label(format!("{} {}", stars_for_rating(rating), flag_label(flag)));
+            });
+            ui.horizontal(|ui| {
+                for candidate in 0..=5u8 {
+                    let label = if candidate == 0 {
+                        Str::UnsetPattern.format_arg("0")
+                    } else {
+                        candidate.to_string()
+                    };
+                    if ui
+                        .selectable_label(rating == candidate, label)
+                        .on_hover_text(format!("{candidate}"))
+                        .clicked()
+                    {
+                        if let Err(error) = self.set_rating(candidate) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                for candidate in [Flag::Pick, Flag::Reject, Flag::Unflagged] {
+                    if ui
+                        .selectable_label(flag == candidate, flag_label(candidate))
+                        .clicked()
+                    {
+                        if let Err(error) = self.set_flag(candidate) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            });
+        });
+    }
+
     /// Normative draw order of the eight F-100 Develop sections, rendered by
     /// [`LuminaApp::draw_develop_panel`] in exactly this sequence.
     /// Lightroom Classic panel order: Basic → Tone Curve → HSL/Color →
@@ -6384,6 +6647,8 @@ impl LuminaApp {
                 self.draw_presets_section(ui);
                 #[cfg(not(target_arch = "wasm32"))]
                 self.draw_history_section(ui);
+                #[cfg(not(target_arch = "wasm32"))]
+                self.draw_rating_section(ui);
                 ui.separator();
                 // The eight adjustment sections are grayed and non-interactive until an
                 // image is loaded (F-100 disabled-while-empty behaviour).
@@ -7303,6 +7568,8 @@ impl eframe::App for LuminaApp {
         // input so they never hijack typing. These set the zoom mode / a custom
         // multiplier; the actual `preview_zoom` is derived per-frame in
         // `sync_zoom()` so the ROI crop matches the on-screen view.
+        // LR-01: `Num1`/`Num2` no longer zoom — they set the star rating (1:1
+        // and 2:1 stay reachable through the preview toolbar buttons).
         if !ctx.egui_wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
                 self.zoom_step(1.2);
@@ -7314,13 +7581,65 @@ impl eframe::App for LuminaApp {
                 self.set_zoom_mode(ZoomMode::Fit);
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
+                // `Num0` clears the rating only when a document is loaded;
+                // without an image it keeps its historical zoom-to-fit role.
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.document.is_some() {
+                    if let Err(error) = self.set_rating(0) {
+                        self.show_error(error);
+                    }
+                } else {
+                    self.set_zoom_mode(ZoomMode::Fit);
+                }
+                #[cfg(target_arch = "wasm32")]
                 self.set_zoom_mode(ZoomMode::Fit);
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
-                self.set_zoom_mode(ZoomMode::OneToOne);
+        }
+
+        // LR-01 / LR-09 / LR-10 rating, flag, mask-tool and duplicate shortcuts.
+        // Ignored while a widget wants keyboard input so typing (mask names,
+        // preset names, paths) is never hijacked. Failures surface via
+        // `show_error`, never silently.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !ctx.egui_wants_keyboard_input() {
+            for key in [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+            ] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    if let Some(rating) = rating_for_key(key) {
+                        if let Err(error) = self.set_rating(rating) {
+                            self.show_error(error);
+                        }
+                    }
+                }
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
-                self.set_zoom_mode(ZoomMode::TwoHundred);
+            for key in [egui::Key::P, egui::Key::X, egui::Key::U] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    if let Some(flag) = flag_for_key(key) {
+                        if let Err(error) = self.set_flag(flag) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            }
+            let shift = ctx.input(|i| i.modifiers.shift);
+            for key in [egui::Key::K, egui::Key::M] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    if let Some(tool) = mask_tool_for_key(key, shift) {
+                        self.set_mask_tool(tool);
+                    }
+                }
+            }
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::Quote) && (i.modifiers.ctrl || i.modifiers.command)
+            }) {
+                if let Err(error) = self.duplicate_active_copy() {
+                    self.show_error(error);
+                }
             }
         }
 
@@ -7833,6 +8152,142 @@ mod tests {
         // ...but the recipe (and therefore any sidecar state) is untouched.
         assert_eq!(app.recipe().adjustments, adjustments_before);
         assert_eq!(app.recipe().adjustments["exposure"], 0.75);
+    }
+
+    #[test]
+    fn rating_flag_mask_keys_map_lightroom_shortcuts() {
+        // LR-01: `0` clears, `1`–`5` set the star rating.
+        assert_eq!(rating_for_key(egui::Key::Num0), Some(0));
+        assert_eq!(rating_for_key(egui::Key::Num1), Some(1));
+        assert_eq!(rating_for_key(egui::Key::Num2), Some(2));
+        assert_eq!(rating_for_key(egui::Key::Num3), Some(3));
+        assert_eq!(rating_for_key(egui::Key::Num4), Some(4));
+        assert_eq!(rating_for_key(egui::Key::Num5), Some(5));
+        assert_eq!(rating_for_key(egui::Key::Num6), None);
+        assert_eq!(rating_for_key(egui::Key::G), None);
+        assert_eq!(rating_for_key(egui::Key::Y), None);
+        // LR-01: `P` pick, `X` reject, `U` unflag.
+        assert_eq!(flag_for_key(egui::Key::P), Some(Flag::Pick));
+        assert_eq!(flag_for_key(egui::Key::X), Some(Flag::Reject));
+        assert_eq!(flag_for_key(egui::Key::U), Some(Flag::Unflagged));
+        assert_eq!(flag_for_key(egui::Key::G), None);
+        assert_eq!(flag_for_key(egui::Key::Y), None);
+        // LR-10: `K` brush, `M` linear, `Shift+M` radial.
+        assert_eq!(
+            mask_tool_for_key(egui::Key::K, false),
+            Some(MaskTool::Brush)
+        );
+        assert_eq!(mask_tool_for_key(egui::Key::K, true), Some(MaskTool::Brush));
+        assert_eq!(
+            mask_tool_for_key(egui::Key::M, false),
+            Some(MaskTool::LinearGradient)
+        );
+        assert_eq!(
+            mask_tool_for_key(egui::Key::M, true),
+            Some(MaskTool::Radial)
+        );
+        assert_eq!(mask_tool_for_key(egui::Key::Q, false), None);
+        assert_eq!(mask_tool_for_key(egui::Key::G, false), None);
+    }
+
+    #[test]
+    fn stars_and_flag_labels_render_for_badges() {
+        assert_eq!(stars_for_rating(0), "☆☆☆☆☆");
+        assert_eq!(stars_for_rating(1), "★☆☆☆☆");
+        assert_eq!(stars_for_rating(3), "★★★☆☆");
+        assert_eq!(stars_for_rating(5), "★★★★★");
+        assert_eq!(flag_label(Flag::Pick), "Pick");
+        assert_eq!(flag_label(Flag::Reject), "Reject");
+        assert_eq!(flag_label(Flag::Unflagged), "Unflagged");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_rating_and_flag_persist_across_save_and_reopen() {
+        // LR-01: rating/flag of the active copy survive a sidecar roundtrip
+        // and are restored on reopen; out-of-range ratings fail loudly.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // No sidecar on disk yet: no active rating (the rating section shows
+        // "No sidecar loaded" in this state).
+        assert_eq!(app.active_rating_flag(), None);
+        app.set_rating(4).unwrap();
+        app.set_flag(Flag::Pick).unwrap();
+        assert_eq!(app.active_rating_flag(), Some((4, Flag::Pick)));
+        assert!(app.set_rating(6).is_err());
+
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.virtual_copies[0].rating, 4);
+        assert_eq!(document.virtual_copies[0].flag, Flag::Pick);
+
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.active_rating_flag(), Some((4, Flag::Pick)));
+        // Clearing works too and persists.
+        reopened.set_rating(0).unwrap();
+        reopened.set_flag(Flag::Unflagged).unwrap();
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.virtual_copies[0].rating, 0);
+        assert_eq!(document.virtual_copies[0].flag, Flag::Unflagged);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn duplicate_active_copy_inherits_visible_recipe_and_rating() {
+        // LR-09: the shortcut path saves unsaved edits first (the duplicate
+        // inherits what the user sees), selects the new copy, and carries
+        // over the rating/flag starting values.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        app.set_rating(5).unwrap();
+        app.set_flag(Flag::Reject).unwrap();
+        let new_id = app.duplicate_active_copy().unwrap();
+        assert_ne!(new_id, "vc-original");
+        assert_eq!(app.active_rating_flag(), Some((5, Flag::Reject)));
+        // The visible recipe (incl. the not-yet-saved exposure) was inherited.
+        assert_eq!(app.recipe().adjustments["exposure"], 1.5);
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.virtual_copies.len(), 2);
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == new_id)
+            .unwrap();
+        assert_eq!(copy.recipe.adjustments["exposure"], 1.5);
+        assert_eq!(copy.rating, 5);
+        assert_eq!(copy.flag, Flag::Reject);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn scan_entry_reports_default_copy_rating_flag() {
+        // LR-01: the Library grid badge reads the default copy's rating/flag
+        // through the normal directory scan (no separate code path).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_rating(3).unwrap();
+        app.set_flag(Flag::Pick).unwrap();
+        app.set_directory(directory.path().display().to_string());
+        let entry = app
+            .entries
+            .iter()
+            .find(|entry| entry.name == "photo.png")
+            .unwrap();
+        assert_eq!(entry.rating, 3);
+        assert_eq!(entry.flag, Flag::Pick);
     }
 
     #[test]
