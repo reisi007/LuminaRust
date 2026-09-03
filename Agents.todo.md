@@ -96,8 +96,7 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: mittel] CLI-GUI-PARITY-1** Analyse CLI↔GUI-Feature-Verankerung (Matrix Core-Feature × CLI-Befehl/Flag × GUI-Sektion × Rezept-Key), Lücken als Folge-Tasks. Plan: `docs/plans/gui-preview-histogram-zoom-2026-09-04.md`. Abnahme: Matrix-Doc, kein Code.
-- [ ] **[PRIO: hoch] GUI-KIT-01-REFRESH** kittest 5 Goldens Rebaseline auf GPU-Maschine nach LR-PARITY-01 Welle 2/3 (c881a62, 1fe6353, 888a391): Develop-Goldens erledigt (a09e7d4 Rating/Expand/Dust-Removal); offen nur Library-Determinismus (Tests auf tempdir/fixen Inhalt oder Baum im Snapshot-Modus deterministisch; CWD-live `crates/lumina-gui` macht Goldens filesystem-fragil, 415px-Diff durch `benches/`-Zeile). Abnahme: cargo test -p lumina-gui --test kittest_snapshots -- --ignored gruen auf GPU-Maschine.
+_(keine offenen Tasks — GUI-AUTOTONE-SAVE-1 BESTANDEN 204p 2026-09-04 c29e609a/5e36133, GUI-KIT-01-REFRESH BESTANDEN kittest 10/10 2026-09-04 a75b42f, CLI-GUI-PARITY-1 BESTANDEN Matrix-Doc 2026-09-04 a75b42f; Details in Git-Historie)_
 
 _(keine weiteren offenen hoch-prio Tasks — F-103-INTEGRATION-PREVIEW-SIDECAR verifiziert BESTANDEN am 2026-09-02, 147p (144→147 +3), core 277+7, sidecar 86p, clippy/fmt/wasm grün, Commit 43b1b73; CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
