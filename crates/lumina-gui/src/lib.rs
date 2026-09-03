@@ -600,6 +600,27 @@ pub fn clip_fractions(frame: &ImageFrame) -> (f64, f64) {
     )
 }
 
+/// Normalized L1 distance of two equal-length histograms (`0` = identical
+/// distributions, `2` = disjoint). Scale-free so a full-res preview and the
+/// unedited decode compare directly. Returns `None` on length mismatch or
+/// empty inputs — never a silent `0`. Pure function, unit-tested headless;
+/// feeds the G-10 "Original Photo" histogram delta.
+pub fn normalized_histogram_l1(a: &[u64], b: &[u64]) -> Option<f64> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let sum_a: u64 = a.iter().sum();
+    let sum_b: u64 = b.iter().sum();
+    if sum_a == 0 || sum_b == 0 {
+        return None;
+    }
+    Some(
+        a.iter()
+            .zip(b.iter())
+            .map(|(&x, &y)| (x as f64 / sum_a as f64 - y as f64 / sum_b as f64).abs())
+            .sum(),
+    )
+}
 /// Maps a key (+ Shift state) to an interactive masking tool (LR-10):
 /// `K` brush, `M` linear gradient, `Shift+M` radial gradient. Pure function,
 /// unit-tested without an [`egui::Context`]. Arming itself still goes through
@@ -1013,9 +1034,14 @@ pub struct LuminaApp {
     /// the sidecar and never part of the recipe (like `Tab`/`L`/`F`):
     /// * `softproof_preview`: plain `S` softproof-preview badge (the G-10
     ///   binding reservation; full print/gamut simulation is G-10 follow-up).
+    /// * `show_original_histogram`: G-10 "Original Photo" histogram compare —
+    ///   shows the unedited Original-Decode measurement instead of the edited
+    ///   render (same `analyze_tone`/`LuminanceHistogram` path as Before/After,
+    ///   no second analysis path).
     /// * `masking_preview`: `Alt`-held tone-slider edit transiently shows the
     ///   clipping badge through the `J` path; holds the slider key while armed.
     softproof_preview: bool,
+    show_original_histogram: bool,
     masking_preview: Option<String>,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
@@ -1626,6 +1652,7 @@ impl LuminaApp {
             before_after_split: false,
             fullscreen: false,
             softproof_preview: false,
+            show_original_histogram: false,
             masking_preview: None,
             wb_pick_mode: false,
             thumbnails: ThumbnailManager::new(),
@@ -2555,6 +2582,61 @@ impl LuminaApp {
     /// headless tests).
     pub fn softproof_preview(&self) -> bool {
         self.softproof_preview
+    }
+
+    /// Toggle the G-10 "Original Photo" histogram compare (histogram-panel
+    /// switch). Display-only session state: shows the unedited
+    /// Original-Decode measurement instead of the edited render, never
+    /// mutates the recipe or the sidecar.
+    pub fn toggle_original_histogram(&mut self) {
+        self.show_original_histogram = !self.show_original_histogram;
+        info!(
+            "GUI interaction: toggle_original_histogram -> {}",
+            self.show_original_histogram
+        );
+        self.status = if self.show_original_histogram {
+            Str::HistogramOriginalOn.t().into()
+        } else {
+            Str::HistogramOriginalOff.t().into()
+        };
+    }
+
+    /// Whether the original (unedited-decode) histogram is shown instead of
+    /// the edited render histogram (read-only accessor for headless tests).
+    pub fn show_original_histogram(&self) -> bool {
+        self.show_original_histogram
+    }
+
+    /// Tone analysis of the unedited Original-Decode (`self.original`),
+    /// measured on the fly through the same `analyze_tone` path the
+    /// Before/After view uses — no second analysis path. `None` without a
+    /// loaded image (loud `NotCurrent` in the panel, never a silent zero).
+    pub fn original_analysis(&self) -> Option<lumina_core::ToneAnalysis> {
+        self.original.as_ref().map(analyze_tone)
+    }
+
+    /// 256-bin luminance histogram of the unedited Original-Decode, measured
+    /// on the fly through the same `LuminanceHistogram` path the
+    /// Before/After view uses. `None` without a loaded image.
+    pub fn original_histogram_data(&self) -> Option<LuminanceHistogram> {
+        self.original.as_ref().map(LuminanceHistogram::new)
+    }
+
+    /// Original-vs-edited histogram delta from real analysis values:
+    /// `(edited_mean - original_mean, normalized_bin_l1)`. The edited side
+    /// is the stored full-frame render measurement (`tone_analysis` /
+    /// `preview_histogram`, never a viewport/ROI slice); the original side
+    /// is the unedited decode. `None` when either side is missing (no image
+    /// yet, or no committed render) — never a silent `(0, 0)`.
+    pub fn histogram_delta(&self) -> Option<(f64, f64)> {
+        let original = self.original.as_ref()?;
+        let edited_analysis = self.tone_analysis.as_ref()?;
+        let edited_histogram = self.preview_histogram.as_ref()?;
+        let original_analysis = analyze_tone(original);
+        let original_histogram = LuminanceHistogram::new(original);
+        let mean_delta = edited_analysis.mean - original_analysis.mean;
+        let l1 = normalized_histogram_l1(&original_histogram.bins, &edited_histogram.bins)?;
+        Some((mean_delta, l1))
     }
 
     /// Arm or disarm the transient `Alt`+tone-slider masking preview (G-16).
@@ -7888,9 +7970,10 @@ impl LuminaApp {
     }
 
     /// Histogram of the *currently displayed* render state (original while
-    /// Before/After is held, otherwise the last preview).
+    /// Before/After is held or the G-10 "Show original" switch is armed,
+    /// otherwise the last preview).
     fn current_analysis(&self) -> Option<lumina_core::ToneAnalysis> {
-        if self.before_after {
+        if self.before_after || self.show_original_histogram {
             self.original.as_ref().map(analyze_tone)
         } else {
             self.tone_analysis
@@ -7898,10 +7981,11 @@ impl LuminaApp {
     }
 
     /// 256-bin luminance histogram matching [`Self::current_analysis`]: computed
-    /// on the fly from the original while Before/After is held, otherwise the
-    /// stored preview histogram (GUI-HISTOGRAM-1).
+    /// on the fly from the original while Before/After is held or the G-10
+    /// "Show original" switch is armed, otherwise the stored preview
+    /// histogram (GUI-HISTOGRAM-1).
     fn current_histogram(&self) -> Option<LuminanceHistogram> {
-        if self.before_after {
+        if self.before_after || self.show_original_histogram {
             self.original.as_ref().map(LuminanceHistogram::new)
         } else {
             self.preview_histogram.clone()
@@ -7931,10 +8015,23 @@ impl LuminaApp {
 
     /// Own collapsible histogram section (GUI-HISTOGRAM-1): default open,
     /// rendered at the top of the Develop panel instead of the module bar.
+    /// Hosts the G-10 "Show original" compare switch and the `S`-softproof
+    /// mouse switch — both route through the single `toggle_*` mutation
+    /// paths so the `info!` log and status fire exactly once per user flip.
     fn draw_histogram_section(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new(Str::Histogram.t())
             .default_open(true)
             .show(ui, |ui| {
+                let mut show_original = self.show_original_histogram;
+                ui.checkbox(&mut show_original, Str::HistogramShowOriginal.t());
+                if show_original != self.show_original_histogram {
+                    self.toggle_original_histogram();
+                }
+                let mut softproof = self.softproof_preview;
+                ui.checkbox(&mut softproof, Str::SoftproofToggle.t());
+                if softproof != self.softproof_preview {
+                    self.toggle_softproof_preview();
+                }
                 self.draw_histogram(ui);
             });
     }
@@ -7958,6 +8055,24 @@ impl LuminaApp {
             "P01 {:.3}  P99 {:.3}  ({} Samples)",
             analysis.p01, analysis.p99, analysis.sample_count
         ));
+        // G-10 "Original Photo" compare: while the switch is armed the numbers
+        // and curve above already describe the unedited decode; the badge says
+        // so and the delta line quantifies edited-vs-original drift.
+        if self.show_original_histogram {
+            ui.colored_label(egui::Color32::YELLOW, Str::HistogramOriginalBadge.t());
+            match self.histogram_delta() {
+                Some((mean_delta, l1)) => {
+                    let text = Str::HistogramDeltaPattern
+                        .t()
+                        .replacen("{}", &format!("{:+.3}", mean_delta), 1)
+                        .replacen("{}", &format!("{:.3}", l1), 1);
+                    ui.label(text);
+                }
+                None => {
+                    ui.label(Str::NotCurrent.t());
+                }
+            }
+        }
         let Some(histogram) = self.current_histogram() else {
             ui.label(Str::NotCurrent.t());
             return;
@@ -19572,6 +19687,163 @@ mod tests {
         );
         app.toggle_softproof_preview();
         assert!(!app.softproof_preview());
+    }
+
+    #[test]
+    fn normalized_histogram_l1_unit() {
+        // Identical distributions measure 0; disjoint ones 2; degenerate
+        // inputs refuse loudly instead of reporting a silent 0.
+        assert_eq!(normalized_histogram_l1(&[4, 6], &[4, 6]), Some(0.0));
+        assert_eq!(normalized_histogram_l1(&[10, 0], &[0, 10]), Some(2.0));
+        assert_eq!(normalized_histogram_l1(&[1, 2], &[1]), None);
+        assert_eq!(normalized_histogram_l1(&[0, 0], &[3, 4]), None);
+        assert_eq!(normalized_histogram_l1(&[], &[]), None);
+    }
+
+    #[test]
+    fn g10_original_histogram_uses_decode_and_delta_is_real() {
+        // Effect test (no layout assert): with a strong edit rendered, the
+        // armed "Show original" switch must surface the unedited decode
+        // measurement — byte-equal to a direct `LuminanceHistogram` of the
+        // decode — and the delta must carry real analysis values.
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        app.set_adjustment("exposure", 2.0);
+        app.render().unwrap();
+        assert!(!app.show_original_histogram());
+        app.toggle_original_histogram();
+        assert!(app.show_original_histogram());
+        // The switch surfaces the decode, not a re-render of the recipe.
+        let direct = LuminanceHistogram::new(app.original.as_ref().expect("decode loaded"));
+        let shown = app
+            .current_histogram()
+            .expect("original histogram while armed");
+        assert_eq!(
+            shown.bins, direct.bins,
+            "armed switch must show the unedited decode"
+        );
+        assert_eq!(
+            app.current_analysis().expect("analysis").mean,
+            app.original_analysis().expect("original analysis").mean
+        );
+        // Real delta: +2 EV brightens the render, so mean drift is positive
+        // and the bin distribution moves.
+        let (mean_delta, l1) = app.histogram_delta().expect("delta with edit + render");
+        assert!(
+            mean_delta > 0.0,
+            "brighter edit must drift the mean up, got {mean_delta}"
+        );
+        assert!(
+            l1 > 0.0,
+            "edited bins must differ from the decode, got L1 {l1}"
+        );
+        assert_eq!(
+            app.recipe().adjustments.get("exposure"),
+            Some(&2.0),
+            "the compare switch never touches the recipe"
+        );
+        // Disarming restores the edited-render measurement.
+        app.toggle_original_histogram();
+        assert!(!app.show_original_histogram());
+        assert_eq!(
+            app.current_histogram().expect("edited histogram").bins,
+            app.preview_histogram
+                .as_ref()
+                .expect("stored render histogram")
+                .bins
+        );
+    }
+
+    #[test]
+    fn g10_display_toggles_leave_recipe_sidecar_and_pixels_untouched() {
+        // G-10 Ausbau on the G-16 softproof path: flipping either display
+        // switch must leave the recipe, the sidecar bytes and the rendered
+        // pixels untouched (display-only assertable, not just documented).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        let (png, _) = synthetic_gradient_png();
+        std::fs::write(&source, &png).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.0);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let recipe_before = app.recipe().adjustments.clone();
+        let sidecar_before = std::fs::read(&sidecar).expect("sidecar committed");
+        let pixels_before = app.preview().expect("preview rendered").pixels.clone();
+        let generation_before = app.preview_generation();
+        app.toggle_softproof_preview();
+        app.toggle_original_histogram();
+        assert!(app.softproof_preview());
+        assert!(app.show_original_histogram());
+        assert_eq!(
+            app.recipe().adjustments,
+            recipe_before,
+            "display toggles never touch the recipe"
+        );
+        assert_eq!(
+            std::fs::read(&sidecar).expect("sidecar still there"),
+            sidecar_before,
+            "display toggles never rewrite the sidecar"
+        );
+        assert_eq!(
+            app.preview().expect("preview kept").pixels,
+            pixels_before,
+            "display toggles never re-render"
+        );
+        assert_eq!(
+            app.preview_generation(),
+            generation_before,
+            "display toggles never bump the generation"
+        );
+        // Even a fresh render with softproof armed is pixel-identical: the
+        // badge never leaks into the pipeline.
+        app.render().unwrap();
+        assert_eq!(
+            app.preview().expect("preview re-rendered").pixels,
+            pixels_before,
+            "softproof must not leak into the render"
+        );
+        assert_eq!(
+            std::fs::read(&sidecar).expect("sidecar still there"),
+            sidecar_before,
+            "re-render under softproof never rewrites the sidecar"
+        );
+    }
+
+    #[test]
+    fn g10_histogram_section_paints_switches_and_original_badge() {
+        // Both G-10 switches are painted in the histogram section (mouse
+        // path next to the `S` shortcut); armed, the unedited-decode badge
+        // and a real delta line are painted.
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_histogram_section(ui));
+        let texts = painted_texts(&shapes);
+        assert!(
+            texts.iter().any(|t| t == Str::HistogramShowOriginal.t()),
+            "Show-original switch must be painted, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == Str::SoftproofToggle.t()),
+            "softproof mouse switch must be painted, got {texts:?}"
+        );
+        app.toggle_original_histogram();
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_histogram(ui));
+        let texts = painted_texts(&shapes);
+        assert!(
+            texts.iter().any(|t| t == Str::HistogramOriginalBadge.t()),
+            "original badge must be painted while armed, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.starts_with("Δ vs edited")),
+            "real delta line must be painted while armed, got {texts:?}"
+        );
     }
 
     #[test]

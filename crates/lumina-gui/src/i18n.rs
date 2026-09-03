@@ -70,6 +70,11 @@ pub enum Str {
     ZoomFitWidth,
     Histogram,
     HistogramDraft,
+    HistogramShowOriginal,
+    HistogramOriginalBadge,
+    HistogramOriginalOn,
+    HistogramOriginalOff,
+    HistogramDeltaPattern,
     Draft,
     Filmstrip,
     LibraryThumbSize,
@@ -386,6 +391,7 @@ pub enum Str {
     // white/black point, Alt+slider masking preview, S softproof preview.
     SoftproofOn,
     SoftproofOff,
+    SoftproofToggle,
     AutoEndpointAppliedPattern,
     MaskingPreviewPattern,
 }
@@ -448,6 +454,11 @@ impl Str {
             Str::ZoomFitWidth => "Fit Width",
             Str::Histogram => "Histogram",
             Str::HistogramDraft => "Draft preview — histogram reflects the low-res draft until the full render completes",
+            Str::HistogramShowOriginal => "Show original",
+            Str::HistogramOriginalBadge => "Original — unedited decode",
+            Str::HistogramOriginalOn => "Original histogram on (unedited decode)",
+            Str::HistogramOriginalOff => "Original histogram off",
+            Str::HistogramDeltaPattern => "Δ vs edited — mean {} L1 {}",
             Str::Draft => "Draft",
             Str::Filmstrip => "Filmstrip",
             Str::LibraryThumbSize => "Thumbnail Size",
@@ -761,6 +772,7 @@ impl Str {
             }
             Str::SoftproofOn => "Softproof preview on (S, full gamut simulation follows in G-10)",
             Str::SoftproofOff => "Softproof preview off",
+            Str::SoftproofToggle => "Softproof preview (S)",
             Str::AutoEndpointAppliedPattern => "Auto {} applied (Shift+double-click)",
             Str::MaskingPreviewPattern => "Masking preview: {} (Alt held)"
         }

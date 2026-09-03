@@ -378,6 +378,20 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   einklappbaren Sektion (Default offen) und wird immer aus dem **gesamten
   Bild** (Full-Render, nie nur sichtbarer Viewport/ROI-Ausschnitt) berechnet;
   Draft-/Veraltet-Zustände bleiben sichtbar markiert.
+- **„Original Photo“-Vergleich (G-10, LRPAR-G10-VIEWER):** Das Histogramm-Panel
+  trägt einen Umschalter „Show original“ (bearbeitet vs. unbearbeitet).
+  Datenquellen-Entscheid: **Original-Decode** — die Anzeige nutzt den
+  unbearbeiteten Decode (`LuminaApp.original`), **kein** Rezept-Reset. Ein
+  Reset-Render wäre ein zweiter, teurer Pipeline-Lauf und würde
+  „unbearbeitet“ mit „Default-Rezept“ verwechseln (Demosaic/Decode bleiben
+  auch beim Reset aktiv); der Original-Decode ist das wahre „unbearbeitet“.
+  Es gibt **keinen zweiten Analysepfad**: Die Original-Messung nutzt dieselbe
+  `analyze_tone`/`LuminanceHistogram`-Messung wie der Before/After-Pfad
+  (`Y`). Die Histogramm-Full-Render-Regel gilt unverändert — der
+  Original-Frame liegt in Vollauflösung vor, nie als Viewport-Ausschnitt.
+  Bei aktivem Original zeigt das Panel zusätzlich das Delta (Δ Mean +
+  normierte L1-Distanz der 256 Bins, echte Analysewerte). Der Umschalter ist
+  reiner Session-Display-State (nie Rezept/Sidecar) und loggt `info!`.
 - Der Navigator zeigt das Gesamtbild mit einem Viewport-Rechteck (= aktuell
   sichtbarer Develop-Arbeitsbereich); Draggen des Rechtecks pannt den
   sichtbaren Bereich. Das Navigator-Panel ist einklappbar.
@@ -453,7 +467,7 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `Num0`, `+` / `-` | Zoom Fit (ohne Dokument) / Zoomstufen | gebunden (`Num0` mit Dokument = Bewertung 0, LR-01) |
 | `Shift`+Doppelklick auf `Whites`/`Blacks`-Label | Auto-Weißpunkt / Auto-Schwarzpunkt (nur dieses Feld aus `suggest_auto_tone`, kein Zweit-Algorithmus) | G-16; `Shift`+Doppelklick auf anderen Labels = normaler Einzel-Reset; ohne `Shift` = normaler Einzel-Reset |
 | `Alt`+Regler (Track-Drag/Scroll an Ton-Reglern) | Maskierungsvorschau: Clipping-Badge (`J`-Pfad) solange `Alt` gehalten | G-16; Scope: `exposure`/`contrast`/`highlights`/`shadows`/`whites`/`blacks`; Label-`Alt`-Klick bleibt Einzel-Reset, `Alt`-Scroll-Feinjustierung bleibt |
-| `S` | Softproof-Vorschau umschalten (reines Anzeige-Badge, nie Rezept) | G-16; G-10-Reservierung: volle Druck-/Farbraumsimulation bleibt LRPAR-G10-VIEWER-Folgearbeit |
+| `S` | Softproof-Vorschau umschalten (reines Anzeige-Badge, nie Rezept) | G-16 + G-10: klickbarer Schalter zusätzlich im Histogramm-Panel (gleicher `info!`-Pfad); Scope-Entscheid (G-10, ehrlich): MVP ist nur Toggle+Badge — eine echte Druck-/Gamut-Simulation braucht einen Pipeline-Anker in `lumina-core` (Output-Profil-/Gamut-Stufe um `output.profile`, s. `crates/lumina-core/src/pipeline.rs`) und bleibt ein eigener Folge-Slice mit Crate-übergreifendem Schema-/Render-Entscheid, kein GUI-Workaround |
 
 Die Bibliotheks-Rasteransicht zeigt je Datei ein Bewertungs-Badge (Sterne der
 Standardkopie plus Pick-/Reject-Markierung); Details stehen im Hover-Text.
@@ -505,6 +519,15 @@ bleiben daneben unverändert bestehen).
   Rezept/Sidecar) und reserviert damit die G-10-Bindung, statt sie zu
   verbauen. Die volle Druck-/Farbraumsimulation (Profilwahl, Gamut-Warnung)
   bleibt ausdrückliche Folgearbeit in LRPAR-G10-VIEWER.
+- **G-10-Softproof-Ausbau (LRPAR-G10-VIEWER, umgesetzt):** Auf G-16-Basis —
+  derselbe `toggle_softproof_preview`-Pfad (`info!`, Status, nie
+  Rezept/Sidecar), zusätzlich mausbedienbar als Schalter im Histogramm-Panel.
+  Kollisionscheck: plain-`S` bleibt frei von allen anderen Bindungen
+  (`Cmd/Ctrl+Alt+S`-Schnappschuss disambiguiert per Modifier, Textfeld-Fokus
+  via `egui_wants_keyboard_input`-Gate wie alle anderen Kürzel). Die
+  Rezept-/Sidecar-Unberührtheit ist per Test assertiert (Rezept-JSON +
+  Sidecar-Bytes identisch, Render-Pixel unverändert). Echte Gamut-Simulation
+  bleibt Folge-Slice (s. `S`-Zeile der Kürzel-Tabelle).
 - **Test-Hinweis:** Shift-Doppelklick-/Alt-Drag-Verdrahtung ist dünn und
   review-geprüft; Fein-Verhalten fährt im manuellen F-103-N6 nach.
 
