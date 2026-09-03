@@ -314,6 +314,10 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 - Slider-Commits speichern: Nach Debounce-Ende wird bei erfolgreichem Render
   das Sidecar geschrieben und per INFO-Log + Status bestätigt („Sidecar
   saved"); Fehler sind laut, nie still.
+- **Ist-Stand 2026-09-04:** Fit neutralisiert Pan und zeigt Vollbild (stale
+  Crop-Textur wird pan-neutral ersetzt, GUI-FIT-1); Draft- und Full-Placement
+  sind geometrisch identisch (kein Springen, GUI-DRAFT-JUMP-1); Auto-Tone
+  schreibt 6 Regler + Spiegel mit selektivem Stale-Clear (AUTO-TONE-2).
 
 ### Regler und Standardinteraktionen
 

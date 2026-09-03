@@ -94,6 +94,8 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
+_(Block A leer — FIT-1/DRAFT-JUMP-1/AUTO-TONE-2 BESTANDEN 2026-09-04, Commits folgen; Details Git-Historie)_
+
 _(Block A leer — R2-GUIMOD-04a BESTANDEN 2026-09-04 575f834, WASM-REMOVE BESTANDEN; Details Git-Historie)_
 
 _(weitere ehemals offene hoch-prio Tasks BESTANDEN s. Git-Historie: GUI-AUTOTONE-SAVE-1 204p c29e609a/5e36133, GUI-KIT-01-REFRESH kittest 10/10 a75b42f, CLI-GUI-PARITY-1 Matrix-Doc a75b42f; F-103-INTEGRATION-PREVIEW-SIDECAR 147p 43b1b73; CI-ONNX-RT 953987e/c5e5e06/67690ec)_

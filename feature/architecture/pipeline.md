@@ -759,6 +759,18 @@ oberen Exposure-Fallback und Weiß den unteren — uniform schwarze/weiße Bilde
 melden den Median exakt als `0.0`/`1.0`, sodass diese Fallback-Zweige
 bit-identisch zum früheren sortierten Verfahren bleiben.
 
+**Auto-Tone Mehrregler (LR-ähnlich, normativ 2026-09-04):** Auto-Tone setzt
+nie einen Einzelregler auf Anschlag, sondern verteilt die Korrektur
+Lightroom-ähnlich auf sechs Regler aus den Histogramm-Perzentilen
+(p01/Median/p99, 256-Bin-Pass): `exposure` (Median → Ziel), `contrast`
+(p01/p99-Spanne → Zielspanne, weich begrenzt, nie hart  ±1-Anschlag),
+`whites`/`blacks` (p99/p01-Enden entzerren), `highlights`/`shadows`
+(Lichter-/Schatten-Balance). Alle sechs Werte landen im Rezept (persistiert
+mit Analyse-Fingerprint); deterministisch (gleiche Perzentile → gleiche
+Werte); kein Regler darf nach Auto-Tone am harten Limit kleben, solange die
+Ziele mit Reserve erreichbar sind (sonst sichtbarer Hinweis, kein stiller
+Anschlag).
+
 **Genauigkeitsvertrag (R2-PERF-01, normativ):** Gegenüber der historischen
 linearen Interpolation zwischen sortierten Samples gilt für JEDES Bild
 (dicht oder sparsam besetzt) die universelle Schranke

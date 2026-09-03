@@ -817,7 +817,20 @@ pub struct LuminaApp {
     /// Source ROI `(x, y, w, h)` of the currently displayed texture. `None`
     /// means the whole frame. Pointer→source mapping accounts for this crop so
     /// the WB eyedropper and mask tools stay accurate while zoomed/panned.
+    /// The rect is expressed in *render-source* pixels (see
+    /// [`Self::preview_render_src`]): identical to full-source pixels for a
+    /// full render, downscaled for a draft render.
     preview_roi: Option<[u32; 4]>,
+    /// Render-source dimensions `(w, h)` backing the currently displayed
+    /// texture (GUI-DRAFT-JUMP-1): the `source.width/height` that
+    /// [`Self::render_from`] consumed for the last render — the full original
+    /// on the non-draft path, the downscaled `draft_original` on the draft
+    /// path. `draw_preview` scales the texture back into full-source geometry
+    /// with it (`draw = tex_dims · (full/render_src) · scale`), so a draft
+    /// and its full render share the exact on-screen placement instead of the
+    /// draft drawing too small with a pan offset error. `None` until the first
+    /// render (legacy/empty state: no rescaling).
+    preview_render_src: Option<(u32, u32)>,
     /// Cached geometry from the last [`Self::draw_preview`] so the next frame's
     /// [`Self::sync_zoom`] can derive absolute zoom modes correctly.
     ///
@@ -1243,6 +1256,7 @@ impl LuminaApp {
             zoom_mode: ZoomMode::Fit,
             preview_pan: egui::Vec2::ZERO,
             preview_roi: None,
+            preview_render_src: None,
             preview_base_fit_scale: 1.0,
             preview_pane_w: 800.0,
             preview_pane_h: 600.0,
@@ -3273,6 +3287,7 @@ impl LuminaApp {
         self.zoom_mode = ZoomMode::Fit;
         self.preview_pan = egui::Vec2::ZERO;
         self.preview_roi = None;
+        self.preview_render_src = None;
         self.before_after = false;
         self.wb_pick_mode = false;
         self.render_mask_layers.clear();
@@ -3734,15 +3749,29 @@ impl LuminaApp {
             ..Default::default()
         };
         let result = suggest_auto_tone(frame, config)?;
-        self.recipe
-            .adjustments
-            .insert("exposure".into(), result.exposure);
-        self.recipe
-            .adjustments
-            .insert("contrast".into(), result.contrast);
+        // AUTO-TONE-2: all six sliders persist 1:1 into `recipe.adjustments`
+        // (domains match the sidecar validation: exposure ±10 EV, the other
+        // five `-1..=1`).
+        for (key, value) in [
+            ("exposure", result.exposure),
+            ("contrast", result.contrast),
+            ("whites", result.whites),
+            ("blacks", result.blacks),
+            ("highlights", result.highlights),
+            ("shadows", result.shadows),
+        ] {
+            self.recipe.adjustments.insert(key.into(), value);
+        }
         self.recipe.auto_features.enable_auto_tone = true;
         self.recipe.auto_features.auto_exposure = Some(result.exposure);
         self.recipe.auto_features.auto_contrast = Some(result.contrast);
+        // AUTO-TONE-2: the four end/balance mirrors mark these adjustments as
+        // auto-written (parallel to `adjustments`); `clear_stale_auto_tone`
+        // uses them to tell auto values apart from manual edits.
+        self.recipe.auto_features.auto_whites = Some(result.whites);
+        self.recipe.auto_features.auto_blacks = Some(result.blacks);
+        self.recipe.auto_features.auto_highlights = Some(result.highlights);
+        self.recipe.auto_features.auto_shadows = Some(result.shadows);
         self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
             algorithm: "tone-rgba8-rec709".into(),
             version: "1".into(),
@@ -3996,6 +4025,55 @@ impl LuminaApp {
         Some([x, y, zw, zh])
     }
 
+    /// Effective texture dimensions in *full-source* pixels (GUI-DRAFT-JUMP-1).
+    ///
+    /// A draft texture lives in downscaled render-source space, so drawing it
+    /// at `tex_dims · scale` (full-source scale) comes out too small; scaling
+    /// by `full/render_src` per axis restores the exact on-screen size of the
+    /// equivalent full render. Full renders (`render_src == full`) and the
+    /// `None` legacy state pass the dimensions through unchanged. Pure helper
+    /// so the draft-vs-full placement roundtrip is unit-testable headless.
+    fn preview_draw_dims(
+        tex_w: f32,
+        tex_h: f32,
+        full_w: f32,
+        full_h: f32,
+        render_src: Option<(u32, u32)>,
+    ) -> (f32, f32) {
+        match render_src {
+            Some((sw, sh)) if sw > 0 && sh > 0 && full_w > 0.0 && full_h > 0.0 => {
+                (tex_w * full_w / sw as f32, tex_h * full_h / sh as f32)
+            }
+            _ => (tex_w, tex_h),
+        }
+    }
+
+    /// Translate a render-source-space ROI into full-source pixels
+    /// (GUI-DRAFT-JUMP-1): the inverse of the draft downscale, so pointer→
+    /// source mapping and the mask overlay consume full-space rects regardless
+    /// of which path rendered the texture. A `None`/degenerate source passes
+    /// the rect through; results are clamped to the full frame. Pure helper
+    /// for the headless draft-vs-full geometry test.
+    fn roi_in_full_pixels(
+        roi: [u32; 4],
+        full_w: u32,
+        full_h: u32,
+        render_src: Option<(u32, u32)>,
+    ) -> [u32; 4] {
+        match render_src {
+            Some((sw, sh)) if sw > 0 && sh > 0 && full_w > 0 && full_h > 0 => {
+                let sx = full_w as f64 / sw as f64;
+                let sy = full_h as f64 / sh as f64;
+                let x = ((roi[0] as f64 * sx).round() as u32).min(full_w - 1);
+                let y = ((roi[1] as f64 * sy).round() as u32).min(full_h - 1);
+                let w = ((roi[2] as f64 * sx).round() as u32).clamp(1, full_w - x);
+                let h = ((roi[3] as f64 * sy).round() as u32).clamp(1, full_h - y);
+                [x, y, w, h]
+            }
+            _ => roi,
+        }
+    }
+
     /// Open or collapse the navigator rail (GUI-PREVIEW-NAV-1). Pure view
     /// state — never touches the recipe or the sidecar.
     pub fn set_navigator_open(&mut self, open: bool) {
@@ -4006,7 +4084,10 @@ impl LuminaApp {
     /// Switch the preview zoom mode. Non-`Custom` modes re-derive `preview_zoom`
     /// from the current pane each frame (so they survive resizes); switching
     /// always re-centres the pan and triggers a re-render so the ROI crop
-    /// matches the on-screen zoom.
+    /// matches the on-screen zoom. The re-render replaces the stale texture
+    /// (GUI-FIT-1 texture-ROI identity: a Custom crop texture is never valid
+    /// under Fit — `mark_dirty` arms its replacement, and `draw_preview`
+    /// neutralizes any stale pan in non-`Custom` modes until it lands).
     pub fn set_zoom_mode(&mut self, mode: ZoomMode) {
         trace!("GUI interaction: set_zoom_mode {:?}", mode);
         self.zoom_mode = mode;
@@ -4365,6 +4446,13 @@ impl LuminaApp {
         } else {
             None
         };
+        // GUI-DRAFT-JUMP-1: record which source space the texture (and
+        // `preview_roi`) lives in so `draw_preview` and the pointer→source
+        // mapping can scale back into full-source geometry. A failed crop
+        // fell back to the full `source`, whose dims are recorded here just
+        // the same — the texture always matches `source`, never the rejected
+        // request.
+        self.preview_render_src = Some((source.width, source.height));
         self.render_mask_layers = output.mask_layers;
         // GUI-WGPU-PRESENT-1 / GPU-STAGE-1: make the *pipeline-evaluated* mask
         // coverage visible in the GPU present composite by pushing the combined
@@ -5526,12 +5614,26 @@ impl LuminaApp {
             self.preview_pane_w = pane.width();
             self.preview_pane_h = pane.height();
 
-            // On-screen scale in screen points per SOURCE pixel. The
+            // On-screen scale in screen points per FULL-source pixel. The
             // ROI-cropped texture is drawn at this same scale; `roi_from_zoom`
-            // sizes the crop to fill the pane exactly at it.
+            // sizes the crop to fill the pane exactly at it. A draft texture
+            // lives in downscaled render-source space (GUI-DRAFT-JUMP-1), so
+            // its dims are scaled back into full-source geometry first —
+            // otherwise the draft draws too small and jumps on mouse-up when
+            // the full frame swaps in.
             let mut scale = self.preview_base_fit_scale * self.preview_zoom;
-            let mut draw = egui::vec2(tw * scale, th * scale);
-            let mut center = pane.center() + self.preview_pan;
+            let (tex_w, tex_h) =
+                Self::preview_draw_dims(tw, th, src_w, src_h, self.preview_render_src);
+            let mut draw = egui::vec2(tex_w * scale, tex_h * scale);
+            // GUI-FIT-1: pan is only meaningful in `Custom`. Absolute modes
+            // re-centre every frame (`sync_zoom`), so a stale pan offset must
+            // never shift the placement here — panning in Fit is a no-op.
+            let eff_pan = if self.zoom_mode == ZoomMode::Custom {
+                self.preview_pan
+            } else {
+                egui::Vec2::ZERO
+            };
+            let mut center = pane.center() + eff_pan;
             let mut rect = egui::Rect::from_center_size(center, draw);
 
             // Scroll-wheel behaviour (GUI-PREVIEW-NAV-1, Lightroom-like): the
@@ -5576,7 +5678,7 @@ impl LuminaApp {
                             self.preview_zoom = (self.preview_zoom * factor).clamp(0.05, 32.0);
                             self.zoom_mode = ZoomMode::Custom;
                             let new_scale = self.preview_base_fit_scale * self.preview_zoom;
-                            let new_draw = egui::vec2(tw * new_scale, th * new_scale);
+                            let new_draw = egui::vec2(tex_w * new_scale, tex_h * new_scale);
                             let new_center =
                                 p - egui::vec2(fx * new_draw.x, fy * new_draw.y) + new_draw / 2.0;
                             self.preview_pan = new_center - pane.center();
@@ -5706,12 +5808,13 @@ impl LuminaApp {
                     self.wb_pick_mode = false;
                     self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
                 } else if let Some(pos) = response.interact_pointer_pos() {
-                    let (nx, ny) = Self::to_normalized(
-                        pos,
-                        rect,
-                        self.preview_roi,
-                        self.image_dims().unwrap_or((1, 1)),
-                    );
+                    let full = self.image_dims().unwrap_or((1, 1));
+                    // GUI-DRAFT-JUMP-1: map through the full-space ROI so the
+                    // pick lands on the same source pixel on both paths.
+                    let roi = self.preview_roi.map(|r| {
+                        Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src)
+                    });
+                    let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
                     self.pick_white_balance_at(nx as f64, ny as f64);
                 }
             }
@@ -5728,7 +5831,12 @@ impl LuminaApp {
             // current ROI crop) so it lines up with the zoomed/panned view.
             {
                 let (full_w, full_h) = self.image_dims().unwrap_or((1, 1));
-                let roi = self.preview_roi.unwrap_or([0, 0, full_w, full_h]);
+                // GUI-DRAFT-JUMP-1: the recorded ROI lives in render-source
+                // pixels; scale it into full-source space so the overlay
+                // lines up with the zoomed/panned view on both paths.
+                let roi = self.preview_roi.map_or([0, 0, full_w, full_h], |r| {
+                    Self::roi_in_full_pixels(r, full_w, full_h, self.preview_render_src)
+                });
                 let from_min = egui::pos2(
                     rect.min.x - roi[0] as f32 * scale,
                     rect.min.y - roi[1] as f32 * scale,
@@ -5785,12 +5893,13 @@ impl LuminaApp {
         let Some(pos) = response.interact_pointer_pos() else {
             return;
         };
-        let (nx, ny) = Self::to_normalized(
-            pos,
-            rect,
-            self.preview_roi,
-            self.image_dims().unwrap_or((1, 1)),
-        );
+        // GUI-DRAFT-JUMP-1: map through the full-space ROI so mask prompts
+        // land on the same source pixels on both render paths.
+        let full = self.image_dims().unwrap_or((1, 1));
+        let roi = self
+            .preview_roi
+            .map(|r| Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src));
+        let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
         if response.drag_started() {
             self.drawing = true;
             self.drag_start = Some(Point2 { x: nx, y: ny });
@@ -8878,10 +8987,27 @@ fn crop_overlay_rect(crop: Option<&Crop>, img_rect: egui::Rect) -> Option<egui::
 // fails and the export aborts.
 
 fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
+    // AUTO-TONE-2: a present mirror marks the adjustment as auto-written, so
+    // a stale fingerprint removes exactly those values (adjustment + mirror).
+    // Manual edits carry no mirror and survive the clear.
+    for (key, mirror) in [
+        ("exposure", recipe.auto_features.auto_exposure),
+        ("contrast", recipe.auto_features.auto_contrast),
+        ("whites", recipe.auto_features.auto_whites),
+        ("blacks", recipe.auto_features.auto_blacks),
+        ("highlights", recipe.auto_features.auto_highlights),
+        ("shadows", recipe.auto_features.auto_shadows),
+    ] {
+        if mirror.is_some() {
+            recipe.adjustments.remove(key);
+        }
+    }
     recipe.auto_features.auto_exposure = None;
     recipe.auto_features.auto_contrast = None;
-    recipe.adjustments.remove("exposure");
-    recipe.adjustments.remove("contrast");
+    recipe.auto_features.auto_whites = None;
+    recipe.auto_features.auto_blacks = None;
+    recipe.auto_features.auto_highlights = None;
+    recipe.auto_features.auto_shadows = None;
 }
 
 fn is_current_tone_analysis(stored: &AnalysisFingerprint, input_fingerprint: &str) -> bool {
@@ -10269,20 +10395,34 @@ mod tests {
     fn stale_auto_tone_clears_active_adjustments_but_keeps_status_state() {
         let mut recipe = EditRecipe::default();
         recipe.auto_features.enable_auto_tone = true;
+        // Auto-written values carry mirrors ...
         recipe.auto_features.auto_exposure = Some(1.25);
         recipe.auto_features.auto_contrast = Some(-0.2);
+        recipe.auto_features.auto_whites = Some(0.3);
+        recipe.auto_features.auto_shadows = Some(-0.1);
         recipe.adjustments.insert("exposure".into(), 1.25);
         recipe.adjustments.insert("contrast".into(), -0.2);
+        recipe.adjustments.insert("whites".into(), 0.3);
+        recipe.adjustments.insert("shadows".into(), -0.1);
+        // ... manual edits carry none and must survive the clear.
         recipe.adjustments.insert("highlights".into(), -0.5);
+        recipe.adjustments.insert("blacks".into(), 0.1);
 
         clear_stale_auto_tone(&mut recipe);
 
         assert!(recipe.auto_features.enable_auto_tone);
         assert!(recipe.auto_features.auto_exposure.is_none());
         assert!(recipe.auto_features.auto_contrast.is_none());
+        assert!(recipe.auto_features.auto_whites.is_none());
+        assert!(recipe.auto_features.auto_blacks.is_none());
+        assert!(recipe.auto_features.auto_highlights.is_none());
+        assert!(recipe.auto_features.auto_shadows.is_none());
         assert!(!recipe.adjustments.contains_key("exposure"));
         assert!(!recipe.adjustments.contains_key("contrast"));
+        assert!(!recipe.adjustments.contains_key("whites"));
+        assert!(!recipe.adjustments.contains_key("shadows"));
         assert_eq!(recipe.adjustments["highlights"], -0.5);
+        assert_eq!(recipe.adjustments["blacks"], 0.1);
     }
 
     #[test]
@@ -11772,6 +11912,195 @@ mod tests {
         );
     }
 
+    /// GUI-DRAFT-JUMP-1: a draft texture (downscaled render source) scales
+    /// back into full-source geometry, so draft and full share placement.
+    #[test]
+    fn preview_draw_dims_upscales_draft_to_full_placement() {
+        let full = (2000.0_f32, 1500.0_f32);
+        // Pass-through without source identity (legacy) and for full renders.
+        assert_eq!(
+            LuminaApp::preview_draw_dims(640.0, 480.0, full.0, full.1, None),
+            (640.0, 480.0)
+        );
+        assert_eq!(
+            LuminaApp::preview_draw_dims(640.0, 480.0, full.0, full.1, Some((2000, 1500))),
+            (640.0, 480.0)
+        );
+        // Draft texture upscales by full/render_src per axis.
+        let (w, h) = LuminaApp::preview_draw_dims(832.0, 624.0, full.0, full.1, Some((1280, 960)));
+        assert!(
+            (w - 1300.0).abs() < 1e-3,
+            "draft width must upscale, got {w}"
+        );
+        assert!(
+            (h - 975.0).abs() < 1e-3,
+            "draft height must upscale, got {h}"
+        );
+        // Degenerate source never divides by zero.
+        assert_eq!(
+            LuminaApp::preview_draw_dims(10.0, 10.0, full.0, full.1, Some((0, 0))),
+            (10.0, 10.0)
+        );
+    }
+
+    /// GUI-DRAFT-JUMP-1: a draft-space ROI converts into (near-)identical
+    /// full-space geometry, so pointer mapping and overlay agree on both paths.
+    #[test]
+    fn roi_in_full_pixels_aligns_draft_and_full_crops() {
+        // Same view (zoom 2, centred) computed in both pixel spaces.
+        let full_roi = LuminaApp::roi_from_zoom(2000, 1500, 2.0, egui::Vec2::ZERO, 800.0, 600.0)
+            .expect("zoomed full ROI");
+        let draft_roi = LuminaApp::roi_from_zoom(1280, 960, 2.0, egui::Vec2::ZERO, 800.0, 600.0)
+            .expect("zoomed draft ROI");
+        let back = LuminaApp::roi_in_full_pixels(draft_roi, 2000, 1500, Some((1280, 960)));
+        for i in 0..4 {
+            assert!(
+                (back[i] as i32 - full_roi[i] as i32).abs() <= 2,
+                "axis {i}: converted {back:?} vs full {full_roi:?}"
+            );
+        }
+        // A full-space ROI passes through unchanged.
+        assert_eq!(
+            LuminaApp::roi_in_full_pixels(full_roi, 2000, 1500, Some((2000, 1500))),
+            full_roi
+        );
+    }
+
+    /// GUI-DRAFT-JUMP-1: draft and full renders of the same zoomed view share
+    /// on-screen placement (no geometry jump on mouse-up).
+    #[test]
+    fn draft_and_full_share_on_screen_placement() {
+        let mut app = new_app();
+        // 2000×1500 source → the cached draft source is downscaled (long
+        // edge 1280), which is exactly the mismatch under test.
+        let frame =
+            ImageFrame::new(2000, 1500, [140_u8, 120, 100, 255].repeat(2000 * 1500)).unwrap();
+        app.load_bytes(frame.encode(ImageFileFormat::Png).unwrap(), "draft.png")
+            .unwrap();
+        let (full_w, full_h) = (
+            app.original.as_ref().unwrap().width,
+            app.original.as_ref().unwrap().height,
+        );
+        assert_eq!((full_w, full_h), (2000, 1500));
+        let draft_w = app.draft_original.as_ref().unwrap().width;
+        assert!(
+            draft_w < full_w,
+            "draft source must be downscaled for this test, got {draft_w}"
+        );
+        app.zoom_mode = ZoomMode::Custom;
+        app.preview_zoom = 2.0;
+        app.preview_pane_w = 800.0;
+        app.preview_pane_h = 600.0;
+        app.render_draft([800, 600], None).unwrap();
+        let draft_roi = app.preview_roi.expect("zoomed draft ROI");
+        let draft_src = app.preview_render_src.expect("draft source recorded");
+        assert_ne!(draft_src, (full_w, full_h));
+        let draft_tex = (
+            app.preview.as_ref().unwrap().width as f32,
+            app.preview.as_ref().unwrap().height as f32,
+        );
+        app.render_full([800, 600], None).unwrap();
+        let full_roi = app.preview_roi.expect("zoomed full ROI");
+        let full_src = app.preview_render_src.expect("full source recorded");
+        assert_eq!(full_src, (full_w, full_h));
+        let full_tex = (
+            app.preview.as_ref().unwrap().width as f32,
+            app.preview.as_ref().unwrap().height as f32,
+        );
+        // Same on-screen draw size from both textures at the same scale.
+        let scale = 0.4_f32 * 2.0; // fit(800×600 against 2000×1500) × zoom
+        let (dw0, dh0) = LuminaApp::preview_draw_dims(
+            draft_tex.0,
+            draft_tex.1,
+            full_w as f32,
+            full_h as f32,
+            Some(draft_src),
+        );
+        let (dw1, dh1) = LuminaApp::preview_draw_dims(
+            full_tex.0,
+            full_tex.1,
+            full_w as f32,
+            full_h as f32,
+            Some(full_src),
+        );
+        assert!(
+            (dw0 * scale - dw1 * scale).abs() <= 1.5,
+            "draw widths must match: draft {dw0} vs full {dw1}"
+        );
+        assert!(
+            (dh0 * scale - dh1 * scale).abs() <= 1.5,
+            "draw heights must match: draft {dh0} vs full {dh1}"
+        );
+        // Same ROI in full pixels (the pan-offset half of the jump).
+        let back = LuminaApp::roi_in_full_pixels(draft_roi, full_w, full_h, Some(draft_src));
+        for i in 0..4 {
+            assert!(
+                (back[i] as i32 - full_roi[i] as i32).abs() <= 2,
+                "axis {i}: draft {back:?} vs full {full_roi:?}"
+            );
+        }
+    }
+
+    /// GUI-FIT-1: Fit always renders the whole frame and neutralizes pan —
+    /// switching back from a zoomed Custom crop shows the full image again
+    /// (the navigator content), never the stale crop corner.
+    #[test]
+    fn fit_renders_full_frame_and_neutralizes_pan() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        app.load_bytes(
+            ImageFrame::new(200, 150, [128_u8, 128, 128, 255].repeat(200 * 150))
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap(),
+            "fit.png",
+        )
+        .unwrap();
+        // Zoomed Custom crop first (the stale-texture setup).
+        app.zoom_mode = ZoomMode::Custom;
+        app.preview_zoom = 2.0;
+        app.preview_pane_w = 800.0;
+        app.preview_pane_h = 600.0;
+        app.render_full([800, 600], None).unwrap();
+        assert!(app.preview_roi.is_some(), "zoomed render must crop");
+        // Back to Fit: the mode switch invalidates the crop (re-render arms
+        // via `mark_dirty`) and the fresh render covers the whole frame —
+        // the same content the navigator shows.
+        app.set_zoom_mode(ZoomMode::Fit);
+        app.sync_zoom();
+        assert_eq!(app.preview_zoom, 1.0);
+        assert_eq!(app.preview_pan, egui::Vec2::ZERO);
+        app.render_full([800, 600], None).unwrap();
+        assert_eq!(app.preview_roi, None, "Fit must render the whole frame");
+        assert_eq!(app.preview_render_src, Some((200, 150)));
+        // A stale pan offset has no effect on the Fit placement: the draw
+        // clamps a smaller-than-pane image to the pane centre and writes the
+        // pan back to zero.
+        app.preview_pan = egui::vec2(60.0, -40.0);
+        app.texture = Some(ctx.load_texture(
+            "preview",
+            egui::ColorImage::filled([200, 150], egui::Color32::GRAY),
+            egui::TextureOptions::LINEAR,
+        ));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            app.preview_pan,
+            egui::Vec2::ZERO,
+            "pan must be neutralized in Fit"
+        );
+    }
+
     /// GUI-PREVIEW-NAV-1: the wheel only zooms with Ctrl/Cmd held; without a
     /// modifier it must scroll/pan and never switch the zoom to `Custom`.
     #[test]
@@ -12307,6 +12636,8 @@ mod tests {
     /// GUI-AUTOTONE-SAVE-1: `auto_tone` records a save commit, persists the
     /// sidecar (Datei + Wert) and reloads (DoD §1-§4, F-100 „Auto-Tone
     /// schreiben anschließend das Sidecar"). Zoom/pan stay untouched.
+    /// AUTO-TONE-2: all six sliders (`exposure`, `contrast`, `whites`,
+    /// `blacks`, `highlights`, `shadows`) persist 1:1 through Datei + Reload.
     #[test]
     fn auto_tone_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
@@ -12316,21 +12647,108 @@ mod tests {
         open_and_decode(&mut app, source.display().to_string());
         app.auto_tone().unwrap();
         assert!(app.recipe().auto_features.enable_auto_tone);
-        let exposure = app.recipe().adjustments["exposure"];
-        let contrast = app.recipe().adjustments["contrast"];
+        let values: [(String, f64); 6] = [
+            ("exposure".into(), app.recipe().adjustments["exposure"]),
+            ("contrast".into(), app.recipe().adjustments["contrast"]),
+            ("whites".into(), app.recipe().adjustments["whites"]),
+            ("blacks".into(), app.recipe().adjustments["blacks"]),
+            ("highlights".into(), app.recipe().adjustments["highlights"]),
+            ("shadows".into(), app.recipe().adjustments["shadows"]),
+        ];
+        // Spec domains: exposure ±10 EV, the other five `-1..=1`.
+        for (key, value) in &values {
+            let (lo, hi) = if key == "exposure" {
+                (-10.0, 10.0)
+            } else {
+                (-1.0, 1.0)
+            };
+            assert!(
+                value.is_finite() && (lo..=hi).contains(value),
+                "{key}={value} outside {lo}..={hi}"
+            );
+        }
+        let exposure = values[0].1;
         assert_eq!(
             app.pending_slider_commit,
             Some(("auto_tone".to_string(), exposure))
         );
+        // AUTO-TONE-2: the mirrors mark all six adjustments as auto-written.
+        let mirrors = [
+            app.recipe().auto_features.auto_exposure,
+            app.recipe().auto_features.auto_contrast,
+            app.recipe().auto_features.auto_whites,
+            app.recipe().auto_features.auto_blacks,
+            app.recipe().auto_features.auto_highlights,
+            app.recipe().auto_features.auto_shadows,
+        ];
+        for ((key, value), mirror) in values.iter().zip(mirrors) {
+            assert_eq!(
+                mirror,
+                Some(*value),
+                "{key} mirror must track the adjustment"
+            );
+        }
         let document = commit_and_load_doc(&mut app, &source);
         let persisted = &document.virtual_copies[0].recipe;
         assert!(persisted.auto_features.enable_auto_tone);
-        assert_eq!(persisted.adjustments["exposure"], exposure);
-        assert_eq!(persisted.adjustments["contrast"], contrast);
+        // NOTE: f64 values cross a JSON roundtrip here, so the last bit may
+        // differ (`0.2396484375` vs `...998`) — compare with a tight epsilon
+        // instead of bit-exact `assert_eq`.
+        for (key, value) in &values {
+            let roundtripped = persisted.adjustments[key.as_str()];
+            assert!(
+                (roundtripped - value).abs() <= 1e-12,
+                "{key} must persist to the sidecar file: {roundtripped} vs {value}"
+            );
+        }
+        assert_eq!(
+            persisted.auto_features.auto_exposure,
+            app.recipe().auto_features.auto_exposure
+        );
+        assert_eq!(
+            persisted.auto_features.auto_contrast,
+            app.recipe().auto_features.auto_contrast
+        );
+        for (key, mirror) in [
+            ("whites", persisted.auto_features.auto_whites),
+            ("blacks", persisted.auto_features.auto_blacks),
+            ("highlights", persisted.auto_features.auto_highlights),
+            ("shadows", persisted.auto_features.auto_shadows),
+        ] {
+            let expected = values
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| *v)
+                .unwrap();
+            assert!(
+                mirror.is_some_and(|m| (m - expected).abs() <= 1e-12),
+                "{key} mirror must persist to the sidecar file"
+            );
+        }
         let reopened = reopen_app(&source);
         assert!(reopened.recipe().auto_features.enable_auto_tone);
-        assert_eq!(reopened.recipe().adjustments["exposure"], exposure);
-        assert_eq!(reopened.recipe().adjustments["contrast"], contrast);
+        for (key, value) in &values {
+            let reloaded = reopened.recipe().adjustments[key.as_str()];
+            assert!(
+                (reloaded - value).abs() <= 1e-12,
+                "{key} must survive the reload: {reloaded} vs {value}"
+            );
+        }
+        // Stale-clear on the reloaded recipe: auto-written values go (mirrors
+        // reset), manual edits without a mirror survive.
+        let mut stale = reopened.recipe().clone();
+        stale.adjustments.insert("highlights".into(), -0.5);
+        stale.auto_features.auto_highlights = None;
+        clear_stale_auto_tone(&mut stale);
+        for key in ["exposure", "contrast", "whites", "blacks", "shadows"] {
+            assert!(
+                !stale.adjustments.contains_key(key),
+                "auto-written {key} must clear on stale"
+            );
+        }
+        assert_eq!(stale.adjustments["highlights"], -0.5);
+        assert!(stale.auto_features.auto_exposure.is_none());
+        assert!(stale.auto_features.auto_whites.is_none());
     }
 
     /// GUI-AUTOTONE-SAVE-1: `match_total_exposure` records a save commit,
