@@ -3568,12 +3568,16 @@ impl LuminaApp {
     /// Indices of the RAW entries in display order (GUI-FILMSTRIP-DUP-1):
     /// the single source behind the filmstrip, the navigator rail and the
     /// Library grid — every image appears exactly once per view, and every
-    /// view shares the same selection bookkeeping.
+    /// view shares the same selection bookkeeping. A duplicated source path
+    /// (e.g. listed twice after overlapping rescans) collapses to its first
+    /// occurrence so no view ever shows the same image twice.
     fn raw_entry_indices(&self) -> Vec<usize> {
+        let mut seen = BTreeSet::new();
         self.entries
             .iter()
             .enumerate()
             .filter(|(_, entry)| is_raw_name(&entry.name))
+            .filter(|(_, entry)| seen.insert(entry.path.display().to_string()))
             .map(|(index, _)| index)
             .collect()
     }
@@ -6086,7 +6090,7 @@ impl LuminaApp {
 
     /// Manually dismiss the overlay toast (its ✕ button).
     pub fn dismiss_toast(&mut self) {
-        trace!("GUI interaction: toast dismissed");
+        info!("GUI interaction: toast dismissed");
         self.toast_message = None;
         self.toast_until = 0.0;
     }
@@ -18966,6 +18970,757 @@ mod tests {
         );
         assert!((after.center().x - before.center().x - drag.x).abs() < 1e-2);
         assert!((after.center().y - before.center().y - drag.y).abs() < 1e-2);
+    }
+
+    /// Full text of every painted text shape (button/slider readouts).
+    fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Read one manual optics field from a lens block (DoD-§3
+    /// Klassen-Vollständigkeit: all eight fields share one assertion path).
+    fn lens_field(lens: &LensCorrection, field: &str) -> Option<f32> {
+        match field {
+            "distortion_k1" => lens.distortion_k1,
+            "distortion_k2" => lens.distortion_k2,
+            "distortion_k3" => lens.distortion_k3,
+            "vignette_c0" => lens.vignette_c0,
+            "vignette_c1" => lens.vignette_c1,
+            "vignette_c2" => lens.vignette_c2,
+            "ca_red" => lens.ca_red,
+            "ca_blue" => lens.ca_blue,
+            _ => None,
+        }
+    }
+
+    /// GUI-OPTICS-1 (DoD-§3 Klassen-Vollständigkeit): every remaining manual
+    /// optics field visibly changes the rendered preview — one fresh session
+    /// per field so cross-talk between fields is impossible.
+    #[test]
+    fn optics_each_manual_field_changes_render() {
+        for (field, value) in [
+            ("distortion_k2", 0.5),
+            ("distortion_k3", 0.5),
+            ("vignette_c0", 0.5),
+            ("vignette_c1", 0.5),
+            ("vignette_c2", 0.5),
+            ("ca_red", 0.05),
+            ("ca_blue", -0.05),
+        ] {
+            let (png, _) = synthetic_gradient_png();
+            let mut app = new_app();
+            app.load_bytes(png, "gradient.png").unwrap();
+            app.render().unwrap();
+            let before = app.preview().unwrap().pixels.clone();
+            app.set_lens_correction_value(field, value);
+            app.render().unwrap();
+            let after = app.preview().unwrap().pixels.clone();
+            assert_ne!(
+                before, after,
+                "{field}={value} must visibly change the preview"
+            );
+        }
+    }
+
+    /// GUI-OPTICS-1 + GUI-SLIDER-SAVE-1: all eight manual optics fields
+    /// persist through the sidecar file and reload in a fresh session.
+    #[test]
+    fn optics_fields_persist_across_save_and_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let fields = [
+            ("distortion_k1", 0.1f32),
+            ("distortion_k2", -0.2f32),
+            ("distortion_k3", 0.3f32),
+            ("vignette_c0", 0.5f32),
+            ("vignette_c1", -0.5f32),
+            ("vignette_c2", 0.25f32),
+            ("ca_red", 0.02f32),
+            ("ca_blue", -0.02f32),
+        ];
+        for (field, value) in fields {
+            app.set_lens_correction_value(field, f64::from(value));
+        }
+        let document = commit_and_load_doc(&mut app, &source);
+        let lens = document.virtual_copies[0]
+            .recipe
+            .lens_correction
+            .clone()
+            .expect("lens correction persisted");
+        for (field, value) in fields {
+            assert_eq!(
+                lens_field(&lens, field),
+                Some(value),
+                "{field} must persist to the sidecar file"
+            );
+        }
+        let reopened = reopen_app(&source);
+        let reloaded = reopened
+            .recipe()
+            .lens_correction
+            .clone()
+            .expect("lens correction reloaded");
+        for (field, value) in fields {
+            assert_eq!(
+                lens_field(&reloaded, field),
+                Some(value),
+                "{field} must survive the reload"
+            );
+        }
+    }
+
+    /// GUI-OPTICS-1: the Develop Optics section paints its profile status and
+    /// all three parameter groups; the hint texts exist, are distinct from
+    /// each other and from the group labels they annotate.
+    #[test]
+    fn optics_groups_and_hints_painted() {
+        for (hint, group) in [
+            (
+                Str::OpticsDistortionHint.t(),
+                Str::OpticsDistortionGroup.t(),
+            ),
+            (Str::OpticsVignetteHint.t(), Str::OpticsVignetteGroup.t()),
+            (Str::OpticsCaHint.t(), Str::OpticsCaGroup.t()),
+        ] {
+            assert!(!hint.is_empty(), "optics hint must not be empty");
+            assert_ne!(hint, group, "hint must differ from its group label");
+        }
+        assert_ne!(Str::OpticsDistortionHint.t(), Str::OpticsVignetteHint.t());
+        assert_ne!(Str::OpticsVignetteHint.t(), Str::OpticsCaHint.t());
+        assert_ne!(Str::OpticsDistortionHint.t(), Str::OpticsCaHint.t());
+        let mut app = new_app();
+        if !cfg!(feature = "lensfun") {
+            // Without the native corrector the panel names the missing
+            // capability instead of the sliders (no silent empty section).
+            let shapes = headless_shapes(&mut app, |app, ui| app.draw_optics(ui));
+            let texts = painted_texts(&shapes);
+            assert!(
+                texts.iter().any(|t| t == Str::OpticsRequiresLensfun.t()),
+                "missing lensfun capability must be painted, got {texts:?}"
+            );
+            return;
+        }
+        // `ui.collapsing` starts closed — pre-open the section on a shared
+        // context (same label → same persistent id) so the groups paint.
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1024.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(raw.clone(), |ui| {
+            egui::CollapsingHeader::new(Str::Optics.t())
+                .default_open(true)
+                .show(ui, |_| {});
+        });
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(raw, |ui| {
+            app.draw_optics(ui);
+        });
+        output.textures_delta.clear();
+        let texts = painted_texts(&output.shapes);
+        for group in [
+            Str::OpticsDistortionGroup.t(),
+            Str::OpticsVignetteGroup.t(),
+            Str::OpticsCaGroup.t(),
+        ] {
+            assert!(
+                texts.iter().any(|t| t == group),
+                "optics group {group:?} must be painted, got {texts:?}"
+            );
+        }
+        assert!(
+            texts.iter().any(|t| t == Str::OpticsProfileNone.t()),
+            "inactive profile status must be painted, got {texts:?}"
+        );
+    }
+
+    /// GUI-OPTICS-1: without a profile the automatic correction is inactive —
+    /// a profile-less lens block renders byte-identical to no block at all,
+    /// never a silent auto-correction.
+    #[test]
+    fn auto_optics_without_profile_leaves_render_untouched() {
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        let base = app.preview().unwrap().pixels.clone();
+        let empty = LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: None,
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        app.recipe.lens_correction = Some(empty);
+        app.render().unwrap();
+        assert_eq!(
+            app.preview().unwrap().pixels,
+            base,
+            "a profile-less lens block must not touch the render"
+        );
+        // An empty profile string is not a silent inactive state at render
+        // time: core validation refuses it loudly (no silent fallback).
+        app.recipe.lens_correction.as_mut().unwrap().profile = Some(String::new());
+        assert!(
+            app.render().is_err(),
+            "an empty profile must fail loudly, never render silently"
+        );
+        let (text, active) = LuminaApp::lens_profile_status(&app.recipe.lens_correction);
+        assert!(!active);
+        assert_eq!(text, Str::OpticsProfileNone.t());
+    }
+
+    /// PREVIEW-CACHE-FEATURE (A2) + GUI-TOAST-OVERLAP-1: Loading/Stale/Failed
+    /// probes raise small corner badges (label + color); the active image and
+    /// Miss/Ready probes raise none (Ready owns the overlay toast instead).
+    #[test]
+    fn neighbor_preview_badges_for_loading_stale_failed() {
+        use lumina_core::preview_cache::PreviewKind;
+        use std::time::{Duration, Instant};
+
+        fn seed_png(dir: &std::path::Path, name: &str, seed: u8) -> std::path::PathBuf {
+            let (w, h) = (32u32, 20u32);
+            let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+            for y in 0..h {
+                for x in 0..w {
+                    let r = ((x * 255 / (w - 1)) as u8).wrapping_add(seed);
+                    let g = ((y * 255 / (h - 1)) as u8).wrapping_add(seed);
+                    pixels.extend_from_slice(&[r, g, 128, 255]);
+                }
+            }
+            let png = ImageFrame::new(w, h, pixels)
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap();
+            let path = dir.join(name);
+            std::fs::write(&path, png).unwrap();
+            path
+        }
+
+        fn neighbor_job(source: std::path::PathBuf, probe: &str) -> preview_ctrl::PreviewJob {
+            let name = source.file_name().unwrap().to_string_lossy().into_owned();
+            preview_ctrl::PreviewJob {
+                probe_id: probe.to_string(),
+                source,
+                name,
+                virtual_copy: "vc-original".into(),
+                target: (64, 64),
+                kind: PreviewKind::Screen,
+                priority: 0,
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        let (mut ctrl, _queue) = preview_ctrl::PreviewController::spawn(1);
+        // Loading: enqueued but never polled — the worker result is still queued.
+        let loading_src = seed_png(dir.path(), "loading.png", 1);
+        assert!(ctrl.enqueue(neighbor_job(loading_src, "loading-probe")));
+        assert_eq!(
+            ctrl.probe_state("loading-probe"),
+            preview_ctrl::PreviewProbeState::Loading
+        );
+        app.preview_ctrl = Some(ctrl);
+        app.preview_ctrl.as_mut().unwrap().set_active("other-probe");
+        let (label, color) = app
+            .neighbor_preview_badge("loading-probe")
+            .expect("a Loading probe must raise a badge");
+        assert_eq!(label, Str::NeighborLoading.t());
+        assert_eq!(color, egui::Color32::from_rgb(0x44, 0x66, 0x88));
+        // The active image never shows a badge, whatever its probe state.
+        app.preview_ctrl
+            .as_mut()
+            .unwrap()
+            .set_active("loading-probe");
+        assert!(
+            app.neighbor_preview_badge("loading-probe").is_none(),
+            "the active image must not carry a neighbor badge"
+        );
+        app.preview_ctrl.as_mut().unwrap().set_active("other-probe");
+        // Stale: 8 distinct previews into the 7-slot RAM LRU evict exactly one.
+        let mut ctrl = app.preview_ctrl.take().unwrap();
+        let mut probes = vec!["loading-probe".to_string()];
+        for i in 0..7u8 {
+            let src = seed_png(dir.path(), &format!("stale-{i}.png"), 10 + i);
+            let probe = format!("stale-probe-{i}");
+            assert!(ctrl.enqueue(neighbor_job(src, &probe)), "enqueue {probe}");
+            probes.push(probe);
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            ctrl.poll();
+            let pending = probes.iter().any(|probe| {
+                matches!(
+                    ctrl.probe_state(probe),
+                    preview_ctrl::PreviewProbeState::Loading
+                        | preview_ctrl::PreviewProbeState::Miss
+                )
+            });
+            if !pending {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "neighbor previews must settle, states: {:?}",
+                probes
+                    .iter()
+                    .map(|probe| (probe, ctrl.probe_state(probe)))
+                    .collect::<Vec<_>>()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let stale: Vec<String> = probes
+            .iter()
+            .filter(|probe| ctrl.probe_state(probe) == preview_ctrl::PreviewProbeState::Stale)
+            .cloned()
+            .collect();
+        assert_eq!(
+            stale.len(),
+            1,
+            "exactly one preview must be evicted to Stale, got {stale:?}"
+        );
+        app.preview_ctrl = Some(ctrl);
+        app.preview_ctrl.as_mut().unwrap().set_active("other-probe");
+        let (label, color) = app
+            .neighbor_preview_badge(&stale[0])
+            .expect("a Stale probe must raise a badge");
+        assert_eq!(label, Str::NeighborStale.t());
+        assert_eq!(color, egui::Color32::from_rgb(0xb0, 0x8a, 0x00));
+        // Failed: a missing source exhausts the worker visibly, never silently.
+        let mut ctrl = app.preview_ctrl.take().unwrap();
+        assert!(
+            ctrl.enqueue(neighbor_job(dir.path().join("gone.png"), "failed-probe")),
+            "a missing source must still enqueue visibly"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ctrl.probe_state("failed-probe") == preview_ctrl::PreviewProbeState::Loading
+            && Instant::now() < deadline
+        {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert_eq!(
+            ctrl.probe_state("failed-probe"),
+            preview_ctrl::PreviewProbeState::Failed,
+            "a missing source must end Failed, never stuck Loading"
+        );
+        let message = ctrl
+            .failure("failed-probe")
+            .unwrap_or("unbekannt")
+            .to_string();
+        app.preview_ctrl = Some(ctrl);
+        app.preview_ctrl.as_mut().unwrap().set_active("other-probe");
+        let (label, color) = app
+            .neighbor_preview_badge("failed-probe")
+            .expect("a Failed probe must raise a badge");
+        assert_eq!(label, Str::NeighborFailedPattern.format_arg(&message));
+        assert_eq!(color, egui::Color32::from_rgb(0xb0, 0x2a, 0x2a));
+    }
+
+    /// GUI-TOAST-OVERLAP-1: the overlay toast takes no layout width — the
+    /// central column next to the navigator rail is exactly as wide with the
+    /// toast visible as without it.
+    #[test]
+    fn toast_leaves_rail_layout_width_unchanged() {
+        fn central_width(toast: bool) -> f32 {
+            use std::cell::Cell;
+            let width = Cell::new(0.0f32);
+            let mut app = new_app();
+            if toast {
+                app.show_toast(Str::ToastPreviewReady.t().to_string(), 0.0);
+            }
+            assert_eq!(app.toast_visible(0.0), toast);
+            let ctx = egui::Context::default();
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(1024.0, 720.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| {
+                egui::Panel::left("navigator")
+                    .resizable(true)
+                    .default_size(150.0)
+                    .show(ui, |ui| {
+                        ui.label("Navigator");
+                    });
+                egui::CentralPanel::default().show(ui, |ui| {
+                    width.set(ui.available_width());
+                });
+                let c = ui.ctx().clone();
+                app.draw_toast(&c);
+            });
+            output.textures_delta.clear();
+            width.get()
+        }
+
+        let plain = central_width(false);
+        let with_toast = central_width(true);
+        assert!(plain > 0.0, "central column must have width");
+        assert_eq!(
+            plain, with_toast,
+            "a visible toast must not steal layout width ({plain} vs {with_toast})"
+        );
+    }
+
+    /// GUI-FILMSTRIP-DUP-1: a Library grid single-click routes through the
+    /// shared filmstrip selection (select, no open); the grid double-click
+    /// opens through the shared filmstrip click path. A grid click on a
+    /// non-RAW entry leaves the selection alone.
+    #[test]
+    fn grid_click_routes_through_shared_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        app.entries = vec![
+            raw_entry(dir.path(), "a.cr3"),
+            raw_entry(dir.path(), "b.cr3"),
+            raw_entry(dir.path(), "c.cr3"),
+        ];
+        let order = app.filmstrip_order();
+        // Grid single-click: shared select, no open.
+        app.select_filmstrip_path(order[0].clone(), false, false);
+        assert_eq!(app.filmstrip_selection(), vec![order[0].clone()]);
+        // Identical bookkeeping to a filmstrip plain click.
+        let (expected, _) = LuminaApp::apply_filmstrip_click(
+            &order,
+            &BTreeSet::new(),
+            None,
+            &order[0],
+            false,
+            false,
+        );
+        assert_eq!(
+            app.filmstrip_selection()
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            expected,
+            "grid and filmstrip clicks must share one bookkeeping"
+        );
+        // Grid double-click: opens through the shared click path — the
+        // selection itself is synchronous (never waits for the decode).
+        app.handle_filmstrip_click(order[1].clone(), false, false);
+        assert!(
+            app.filmstrip_selection().contains(&order[1]),
+            "double-click must select through the shared path"
+        );
+        // A non-RAW grid entry is no selection target: nothing changes.
+        let before = app.filmstrip_selection();
+        app.select_filmstrip_path(
+            dir.path().join("notes.png").display().to_string(),
+            false,
+            false,
+        );
+        assert_eq!(app.filmstrip_selection(), before);
+    }
+
+    /// GUI-FILMSTRIP-DUP-1: a duplicated source path appears exactly once per
+    /// view — filmstrip, navigator rail and Library grid share one deduped
+    /// index source.
+    #[test]
+    fn duplicate_paths_appear_once_per_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        app.entries = vec![
+            raw_entry(dir.path(), "a.cr3"),
+            raw_entry(dir.path(), "b.cr3"),
+            raw_entry(dir.path(), "a.cr3"),
+        ];
+        let indices = app.raw_entry_indices();
+        assert_eq!(
+            indices.len(),
+            2,
+            "a duplicated path must collapse to one entry, got {indices:?}"
+        );
+        let order = app.filmstrip_order();
+        assert_eq!(order.len(), 2);
+        let mut sorted = order.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            order.len(),
+            "filmstrip order must hold no duplicates"
+        );
+        let rail: Vec<String> = indices
+            .iter()
+            .map(|&i| app.entries[i].path.display().to_string())
+            .collect();
+        assert_eq!(rail, order, "rail and filmstrip share one index source");
+    }
+
+    /// GUI-NAV-RECT-1 + PERF-GUI-5: the navigator rectangle and the render ROI
+    /// describe the same visible window — their centres coincide and the ROI
+    /// is the navigator window expanded by exactly the pan margin.
+    #[test]
+    fn navigator_rect_matches_roi_from_zoom() {
+        let (src_w, src_h) = (600.0f32, 400.0f32);
+        let (pane_w, pane_h) = (300.0f32, 200.0f32);
+        let zoom = 2.0f32;
+        let pan = egui::Vec2::ZERO;
+        let roi = LuminaApp::roi_from_zoom(600, 400, zoom, pan, pane_w, pane_h)
+            .expect("a 2x zoom must crop an ROI");
+        let fit = (f64::from(pane_w) / 600.0).min(f64::from(pane_h) / 400.0);
+        let scale = zoom * fit as f32;
+        let nav = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 200.0));
+        let rect =
+            LuminaApp::navigator_viewport_rect(nav, src_w, src_h, pane_w, pane_h, scale, pan);
+        // Back to source pixels (the overview maps 600x400 onto 300x200).
+        let to_src_x = 600.0 / nav.width();
+        let to_src_y = 400.0 / nav.height();
+        let nav_src = [
+            (rect.min.x - nav.min.x) * to_src_x,
+            (rect.min.y - nav.min.y) * to_src_y,
+            rect.width() * to_src_x,
+            rect.height() * to_src_y,
+        ];
+        let roi_cx = roi[0] as f32 + roi[2] as f32 / 2.0;
+        let roi_cy = roi[1] as f32 + roi[3] as f32 / 2.0;
+        let nav_cx = nav_src[0] + nav_src[2] / 2.0;
+        let nav_cy = nav_src[1] + nav_src[3] / 2.0;
+        assert!(
+            (roi_cx - nav_cx).abs() < 1.0 && (roi_cy - nav_cy).abs() < 1.0,
+            "ROI centre ({roi_cx},{roi_cy}) must match the navigator window ({nav_cx},{nav_cy})"
+        );
+        let margin = PREVIEW_ROI_MARGIN as f32;
+        assert!(
+            (roi[2] as f32 - nav_src[2] * margin).abs() < 2.0
+                && (roi[3] as f32 - nav_src[3] * margin).abs() < 2.0,
+            "ROI {:?} must be the navigator window {nav_src:?} expanded by the margin {margin}",
+            roi
+        );
+    }
+
+    /// GUI-PREVIEW-NAV-1 (F-100): every nominal zoom stage derives its
+    /// relative-to-fit multiplier and names itself in the toolbar readout;
+    /// continuous zoom pins `Custom` instead.
+    #[test]
+    fn zoom_step_cycles_all_nominal_stages() {
+        let mut app = new_app();
+        // Pane 800x600 over a 600x400 source: fit = 4/3.
+        app.preview_base_fit_scale = (800.0f32 / 600.0).min(600.0 / 400.0);
+        app.preview_pane_w = 800.0;
+        app.preview_pane_h = 600.0;
+        app.preview_src_w = 600.0;
+        app.preview_src_h = 400.0;
+        let fit = app.preview_base_fit_scale;
+        for (mode, expected_zoom, expected_label) in [
+            (ZoomMode::Fit, 1.0, "Fit"),
+            (ZoomMode::Quarter, 0.25 / fit, "25%"),
+            (ZoomMode::Half, 0.5 / fit, "50%"),
+            (ZoomMode::ThreeQuarter, 0.75 / fit, "75%"),
+            (ZoomMode::OneToOne, 1.0 / fit, "100%"),
+            (ZoomMode::TwoHundred, 2.0 / fit, "200%"),
+            (ZoomMode::FitWidth, (800.0 / 600.0) / fit, "Fit Width"),
+        ] {
+            app.preview_pan = egui::vec2(24.0, -12.0);
+            app.set_zoom_mode(mode);
+            app.sync_zoom();
+            assert!(
+                (app.preview_zoom - expected_zoom).abs() < 1e-4,
+                "{mode:?} must derive zoom {expected_zoom}, got {}",
+                app.preview_zoom
+            );
+            assert_eq!(app.zoom_label(), expected_label, "{mode:?} label");
+            assert_eq!(
+                app.preview_pan,
+                egui::Vec2::ZERO,
+                "{mode:?} must re-centre the pan"
+            );
+        }
+        // Continuous zoom pins Custom with its own readout.
+        app.set_zoom_mode(ZoomMode::Fit);
+        app.sync_zoom();
+        app.zoom_step(1.5);
+        assert_eq!(app.zoom_mode, ZoomMode::Custom);
+        assert!((app.preview_zoom - 1.5).abs() < 1e-6);
+        assert_eq!(app.zoom_label(), "Custom");
+    }
+
+    /// REVIEW-GUI-N5: a draft analysis render is flagged as draft and the
+    /// histogram panel says so instead of posing as the final render state.
+    #[test]
+    fn draft_analysis_render_marks_histogram_draft() {
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        assert!(
+            !app.preview_is_draft(),
+            "a settled full render is never a draft"
+        );
+        app.render_draft([64, 40], None).unwrap();
+        assert!(
+            app.preview_is_draft(),
+            "a drag render must flag the preview as draft"
+        );
+        assert!(
+            app.current_histogram().is_some(),
+            "the draft keeps its full-frame analysis"
+        );
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_histogram(ui));
+        let texts = painted_texts(&shapes);
+        assert!(
+            texts.iter().any(|t| t == Str::HistogramDraft.t()),
+            "the draft histogram badge must be painted, got {texts:?}"
+        );
+    }
+
+    /// GUI-PREVIEW-NOISE-1 (portrait): the same full-frame guarantee as the
+    /// landscape case — at Fit a portrait preview shows the whole frame and
+    /// its histogram matches the thumbnail histogram.
+    #[test]
+    fn fit_preview_portrait_histogram_matches_thumbnail() {
+        let (w, h) = (40u32, 64u32);
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x * 255 / (w - 1)) as u8;
+                let g = (y * 255 / (h - 1)) as u8;
+                let b = ((x + y) * 255 / (w - 1 + h - 1)) as u8;
+                pixels.extend_from_slice(&[r, g, b, 255]);
+            }
+        }
+        let original = ImageFrame::new(w, h, pixels).unwrap();
+        let png = original.encode(ImageFileFormat::Png).unwrap();
+        let mut app = new_app();
+        app.load_bytes(png, "portrait.png").unwrap();
+        app.render().unwrap();
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert!(
+            app.preview_roi.is_none(),
+            "Fit must render the full frame (ROI None), got {:?}",
+            app.preview_roi
+        );
+        assert!(
+            !app.preview_is_draft,
+            "a settled Fit render is never a draft"
+        );
+        let preview = app.preview().expect("preview after load").clone();
+        assert_eq!((preview.width, preview.height), (40, 64));
+        let (small, sw, sh) = crate::filmstrip::downscale_rgba(
+            &original.pixels,
+            original.width,
+            original.height,
+            crate::filmstrip::THUMBNAIL_MAX_DIM,
+        );
+        let small_frame = ImageFrame::new(sw, sh, small).unwrap();
+        let thumb_ctx = RenderContext {
+            recipe: &EditRecipe::default(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let thumb = render_frame(&small_frame, &thumb_ctx).unwrap().frame;
+        let (_, preview_hist) = analyze_tone_with_histogram(&preview);
+        let (_, thumb_hist) = analyze_tone_with_histogram(&thumb);
+        let stored = app.current_histogram().expect("stored preview histogram");
+        assert_eq!(
+            stored.bins, preview_hist.bins,
+            "stored histogram must describe the displayed preview"
+        );
+        let distance = histogram_l1(&preview_hist.bins, &thumb_hist.bins);
+        assert!(
+            distance < 0.35,
+            "portrait Fit preview histogram must match the thumbnail (L1 {distance:.3} >= 0.35)"
+        );
+        let total: u64 = preview_hist.bins.iter().sum();
+        let populated = preview_hist
+            .bins
+            .iter()
+            .filter(|&&c| c as f64 > total as f64 * 0.001)
+            .count();
+        let peak = *preview_hist.bins.iter().max().unwrap() as f64 / total as f64;
+        assert!(
+            populated >= 16,
+            "preview histogram must spread over >= 16 bins, got {populated}"
+        );
+        assert!(
+            peak < 0.5,
+            "no single bin may dominate the preview histogram (peak {peak:.3})"
+        );
+    }
+
+    /// GUI-SIDECAR-READ-1 (DoD-§1): switching images restores each file's
+    /// sidecar values to the recipe AND the slider readouts — the display
+    /// comes from the file, never from session memory.
+    #[test]
+    fn switching_image_restores_sidecar_values_to_sliders() {
+        fn exposure_text(app: &mut LuminaApp) -> Vec<String> {
+            painted_texts(&headless_shapes(app, |app, ui| {
+                app.adjustment_slider(
+                    ui,
+                    "exposure",
+                    Str::Exposure.t(),
+                    identity_spec(-10.0..=10.0, 0.0, 0.1),
+                );
+            }))
+        }
+
+        /// Open `path` and wait until its background decode landed (the shared
+        /// `open_and_decode` helper only waits for *any* image — on a switch
+        /// the previous frame would satisfy it immediately, so the switch
+        /// itself must be awaited by path).
+        fn switch_and_wait(app: &mut LuminaApp, path: &str) {
+            app.open_file(path.to_string());
+            for _ in 0..2000 {
+                app.poll_decode();
+                if app.path == path || app.error().is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(app.path, path, "the switched image must finish loading");
+            assert!(app.error().is_none(), "switch must succeed");
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let source_a = directory.path().join("a.png");
+        let source_b = directory.path().join("b.png");
+        save_png(&source_a);
+        save_png(&source_b);
+        let mut app = new_app();
+        switch_and_wait(&mut app, &source_a.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        switch_and_wait(&mut app, &source_b.display().to_string());
+        app.set_adjustment("exposure", -0.5);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        // Back to A: the file value 1.5 returns to recipe and slider.
+        switch_and_wait(&mut app, &source_a.display().to_string());
+        assert_eq!(app.recipe().adjustments.get("exposure"), Some(&1.5));
+        assert!(
+            exposure_text(&mut app).iter().any(|t| t == "1.5"),
+            "slider must display A's restored exposure"
+        );
+        // Over to B: the file value −0.5 returns to recipe and slider.
+        switch_and_wait(&mut app, &source_b.display().to_string());
+        assert_eq!(app.recipe().adjustments.get("exposure"), Some(&-0.5));
+        assert!(
+            exposure_text(&mut app).iter().any(|t| t == "-0.5"),
+            "slider must display B's restored exposure"
+        );
     }
 
     /// GUI-LIBRARY-BADGE-CONTRAST-1: white badge text on the badge chip meets
