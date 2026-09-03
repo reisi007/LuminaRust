@@ -21,6 +21,7 @@
 //! a right-aligned monospace value that is editable inline (via [`egui::DragValue`]),
 //! tooltips, focus/keyboard accessibility and a grayed disabled state.
 
+use crate::i18n::Str;
 use crate::theme::{ACCENT, DISABLED, HANDLE_BORDER, TRACK_HOVER, TRACK_IDLE};
 use eframe::egui;
 
@@ -58,6 +59,15 @@ pub enum SliderAction {
     ResetRequested,
     /// Nothing relevant happened.
     Nothing,
+}
+
+/// Whether a label interaction requests a single-control reset (Welle 2,
+/// F-100): a label double-click always resets, and an Alt/Option-held single
+/// click resets too (Alt-Regler-Reset for Exposure/Contrast and every other
+/// row). A plain single click never resets (it only focuses the row).
+/// Pure function so the rule is unit-testable without an [`egui::Ui`].
+pub fn label_reset_requested(double_clicked: bool, alt_single_click: bool) -> bool {
+    double_clicked || alt_single_click
 }
 
 /// Static parameters of a slider row.
@@ -361,7 +371,10 @@ pub fn lr_slider<T: Scalar>(
                 .sense(egui::Sense::click()),
         );
         let label_double_clicked = label_response.double_clicked();
-        label_response.on_hover_text("Double-click to reset to default");
+        // Welle 2 Alt-Regler-Reset: Alt/Option-held single click on the label
+        // resets exactly like a double-click (same single-control rule).
+        let alt_clicked = label_response.clicked() && mods.alt;
+        label_response.on_hover_text(Str::SliderResetHint.t());
 
         ui.add_space(ROW_SPACING);
 
@@ -424,7 +437,7 @@ pub fn lr_slider<T: Scalar>(
         }
 
         // ----- Label double-click resets only this control -----
-        if label_double_clicked {
+        if label_reset_requested(label_double_clicked, alt_clicked) {
             *value = T::from_f64(spec.default);
             action = SliderAction::ResetRequested;
         }
@@ -453,5 +466,20 @@ pub fn identity_spec(range: std::ops::RangeInclusive<f64>, default: f64, step: f
         coarse_step: step,
         fine_step: step / 10.0,
         unit: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alt_click_resets_like_double_click() {
+        // Welle 2 Alt-Regler-Reset: double-click always resets, Alt-held
+        // single click resets too, a plain single click never does.
+        assert!(label_reset_requested(true, false));
+        assert!(label_reset_requested(false, true));
+        assert!(label_reset_requested(true, true));
+        assert!(!label_reset_requested(false, false));
     }
 }

@@ -164,6 +164,133 @@ pub fn flag_for_key(key: egui::Key) -> Option<Flag> {
     }
 }
 
+/// Maps a number key to a Lightroom-style color label (Welle 2, LR-17 light):
+/// `6`–`9` select label `1`–`4` (red/yellow/green/blue, see
+/// [`color_label_name`]), stored in the active copy's `extras["color_label"]`
+/// so no sidecar schema change is needed. Pure function, unit-tested without
+/// an [`egui::Context`].
+pub fn color_label_for_key(key: egui::Key) -> Option<u8> {
+    match key {
+        egui::Key::Num6 => Some(1),
+        egui::Key::Num7 => Some(2),
+        egui::Key::Num8 => Some(3),
+        egui::Key::Num9 => Some(4),
+        _ => None,
+    }
+}
+
+/// User-visible name of a color label (`0` = none). Routed through [`Str`] so
+/// no panel carries a free-form literal.
+pub fn color_label_name(label: u8) -> &'static str {
+    match label {
+        1 => Str::ColorRed.t(),
+        2 => Str::ColorYellow.t(),
+        3 => Str::ColorGreen.t(),
+        4 => Str::ColorBlue.t(),
+        _ => Str::ColorLabel.t(),
+    }
+}
+
+/// Read a color label (`0..=4`, `0` = none) from a virtual copy's `extras`
+/// map. Missing, non-numeric or out-of-range values read as `0` (none): the
+/// field is a forward-compatible cosmetic annotation, while the strict
+/// `0..=4` gate lives on the [`LuminaApp::set_color_label`] write path.
+/// Shared by the Library scan and the rating section so both read one path.
+pub fn color_label_of(extras: &BTreeMap<String, serde_json::Value>) -> u8 {
+    extras
+        .get("color_label")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|&n| n <= 4)
+        .unwrap_or(0) as u8
+}
+
+/// Copy/paste-settings clipboard action (Welle 2, LR-09): `Cmd/Ctrl+Shift+C`
+/// copies the session recipe, `Cmd/Ctrl+Shift+V` pastes it onto the active
+/// virtual copy. Pure function, unit-tested without an [`egui::Context`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardAction {
+    Copy,
+    Paste,
+}
+
+pub fn clipboard_action_for_key(
+    key: egui::Key,
+    command: bool,
+    shift: bool,
+) -> Option<ClipboardAction> {
+    if !(command && shift) {
+        return None;
+    }
+    match key {
+        egui::Key::C => Some(ClipboardAction::Copy),
+        egui::Key::V => Some(ClipboardAction::Paste),
+        _ => None,
+    }
+}
+
+/// Display-only Develop view toggle (Welle 2): `V` black-&-white treatment
+/// (recipe-backed, restores on second press), `J` clipping warnings (badge
+/// computed from preview pixels), `L` lights-out (hides side panels and the
+/// filmstrip, header stays). Pure function, unit-tested without an
+/// [`egui::Context`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewToggle {
+    BlackWhite,
+    Clipping,
+    LightsOut,
+}
+
+pub fn view_toggle_for_key(key: egui::Key) -> Option<ViewToggle> {
+    match key {
+        egui::Key::V => Some(ViewToggle::BlackWhite),
+        egui::Key::J => Some(ViewToggle::Clipping),
+        egui::Key::L => Some(ViewToggle::LightsOut),
+        _ => None,
+    }
+}
+
+/// Panel-visibility toggle (Welle 2): `R` arms/disarms the crop mode badge
+/// (edits stay in the Geometry Crop controls), `Tab` hides/shows the side
+/// panels (the filmstrip stays; `L` lights-out hides that too). Pure
+/// function, unit-tested without an [`egui::Context`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelToggle {
+    CropMode,
+    PanelsHidden,
+}
+
+pub fn panel_toggle_for_key(key: egui::Key) -> Option<PanelToggle> {
+    match key {
+        egui::Key::R => Some(PanelToggle::CropMode),
+        egui::Key::Tab => Some(PanelToggle::PanelsHidden),
+        _ => None,
+    }
+}
+
+/// Shadow/highlight clipping fractions (`0..=1`) of a frame: a pixel counts
+/// as shadow-clipped when all channels are `0`, as highlight-clipped when
+/// all are `255`. Pure display diagnostic for the `J` overlay badge — it
+/// never feeds back into the recipe or render. Empty frames report `(0, 0)`.
+pub fn clip_fractions(frame: &ImageFrame) -> (f64, f64) {
+    let total = (frame.width as usize) * (frame.height as usize);
+    if total == 0 || frame.pixels.len() < total * 4 {
+        return (0.0, 0.0);
+    }
+    let mut shadow = 0usize;
+    let mut highlight = 0usize;
+    for px in frame.pixels.chunks_exact(4) {
+        if px[0] == 0 && px[1] == 0 && px[2] == 0 {
+            shadow += 1;
+        } else if px[0] == 255 && px[1] == 255 && px[2] == 255 {
+            highlight += 1;
+        }
+    }
+    (
+        shadow as f64 / total as f64,
+        highlight as f64 / total as f64,
+    )
+}
+
 /// Maps a key (+ Shift state) to an interactive masking tool (LR-10):
 /// `K` brush, `M` linear gradient, `Shift+M` radial gradient. Pure function,
 /// unit-tested without an [`egui::Context`]. Arming itself still goes through
@@ -531,6 +658,20 @@ pub struct LuminaApp {
     export_quality: u8,
     /// Before/After toggle state. Never mutates the recipe.
     before_after: bool,
+    /// Welle 2 (LR-09): session-only copy/paste-settings clipboard. Holds the
+    /// recipe snapshot taken by `Cmd/Ctrl+Shift+C`; `None` until the first
+    /// copy. Never persisted (Lightroom behaviour) — paste applies it to the
+    /// active copy through the normal save/render path. Native-only: clipboard
+    /// and sidecar persistence are file-system capabilities.
+    #[cfg(not(target_arch = "wasm32"))]
+    settings_clipboard: Option<EditRecipe>,
+    /// Welle 2 display-only view flags (`J` clipping overlay, `L` lights-out,
+    /// `Tab` panel hide, `R` crop mode). None of them mutates the recipe; the
+    /// B&W `V` treatment is recipe-backed instead (see `toggle_black_white`).
+    clipping_overlay: bool,
+    lights_out: bool,
+    panels_hidden: bool,
+    crop_mode: bool,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
     /// Generated filmstrip thumbnail textures. Native-only (REVIEW-GUI-
@@ -826,6 +967,9 @@ pub struct FileBrowserEntry {
     /// Pick flag of the default virtual copy (LR-01); `Unflagged` without a
     /// sidecar.
     flag: lumina_sidecar::Flag,
+    /// Color label (`0..=4`, `0` = none) of the default virtual copy (Welle 2),
+    /// read from the copy's `extras["color_label"]`; `0` without a sidecar.
+    color_label: u8,
 }
 
 /// REVIEW-GUI-THUMB-1: stable thumbnail cache key. The canonicalized absolute
@@ -1017,6 +1161,12 @@ impl LuminaApp {
             #[cfg(not(target_arch = "wasm32"))]
             export_quality: 90,
             before_after: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            settings_clipboard: None,
+            clipping_overlay: false,
+            lights_out: false,
+            panels_hidden: false,
+            crop_mode: false,
             wb_pick_mode: false,
             #[cfg(not(target_arch = "wasm32"))]
             thumbnails: ThumbnailManager::new(),
@@ -1249,6 +1399,7 @@ impl LuminaApp {
         // canonical per-image organization state.
         let mut rating = 0u8;
         let mut flag = lumina_sidecar::Flag::Unflagged;
+        let mut color_label = 0u8;
         let source_status = if path.is_file() {
             match lumina_sidecar::load_sidecar(&sidecar_path) {
                 Ok(document) => {
@@ -1261,6 +1412,7 @@ impl LuminaApp {
                     {
                         rating = default.rating;
                         flag = default.flag;
+                        color_label = color_label_of(&default.extras);
                     }
                     let bundle_root = path.parent().unwrap_or_else(|| Path::new("."));
                     for copy in &document.virtual_copies {
@@ -1306,6 +1458,7 @@ impl LuminaApp {
             missing_models,
             rating,
             flag,
+            color_label,
         })
     }
     pub fn status(&self) -> &str {
@@ -1497,6 +1650,242 @@ impl LuminaApp {
         self.save_sidecar();
         self.status = Str::FlagSetPattern.format_arg(flag_label(flag));
         Ok(())
+    }
+
+    /// Current color label (`0..=4`, `0` = none) of the active virtual copy
+    /// (Welle 2): read from the copy's `extras["color_label"]` — a plain
+    /// cosmetic annotation, no sidecar schema change. Returns `None` when no
+    /// document is loaded; read-only accessor for the rating section, the
+    /// Library badge and headless tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn color_label(&self) -> Option<u8> {
+        self.document.as_ref().and_then(|document| {
+            document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == self.virtual_copy_id)
+                .map(|copy| color_label_of(&copy.extras))
+        })
+    }
+
+    /// Set the color label (`0..=4`, `0` = none) of the active virtual copy
+    /// (Welle 2, keys `6`–`9` select `1`–`4`). Persists through
+    /// [`Self::save_sidecar`] so the value survives restarts; values `> 4`
+    /// are rejected loudly, never clamped.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_color_label(&mut self, label: u8) -> Result<(), GuiError> {
+        if label > 4 {
+            return Err(GuiError::Io(Str::InvalidColorLabel.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        self.active_copy_mut()?
+            .extras
+            .insert("color_label".into(), serde_json::Value::from(label));
+        self.save_sidecar();
+        self.status = Str::ColorLabelSetPattern.format_arg(color_label_name(label));
+        Ok(())
+    }
+
+    /// Copy the session recipe into the session clipboard (Welle 2, LR-09,
+    /// `Cmd/Ctrl+Shift+C`). Session-only — never persisted. Fails loudly
+    /// when no image is loaded so an empty copy can never silently succeed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn copy_settings(&mut self) -> Result<(), GuiError> {
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        trace!("GUI interaction: copy_settings");
+        self.settings_clipboard = Some(self.recipe.clone());
+        self.status = Str::SettingsCopied.t().into();
+        Ok(())
+    }
+
+    /// Whether the session clipboard holds copied settings (read-only
+    /// accessor for headless tests).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn clipboard_has_settings(&self) -> bool {
+        self.settings_clipboard.is_some()
+    }
+
+    /// Paste the clipboard recipe onto the active virtual copy (Welle 2,
+    /// LR-09, `Cmd/Ctrl+Shift+V`). Applies through the normal save/render
+    /// path, so the preview generation bumps and the sidecar persists the
+    /// result. Fails loudly on an empty clipboard or without a loaded image —
+    /// never a silent no-op.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn paste_settings(&mut self) -> Result<(), GuiError> {
+        let Some(snapshot) = self.settings_clipboard.clone() else {
+            return Err(GuiError::Io(Str::ClipboardEmpty.t().to_string()));
+        };
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        trace!("GUI interaction: paste_settings");
+        self.recipe = snapshot;
+        self.mark_dirty();
+        self.save_sidecar();
+        self.render()?;
+        self.status = Str::SettingsPasted.t().into();
+        Ok(())
+    }
+
+    /// Whether the black-&-white treatment (`V`) is active: the recipe carries
+    /// `extras["treatment"] = "bw"`. Read-only accessor for badges and
+    /// headless tests.
+    pub fn bw_active(&self) -> bool {
+        self.recipe
+            .extras
+            .get("treatment")
+            .and_then(|v| v.as_str())
+            .is_some_and(|t| t == "bw")
+    }
+
+    /// Toggle the Lightroom-style B&W treatment (`V`, Welle 2). Enabling
+    /// stashes the current `saturation`/`vibrance` (including absence) in
+    /// `extras["bw_stash"]` and sets both to `-1.0` — full desaturation
+    /// through the shared pipeline stage, no GUI-side pixel logic.
+    /// Disabling restores the stashed values exactly (absent keys are removed
+    /// again, never left at `-1`). Persists via [`Self::save_sidecar`] and
+    /// re-renders, so the preview generation bumps. Fails loudly without a
+    /// loaded image.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn toggle_black_white(&mut self) -> Result<(), GuiError> {
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        if self.bw_active() {
+            let stash = self.recipe.extras.remove("bw_stash");
+            self.recipe.extras.remove("treatment");
+            match stash.as_ref().and_then(|v| {
+                serde_json::from_value::<BTreeMap<String, Option<f64>>>(v.clone()).ok()
+            }) {
+                Some(map) => {
+                    for key in ["saturation", "vibrance"] {
+                        match map.get(key).copied().flatten() {
+                            Some(value) => {
+                                self.recipe.adjustments.insert(key.into(), value);
+                            }
+                            None => {
+                                self.recipe.adjustments.remove(key);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    // No (or corrupt) stash: the treatment marker is still
+                    // removed above, but `-1` values must not linger silently
+                    // — drop both keys so the recipe returns to identity.
+                    warn!(
+                        "B&W stash missing or corrupt; resetting saturation/vibrance to identity"
+                    );
+                    self.recipe.adjustments.remove("saturation");
+                    self.recipe.adjustments.remove("vibrance");
+                }
+            }
+            self.status = Str::BlackWhiteOff.t().into();
+        } else {
+            let mut stash = BTreeMap::new();
+            for key in ["saturation", "vibrance"] {
+                stash.insert(key.to_string(), self.recipe.adjustments.get(key).copied());
+            }
+            self.recipe.extras.insert(
+                "bw_stash".into(),
+                serde_json::to_value(&stash).expect("f64 stash serializes"),
+            );
+            self.recipe
+                .extras
+                .insert("treatment".into(), serde_json::Value::String("bw".into()));
+            self.recipe.adjustments.insert("saturation".into(), -1.0);
+            self.recipe.adjustments.insert("vibrance".into(), -1.0);
+            self.status = Str::BlackWhiteOn.t().into();
+        }
+        trace!(
+            "GUI interaction: toggle_black_white -> {}",
+            self.bw_active()
+        );
+        self.mark_dirty();
+        self.save_sidecar();
+        self.render()?;
+        // `render` overwrites the status ("Preview current"); restore the
+        // treatment message so the toggle stays visible.
+        self.status = if self.bw_active() {
+            Str::BlackWhiteOn.t().into()
+        } else {
+            Str::BlackWhiteOff.t().into()
+        };
+        Ok(())
+    }
+
+    /// Toggle the clipping-warning overlay badge (`J`, Welle 2). Display-only:
+    /// while armed, the preview header shows shadow/highlight clipping
+    /// fractions computed from the displayed pixels (see
+    /// [`clip_fractions`]). Never mutates the recipe.
+    pub fn toggle_clipping_overlay(&mut self) {
+        self.clipping_overlay = !self.clipping_overlay;
+        trace!(
+            "GUI interaction: toggle_clipping_overlay -> {}",
+            self.clipping_overlay
+        );
+        self.status = if self.clipping_overlay {
+            Str::ClippingOn.t().into()
+        } else {
+            Str::ClippingOff.t().into()
+        };
+    }
+
+    /// Clipping fractions of the currently displayed frame for the `J` badge:
+    /// the original while Before/After is held, otherwise the last preview.
+    /// `None` when no frame is displayed yet.
+    pub fn clipping_detail(&self) -> Option<(f64, f64)> {
+        if self.before_after {
+            self.original.as_ref().map(clip_fractions)
+        } else {
+            self.preview.as_ref().map(clip_fractions)
+        }
+    }
+
+    /// Toggle lights-out (`L`, Welle 2). Display-only: hides the side panels
+    /// and the filmstrip; header, module bar and preview stay so status and
+    /// errors remain visible. Never mutates the recipe.
+    pub fn toggle_lights_out(&mut self) {
+        self.lights_out = !self.lights_out;
+        trace!("GUI interaction: toggle_lights_out -> {}", self.lights_out);
+        self.status = if self.lights_out {
+            Str::LightsOutOn.t().into()
+        } else {
+            Str::LightsOutOff.t().into()
+        };
+    }
+
+    /// Toggle side-panel visibility (`Tab`, Welle 2). Display-only: hides the
+    /// left/right panels; the filmstrip stays (unlike `L` lights-out).
+    /// Never mutates the recipe.
+    pub fn toggle_panels_hidden(&mut self) {
+        self.panels_hidden = !self.panels_hidden;
+        trace!(
+            "GUI interaction: toggle_panels_hidden -> {}",
+            self.panels_hidden
+        );
+        self.status = if self.panels_hidden {
+            Str::PanelsHiddenOn.t().into()
+        } else {
+            Str::PanelsHiddenOff.t().into()
+        };
+    }
+
+    /// Toggle the crop-mode badge (`R`, Welle 2). Display-only: while armed,
+    /// the preview header advertises the mode; edits stay in the Geometry
+    /// Crop controls. Never mutates the recipe.
+    pub fn toggle_crop_mode(&mut self) {
+        self.crop_mode = !self.crop_mode;
+        trace!("GUI interaction: toggle_crop_mode -> {}", self.crop_mode);
+        self.status = if self.crop_mode {
+            Str::CropModeOn.t().into()
+        } else {
+            Str::CropModeOff.t().into()
+        };
     }
 
     /// Current rating and flag of the active virtual copy (LR-01). Returns
@@ -6268,15 +6657,17 @@ impl LuminaApp {
                                         self.open_file(entry.path.display().to_string());
                                         self.active_module = Module::Develop;
                                     }
-                                    // LR-01: rating/flag badge of the default
-                                    // copy, painted over the cell's bottom
-                                    // edge (display-only; edits go through the
-                                    // rating section or the 1-5/P/X/U keys).
-                                    // Unrated + unflagged cells stay clean.
+                                    // LR-01 + Welle 2: rating/flag/color-label
+                                    // badge of the default copy, painted over
+                                    // the cell's bottom edge (display-only;
+                                    // edits go through the rating section or
+                                    // the 1-5/6-9/P/X/U keys). Unrated +
+                                    // unflagged + unlabeled cells stay clean.
                                     if entry.rating > 0
                                         || entry.flag != lumina_sidecar::Flag::Unflagged
+                                        || entry.color_label > 0
                                     {
-                                        let badge = match entry.flag {
+                                        let mut badge = match entry.flag {
                                             lumina_sidecar::Flag::Pick => {
                                                 format!("{} P", stars_for_rating(entry.rating))
                                             }
@@ -6287,11 +6678,17 @@ impl LuminaApp {
                                                 stars_for_rating(entry.rating)
                                             }
                                         };
+                                        if entry.color_label > 0 {
+                                            badge.push_str(&format!(
+                                                " ●{}",
+                                                color_label_name(entry.color_label)
+                                            ));
+                                        }
                                         let badge_pos = rect.left_bottom() + egui::vec2(4.0, -16.0);
                                         ui.painter().rect_filled(
                                             egui::Rect::from_min_size(
                                                 badge_pos - egui::vec2(2.0, 2.0),
-                                                egui::vec2(76.0, 16.0),
+                                                egui::vec2(118.0, 16.0),
                                             ),
                                             2.0,
                                             egui::Color32::from_black_alpha(160),
@@ -6307,7 +6704,7 @@ impl LuminaApp {
                                     // Sidecar/copy status on hover (kept from the former
                                     // text file-browser).
                                     resp.on_hover_text(format!(
-                                        "{}\n[{}] {}:{} {}:{} {}:{} {}:{}",
+                                        "{}\n[{}] {}:{} {}:{} {}:{} {}:{} {}:{}",
                                         entry.name,
                                         entry.status_label(),
                                         Str::Copies.t(),
@@ -6318,6 +6715,8 @@ impl LuminaApp {
                                         stars_for_rating(entry.rating),
                                         Str::FlagLabel.t(),
                                         flag_label(entry.flag),
+                                        Str::ColorLabel.t(),
+                                        color_label_name(entry.color_label),
                                     ));
                                 }
                             });
@@ -6560,11 +6959,13 @@ impl LuminaApp {
         });
     }
 
-    /// Lightroom-style Rating section (LR-01): star buttons `1`–`5` plus clear
-    /// (`0` = unrated) and Pick/Reject/Unflag buttons for the active virtual
-    /// copy. Every button routes through [`Self::set_rating`]/[`Self::set_flag`]
-    /// — the same paths the `1-5`/`P`/`X`/`U` shortcuts use — so panel and
-    /// keyboard can never diverge.
+    /// Lightroom-style Rating section (LR-01 + Welle 2 color label): star
+    /// buttons `1`–`5` plus clear (`0` = unrated), Pick/Reject/Unflag buttons
+    /// and color-label buttons (`6`–`9` select `1`–`4`, `0` clears) for the
+    /// active virtual copy. Every button routes through
+    /// [`Self::set_rating`]/[`Self::set_flag`]/[`Self::set_color_label`] —
+    /// the same paths the `1-5`/`6-9`/`P`/`X`/`U` shortcuts use — so panel
+    /// and keyboard can never diverge.
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_rating_section(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::Rating.t(), |ui| {
@@ -6572,8 +6973,14 @@ impl LuminaApp {
                 ui.label(Str::NoSidecarLoaded.t());
                 return;
             };
+            let label = self.color_label().unwrap_or(0);
             ui.horizontal(|ui| {
-                ui.label(format!("{} {}", stars_for_rating(rating), flag_label(flag)));
+                ui.label(format!(
+                    "{} {} ●{}",
+                    stars_for_rating(rating),
+                    flag_label(flag),
+                    color_label_name(label)
+                ));
             });
             ui.horizontal(|ui| {
                 for candidate in 0..=5u8 {
@@ -6600,6 +7007,25 @@ impl LuminaApp {
                         .clicked()
                     {
                         if let Err(error) = self.set_flag(candidate) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(Str::ColorLabel.t());
+                for candidate in 0..=4u8 {
+                    let name = if candidate == 0 {
+                        Str::UnsetPattern.format_arg("0")
+                    } else {
+                        format!("{candidate} {}", color_label_name(candidate))
+                    };
+                    if ui
+                        .selectable_label(label == candidate, name)
+                        .on_hover_text(format!("{candidate}"))
+                        .clicked()
+                    {
+                        if let Err(error) = self.set_color_label(candidate) {
                             self.show_error(error);
                         }
                     }
@@ -6990,6 +7416,29 @@ impl LuminaApp {
             ));
         } else {
             ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
+        }
+        // Welle 2 view-state badges: crop mode (`R`), B&W treatment (`V`)
+        // and the clipping overlay (`J`) advertise their state in the
+        // preview header so no toggle is ever silent.
+        if self.crop_mode {
+            ui.colored_label(egui::Color32::YELLOW, Str::CropModeOn.t());
+        }
+        if self.bw_active() {
+            ui.label(Str::BlackWhiteOn.t());
+        }
+        if self.clipping_overlay {
+            match self.clipping_detail() {
+                Some((shadow, highlight)) => {
+                    let text = Str::ClippingDetailPattern
+                        .t()
+                        .replacen("{}", &format!("{:.1}", shadow * 100.0), 1)
+                        .replacen("{}", &format!("{:.1}", highlight * 100.0), 1);
+                    ui.colored_label(egui::Color32::YELLOW, text);
+                }
+                None => {
+                    ui.colored_label(egui::Color32::YELLOW, Str::ClippingOn.t());
+                }
+            }
         }
         // R2-GUIMOD-06: surface the otherwise-silent GPU→CPU routing fallback
         // as a visible status badge (with tooltip) instead of only a stderr
@@ -7641,6 +8090,74 @@ impl eframe::App for LuminaApp {
                     self.show_error(error);
                 }
             }
+            // Welle 2: color labels `6`–`9` (extras, no schema change).
+            for key in [
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    if let Some(label) = color_label_for_key(key) {
+                        if let Err(error) = self.set_color_label(label) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            }
+            // Welle 2 (LR-09): copy/paste settings `Cmd/Ctrl+Shift+C/V` for
+            // the active virtual copy.
+            for key in [egui::Key::C, egui::Key::V] {
+                if ctx.input(|i| {
+                    i.key_pressed(key)
+                        && (i.modifiers.ctrl || i.modifiers.command)
+                        && i.modifiers.shift
+                }) {
+                    match clipboard_action_for_key(key, true, true) {
+                        Some(ClipboardAction::Copy) => {
+                            if let Err(error) = self.copy_settings() {
+                                self.show_error(error);
+                            }
+                        }
+                        Some(ClipboardAction::Paste) => {
+                            if let Err(error) = self.paste_settings() {
+                                self.show_error(error);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            // Welle 2: B&W treatment `V` (recipe-backed, restores on repeat).
+            if ctx.input(|i| i.key_pressed(egui::Key::V)) {
+                if let Err(error) = self.toggle_black_white() {
+                    self.show_error(error);
+                }
+            }
+        }
+
+        // Welle 2 display-only view toggles (`J` clipping, `L` lights-out,
+        // `R` crop mode, `Tab` side panels). Recipe-free by construction, so
+        // they stay available on every platform (wasm32 included).
+        if !ctx.egui_wants_keyboard_input() {
+            for key in [egui::Key::J, egui::Key::L] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    match view_toggle_for_key(key) {
+                        Some(ViewToggle::Clipping) => self.toggle_clipping_overlay(),
+                        Some(ViewToggle::LightsOut) => self.toggle_lights_out(),
+                        Some(ViewToggle::BlackWhite) | None => {}
+                    }
+                }
+            }
+            for key in [egui::Key::R, egui::Key::Tab] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    match panel_toggle_for_key(key) {
+                        Some(PanelToggle::CropMode) => self.toggle_crop_mode(),
+                        Some(PanelToggle::PanelsHidden) => self.toggle_panels_hidden(),
+                        None => {}
+                    }
+                }
+            }
         }
 
         // PERF-FILMSTRIP: drain completed thumbnails from the background pool and
@@ -7873,9 +8390,11 @@ impl eframe::App for LuminaApp {
         });
 
         // Left: Lightroom-like Library folder tree. Develop/Export leave the
-        // left edge to the navigator/preview working area.
+        // left edge to the navigator/preview working area. Hidden under `Tab`
+        // panels-hide and `L` lights-out (Welle 2); the header/module bar
+        // stay so status and errors remain visible.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.active_module == Module::Library {
+        if self.active_module == Module::Library && !self.panels_hidden && !self.lights_out {
             egui::Panel::left("folders")
                 .resizable(true)
                 .default_size(220.0)
@@ -7888,7 +8407,11 @@ impl eframe::App for LuminaApp {
         // ThumbnailManager (no duplicate generation) and highlights the active
         // image.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.navigator_open && !matches!(self.active_module, Module::Library) {
+        if self.navigator_open
+            && !matches!(self.active_module, Module::Library)
+            && !self.panels_hidden
+            && !self.lights_out
+        {
             egui::Panel::left("navigator")
                 .resizable(true)
                 .default_size(150.0)
@@ -7900,34 +8423,38 @@ impl eframe::App for LuminaApp {
         // two-pane layout (folder tree left, thumbnail grid center) with no
         // right-hand Source panel — that source/sidecar/copy info belongs to
         // the Develop/Export context (Lightroom-parity: the Source panel was
-        // removed from Library).
-        egui::Panel::right("controls")
-            .resizable(true)
-            .default_size(320.0)
-            .show(ui, |ui| match self.active_module {
-                Module::Develop => self.draw_develop_panel(ui),
-                Module::Library => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        // No right Source panel in Library — intentional.
+        // removed from Library). Hidden under `Tab`/`L` like the left panels.
+        if !self.panels_hidden && !self.lights_out {
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ui, |ui| match self.active_module {
+                    Module::Develop => self.draw_develop_panel(ui),
+                    Module::Library => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            // No right Source panel in Library — intentional.
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            ui.label(Str::NotAvailable.t());
+                        }
                     }
-                    #[cfg(target_arch = "wasm32")]
-                    {
+                    Module::Export => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        self.draw_export_panel(ui);
+                        #[cfg(target_arch = "wasm32")]
                         ui.label(Str::NotAvailable.t());
                     }
-                }
-                Module::Export => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    self.draw_export_panel(ui);
-                    #[cfg(target_arch = "wasm32")]
-                    ui.label(Str::NotAvailable.t());
-                }
-            });
+                });
+        }
 
         // Bottom: filmstrip in Library/Develop. Native builds show generated
         // thumbnails (miss -> background job); the wasm build shows placeholders
         // only, since in-browser RAW/file IO is a documented native capability.
-        let show_filmstrip = matches!(self.active_module, Module::Library | Module::Develop);
+        // `L` lights-out hides it (Welle 2); `Tab` panels-hide keeps it.
+        let show_filmstrip =
+            matches!(self.active_module, Module::Library | Module::Develop) && !self.lights_out;
         if show_filmstrip {
             #[cfg(not(target_arch = "wasm32"))]
             egui::Panel::bottom("filmstrip").show(ui, |ui| self.draw_filmstrip(&ctx, ui));
@@ -8288,6 +8815,252 @@ mod tests {
             .unwrap();
         assert_eq!(entry.rating, 3);
         assert_eq!(entry.flag, Flag::Pick);
+    }
+
+    #[test]
+    fn w2_shortcut_mappings_are_exact() {
+        // Welle 2 pure key mappings: every bound key maps, neighbours don't.
+        assert_eq!(color_label_for_key(egui::Key::Num6), Some(1));
+        assert_eq!(color_label_for_key(egui::Key::Num7), Some(2));
+        assert_eq!(color_label_for_key(egui::Key::Num8), Some(3));
+        assert_eq!(color_label_for_key(egui::Key::Num9), Some(4));
+        assert_eq!(color_label_for_key(egui::Key::Num5), None);
+        assert_eq!(color_label_for_key(egui::Key::P), None);
+        assert_eq!(
+            clipboard_action_for_key(egui::Key::C, true, true),
+            Some(ClipboardAction::Copy)
+        );
+        assert_eq!(
+            clipboard_action_for_key(egui::Key::V, true, true),
+            Some(ClipboardAction::Paste)
+        );
+        assert_eq!(clipboard_action_for_key(egui::Key::C, false, true), None);
+        assert_eq!(clipboard_action_for_key(egui::Key::C, true, false), None);
+        assert_eq!(clipboard_action_for_key(egui::Key::V, true, false), None);
+        assert_eq!(clipboard_action_for_key(egui::Key::X, true, true), None);
+        assert_eq!(
+            view_toggle_for_key(egui::Key::V),
+            Some(ViewToggle::BlackWhite)
+        );
+        assert_eq!(
+            view_toggle_for_key(egui::Key::J),
+            Some(ViewToggle::Clipping)
+        );
+        assert_eq!(
+            view_toggle_for_key(egui::Key::L),
+            Some(ViewToggle::LightsOut)
+        );
+        assert_eq!(view_toggle_for_key(egui::Key::Y), None);
+        assert_eq!(view_toggle_for_key(egui::Key::K), None);
+        assert_eq!(
+            panel_toggle_for_key(egui::Key::R),
+            Some(PanelToggle::CropMode)
+        );
+        assert_eq!(
+            panel_toggle_for_key(egui::Key::Tab),
+            Some(PanelToggle::PanelsHidden)
+        );
+        assert_eq!(panel_toggle_for_key(egui::Key::T), None);
+        assert_eq!(panel_toggle_for_key(egui::Key::F), None);
+        // Label names route through i18n, never literals.
+        assert_eq!(color_label_name(1), "Red");
+        assert_eq!(color_label_name(2), "Yellow");
+        assert_eq!(color_label_name(3), "Green");
+        assert_eq!(color_label_name(4), "Blue");
+        assert_eq!(color_label_name(0), "Color Label");
+        assert_eq!(color_label_name(9), "Color Label");
+    }
+
+    #[test]
+    fn clip_fractions_counts_pure_black_and_white() {
+        // 2×2: black, white, mid-grey, white → 25% shadow, 50% highlight.
+        let frame = ImageFrame::new(
+            2,
+            2,
+            vec![
+                0, 0, 0, 255, 255, 255, 255, 255, 10, 20, 30, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
+        let (shadow, highlight) = clip_fractions(&frame);
+        assert!((shadow - 0.25).abs() < 1e-12);
+        assert!((highlight - 0.5).abs() < 1e-12);
+        // A coloured frame clips nothing; alpha is ignored.
+        let coloured = ImageFrame::new(1, 1, vec![128, 64, 200, 0]).unwrap();
+        assert_eq!(clip_fractions(&coloured), (0.0, 0.0));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn copy_paste_settings_roundtrip_persists_and_bumps_generation() {
+        // Welle 2 (LR-09): copy snapshots the visible recipe, paste applies
+        // it through save/render (generation bump + sidecar persistence).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(!app.clipboard_has_settings());
+        assert!(app.paste_settings().is_err());
+        let generation = app.preview_generation();
+        app.set_adjustment("exposure", 2.0);
+        app.copy_settings().unwrap();
+        assert!(app.clipboard_has_settings());
+        app.set_adjustment("exposure", -1.0);
+        app.paste_settings().unwrap();
+        assert_eq!(app.recipe().adjustments["exposure"], 2.0);
+        assert!(
+            app.preview_generation() > generation,
+            "paste must re-render the preview"
+        );
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            2.0
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn clipboard_and_bw_without_image_fail_loudly() {
+        // No silent no-ops: copy/paste/B&W without a loaded image are errors.
+        let mut app = new_app();
+        assert!(app.copy_settings().is_err());
+        assert!(app.paste_settings().is_err());
+        assert!(app.toggle_black_white().is_err());
+        assert!(!app.clipboard_has_settings());
+        assert!(!app.bw_active());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn color_label_set_persists_and_rejects_invalid() {
+        // Welle 2: `extras["color_label"]` roundtrips through save/reopen and
+        // the Library scan; out-of-range values fail loudly.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert_eq!(app.color_label(), None);
+        app.set_color_label(2).unwrap();
+        assert_eq!(app.color_label(), Some(2));
+        assert!(app.set_color_label(5).is_err());
+        assert!(app.set_color_label(255).is_err());
+        // The rejected writes left the stored label untouched.
+        assert_eq!(app.color_label(), Some(2));
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(color_label_of(&document.virtual_copies[0].extras), 2);
+        // Corrupt/foreign values read as none (forward-compatible cosmetic).
+        assert_eq!(
+            color_label_of(&BTreeMap::from([(
+                "color_label".into(),
+                serde_json::Value::from(9u64)
+            )])),
+            0
+        );
+        assert_eq!(
+            color_label_of(&BTreeMap::from([(
+                "color_label".into(),
+                serde_json::Value::from("red")
+            )])),
+            0
+        );
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.color_label(), Some(2));
+        reopened.set_directory(directory.path().display().to_string());
+        let entry = reopened
+            .entries
+            .iter()
+            .find(|entry| entry.name == "photo.png")
+            .unwrap();
+        assert_eq!(entry.color_label, 2);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn black_white_treatment_sets_and_restores_saturation() {
+        // Welle 2 (`V`): enabling drives saturation/vibrance to -1 through
+        // the shared pipeline (grayscale preview pixels), disabling restores
+        // the exact previous values; the marker persists in the sidecar.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("saturation", 0.4);
+        let generation = app.preview_generation();
+        app.toggle_black_white().unwrap();
+        assert!(app.bw_active());
+        assert_eq!(app.recipe().adjustments["saturation"], -1.0);
+        assert_eq!(app.recipe().adjustments["vibrance"], -1.0);
+        assert!(
+            app.preview_generation() > generation,
+            "B&W toggle must re-render the preview"
+        );
+        let preview = app.preview().unwrap();
+        for px in preview.pixels.chunks_exact(4) {
+            let (lo, hi) = (px[0].min(px[1]).min(px[2]), px[0].max(px[1]).max(px[2]));
+            assert!(hi - lo <= 1, "B&W preview must be (near-)grayscale");
+        }
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.extras["treatment"],
+            serde_json::Value::String("bw".into())
+        );
+        app.toggle_black_white().unwrap();
+        assert!(!app.bw_active());
+        assert_eq!(app.recipe().adjustments["saturation"], 0.4);
+        // `vibrance` was absent before `V` — it is removed again, never left
+        // at -1.
+        assert!(!app.recipe().adjustments.contains_key("vibrance"));
+    }
+
+    #[test]
+    fn view_toggles_flip_status_without_touching_recipe() {
+        // Welle 2 (`J`/`L`/`R`/`Tab`): pure view state — flags flip, status
+        // is visible, the recipe (and its sidecar lineage) never changes.
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        let recipe = app.recipe().clone();
+        app.toggle_clipping_overlay();
+        assert!(app.clipping_overlay);
+        app.toggle_lights_out();
+        assert!(app.lights_out);
+        app.toggle_panels_hidden();
+        assert!(app.panels_hidden);
+        app.toggle_crop_mode();
+        assert!(app.crop_mode);
+        assert_eq!(*app.recipe(), recipe);
+        assert_eq!(app.clipping_detail(), Some((0.0, 0.0)));
+        // Second press disarms again; the recipe is still untouched.
+        app.toggle_clipping_overlay();
+        app.toggle_lights_out();
+        app.toggle_panels_hidden();
+        app.toggle_crop_mode();
+        assert!(!app.clipping_overlay);
+        assert!(!app.lights_out);
+        assert!(!app.panels_hidden);
+        assert!(!app.crop_mode);
+        assert_eq!(*app.recipe(), recipe);
+    }
+
+    #[test]
+    fn alt_reset_path_restores_single_adjustment_default() {
+        // Welle 2 Alt-Regler-Reset (`label_reset_requested` in `slider.rs`
+        // wires Alt+click to the same path): resetting one control restores
+        // its documented default and leaves every other key alone.
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.set_adjustment("exposure", 3.0);
+        app.set_adjustment("contrast", 0.5);
+        app.reset_single_adjustment("exposure");
+        assert_eq!(app.recipe().adjustments["exposure"], 0.0);
+        assert_eq!(app.recipe().adjustments["contrast"], 0.5);
     }
 
     #[test]

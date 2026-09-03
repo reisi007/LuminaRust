@@ -314,7 +314,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Pipette (White Balance Eyedropper), die einen Punkt aus Navigator oder
   Vorschau übernimmt.
 
-### Tastaturkürzel (F-100, LR-01/LR-09/LR-10)
+### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2)
 
 Alle Kürzel werden ignoriert, solange ein Widget Tastatureingaben erwartet
 (z. B. ein fokussiertes Textfeld), damit sie keinen eingegebenen Text
@@ -329,6 +329,13 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `K` / `M` / `Shift+M` | Maskenwerkzeug Pinsel / Verlauf / Radial scharfschalten | LR-10; `Esc` entschärft; bei aktiver Rezept-Geometrie laut verweigert |
 | `Q` | Spot-Heal-Werkzeug umschalten | bereits gebunden |
 | `Cmd/Ctrl+'` | Aktive virtuelle Kopie duplizieren und auswählen | LR-09; vorheriges `save_sidecar` sichert ungespeicherte Edits, damit das Duplikat den aktuellen Stand erbt |
+| `Cmd/Ctrl+Shift+C` / `Cmd/Ctrl+Shift+V` | Einstellungen kopieren / einfügen (aktive virtuelle Kopie) | LR-09 Welle 2; sitzungsweiter Clipboard (nicht persistiert), Einfügen über Save/Render-Pfad mit `preview_generation`-Bump |
+| `6`–`9` | Farb-Label 1–4 (Rot/Gelb/Grün/Blau) der aktiven Kopie | Welle 2; `extras["color_label"]`, kein Schema-Change; `0` = kein Label |
+| `V` | Schwarz-Weiß-Behandlung umschalten | Welle 2; rezeptbasiert (`saturation`/`vibrance` −1, Vorwerte in `extras["bw_stash"]`), erneutes `V` stellt exakt wieder her |
+| `J` | Clipping-Warnungen umschalten | Welle 2; reines Anzeige-Badge aus Preview-Pixeln, nie Rezept |
+| `L` | Lights-Out (Seitenpanels + Filmstreifen aus) | Welle 2; Header/Modulleiste bleiben, nie Rezept |
+| `R` | Crop-Modus-Badge umschalten | Welle 2; reine Anzeige, Edits in Geometrie-Crop |
+| `Tab` | Seitenpanels ein-/ausblenden (Filmstreifen bleibt) | Welle 2; nie Rezept |
 | `Y` | Vorher/Nachher | gebunden |
 | `F` / `Num0`, `+` / `-` | Vorschau-Zoom Fit / Zoomstufen | gebunden |
 

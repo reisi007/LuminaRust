@@ -290,8 +290,32 @@ pub enum Str {
     RatingSetPattern,
     FlagSetPattern,
     VirtualCopyDuplicatedPattern,
-}
 
+    // LR-PARITY-01 Welle 2: copy/paste settings, color label (6-9), B&W (V),
+    // clipping (J), lights out (L), crop mode (R), panel hide (Tab).
+    SettingsCopied,
+    SettingsPasted,
+    ClipboardEmpty,
+    ColorLabel,
+    ColorRed,
+    ColorYellow,
+    ColorGreen,
+    ColorBlue,
+    InvalidColorLabel,
+    ColorLabelSetPattern,
+    CropModeOn,
+    CropModeOff,
+    PanelsHiddenOn,
+    PanelsHiddenOff,
+    LightsOutOn,
+    LightsOutOff,
+    ClippingOn,
+    ClippingOff,
+    ClippingDetailPattern,
+    BlackWhiteOn,
+    BlackWhiteOff,
+    SliderResetHint,
+}
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
     /// live; the future `de` locale would be a second match arm selected by a
@@ -558,6 +582,33 @@ impl Str {
             Str::RatingSetPattern => "Rating set to {}",
             Str::FlagSetPattern => "Flag set to {}",
             Str::VirtualCopyDuplicatedPattern => "Duplicated virtual copy as {}",
+
+            Str::SettingsCopied => {
+                "Settings copied from the active copy (paste with Cmd/Ctrl+Shift+V)"
+            }
+            Str::SettingsPasted => "Settings pasted onto the active copy",
+            Str::ClipboardEmpty => {
+                "Clipboard empty: copy settings first (Cmd/Ctrl+Shift+C)"
+            }
+            Str::ColorLabel => "Color Label",
+            Str::ColorRed => "Red",
+            Str::ColorYellow => "Yellow",
+            Str::ColorGreen => "Green",
+            Str::ColorBlue => "Blue",
+            Str::InvalidColorLabel => "Color label must be 0..=4 (0 = none)",
+            Str::ColorLabelSetPattern => "Color label set to {}",
+            Str::CropModeOn => "Crop mode on (R): adjust Crop in Geometry, R toggles off",
+            Str::CropModeOff => "Crop mode off",
+            Str::PanelsHiddenOn => "Side panels hidden (Tab to show)",
+            Str::PanelsHiddenOff => "Side panels shown",
+            Str::LightsOutOn => "Lights out (L to show chrome)",
+            Str::LightsOutOff => "Lights on",
+            Str::ClippingOn => "Clipping warnings on (J)",
+            Str::ClippingOff => "Clipping warnings off",
+            Str::ClippingDetailPattern => "Clipping shadows {}% / highlights {}%",
+            Str::BlackWhiteOn => "Black & white treatment on (V)",
+            Str::BlackWhiteOff => "Black & white treatment off (color restored)",
+            Str::SliderResetHint => "Double-click or Alt-click to reset to default",
         }
     }
 }
