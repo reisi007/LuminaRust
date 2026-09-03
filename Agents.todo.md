@@ -97,7 +97,6 @@ GUI/User-Test ab.**
 ### PRIO: hoch
 
 - [ ] **[PRIO: mittel] CLI-GUI-PARITY-1** Analyse CLI↔GUI-Feature-Verankerung (Matrix Core-Feature × CLI-Befehl/Flag × GUI-Sektion × Rezept-Key), Lücken als Folge-Tasks. Plan: `docs/plans/gui-preview-histogram-zoom-2026-09-04.md`. Abnahme: Matrix-Doc, kein Code.
-- [ ] **[PRIO: hoch] GUI-AUTOTONE-SAVE-1** `auto_tone`/`match_total_exposure` mutieren Rezept + rendern ohne `save_sidecar` (Spannung zu F-100 „Auto-Tone schreiben anschließend das Sidecar"; vorbestehend, keine Regression). Save-Trigger + INFO-Log + headless Reload-Test nach GUI-SLIDER-SAVE-1-Muster (DoD §1-§4). Abnahme: tempdir-Test Datei+Wert+Reload, `cargo test -p lumina-gui` grün.
 - [ ] **[PRIO: hoch] GUI-KIT-01-REFRESH** kittest 5 Goldens Rebaseline auf GPU-Maschine nach LR-PARITY-01 Welle 2/3 (c881a62, 1fe6353, 888a391): Develop-Goldens erledigt (a09e7d4 Rating/Expand/Dust-Removal); offen nur Library-Determinismus (Tests auf tempdir/fixen Inhalt oder Baum im Snapshot-Modus deterministisch; CWD-live `crates/lumina-gui` macht Goldens filesystem-fragil, 415px-Diff durch `benches/`-Zeile). Abnahme: cargo test -p lumina-gui --test kittest_snapshots -- --ignored gruen auf GPU-Maschine.
 
 _(keine weiteren offenen hoch-prio Tasks — F-103-INTEGRATION-PREVIEW-SIDECAR verifiziert BESTANDEN am 2026-09-02, 147p (144→147 +3), core 277+7, sidecar 86p, clippy/fmt/wasm grün, Commit 43b1b73; CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
