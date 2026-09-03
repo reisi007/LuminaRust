@@ -2106,6 +2106,22 @@ impl LuminaApp {
         self.panels_hidden || self.lights_out || self.fullscreen
     }
 
+    /// Whether the bottom filmstrip is drawn for the current module state
+    /// (F-100: visible in Library, Develop AND Export; `Tab` panels-hide
+    /// keeps it, `L` lights-out and `F` fullscreen hide it). Single source
+    /// of truth shared by the draw path and the headless regression tests
+    /// (GUI-VISION-1: Export deliberately shows the filmstrip — there is no
+    /// Export-specific reason to hide it, the old
+    /// `Library | Develop`-only gate was an oversight against the F-100 norm
+    /// "Der Filmstreifen ist in allen drei Modulen sichtbar").
+    pub fn shows_filmstrip(&self) -> bool {
+        matches!(
+            self.active_module,
+            Module::Library | Module::Develop | Module::Export
+        ) && !self.lights_out
+            && !self.fullscreen
+    }
+
     /// Current stack-group proxy id of the active virtual copy (Welle 3,
     /// LR-17 light), read tolerantly via [`stack_id_of`]. Returns `None`
     /// when no document is loaded. Read-only accessor for headless tests.
@@ -5590,15 +5606,23 @@ impl LuminaApp {
     fn draw_export_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading(Str::Export.t());
         ui.label(Str::ExportTarget.t());
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.export_path);
-            if ui.button(Str::ExportChoose.t()).clicked() {
-                let suggested = self.suggested_export_name();
-                if let Some(path) = rfd::FileDialog::new().set_file_name(&suggested).save_file() {
-                    self.export_path = path.display().to_string();
-                }
-            }
+        // GUI-VISION-1: button-first (right-to-left) row so the Choose button
+        // keeps its natural width at the panel edge and the field takes the
+        // rest. An unbounded edit claimed the full row and pushed the button
+        // past the panel edge (kittest `export_module` golden).
+        let mut choose_clicked = false;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            choose_clicked = ui.button(Str::ExportChoose.t()).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.text_edit_singleline(&mut self.export_path);
+            });
         });
+        if choose_clicked {
+            let suggested = self.suggested_export_name();
+            if let Some(path) = rfd::FileDialog::new().set_file_name(&suggested).save_file() {
+                self.export_path = path.display().to_string();
+            }
+        }
         ui.horizontal(|ui| {
             ui.label(Str::ExportFormatLabel.t());
             egui::ComboBox::from_label("")
@@ -7424,16 +7448,22 @@ impl LuminaApp {
                     self.show_error(e);
                 }
             }
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.mask_name_input);
-                if ui.button(Str::NewMask.t()).clicked() {
-                    if let Err(e) = self.create_mask(self.mask_name_input.clone()) {
-                        self.show_error(e);
-                    } else {
-                        self.mask_name_input.clear();
-                    }
-                }
+            // GUI-VISION-1 (same bug class as the Export Choose row):
+            // button-first (right-to-left) so New Mask stays inside the panel.
+            let mut new_clicked = false;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                new_clicked = ui.button(Str::NewMask.t()).clicked();
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.text_edit_singleline(&mut self.mask_name_input);
+                });
             });
+            if new_clicked {
+                if let Err(e) = self.create_mask(self.mask_name_input.clone()) {
+                    self.show_error(e);
+                } else {
+                    self.mask_name_input.clear();
+                }
+            }
             // F-103-N4: interactive mask tools. The tool only picks how a drag on
             // the preview is interpreted; persistence goes through the sidecar.
             ui.separator();
@@ -7599,13 +7629,19 @@ impl LuminaApp {
         ui.heading(Str::Folders.t());
         // Direct path entry stays available (replaces the old text browser's
         // address row) plus a manual rescan.
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.directory);
-            if ui.button(Str::Open.t()).clicked() {
-                let target = self.directory.clone();
-                self.set_directory(target);
-            }
+        // GUI-VISION-1 (same bug class as the Export Choose row):
+        // button-first (right-to-left) so Open stays inside the panel.
+        let mut open_clicked = false;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            open_clicked = ui.button(Str::Open.t()).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.text_edit_singleline(&mut self.directory);
+            });
         });
+        if open_clicked {
+            let target = self.directory.clone();
+            self.set_directory(target);
+        }
         if ui.button(Str::Refresh.t()).clicked() {
             self.list_directory();
         }
@@ -8236,71 +8272,96 @@ impl LuminaApp {
     /// The full Develop control stack: the eight F-100 sections in fixed order,
     /// then the preset manager and the global render/save actions.  Every
     /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
+    ///
+    /// GUI-VISION-1: the outer layout is bottom-up so the global actions form
+    /// a pinned footer at the panel bottom edge — never half-cut below a
+    /// scroll fold (kittest `develop_basic`/`histogram_graphic` goldens).
+    /// Code order is bottom-first (padding, Save, Reset/Render, Match,
+    /// separator, then the scrolling sections); the scroll content itself is
+    /// explicitly top-down again because `ScrollArea` inherits the parent
+    /// layout (`Ui::new_child` falls back to `*self.layout()`).
     fn draw_develop_panel(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                // GUI-HISTOGRAM-1: the histogram is its own collapsible
-                // section (default open) at the top of the Develop panel —
-                // never in the module bar.
-                self.draw_histogram_section(ui);
-                ui.separator();
-                // Lightroom-style panel head: display-only crop/histogram
-                // thumbnail with the active crop overlay, then the Presets and
-                // History collapsible sections.
-                self.draw_crop_thumb(ui);
-                self.draw_presets_section(ui);
-                self.draw_history_section(ui);
-                self.draw_rating_section(ui);
-                ui.separator();
-                // The eight adjustment sections are grayed and non-interactive until an
-                // image is loaded (F-100 disabled-while-empty behaviour).
-                ui.add_enabled_ui(self.original.is_some(), |ui| {
-                    // F-100 section order (incl. F-103-N10: Detail BEFORE
-                    // Effects) has its single source of truth in
-                    // `DEVELOP_SECTIONS`; see there.
-                    for (_, draw_section) in Self::DEVELOP_SECTIONS {
-                        draw_section(self, ui);
-                    }
-                    self.draw_generative_expand(ui);
-                    self.draw_spot_heal(ui);
-                });
-                ui.separator();
-                {
-                    ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.path);
-                        if ui.button(Str::Load.t()).clicked() {
-                            self.begin_load_path(self.path.clone());
-                        }
-                    });
-                    if ui.button(Str::ChooseFile.t()).clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_file() {
-                            // REVIEW-GUI-PATHDESYNC-1: no immediate
-                            // `self.path` commit; `finish_decode` adopts the
-                            // path after a successful decode.
-                            self.begin_load_path(path.display().to_string());
-                        }
-                    }
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+            ui.add_space(2.0);
+            if ui.button(Str::SaveRecipe.t()).clicked() {
+                self.save_sidecar();
+            }
+            ui.horizontal(|ui| {
+                if ui.button(Str::Reset.t()).clicked() {
+                    self.reset();
                 }
-                if ui.button(Str::MatchExposure.t()).clicked() {
-                    if let Err(error) = self.match_total_exposure(0.5) {
+                if ui.button(Str::RenderApply.t()).clicked() {
+                    if let Err(error) = self.render() {
                         self.show_error(error);
                     }
                 }
-                ui.horizontal(|ui| {
-                    if ui.button(Str::Reset.t()).clicked() {
-                        self.reset();
-                    }
-                    if ui.button(Str::RenderApply.t()).clicked() {
-                        if let Err(error) = self.render() {
-                            self.show_error(error);
-                        }
-                    }
-                });
-                if ui.button(Str::SaveRecipe.t()).clicked() {
-                    self.save_sidecar();
-                }
             });
+            if ui.button(Str::MatchExposure.t()).clicked() {
+                if let Err(error) = self.match_total_exposure(0.5) {
+                    self.show_error(error);
+                }
+            }
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        self.develop_scroll_content(ui);
+                    });
+                });
+        });
+    }
+
+    /// Scrolling part of the Develop panel (sections + load controls); the
+    /// pinned action footer lives in [`LuminaApp::draw_develop_panel`].
+    fn develop_scroll_content(&mut self, ui: &mut egui::Ui) {
+        // GUI-HISTOGRAM-1: the histogram is its own collapsible
+        // section (default open) at the top of the Develop panel —
+        // never in the module bar.
+        self.draw_histogram_section(ui);
+        ui.separator();
+        // Lightroom-style panel head: display-only crop/histogram
+        // thumbnail with the active crop overlay, then the Presets and
+        // History collapsible sections.
+        self.draw_crop_thumb(ui);
+        self.draw_presets_section(ui);
+        self.draw_history_section(ui);
+        self.draw_rating_section(ui);
+        ui.separator();
+        // The eight adjustment sections are grayed and non-interactive until an
+        // image is loaded (F-100 disabled-while-empty behaviour).
+        ui.add_enabled_ui(self.original.is_some(), |ui| {
+            // F-100 section order (incl. F-103-N10: Detail BEFORE
+            // Effects) has its single source of truth in
+            // `DEVELOP_SECTIONS`; see there.
+            for (_, draw_section) in Self::DEVELOP_SECTIONS {
+                draw_section(self, ui);
+            }
+            self.draw_generative_expand(ui);
+            self.draw_spot_heal(ui);
+        });
+        ui.separator();
+        // GUI-VISION-1 (same bug class as the Export Choose row):
+        // button-first (right-to-left) so Load stays inside the panel.
+        let mut load_clicked = false;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            load_clicked = ui.button(Str::Load.t()).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.text_edit_singleline(&mut self.path);
+            });
+        });
+        if load_clicked {
+            let path = self.path.clone();
+            self.begin_load_path(path);
+        }
+        if ui.button(Str::ChooseFile.t()).clicked() {
+            if let Some(path) = rfd::FileDialog::new().pick_file() {
+                // REVIEW-GUI-PATHDESYNC-1: no immediate
+                // `self.path` commit; `finish_decode` adopts the
+                // path after a successful decode.
+                self.begin_load_path(path.display().to_string());
+            }
+        }
     }
 
     /// Library-module sidecar / virtual-copy manager (native only).  Mask editing
@@ -9658,14 +9719,12 @@ impl eframe::App for LuminaApp {
                 });
         }
 
-        // Bottom: filmstrip in Library/Develop. Generated thumbnails are
-        // produced by the background worker pool (miss -> background job).
+        // Bottom: filmstrip in all three modules (F-100, see
+        // `shows_filmstrip`). Generated thumbnails are produced by the
+        // background worker pool (miss -> background job).
         // `L` lights-out and `F` fullscreen hide it (Welle 2/3); `Tab`
         // panels-hide keeps it.
-        let show_filmstrip = matches!(self.active_module, Module::Library | Module::Develop)
-            && !self.lights_out
-            && !self.fullscreen;
-        if show_filmstrip {
+        if self.shows_filmstrip() {
             egui::Panel::bottom("filmstrip").show(ui, |ui| self.draw_filmstrip(&ctx, ui));
         }
 
@@ -9802,6 +9861,261 @@ mod tests {
         let detail = labels.iter().position(|l| *l == "Detail").unwrap();
         let effects = labels.iter().position(|l| *l == "Effects").unwrap();
         assert!(detail < effects, "Detail must precede Effects");
+    }
+    /// GUI-VISION-1 (F-100): the filmstrip is visible in all three modules
+    /// (Library, Develop, Export). `Tab` panels-hide keeps it; `L`
+    /// lights-out and `F` fullscreen hide it.
+    #[test]
+    fn filmstrip_visible_in_all_three_modules() {
+        let mut app = new_app();
+        for module in [Module::Library, Module::Develop, Module::Export] {
+            app.set_module(module);
+            assert!(
+                app.shows_filmstrip(),
+                "filmstrip must be visible in {module:?} (F-100)"
+            );
+        }
+        app.set_module(Module::Export);
+        app.lights_out = true;
+        assert!(!app.shows_filmstrip(), "lights-out hides the filmstrip");
+        app.lights_out = false;
+        app.fullscreen = true;
+        assert!(!app.shows_filmstrip(), "fullscreen hides the filmstrip");
+        app.fullscreen = false;
+        app.panels_hidden = true;
+        assert!(app.shows_filmstrip(), "Tab panels-hide keeps the filmstrip");
+    }
+    /// GUI-VISION-1: drive one headless egui frame (`Context::run_ui`, no GPU
+    /// needed) and return the painted shapes. Layout-overflow regressions
+    /// (buttons clipped at the panel edge) fail here in
+    /// `cargo test -p lumina-gui --lib` instead of only in kittest goldens.
+    /// Mirrors the established `run_ui` headless pattern used by the
+    /// preview-interaction tests below.
+    fn headless_shapes(
+        app: &mut LuminaApp,
+        mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1024.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(raw, |ui| draw(app, ui));
+        // No GPU renderer consumes the per-frame texture deltas in these
+        // headless tests; dropping them would trip epaint's
+        // "unapplied deltas" debug assertion.
+        output.textures_delta.clear();
+        output.shapes
+    }
+    /// `(text rect, clip rect)` of every painted text shape whose full string
+    /// equals `needle` (button labels). A widget cut off at a panel edge is
+    /// painted with a clip rect smaller than its text rect. Exact match (not
+    /// substring) so unrelated labels can never trip the assertion.
+    fn text_shapes_for(
+        shapes: &[egui::epaint::ClippedShape],
+        needle: &str,
+    ) -> Vec<(egui::Rect, egui::Rect)> {
+        let mut out = Vec::new();
+        for clipped in shapes {
+            if let egui::Shape::Text(text) = &clipped.shape {
+                if text.galley.text() == needle {
+                    out.push((
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        clipped.clip_rect,
+                    ));
+                }
+            }
+        }
+        out
+    }
+    /// Every painted occurrence of the button label `needle` must lie fully
+    /// inside its clip rect (1px tolerance for rounding).
+    fn assert_fully_visible(shapes: &[egui::epaint::ClippedShape], needle: &str) {
+        let hits = text_shapes_for(shapes, needle);
+        assert!(!hits.is_empty(), "{needle:?} must be painted");
+        for (rect, clip) in &hits {
+            assert!(
+                clip.expand(1.0).contains_rect(*rect),
+                "{needle:?} text {rect:?} must be fully inside its clip {clip:?}"
+            );
+        }
+    }
+    /// GUI-VISION-1: the Export "Choose…" button must not overflow the right
+    /// panel edge (kittest `export_module` golden).
+    #[test]
+    fn export_choose_button_fully_inside_panel() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Export);
+        let shapes = headless_shapes(&mut app, |app, ctx| {
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ctx, |ui| app.draw_export_panel(ui));
+        });
+        assert_fully_visible(&shapes, Str::ExportChoose.t());
+    }
+    /// GUI-VISION-1: the Develop "Save Recipe / Sidecar" button (now in a
+    /// pinned footer below the scroll area) and the path "Load" button must
+    /// not be cut at the panel edges (kittest `develop_basic`,
+    /// `histogram_graphic` goldens).
+    #[test]
+    fn develop_save_button_fully_inside_panel() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Develop);
+        let shapes = headless_shapes(&mut app, |app, ctx| {
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ctx, |ui| app.draw_develop_panel(ui));
+        });
+        assert_fully_visible(&shapes, Str::SaveRecipe.t());
+        assert_fully_visible(&shapes, Str::Load.t());
+    }
+    /// GUI-VISION-1 (same bug class): the Library folder-tree "Open" button
+    /// shares its row with a path field and must stay inside the panel.
+    #[test]
+    fn library_open_button_fully_inside_panel() {
+        let mut app = new_app();
+        let shapes = headless_shapes(&mut app, |app, ctx| {
+            egui::Panel::left("folders")
+                .resizable(true)
+                .default_size(220.0)
+                .show(ctx, |ui| app.draw_folder_tree(ui));
+        });
+        assert_fully_visible(&shapes, Str::Open.t());
+    }
+    /// GUI-VISION-1 (same bug class): the Masking "New Mask" button shares
+    /// its row with a name field and must stay inside the panel. The row only
+    /// renders with a loaded document, and the Masking section starts
+    /// collapsed — so the test prepares an in-memory document (no disk
+    /// writes), draws the Masking section directly in a right panel with the
+    /// production parameters, and opens it with a synthetic header click.
+    ///
+    /// Two assertions: `assert_fully_visible` (1:1 pattern of the other
+    /// clip tests — the button must not be cut) plus a panel-width gate.
+    /// The width gate is the discriminating one here: an unbounded field
+    /// makes the row demand more than the 320px default, which widens the
+    /// panel in this harness (measured 390px pre-fix) and — with the panel
+    /// held at 320px by the full app layout — clips the button in
+    /// production (the export_module `Choose…` finding).
+    #[test]
+    fn masking_new_button_fully_inside_panel() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Develop);
+        // In-memory document only (`SidecarDocument::new`, no save): enough
+        // for `draw_masking` to render past its `document.clone()` guard.
+        // The mask library stays empty so no long mask name can widen the
+        // panel on its own behalf.
+        app.ensure_document_loaded().unwrap();
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
+        // Simulated clock: the open/close animation only progresses while
+        // time advances, so every frame steps it by 1/60s.
+        let mut t = 0.0;
+        let mut panel_rect = egui::Rect::NOTHING;
+        let mut run = |events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let r = egui::Panel::right("controls")
+                        .resizable(true)
+                        .default_size(320.0)
+                        .show(ui, |ui| app.draw_masking(ui));
+                    panel_rect = r.response.rect;
+                },
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        // Frame 1: layout; locate the Masking header.
+        let shapes = run(vec![]);
+        let pos = text_shapes_for(&shapes, Str::Masking.t())
+            .into_iter()
+            .next()
+            .expect("Masking header must be painted")
+            .0
+            .center();
+        // Press + release on the header to open the section (`clicked()`
+        // fires on release), then settle the open animation (~0.3s) and the
+        // panel width so the final frame is representative.
+        let click = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run(vec![egui::Event::PointerMoved(pos), click(true)]);
+        run(vec![egui::Event::PointerMoved(pos), click(false)]);
+        let mut shapes = Vec::new();
+        for _ in 0..30 {
+            shapes = run(vec![]);
+        }
+        assert_fully_visible(&shapes, Str::NewMask.t());
+        assert!(
+            panel_rect.width() <= 321.0,
+            "New Mask row must not push the panel past its 320px default (got {panel_rect:?})"
+        );
+    }
+    /// GUI-VISION-1 refactor guard: the outer Develop panel is bottom-up
+    /// (pinned footer) but the scroll content must stay top-down in F-100
+    /// order — headers paint top-to-bottom Basic → … → Masking.
+    #[test]
+    fn develop_sections_stay_top_down_despite_bottom_up_footer() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Develop);
+        let shapes = headless_shapes(&mut app, |app, ctx| {
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ctx, |ui| app.draw_develop_panel(ui));
+        });
+        let top_y = |needle: &str| {
+            text_shapes_for(&shapes, needle)
+                .iter()
+                .map(|(rect, _)| rect.min.y)
+                .min_by(f32::total_cmp)
+                .unwrap_or_else(|| panic!("{needle:?} must be painted"))
+        };
+        let mut last = f32::NEG_INFINITY;
+        for section in [
+            "Basic",
+            "Tone Curve",
+            "Color",
+            "Detail",
+            "Effects",
+            "Optics",
+            "Geometry",
+            "Masking",
+        ] {
+            let y = top_y(section);
+            assert!(
+                y > last,
+                "{section:?} (y={y}) must paint below the previous section (y={last})"
+            );
+            last = y;
+        }
+        // The footer is pinned at the very bottom: Save paints below Masking.
+        assert!(
+            top_y(Str::SaveRecipe.t()) > last,
+            "Save footer must paint below the last section"
+        );
     }
     /// Badge helpers (LR-01/LR-17 light): the Library grid badge composes
     /// `stars_for_rating` + `flag_label` + `color_label_name`, and both the

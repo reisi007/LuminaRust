@@ -293,7 +293,17 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Rand befindet sich ein Filmstreifen mit Miniaturen als
   Datei-Browser-Entsprechung. Diese beiden Bereiche sind beim Entwickeln
   vorhanden; der Filmstreifen darf nicht durch eine reine Dateiliste ersetzt
-  werden.
+  werden. Der Filmstreifen ist in allen drei Modulen sichtbar (Library,
+  Develop, Export).
+- Mehrfachauswahl im Filmstreifen (Click = Auswahl, Cmd/Ctrl-Click = Toggle,
+  Shift-Click = Bereich): **Sync Settings** wendet Rezept der aktiven Kopie
+  auf alle ausgewählten Bilder an (je eigenes Sidecar, CAS, Fehler einzeln
+  laut); **Match Total Exposures** gleicht Belichtung über die Auswahl an
+  (Core-`match_total_exposure` je Bild gegen Auswahl-Median). Beide Aktionen
+  loggen `info!` je Bild und bumpen `preview_generation`.
+- Globale Develop-Aktionen (Save Recipe/Sidecar, Reset, Render/Apply, Match
+  Total Exposure) stehen als fixierter Footer unterhalb der ScrollArea; die
+  Sektionsreihenfolge darüber bleibt unverändert.
 - Oben befinden sich die Modul-Leiste mit den Lightroom-Entsprechungen
   **Bibliothek**, **Entwickeln** und **Exportieren** (Library, Develop,
   Export).
