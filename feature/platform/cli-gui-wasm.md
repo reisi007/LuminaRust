@@ -391,6 +391,7 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `L` | Lights-Out (Seitenpanels + Filmstreifen aus) | Welle 2; Header/Modulleiste bleiben, nie Rezept |
 | `R` | Crop-Modus-Badge umschalten | Welle 2; reine Anzeige, Edits in Geometrie-Crop |
 | `Tab` | Seitenpanels ein-/ausblenden (Filmstreifen bleibt) | Welle 2; nie Rezept |
+| `Shift+Tab` | Alle Panels ein-/ausblenden (Seitenpanels + Navigator + Filmstreifen) | G-11; nie Rezept, keine Kollision (kein anderer `Shift+Tab`-Pfad) |
 | `Y` | Vorher/Nachher | gebunden |
 | `Shift+Y` | Split-Vorher/Nachher-Markierung (Vollbild-Before-Proxy über `before_after`; Side-by-Side-Render ist Folgearbeit) | Welle 3; nie Rezept |
 | `C` | Compare (Vorher-Bild über `before_after`, erneutes `C` verlässt) | Welle 3, LR-20 light; nie Rezept |
@@ -436,6 +437,49 @@ separaten, kontextlosen Dialog: Ihre Zugehörigkeit zur ausgewählten Maske muss
 im Panel sichtbar bleiben. Masken-Layer, Invertierung, Feathering, Blur und
 lokale Anpassungen werden entsprechend der virtuellen Kopie im deklarativen
 Rezept gespeichert.
+
+### Tool-Overlays, Edit-Pins, Solo-Mode, Shift+Tab (G-11, LRPAR-G11-OVERLAYS)
+
+Overlay-/Panel-Comfort nach Lightroom-Vorbild, GUI-contained (kein CLI-Anteil).
+Alle vier Bausteine sind reiner Session-Display-State und werden **nicht** ins
+Sidecar persistiert (wie `Tab`/`L`/`F`/`J`/`R`): Das Sidecar bleibt portabel,
+ein Reload stellt die Defaults wieder her, das Rezept wird nie berührt.
+
+- **Tool-Overlay-Modi** (`OverlayMode`, global für Masken- und Retusche-
+  Werkzeuge — bewusst ein Schalter statt pro Werkzeug, damit der Zustand
+  vorhersehbar bleibt): `Always` malt das Matte-Overlay, sobald ein Prompt
+  existiert (Live-Drag oder gespeicherter Prompt der selektierten Maske) —
+  das ist das bisherige Verhalten und daher der Default; `Auto` malt nur,
+  solange ein Masken- (`K`/`M`/`Shift+M`) oder Spot-Heal-Werkzeug (`Q`)
+  armiert ist oder ein Drag läuft; `Never` malt nie. Umschalter in der
+  Masking-Sektion, Statuszeile + `info!`-Log.
+- **Edit-Pin-Sichtbarkeit** (`PinVisibility`, global, Default `Auto`):
+  `Always` zeigt alle Pins ohne armiertes Werkzeug, `Never` zeigt keine,
+  `Auto` zeigt Pins nur bei armiertem Masken-/Spot-Werkzeug. Ein Pin steht
+  für jede Maske der aktiven Kopie mit ableitbarem Anker (Box: Rechteck-
+  Mitte; Brush: erster Mark; Polygon: erster Vertex; Ellipse: Zentrum;
+  Gradient: Mittelpunkt der Verlaufsstrecke aus `angle_deg`/`start`/`end`
+  um die Bildmitte, auf `0..=1` geclampt; Masken ohne Prompt/Geometrie
+  erhalten bewusst keinen Pin statt einer erfundenen Position) plus jeden
+  Spot-Heal (`center_x`/`center_y` aus `spot_removals`). Pins sind
+  Painter-Content (für AccessKit unsichtbar) — daher hält das Modell
+  zusätzlich den testbaren Getter `visible_edit_pins()` (Anzahl/Anker/
+  Selektion) vor; der Painter malt dieselbe Liste.
+- **Solo-Mode** (Checkbox in der Masking-Sektion, Default aus): Ist er an,
+  schließt das Öffnen einer der acht Develop-Sektionen (Basic, Tone Curve,
+  Color, Detail, Effects, Optics, Geometry, Masking) die anderen sieben;
+  das Einschalten bei mehreren offenen Sektionen behält deterministisch die
+  erste (niedrigster Index) und schließt den Rest. Die Öffnungszustände
+  (`section_open[8]`) sind expliziter App-State (kein egui-implizites
+  `ui.collapsing`-Gedächtnis), damit Solo headless testbar bleibt.
+- **`Shift+Tab`** schaltet `all_panels_hidden`: Seitenpanels, Navigator-Rail
+  und Filmstreifen werden ausgeblendet (Header/Modulleiste + Vorschau
+  bleiben, damit Status und Fehler sichtbar sind). `Tab` allein behält
+  bewusst den Filmstreifen. Mapping als reine Funktion
+  `all_panels_toggle_for_key(Taste, Shift)` mit Mapping-Test; keine
+  Kollision mit Bestand (`Shift+M` Radial, `Shift+Y` Split, `Shift+C/V/I/E`
+  Clipboard/Import/Export nutzen andere Tasten; `Shift+Tab` fiel bisher in
+  den `Tab`-Zweig und ist jetzt disambiguiert).
 
 ## WASM — ENTFERNT (2026-09-04)
 

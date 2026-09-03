@@ -365,6 +365,22 @@ pub enum Str {
     QuickDevelopAppliedPattern,
     GotoLibraryImport,
     GotoExport,
+
+    // G-11 overlay/panel comfort (LRPAR-G11-OVERLAYS): tool overlay modes,
+    // edit-pin visibility, solo mode, Shift+Tab all-panels toggle.
+    OverlayModeLabel,
+    OverlayAlways,
+    OverlayAuto,
+    OverlayNever,
+    OverlayModeSetPattern,
+    PinVisibilityLabel,
+    PinVisibilitySetPattern,
+    SoloMode,
+    SoloModeOn,
+    SoloModeOff,
+    AllPanelsHiddenOn,
+    AllPanelsHiddenOff,
+    SpotOverlayHint,
 }
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
@@ -721,6 +737,21 @@ impl Str {
             Str::QuickDevelopAppliedPattern => "Quick develop applied: {}",
             Str::GotoLibraryImport => "Library (import shortcut)",
             Str::GotoExport => "Export (export shortcut)",
+            Str::OverlayModeLabel => "Tool overlay",
+            Str::OverlayAlways => "Always",
+            Str::OverlayAuto => "Auto",
+            Str::OverlayNever => "Never",
+            Str::OverlayModeSetPattern => "Tool overlay: {}",
+            Str::PinVisibilityLabel => "Edit pins",
+            Str::PinVisibilitySetPattern => "Edit pins: {}",
+            Str::SoloMode => "Solo mode (one section open)",
+            Str::SoloModeOn => "Solo mode on (opening a section closes the others)",
+            Str::SoloModeOff => "Solo mode off",
+            Str::AllPanelsHiddenOn => "All panels hidden (Shift+Tab to show)",
+            Str::AllPanelsHiddenOff => "All panels shown",
+            Str::SpotOverlayHint => {
+                "Overlay/pins follow the global Tool overlay + Edit pins modes (Masking section)"
+            }
         }
     }
 }

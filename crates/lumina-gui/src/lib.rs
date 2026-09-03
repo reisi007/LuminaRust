@@ -258,6 +258,165 @@ pub fn panel_toggle_for_key(key: egui::Key) -> Option<PanelToggle> {
     }
 }
 
+/// All-panels toggle (G-11, LRPAR-G11-OVERLAYS): `Shift+Tab` hides/shows the
+/// side panels, the navigator rail AND the filmstrip (header/module bar and
+/// preview stay). Plain `Tab` keeps the filmstrip (see [`panel_toggle_for_key`]);
+/// the shift-aware dispatch in `update` prefers this branch. Pure function,
+/// unit-tested without an [`egui::Context`].
+pub fn all_panels_toggle_for_key(key: egui::Key, shift: bool) -> bool {
+    matches!(key, egui::Key::Tab) && shift
+}
+
+/// Tool-overlay mode (G-11): how the mask-matte overlay behaves for the
+/// masking/retouch tools. Global across tools (one predictable switch, F-100
+/// G-11 SOLL). `Always` is the historical behaviour (overlay whenever a prompt
+/// exists) and therefore the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverlayMode {
+    #[default]
+    Always,
+    Auto,
+    Never,
+}
+
+/// Edit-pin visibility (G-11): whether numbered edit pins (mask anchors + spot
+/// centres) are painted. Default `Auto` (pins only while a tool is armed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PinVisibility {
+    Always,
+    #[default]
+    Auto,
+    Never,
+}
+
+/// User-visible name of an [`OverlayMode`], routed through [`Str`] so no panel
+/// carries a free-form literal.
+pub fn overlay_mode_name(mode: OverlayMode) -> &'static str {
+    match mode {
+        OverlayMode::Always => Str::OverlayAlways.t(),
+        OverlayMode::Auto => Str::OverlayAuto.t(),
+        OverlayMode::Never => Str::OverlayNever.t(),
+    }
+}
+
+/// User-visible name of a [`PinVisibility`], routed through [`Str`].
+pub fn pin_visibility_name(visibility: PinVisibility) -> &'static str {
+    match visibility {
+        PinVisibility::Always => Str::OverlayAlways.t(),
+        PinVisibility::Auto => Str::OverlayAuto.t(),
+        PinVisibility::Never => Str::OverlayNever.t(),
+    }
+}
+
+/// Number of F-100 Develop sections in [`LuminaApp::DEVELOP_SECTIONS`] order
+/// (Basic, Tone Curve, Color, Detail, Effects, Optics, Geometry, Masking):
+/// the G-11 solo-mode scope.
+pub const SECTION_COUNT: usize = 8;
+pub const SECTION_BASIC: usize = 0;
+pub const SECTION_TONE_CURVE: usize = 1;
+pub const SECTION_COLOR: usize = 2;
+pub const SECTION_DETAIL: usize = 3;
+pub const SECTION_EFFECTS: usize = 4;
+pub const SECTION_OPTICS: usize = 5;
+pub const SECTION_GEOMETRY: usize = 6;
+pub const SECTION_MASKING: usize = 7;
+
+/// F-100 label of a Develop section index (G-11, routed through [`Str`]).
+/// `None` for out-of-range indices.
+pub fn section_name(index: usize) -> Option<&'static str> {
+    match index {
+        SECTION_BASIC => Some(Str::Basic.t()),
+        SECTION_TONE_CURVE => Some(Str::ToneCurve.t()),
+        SECTION_COLOR => Some(Str::Color.t()),
+        SECTION_DETAIL => Some(Str::Detail.t()),
+        SECTION_EFFECTS => Some(Str::Effects.t()),
+        SECTION_OPTICS => Some(Str::Optics.t()),
+        SECTION_GEOMETRY => Some(Str::Geometry.t()),
+        SECTION_MASKING => Some(Str::Masking.t()),
+        _ => None,
+    }
+}
+
+/// What an edit pin marks (G-11): a mask-library entry or a spot heal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditPinKind {
+    Mask,
+    Spot,
+}
+
+/// One headless-testable edit pin (G-11): normalized source-space anchor
+/// (`0..=1`), selection flag and a stable id. The painter loop paints exactly
+/// this list, so pin behaviour is covered without pixel assertions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditPin {
+    pub id: String,
+    pub label: String,
+    pub pos: (f32, f32),
+    pub selected: bool,
+    pub kind: EditPinKind,
+}
+
+/// Derive a pin anchor (normalized source space) from a mask prompt (G-11).
+/// Box → rect centre; Brush → first mark; Polygon → first vertex; Ellipse →
+/// centre; Gradient → midpoint of the start→end stretch along `angle_deg`
+/// around the frame centre, clamped to `0..=1`. Prompts without geometry
+/// (empty brush/polygon) yield `None`: no pin instead of an invented position.
+/// Pure function, unit-tested headless.
+pub fn pin_anchor_for_prompt(prompt: &MaskPrompt) -> Option<(f32, f32)> {
+    let clamp01 = |v: f32| v.clamp(0.0, 1.0);
+    match prompt {
+        MaskPrompt::Box { rect, .. } => {
+            if !rect.x.is_finite()
+                || !rect.y.is_finite()
+                || !rect.width.is_finite()
+                || !rect.height.is_finite()
+            {
+                return None;
+            }
+            Some((
+                clamp01(rect.x + rect.width / 2.0),
+                clamp01(rect.y + rect.height / 2.0),
+            ))
+        }
+        MaskPrompt::Brush { marks, .. } => {
+            let first = marks.first()?;
+            if !first.x.is_finite() || !first.y.is_finite() {
+                return None;
+            }
+            Some((clamp01(first.x), clamp01(first.y)))
+        }
+        MaskPrompt::Polygon { points, .. } => {
+            let first = points.first()?;
+            if !first.x.is_finite() || !first.y.is_finite() {
+                return None;
+            }
+            Some((clamp01(first.x), clamp01(first.y)))
+        }
+        MaskPrompt::Ellipse { center, .. } => {
+            if !center.x.is_finite() || !center.y.is_finite() {
+                return None;
+            }
+            Some((clamp01(center.x), clamp01(center.y)))
+        }
+        MaskPrompt::Gradient {
+            angle_deg,
+            start,
+            end,
+            ..
+        } => {
+            if !angle_deg.is_finite() || !start.is_finite() || !end.is_finite() {
+                return None;
+            }
+            let mid = (start + end) / 2.0;
+            let radians = angle_deg.to_radians();
+            Some((
+                clamp01(0.5 + radians.cos() * (mid - 0.5)),
+                clamp01(0.5 + radians.sin() * (mid - 0.5)),
+            ))
+        }
+    }
+}
+
 /// Library compare/survey view (Welle 3, LR-20 light): `C` shows the
 /// full-frame Before image through the existing [`LuminaApp::before_after`]
 /// path (compare proxy), `N` jumps to the Library grid (survey proxy over
@@ -766,6 +925,20 @@ pub struct LuminaApp {
     lights_out: bool,
     panels_hidden: bool,
     crop_mode: bool,
+    /// G-11 (LRPAR-G11-OVERLAYS) session-only display state. Never persisted
+    /// to the sidecar and never part of the recipe (like `Tab`/`L`/`F` above):
+    /// * `all_panels_hidden`: `Shift+Tab` hides side panels, navigator rail
+    ///   AND filmstrip (header/module bar + preview stay).
+    /// * `overlay_mode`: global tool-overlay mode (mask matte tint).
+    /// * `pin_visibility`: global edit-pin visibility (mask anchors + spots).
+    /// * `solo_mode` + `section_open`: solo collapses the 8 Develop sections
+    ///   to a single open one; `section_open` is the explicit open state so
+    ///   solo stays headless-testable (no egui-implicit collapsing memory).
+    all_panels_hidden: bool,
+    overlay_mode: OverlayMode,
+    pin_visibility: PinVisibility,
+    solo_mode: bool,
+    section_open: [bool; SECTION_COUNT],
     /// Welle 3 (LR-13/LR-20/LR-09/LR-12/LR-17 light) display/session state.
     /// All of these are display-only or `extras`/history-backed, so no
     /// sidecar schema change was needed:
@@ -1380,6 +1553,11 @@ impl LuminaApp {
             lights_out: false,
             panels_hidden: false,
             crop_mode: false,
+            all_panels_hidden: false,
+            overlay_mode: OverlayMode::Always,
+            pin_visibility: PinVisibility::Auto,
+            solo_mode: false,
+            section_open: [false; SECTION_COUNT],
             filter_bar_visible: false,
             library_filter: String::new(),
             compare_mode: None,
@@ -2313,6 +2491,235 @@ impl LuminaApp {
         };
     }
 
+    /// Toggle all panels (`Shift+Tab`, G-11). Display-only: hides the side
+    /// panels, the navigator rail and the filmstrip; header/module bar and
+    /// preview stay so status and errors remain visible. Never mutates the
+    /// recipe or the sidecar (session-only like `Tab`).
+    pub fn toggle_all_panels_hidden(&mut self) {
+        self.all_panels_hidden = !self.all_panels_hidden;
+        log::info!(
+            "GUI interaction: toggle_all_panels_hidden -> {}",
+            self.all_panels_hidden
+        );
+        self.status = if self.all_panels_hidden {
+            Str::AllPanelsHiddenOn.t().into()
+        } else {
+            Str::AllPanelsHiddenOff.t().into()
+        };
+    }
+
+    /// Whether `Shift+Tab` all-panels-hide is armed (read-only accessor for
+    /// headless tests).
+    pub fn all_panels_hidden(&self) -> bool {
+        self.all_panels_hidden
+    }
+
+    /// Whether any side chrome is hidden: plain `Tab` panels-hide, `L`
+    /// lights-out, `F` fullscreen or `Shift+Tab` all-panels-hide. Shared by
+    /// the side-panel and navigator draw gates; [`Self::chrome_hidden`] keeps
+    /// its historical meaning (without the G-11 flag) for compatibility.
+    pub fn side_chrome_hidden(&self) -> bool {
+        self.chrome_hidden() || self.all_panels_hidden
+    }
+
+    /// Current tool-overlay mode (G-11, read-only accessor for headless tests).
+    pub fn overlay_mode(&self) -> OverlayMode {
+        self.overlay_mode
+    }
+
+    /// Set the tool-overlay mode (G-11). Display-only session state: never
+    /// touches the recipe or the sidecar.
+    pub fn set_overlay_mode(&mut self, mode: OverlayMode) {
+        if self.overlay_mode == mode {
+            return;
+        }
+        self.overlay_mode = mode;
+        log::info!("GUI interaction: set_overlay_mode -> {mode:?}");
+        self.status = Str::OverlayModeSetPattern.format_arg(overlay_mode_name(mode));
+    }
+
+    /// Whether the mask-matte overlay paints right now (G-11): `Always` shows
+    /// whenever a prompt exists, `Never` hides, `Auto` shows only while a
+    /// masking/retouch tool is armed or a drag is in progress. Consumed by
+    /// [`Self::effective_overlay_prompt`] (the single draw-path gate), so the
+    /// default `Always` preserves the historical behaviour exactly.
+    pub fn overlay_visible(&self) -> bool {
+        match self.overlay_mode {
+            OverlayMode::Always => true,
+            OverlayMode::Never => false,
+            OverlayMode::Auto => {
+                self.mask_tool != MaskTool::None || self.spot_tool != SpotTool::None || self.drawing
+            }
+        }
+    }
+
+    /// The overlay prompt gated by [`Self::overlay_visible`] (G-11): `None`
+    /// when the current mode hides the overlay, otherwise the live drag or
+    /// the selected mask's saved prompt. Single draw-path gate for
+    /// `draw_mask_overlay`, headless-testable without pixels.
+    fn effective_overlay_prompt(&self) -> Option<MaskPrompt> {
+        if !self.overlay_visible() {
+            return None;
+        }
+        self.current_overlay_prompt()
+    }
+
+    /// Current edit-pin visibility mode (G-11, read-only accessor).
+    pub fn pin_visibility(&self) -> PinVisibility {
+        self.pin_visibility
+    }
+
+    /// Set the edit-pin visibility (G-11). Display-only session state: never
+    /// touches the recipe or the sidecar.
+    pub fn set_pin_visibility(&mut self, visibility: PinVisibility) {
+        if self.pin_visibility == visibility {
+            return;
+        }
+        self.pin_visibility = visibility;
+        log::info!("GUI interaction: set_pin_visibility -> {visibility:?}");
+        self.status = Str::PinVisibilitySetPattern.format_arg(pin_visibility_name(visibility));
+    }
+
+    /// Whether edit pins paint right now (G-11): `Always` shows, `Never`
+    /// hides, `Auto` shows only while a masking/retouch tool is armed.
+    pub fn pins_visible(&self) -> bool {
+        match self.pin_visibility {
+            PinVisibility::Always => true,
+            PinVisibility::Never => false,
+            PinVisibility::Auto => {
+                self.mask_tool != MaskTool::None || self.spot_tool != SpotTool::None
+            }
+        }
+    }
+
+    /// The edit pins to paint (G-11): one pin per mask of the active copy with
+    /// a derivable anchor ([`pin_anchor_for_prompt`]) plus one pin per stored
+    /// spot heal with finite `0..=1` centre coordinates. Empty unless
+    /// [`Self::pins_visible`]. Pins are Painter-content (invisible to
+    /// AccessKit per HARNESS-2), so this getter is the testable model state;
+    /// the painter loop paints exactly this list in order (labels `1..=n`).
+    pub fn visible_edit_pins(&self) -> Vec<EditPin> {
+        if !self.pins_visible() {
+            return Vec::new();
+        }
+        let mut pins = Vec::new();
+        let document = match self.document.as_ref() {
+            Some(document) => document,
+            None => return pins,
+        };
+        let copy = match document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == self.virtual_copy_id)
+        {
+            Some(copy) => copy,
+            None => return pins,
+        };
+        for mask in &copy.mask_library {
+            let Some(prompt) = mask.prompt.as_ref() else {
+                continue;
+            };
+            let Some((x, y)) = pin_anchor_for_prompt(prompt) else {
+                continue;
+            };
+            pins.push(EditPin {
+                id: format!("mask:{}", mask.id),
+                label: (pins.len() + 1).to_string(),
+                pos: (x, y),
+                selected: self.selected_mask_id.as_deref() == Some(mask.id.as_str()),
+                kind: EditPinKind::Mask,
+            });
+        }
+        let spots: Vec<serde_json::Value> = self
+            .recipe
+            .extras
+            .get("spot_removals")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        for spot in &spots {
+            let centre = spot
+                .get("center_x")
+                .and_then(serde_json::Value::as_f64)
+                .zip(spot.get("center_y").and_then(serde_json::Value::as_f64));
+            let Some((x, y)) = centre else {
+                continue;
+            };
+            if !x.is_finite()
+                || !y.is_finite()
+                || !(0.0..=1.0).contains(&x)
+                || !(0.0..=1.0).contains(&y)
+            {
+                continue;
+            }
+            let id = spot
+                .get("id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("?");
+            pins.push(EditPin {
+                id: format!("spot:{id}"),
+                label: (pins.len() + 1).to_string(),
+                pos: (x as f32, y as f32),
+                selected: false,
+                kind: EditPinKind::Spot,
+            });
+        }
+        pins
+    }
+
+    /// Whether solo mode is armed (G-11, read-only accessor).
+    pub fn solo_mode(&self) -> bool {
+        self.solo_mode
+    }
+
+    /// Set solo mode (G-11). Display-only session state. Enabling with several
+    /// open sections deterministically keeps the first (lowest index) and
+    /// closes the rest.
+    pub fn set_solo_mode(&mut self, enabled: bool) {
+        if self.solo_mode == enabled {
+            return;
+        }
+        self.solo_mode = enabled;
+        if enabled {
+            if let Some(first) = (0..SECTION_COUNT).find(|&i| self.section_open[i]) {
+                for i in 0..SECTION_COUNT {
+                    self.section_open[i] = i == first;
+                }
+            }
+        }
+        log::info!("GUI interaction: set_solo_mode -> {enabled}");
+        self.status = if enabled {
+            Str::SoloModeOn.t().into()
+        } else {
+            Str::SoloModeOff.t().into()
+        };
+    }
+
+    /// Whether Develop section `index` is open (G-11, read-only accessor).
+    /// Out-of-range indices read as closed.
+    pub fn is_section_open(&self, index: usize) -> bool {
+        self.section_open.get(index).copied().unwrap_or(false)
+    }
+
+    /// Set a Develop section open state (G-11). With solo mode on, opening one
+    /// section closes the other seven. Out-of-range indices are refused loudly
+    /// (warn, no state change). Display-only session state: never touches the
+    /// recipe or the sidecar.
+    pub fn set_section_open(&mut self, index: usize, open: bool) {
+        if index >= SECTION_COUNT {
+            log::warn!("GUI interaction: set_section_open refused for index {index}");
+            return;
+        }
+        if open && self.solo_mode {
+            for i in 0..SECTION_COUNT {
+                self.section_open[i] = false;
+            }
+        }
+        if self.section_open[index] != open {
+            self.section_open[index] = open;
+            log::info!("GUI interaction: set_section_open {index} -> {open}");
+        }
+    }
+
     /// Toggle the crop-mode badge (`R`, Welle 2). Display-only: while armed,
     /// the preview header advertises the mode; edits stay in the Geometry
     /// Crop controls. Never mutates the recipe.
@@ -2482,6 +2889,7 @@ impl LuminaApp {
             Module::Library | Module::Develop | Module::Export
         ) && !self.lights_out
             && !self.fullscreen
+            && !self.all_panels_hidden
     }
 
     /// Current stack-group proxy id of the active virtual copy (Welle 3,
@@ -6974,6 +7382,7 @@ impl LuminaApp {
                     egui::vec2(full_w as f32 * scale, full_h as f32 * scale),
                 );
                 self.draw_mask_overlay(ui, full_rect);
+                self.draw_edit_pins(ui, full_rect);
             }
             ui.set_clip_rect(previous_clip);
         } else {
@@ -7195,7 +7604,7 @@ impl LuminaApp {
             // Gradient/radial prompts have no VRAM representation — fall
             // through to the CPU overlay below.
         }
-        let Some(prompt) = self.current_overlay_prompt() else {
+        let Some(prompt) = self.effective_overlay_prompt() else {
             return;
         };
         let (w, h) = self.image_dims().unwrap_or((1, 1));
@@ -7231,6 +7640,42 @@ impl LuminaApp {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+    }
+
+    /// Paint the [`Self::visible_edit_pins`] list (G-11) onto the preview:
+    /// numbered circles at the normalized pin anchors mapped through the
+    /// full-source rect. Selected pins use the accent fill. No-op while the
+    /// pin mode hides pins or no pins exist, so default states render exactly
+    /// as before (no golden churn).
+    fn draw_edit_pins(&self, ui: &mut egui::Ui, full_rect: egui::Rect) {
+        let pins = self.visible_edit_pins();
+        if pins.is_empty() {
+            return;
+        }
+        let painter = ui.painter();
+        for pin in &pins {
+            let pos = egui::pos2(
+                full_rect.min.x + pin.pos.0 * full_rect.width(),
+                full_rect.min.y + pin.pos.1 * full_rect.height(),
+            );
+            if !full_rect.contains(pos) {
+                continue;
+            }
+            let fill = if pin.selected {
+                crate::theme::ACCENT
+            } else {
+                egui::Color32::from_gray(30)
+            };
+            painter.circle_filled(pos, 9.0, fill);
+            painter.circle_stroke(pos, 9.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+            painter.text(
+                pos,
+                egui::Align2::CENTER_CENTER,
+                pin.label.clone(),
+                egui::FontId::proportional(10.0),
+                egui::Color32::WHITE,
+            );
+        }
     }
 
     /// The prompt to display in the overlay: the live in-progress gesture while
@@ -7541,7 +7986,12 @@ impl LuminaApp {
     // ---- Develop panel sections (fixed F-100 order) ----
 
     fn draw_basic(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Basic.t(), |ui| {
+        // G-11 solo: the explicit `section_open` state drives the header (not
+        // egui-implicit memory), so solo mode stays headless-testable.
+        let section_was_open = self.section_open[SECTION_BASIC];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Basic.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             ui.label(Str::WhiteBalance.t());
             self.adjustment_slider(
                 ui,
@@ -7608,10 +8058,17 @@ impl LuminaApp {
                 }
             }
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_BASIC, !section_was_open);
+        }
     }
 
     fn draw_tone_curve(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::ToneCurve.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_TONE_CURVE];
+        let section_header =
+            egui::CollapsingHeader::new(Str::ToneCurve.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             ui.label(Str::CurveRegions.t());
             let (mut s, mut d, mut l, mut h) = tone_curve_regions(&self.recipe);
             let spec = percent_spec(-1.0..=1.0, 0.0);
@@ -7639,10 +8096,17 @@ impl LuminaApp {
                 }
             }
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_TONE_CURVE, !section_was_open);
+        }
     }
 
     fn draw_color(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Color.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_COLOR];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Color.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             ui.label(Str::HslMixer.t());
             // GUI-SLIDER-SAVE-1: mixer sliders commit through `set_hsl_value`
             // (save at debounce); `hsl` is only a slider binding buffer.
@@ -7779,6 +8243,9 @@ impl LuminaApp {
                 percent_spec(-1.0..=1.0, 0.0),
             );
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_COLOR, !section_was_open);
+        }
     }
 
     /// One Lightroom color-grading range (hue + saturation sliders) bound to the
@@ -7818,7 +8285,11 @@ impl LuminaApp {
     }
 
     fn draw_effects(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Effects.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_EFFECTS];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Effects.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             ui.label(Str::Vignette.t());
             let mut effects = self.recipe.effects.clone().unwrap_or(Effects {
                 vignette: Some(Vignette {
@@ -7942,10 +8413,17 @@ impl LuminaApp {
             // `effects` is only a slider binding buffer now: every arm above
             // commits through `set_effects_value` (GUI-SLIDER-SAVE-1).
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_EFFECTS, !section_was_open);
+        }
     }
 
     fn draw_detail(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Detail.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_DETAIL];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Detail.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             ui.label(Str::Sharpening.t());
             // GUI-SLIDER-SAVE-1: sharpening sliders commit through
             // `set_sharpening_value` (save at debounce); `sh` is only a
@@ -8038,6 +8516,9 @@ impl LuminaApp {
                 self.set_noise_reduction_value("color", f64::from(col));
             }
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_DETAIL, !section_was_open);
+        }
     }
 
     /// Visible lens-profile status (GUI-OPTICS-1): the profile name when the
@@ -8053,7 +8534,11 @@ impl LuminaApp {
     }
 
     fn draw_optics(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Optics.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_OPTICS];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Optics.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             if cfg!(feature = "lensfun") {
                 ui.label(Str::LensCorrection.t());
                 // GUI-OPTICS-1: the profile status is always visible (name or
@@ -8176,10 +8661,17 @@ impl LuminaApp {
                 ui.label(Str::NotAvailable.t());
             }
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_OPTICS, !section_was_open);
+        }
     }
 
     fn draw_geometry(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Geometry.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_GEOMETRY];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Geometry.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             // GUI-ROTATE-1: rotation + mirror are pure core-pipeline controls
             // (no Lensfun stage involved), so they are always available — the
             // N6 finding was "not rotatable / wiring missing or unfindable".
@@ -8307,6 +8799,9 @@ impl LuminaApp {
                 ui.label(Str::NotAvailable.t());
             }
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_GEOMETRY, !section_was_open);
+        }
     }
 
     fn draw_generative_expand(&mut self, ui: &mut egui::Ui) {
@@ -8449,7 +8944,11 @@ impl LuminaApp {
     }
 
     fn draw_masking(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing(Str::Masking.t(), |ui| {
+        // G-11 solo: see `draw_basic`.
+        let section_was_open = self.section_open[SECTION_MASKING];
+        let section_header =
+            egui::CollapsingHeader::new(Str::Masking.t()).open(Some(section_was_open));
+        let section_response = section_header.show(ui, |ui| {
             let Some(document) = self.document.clone() else {
                 return;
             };
@@ -8533,6 +9032,44 @@ impl LuminaApp {
             });
             if geometry_blocked {
                 ui.colored_label(egui::Color32::YELLOW, Self::GEOMETRY_TOOL_BLOCKED);
+            }
+            // G-11 overlay/panel comfort: global tool-overlay mode, edit-pin
+            // visibility and solo mode. Session-only display state — never
+            // recipe or sidecar.
+            ui.separator();
+            ui.label(Str::OverlayModeLabel.t());
+            ui.horizontal_wrapped(|ui| {
+                for (mode, name) in [
+                    (OverlayMode::Always, Str::OverlayAlways),
+                    (OverlayMode::Auto, Str::OverlayAuto),
+                    (OverlayMode::Never, Str::OverlayNever),
+                ] {
+                    if ui
+                        .selectable_label(self.overlay_mode == mode, name.t())
+                        .clicked()
+                    {
+                        self.set_overlay_mode(mode);
+                    }
+                }
+            });
+            ui.label(Str::PinVisibilityLabel.t());
+            ui.horizontal_wrapped(|ui| {
+                for (visibility, name) in [
+                    (PinVisibility::Always, Str::OverlayAlways),
+                    (PinVisibility::Auto, Str::OverlayAuto),
+                    (PinVisibility::Never, Str::OverlayNever),
+                ] {
+                    if ui
+                        .selectable_label(self.pin_visibility == visibility, name.t())
+                        .clicked()
+                    {
+                        self.set_pin_visibility(visibility);
+                    }
+                }
+            });
+            let mut solo = self.solo_mode;
+            if ui.checkbox(&mut solo, Str::SoloMode.t()).changed() {
+                self.set_solo_mode(solo);
             }
             if self.mask_tool == MaskTool::Brush {
                 let mut radius = self.brush_radius;
@@ -8639,6 +9176,9 @@ impl LuminaApp {
                 }
             }
         });
+        if section_response.header_response.clicked() {
+            self.set_section_open(SECTION_MASKING, !section_was_open);
+        }
     }
     fn draw_spot_heal(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Dust Removal (Q)", |ui| {
@@ -8655,6 +9195,7 @@ impl LuminaApp {
             if ui.button("Clear spots").clicked() { self.clear_spot_heals(); }
             let spots: Vec<serde_json::Value> = self.recipe.extras.get("spot_removals").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
             for spot in &spots { let id = spot.get("id").and_then(|v| v.as_str()).unwrap_or("?"); let status = spot.get("status").and_then(|v| v.as_str()).unwrap_or("valid"); ui.label(format!("spot {id}: {status}")); }
+            ui.label(Str::SpotOverlayHint.t());
             ui.label("SpotHeal → Lens → Perspective → Crop (quick heuristic instant, native desktop-only, no zdata; generative local ONNX Box/Pinsel/Prompt/Seed artifact kind=spot_heal_generative)");
         });
     }
@@ -10657,10 +11198,17 @@ impl eframe::App for LuminaApp {
             }
             for key in [egui::Key::R, egui::Key::Tab] {
                 if ctx.input(|i| i.key_pressed(key)) {
-                    match panel_toggle_for_key(key) {
-                        Some(PanelToggle::CropMode) => self.toggle_crop_mode(),
-                        Some(PanelToggle::PanelsHidden) => self.toggle_panels_hidden(),
-                        None => {}
+                    // G-11: `Shift+Tab` hides all panels (incl. filmstrip);
+                    // plain `Tab` keeps the filmstrip. Disambiguated here so
+                    // the shift variant never falls into the plain branch.
+                    if all_panels_toggle_for_key(key, ctx.input(|i| i.modifiers.shift)) {
+                        self.toggle_all_panels_hidden();
+                    } else {
+                        match panel_toggle_for_key(key) {
+                            Some(PanelToggle::CropMode) => self.toggle_crop_mode(),
+                            Some(PanelToggle::PanelsHidden) => self.toggle_panels_hidden(),
+                            None => {}
+                        }
                     }
                 }
             }
@@ -10878,9 +11426,10 @@ impl eframe::App for LuminaApp {
 
         // Left: Lightroom-like Library folder tree. Develop/Export leave the
         // left edge to the navigator/preview working area. Hidden under `Tab`
-        // panels-hide, `L` lights-out and `F` fullscreen (Welle 2/3); the
+        // panels-hide, `Shift+Tab` all-panels-hide, `L` lights-out and `F`
+        // fullscreen (Welle 2/3, G-11); the
         // header/module bar stay so status and errors remain visible.
-        if self.active_module == Module::Library && !self.chrome_hidden() {
+        if self.active_module == Module::Library && !self.side_chrome_hidden() {
             egui::Panel::left("folders")
                 .resizable(true)
                 .default_size(220.0)
@@ -10894,7 +11443,7 @@ impl eframe::App for LuminaApp {
         // image.
         if self.navigator_open
             && !matches!(self.active_module, Module::Library)
-            && !self.chrome_hidden()
+            && !self.side_chrome_hidden()
         {
             egui::Panel::left("navigator")
                 .resizable(true)
@@ -10907,8 +11456,9 @@ impl eframe::App for LuminaApp {
         // two-pane layout (folder tree left, thumbnail grid center) with no
         // right-hand Source panel — that source/sidecar/copy info belongs to
         // the Develop/Export context (Lightroom-parity: the Source panel was
-        // removed from Library). Hidden under `Tab`/`L`/`F` like the left panels.
-        if !self.chrome_hidden() {
+        // removed from Library). Hidden under `Tab`/`Shift+Tab`/`L`/`F` like the
+        // left panels.
+        if !self.side_chrome_hidden() {
             egui::Panel::right("controls")
                 .resizable(true)
                 .default_size(320.0)
@@ -10989,8 +11539,8 @@ mod tests {
     use lumina_sidecar::{
         BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint, GenerativeCanvas,
         GenerativeEdit, GeometryFingerprint, LensCorrection, MaskDefinition, MaskOperation,
-        MaskPrompt, MaskStatus, ModelIdentity, Point2, Preprocessing, PromptTransform, Resolution,
-        SourceFingerprint, SourceStatus,
+        MaskPrompt, MaskStatus, ModelIdentity, NormalizedRect, Point2, Preprocessing,
+        PromptTransform, Resolution, SourceFingerprint, SourceStatus,
     };
     fn new_app() -> LuminaApp {
         LuminaApp::new(egui::Context::default())
@@ -12328,6 +12878,358 @@ mod tests {
         assert!(!app.panels_hidden);
         assert!(!app.crop_mode);
         assert_eq!(*app.recipe(), recipe);
+    }
+
+    // ---- G-11 overlay/panel comfort (LRPAR-G11-OVERLAYS) ----
+
+    /// Create a mask and inject a box prompt so overlay/pin tests have
+    /// deterministic geometry without a pointer drag. Returns the mask id;
+    /// the mask is selected afterwards.
+    fn mask_with_box_prompt(app: &mut LuminaApp, name: &str, rect: (f32, f32, f32, f32)) -> String {
+        let mask_id = app.create_mask(name).unwrap();
+        {
+            let virtual_copy_id = app.virtual_copy_id.clone();
+            let document = app.document.as_mut().expect("document loaded");
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == virtual_copy_id)
+                .expect("active copy");
+            let mask = copy
+                .mask_library
+                .iter_mut()
+                .find(|mask| mask.id == mask_id)
+                .expect("mask");
+            mask.prompt = Some(MaskPrompt::Box {
+                rect: NormalizedRect {
+                    x: rect.0,
+                    y: rect.1,
+                    width: rect.2,
+                    height: rect.3,
+                },
+                transformation: PromptTransform::default(),
+            });
+        }
+        app.select_mask(&mask_id).unwrap();
+        mask_id
+    }
+
+    #[test]
+    fn g11_overlay_modes_gate_the_draw_prompt() {
+        // G-11 Tool-Overlay-Modi: Always shows the saved prompt without an
+        // armed tool, Never hides it, Auto shows it only with an armed tool.
+        // The mode setters are session-only: the recipe never changes.
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        assert_eq!(app.overlay_mode(), OverlayMode::Always);
+        // No prompt yet: nothing to show in any mode.
+        assert!(app.effective_overlay_prompt().is_none());
+        let _mask_id = mask_with_box_prompt(&mut app, "m1", (0.2, 0.3, 0.4, 0.2));
+        let recipe = app.recipe().clone();
+        // Default Always: prompt visible without an armed tool.
+        assert!(app.overlay_visible());
+        assert!(app.effective_overlay_prompt().is_some());
+        // Never: hidden even with a prompt and an armed tool.
+        app.set_overlay_mode(OverlayMode::Never);
+        assert_eq!(app.overlay_mode(), OverlayMode::Never);
+        assert!(!app.overlay_visible());
+        assert!(app.effective_overlay_prompt().is_none());
+        app.set_mask_tool(MaskTool::Brush);
+        assert!(app.effective_overlay_prompt().is_none());
+        app.set_mask_tool(MaskTool::None);
+        // Auto: hidden without a tool, visible with one.
+        app.set_overlay_mode(OverlayMode::Auto);
+        assert!(!app.overlay_visible());
+        assert!(app.effective_overlay_prompt().is_none());
+        app.set_mask_tool(MaskTool::LinearGradient);
+        assert!(app.overlay_visible());
+        assert!(app.effective_overlay_prompt().is_some());
+        // The spot-heal tool also counts as an armed retouch tool.
+        app.set_mask_tool(MaskTool::None);
+        assert!(!app.overlay_visible());
+        app.set_spot_tool(SpotTool::Heal);
+        assert!(app.overlay_visible());
+        app.set_spot_tool(SpotTool::None);
+        assert!(!app.overlay_visible());
+        // Session-only: mode switches never touched the recipe.
+        assert_eq!(*app.recipe(), recipe);
+        assert_eq!(app.status(), "Tool overlay: Auto");
+    }
+
+    #[test]
+    fn g11_pin_visibility_modes_cover_masks_and_spots() {
+        // G-11 Edit-Pins: Always shows pins without an armed tool, Never shows
+        // none, Auto only with an armed tool. Covers one mask pin (anchor from
+        // the box geometry, selected flag) plus one spot pin.
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        assert_eq!(app.pin_visibility(), PinVisibility::Auto);
+        let mask_id = mask_with_box_prompt(&mut app, "m1", (0.2, 0.3, 0.4, 0.2));
+        app.commit_spot_heal(
+            Point2 { x: 0.25, y: 0.5 },
+            2.0,
+            0.5,
+            Point2 { x: 0.5, y: 0.0 },
+            1.0,
+        )
+        .unwrap();
+        let recipe = app.recipe().clone();
+        // Default Auto without a tool: no pins.
+        assert!(!app.pins_visible());
+        assert!(app.visible_edit_pins().is_empty());
+        // Always: both pins, no tool needed.
+        app.set_pin_visibility(PinVisibility::Always);
+        assert!(app.pins_visible());
+        let pins = app.visible_edit_pins();
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].id, format!("mask:{mask_id}"));
+        assert_eq!(pins[0].label, "1");
+        assert_eq!(pins[0].kind, EditPinKind::Mask);
+        assert!((pins[0].pos.0 - 0.4).abs() < 1e-6);
+        assert!((pins[0].pos.1 - 0.4).abs() < 1e-6);
+        assert!(pins[0].selected);
+        assert_eq!(pins[1].kind, EditPinKind::Spot);
+        assert_eq!(pins[1].label, "2");
+        assert!((pins[1].pos.0 - 0.25).abs() < 1e-6);
+        assert!((pins[1].pos.1 - 0.5).abs() < 1e-6);
+        assert!(!pins[1].selected);
+        // Never: no pins even with an armed tool.
+        app.set_pin_visibility(PinVisibility::Never);
+        app.set_mask_tool(MaskTool::Brush);
+        assert!(!app.pins_visible());
+        assert!(app.visible_edit_pins().is_empty());
+        // Auto with an armed tool: both pins again.
+        app.set_pin_visibility(PinVisibility::Auto);
+        assert!(app.pins_visible());
+        assert_eq!(app.visible_edit_pins().len(), 2);
+        app.set_mask_tool(MaskTool::None);
+        assert!(app.visible_edit_pins().is_empty());
+        // Session-only: visibility switches never touched the recipe.
+        assert_eq!(*app.recipe(), recipe);
+    }
+
+    #[test]
+    fn g11_pin_anchor_covers_all_prompt_variants() {
+        // G-11: every prompt variant maps to its documented anchor; prompts
+        // without geometry yield no pin instead of an invented position.
+        let anchor = |prompt: &MaskPrompt| pin_anchor_for_prompt(prompt);
+        let boxed = MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.2,
+                y: 0.3,
+                width: 0.4,
+                height: 0.2,
+            },
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&boxed), Some((0.4, 0.4)));
+        let brush = MaskPrompt::Brush {
+            marks: vec![BrushMark {
+                x: 0.1,
+                y: 0.9,
+                radius: 0.05,
+                sign: BrushMarkSign::Positive,
+            }],
+            resolution: (8, 8),
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&brush), Some((0.1, 0.9)));
+        let empty_brush = MaskPrompt::Brush {
+            marks: Vec::new(),
+            resolution: (8, 8),
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&empty_brush), None);
+        let polygon = MaskPrompt::Polygon {
+            points: vec![Point2 { x: 0.7, y: 0.1 }, Point2 { x: 0.8, y: 0.2 }],
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&polygon), Some((0.7, 0.1)));
+        let empty_polygon = MaskPrompt::Polygon {
+            points: Vec::new(),
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&empty_polygon), None);
+        let ellipse = MaskPrompt::Ellipse {
+            center: Point2 { x: 0.6, y: 0.6 },
+            radii: Point2 { x: 0.1, y: 0.2 },
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&ellipse), Some((0.6, 0.6)));
+        // Gradient 0° from 0..=1: midpoint of the stretch is the frame centre.
+        let gradient = MaskPrompt::Gradient {
+            angle_deg: 0.0,
+            start: 0.0,
+            end: 1.0,
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&gradient), Some((0.5, 0.5)));
+        // Gradient 0° from 0.5..=1: midpoint shifts right by a quarter.
+        let gradient_half = MaskPrompt::Gradient {
+            angle_deg: 0.0,
+            start: 0.5,
+            end: 1.0,
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&gradient_half), Some((0.75, 0.5)));
+        // Non-finite geometry yields no pin.
+        let nan_box = MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: f32::NAN,
+                y: 0.0,
+                width: 0.1,
+                height: 0.1,
+            },
+            transformation: PromptTransform::default(),
+        };
+        assert_eq!(anchor(&nan_box), None);
+    }
+
+    #[test]
+    fn g11_solo_mode_keeps_a_single_open_section() {
+        // G-11 Solo-Mode: opening a section closes the others; enabling with
+        // several open keeps the first; disabling restores independence.
+        // Out-of-range indices are refused without a state change.
+        let mut app = new_app();
+        assert!(!app.solo_mode());
+        assert_eq!(SECTION_COUNT, 8);
+        assert_eq!(section_name(SECTION_BASIC), Some("Basic"));
+        assert_eq!(section_name(SECTION_MASKING), Some("Masking"));
+        assert_eq!(section_name(SECTION_COUNT), None);
+        // Independent without solo.
+        app.set_section_open(SECTION_BASIC, true);
+        app.set_section_open(SECTION_COLOR, true);
+        assert!(app.is_section_open(SECTION_BASIC));
+        assert!(app.is_section_open(SECTION_COLOR));
+        // Enabling keeps the first open section only.
+        app.set_solo_mode(true);
+        assert!(app.solo_mode());
+        assert!(app.is_section_open(SECTION_BASIC));
+        assert!(!app.is_section_open(SECTION_COLOR));
+        // Opening another one closes the first.
+        app.set_section_open(SECTION_DETAIL, true);
+        assert!(app.is_section_open(SECTION_DETAIL));
+        assert!(!app.is_section_open(SECTION_BASIC));
+        // Closing keeps the rest closed (never re-opens).
+        app.set_section_open(SECTION_DETAIL, false);
+        assert!(!app.is_section_open(SECTION_DETAIL));
+        // Disabled again: sections stay independent.
+        app.set_solo_mode(false);
+        app.set_section_open(SECTION_BASIC, true);
+        app.set_section_open(SECTION_DETAIL, true);
+        assert!(app.is_section_open(SECTION_BASIC));
+        assert!(app.is_section_open(SECTION_DETAIL));
+        // Out-of-range: refused, nothing changes.
+        app.set_section_open(SECTION_COUNT, true);
+        assert!(!app.is_section_open(SECTION_COUNT));
+        assert!(app.is_section_open(SECTION_BASIC));
+        // Session-only: no recipe involvement by construction (display state).
+        assert_eq!(app.status(), "Solo mode off");
+    }
+
+    #[test]
+    fn g11_shift_tab_mapping_toggle_and_no_collision() {
+        // G-11 `Shift+Tab`: pure mapping, toggle effect (side panels +
+        // navigator + filmstrip hide, header stays) and no collision with the
+        // existing Shift-combos (`Shift+M` radial, `Shift+Y` split,
+        // `Shift+C/V/I/E` clipboard/import/export use other keys).
+        assert!(all_panels_toggle_for_key(egui::Key::Tab, true));
+        assert!(!all_panels_toggle_for_key(egui::Key::Tab, false));
+        assert!(!all_panels_toggle_for_key(egui::Key::R, true));
+        assert!(!all_panels_toggle_for_key(egui::Key::F, false));
+        assert!(!all_panels_toggle_for_key(egui::Key::M, true));
+        // Plain `Tab` mapping is untouched (disambiguation happens in update).
+        assert_eq!(
+            panel_toggle_for_key(egui::Key::Tab),
+            Some(PanelToggle::PanelsHidden)
+        );
+        // Existing Shift-combos are unaffected (other keys).
+        assert_eq!(
+            mask_tool_for_key(egui::Key::M, true),
+            Some(MaskTool::Radial)
+        );
+        assert_eq!(
+            mask_tool_for_key(egui::Key::M, false),
+            Some(MaskTool::LinearGradient)
+        );
+        assert_eq!(
+            clipboard_action_for_key(egui::Key::C, true, true),
+            Some(ClipboardAction::Copy)
+        );
+        assert_eq!(
+            import_export_for_key(egui::Key::E, true, true),
+            Some(ImportExportAction::Export)
+        );
+        // Effect: all-panels-hide covers filmstrip + side chrome, while plain
+        // `Tab` keeps the filmstrip.
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        let recipe = app.recipe().clone();
+        assert!(app.shows_filmstrip());
+        assert!(!app.side_chrome_hidden());
+        app.toggle_all_panels_hidden();
+        assert!(app.all_panels_hidden());
+        assert!(!app.shows_filmstrip());
+        assert!(app.side_chrome_hidden());
+        // Plain Tab state stayed off: the two hides are independent.
+        assert!(!app.panels_hidden);
+        assert!(!app.chrome_hidden());
+        app.toggle_all_panels_hidden();
+        assert!(!app.all_panels_hidden());
+        assert!(app.shows_filmstrip());
+        assert!(!app.side_chrome_hidden());
+        app.toggle_panels_hidden();
+        assert!(app.panels_hidden);
+        assert!(app.shows_filmstrip(), "plain Tab keeps the filmstrip");
+        assert_eq!(*app.recipe(), recipe);
+    }
+
+    #[test]
+    fn g11_session_state_survives_no_sidecar_roundtrip() {
+        // G-11 E2E-Anker (DoD §1): mode switches are visible session state,
+        // the mask prompt persists through save/reload, and the modes reset
+        // to defaults on reopen (never sidecar keys).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let _mask_id = mask_with_box_prompt(&mut app, "m1", (0.2, 0.3, 0.4, 0.2));
+        app.set_overlay_mode(OverlayMode::Never);
+        app.set_pin_visibility(PinVisibility::Never);
+        app.set_solo_mode(true);
+        app.set_section_open(SECTION_COLOR, true);
+        app.toggle_all_panels_hidden();
+        assert!(app.effective_overlay_prompt().is_none());
+        assert!(app.visible_edit_pins().is_empty());
+        // Persist the document (mask prompt rides along as recipe data).
+        app.save_sidecar();
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&source);
+        assert!(sidecar_path.exists());
+        let raw = std::fs::read_to_string(&sidecar_path).unwrap();
+        for key in [
+            "overlay_mode",
+            "pin_visibility",
+            "solo_mode",
+            "all_panels_hidden",
+            "section_open",
+        ] {
+            assert!(!raw.contains(key), "session-only key leaked: {key}");
+        }
+        // Reload: the prompt survived, the session modes reset to defaults.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.overlay_mode(), OverlayMode::Always);
+        assert_eq!(reopened.pin_visibility(), PinVisibility::Auto);
+        assert!(!reopened.solo_mode());
+        assert!(!reopened.all_panels_hidden());
+        assert!(!reopened.is_section_open(SECTION_COLOR));
+        let pins = {
+            reopened.set_pin_visibility(PinVisibility::Always);
+            reopened.visible_edit_pins()
+        };
+        assert_eq!(pins.len(), 1, "saved mask prompt reopens with its pin");
+        assert_eq!(pins[0].kind, EditPinKind::Mask);
     }
 
     #[test]
@@ -19647,8 +20549,10 @@ mod tests {
             );
             return;
         }
-        // `ui.collapsing` starts closed — pre-open the section on a shared
-        // context (same label → same persistent id) so the groups paint.
+        // G-11: section openness is explicit app state (`section_open`), not
+        // egui-implicit memory — open the section through the setter so the
+        // groups paint on a fresh headless context.
+        app.set_section_open(SECTION_OPTICS, true);
         let ctx = egui::Context::default();
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -19657,12 +20561,6 @@ mod tests {
             )),
             ..Default::default()
         };
-        let mut output = ctx.run_ui(raw.clone(), |ui| {
-            egui::CollapsingHeader::new(Str::Optics.t())
-                .default_open(true)
-                .show(ui, |_| {});
-        });
-        output.textures_delta.clear();
         let mut output = ctx.run_ui(raw, |ui| {
             app.draw_optics(ui);
         });
