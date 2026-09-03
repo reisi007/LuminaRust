@@ -3989,7 +3989,13 @@ mod tests {
             )
             .unwrap();
         let mut staged = frame();
-        staged.apply_lens_stage(None).unwrap();
+        staged
+            .apply_lens_stage(
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         staged.apply_perspective_stage(None, None).unwrap();
         staged.apply_crop_stage(Some(&geometry)).unwrap();
         assert_eq!(legacy.pixels, staged.pixels);

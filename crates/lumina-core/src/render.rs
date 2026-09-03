@@ -2401,7 +2401,11 @@ mod tests {
 
         let mut manual = frame.clone();
         manual
-            .apply_lens_stage(recipe.lens_correction.as_ref())
+            .apply_lens_stage(
+                recipe.lens_correction.as_ref(),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         let ge = recipe.generative_edit.as_ref().unwrap();
         manual.apply_auto_fill_transparent(true, ge.seed.unwrap_or(0));
@@ -2515,7 +2519,13 @@ mod tests {
 
         // Manual Fill → Perspective sequence.
         let mut forward = frame.clone();
-        forward.apply_lens_stage(None).unwrap();
+        forward
+            .apply_lens_stage(
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         assert!(forward.apply_auto_fill_transparent(true, 11));
         assert!(!crate::generative::has_transparent_pixels(&forward));
         forward
@@ -2525,7 +2535,13 @@ mod tests {
 
         // Reversed Perspective → Fill sequence must differ (halo proof).
         let mut reversed = frame.clone();
-        reversed.apply_lens_stage(None).unwrap();
+        reversed
+            .apply_lens_stage(
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         reversed
             .apply_perspective_stage(None, Some(&perspective))
             .unwrap();
