@@ -1,7 +1,13 @@
 # Plattformen und optionale Indizierung
 
-**Features:** F-006 Optionale DB, F-007 RAW-Import, F-010 CLI, GUI und WASM,
+**Features:** F-006 Optionale DB, F-007 RAW-Import, F-010 CLI und GUI,
 F-100 Lightroom-UI-Konventionen
+
+> **WASM gestrichen (2026-09-04, Eigentümer-Entscheidung):** alle WASM-/Browser-
+> Ziele (F-069…F-071), `cfg(target_arch = "wasm32")`-Pfade, `wasm-bindgen`-/`trunk`-
+> Artefakte und der WASM-CI-Job werden ausgebaut. Dieses Dokument beschreibt nur
+> noch native CLI + Desktop-GUI. Historische WASM-Abschnitte unten sind als
+> ENTFERNT markiert und nicht normativ.
 
 ## Inhaltsverzeichnis
 
@@ -9,7 +15,6 @@ F-100 Lightroom-UI-Konventionen
 - [CLI](#cli)
 - [Desktop-GUI](#desktop-gui)
 - [UI-Konventionen (F-100)](#ui-konventionen-f-100)
-- [WASM](#wasm)
 - [Optionale zentrale Indizierung](#optionale-zentrale-indizierung)
 - [Abnahme](#abnahme)
 
@@ -61,13 +66,11 @@ Core-/CLI-/Desktop-Pfad. Der aktuelle Implementierungsstand enthält den Adapter
 CLI-/Desktop-Pfad und Fehler-/Capability-Tests. Ein echter Kamera-Golden-Test
 bleibt bis zur Bereitstellung einer lizenzgeeigneten Fixture offen.
 
-**MVP-Grenze (Stand 2026-08-17):** Das MVP umfasst **CLI und native Desktop**
-(auch RAW). Der **Web/WASM-Teil ist aus dem MVP geschoben** und wird später
-umgesetzt. Die Architektur bleibt aber bewusst kompatibel: `lumina-raw` kapselt
+**MVP-Grenze (Stand 2026-09-04):** Das MVP umfasst **CLI und native Desktop**
+(auch RAW). **WASM/Browser ist ersatzlos gestrichen** (Eigentümer-Entscheidung
+2026-09-04) und wird nicht umgesetzt. `lumina-raw` kapselt
 den LibRaw-Zugriff hinter einem einheitlichen `decode_bytes`/`RawMetadata`-
-Vertrag, sodass ein späteres WASM-Backend (`libraw-wasm`, Emscripten/npm, Feature
-`wasm-js`) ohne API-Änderung andocken kann. WASM-spezifische Pfade sind bereits
-per `cfg(target_arch = "wasm32")` gekapselt; der native LibRaw-Adapter bleibt
+Vertrag; der native LibRaw-Adapter bleibt
 Default für CLI/Desktop.
 
 Die CLI soll mindestens `import`, `inspect`, `develop`, `render`, `export`,
@@ -170,7 +173,7 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 > **Implementierungsstatus (F-086, 2026-08-17):** Umgesetzt und unabhängig
 > verifiziert. Die `.lumina/`-Disk-Schicht (settings.json inkl.
 > Eltern-Vererbung, Preview-Ablage, Prune) liegt in `lumina-core`
-> (`DiskFolderCache`), WASM-gekapselt; siehe feature/architecture/pipeline.md.
+> (`DiskFolderCache`); siehe feature/architecture/pipeline.md.
 
 > **Implementierungsstatus (F-103, 2026-08-21):** Die Desktop-GUI (egui/eframe,
 > native Desktop als einzige MVP-GUI) erfüllt die F-100-Konventionen:
@@ -207,13 +210,10 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 Für v1 ist egui/eframe festgelegt. Tauri ist keine v1-Abhängigkeit und kann in
 einer späteren Architekturentscheidung erneut bewertet werden.
 
-> **Produktentscheidung (2026-08-21, Projekteeigentümer):** Die **native
-> Desktop-App ist die einzige MVP-GUI.** Der WASM-/Trunk-Pfad bleibt buildbar
-> (CI-Check) und wird ausschließlich als dokumentierte Capability-Grenze
-> geführt; es findet keine Funktionsentwicklung für WASM statt (Post-MVP,
-> siehe WASM-Abschnitt). UI-Verifikation im MVP erfolgt nativ, z. B. über
-> Headless-Snapshot-Tests (`egui_kittest`); Browser-basierte Screenshot-Harnesses
-> (trunk serve + Playwright) sind Post-MVP-Optionen.
+> **Produktentscheidung (2026-09-04, Projekteeigentümer):** Die **native
+> Desktop-App ist die einzige GUI. WASM/Browser ist ersatzlos gestrichen.**
+> UI-Verifikation erfolgt nativ, z. B. über
+> Headless-Snapshot-Tests (`egui_kittest`).
 
 > **F-103-N9 — UI-Snapshot-Regressionen (`egui_kittest`, 2026-08-21):** Die
 > Integrationstests unter `crates/lumina-gui/tests/kittest_snapshots.rs` rendern
@@ -392,7 +392,12 @@ im Panel sichtbar bleiben. Masken-Layer, Invertierung, Feathering, Blur und
 lokale Anpassungen werden entsprechend der virtuellen Kopie im deklarativen
 Rezept gespeichert.
 
-## WASM
+## WASM — ENTFERNT (2026-09-04)
+
+WASM/Browser ist ersatzlos gestrichen (Eigentümer-Entscheidung). F-069…F-071
+entfallen; `cfg(target_arch = "wasm32")`-Pfade, `wasm-bindgen`-/`trunk`-Artefakte
+und der WASM-CI-Job werden ausgebaut (Task WASM-REMOVE-01). Der Rest dieses
+Abschnitts ist historisch und nicht normativ:
 
 WASM unterstützt zunächst den portablen Core und klar begrenzte Preview-
 Szenarien. Browser-Dateiimport, Speicherlimits, Export und GPU werden getrennt
@@ -472,22 +477,18 @@ Eine ausführliche GPU‑DAG‑ und Present‑Diskussion steht in `docs/gpu-boot
 
 ### Erster visueller User-Test
 
-Das gemeinsame `lumina-gui`-Crate verwendet eframe nativ und als Trunk-WASM-
-App. Die reproduzierbaren MVP-Befehle sind:
+Das `lumina-gui`-Crate ist eine native eframe-Desktop-App. Der reproduzierbare
+MVP-Befehl ist:
 
 ```bash
 cargo run -p lumina-gui
-cd crates/lumina-gui
-trunk serve
-trunk build --release
 ```
 
 Die Oberfläche lädt PNG, JPEG und WebP sowie native RAW-Dateien per Pfad oder
-Drag-and-drop. Browser/WASM bleibt im MVP RAW-frei und weist diese Capability
-klar aus (Post-MVP: `libraw-wasm`-Backend, Feature `wasm-js`). Preview, Exposure
+Drag-and-drop. Preview, Exposure
 (`-10..=10`) und Contrast (`-1..=1`) laufen über `lumina-core::ImageFrame` und
 `lumina-sidecar::EditRecipe`. Native Sidecars werden neben dem Original
-gespeichert; Browser-Dateispeichern ist im MVP noch nicht implementiert. ONNX,
+gespeichert. ONNX,
 Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 
 ## Optionale zentrale Indizierung

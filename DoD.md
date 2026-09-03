@@ -55,6 +55,10 @@ genau diese Lücken.
 - Jeder manuelle Test-Befund erzeugt (a) einen automatischen Regressionstest
   und (b) falls eine Regel fehlte, einen DoD-Eintrag hier (dieser Abschnitt
   wurde so geboren).
+- **Manuelle GUI-Tests starten immer mit Trace-Level:** `RUST_LOG=trace
+  cargo run -p lumina-gui` (o. ä.), damit Slider-/Debounce-/Render-Pfade im Log
+  sichtbar sind (`trace!` ist unter INFO unsichtbar). Der Befundbericht nennt
+  den Log-Ausschnitt.
 - `F-103-N6` und jeder folgende manuelle Test gelten erst als abgeschlossen,
   wenn alle Befunde einen automatischen Test-Anker haben.
 

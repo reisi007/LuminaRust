@@ -217,32 +217,6 @@ jobs:
           path: perf/results/
           if-no-files-found: warn
 
-  wasm:
-    name: WASM checks
-    needs: detect
-    if: needs.detect.outputs.has_cargo == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check portable core and GUI
-        run: |
-          cargo check -p lumina-core --target wasm32-unknown-unknown
-          # lumina-gui's default features (`lensfun`, `gpu`) are native-only;
-          # the documented wasm32 capability boundary is the check WITHOUT
-          # default features (see crates/lumina-gui/Cargo.toml).
-          cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features
-
   docs:
     name: Documentation checks
     runs-on: ubuntu-latest

@@ -96,7 +96,12 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-_(keine offenen Tasks — GUI-AUTOTONE-SAVE-1 BESTANDEN 204p 2026-09-04 c29e609a/5e36133, GUI-KIT-01-REFRESH BESTANDEN kittest 10/10 2026-09-04 a75b42f, CLI-GUI-PARITY-1 BESTANDEN Matrix-Doc 2026-09-04 a75b42f; Details in Git-Historie)_
+- [ ] **[PRIO: hoch] WASM-REMOVE-GUI** `lumina-gui`: alle `cfg(target_arch = "wasm32")`-Zweige + `wasm-bindgen`-/`web-sys`-Deps + `index.html` entfernen, Dropped-File-Handling nur nativ. Abnahme: `cargo test -p lumina-gui --lib` + clippy/fmt grün, kein `wasm32`-Grep-Treffer im Crate.
+- [ ] **[PRIO: hoch] WASM-REMOVE-ONNX** `lumina-onnx`: `wasm_stub.rs` + Target-Gates entfernen (`ort` nativ-only direkt). Abnahme: `cargo test -p lumina-onnx --features onnx-rt` + clippy grün, kein `wasm32`-Treffer.
+- [ ] **[PRIO: hoch] WASM-REMOVE-REST** `lumina-core/-sidecar/-raw/-cli/-bench/-mcp/-gpu`: alle `cfg(target_arch = "wasm32")`-Zweige + Target-Deps entfernen. Abnahme: Workspace-Tests + clippy grün, repo-weit kein `wasm32`-Treffer außer Historie (`docs/reviews`, `docs/plans`).
+- [ ] **[PRIO: hoch] R2-GUIMOD-04a** Drag-Render-Instrumentierung (lumina-gui): pro-Tick-Timings CPU-Draft/GPU/Analyse ins Log (trace), damit F-103-N6 Zahlen liefert. Kein Verhalten ändern. Abnahme: headless Test (Timings fallen an), `cargo test -p lumina-gui` grün.
+
+_(weitere ehemals offene hoch-prio Tasks BESTANDEN s. Git-Historie: GUI-AUTOTONE-SAVE-1 204p c29e609a/5e36133, GUI-KIT-01-REFRESH kittest 10/10 a75b42f, CLI-GUI-PARITY-1 Matrix-Doc a75b42f; F-103-INTEGRATION-PREVIEW-SIDECAR 147p 43b1b73; CI-ONNX-RT 953987e/c5e5e06/67690ec)_
 
 _(keine weiteren offenen hoch-prio Tasks — F-103-INTEGRATION-PREVIEW-SIDECAR verifiziert BESTANDEN am 2026-09-02, 147p (144→147 +3), core 277+7, sidecar 86p, clippy/fmt/wasm grün, Commit 43b1b73; CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
@@ -155,16 +160,14 @@ Vor F-103-N6 empfohlen: kleine Stabilitäts-Fixes aus den Review-Befunden
 (z. B. REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1),
 damit der manuelle Test aussagekräftig ist.
 
-- [ ] **[PRIO: mittel] R2-GUIMOD-04** (nach manuellem Test): CPU-Draft läuft auf
-  GPU-Pfaden redundant mit. Drosselung ist Verhaltensentscheidung — erst nach
-  Test entscheiden, ob der Draft-Throttle nötig ist.
+- [ ] **[PRIO: mittel] R2-GUIMOD-04b** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
+- [ ] **[PRIO: mittel] R2-GUIMOD-04c** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).
 
-- [ ] **[PRIO: hoch] F-103-N6** Erster visueller User-Test: `cargo run -p lumina-gui` mit
+- [ ] **[PRIO: hoch] F-103-N6** Erster visueller User-Test: `RUST_LOG=trace cargo run -p lumina-gui` (Trace-Pflicht nach DoD §6) mit
   PNG/JPEG/WebP + nativen RAW per Pfad und Drag&drop; Preview + Exposure/
   Contrast ändern den Renderstand; Sidecar wird geschrieben und beim Neustart
-  wiederhergestellt; WASM (`trunk serve`/`trunk build --release`) bleibt
-  buildbar und weist RAW als nicht verfügbare Capability aus. Abnahme:
-  reproduzierbare Befehle aus cli-gui-wasm.md; unabhängiger Verifizierungs-
+  wiederhergestellt. Abnahme:
+  reproduzierbare Befehle aus cli-gui-wasm.md + Log-Ausschnitt; unabhängiger Verifizierungs-
   Agent bestätigt F-100-Checkliste + Tests (BESTANDEN). Letzter Schritt vor
   Abschluss von Phase 8.
 

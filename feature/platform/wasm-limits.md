@@ -1,5 +1,9 @@
 # WASM/Browser: Import, Speicher, Export und Limits (F-069…F-071)
 
+> **ENTFERNT (2026-09-04, Eigentümer-Entscheidung):** WASM/Browser ist ersatzlos
+> gestrichen. Dieses Dokument ist historisch und nicht normativ; F-069…F-071
+> entfallen. Der Ausbau aus dem Code läuft unter Task WASM-REMOVE-01.
+
 **Features:** F-069 Browser-Dateiimport, temporärer Speicher und Exportmodell,
 F-070 ONNX im Browser, F-071 quantitative native-/Desktop-/Browser-Limits
 

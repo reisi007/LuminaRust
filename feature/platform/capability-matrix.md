@@ -1,4 +1,8 @@
-# Capability-Matrix: native CLI / Desktop / Browser (WASM)
+# Capability-Matrix: native CLI / Desktop (WASM ENTFERNT 2026-09-04)
+
+> **Browser-Spalte gestrichen:** WASM/Browser ist ersatzlos gestrichen
+> (Eigentümer-Entscheidung 2026-09-04). Die Browser-Spalte unten ist historisch
+> und nicht normativ; der Ausbau aus dem Code läuft unter WASM-REMOVE-01.
 
 **Features:** F-006 Capability-Matrix (native CLI, Desktop, Browser),
 F-069 Browser-Dateiimport/Speicher/Export, F-070 ONNX im Browser, F-071

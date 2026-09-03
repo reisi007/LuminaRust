@@ -85,10 +85,9 @@ Sidecars vollständig wiederherstellbar sein.
   Schnittstelle für programmatischen Bildzugriff, Rezept-Bearbeitung und
   Schnellvorschau (F-101)
 - [`platform/capability-matrix.md`](platform/capability-matrix.md):
-  Capability-Matrix native CLI / Desktop / Browser (F-006, F-069–F-071)
-- [`platform/wasm-limits.md`](platform/wasm-limits.md): Browser-Dateiimport,
-  temporärer Speicher (OPFS), Exportmodell, ONNX im Browser und quantitative
-  Limits Bildgröße/Speicher/Threads/GPU (F-069–F-071)
+  Capability-Matrix native CLI / Desktop (Browser ENTFERNT 2026-09-04)
+- [`platform/wasm-limits.md`](platform/wasm-limits.md): ENTFERNT 2026-09-04
+  (historisch; F-069–F-071 entfallen)
 
 ### Qualität
 
@@ -121,7 +120,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-037 | Bildexport | [Export](product/export.md) | mittel |
 | F-074 | Performance-Benchmarks | [Performance](quality/performance-benchmarks.md) | mittel |
 | F-009 | Presets | [Virtual Copies](product/virtual-copies.md) | mittel |
-| F-010 | CLI, GUI und WASM | [Plattformen](platform/cli-gui-wasm.md) | hoch |
+| F-010 | CLI und GUI | [Plattformen](platform/cli-gui-wasm.md) | hoch |
 | F-011 | Konflikt- und Releasequalität | [Qualität](quality/conflicts-and-acceptance.md) | hoch |
 | F-012 | Benutzergeführte Segmentierung | [AI-Masks](product/ai-masks.md) | hoch |
 | F-014 | Standardkopie-Regeln | [Virtual Copies](product/virtual-copies.md) | mittel |
@@ -142,9 +141,9 @@ Sidecars vollständig wiederherstellbar sein.
 | F-065 | SQLite-Adapter (optional) | [Index](architecture/index.md) | mittel |
 | F-066 | Index-Rebuild/Locking/corrupt DB | [Index](architecture/index.md) | mittel |
 | F-067 | Index-Löschsicherheit | [Index](architecture/index.md) | mittel |
-| F-069 | Browser-Import/Speicher/Export | [WASM Limits](platform/wasm-limits.md) | hoch |
-| F-070 | ONNX im Browser | [WASM Limits](platform/wasm-limits.md) | hoch |
-| F-071 | Quantitative Plattform-Limits | [WASM Limits](platform/wasm-limits.md) | mittel |
+| F-069 | Browser-Import/Speicher/Export — ENTFERNT 2026-09-04 | historisch | — |
+| F-070 | ONNX im Browser — ENTFERNT 2026-09-04 | historisch | — |
+| F-071 | Quantitative Plattform-Limits (Browser-Anteil ENTFERNT 2026-09-04) | [WASM Limits](platform/wasm-limits.md) (historisch) | mittel |
 | GEN-EXPAND-1 | Generatives Entfernen + Erweitern | [Generative Expand](product/generative-expand.md) | hoch |
 | SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
 
