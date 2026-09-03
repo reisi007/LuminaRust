@@ -248,24 +248,68 @@ fn reject_unsupported_spot_modes_extras(recipe: &EditRecipe) -> Result<(), CoreE
     Ok(())
 }
 
-/// SPOT-TYPED-FIELD-FIX: validates the typed schema-v2 `recipe.spot_removals`
-/// alongside the legacy extras array (see [`reject_unsupported_spot_modes`]).
-/// Every typed entry is checked: an unknown `version` is rejected (no silent
-/// migration), `Generative` is rejected (model + artifact live outside the
-/// portable core), and `Heuristic` is rejected as well — schema-v2 carries no
-/// heal geometry (`SpotRemoval` holds only version/mode/artifact), so a typed
-/// heuristic entry is unrenderable by construction. Failing loudly here turns
-/// the GEN-ZDATA-LINK-1 roundtrip loss (heuristic params dropped on
-/// deserialize) into a visible error instead of a silent no-heal render; the
-/// durable fix is a sidecar schema follow-up preserving the geometry.
+/// SPOT-TYPED-FIELD-FIX + SPOT-CORE-SHADOW-FOLLOWUP: validates the typed
+/// schema-v2 `recipe.spot_removals` alongside the legacy extras array (see
+/// [`reject_unsupported_spot_modes`]).
+///
+/// Decision (c000c6f sidecar mirror, 30ca7ba follow-up): since the sidecar
+/// mirrors the raw `spot_removals` JSON back into `extras` on deserialize,
+/// a loaded healthy recipe carries BOTH the geometry-carrying extras view
+/// (source of truth for healing) AND a geometry-free typed mirror shadow
+/// (`SpotRemoval` holds only version/mode/artifact). Rejecting that shadow
+/// loudly would be a false alarm on every healthy loaded recipe, so a
+/// geometry-free typed `Heuristic` entry is TOLERATED (skipped) exactly when
+/// the extras `spot_removals` key is present — healing comes from extras via
+/// [`crate::spot_heal::spots_from_recipe`], the shadow contributes nothing.
+/// Two cases stay LOUD (hard `InvalidAdjustment`, never a silent fallback):
+/// (a) a geometry-free typed heuristic WITHOUT the extras key (isolated
+/// shadow, no geometry anywhere — nothing could heal it), and (b) a typed
+/// heuristic that DOES carry geometry fields (if the schema ever gains
+/// them — detected via its serialized JSON keys; an explicit typed geometry
+/// path must be wired deliberately, not healed by accident). Unknown
+/// `version` and `Generative` stay loud unconditionally (no silent
+/// migration; model + artifact live outside the portable core).
 fn reject_unsupported_spot_modes_typed(recipe: &EditRecipe) -> Result<(), CoreError> {
+    let has_extras_geometry = recipe.extras.contains_key("spot_removals");
     for entry in &recipe.spot_removals {
-        check_typed_spot_entry(entry)?;
+        check_typed_spot_entry(entry, has_extras_geometry)?;
     }
     Ok(())
 }
 
-fn check_typed_spot_entry(entry: &lumina_sidecar::SpotRemoval) -> Result<(), CoreError> {
+/// SPOT-CORE-SHADOW-FOLLOWUP: future-proof probe for typed heal geometry.
+/// `SpotRemoval` currently serializes only version/mode/artifact, so this
+/// is always false today; if the schema ever gains geometry fields
+/// (center/radius/feather/offset/opacity/…), they appear in the serialized
+/// JSON and the entry takes the loud path in [`check_typed_spot_entry`].
+fn typed_entry_has_geometry(entry: &lumina_sidecar::SpotRemoval) -> bool {
+    let Ok(value) = serde_json::to_value(entry) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    [
+        "center",
+        "center_x",
+        "center_y",
+        "radius",
+        "feather",
+        "offset_dx",
+        "offset_dy",
+        "source_offset",
+        "opacity",
+        "id",
+        "status",
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key))
+}
+
+fn check_typed_spot_entry(
+    entry: &lumina_sidecar::SpotRemoval,
+    has_extras_geometry: bool,
+) -> Result<(), CoreError> {
     if entry.version != lumina_sidecar::SPOT_REMOVAL_VERSION {
         return Err(CoreError::InvalidAdjustment {
             name: "spot_heal.version".into(),
@@ -281,12 +325,37 @@ fn check_typed_spot_entry(entry: &lumina_sidecar::SpotRemoval) -> Result<(), Cor
             minimum: 0.0,
             maximum: 0.0,
         }),
-        lumina_sidecar::SpotRemovalMode::Heuristic => Err(CoreError::InvalidAdjustment {
-            name: "spot_heal.entry".into(),
-            value: -1.0,
-            minimum: 0.0,
-            maximum: 0.0,
-        }),
+        lumina_sidecar::SpotRemovalMode::Heuristic => {
+            if typed_entry_has_geometry(entry) {
+                // Typed entry claims its own geometry: healing it from the
+                // extras view could apply the WRONG params, healing nothing
+                // would be silent — reject loudly until a typed geometry
+                // path is deliberately wired.
+                return Err(CoreError::InvalidAdjustment {
+                    name: "spot_heal.entry".into(),
+                    value: -1.0,
+                    minimum: 0.0,
+                    maximum: 0.0,
+                });
+            }
+            if has_extras_geometry {
+                // Healthy loaded recipe: geometry-free mirror shadow, the
+                // extras view carries the heal params — skip the shadow,
+                // healing happens from extras. Documented tolerance, not a
+                // silent fallback: there is nothing to fall back from, the
+                // shadow was never renderable input.
+                return Ok(());
+            }
+            // Isolated shadow with no geometry anywhere: nothing could heal
+            // it, rendering as if no spot existed would be a silent
+            // no-heal — reject loudly.
+            Err(CoreError::InvalidAdjustment {
+                name: "spot_heal.entry".into(),
+                value: -1.0,
+                minimum: 0.0,
+                maximum: 0.0,
+            })
+        }
     }
 }
 
@@ -2727,12 +2796,13 @@ mod tests {
 
     #[test]
     fn typed_heuristic_spot_without_geometry_is_hard_error() {
-        // SPOT-TYPED-FIELD-FIX: schema-v2 typed heuristic entries carry no
-        // heal geometry (`SpotRemoval` holds only version/mode/artifact, the
-        // GEN-ZDATA-LINK-1 roundtrip drops the params), so they are
-        // unrenderable by construction. Failing loudly turns the silent
-        // no-heal render into a visible error until the sidecar schema
-        // follow-up preserves the geometry.
+        // SPOT-CORE-SHADOW-FOLLOWUP: an ISOLATED geometry-free typed
+        // heuristic shadow (no `extras["spot_removals"]` key anywhere) has
+        // no heal geometry to render from — rendering it as absent would be
+        // a silent no-heal, so it fails loudly. Contrast with
+        // `typed_heuristic_mirror_shadow_with_extras_is_tolerated`: on a
+        // healthy loaded recipe the extras view carries the geometry and
+        // the same shadow is skipped.
         let frame = checker_8x8();
         let mut recipe = EditRecipe::default();
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
@@ -2740,8 +2810,43 @@ mod tests {
             mode: lumina_sidecar::SpotRemovalMode::Heuristic,
             artifact: None,
         });
+        assert!(
+            !recipe.extras.contains_key("spot_removals"),
+            "isolated shadow fixture must carry no extras geometry"
+        );
         let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
         assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
+    }
+
+    #[test]
+    fn typed_heuristic_mirror_shadow_with_extras_is_tolerated() {
+        // SPOT-CORE-SHADOW-FOLLOWUP: a healthy loaded recipe carries the
+        // heal geometry in `extras["spot_removals"]` plus the geometry-free
+        // typed mirror shadow (sidecar c000c6f). The shadow is skipped and
+        // healing comes from extras — no false alarm, visibly healed pixels.
+        let mut pixels = Vec::new();
+        for _y in 0..8 {
+            for x in 0..8 {
+                let v = if x < 4 { 0 } else { 255 };
+                pixels.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
+        let mut recipe = EditRecipe::default();
+        recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.25,"center_y":0.5,"radius":2.0,"feather":0.5,"offset_dx":0.5,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
+        );
+        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
+            artifact: None,
+        });
+        let output = render_frame(&frame, &default_context(&recipe, None)).unwrap();
+        assert_ne!(
+            output.frame.pixels, frame.pixels,
+            "mirror-shadow recipe must visibly heal from extras"
+        );
     }
 
     #[test]

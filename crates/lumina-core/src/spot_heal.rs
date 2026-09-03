@@ -94,13 +94,15 @@ impl SpotHeuristic {
 /// and rejected loudly in the render path instead). Entries without a `mode`
 /// key default to heuristic (legacy documents).
 ///
-/// SPOT-TYPED-FIELD-FIX note: the typed schema-v2 `recipe.spot_removals` is
-/// intentionally NOT converted here — `SpotRemoval` carries only
-/// version/mode/artifact and no heal geometry (center/radius/feather/offset/
-/// opacity), so a typed entry cannot yield a `SpotHeuristic`. Typed entries
-/// are validated loudly in the render path
-/// (`render::apply_spot_heals_from_recipe`) instead of being silently treated
-/// as healed or as absent.
+/// SPOT-TYPED-FIELD-FIX + SPOT-CORE-SHADOW-FOLLOWUP note: the typed
+/// schema-v2 `recipe.spot_removals` is intentionally NOT converted here —
+/// `SpotRemoval` carries only version/mode/artifact and no heal geometry
+/// (center/radius/feather/offset/opacity), so a typed entry cannot yield a
+/// `SpotHeuristic`. Healing always comes from the extras view. The render
+/// path (`render::apply_spot_heals_from_recipe`) skips a geometry-free typed
+/// heuristic mirror shadow while the extras `spot_removals` key is present
+/// (healthy loaded recipe) and rejects it loudly when isolated (no geometry
+/// anywhere), as well as any generative/unknown-version entry.
 pub fn spots_from_recipe(recipe: &lumina_sidecar::EditRecipe) -> Vec<SpotHeuristic> {
     let Some(value) = recipe.extras.get("spot_removals") else {
         return Vec::new();
@@ -359,18 +361,24 @@ mod tests {
         let parsed = spots_from_recipe(&recipe);
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, "spot-1");
-        // GEN-ZDATA-LINK-1 contract: `EditRecipe` serde consumes the
-        // top-level `spot_removals` key into the typed schema-v2 field, so a
-        // JSON roundtrip moves the entry out of extras. The typed entry keeps
-        // the key (no silent key loss) but drops the heuristic geometry
-        // (`SpotRemoval` holds only version/mode/artifact) — the render path
-        // rejects such typed entries loudly instead of healing nothing
-        // (see `render::tests::typed_heuristic_spot_without_geometry_is_hard_error`).
+        // SPOT-SCHEMA-GEOMETRY / SPOT-CORE-SHADOW-FOLLOWUP contract:
+        // `EditRecipe` serde mirrors the raw `spot_removals` value back into
+        // `extras` on deserialize (the typed schema-v2 `SpotRemoval` holds
+        // only version/mode/artifact, so the extras view remains the
+        // geometry-carrying source of truth). A JSON roundtrip therefore
+        // keeps the extras key AND populates the typed mirror shadow; the
+        // render path heals from extras and tolerates that shadow (see
+        // `render::reject_unsupported_spot_modes_typed`).
         let json = serde_json::to_string(&recipe).unwrap();
         let back: lumina_sidecar::EditRecipe = serde_json::from_str(&json).unwrap();
         assert!(
-            !back.extras.contains_key("spot_removals"),
-            "serde moves spot_removals into the typed field"
+            back.extras.contains_key("spot_removals"),
+            "serde mirrors raw spot_removals back into extras"
+        );
+        assert_eq!(
+            back.extras.get("spot_removals"),
+            recipe.extras.get("spot_removals"),
+            "extras spot geometry survives the roundtrip"
         );
         assert_eq!(back.spot_removals.len(), 1);
         assert_eq!(
