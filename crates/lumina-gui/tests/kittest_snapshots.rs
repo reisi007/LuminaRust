@@ -277,3 +277,40 @@ fn library_folders_root_is_workdir() {
         "Folder tree must show the workdir `{base}` as its root (not $HOME)"
     );
 }
+
+/// GUI-HISTOGRAM-1: the histogram renders as a real graphic (filled
+/// 256-bin Painter curve with P01/P99 markers) in its own collapsible
+/// Develop-panel section instead of the old clip bar in the module bar.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn histogram_graphic() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // The histogram section defaults to open; Basic stays collapsed so the
+    // golden focuses on the graphic. Two frames: the first renders and
+    // uploads the preview texture, the second paints it.
+    harness.run();
+    harness.run();
+    harness.snapshot("histogram_graphic");
+}
+
+/// GUI-PREVIEW-NAV-1: the navigator shows the full image with the viewport
+/// rectangle of the zoomed working area (Custom zoom so the rectangle is
+/// strictly smaller than the overview).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn navigator_viewport() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    harness.state_mut().set_navigator_open(true);
+    // Custom zoom above fit: the viewport rectangle must be smaller than the
+    // navigator overview. `zoom_step` pins `Custom` like modifier-wheel zoom.
+    // Two frames: the first settles the zoomed render and uploads the preview
+    // texture, the second paints the navigator overview from it.
+    harness.state_mut().zoom_step(4.0);
+    harness.run();
+    harness.run();
+    harness.snapshot("navigator_viewport");
+}

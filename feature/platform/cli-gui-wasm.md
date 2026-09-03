@@ -305,9 +305,12 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   sichtbarer Develop-Arbeitsbereich); Draggen des Rechtecks pannt den
   sichtbaren Bereich. Das Navigator-Panel ist einklappbar.
 - Zoomstufen: **Fit (Default)**, 25 %, 50 %, 75 %, 100 % (1:1), 200 %,
-  Fit-Breite. Das Mausrad zoomt nur mit Modifier (sonst Scroll/Pan), damit der
-  Zoom nie versehentlich auf Custom springt; Zoom-%- und Draft-Badge bleiben
-  sichtbar.
+  Fit-Breite. Das Mausrad zoomt nur mit Modifier (sonst Scroll/Pan) — ohne
+  Modifier entsteht nie ein Zoom. `Custom` ist die gepinnte Ansicht (Zoom **und**
+  Pan): Pannen (Wheel ohne Modifier im Zoom, Drag, Navigator-Rechteck) pinnt
+  `Custom`, tastet den Zoomfaktor aber nie an. Die Zoom-Anzeige nennt die
+  nominale Stufe (Fit/25/50/75/100/200 %, Fit-Breite); die effektive
+  On-Screen-Skala ist höchstens Tooltip.
 - Slider-Commits speichern: Nach Debounce-Ende wird bei erfolgreichem Render
   das Sidecar geschrieben und per INFO-Log + Status bestätigt („Sidecar
   saved"); Fehler sind laut, nie still.

@@ -37,10 +37,10 @@ use lumina_core::MaskPolicy;
 // REVIEW-GUI-WASM-FOLLOWUP: `export_image`/`ExportOptions` (Export module) and
 // `rasterize_prompt` (mask overlay) are only reachable on native.
 use lumina_core::{
-    analyze_tone, match_total_exposure_masked, prepare_source_base, render_frame_from_base,
-    suggest_auto_tone, tone_fingerprint, AutoToneConfig, CacheStage, ImageFileFormat, ImageFrame,
-    MaskContext, MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache,
-    StageWork,
+    analyze_tone, analyze_tone_with_histogram, match_total_exposure_masked, prepare_source_base,
+    render_frame_from_base, suggest_auto_tone, tone_fingerprint, AutoToneConfig, CacheStage,
+    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
+    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
 // PERF-FILMSTRIP only (native thumbnail worker); unused on wasm32.
 #[cfg(not(target_arch = "wasm32"))]
@@ -458,12 +458,18 @@ pub enum MaskTool {
 /// Preview zoom behaviour (Lightroom-like). `Fit` is object-contain (the
 /// previous default); the absolute modes resolve to an effective scale derived
 /// from the pane each frame so they survive window resizes. `Custom` is set by
-/// scroll-wheel / `+/-` zoom and pins an explicit relative-to-fit multiplier
+/// modifier-wheel / `+/-` zoom and pins an explicit relative-to-fit multiplier
 /// that is no longer re-derived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ZoomMode {
     #[default]
     Fit,
+    /// 25 % effective scale (relative-to-fit `0.25 / fit`).
+    Quarter,
+    /// 50 % effective scale (relative-to-fit `0.5 / fit`).
+    Half,
+    /// 75 % effective scale (relative-to-fit `0.75 / fit`).
+    ThreeQuarter,
     OneToOne,
     TwoHundred,
     FitWidth,
@@ -689,6 +695,19 @@ pub struct LuminaApp {
     error: Option<String>,
     render_key: Option<RenderKey>,
     tone_analysis: Option<lumina_core::ToneAnalysis>,
+    /// 256-bin luminance histogram of the currently displayed preview, stored
+    /// together with [`Self::tone_analysis`] from the single shared
+    /// `analyze_tone_with_histogram` pass (GUI-HISTOGRAM-1). Feeds the filled
+    /// Painter curve; `None` until the first render (panel shows `NotCurrent`).
+    preview_histogram: Option<LuminanceHistogram>,
+    /// Pending slider commit awaiting the debounced full render
+    /// (GUI-SLIDER-SAVE-1): `(recipe_key, value)` recorded by
+    /// [`Self::set_adjustment`] / [`Self::set_presence`] /
+    /// [`Self::reset_single_adjustment`]. Consumed by
+    /// [`Self::commit_pending_slider_save`], which renders, saves the sidecar
+    /// and logs `<key>=<value> saved`. Zoom/pan state is deliberately never
+    /// recorded here — it stays GUI session state, never recipe.
+    pending_slider_commit: Option<(String, f64)>,
     /// Effective mask layers of the last [`Self::render`] (F-041): the
     /// measurement domain of `Match Total Exposure` is the rendered preview
     /// weighted by these planes. Empty on wasm32 (no mask context, documented
@@ -1222,6 +1241,8 @@ impl LuminaApp {
             error: None,
             render_key: None,
             tone_analysis: None,
+            preview_histogram: None,
+            pending_slider_commit: None,
             render_mask_layers: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             document: None,
@@ -2636,8 +2657,10 @@ impl LuminaApp {
             return Err(GuiError::Io(Str::FeatheringMustBeBetween.t().to_string()));
         }
         self.active_layer_mut()?.feather = feather;
-        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`.
-        self.mark_dirty();
+        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`. GUI-SLIDER-SAVE-1:
+        // the feather slider commits like any other slider (CAS save at
+        // debounce, loud conflicts).
+        self.mark_recipe_dirty("mask.feather", f64::from(feather));
         Ok(())
     }
 
@@ -2652,6 +2675,9 @@ impl LuminaApp {
         self.active_layer_mut()?
             .extras
             .insert(format!("adjustment_{key}"), Value::from(value));
+        // GUI-SLIDER-SAVE-1: a local adjustment is recipe data — it must arm
+        // the re-render AND the debounced save (previously neither happened).
+        self.mark_recipe_dirty(&format!("mask.local.{key}"), value);
         self.status = Str::LocalAdjustmentSaved.t().to_string();
         Ok(())
     }
@@ -2851,6 +2877,10 @@ impl LuminaApp {
             ));
         }
         self.brush_radius = radius;
+        // GUI-SLIDER-SAVE-1: the brush-size slider arms a save commit like any
+        // other slider (the radius itself is tool session state; the commit
+        // persists the recipe loudly instead of dropping it).
+        self.mark_recipe_dirty("mask.brush_radius", f64::from(radius));
         Ok(())
     }
 
@@ -2860,6 +2890,35 @@ impl LuminaApp {
         self.brush_eraser = eraser;
     }
 
+    /// Set the spot-heal radius tool default (GUI-SLIDER-SAVE-1). Tool-only
+    /// session state (not recipe): still records a save commit so the
+    /// debounced path persists loudly instead of dropping concurrent edits.
+    /// Native-only with the spot-heal panel (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_spot_radius(&mut self, radius: f32) {
+        trace!("GUI interaction: set_spot_radius {}", radius);
+        self.spot_radius = radius;
+        self.mark_recipe_dirty("spot.radius", f64::from(radius));
+    }
+
+    /// Set the spot-heal feather tool default (GUI-SLIDER-SAVE-1, see
+    /// [`Self::set_spot_radius`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_spot_feather(&mut self, feather: f32) {
+        trace!("GUI interaction: set_spot_feather {}", feather);
+        self.spot_feather = feather;
+        self.mark_recipe_dirty("spot.feather", f64::from(feather));
+    }
+
+    /// Set the spot-heal opacity tool default (GUI-SLIDER-SAVE-1, see
+    /// [`Self::set_spot_radius`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_spot_opacity(&mut self, opacity: f32) {
+        trace!("GUI interaction: set_spot_opacity {}", opacity);
+        self.spot_opacity = opacity;
+        self.mark_recipe_dirty("spot.opacity", f64::from(opacity));
+    }
+
     /// Set the blur of the selected mask layer (0..=1).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_blur(&mut self, blur: f32) -> Result<(), GuiError> {
@@ -2867,8 +2926,9 @@ impl LuminaApp {
             return Err(GuiError::Io("Blur must be between 0 and 1".into()));
         }
         self.active_layer_mut()?.blur = blur;
-        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`.
-        self.mark_dirty();
+        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`. GUI-SLIDER-SAVE-1:
+        // the blur slider commits like any other slider.
+        self.mark_recipe_dirty("mask.blur", f64::from(blur));
         Ok(())
     }
 
@@ -2879,8 +2939,9 @@ impl LuminaApp {
             return Err(GuiError::Io("Density must be between 0 and 1".into()));
         }
         self.active_layer_mut()?.density = density;
-        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`.
-        self.mark_dirty();
+        // REVIEW-GUI-MASKRENDER-1: see `set_mask_inverted`. GUI-SLIDER-SAVE-1:
+        // the density slider commits like any other slider.
+        self.mark_recipe_dirty("mask.density", f64::from(density));
         Ok(())
     }
 
@@ -3373,6 +3434,8 @@ impl LuminaApp {
         self.render_mask_layers.clear();
         self.render_key = None;
         self.tone_analysis = None;
+        self.preview_histogram = None;
+        self.pending_slider_commit = None;
         self.pending_full_render = false;
         self.last_edit_time = 0.0;
         self.original = Some(frame.clone());
@@ -3416,6 +3479,10 @@ impl LuminaApp {
             value
         );
         self.recipe.adjustments.insert(name.into(), value);
+        // GUI-SLIDER-SAVE-1: remember the commit so the debounced full render
+        // can save the sidecar and log `<key>=<value> saved`. Zoom/pan state
+        // is deliberately never recorded here — it stays GUI session state.
+        self.pending_slider_commit = Some((name.to_string(), value));
         // PERF-GUI-1 stepwise invalidation: an adjustment is downstream of the
         // base stage, so only the render identity and the derived tone panel
         // are invalidated here. The cached demosaiced base
@@ -3463,7 +3530,355 @@ impl LuminaApp {
         }
         self.recipe.presence = Some(presence);
         trace!("GUI interaction: set_presence {}={}", field, value);
+        // GUI-SLIDER-SAVE-1: presence sliders commit like flat adjustments.
+        self.pending_slider_commit = Some((format!("presence.{field}"), value));
         self.mark_dirty();
+    }
+
+    /// Record a struct-backed recipe edit for the debounced slider-save commit
+    /// (GUI-SLIDER-SAVE-1) and arm the re-render. Every recipe mutation routes
+    /// through here (or `set_adjustment`/`set_presence`); pure view state
+    /// (zoom/pan) uses bare `mark_dirty` and is therefore never saved.
+    fn mark_recipe_dirty(&mut self, key: &str, value: f64) {
+        self.pending_slider_commit = Some((key.to_string(), value));
+        self.mark_dirty();
+    }
+
+    /// Set one tone-curve region delta (`shadows`, `darks`, `lights`,
+    /// `highlights`) and record the save commit (GUI-SLIDER-SAVE-1). Unknown
+    /// region names are ignored loudly (`warn!`) — all call sites pass
+    /// literals, and the headless save tests pin every valid name.
+    fn set_tone_curve_region(&mut self, region: &str, value: f64) {
+        let (mut s, mut d, mut l, mut h) = tone_curve_regions(&self.recipe);
+        match region {
+            "shadows" => s = value,
+            "darks" => d = value,
+            "lights" => l = value,
+            "highlights" => h = value,
+            _ => {
+                warn!("set_tone_curve_region: unknown region {region}");
+                return;
+            }
+        }
+        self.recipe.curves = Some(build_tone_curve(s, d, l, h));
+        self.mark_recipe_dirty(&format!("curves.{region}"), value);
+        // REVIEW-GUI-CURVE-1: a clamped output absorbs part of a delta, so the
+        // affected slider visibly snaps back. Surface that MVP limit explicitly
+        // instead of leaving the user with a silently moving slider.
+        if tone_curve_roundtrip_is_lossy(s, d, l, h) {
+            self.status = "Tone curve: extreme region values are clamped to the 0..=1 output range (MVP limit) — negative Shadows beyond the base point are not representable.".into();
+        }
+    }
+
+    /// Set one HSL mixer channel field (`red`…`magenta` × `hue`/`saturation`/
+    /// `luminance`) and record the save commit (GUI-SLIDER-SAVE-1). Unknown
+    /// names are ignored loudly — all call sites pass literals.
+    fn set_hsl_value(&mut self, channel: &str, field: &str, value: f64) {
+        if !matches!(
+            channel,
+            "red" | "orange" | "yellow" | "green" | "cyan" | "blue" | "violet" | "magenta"
+        ) {
+            warn!("set_hsl_value: unknown channel {channel}");
+            return;
+        }
+        let mut hsl = self.recipe.hsl.clone().unwrap_or_default();
+        // The derived `Default` carries `version: 0`, which the sidecar
+        // validation rejects (`unsupported hsl version`) — a fresh HSL block
+        // is always version 1 (same class of explicit-version construction as
+        // every other struct setter here).
+        hsl.version = 1;
+        match field {
+            "hue" => hsl_channel_mut(&mut hsl, channel).hue = value as f32,
+            "saturation" => hsl_channel_mut(&mut hsl, channel).saturation = value as f32,
+            "luminance" => hsl_channel_mut(&mut hsl, channel).luminance = value as f32,
+            _ => {
+                warn!("set_hsl_value: unknown field {field}");
+                return;
+            }
+        }
+        self.recipe.hsl = Some(hsl);
+        self.mark_recipe_dirty(&format!("hsl.{channel}.{field}"), value);
+    }
+
+    /// Set one color-grading range field (`shadows`/`midtones`/`highlights` ×
+    /// `hue_degrees`/`saturation`) and record the save commit
+    /// (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    fn set_color_grading_value(&mut self, range: &str, field: &str, value: f64) {
+        let mut cg = self.recipe.color_grading.clone().unwrap_or(ColorGrading {
+            version: 1,
+            shadows: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+            },
+            midtones: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+            },
+            highlights: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+            },
+            balance: 0.0,
+        });
+        let slot = match range {
+            "shadows" => &mut cg.shadows,
+            "midtones" => &mut cg.midtones,
+            "highlights" => &mut cg.highlights,
+            _ => {
+                warn!("set_color_grading_value: unknown range {range}");
+                return;
+            }
+        };
+        match field {
+            "hue_degrees" => slot.hue_degrees = value as f32,
+            "saturation" => slot.saturation = value as f32,
+            _ => {
+                warn!("set_color_grading_value: unknown field {field}");
+                return;
+            }
+        }
+        self.recipe.color_grading = Some(cg);
+        self.mark_recipe_dirty(&format!("color_grading.{range}.{field}"), value);
+    }
+
+    /// Set the color-grading balance and record the save commit
+    /// (GUI-SLIDER-SAVE-1).
+    fn set_color_grading_balance(&mut self, value: f64) {
+        let mut cg = self.recipe.color_grading.clone().unwrap_or(ColorGrading {
+            version: 1,
+            shadows: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+            },
+            midtones: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+            },
+            highlights: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+            },
+            balance: 0.0,
+        });
+        cg.balance = value as f32;
+        self.recipe.color_grading = Some(cg);
+        self.mark_recipe_dirty("color_grading.balance", value);
+    }
+
+    /// Set one effects field (`vignette` × `amount`/`midpoint`/`roundness`/
+    /// `feather`, `grain` × `amount`/`size`/`roughness`/`seed`) and record the
+    /// save commit (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    fn set_effects_value(&mut self, group: &str, field: &str, value: f64) {
+        let mut effects = self.recipe.effects.clone().unwrap_or(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: 0.0,
+                midpoint: 0.5,
+                roundness: 0.0,
+                feather: 0.0,
+            }),
+            grain: Some(Grain {
+                version: 1,
+                amount: 0.0,
+                size: 0.0,
+                roughness: 0.0,
+                seed: 0,
+            }),
+        });
+        match group {
+            "vignette" => {
+                let slot = effects.vignette.get_or_insert(Vignette {
+                    version: 1,
+                    amount: 0.0,
+                    midpoint: 0.5,
+                    roundness: 0.0,
+                    feather: 0.0,
+                });
+                match field {
+                    "amount" => slot.amount = value as f32,
+                    "midpoint" => slot.midpoint = value as f32,
+                    "roundness" => slot.roundness = value as f32,
+                    "feather" => slot.feather = value as f32,
+                    _ => {
+                        warn!("set_effects_value: unknown vignette field {field}");
+                        return;
+                    }
+                }
+            }
+            "grain" => {
+                let slot = effects.grain.get_or_insert(Grain {
+                    version: 1,
+                    amount: 0.0,
+                    size: 0.0,
+                    roughness: 0.0,
+                    seed: 0,
+                });
+                match field {
+                    "amount" => slot.amount = value as f32,
+                    "size" => slot.size = value as f32,
+                    "roughness" => slot.roughness = value as f32,
+                    "seed" => slot.seed = value as u64,
+                    _ => {
+                        warn!("set_effects_value: unknown grain field {field}");
+                        return;
+                    }
+                }
+            }
+            _ => {
+                warn!("set_effects_value: unknown group {group}");
+                return;
+            }
+        }
+        self.recipe.effects = Some(effects);
+        self.mark_recipe_dirty(&format!("effects.{group}.{field}"), value);
+    }
+
+    /// Set one sharpening field (`amount`/`radius`/`detail`/`masking`) and
+    /// record the save commit (GUI-SLIDER-SAVE-1). Unknown names are ignored
+    /// loudly.
+    fn set_sharpening_value(&mut self, field: &str, value: f64) {
+        let mut sh = self.recipe.sharpening.unwrap_or(Sharpening {
+            version: 1,
+            amount: 0.0,
+            radius: 0.5,
+            detail: 0.0,
+            masking: 0.0,
+        });
+        match field {
+            "amount" => sh.amount = value as f32,
+            "radius" => sh.radius = value as f32,
+            "detail" => sh.detail = value as f32,
+            "masking" => sh.masking = value as f32,
+            _ => {
+                warn!("set_sharpening_value: unknown field {field}");
+                return;
+            }
+        }
+        self.recipe.sharpening = Some(sh);
+        self.mark_recipe_dirty(&format!("sharpening.{field}"), value);
+    }
+
+    /// Set one noise-reduction field (`luminance`/`color`) and record the save
+    /// commit (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    fn set_noise_reduction_value(&mut self, field: &str, value: f64) {
+        let mut nr = self.recipe.noise_reduction.unwrap_or(NoiseReduction {
+            version: 1,
+            luminance: 0.0,
+            color: 0.0,
+        });
+        match field {
+            "luminance" => nr.luminance = value as f32,
+            "color" => nr.color = value as f32,
+            _ => {
+                warn!("set_noise_reduction_value: unknown field {field}");
+                return;
+            }
+        }
+        self.recipe.noise_reduction = Some(nr);
+        self.mark_recipe_dirty(&format!("noise_reduction.{field}"), value);
+    }
+
+    /// Set one lens-correction field (`distortion_k1`…`ca_blue`) and record the
+    /// save commit (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    fn set_lens_correction_value(&mut self, field: &str, value: f64) {
+        let mut lc = self
+            .recipe
+            .lens_correction
+            .clone()
+            .unwrap_or(LensCorrection {
+                version: 1,
+                profile: None,
+                distortion_k1: None,
+                distortion_k2: None,
+                distortion_k3: None,
+                vignette_c0: None,
+                vignette_c1: None,
+                vignette_c2: None,
+                ca_red: None,
+                ca_blue: None,
+            });
+        let slot = match field {
+            "distortion_k1" => &mut lc.distortion_k1,
+            "distortion_k2" => &mut lc.distortion_k2,
+            "distortion_k3" => &mut lc.distortion_k3,
+            "vignette_c0" => &mut lc.vignette_c0,
+            "vignette_c1" => &mut lc.vignette_c1,
+            "vignette_c2" => &mut lc.vignette_c2,
+            "ca_red" => &mut lc.ca_red,
+            "ca_blue" => &mut lc.ca_blue,
+            _ => {
+                warn!("set_lens_correction_value: unknown field {field}");
+                return;
+            }
+        };
+        *slot = Some(value as f32);
+        self.recipe.lens_correction = Some(lc);
+        self.mark_recipe_dirty(&format!("lens_correction.{field}"), value);
+    }
+
+    /// Set the geometry rotation and record the save commit
+    /// (GUI-SLIDER-SAVE-1).
+    fn set_geometry_rotation(&mut self, degrees: f64) {
+        let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        geo.rotation_degrees = degrees as f32;
+        self.recipe.geometry = Some(geo);
+        self.mark_recipe_dirty("geometry.rotation_degrees", degrees);
+    }
+
+    /// Set the geometry mirror flags and record the save commit
+    /// (GUI-SLIDER-SAVE-1).
+    fn set_geometry_mirror(&mut self, horizontal: bool, vertical: bool) {
+        let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        geo.mirror_horizontal = horizontal;
+        geo.mirror_vertical = vertical;
+        self.recipe.geometry = Some(geo);
+        self.mark_recipe_dirty(
+            "geometry.mirror",
+            f64::from(u8::from(horizontal) * 2 + u8::from(vertical)),
+        );
+    }
+
+    /// Set one perspective field (`vertical`/`horizontal`/`rotation`/`scale`/
+    /// `aspect_ratio`/`shift_x`/`shift_y`) and record the save commit
+    /// (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    fn set_perspective_value(&mut self, field: &str, value: f64) {
+        let mut persp = self.recipe.perspective.unwrap_or(Perspective {
+            version: 1,
+            vertical: 0.0,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        });
+        match field {
+            "vertical" => persp.vertical = value as f32,
+            "horizontal" => persp.horizontal = value as f32,
+            "rotation" => persp.rotation = value as f32,
+            "scale" => persp.scale = value as f32,
+            "aspect_ratio" => persp.aspect_ratio = value as f32,
+            "shift_x" => persp.shift_x = value as f32,
+            "shift_y" => persp.shift_y = value as f32,
+            _ => {
+                warn!("set_perspective_value: unknown field {field}");
+                return;
+            }
+        }
+        self.recipe.perspective = Some(persp);
+        self.mark_recipe_dirty(&format!("perspective.{field}"), value);
     }
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
@@ -3671,6 +4086,15 @@ impl LuminaApp {
         Some([x, y, zw, zh])
     }
 
+    /// Open or collapse the navigator rail (GUI-PREVIEW-NAV-1). Pure view
+    /// state — never touches the recipe or the sidecar. Native-only with the
+    /// navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_navigator_open(&mut self, open: bool) {
+        trace!("GUI interaction: set_navigator_open {}", open);
+        self.navigator_open = open;
+    }
+
     /// Switch the preview zoom mode. Non-`Custom` modes re-derive `preview_zoom`
     /// from the current pane each frame (so they survive resizes); switching
     /// always re-centres the pan and triggers a re-render so the ROI crop
@@ -3726,11 +4150,73 @@ impl LuminaApp {
         self.preview_pan = egui::Vec2::ZERO;
         self.preview_zoom = match self.zoom_mode {
             Fit => 1.0,
+            Quarter => 0.25 / fit,
+            Half => 0.5 / fit,
+            ThreeQuarter => 0.75 / fit,
             OneToOne => 1.0 / fit,
             TwoHundred => 2.0 / fit,
             FitWidth => (self.preview_pane_w / src_w) / fit,
             Custom => 1.0,
         };
+    }
+
+    /// Viewport rectangle for the navigator overview (GUI-PREVIEW-NAV-1): the
+    /// currently visible Develop working area mapped into `nav_rect`, which
+    /// shows the whole source (`src_w × src_h`) contain-fitted without
+    /// letterboxing (the caller sizes it to the source aspect).
+    ///
+    /// `scale` is the on-screen preview scale (screen points per source pixel)
+    /// and `pan` the preview pan offset. At fit (or degenerate geometry) the
+    /// whole frame is visible and the returned rect equals `nav_rect`. Pure
+    /// helper so the pan-rectangle roundtrip is unit-testable headless.
+    /// Native-only with the navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn navigator_viewport_rect(
+        nav_rect: egui::Rect,
+        src_w: f32,
+        src_h: f32,
+        pane_w: f32,
+        pane_h: f32,
+        scale: f32,
+        pan: egui::Vec2,
+    ) -> egui::Rect {
+        if src_w <= 0.0 || src_h <= 0.0 || scale <= 0.0 || pane_w <= 0.0 || pane_h <= 0.0 {
+            return nav_rect;
+        }
+        // Visible window in source pixels, centred on the source point behind
+        // the pane centre (mirrors `roi_from_zoom` without the pan margin).
+        let vw = (pane_w / scale).min(src_w);
+        let vh = (pane_h / scale).min(src_h);
+        if vw >= src_w && vh >= src_h {
+            return nav_rect;
+        }
+        let cx = (src_w / 2.0 - pan.x / scale).clamp(vw / 2.0, src_w - vw / 2.0);
+        let cy = (src_h / 2.0 - pan.y / scale).clamp(vh / 2.0, src_h - vh / 2.0);
+        let to_nav_x = |x: f32| nav_rect.min.x + x / src_w * nav_rect.width();
+        let to_nav_y = |y: f32| nav_rect.min.y + y / src_h * nav_rect.height();
+        egui::Rect::from_min_max(
+            egui::pos2(to_nav_x(cx - vw / 2.0), to_nav_y(cy - vh / 2.0)),
+            egui::pos2(to_nav_x(cx + vw / 2.0), to_nav_y(cy + vh / 2.0)),
+        )
+    }
+
+    /// Map a navigator drag onto the preview pan offset (GUI-PREVIEW-NAV-1):
+    /// dragging the viewport rectangle by `drag_nav` (navigator points) moves
+    /// the visible window with the cursor. `nav_scale` is navigator points per
+    /// source pixel, `preview_scale` the on-screen preview scale. Pure helper
+    /// for the headless pan-rectangle roundtrip test. Native-only with the
+    /// navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pan_for_navigator_drag(
+        pan: egui::Vec2,
+        drag_nav: egui::Vec2,
+        nav_scale: f32,
+        preview_scale: f32,
+    ) -> egui::Vec2 {
+        if nav_scale <= 0.0 || preview_scale <= 0.0 {
+            return pan;
+        }
+        pan - drag_nav * (preview_scale / nav_scale)
     }
 
     /// Core render used by both [`Self::render_full`] and [`Self::render_draft`].
@@ -3958,7 +4444,11 @@ impl LuminaApp {
                 format: "rgba8".into(),
             },
         ));
-        self.tone_analysis = Some(analyze_tone(&preview));
+        // GUI-HISTOGRAM-1: one shared pass yields both the tone panel values
+        // and the 256-bin histogram feeding the Painter curve.
+        let (analysis, histogram) = analyze_tone_with_histogram(&preview);
+        self.tone_analysis = Some(analysis);
+        self.preview_histogram = Some(histogram);
         self.preview = Some(preview);
         // R2-GUIMOD-02: new preview content — any CPU-present identity cached
         // in `texture_identity` is now stale and will re-upload once.
@@ -4787,6 +5277,27 @@ impl LuminaApp {
 
     /// Persist the active virtual copy's recipe into the sidecar.
     ///
+    /// Debounce-commit for slider edits (GUI-SLIDER-SAVE-1): runs the pending
+    /// full-quality render, then — only when a slider/presence commit is
+    /// pending — saves the sidecar through the CAS API and logs
+    /// `<key>=<value> saved` at INFO with the "Sidecar saved" status.
+    /// Failures stay loud (`show_error`, no silent loss); the edit itself
+    /// remains in the recipe so a retry keeps the value. Zoom/pan state is
+    /// deliberately never saved — it is GUI session state, never recipe.
+    fn commit_pending_slider_save(&mut self, viewport: [u32; 2]) {
+        if let Err(error) = self.render_full(viewport, None) {
+            self.show_error(error);
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((key, value)) = self.pending_slider_commit.take() {
+            self.save_sidecar();
+            if self.error().is_none() {
+                info!("{key}={value} saved");
+            }
+        }
+    }
+
     /// REVIEW-GUI-SAVEMSG-1: the "Sidecar saved" status is set **only** on
     /// success; a failed write keeps the error visible instead of being
     /// overwritten by a success message.
@@ -5159,42 +5670,71 @@ impl LuminaApp {
             let mut center = pane.center() + self.preview_pan;
             let mut rect = egui::Rect::from_center_size(center, draw);
 
-            // Scroll-wheel zoom around the cursor (Lightroom-like). Only while
-            // the pointer hovers the preview so other scroll areas are
-            // unaffected. egui 0.36 removed `InputState::raw_scroll_delta`; the
-            // raw per-frame wheel delta is summed from the `MouseWheel` events.
-            let scroll = ui.input(|i| {
-                i.raw
-                    .events
-                    .iter()
-                    .filter_map(|event| match event {
-                        egui::Event::MouseWheel { delta, .. } => Some(delta.y),
-                        _ => None,
-                    })
-                    .sum::<f32>()
+            // Scroll-wheel behaviour (GUI-PREVIEW-NAV-1, Lightroom-like): the
+            // wheel zooms around the cursor ONLY while Ctrl/Cmd is held (then
+            // the mode pins to `Custom`, like `zoom_step`); without a modifier
+            // the wheel pans the zoomed image and never touches the zoom, so
+            // `Custom` can never arise by accident. egui 0.36 removed
+            // `InputState::raw_scroll_delta`; the raw per-frame wheel delta is
+            // summed from the `MouseWheel` events. Only handled while the
+            // pointer hovers the preview so other scroll areas are unaffected.
+            //
+            // The modifier is read from the wheel events themselves as well as
+            // the global input state: a held Ctrl is delivered as key state in
+            // live frames, while synthetic/headless frames may carry it only
+            // on the event.
+            let (wheel, wheel_zoom) = ui.input(|i| {
+                let mut delta = egui::Vec2::ZERO;
+                let mut zoom = Self::wants_wheel_zoom(&i.modifiers);
+                for event in i.raw.events.iter() {
+                    if let egui::Event::MouseWheel {
+                        delta: event_delta,
+                        modifiers,
+                        ..
+                    } = event
+                    {
+                        delta += *event_delta;
+                        zoom = zoom || Self::wants_wheel_zoom(modifiers);
+                    }
+                }
+                (delta, zoom)
             });
             let pointer = ui.input(|i| i.pointer.interact_pos());
-            if scroll != 0.0 {
+            if wheel != egui::Vec2::ZERO {
                 if let Some(p) = pointer {
                     if rect.contains(p) {
-                        let srect_w = rect.width().max(1e-6);
-                        let srect_h = rect.height().max(1e-6);
-                        let fx = ((p.x - rect.min.x) / srect_w).clamp(0.0, 1.0);
-                        let fy = ((p.y - rect.min.y) / srect_h).clamp(0.0, 1.0);
-                        let factor = if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 };
-                        self.preview_zoom = (self.preview_zoom * factor).clamp(0.05, 32.0);
-                        self.zoom_mode = ZoomMode::Custom;
-                        let new_scale = self.preview_base_fit_scale * self.preview_zoom;
-                        let new_draw = egui::vec2(tw * new_scale, th * new_scale);
-                        let new_center =
-                            p - egui::vec2(fx * new_draw.x, fy * new_draw.y) + new_draw / 2.0;
-                        self.preview_pan = new_center - pane.center();
-                        // Recompute for the placement below.
-                        scale = new_scale;
-                        draw = new_draw;
-                        center = new_center;
-                        rect = egui::Rect::from_center_size(center, draw);
-                        self.mark_dirty();
+                        if wheel_zoom {
+                            let srect_w = rect.width().max(1e-6);
+                            let srect_h = rect.height().max(1e-6);
+                            let fx = ((p.x - rect.min.x) / srect_w).clamp(0.0, 1.0);
+                            let fy = ((p.y - rect.min.y) / srect_h).clamp(0.0, 1.0);
+                            let factor = if wheel.y > 0.0 { 1.1 } else { 1.0 / 1.1 };
+                            self.preview_zoom = (self.preview_zoom * factor).clamp(0.05, 32.0);
+                            self.zoom_mode = ZoomMode::Custom;
+                            let new_scale = self.preview_base_fit_scale * self.preview_zoom;
+                            let new_draw = egui::vec2(tw * new_scale, th * new_scale);
+                            let new_center =
+                                p - egui::vec2(fx * new_draw.x, fy * new_draw.y) + new_draw / 2.0;
+                            self.preview_pan = new_center - pane.center();
+                            // Recompute for the placement below.
+                            scale = new_scale;
+                            draw = new_draw;
+                            center = new_center;
+                            rect = egui::Rect::from_center_size(center, draw);
+                            self.mark_dirty();
+                        } else if draw.x > pane.width() + 0.5 || draw.y > pane.height() + 0.5 {
+                            // Modifier-free wheel pans the zoomed image (the
+                            // clamp below keeps it covering the pane). Panning
+                            // only persists in `Custom` (see `sync_zoom`), so
+                            // the mode follows — the zoom factor itself is
+                            // untouched, never an accidental zoom.
+                            self.zoom_mode = ZoomMode::Custom;
+                            center += wheel;
+                            self.preview_pan = center - pane.center();
+                            // Recompute for the placement below.
+                            rect = egui::Rect::from_center_size(center, draw);
+                            self.mark_dirty();
+                        }
                     }
                 }
             }
@@ -5647,43 +6187,115 @@ impl LuminaApp {
         }
     }
 
+    /// 256-bin luminance histogram matching [`Self::current_analysis`]: computed
+    /// on the fly from the original while Before/After is held, otherwise the
+    /// stored preview histogram (GUI-HISTOGRAM-1).
+    fn current_histogram(&self) -> Option<LuminanceHistogram> {
+        if self.before_after {
+            self.original.as_ref().map(LuminanceHistogram::new)
+        } else {
+            self.preview_histogram.clone()
+        }
+    }
+
+    /// Map 256 histogram bins onto plot points inside `rect` (GUI-HISTOGRAM-1).
+    /// Pure helper so headless tests can pin the bins→plot mapping without a
+    /// laid-out UI. Always returns one point per bin (baseline at the bottom
+    /// edge when the histogram is empty), so callers can rely on non-emptiness
+    /// whenever bins are present.
+    fn histogram_plot_points(bins: &[u64], rect: egui::Rect) -> Vec<egui::Pos2> {
+        let n = bins.len().max(1) as f32;
+        let max = bins.iter().copied().max().unwrap_or(0).max(1) as f32;
+        bins.iter()
+            .enumerate()
+            .map(|(i, &count)| {
+                let x = rect.left() + rect.width() * (i as f32 + 0.5) / n;
+                let y = rect.bottom() - rect.height() * (count as f32 / max);
+                egui::pos2(x, y)
+            })
+            .collect()
+    }
+
+    /// Histogram height in screen points (GUI-HISTOGRAM-1).
+    const HISTOGRAM_HEIGHT: f32 = 72.0;
+
+    /// Own collapsible histogram section (GUI-HISTOGRAM-1): default open,
+    /// rendered at the top of the Develop panel instead of the module bar.
+    fn draw_histogram_section(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new(Str::Histogram.t())
+            .default_open(true)
+            .show(ui, |ui| {
+                self.draw_histogram(ui);
+            });
+    }
+
     fn draw_histogram(&self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.heading(Str::Histogram.t());
         // REVIEW-GUI-N5: a draft preview's histogram is measured from the
         // low-resolution drag render — it must say so instead of posing as
         // the final render state.
         if self.preview_is_draft {
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                "Draft preview — histogram reflects the low-res draft until the full render completes",
-            );
+            ui.colored_label(egui::Color32::YELLOW, Str::HistogramDraft.t());
         }
-        if let Some(analysis) = self.current_analysis() {
-            ui.label(format!(
-                "Mean {:.3}  Median {:.3}",
-                analysis.mean, analysis.median
-            ));
-            ui.label(format!(
-                "P01 {:.3}  P99 {:.3}  ({} Samples)",
-                analysis.p01, analysis.p99, analysis.sample_count
-            ));
-            let width = ui.available_width().max(40.0);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), egui::Sense::hover());
-            let painter = ui.painter();
-            painter.rect_filled(rect, 2.0, egui::Color32::from_gray(35));
-            let left = rect.left() + rect.width() * analysis.p01 as f32;
-            let right = rect.left() + rect.width() * analysis.p99 as f32;
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(left, rect.top()),
-                    egui::pos2(right.max(left + 1.0), rect.bottom()),
-                ),
-                2.0,
-                egui::Color32::LIGHT_GRAY,
-            );
-        } else {
+        let Some(analysis) = self.current_analysis() else {
             ui.label(Str::NotCurrent.t());
+            return;
+        };
+        ui.label(format!(
+            "Mean {:.3}  Median {:.3}",
+            analysis.mean, analysis.median
+        ));
+        ui.label(format!(
+            "P01 {:.3}  P99 {:.3}  ({} Samples)",
+            analysis.p01, analysis.p99, analysis.sample_count
+        ));
+        let Some(histogram) = self.current_histogram() else {
+            ui.label(Str::NotCurrent.t());
+            return;
+        };
+        let width = ui.available_width().max(40.0);
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(width, Self::HISTOGRAM_HEIGHT),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter();
+        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(35));
+        // Filled luminance bars in the theme accent (WASM-portable Painter
+        // rects, no native dependency).
+        let n = histogram.bins.len().max(1) as f32;
+        let max = histogram.bins.iter().copied().max().unwrap_or(0).max(1) as f32;
+        for (i, &count) in histogram.bins.iter().enumerate() {
+            let x0 = rect.left() + rect.width() * i as f32 / n;
+            let x1 = rect.left() + rect.width() * (i + 1) as f32 / n;
+            let bar_h = rect.height() * (count as f32 / max);
+            if bar_h > 0.5 {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(x0, rect.bottom() - bar_h),
+                        egui::pos2(x1.max(x0 + 0.5), rect.bottom()),
+                    ),
+                    0.0,
+                    crate::theme::ACCENT,
+                );
+            }
+        }
+        // Curve stroke over the bars for readability.
+        let points = Self::histogram_plot_points(&histogram.bins, rect);
+        if points.len() >= 2 {
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
+            ));
+        }
+        // P01/P99 as slim marker lines.
+        for (value, color) in [
+            (analysis.p01, egui::Color32::WHITE),
+            (analysis.p99, egui::Color32::YELLOW),
+        ] {
+            let x = rect.left() + rect.width() * value.clamp(0.0, 1.0) as f32;
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                egui::Stroke::new(1.0_f32, color),
+            );
         }
     }
 
@@ -5724,6 +6336,8 @@ impl LuminaApp {
         trace!("GUI interaction: reset_single_adjustment {}", key);
         let default = Self::default_for_adjustment(key);
         self.recipe.adjustments.insert(key.to_owned(), default);
+        // GUI-SLIDER-SAVE-1: a single-slider reset is a commit like a drag.
+        self.pending_slider_commit = Some((key.to_owned(), default));
         self.mark_dirty();
         self.status = format!("Reset {key}");
     }
@@ -5786,7 +6400,9 @@ impl LuminaApp {
             .insert("wb_temperature".into(), temp);
         self.recipe.adjustments.insert("wb_tint".into(), tint);
         self.wb_pick_mode = false;
-        self.mark_dirty();
+        // GUI-SLIDER-SAVE-1: the eyedropper pick commits like a slider (both
+        // fields persist; the temperature is the log representative).
+        self.mark_recipe_dirty("wb_temperature", temp);
         self.status = "White balance set from picked point".into();
         if self.original.is_some() {
             self.render()?;
@@ -5915,28 +6531,27 @@ impl LuminaApp {
             ui.label(Str::CurveRegions.t());
             let (mut s, mut d, mut l, mut h) = tone_curve_regions(&self.recipe);
             let spec = percent_spec(-1.0..=1.0, 0.0);
-            let mut changed = false;
+            // GUI-SLIDER-SAVE-1: each region slider commits through
+            // `set_tone_curve_region` (save at debounce); the locals are only
+            // slider binding buffers.
             for (val, label) in [
                 (&mut s, Str::ToneCurveShadows),
                 (&mut d, Str::ToneCurveDarks),
                 (&mut l, Str::ToneCurveLights),
                 (&mut h, Str::ToneCurveHighlights),
             ] {
-                match lr_slider(ui, label.t(), val, spec) {
-                    SliderAction::Changed | SliderAction::ResetRequested => changed = true,
-                    SliderAction::Nothing => {}
-                }
-            }
-            if changed {
-                self.recipe.curves = Some(build_tone_curve(s, d, l, h));
-                self.mark_dirty();
-                // REVIEW-GUI-CURVE-1: a clamped output absorbs part of a
-                // delta (Shadows cannot go below its 0.0 base point), so the
-                // affected slider visibly snaps back. Surface that MVP limit
-                // explicitly instead of leaving the user with a silently
-                // moving slider.
-                if tone_curve_roundtrip_is_lossy(s, d, l, h) {
-                    self.status = "Tone curve: extreme region values are clamped to the 0..=1 output range (MVP limit) — negative Shadows beyond the base point are not representable.".into();
+                if matches!(
+                    lr_slider(ui, label.t(), val, spec),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    let region = match label {
+                        Str::ToneCurveShadows => "shadows",
+                        Str::ToneCurveDarks => "darks",
+                        Str::ToneCurveLights => "lights",
+                        Str::ToneCurveHighlights => "highlights",
+                        _ => continue,
+                    };
+                    self.set_tone_curve_region(region, *val);
                 }
             }
         });
@@ -5945,6 +6560,8 @@ impl LuminaApp {
     fn draw_color(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::Color.t(), |ui| {
             ui.label(Str::HslMixer.t());
+            // GUI-SLIDER-SAVE-1: mixer sliders commit through `set_hsl_value`
+            // (save at debounce); `hsl` is only a slider binding buffer.
             let mut hsl = self.recipe.hsl.clone().unwrap_or_default();
             let spec = percent_spec(-1.0..=1.0, 0.0);
             let channels = [
@@ -5957,7 +6574,6 @@ impl LuminaApp {
                 (Str::HslViolet, "violet"),
                 (Str::HslMagenta, "magenta"),
             ];
-            let mut changed = false;
             for (label, key) in channels {
                 ui.label(label.t());
                 let slot = hsl_channel_mut(&mut hsl, key);
@@ -5966,14 +6582,28 @@ impl LuminaApp {
                     (&mut slot.saturation, Str::Saturation),
                     (&mut slot.luminance, Str::Luminance),
                 ] {
-                    match lr_slider(ui, label.t(), field, spec) {
-                        SliderAction::Changed | SliderAction::ResetRequested => changed = true,
-                        SliderAction::Nothing => {}
+                    if matches!(
+                        lr_slider(ui, label.t(), field, spec),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        // GUI-SLIDER-SAVE-1: each mixer slider commits through
+                        // `set_hsl_value` (save at debounce); the locals are
+                        // only slider binding buffers.
+                        let field_name = match label {
+                            Str::Hue => "hue",
+                            Str::Saturation => "saturation",
+                            Str::Luminance => "luminance",
+                            _ => continue,
+                        };
+                        self.set_hsl_value(key, field_name, f64::from(*field));
                     }
                 }
             }
             ui.separator();
             ui.label(Str::ColorGrading.t());
+            // GUI-SLIDER-SAVE-1: grading sliders commit through the
+            // `set_color_grading_*` setters (save at debounce); `cg` is only a
+            // slider binding buffer.
             let mut cg = self.recipe.color_grading.clone().unwrap_or(ColorGrading {
                 version: 1,
                 shadows: ColorGradingRange {
@@ -5990,34 +6620,24 @@ impl LuminaApp {
                 },
                 balance: 0.0,
             });
-            let mut changed_cg = false;
-            for (range, label) in [
-                (&mut cg.shadows, Str::GradingShadows),
-                (&mut cg.midtones, Str::GradingMidtones),
-                (&mut cg.highlights, Str::GradingHighlights),
+            for (range, range_name, label) in [
+                (&mut cg.shadows, "shadows", Str::GradingShadows),
+                (&mut cg.midtones, "midtones", Str::GradingMidtones),
+                (&mut cg.highlights, "highlights", Str::GradingHighlights),
             ] {
-                self.color_grading_range_slider(ui, range, label, &mut changed_cg);
+                self.color_grading_range_slider(ui, range_name, range, label);
             }
             let mut balance = cg.balance;
-            match lr_slider(
-                ui,
-                Str::GradingBalance.t(),
-                &mut balance,
-                percent_spec(-1.0..=1.0, 0.0),
+            if matches!(
+                lr_slider(
+                    ui,
+                    Str::GradingBalance.t(),
+                    &mut balance,
+                    percent_spec(-1.0..=1.0, 0.0),
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                SliderAction::Changed | SliderAction::ResetRequested => {
-                    cg.balance = balance;
-                    changed_cg = true;
-                }
-                SliderAction::Nothing => {}
-            }
-            if changed {
-                self.recipe.hsl = Some(hsl);
-                self.mark_dirty();
-            }
-            if changed_cg {
-                self.recipe.color_grading = Some(cg);
-                self.mark_dirty();
+                self.set_color_grading_balance(f64::from(balance));
             }
 
             ui.separator();
@@ -6030,13 +6650,15 @@ impl LuminaApp {
             // own group; the F-100 ordering requires it here, ahead of
             // Vibrance/Saturation, hence this dedicated group.)
             ui.label(Str::Presence.t());
+            // GUI-SLIDER-SAVE-1: presence sliders commit through the shared
+            // `set_presence` path (save at debounce); `presence` is only a
+            // slider binding buffer.
             let mut presence = self.recipe.presence.unwrap_or(Presence {
                 version: 1,
                 texture: 0.0,
                 clarity: 0.0,
                 dehaze: 0.0,
             });
-            let mut changed_presence = false;
             let spec = percent_spec(-1.0..=1.0, 0.0);
             for (label, field) in [
                 (Str::Texture, &mut presence.texture),
@@ -6047,12 +6669,14 @@ impl LuminaApp {
                     lr_slider(ui, label.t(), field, spec),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    changed_presence = true;
+                    let name = match label {
+                        Str::Texture => "texture",
+                        Str::Clarity => "clarity",
+                        Str::Dehaze => "dehaze",
+                        _ => continue,
+                    };
+                    self.set_presence(name, f64::from(*field));
                 }
-            }
-            if changed_presence {
-                self.recipe.presence = Some(presence);
-                self.mark_dirty();
             }
 
             ui.separator();
@@ -6073,12 +6697,15 @@ impl LuminaApp {
         });
     }
 
+    /// One Lightroom color-grading range (hue + saturation sliders) bound to the
+    /// `set_color_grading_value` commit path (GUI-SLIDER-SAVE-1). `range` is
+    /// only a slider binding buffer; the setter re-reads the recipe.
     fn color_grading_range_slider(
         &mut self,
         ui: &mut egui::Ui,
+        range_name: &str,
         range: &mut ColorGradingRange,
         label: Str,
-        changed: &mut bool,
     ) {
         let mut hue = range.hue_degrees;
         if matches!(
@@ -6090,8 +6717,7 @@ impl LuminaApp {
             ),
             SliderAction::Changed | SliderAction::ResetRequested
         ) {
-            range.hue_degrees = hue;
-            *changed = true;
+            self.set_color_grading_value(range_name, "hue_degrees", f64::from(hue));
         }
         let mut sat = range.saturation;
         if matches!(
@@ -6103,8 +6729,7 @@ impl LuminaApp {
             ),
             SliderAction::Changed | SliderAction::ResetRequested
         ) {
-            range.saturation = sat;
-            *changed = true;
+            self.set_color_grading_value(range_name, "saturation", f64::from(sat));
         }
     }
 
@@ -6127,7 +6752,6 @@ impl LuminaApp {
                     seed: 0,
                 }),
             });
-            let mut changed = false;
             if let Some(v) = &mut effects.vignette {
                 let mut amount = v.amount;
                 if matches!(
@@ -6139,8 +6763,9 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    v.amount = amount;
-                    changed = true;
+                    // GUI-SLIDER-SAVE-1: effects sliders commit through
+                    // `set_effects_value` (save at debounce).
+                    self.set_effects_value("vignette", "amount", f64::from(amount));
                 }
                 let mut midpoint = v.midpoint;
                 if matches!(
@@ -6152,8 +6777,7 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    v.midpoint = midpoint;
-                    changed = true;
+                    self.set_effects_value("vignette", "midpoint", f64::from(midpoint));
                 }
                 let mut roundness = v.roundness;
                 if matches!(
@@ -6165,8 +6789,7 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    v.roundness = roundness;
-                    changed = true;
+                    self.set_effects_value("vignette", "roundness", f64::from(roundness));
                 }
                 let mut feather = v.feather;
                 if matches!(
@@ -6178,8 +6801,7 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    v.feather = feather;
-                    changed = true;
+                    self.set_effects_value("vignette", "feather", f64::from(feather));
                 }
             }
             ui.label(Str::Grain.t());
@@ -6194,8 +6816,7 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    g.amount = amount;
-                    changed = true;
+                    self.set_effects_value("grain", "amount", f64::from(amount));
                 }
                 let mut size = g.size;
                 if matches!(
@@ -6207,8 +6828,7 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    g.size = size;
-                    changed = true;
+                    self.set_effects_value("grain", "size", f64::from(size));
                 }
                 let mut roughness = g.roughness;
                 if matches!(
@@ -6220,8 +6840,7 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    g.roughness = roughness;
-                    changed = true;
+                    self.set_effects_value("grain", "roughness", f64::from(roughness));
                 }
                 let mut seed = g.seed as f64;
                 if matches!(
@@ -6233,20 +6852,20 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    g.seed = seed as u64;
-                    changed = true;
+                    self.set_effects_value("grain", "seed", seed);
                 }
             }
-            if changed {
-                self.recipe.effects = Some(effects);
-                self.mark_dirty();
-            }
+            // `effects` is only a slider binding buffer now: every arm above
+            // commits through `set_effects_value` (GUI-SLIDER-SAVE-1).
         });
     }
 
     fn draw_detail(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::Detail.t(), |ui| {
             ui.label(Str::Sharpening.t());
+            // GUI-SLIDER-SAVE-1: sharpening sliders commit through
+            // `set_sharpening_value` (save at debounce); `sh` is only a
+            // slider binding buffer.
             let mut sh = self.recipe.sharpening.unwrap_or(Sharpening {
                 version: 1,
                 amount: 0.0,
@@ -6254,7 +6873,6 @@ impl LuminaApp {
                 detail: 0.0,
                 masking: 0.0,
             });
-            let mut changed = false;
             let mut amount = sh.amount;
             if matches!(
                 lr_slider(
@@ -6265,8 +6883,7 @@ impl LuminaApp {
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                sh.amount = amount;
-                changed = true;
+                self.set_sharpening_value("amount", f64::from(amount));
             }
             let mut radius = sh.radius;
             if matches!(
@@ -6278,8 +6895,7 @@ impl LuminaApp {
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                sh.radius = radius;
-                changed = true;
+                self.set_sharpening_value("radius", f64::from(radius));
             }
             let mut detail = sh.detail;
             if matches!(
@@ -6291,8 +6907,7 @@ impl LuminaApp {
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                sh.detail = detail;
-                changed = true;
+                self.set_sharpening_value("detail", f64::from(detail));
             }
             let mut masking = sh.masking;
             if matches!(
@@ -6304,20 +6919,16 @@ impl LuminaApp {
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                sh.masking = masking;
-                changed = true;
-            }
-            if changed {
-                self.recipe.sharpening = Some(sh);
-                self.mark_dirty();
+                self.set_sharpening_value("masking", f64::from(masking));
             }
             ui.label(Str::NoiseReduction.t());
+            // GUI-SLIDER-SAVE-1: same commit pattern via
+            // `set_noise_reduction_value`.
             let mut nr = self.recipe.noise_reduction.unwrap_or(NoiseReduction {
                 version: 1,
                 luminance: 0.0,
                 color: 0.0,
             });
-            let mut changed_nr = false;
             let mut lum = nr.luminance;
             if matches!(
                 lr_slider(
@@ -6328,8 +6939,7 @@ impl LuminaApp {
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                nr.luminance = lum;
-                changed_nr = true;
+                self.set_noise_reduction_value("luminance", f64::from(lum));
             }
             let mut col = nr.color;
             if matches!(
@@ -6341,12 +6951,7 @@ impl LuminaApp {
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                nr.color = col;
-                changed_nr = true;
-            }
-            if changed_nr {
-                self.recipe.noise_reduction = Some(nr);
-                self.mark_dirty();
+                self.set_noise_reduction_value("color", f64::from(col));
             }
         });
     }
@@ -6371,7 +6976,9 @@ impl LuminaApp {
                         ca_red: None,
                         ca_blue: None,
                     });
-                let mut changed = false;
+                // GUI-SLIDER-SAVE-1: optics sliders commit through
+                // `set_lens_correction_value` (save at debounce); `lc` is only
+                // a slider binding buffer.
                 for (field, label, spec) in [
                     (
                         &mut lc.distortion_k1,
@@ -6417,20 +7024,26 @@ impl LuminaApp {
                     let current = field.as_ref().copied();
                     if let Some(c) = current {
                         let mut v = c;
-                        match lr_slider(ui, label.t(), &mut v, spec) {
-                            SliderAction::Changed | SliderAction::ResetRequested => {
-                                *field = Some(v);
-                                changed = true;
-                            }
-                            SliderAction::Nothing => {}
+                        if matches!(
+                            lr_slider(ui, label.t(), &mut v, spec),
+                            SliderAction::Changed | SliderAction::ResetRequested
+                        ) {
+                            let name = match label {
+                                Str::DistortionK1 => "distortion_k1",
+                                Str::DistortionK2 => "distortion_k2",
+                                Str::DistortionK3 => "distortion_k3",
+                                Str::VignetteC0 => "vignette_c0",
+                                Str::VignetteC1 => "vignette_c1",
+                                Str::VignetteC2 => "vignette_c2",
+                                Str::ChromaticRed => "ca_red",
+                                Str::ChromaticBlue => "ca_blue",
+                                _ => continue,
+                            };
+                            self.set_lens_correction_value(name, f64::from(v));
                         }
                     } else {
                         ui.label(Str::UnsetPattern.format_arg(label.t()));
                     }
-                }
-                if changed {
-                    self.recipe.lens_correction = Some(lc);
-                    self.mark_dirty();
                 }
             } else {
                 ui.label(Str::OpticsRequiresLensfun.t());
@@ -6443,6 +7056,9 @@ impl LuminaApp {
         ui.collapsing(Str::Geometry.t(), |ui| {
             if cfg!(feature = "lensfun") {
                 ui.label(Str::Crop.t());
+                // GUI-SLIDER-SAVE-1: geometry edits commit through the
+                // `set_geometry_*` setters (save at debounce); `geo` is only a
+                // control binding buffer.
                 let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
                     version: 1,
                     crop: None,
@@ -6450,7 +7066,6 @@ impl LuminaApp {
                     mirror_horizontal: false,
                     mirror_vertical: false,
                 });
-                let mut changed = false;
                 let mut rotation = geo.rotation_degrees;
                 if matches!(
                     lr_slider(
@@ -6461,20 +7076,28 @@ impl LuminaApp {
                     ),
                     SliderAction::Changed | SliderAction::ResetRequested
                 ) {
-                    geo.rotation_degrees = rotation;
-                    changed = true;
+                    self.set_geometry_rotation(f64::from(rotation));
                 }
                 let mut mh = geo.mirror_horizontal;
                 if ui.checkbox(&mut mh, Str::MirrorHorizontal.t()).changed() {
-                    geo.mirror_horizontal = mh;
-                    changed = true;
+                    self.set_geometry_mirror(mh, geo.mirror_vertical);
                 }
                 let mut mv = geo.mirror_vertical;
                 if ui.checkbox(&mut mv, Str::MirrorVertical.t()).changed() {
-                    geo.mirror_vertical = mv;
-                    changed = true;
+                    // Re-read the horizontal flag: a same-frame horizontal
+                    // change above already committed through the setter.
+                    let horizontal = self
+                        .recipe
+                        .geometry
+                        .as_ref()
+                        .map(|g| g.mirror_horizontal)
+                        .unwrap_or(mh);
+                    self.set_geometry_mirror(horizontal, mv);
                 }
                 ui.label(Str::Perspective.t());
+                // GUI-SLIDER-SAVE-1: perspective sliders commit through
+                // `set_perspective_value` (save at debounce); `persp` is only
+                // a slider binding buffer.
                 let mut persp = self.recipe.perspective.unwrap_or(Perspective {
                     version: 1,
                     vertical: 0.0,
@@ -6485,7 +7108,6 @@ impl LuminaApp {
                     shift_x: 0.0,
                     shift_y: 0.0,
                 });
-                let mut changed_p = false;
                 for (field, label, spec) in [
                     (
                         &mut persp.vertical,
@@ -6524,21 +7146,22 @@ impl LuminaApp {
                     ),
                 ] {
                     let mut v = *field;
-                    match lr_slider(ui, label.t(), &mut v, spec) {
-                        SliderAction::Changed | SliderAction::ResetRequested => {
-                            *field = v;
-                            changed_p = true;
-                        }
-                        SliderAction::Nothing => {}
+                    if matches!(
+                        lr_slider(ui, label.t(), &mut v, spec),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        let name = match label {
+                            Str::Vertical => "vertical",
+                            Str::Horizontal => "horizontal",
+                            Str::Rotation => "rotation",
+                            Str::Scale => "scale",
+                            Str::AspectRatio => "aspect_ratio",
+                            Str::ShiftX => "shift_x",
+                            Str::ShiftY => "shift_y",
+                            _ => continue,
+                        };
+                        self.set_perspective_value(name, f64::from(v));
                     }
-                }
-                if changed {
-                    self.recipe.geometry = Some(geo);
-                    self.mark_dirty();
-                }
-                if changed_p {
-                    self.recipe.perspective = Some(persp);
-                    self.mark_dirty();
                 }
             } else {
                 ui.label(Str::GeometryRequiresLensfun.t());
@@ -6887,9 +7510,9 @@ impl LuminaApp {
                 if ui.selectable_label(self.spot_mode == SpotMode::Generative, "Generative").clicked() { self.set_spot_mode(SpotMode::Generative); }
             });
             if self.spot_mode == SpotMode::Generative { ui.colored_label(egui::Color32::YELLOW, "Generative inpaint requires model inpaint-heal-xl (lumina-onnx, BLAKE3 .lumina.zdata kind=spot_heal_generative). Missing → stale."); }
-            let mut radius = self.spot_radius; if ui.add(egui::Slider::new(&mut radius, 1.0..=512.0).text("Radius")).changed() { self.spot_radius = radius; }
-            let mut feather = self.spot_feather; if ui.add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feather")).changed() { self.spot_feather = feather; }
-            let mut opacity = self.spot_opacity; if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity")).changed() { self.spot_opacity = opacity; }
+            let mut radius = self.spot_radius; if ui.add(egui::Slider::new(&mut radius, 1.0..=512.0).text("Radius")).changed() { self.set_spot_radius(radius); }
+            let mut feather = self.spot_feather; if ui.add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feather")).changed() { self.set_spot_feather(feather); }
+            let mut opacity = self.spot_opacity; if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity")).changed() { self.set_spot_opacity(opacity); }
             if ui.button("Clear spots").clicked() { self.clear_spot_heals(); }
             let spots: Vec<serde_json::Value> = self.recipe.extras.get("spot_removals").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
             for spot in &spots { let id = spot.get("id").and_then(|v| v.as_str()).unwrap_or("?"); let status = spot.get("status").and_then(|v| v.as_str()).unwrap_or("valid"); ui.label(format!("spot {id}: {status}")); }
@@ -7558,6 +8181,11 @@ impl LuminaApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                // GUI-HISTOGRAM-1: the histogram is its own collapsible
+                // section (default open) at the top of the Develop panel —
+                // never in the module bar.
+                self.draw_histogram_section(ui);
+                ui.separator();
                 // Lightroom-style panel head: display-only crop/histogram
                 // thumbnail with the active crop overlay, then the Presets and
                 // History collapsible sections.
@@ -7909,6 +8537,11 @@ impl LuminaApp {
         } else {
             ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
         }
+        // GUI-PREVIEW-NAV-1: the draft state is always visible next to the
+        // zoom readout, never only implied by soft pixels.
+        if self.preview_is_draft {
+            ui.colored_label(egui::Color32::YELLOW, Str::Draft.t());
+        }
         // Welle 2 view-state badges: crop mode (`R`), B&W treatment (`V`)
         // and the clipping overlay (`J`) advertise their state in the
         // preview header so no toggle is ever silent.
@@ -7949,13 +8582,26 @@ impl LuminaApp {
     /// native preview-area header.
     #[cfg(not(target_arch = "wasm32"))]
     fn zoom_toolbar(&mut self, ui: &mut egui::Ui) {
-        let pct = (self.preview_effective_scale * 100.0) as i32;
-        ui.label(format!("{}: {}%", Str::Zoom.t(), pct));
+        // GUI-PREVIEW-NAV-1 (F-100): the readout names the nominal step, never
+        // the effective on-screen scale.
+        ui.label(format!("{}: {}", Str::Zoom.t(), self.zoom_label()));
         if ui
             .selectable_label(self.zoom_mode == ZoomMode::Fit, Str::ZoomFit.t())
             .clicked()
         {
             self.set_zoom_mode(ZoomMode::Fit);
+        }
+        for (mode, label) in [
+            (ZoomMode::Quarter, Str::Zoom25),
+            (ZoomMode::Half, Str::Zoom50),
+            (ZoomMode::ThreeQuarter, Str::Zoom75),
+        ] {
+            if ui
+                .selectable_label(self.zoom_mode == mode, label.t())
+                .clicked()
+            {
+                self.set_zoom_mode(mode);
+            }
         }
         if ui
             .selectable_label(self.zoom_mode == ZoomMode::OneToOne, Str::ZoomOneToOne.t())
@@ -7980,6 +8626,86 @@ impl LuminaApp {
         }
     }
 
+    /// Whether a mouse-wheel event over the preview zooms (GUI-PREVIEW-NAV-1):
+    /// only while Ctrl (or Cmd on macOS) is held. Without a modifier the wheel
+    /// scrolls/pans and must never switch the zoom to `Custom`.
+    fn wants_wheel_zoom(modifiers: &egui::Modifiers) -> bool {
+        modifiers.ctrl || modifiers.command
+    }
+
+    /// Nominal zoom step for the toolbar readout (GUI-PREVIEW-NAV-1, F-100):
+    /// absolute modes name their nominal step (Fit/25/50/75/100/200 %,
+    /// Fit-Breite); `Custom` — the pinned zoom+pan view — names itself. The
+    /// effective on-screen scale is deliberately not shown (F-100: höchstens
+    /// Tooltip). Pure helper, unit-tested headless. Native-only with the zoom
+    /// toolbar (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zoom_label(&self) -> String {
+        match self.zoom_mode {
+            ZoomMode::Fit => Str::ZoomFit.t().to_string(),
+            ZoomMode::Quarter => Str::Zoom25.t().to_string(),
+            ZoomMode::Half => Str::Zoom50.t().to_string(),
+            ZoomMode::ThreeQuarter => Str::Zoom75.t().to_string(),
+            ZoomMode::OneToOne => Str::Zoom100.t().to_string(),
+            ZoomMode::TwoHundred => Str::ZoomTwoHundred.t().to_string(),
+            ZoomMode::FitWidth => Str::ZoomFitWidth.t().to_string(),
+            ZoomMode::Custom => Str::ZoomCustom.t().to_string(),
+        }
+    }
+
+    /// Navigator viewport overview (GUI-PREVIEW-NAV-1): the full image with the
+    /// currently visible Develop working-area rectangle. Dragging the rectangle
+    /// pans (`preview_pan` + `mark_dirty`); panning pins the mode to `Custom`
+    /// because absolute modes re-centre every frame (see [`Self::sync_zoom`]).
+    /// Native-only with the navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_navigator_viewport(&mut self, ui: &mut egui::Ui) {
+        let Some(texture) = self.texture.clone() else {
+            ui.label(Str::NotCurrent.t());
+            return;
+        };
+        let (src_w, src_h) = self.image_dims().unwrap_or((1, 1));
+        if src_w == 0 || src_h == 0 {
+            ui.label(Str::NotCurrent.t());
+            return;
+        }
+        // Aspect-fitted overview (no letterboxing, so the navigator scale is
+        // uniform on both axes and the drag mapping stays exact).
+        let avail_w = ui.available_width().max(40.0);
+        let height = (avail_w * src_h as f32 / src_w as f32).max(40.0);
+        let size = egui::vec2(avail_w, height);
+        let (nav_rect, response) = ui.allocate_exact_size(size, egui::Sense::drag());
+        ui.put(nav_rect, egui::Image::from_texture(&texture).max_size(size));
+        let scale = self.preview_effective_scale.max(1e-6);
+        let view = Self::navigator_viewport_rect(
+            nav_rect,
+            src_w as f32,
+            src_h as f32,
+            self.preview_pane_w,
+            self.preview_pane_h,
+            scale,
+            self.preview_pan,
+        );
+        ui.painter().rect_stroke(
+            view,
+            1.0_f32,
+            egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
+            egui::StrokeKind::Middle,
+        );
+        let drag = response.drag_delta();
+        if drag != egui::Vec2::ZERO {
+            let nav_scale = (nav_rect.width() / src_w as f32).max(1e-6);
+            self.preview_pan =
+                Self::pan_for_navigator_drag(self.preview_pan, drag, nav_scale, scale);
+            self.zoom_mode = ZoomMode::Custom;
+            trace!("GUI interaction: navigator viewport drag");
+            self.mark_dirty();
+        }
+        if self.preview_is_draft {
+            ui.colored_label(egui::Color32::YELLOW, Str::Draft.t());
+        }
+    }
+
     /// Left thumbnail navigator rail (Lightroom-like). Reuses the filmstrip
     /// [`Self::ensure_thumbnail`] / [`ThumbnailManager`] pipeline — no duplicate
     /// thumbnail generation — shows a vertical scroll of directory entries,
@@ -7995,6 +8721,8 @@ impl LuminaApp {
                 }
             });
         });
+        ui.separator();
+        self.draw_navigator_viewport(ui);
         ui.separator();
         ui.label(Str::FilmstripHint.t());
         // RAW-only: mirror the filmstrip filter so the left navigator rail shows
@@ -8809,9 +9537,10 @@ impl eframe::App for LuminaApp {
                     trace!("GUI render: debounced full render after interaction");
                     let screen = ctx.input(|i| i.viewport_rect());
                     let viewport = [screen.width() as u32, screen.height() as u32];
-                    if let Err(e) = self.render_full(viewport, None) {
-                        self.show_error(e);
-                    }
+                    // GUI-SLIDER-SAVE-1: the settled render commits pending
+                    // slider edits to the sidecar (CAS, loud conflicts) with
+                    // an INFO log; pure view edits (zoom/pan) only re-render.
+                    self.commit_pending_slider_save(viewport);
                     self.last_edit_time = 0.0;
                 }
             }
@@ -8882,8 +9611,9 @@ impl eframe::App for LuminaApp {
             }
         });
 
-        // Top: module bar (Library / Develop / Export) + the Before/After toggle,
-        // then the histogram of the currently displayed render state. The module
+        // Top: module bar (Library / Develop / Export) + the Before/After toggle.
+        // The histogram lives in its own collapsible Develop-panel section
+        // (GUI-HISTOGRAM-1), not in the module bar. The module
         // labels advertise their Lightroom keyboard shortcuts (`G`, `D`).
         egui::Panel::top("modules").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -8904,7 +9634,6 @@ impl eframe::App for LuminaApp {
                     self.toggle_before_after();
                 }
             });
-            self.draw_histogram(ui);
         });
 
         // Left: Lightroom-like Library folder tree. Develop/Export leave the
@@ -11225,6 +11954,11 @@ mod tests {
     /// `pending_full_render` and produced a fresh `render_key` in the same
     /// pass.
     #[test]
+    /// GUI-PREVIEW-NAV-1: the scroll wheel without a modifier must never zoom
+    /// (and never switch the mode to `Custom`); with Ctrl held it zooms around
+    /// the cursor and arms the debounced full render without rendering
+    /// synchronously. Replaces the pre-zoom-gating assertion that any wheel
+    /// event zooms.
     fn scroll_wheel_zoom_arms_debounce_without_synchronous_render() {
         let ctx = egui::Context::default();
         let mut app = LuminaApp::new(ctx.clone());
@@ -11257,7 +11991,9 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        // Scroll-wheel zoom with the pointer hovering the preview.
+        // Wheel WITHOUT a modifier: no zoom, no mode change, no render armed
+        // (GUI-PREVIEW-NAV-1 — the image fits the pane here, so there is
+        // nothing to pan either).
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),
@@ -11268,6 +12004,38 @@ mod tests {
                     phase: egui::TouchPhase::Move,
                     modifiers: Default::default(),
                 }],
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.preview_zoom, 1.0, "modifier-free wheel must not zoom");
+        assert_eq!(
+            app.zoom_mode,
+            ZoomMode::Fit,
+            "modifier-free wheel must not switch to Custom"
+        );
+        assert!(
+            !app.pending_full_render,
+            "modifier-free wheel at fit arms no render"
+        );
+        // Wheel WITH Ctrl held: zoom around the cursor, pin Custom, arm the
+        // debounced full render — without rendering synchronously.
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.1),
+                events: vec![
+                    egui::Event::PointerMoved(pointer),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 120.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::CTRL,
+                    },
+                ],
                 ..Default::default()
             },
             |ui| {
@@ -11327,6 +12095,600 @@ mod tests {
         app.preview_base_fit_scale = 0.2; // unchanged by draw_preview by design
         app.sync_zoom();
         assert_eq!(app.preview_zoom, first);
+    }
+
+    /// GUI-PREVIEW-NAV-1: the fractional zoom steps resolve to a fraction of
+    /// the pane fit (Fit stays the default 1.0). Same geometry as the
+    /// `sync_zoom` regression test above: 4000×3000 source in 800×600 → fit 0.2.
+    #[test]
+    fn zoom_fraction_modes_derive_from_fit() {
+        let mut app = new_app();
+        app.preview_base_fit_scale = 0.2;
+        app.preview_src_w = 4000.0;
+        app.preview_src_h = 3000.0;
+        app.preview_pane_w = 800.0;
+        app.preview_pane_h = 600.0;
+
+        // Fit (default) is always 1.0.
+        app.zoom_mode = ZoomMode::Fit;
+        app.sync_zoom();
+        assert_eq!(app.preview_zoom, 1.0);
+
+        // 25 % / 50 % / 75 % effective scale → fraction of fit.
+        app.zoom_mode = ZoomMode::Quarter;
+        app.sync_zoom();
+        assert!((app.preview_zoom - 1.25).abs() < 1e-5);
+        app.zoom_mode = ZoomMode::Half;
+        app.sync_zoom();
+        assert!((app.preview_zoom - 2.5).abs() < 1e-5);
+        app.zoom_mode = ZoomMode::ThreeQuarter;
+        app.sync_zoom();
+        assert!((app.preview_zoom - 3.75).abs() < 1e-5);
+
+        // Fractional steps map onto the zoom factor; near-fit steps still
+        // cover the whole frame (whole-frame render, no degenerate crop),
+        // while 50 %/75 % produce a real ROI crop (zoomed render).
+        assert_eq!(
+            LuminaApp::roi_from_zoom(4000, 3000, 1.25, egui::Vec2::ZERO, 800.0, 600.0),
+            None,
+            "25 % step still covers the frame"
+        );
+        assert!(
+            LuminaApp::roi_from_zoom(4000, 3000, 2.5, egui::Vec2::ZERO, 800.0, 600.0).is_some(),
+            "50 % step must crop"
+        );
+        assert!(
+            LuminaApp::roi_from_zoom(4000, 3000, 3.75, egui::Vec2::ZERO, 800.0, 600.0).is_some(),
+            "75 % step must crop"
+        );
+        assert_eq!(
+            LuminaApp::roi_from_zoom(4000, 3000, 1.0, egui::Vec2::ZERO, 800.0, 600.0),
+            None
+        );
+    }
+
+    /// GUI-PREVIEW-NAV-1: the wheel only zooms with Ctrl/Cmd held; without a
+    /// modifier it must scroll/pan and never switch the zoom to `Custom`.
+    #[test]
+    fn wheel_zoom_requires_modifier() {
+        assert!(!LuminaApp::wants_wheel_zoom(&egui::Modifiers::default()));
+        assert!(LuminaApp::wants_wheel_zoom(&egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        }));
+        assert!(LuminaApp::wants_wheel_zoom(&egui::Modifiers {
+            command: true,
+            ..Default::default()
+        }));
+        // Shift alone (horizontal scroll) never zooms.
+        assert!(!LuminaApp::wants_wheel_zoom(&egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        }));
+    }
+
+    /// GUI-PREVIEW-NAV-1: the navigator viewport rectangle tracks zoom/pan and
+    /// a drag of the rectangle round-trips back through `preview_pan`.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn navigator_viewport_rect_roundtrip() {
+        // 300×200 source shown in a 150×100 navigator cell (scale 0.5);
+        // preview pane 800×600, source fit 8/3 ≈ 2.667. At 4× zoom the
+        // effective scale is 32/3 ≈ 10.667 → visible 75×56.25 source px.
+        let nav = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(150.0, 100.0));
+        let zoomed_scale = 32.0_f32 / 3.0;
+        let view = LuminaApp::navigator_viewport_rect(
+            nav,
+            300.0,
+            200.0,
+            800.0,
+            600.0,
+            zoomed_scale,
+            egui::Vec2::ZERO,
+        );
+        // Centred and strictly inside the navigator while zoomed.
+        assert!(nav.contains_rect(view));
+        assert!(view.width() < nav.width() && view.height() < nav.height());
+        assert!((view.center().x - nav.center().x).abs() < 1e-3);
+        assert!((view.center().y - nav.center().y).abs() < 1e-3);
+        assert!((view.width() - 37.5).abs() < 1e-3);
+        assert!((view.height() - 28.125).abs() < 1e-3);
+
+        // Fit shows the whole frame: the rectangle equals the navigator.
+        let fit = LuminaApp::navigator_viewport_rect(
+            nav,
+            300.0,
+            200.0,
+            800.0,
+            600.0,
+            8.0 / 3.0,
+            egui::Vec2::ZERO,
+        );
+        assert_eq!(fit, nav);
+
+        // Dragging the rectangle 10 navigator points right moves the visible
+        // window right by exactly that amount in navigator space: the pan
+        // shift is `-drag * (preview_scale / nav_scale)`.
+        let pan = LuminaApp::pan_for_navigator_drag(
+            egui::Vec2::ZERO,
+            egui::vec2(10.0, 0.0),
+            0.5,
+            zoomed_scale,
+        );
+        assert!(
+            (pan.x + 10.0 * (zoomed_scale / 0.5)).abs() < 1e-3,
+            "unexpected pan {pan:?}"
+        );
+        assert_eq!(pan.y, 0.0);
+        let moved =
+            LuminaApp::navigator_viewport_rect(nav, 300.0, 200.0, 800.0, 600.0, zoomed_scale, pan);
+        assert!((moved.center().x - view.center().x - 10.0).abs() < 1e-3);
+        assert!((moved.center().y - view.center().y).abs() < 1e-3);
+
+        // Degenerate geometry never panics and degrades to the full rect.
+        assert_eq!(
+            LuminaApp::navigator_viewport_rect(nav, 0.0, 0.0, 800.0, 600.0, 0.8, egui::Vec2::ZERO),
+            nav
+        );
+        assert_eq!(
+            LuminaApp::pan_for_navigator_drag(egui::Vec2::ZERO, egui::vec2(5.0, 5.0), 0.0, 0.8),
+            egui::Vec2::ZERO
+        );
+    }
+
+    /// GUI-HISTOGRAM-1: stored 256-bin histograms map onto non-empty plot
+    /// points inside the plot rect, with the peak reaching the top.
+    #[test]
+    fn histogram_plot_points_follow_bins() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.render().unwrap();
+        let histogram = app
+            .preview_histogram
+            .clone()
+            .expect("render stores the histogram");
+        assert_eq!(histogram.bins.len(), 256);
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(256.0, 72.0));
+        let points = LuminaApp::histogram_plot_points(&histogram.bins, rect);
+        assert_eq!(points.len(), 256, "one point per bin");
+        for point in &points {
+            assert!(rect.contains(*point), "point {point:?} outside plot rect");
+        }
+        let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        assert!(
+            top <= rect.top() + 1.0,
+            "peak bin must reach the plot top, got y={top}"
+        );
+
+        // An empty histogram still yields baseline points (never empty, never
+        // NaN) so the panel cannot collapse.
+        let empty = LuminaApp::histogram_plot_points(&[0u64; 256], rect);
+        assert_eq!(empty.len(), 256);
+        assert!(empty.iter().all(|p| (p.y - rect.bottom()).abs() < 1e-4));
+        assert!(empty.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+    }
+
+    /// GUI-SLIDER-SAVE-1: a slider commit renders, writes the sidecar with the
+    /// committed value and clears the pending commit. Zoom/pan view state never
+    /// enters the recipe — panning/zooming records no commit.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn slider_commit_saves_sidecar_with_value() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+
+        // A slider edit records its commit and dirties the render.
+        app.set_adjustment("exposure", 1.5);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("exposure".to_string(), 1.5))
+        );
+
+        // The debounce commit renders and persists.
+        app.commit_pending_slider_save([0, 0]);
+        assert_eq!(app.pending_slider_commit, None);
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        assert!(sidecar.is_file(), "Sidecar must be written");
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            1.5
+        );
+
+        // Zoom/pan are pure view state: they record no commit and the recipe
+        // carries no zoom/pan keys after exercising them.
+        app.set_zoom_mode(ZoomMode::OneToOne);
+        app.preview_pan = egui::vec2(24.0, -12.0);
+        app.zoom_step(1.5);
+        assert_eq!(app.pending_slider_commit, None);
+        assert!(!app.recipe().adjustments.contains_key("zoom"));
+        assert!(!app.recipe().adjustments.contains_key("preview_pan"));
+        assert!(!app.recipe().adjustments.contains_key("zoom_mode"));
+
+        // Reload: the committed value is restored from the sidecar (DoD §1).
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+    }
+
+    /// Shared commit-save-assert for the struct-backed slider classes
+    /// (GUI-SLIDER-SAVE-1, native only): runs the debounced commit, loads the
+    /// written sidecar document and fails loudly when no file was written.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn commit_and_load_doc(
+        app: &mut LuminaApp,
+        source: &std::path::Path,
+    ) -> lumina_sidecar::SidecarDocument {
+        app.commit_pending_slider_save([0, 0]);
+        assert!(
+            app.error().is_none(),
+            "commit must not fail, got {:?}",
+            app.error()
+        );
+        let sidecar = lumina_sidecar::sidecar_path_for(source);
+        assert!(sidecar.is_file(), "Sidecar must be written");
+        lumina_sidecar::load_sidecar(&sidecar).unwrap()
+    }
+
+    /// Reopen a source in a fresh app (DoD §1: values survive restarts).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reopen_app(source: &std::path::Path) -> LuminaApp {
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app
+    }
+
+    /// B4: the toolbar readout names the nominal zoom step (F-100), never the
+    /// effective on-screen scale; `Custom` names itself.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zoom_label_names_nominal_step() {
+        let mut app = new_app();
+        for (mode, expected) in [
+            (ZoomMode::Fit, "Fit"),
+            (ZoomMode::Quarter, "25%"),
+            (ZoomMode::Half, "50%"),
+            (ZoomMode::ThreeQuarter, "75%"),
+            (ZoomMode::OneToOne, "100%"),
+            (ZoomMode::TwoHundred, "200%"),
+            (ZoomMode::FitWidth, "Fit Width"),
+            (ZoomMode::Custom, "Custom"),
+        ] {
+            app.zoom_mode = mode;
+            assert_eq!(app.zoom_label(), expected, "{mode:?}");
+        }
+    }
+
+    /// GUI-SLIDER-SAVE-1: presence sliders commit, persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn presence_slider_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_presence("clarity", 0.4);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("presence.clarity".to_string(), 0.4))
+        );
+        let document = commit_and_load_doc(&mut app, &source);
+        let presence = document.virtual_copies[0]
+            .recipe
+            .presence
+            .expect("presence persisted");
+        assert!((f64::from(presence.clarity) - 0.4).abs() < 1e-6);
+        let reopened = reopen_app(&source);
+        let restored = reopened.recipe().presence.expect("presence reloaded");
+        assert!((f64::from(restored.clarity) - 0.4).abs() < 1e-6);
+    }
+
+    /// GUI-SLIDER-SAVE-1: tone-curve region sliders commit, persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn tone_curve_slider_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // NOTE: region values must keep the normative (0,0)/(1,1) endpoints —
+        // positive Shadows would lift (0,0) and the save loudly refuses the
+        // invalid curve (schema fact, tested by the loud-failure path, not here).
+        app.set_tone_curve_region("lights", 0.2);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("curves.lights".to_string(), 0.2))
+        );
+        let document = commit_and_load_doc(&mut app, &source);
+        let (_, _, l, _) = tone_curve_regions(&document.virtual_copies[0].recipe);
+        assert!((l - 0.2).abs() < 1e-6, "lights region persisted, got {l}");
+        let reopened = reopen_app(&source);
+        let (_, _, rl, _) = tone_curve_regions(reopened.recipe());
+        assert!((rl - 0.2).abs() < 1e-6, "lights region reloaded, got {rl}");
+    }
+
+    /// GUI-SLIDER-SAVE-1: HSL mixer sliders commit, persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn hsl_slider_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_hsl_value("red", "hue", 0.5);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("hsl.red.hue".to_string(), 0.5))
+        );
+        let document = commit_and_load_doc(&mut app, &source);
+        let red = document.virtual_copies[0]
+            .recipe
+            .hsl
+            .as_ref()
+            .and_then(|hsl| hsl.red)
+            .expect("hsl.red persisted");
+        assert!((f64::from(red.hue) - 0.5).abs() < 1e-6);
+        let reopened = reopen_app(&source);
+        let rred = reopened
+            .recipe()
+            .hsl
+            .as_ref()
+            .and_then(|hsl| hsl.red)
+            .expect("hsl.red reloaded");
+        assert!((f64::from(rred.hue) - 0.5).abs() < 1e-6);
+    }
+
+    /// GUI-SLIDER-SAVE-1: color-grading sliders (range + balance) commit,
+    /// persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn color_grading_sliders_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_color_grading_value("shadows", "hue_degrees", 120.0);
+        app.set_color_grading_balance(0.3);
+        let document = commit_and_load_doc(&mut app, &source);
+        let cg = document.virtual_copies[0]
+            .recipe
+            .color_grading
+            .clone()
+            .expect("color grading persisted");
+        assert!((f64::from(cg.shadows.hue_degrees) - 120.0).abs() < 1e-4);
+        assert!((f64::from(cg.balance) - 0.3).abs() < 1e-6);
+        let reopened = reopen_app(&source);
+        let rcg = reopened
+            .recipe()
+            .color_grading
+            .clone()
+            .expect("grading reloaded");
+        assert!((f64::from(rcg.shadows.hue_degrees) - 120.0).abs() < 1e-4);
+        assert!((f64::from(rcg.balance) - 0.3).abs() < 1e-6);
+    }
+
+    /// GUI-SLIDER-SAVE-1: effects sliders (vignette + grain seed) commit,
+    /// persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn effects_sliders_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_effects_value("vignette", "amount", -0.5);
+        app.set_effects_value("grain", "seed", 42.0);
+        let document = commit_and_load_doc(&mut app, &source);
+        let effects = document.virtual_copies[0]
+            .recipe
+            .effects
+            .clone()
+            .expect("effects persisted");
+        assert!((f64::from(effects.vignette.expect("vignette").amount) + 0.5).abs() < 1e-6);
+        assert_eq!(effects.grain.expect("grain").seed, 42);
+        let reopened = reopen_app(&source);
+        let reffects = reopened.recipe().effects.clone().expect("effects reloaded");
+        assert!((f64::from(reffects.vignette.expect("vignette").amount) + 0.5).abs() < 1e-6);
+        assert_eq!(reffects.grain.expect("grain").seed, 42);
+    }
+
+    /// GUI-SLIDER-SAVE-1: detail sliders (sharpening + noise reduction)
+    /// commit, persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn detail_sliders_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_sharpening_value("amount", 1.5);
+        app.set_noise_reduction_value("luminance", 0.25);
+        let document = commit_and_load_doc(&mut app, &source);
+        let recipe = &document.virtual_copies[0].recipe;
+        let sh = recipe.sharpening.expect("sharpening persisted");
+        let nr = recipe.noise_reduction.expect("noise reduction persisted");
+        assert!((f64::from(sh.amount) - 1.5).abs() < 1e-6);
+        assert!((f64::from(nr.luminance) - 0.25).abs() < 1e-6);
+        let reopened = reopen_app(&source);
+        let rsh = reopened.recipe().sharpening.expect("sharpening reloaded");
+        let rnr = reopened.recipe().noise_reduction.expect("nr reloaded");
+        assert!((f64::from(rsh.amount) - 1.5).abs() < 1e-6);
+        assert!((f64::from(rnr.luminance) - 0.25).abs() < 1e-6);
+    }
+
+    /// GUI-SLIDER-SAVE-1: optics, geometry and perspective sliders commit,
+    /// persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn optics_geometry_perspective_sliders_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_lens_correction_value("distortion_k1", 0.1);
+        app.set_geometry_rotation(15.0);
+        app.set_perspective_value("vertical", 0.2);
+        let document = commit_and_load_doc(&mut app, &source);
+        let recipe = &document.virtual_copies[0].recipe;
+        assert_eq!(
+            recipe
+                .lens_correction
+                .as_ref()
+                .and_then(|lc| lc.distortion_k1),
+            Some(0.1_f32)
+        );
+        assert_eq!(
+            recipe.geometry.as_ref().map(|g| g.rotation_degrees),
+            Some(15.0_f32)
+        );
+        assert_eq!(
+            recipe.perspective.as_ref().map(|p| p.vertical),
+            Some(0.2_f32)
+        );
+        let reopened = reopen_app(&source);
+        assert_eq!(
+            reopened
+                .recipe()
+                .lens_correction
+                .as_ref()
+                .and_then(|lc| lc.distortion_k1),
+            Some(0.1_f32)
+        );
+        assert_eq!(
+            reopened
+                .recipe()
+                .geometry
+                .as_ref()
+                .map(|g| g.rotation_degrees),
+            Some(15.0_f32)
+        );
+        assert_eq!(
+            reopened.recipe().perspective.as_ref().map(|p| p.vertical),
+            Some(0.2_f32)
+        );
+    }
+
+    /// GUI-SLIDER-SAVE-1: mask layer sliders (feather/blur/density) and local
+    /// adjustments commit, persist and reload.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mask_layer_sliders_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.create_mask("Subject").unwrap();
+        app.set_mask_feather(0.5).unwrap();
+        app.set_mask_blur(0.2).unwrap();
+        app.set_mask_density(0.8).unwrap();
+        app.set_mask_local_adjustment("exposure", 0.7).unwrap();
+        assert!(app.pending_slider_commit.is_some(), "mask edit commits");
+        let document = commit_and_load_doc(&mut app, &source);
+        let layer = &document.virtual_copies[0].mask_layers[0];
+        assert_eq!(layer.feather, 0.5);
+        assert_eq!(layer.blur, 0.2);
+        assert_eq!(layer.density, 0.8);
+        assert_eq!(
+            layer.extras.get("adjustment_exposure"),
+            Some(&serde_json::Value::from(0.7))
+        );
+        let reopened = reopen_app(&source);
+        let rlayer = &reopened
+            .document
+            .as_ref()
+            .expect("document reloaded")
+            .virtual_copies[0]
+            .mask_layers[0];
+        assert_eq!(rlayer.feather, 0.5);
+        assert_eq!(
+            rlayer.extras.get("adjustment_exposure"),
+            Some(&serde_json::Value::from(0.7))
+        );
+    }
+
+    /// GUI-SLIDER-SAVE-1: tool-only settings (brush size, spot defaults)
+    /// record a commit and trigger the sidecar write; the values themselves
+    /// are session state, so the test pins the app fields plus the file.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn tool_settings_record_commit_and_write_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_brush_radius(0.1).unwrap();
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("mask.brush_radius".to_string(), f64::from(0.1_f32)))
+        );
+        app.set_spot_radius(24.0);
+        app.set_spot_feather(0.7);
+        app.set_spot_opacity(0.9);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("spot.opacity".to_string(), f64::from(0.9_f32)))
+        );
+        commit_and_load_doc(&mut app, &source);
+        assert_eq!(app.brush_radius, 0.1);
+        assert_eq!(app.spot_radius, 24.0);
+        assert_eq!(app.spot_feather, 0.7);
+        assert_eq!(app.spot_opacity, 0.9);
+    }
+
+    /// GUI-SLIDER-SAVE-1: the WB eyedropper pick commits both fields, persists
+    /// and reloads.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn white_balance_pick_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_white_balance_from_point(0.5, 0.5, 0.5).unwrap();
+        assert!(app.pending_slider_commit.is_some(), "WB pick commits");
+        let document = commit_and_load_doc(&mut app, &source);
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["wb_temperature"],
+            6500.0
+        );
+        let reopened = reopen_app(&source);
+        assert_eq!(reopened.recipe().adjustments["wb_temperature"], 6500.0);
+    }
+
+    /// GUI-SLIDER-SAVE-1: unknown struct field names warn loudly but record no
+    /// commit and mutate nothing (no silent fallback into a wrong field).
+    #[test]
+    fn unknown_recipe_fields_warn_without_commit() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.set_tone_curve_region("bogus", 0.5);
+        app.set_hsl_value("red", "bogus", 0.5);
+        app.set_hsl_value("bogus", "hue", 0.5);
+        app.set_color_grading_value("shadows", "bogus", 0.5);
+        app.set_effects_value("grain", "bogus", 0.5);
+        app.set_sharpening_value("bogus", 0.5);
+        app.set_noise_reduction_value("bogus", 0.5);
+        app.set_lens_correction_value("bogus", 0.5);
+        app.set_perspective_value("bogus", 0.5);
+        assert_eq!(app.pending_slider_commit, None);
+        assert!(app.recipe().curves.is_none());
+        assert!(app.recipe().hsl.is_none());
+        assert!(app.recipe().color_grading.is_none());
+        assert!(app.recipe().effects.is_none());
+        assert!(app.recipe().sharpening.is_none());
     }
 
     #[test]
