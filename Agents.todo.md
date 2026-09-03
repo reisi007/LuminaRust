@@ -119,6 +119,8 @@ _(keine offenen Tasks — F-069…F-071 BESTANDEN verifiziert 2026-09-02, Commit
 
 _(keine offenen Tasks — GEN-EXPAND-1 BESTANDEN verifiziert 2026-09-02, Commit 46f6baf: Doku-first GenerativeEdit Felder sha256 Prompt/Seed inference_resolution canvas>100% region/mask ref artifact .lumina.zdata kind=generative_canvas atomar, Pipeline Decode→SourceActions→GenerativeEdit→Lens→Perspective→Crop, Identität/Veraltung analog AI-Masken, kein stiller Fallback, Capability lokal vs Cloud getrennt, Lizenz F-078; kein Code)_
 
+- [ ] **[PRIO: mittel] GEN-ZDATA-LINK-1** Rezept-Verlinkung generativer zdata-Artefakte (Folge zu GEN-ZDATA-PERSIST 1e0ccbd, BESTANDEN verifiziert 2026-09-03): typisierte, additive Schema-v2-Rezeptfelder, die `GenerativeEdit` (GEN-EXPAND-1 `generative_canvas`, kind=2) und `spot_removals` (SPOT-REMOVE-1 `spot_heal_generative`, kind=3) per Record-ID + `ArtifactReference` (relativer Pfad, Format, BLAKE3-Prüfsumme, Auflösung, Kanaltyp, Datenversion) mit den `.lumina.zdata`-Records verknüpfen; Validierung (unbekannte Version laut ablehnen, gegenseitige Ausschlussregeln je Modus), JSON-Roundtrip + `artifact_status`-Abdeckung (`Available`/`Missing`/`Corrupt` eager), relative Pfade nach Bundle-Verschiebung gültig, atomar. Abnahme: `cargo test -p lumina-sidecar --features zdata --lib` grün + unabhängiger Verifizierungs-Agent bestätigt.
+
 ## Block B – „Offene Rückfragen“
 
 Tasks, bei denen eine User-Entscheidung/Klärung fehlt (Produkt-, Naming-,

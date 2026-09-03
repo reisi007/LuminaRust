@@ -213,6 +213,24 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   gemeinsame `.zdata.lock`; `load_zdata` verifiziert BLAKE3-Prüfsummen **eager**
   beim Laden (nicht mehr lazy beim Tile-Zugriff). Korrekte Container bis 512 MB:
   bewusster Korrektheit-vor-Geschwindigkeit-Trade-off.
+- **zdata generativ (GEN-ZDATA-PERSIST, 2026-09-03, 1e0ccbd, verifiziert
+  BESTANDEN):** Zwei weitere RGBA8-Artefakttypen teilen dasselbe Bundle mit
+  eigenem `kind`-Diskriminator bei unverändertem Container-`VERSION = 1`:
+  `GenerativeCanvasArtifact` (`kind = 2`, GEN-EXPAND-1 `generative_canvas`,
+  volles kompositiertes Canvas) und `SpotHealGenerativeArtifact` (`kind = 3`,
+  SPOT-REMOVE-1 `spot_heal_generative`, ersetzte Spot-Kachel ohne
+  Canvas-Expansion). Rohformat je Record: `encoding_version u32 (= 1)` +
+  `width`/`height u32` + `width*height*4` RGBA8-Bytes; BLAKE3 über den
+  unkomprimierten Rohstrom (`checksum()`), Lese-/Schreibvalidierung von ID,
+  Dimensionen und Payload-Split, strikte Kind-Trennung (ein `generative_canvas`-
+  Record wird nie als Spot-Heal gelesen und umgekehrt), Duplikat-IDs über alle
+  Kinds abgelehnt. `append_generative_canvas`/`append_spot_heal_generative`
+  laufen unter derselben `.zdata.lock` und schreiben atomar (Temp + Rename);
+  WASM-Stub meldet `zdata not available on wasm32` laut (kein stiller
+  Fallback). Tests: `88p` ohne / `124p` mit `zdata`-Feature, Clippy/Format/
+  wasm32 (`--features zdata`) grün. Offene Folgearbeit: Rezept-Verlinkung
+  (typisierte `GenerativeEdit`-/`spot_removals`-Artefaktreferenz auf Record-IDs,
+  additives Schema-v2-Feld) — siehe `Agents.todo.md` Phase 10b.
 - **Artefaktstatus:** `artifact_status` unterscheidet `Missing`, `Available`
   und neu `Corrupt` (leere Datei, <8-Byte-Container ohne Magic,
   zdata-deklariertes Format ohne `LUMZDATA`-Magic, fehlende/falsche Magic,
