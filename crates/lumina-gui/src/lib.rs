@@ -3905,6 +3905,11 @@ impl LuminaApp {
             input_fingerprint: tone_fingerprint(frame, config),
             extras: BTreeMap::new(),
         });
+        // GUI-AUTOTONE-SAVE-1: record the save commit so the debounced path
+        // (`commit_pending_slider_save`) persists the sidecar (CAS, loud
+        // conflicts) with an INFO log — same as GUI-SLIDER-SAVE-1. The
+        // exposure is the log representative (contrast persists alongside).
+        self.mark_recipe_dirty("auto_tone", result.exposure);
         self.render()
     }
 
@@ -3943,6 +3948,11 @@ impl LuminaApp {
         self.recipe.auto_features.match_total_exposure = true;
         self.recipe.auto_features.target_luminance = target;
         self.recipe.auto_features.matched_exposure = Some(value);
+        // GUI-AUTOTONE-SAVE-1: record the save commit so the debounced path
+        // (`commit_pending_slider_save`) persists the sidecar (CAS, loud
+        // conflicts) with an INFO log — same as GUI-SLIDER-SAVE-1. Zoom/pan
+        // view state is never recorded here; it stays GUI session state.
+        self.mark_recipe_dirty("match_total_exposure", value);
         self.render()
     }
 
@@ -12666,6 +12676,70 @@ mod tests {
         );
         let reopened = reopen_app(&source);
         assert_eq!(reopened.recipe().adjustments["wb_temperature"], 6500.0);
+    }
+
+    /// GUI-AUTOTONE-SAVE-1: `auto_tone` records a save commit, persists the
+    /// sidecar (Datei + Wert) and reloads (DoD §1-§4, F-100 „Auto-Tone
+    /// schreiben anschließend das Sidecar"). Zoom/pan stay untouched.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn auto_tone_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.auto_tone().unwrap();
+        assert!(app.recipe().auto_features.enable_auto_tone);
+        let exposure = app.recipe().adjustments["exposure"];
+        let contrast = app.recipe().adjustments["contrast"];
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("auto_tone".to_string(), exposure))
+        );
+        let document = commit_and_load_doc(&mut app, &source);
+        let persisted = &document.virtual_copies[0].recipe;
+        assert!(persisted.auto_features.enable_auto_tone);
+        assert_eq!(persisted.adjustments["exposure"], exposure);
+        assert_eq!(persisted.adjustments["contrast"], contrast);
+        let reopened = reopen_app(&source);
+        assert!(reopened.recipe().auto_features.enable_auto_tone);
+        assert_eq!(reopened.recipe().adjustments["exposure"], exposure);
+        assert_eq!(reopened.recipe().adjustments["contrast"], contrast);
+    }
+
+    /// GUI-AUTOTONE-SAVE-1: `match_total_exposure` records a save commit,
+    /// persists the sidecar (Datei + Wert) and reloads (DoD §1-§4, F-100).
+    /// Zoom/pan stay untouched.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn match_total_exposure_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.render().unwrap();
+        app.match_total_exposure(0.5).unwrap();
+        assert!(app.recipe().auto_features.match_total_exposure);
+        let delta = app.recipe().auto_features.matched_exposure.unwrap();
+        let exposure = app.recipe().adjustments["exposure"];
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("match_total_exposure".to_string(), delta))
+        );
+        let document = commit_and_load_doc(&mut app, &source);
+        let persisted = &document.virtual_copies[0].recipe;
+        assert!(persisted.auto_features.match_total_exposure);
+        assert_eq!(persisted.auto_features.matched_exposure, Some(delta));
+        assert_eq!(persisted.adjustments["exposure"], exposure);
+        let reopened = reopen_app(&source);
+        assert!(reopened.recipe().auto_features.match_total_exposure);
+        assert_eq!(
+            reopened.recipe().auto_features.matched_exposure,
+            Some(delta)
+        );
+        assert_eq!(reopened.recipe().adjustments["exposure"], exposure);
     }
 
     /// GUI-SLIDER-SAVE-1: unknown struct field names warn loudly but record no
