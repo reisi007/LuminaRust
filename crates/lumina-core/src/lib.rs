@@ -4106,6 +4106,7 @@ mod tests {
             lumina_sidecar::GenerativeEdit {
                 version: 1,
                 canvas,
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: None,
                 expand_beyond_image: expand,

@@ -386,6 +386,7 @@ mod tests {
         recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: None,
@@ -421,6 +422,7 @@ mod tests {
         recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: Some(c.clone()),
+            artifact: None,
             keep_generative_content: Some(true),
             auto_fill_transparent: None,
             expand_beyond_image: None,
@@ -528,6 +530,7 @@ mod tests {
         a.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: Some(canvas(100, 100, 0, 0)),
+            artifact: None,
             keep_generative_content: Some(true),
             auto_fill_transparent: None,
             expand_beyond_image: None,
@@ -617,6 +620,7 @@ mod tests {
         a.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(true),
             expand_beyond_image: None,

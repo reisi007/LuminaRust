@@ -198,7 +198,22 @@ pub fn apply_spot_heals_from_recipe(
 /// `spot_removals`, or entries without a `mode` key (legacy documents default
 /// to heuristic, mirroring [`crate::spot_heal::spots_from_recipe`]), that
 /// parse and validate are identity.
+///
+/// SPOT-TYPED-FIELD-FIX: both the legacy `extras["spot_removals"]` array and
+/// the typed schema-v2 `recipe.spot_removals` are validated. The typed field
+/// is authoritative after a sidecar roundtrip (deserialization consumes the
+/// top-level key), so checking only extras would silently ignore typed
+/// entries. Typed heuristic entries carry no heal geometry in schema-v2
+/// (`SpotRemoval` holds only version/mode/artifact) and are therefore
+/// unrenderable: they fail loudly here instead of rendering as if no spot
+/// existed.
 fn reject_unsupported_spot_modes(recipe: &EditRecipe) -> Result<(), CoreError> {
+    reject_unsupported_spot_modes_extras(recipe)?;
+    reject_unsupported_spot_modes_typed(recipe)?;
+    Ok(())
+}
+
+fn reject_unsupported_spot_modes_extras(recipe: &EditRecipe) -> Result<(), CoreError> {
     let Some(value) = recipe.extras.get("spot_removals") else {
         return Ok(());
     };
@@ -231,6 +246,48 @@ fn reject_unsupported_spot_modes(recipe: &EditRecipe) -> Result<(), CoreError> {
         spot.validate()?;
     }
     Ok(())
+}
+
+/// SPOT-TYPED-FIELD-FIX: validates the typed schema-v2 `recipe.spot_removals`
+/// alongside the legacy extras array (see [`reject_unsupported_spot_modes`]).
+/// Every typed entry is checked: an unknown `version` is rejected (no silent
+/// migration), `Generative` is rejected (model + artifact live outside the
+/// portable core), and `Heuristic` is rejected as well — schema-v2 carries no
+/// heal geometry (`SpotRemoval` holds only version/mode/artifact), so a typed
+/// heuristic entry is unrenderable by construction. Failing loudly here turns
+/// the GEN-ZDATA-LINK-1 roundtrip loss (heuristic params dropped on
+/// deserialize) into a visible error instead of a silent no-heal render; the
+/// durable fix is a sidecar schema follow-up preserving the geometry.
+fn reject_unsupported_spot_modes_typed(recipe: &EditRecipe) -> Result<(), CoreError> {
+    for entry in &recipe.spot_removals {
+        check_typed_spot_entry(entry)?;
+    }
+    Ok(())
+}
+
+fn check_typed_spot_entry(entry: &lumina_sidecar::SpotRemoval) -> Result<(), CoreError> {
+    if entry.version != lumina_sidecar::SPOT_REMOVAL_VERSION {
+        return Err(CoreError::InvalidAdjustment {
+            name: "spot_heal.version".into(),
+            value: entry.version as f64,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+    }
+    match entry.mode {
+        lumina_sidecar::SpotRemovalMode::Generative => Err(CoreError::InvalidAdjustment {
+            name: "spot_heal.mode".into(),
+            value: -1.0,
+            minimum: 0.0,
+            maximum: 0.0,
+        }),
+        lumina_sidecar::SpotRemovalMode::Heuristic => Err(CoreError::InvalidAdjustment {
+            name: "spot_heal.entry".into(),
+            value: -1.0,
+            minimum: 0.0,
+            maximum: 0.0,
+        }),
+    }
 }
 
 /// PERF-GUI-1: continues a render from an already-prepared base frame.
@@ -2174,6 +2231,7 @@ mod tests {
         recipe_with.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(true),
             expand_beyond_image: None,
@@ -2231,6 +2289,7 @@ mod tests {
             generative_edit: Some(lumina_sidecar::GenerativeEdit {
                 version: 1,
                 canvas: None,
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: Some(true),
                 expand_beyond_image: None,
@@ -2277,6 +2336,7 @@ mod tests {
         base.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(true),
             expand_beyond_image: None,
@@ -2350,6 +2410,7 @@ mod tests {
                     source_offset_y: 4,
                     extras: Default::default(),
                 }),
+                artifact: None,
                 keep_generative_content: None,
                 auto_fill_transparent: None,
                 expand_beyond_image: Some(true),
@@ -2506,6 +2567,7 @@ mod tests {
         recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: Some(true),
             expand_beyond_image: None,
@@ -2592,6 +2654,7 @@ mod tests {
         recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
             version: 1,
             canvas: None,
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: Some(true),
@@ -2618,6 +2681,7 @@ mod tests {
                 source_offset_y: 4,
                 extras: Default::default(),
             }),
+            artifact: None,
             keep_generative_content: None,
             auto_fill_transparent: None,
             expand_beyond_image: Some(false),
@@ -2643,5 +2707,83 @@ mod tests {
             render_frame(&frame, &default_context(&recipe, None)),
             Err(CoreError::InvalidAdjustment { .. })
         ));
+    }
+
+    #[test]
+    fn typed_generative_spot_is_hard_error_not_silent_skip() {
+        // SPOT-TYPED-FIELD-FIX: a typed generative entry (schema-v2) needs
+        // model + artifact like its legacy extras counterpart — rendering it
+        // as absent would be a silent fallback.
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+            mode: lumina_sidecar::SpotRemovalMode::Generative,
+            artifact: None,
+        });
+        let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
+    }
+
+    #[test]
+    fn typed_heuristic_spot_without_geometry_is_hard_error() {
+        // SPOT-TYPED-FIELD-FIX: schema-v2 typed heuristic entries carry no
+        // heal geometry (`SpotRemoval` holds only version/mode/artifact, the
+        // GEN-ZDATA-LINK-1 roundtrip drops the params), so they are
+        // unrenderable by construction. Failing loudly turns the silent
+        // no-heal render into a visible error until the sidecar schema
+        // follow-up preserves the geometry.
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
+            artifact: None,
+        });
+        let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
+    }
+
+    #[test]
+    fn typed_spot_unknown_version_is_hard_error() {
+        // Unknown typed spot versions are rejected, never silently migrated.
+        let frame = checker_8x8();
+        let mut recipe = EditRecipe::default();
+        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            version: 99,
+            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
+            artifact: None,
+        });
+        assert!(matches!(
+            render_frame(&frame, &default_context(&recipe, None)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn legacy_heuristic_extras_still_heal_when_typed_empty() {
+        // SPOT-TYPED-FIELD-FIX: the tolerant legacy path keeps healing while
+        // no typed entries exist (in-memory GUI recipes pre-roundtrip).
+        // Halves frame (left black, right white): a spot on black cloning
+        // from white must visibly change pixels (a checker with an even
+        // offset would clone identical values and prove nothing).
+        let mut pixels = Vec::new();
+        for _y in 0..8 {
+            for x in 0..8 {
+                let v = if x < 4 { 0 } else { 255 };
+                pixels.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
+        let mut recipe = EditRecipe::default();
+        recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.25,"center_y":0.5,"radius":2.0,"feather":0.5,"offset_dx":0.5,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
+        );
+        let output = render_frame(&frame, &default_context(&recipe, None)).unwrap();
+        assert_ne!(
+            output.frame.pixels, frame.pixels,
+            "legacy heuristic spot must visibly heal"
+        );
     }
 }

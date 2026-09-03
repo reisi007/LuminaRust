@@ -87,6 +87,20 @@ impl SpotHeuristic {
         Ok(())
     }
 }
+/// Extracts applicable heuristic spots from a recipe.
+///
+/// Reads the legacy `extras["spot_removals"]` array tolerantly: absent or
+/// non-heuristic entries yield no spots (generative entries are skipped here
+/// and rejected loudly in the render path instead). Entries without a `mode`
+/// key default to heuristic (legacy documents).
+///
+/// SPOT-TYPED-FIELD-FIX note: the typed schema-v2 `recipe.spot_removals` is
+/// intentionally NOT converted here — `SpotRemoval` carries only
+/// version/mode/artifact and no heal geometry (center/radius/feather/offset/
+/// opacity), so a typed entry cannot yield a `SpotHeuristic`. Typed entries
+/// are validated loudly in the render path
+/// (`render::apply_spot_heals_from_recipe`) instead of being silently treated
+/// as healed or as absent.
 pub fn spots_from_recipe(recipe: &lumina_sidecar::EditRecipe) -> Vec<SpotHeuristic> {
     let Some(value) = recipe.extras.get("spot_removals") else {
         return Vec::new();
@@ -345,9 +359,24 @@ mod tests {
         let parsed = spots_from_recipe(&recipe);
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, "spot-1");
+        // GEN-ZDATA-LINK-1 contract: `EditRecipe` serde consumes the
+        // top-level `spot_removals` key into the typed schema-v2 field, so a
+        // JSON roundtrip moves the entry out of extras. The typed entry keeps
+        // the key (no silent key loss) but drops the heuristic geometry
+        // (`SpotRemoval` holds only version/mode/artifact) — the render path
+        // rejects such typed entries loudly instead of healing nothing
+        // (see `render::tests::typed_heuristic_spot_without_geometry_is_hard_error`).
         let json = serde_json::to_string(&recipe).unwrap();
         let back: lumina_sidecar::EditRecipe = serde_json::from_str(&json).unwrap();
-        assert_eq!(spots_from_recipe(&back).len(), 1);
+        assert!(
+            !back.extras.contains_key("spot_removals"),
+            "serde moves spot_removals into the typed field"
+        );
+        assert_eq!(back.spot_removals.len(), 1);
+        assert_eq!(
+            back.spot_removals[0].mode,
+            lumina_sidecar::SpotRemovalMode::Heuristic
+        );
     }
     #[test]
     fn generative_mode_filtered_out() {
@@ -357,5 +386,35 @@ mod tests {
             serde_json::json!([{"id":"g1","version":1,"mode":"generative","prompt":"test"}]),
         );
         assert!(spots_from_recipe(&recipe).is_empty());
+    }
+    #[test]
+    fn spots_from_recipe_typed_entries_carry_no_convertible_geometry() {
+        // SPOT-TYPED-FIELD-FIX: schema-v2 typed entries hold only
+        // version/mode/artifact — no heal geometry — so they contribute no
+        // SpotHeuristic here. They are rejected loudly in the render path
+        // instead of silently skipped.
+        let mut recipe = lumina_sidecar::EditRecipe::default();
+        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
+            artifact: None,
+        });
+        assert!(spots_from_recipe(&recipe).is_empty());
+    }
+    #[test]
+    fn spots_from_recipe_legacy_extras_parsed_alongside_typed_entries() {
+        // Legacy extras heuristic spots keep working while typed entries are
+        // present (tolerant read, strict render validation elsewhere).
+        let mut recipe = lumina_sidecar::EditRecipe::default();
+        let s = spot(0.501, 0.498, 18.0, 0.5, 0.05, -0.02, 1.0);
+        recipe.extras.insert("spot_removals".into(), serde_json::to_value(vec![serde_json::json!({"id":s.id,"version":s.version,"center_x":s.center_x,"center_y":s.center_y,"radius":s.radius,"feather":s.feather,"offset_dx":s.offset_dx,"offset_dy":s.offset_dy,"opacity":s.opacity,"status":s.status,"mode":"heuristic"})]).unwrap());
+        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+            mode: lumina_sidecar::SpotRemovalMode::Generative,
+            artifact: None,
+        });
+        let parsed = spots_from_recipe(&recipe);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, "spot-1");
     }
 }
