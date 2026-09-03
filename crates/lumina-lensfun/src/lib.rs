@@ -592,40 +592,61 @@ mod ffi {
         //
         // The per-pixel `geometry` / `color_gain` methods each cross the FFI
         // boundary once per destination pixel (two transitions per pixel → ~48
-        // million FFI crossings for a 24 MP frame). Lensfun's batch API
-        // (`lf_modifier_apply_geometry_distortion` /
-        // `lf_modifier_apply_color_modification`) computes a whole *block* of
-        // points (`width × height`) in one call. Feeding it one row at a time
-        // (`height = 1`) reduces the FFI crossings to ~2 per row (~16k for
-        // 24 MP).
+        // million FFI crossings for a 24 MP frame). Lensfun's colour batch API
+        // (`lf_modifier_apply_color_modification`) computes a whole *block* of
+        // pixels (`width × height`) in one call. Feeding it one row at a time
+        // (`height = 1`) reduces the vignetting FFI crossings to ~1 per row
+        // (~8k for 24 MP); see `apply_vignetting_row`.
         //
-        // # Documented numeric divergence (not byte-identical)
+        // # Why `geometry_row` is NOT a single native batch call
         //
-        // Lensfun's batch paths are **not** bit-identical to the per-pixel
-        // calls, which is why switching the pipeline to them requires a Golden
-        // rebaseline (F-043), not a silent output change:
+        // lensfun 0.3.4's x86 SSE geometry callbacks
+        // (`libs/lensfun/mod-coord-sse.cpp`: `ModifyCoord_Dist_PTLens_SSE`,
+        // `ModifyCoord_UnDist_PTLens_SSE`, `ModifyCoord_Dist_Poly3_SSE`) are
+        // mathematically wrong for multi-pixel blocks: they shuffle four
+        // pixels' interleaved `(x, y)` lanes apart to compute one correction
+        // factor per pixel, but then multiply the per-pixel factor vector
+        // directly with the still-interleaved coordinate vector
+        // (`_mm_store_ps(&iocoord[8*i], _mm_mul_ps(poly3, c0))`), so pixel 0's
+        // factor scales pixel 0's x but pixel 1's factor scales pixel 0's y,
+        // and so on. On a horizontal row every input y is identical, hence the
+        // signature pairwise-duplicated output y
+        // (observed on x86_64: `geometry_row(0, 0, width=5)` yields
+        // y = [a, b, a, b, _], off by up to ~1 px, while width=1 calls match
+        // `geometry` bit-exactly). The scalar tail (`remain = count % 4`) and
+        // every width=1 call stay correct, and non-x86 builds (e.g. ARM, where
+        // `VECTORIZATION_SSE` is undefined) never take the SSE path — which is
+        // why the bug is x86_64-only.
         //
-        // - `geometry_row`: lensfun builds the row output by *accumulating*
-        //   the normalized x coordinate (`x += NormScale` per column,
-        //   `mod-coord.cpp::ApplyGeometryDistortion`), while the per-pixel
-        //   path computes each point from the fresh integer pixel coordinate.
-        //   The first column (`x_start`) is bit-identical; later columns drift
-        //   by float rounding that grows with the row width (measured
-        //   ≤ ~7.4e-4 px over 257 columns, ≈ 0.75 px over 8192).
-        // - `apply_vignetting_row`: the batch colour path advances the
-        //   vignette polynomial's `r²` incrementally (`r2 += 2·ns·x + ns²`)
-        //   instead of recomputing `x² + y²` per pixel
-        //   (`mod-color.cpp::ModifyColor_Vignetting_PA`). Same first-column
-        //   bit-identity, same float-rounding drift to the right.
+        // `geometry_row` therefore issues one native width=1 call per column
+        // (each provably on the scalar path: `count/4 == 0`), i.e. it is
+        // bit-identical to `out.len()` calls to [`Self::geometry`] on every
+        // platform. The geometry FFI rate stays at one transition per pixel;
+        // only the vignetting pass keeps the one-call-per-row batching. If a
+        // future lensfun fixes the SSE lane shuffle, the single-call batch
+        // can be re-enabled (the `geometry_row_*` tests pin the contract).
         //
-        // The drift stays sub-pixel for realistic row widths, so the visual
-        // result is unchanged within the resampling round-off, but the exact
-        // bytes differ from the per-pixel model (see the `apply_lens` comment
-        // in `lumina-core` and R2-LENS-01 in `docs/reviews/2026-08-26-full-review.md`).
+        // # Documented numeric divergence of `apply_vignetting_row`
+        // (not byte-identical)
+        //
+        // The batch colour path advances the vignette polynomial's `r²`
+        // incrementally (`r2 += 2·ns·x + ns²`) instead of recomputing `x² + y²`
+        // per pixel (`mod-color.cpp::ModifyColor_Vignetting_PA`). The first
+        // column is bit-identical to [`Self::color_gain`]; later columns drift
+        // by float rounding that grows with the row width but stays far below
+        // one output unit. (Note: with our `LF_CR_RGB` 3-component role the
+        // colour SSE fast path is never taken — it requires 4 components per
+        // pixel plus 16-byte alignment and falls back to the scalar code — so
+        // the colour batch is exact up to the documented `r²` accumulation.)
+        //
+        // Switching the pipeline to the row wrappers changes the exact output
+        // bytes, which is why it requires a Golden rebaseline (F-043), not a
+        // silent output change (see the `apply_lens` comment in `lumina-core`
+        // and R2-LENS-01 in `docs/reviews/2026-08-26-full-review.md`).
         // -------------------------------------------------------------------
 
-        /// Map a whole destination row to the source pixels it samples, in a
-        /// single lensfun batch call (R2-LENS-01).
+        /// Map a whole destination row to the source pixels it samples
+        /// (R2-LENS-01).
         ///
         /// `out[i]` receives the destination→source mapping of the destination
         /// pixel `(x_start + i, y)` (for `i` in `0..out.len()`), so one call
@@ -633,46 +654,51 @@ mod ffi {
         /// exactly as many entries as the row has pixels (its length is the row
         /// width).
         ///
-        /// For a vignetting-only profile (`has_distortion() == false`) lensfun
-        /// reports `false` **without writing** its output buffer (as with
-        /// [`Self::geometry`], review REVIEW-LENSFUN-VIGN-1); the row is
-        /// filled with the exact identity mapping instead of collapsing onto
-        /// `(0, 0)`.
+        /// For a vignetting-only profile (`has_distortion() == false`) the row
+        /// is filled with the exact identity mapping (as with
+        /// [`Self::geometry`], review REVIEW-LENSFUN-VIGN-1).
         ///
-        /// See the module-level "Documented numeric divergence" block above for
-        /// the bit-identity vs. [`Self::geometry`] contract (first column
-        /// bit-identical, sub-pixel drift to the right).
+        /// Bit-identity vs. [`Self::geometry`] contract: EVERY column is
+        /// bit-identical to the corresponding per-pixel call on every
+        /// platform. This is implemented as one native width=1 call per
+        /// column, never as a single multi-pixel native batch call, because
+        /// lensfun 0.3.4's x86 SSE geometry callbacks apply each pixel's
+        /// correction factor to its neighbour's lane (see the module-level
+        /// "Why `geometry_row` is NOT a single native batch call" block).
         pub fn geometry_row(&self, x_start: f64, y: f64, out: &mut [(f64, f64)]) {
             let width = out.len();
             debug_assert!(width > 0, "geometry_row requires at least one pixel");
-            // Prefill with the identity mapping: on a `false` return lensfun
-            // leaves the buffer untouched (vignetting-only profile), so the
-            // passthrough values below are correct even before we check the
-            // flag — exactly like [`Self::geometry`].
+            // Prefill with the identity mapping: for a vignetting-only profile
+            // the early return below keeps these passthrough values — exactly
+            // like [`Self::geometry`].
             for (i, slot) in out.iter_mut().enumerate() {
                 *slot = (x_start + i as f64, y);
             }
             if !self.has_distortion {
                 return;
             }
+            // One native width=1 call per column: each call takes lensfun's
+            // scalar path (`count/4 == 0`, plus the width=1 result matches
+            // `geometry` bit-exactly), so the SSE lane-shuffle bug of the
+            // multi-pixel batch path can never trigger, on any platform.
             unsafe {
-                // lensfun output buffer for the batch geometry (f32 pairs).
-                let mut res = vec![0f32; width * 2];
-                let ok = lf_modifier_apply_geometry_distortion(
-                    self.modifier,
-                    x_start as c_float,
-                    y as c_float,
-                    width as c_int,
-                    1,
-                    res.as_mut_ptr(),
-                );
-                if ok != 0 {
-                    for (i, slot) in out.iter_mut().enumerate() {
-                        *slot = (res[i * 2] as f64, res[i * 2 + 1] as f64);
+                for (i, slot) in out.iter_mut().enumerate() {
+                    let x = x_start + i as f64;
+                    let mut res = [x as c_float, y as c_float];
+                    let ok = lf_modifier_apply_geometry_distortion(
+                        self.modifier,
+                        x as c_float,
+                        y as c_float,
+                        1,
+                        1,
+                        res.as_mut_ptr(),
+                    );
+                    if ok != 0 {
+                        *slot = (res[0] as f64, res[1] as f64);
                     }
+                    // `ok == 0`: no distortion callback — keep the prefilled
+                    // identity mapping (never a silent fallback onto (0, 0)).
                 }
-                // `ok == 0`: no distortion callback — keep the prefilled
-                // identity mapping (never a silent fallback onto (0, 0)).
             }
         }
 
@@ -694,8 +720,9 @@ mod ffi {
         /// On a distortion-only profile (no colour callback) lensfun reports
         /// `false` and leaves the buffer untouched, matching [`Self::color_gain`].
         ///
-        /// See the module-level "Documented numeric divergence" block above for
-        /// the bit-identity vs. [`Self::color_gain`] contract.
+        /// See the module-level "Documented numeric divergence of
+        /// `apply_vignetting_row`" block above for the bit-identity vs.
+        /// [`Self::color_gain`] contract.
         pub fn apply_vignetting_row(&self, rgb: &mut [f32], x_start: f64, y: f64) {
             debug_assert!(
                 rgb.len().is_multiple_of(3),
@@ -1053,14 +1080,19 @@ mod tests {
     // -----------------------------------------------------------------------
     // R2-LENS-01: row-batch wrappers (`geometry_row` / `apply_vignetting_row`).
     //
-    // The wrappers reduce the FFI crossings from two per pixel to two per row
-    // by feeding lensfun's batch API one row at a time (`height = 1`).
-    // Contract (documented on the wrappers):
-    //   - the FIRST COLUMN of a row is bit-identical to the per-pixel
-    //     `geometry` / `color_gain` calls;
-    //   - the remaining columns drift only by float rounding that grows with
-    //     the row width (measured ≤ ~7.4e-4 px over 257 columns, ≈ 0.75 px
-    //     over 8192 on the reference profiles) — never a whole pixel;
+    // `apply_vignetting_row` feeds lensfun's colour batch API one row at a
+    // time (`height = 1`): one FFI transition per row instead of one per
+    // pixel. `geometry_row` intentionally does NOT use the native geometry
+    // batch call — lensfun 0.3.4's x86 SSE geometry callbacks scale each
+    // pixel's coordinates with its neighbour's correction factor (see the
+    // module-level block), so it issues one native width=1 call per column
+    // and is bit-identical to per-pixel `geometry` in EVERY column on every
+    // platform. Contract:
+    //   - EVERY column of `geometry_row` is bit-identical to the per-pixel
+    //     `geometry` call (pinned below, including at 8192 columns);
+    //   - `apply_vignetting_row`'s first column is bit-identical to
+    //     per-pixel `color_gain`, later columns drift only by the documented
+    //     `r²` float-rounding accumulation;
     //   - vignetting-only profiles keep `geometry_row` at the exact identity
     //     (review REVIEW-LENSFUN-VIGN-1).
     // -----------------------------------------------------------------------
@@ -1099,17 +1131,11 @@ mod tests {
         c.geometry_row(0.0, 42.0, &mut row);
         for (i, (sx, sy)) in row.iter().enumerate() {
             let (rx, ry) = c.geometry(i as f64, 42.0);
-            // First column (i == 0) must be bit-identical; the rest must stay
-            // within the documented sub-pixel drift.
-            if i == 0 {
-                assert_eq!(*sx, rx, "first-column x must be bit-identical");
-                assert_eq!(*sy, ry, "first-column y must be bit-identical");
-            } else {
-                assert!(
-                    (sx - rx).abs() <= 1.0e-3 && (sy - ry).abs() <= 1.0e-3,
-                    "column {i} drifts too much: row ({sx}, {sy}) vs per-pixel ({rx}, {ry})"
-                );
-            }
+            // Every column must be bit-identical (the wrapper issues one
+            // native width=1 call per column precisely so the x86 SSE
+            // lane-shuffle bug of the multi-pixel batch path cannot trigger).
+            assert_eq!(*sx, rx, "column {i} x must be bit-identical");
+            assert_eq!(*sy, ry, "column {i} y must be bit-identical");
         }
         // The row mapping must actually deviate from the identity at the right
         // edge (the distorted profile is active), otherwise the row call silently
@@ -1122,15 +1148,14 @@ mod tests {
 
     #[test]
     fn geometry_row_document_drift_magnitude_over_widths() {
-        // Pins the documented R2-LENS-01 magnitudes on a 4:3 image: the batch
-        // path drifts from the per-pixel path by fractions of a pixel at 257
-        // columns and stays below one pixel even at 8192 (measured on this
-        // synthetic profile: ~0.008 px @257, ~0.21 px @8192; the review's
-        // reference profile showed ~7.4e-4 px @257 / ≈0.75 px @8192 — the
-        // exact values depend on the lens calibration, the *ordering* is
-        // deterministic). Sub-pixel drift is the whole point of the task: it is
-        // why the pipeline change needs a Golden rebaseline (F-043) rather than
-        // being byte-identical.
+        // Pins the R2-LENS-01 contract at scale: `geometry_row` is
+        // bit-identical to the per-pixel path at every width (it issues one
+        // native width=1 call per column, dodging the x86 SSE lane-shuffle
+        // bug of the multi-pixel batch path), so the measured drift is
+        // exactly zero even at 8192 columns. The ordering assertion below
+        // (`drift_8192 >= drift_257`, i.e. `0 >= 0`) guards the test against
+        // silently measuring nothing if the wrapper ever regresses to a
+        // width-dependent path.
         let path = write_distortion_and_vignetting_fixture("rowdrift");
         let db = LensfunDb::load_file(&path).expect("fixture database must load");
         let _ = std::fs::remove_file(&path);

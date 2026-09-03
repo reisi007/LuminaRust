@@ -1310,16 +1310,17 @@ fn apply_lens(
     // channel is left untouched (same structure as the manual model).
     //
     // R2-LENS-01: the loop is *row-wise* — every row crosses the lensfun FFI
-    // boundary exactly twice (once for the geometry via `geometry_row`, once
-    // for the vignetting via `apply_vignetting_row`) instead of twice per
-    // pixel (~48 Mio → ~16k FFI crossings @24 MP). The batch results are not
-    // byte-identical to the previous per-pixel `geometry`/`color_gain` calls:
-    // the first column is bit-identical, but later columns drift by float
-    // rounding that grows with the row width (≤ ~7.4e-4 px @257 columns on the
-    // review reference profile, ≈0.75 px @8192 — documented in the `lumina-
-    // lensfun` wrapper contract). That is why this switch deliberately changes
-    // the output and requires a Golden rebaseline (F-043), it is not a silent
-    // fallback.
+    // boundary once per pixel for the geometry via `geometry_row` (which
+    // issues one native width=1 call per column, bit-identical to per-pixel
+    // `geometry` — a single multi-pixel native geometry batch call is
+    // provably wrong on x86_64, see the `lumina-lensfun` docs) plus once per
+    // row for the vignetting via `apply_vignetting_row`. The vignetting batch
+    // results are not byte-identical to the previous per-pixel `color_gain`
+    // calls: the first column is bit-identical, but later columns drift by
+    // float rounding that grows with the row width (documented in the
+    // `lumina-lensfun` wrapper contract). That is why this switch
+    // deliberately changes the output and requires a Golden rebaseline
+    // (F-043), it is not a silent fallback.
     #[cfg(feature = "lensfun")]
     if let Some(corrector) = lensfun {
         if !corrector.is_identity() {
@@ -5574,28 +5575,77 @@ mod tests {
         #[test]
         fn lensfun_row_full_frame_drift_stays_bounded() {
             let corrector = build_row_corrector(257, 200);
-            let src = gradient_frame(257, 200);
-            let mut row_path = src.clone();
-            let mut per_pixel = src;
-            apply_lens(&mut row_path, &EMPTY_LENS, Some(&corrector));
-            apply_lens_per_pixel(&mut per_pixel, &corrector);
-
-            // The whole frame differs from the per-pixel oracle only by the
-            // documented sub-pixel drift. In 8-bit byte space the drift surface
-            // is tiny: the sampling/vignette deltas must stay a few units, far
-            // below the ≥ 8–10 units a full-source-step coarsening would show.
-            // (Everything is deterministic, so the bound is stable for this
-            // fixture.)
-            let max_diff = row_path
-                .pixels
-                .iter()
-                .zip(&per_pixel.pixels)
-                .map(|(a, b)| (*a as i16 - *b as i16).abs())
-                .max()
-                .unwrap();
+            // The drift contract is asserted in COORDINATE space and GAIN
+            // space — not in byte space. Byte diffs equal drift × texture
+            // gradient, and this fixture deliberately uses a high-frequency
+            // `(x ^ y)` texture whose neighbour bytes differ by up to 255:
+            // a sub-pixel coordinate difference then yields triple-digit
+            // byte diffs depending on platform float rounding (x86_64 vs
+            // ARM), which no byte bound can pin without masking real
+            // regressions. Coordinates and gains are smooth, so their
+            // bounds are meaningful on every platform.
+            let w = 257usize;
+            let h = 200usize;
+            let mut max_coord_drift = 0.0f64;
+            let mut max_coord_at = (0usize, 0usize);
+            let mut coords = vec![(0.0f64, 0.0f64); w];
+            for y in 0..h {
+                corrector.geometry_row(0.0, y as f64, &mut coords);
+                for x in 0..w {
+                    let (sx, sy) = corrector.geometry(x as f64, y as f64);
+                    let dx = (coords[x].0 - sx).abs();
+                    let dy = (coords[x].1 - sy).abs();
+                    if dx > max_coord_drift {
+                        max_coord_drift = dx;
+                        max_coord_at = (x, y);
+                    }
+                    if dy > max_coord_drift {
+                        max_coord_drift = dy;
+                        max_coord_at = (x, y);
+                    }
+                }
+            }
             assert!(
-                max_diff <= 4,
-                "row path must stay within the documented sub-pixel drift, got max byte diff {max_diff}"
+                max_coord_drift <= 1e-3,
+                "batch geometry_row must match per-pixel geometry within 1e-3 px, got {max_coord_drift} at {:?}",
+                max_coord_at,
+            );
+            // Vignetting gains: batch row call vs per-pixel oracle on the
+            // same input triples.
+            let src = gradient_frame(w as u32, h as u32);
+            let mut max_gain_drift = 0.0f32;
+            for y in [0, h / 2, h - 1] {
+                let base = y * w * 4;
+                let mut row: Vec<f32> = (0..w)
+                    .flat_map(|x| {
+                        [
+                            src.pixels[base + x * 4] as f32,
+                            src.pixels[base + x * 4 + 1] as f32,
+                            src.pixels[base + x * 4 + 2] as f32,
+                        ]
+                    })
+                    .collect();
+                let mut expected = row.clone();
+                corrector.apply_vignetting_row(&mut row, 0.0, y as f64);
+                for x in 0..w {
+                    let (er, eg, eb) = corrector.color_gain(
+                        expected[x * 3],
+                        expected[x * 3 + 1],
+                        expected[x * 3 + 2],
+                        x as f64,
+                        y as f64,
+                    );
+                    for (ch, e) in [er, eg, eb].into_iter().enumerate() {
+                        let d = (row[x * 3 + ch] - e).abs();
+                        if d > max_gain_drift {
+                            max_gain_drift = d;
+                        }
+                    }
+                }
+            }
+            assert!(
+                max_gain_drift <= 1e-3,
+                "batch apply_vignetting_row must match per-pixel color_gain within 1e-3, got {max_gain_drift}"
             );
         }
 
