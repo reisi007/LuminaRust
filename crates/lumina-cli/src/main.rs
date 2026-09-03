@@ -36,10 +36,12 @@ use log::info;
 #[allow(unused_imports)]
 use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
 use lumina_sidecar::{
-    artifact_status, load_sidecar, save_sidecar, sidecar_path_for, AnalysisFingerprint,
-    ArtifactStatus, DecodeFingerprint, EditRecipe, GeometryFingerprint, HistoryEntry,
-    MaskOperation, MaskStatus, Preset, SidecarDocument, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SourceIdentity, SOURCE_ACTION_VERSION,
+    apply_batch_op, artifact_status, load_sidecar, save_sidecar, sidecar_path_for,
+    validate_smart_collection_def, AnalysisFingerprint, ArtifactStatus, BatchOp,
+    CollectionMembership, DecodeFingerprint, EditRecipe, GeometryFingerprint, HistoryEntry,
+    MaskOperation, MaskStatus, Preset, SidecarDocument, SmartCollectionDef,
+    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceIdentity,
+    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -282,6 +284,18 @@ enum Command {
     Reindex(IndexArgs),
     Validate(IndexArgs),
     DustRemoval(DustRemovalArgs),
+    /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
+    /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
+    Keywords(KeywordsArgs),
+    /// G-15 META-MVP (Slice 2): list and mutate static collection memberships
+    /// of one sidecar.
+    Collections(CollectionsArgs),
+    /// G-15 META-MVP (Slice 2): apply one `BatchOp` over N sidecars, one
+    /// atomic write per file, per-file failures isolated and loud.
+    BatchMeta(BatchMetaArgs),
+    /// G-15 META-MVP (Slice 2): evaluate a portable smart-collection catalog
+    /// against N sidecars (read-only filter/list).
+    SmartCollections(SmartCollectionsArgs),
     /// F-101-F1: run the Lumina MCP server over stdio (JSON-RPC on
     /// stdin/stdout). Takes no arguments; see `feature/platform/mcp-server.md`.
     #[cfg(feature = "mcp")]
@@ -422,6 +436,73 @@ struct IndexArgs {
     json: bool,
     #[arg(long)]
     migrate: bool,
+}
+
+/// G-15 META-MVP (Slice 2): list (`--add`/`--remove` absent) or mutate
+/// source-level keywords of one image sidecar. Mutations apply in flag order
+/// as `BatchOp::{AddKeyword, RemoveKeyword}` via `apply_batch_op`.
+#[derive(Debug, Args)]
+struct KeywordsArgs {
+    #[arg(long)]
+    input: PathBuf,
+    /// Keywords to add (repeatable, applied in order).
+    #[arg(long = "add")]
+    add: Vec<String>,
+    /// Keywords to remove (repeatable, applied in order after `--add`).
+    #[arg(long = "remove")]
+    remove: Vec<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// G-15 META-MVP (Slice 2): list or mutate static collection memberships of
+/// one image sidecar. `--add-to` takes `id=name` (split at the first `=`);
+/// `--remove-from` takes the membership `id`.
+#[derive(Debug, Args)]
+struct CollectionsArgs {
+    #[arg(long)]
+    input: PathBuf,
+    /// Memberships to add/rename as `id=name` (repeatable, in order).
+    #[arg(long = "add-to")]
+    add_to: Vec<String>,
+    /// Membership ids to remove (repeatable, in order after `--add-to`).
+    #[arg(long = "remove-from")]
+    remove_from: Vec<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// G-15 META-MVP (Slice 2): apply exactly one `BatchOp` (JSON in the
+/// `BatchOp` serde form) over every sidecar found under `--input`.
+/// Exactly one of `--op` / `--op-file` is required.
+#[derive(Debug, Args)]
+struct BatchMetaArgs {
+    #[arg(long)]
+    input: PathBuf,
+    /// The batch operation as inline JSON (e.g.
+    /// `{"op":"add_keyword","keyword":"portrait"}`).
+    #[arg(long)]
+    op: Option<String>,
+    /// Path to a file containing the batch operation JSON.
+    #[arg(long)]
+    op_file: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// G-15 META-MVP (Slice 2): evaluate a portable smart-collection catalog file
+/// against every sidecar found under `--input` (read-only).
+#[derive(Debug, Args)]
+struct SmartCollectionsArgs {
+    #[arg(long)]
+    input: PathBuf,
+    /// Path to the catalog file
+    /// (`{"format":"lumina-smart-catalog","version":1,"collections":[...]}`).
+    /// A plain CLI argument, never persisted into recipe data.
+    #[arg(long)]
+    catalog: PathBuf,
+    #[arg(long)]
+    json: bool,
 }
 
 /// F-042-N1: persist a dust-removal (or AI-replacement) repair region into the
@@ -584,6 +665,10 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Reindex(args) => reindex(args),
         Command::Validate(args) => validate(args),
         Command::DustRemoval(args) => dust_removal(args),
+        Command::Keywords(args) => keywords(args),
+        Command::Collections(args) => collections(args),
+        Command::BatchMeta(args) => batch_meta(args),
+        Command::SmartCollections(args) => smart_collections(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -904,6 +989,391 @@ fn validate(args: IndexArgs) -> Result<(), CliError> {
         serde_json::json!({"command":"validate", "sidecar":path, "status":"valid"}),
         "valid",
     )
+}
+
+/// Requires the sidecar of `input`, failing loudly when none exists instead
+/// of silently operating on default contents.
+fn require_sidecar(input: &Path) -> Result<(PathBuf, SidecarDocument), CliError> {
+    let path = sidecar_path_for(input);
+    match load_sidecar(&path) {
+        Ok(document) => Ok((path, document)),
+        Err(lumina_sidecar::SidecarError::Missing(_)) => Err(CliError::Message(format!(
+            "no sidecar for `{}`; run `import` first",
+            input.display()
+        ))),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Resolves `--input` of the multi-sidecar metadata commands to the sidecar
+/// files to process, in deterministic (sorted) order: a `*.lumina.json` file
+/// is used directly, any other file maps to its sidecar path, and a
+/// directory is scanned recursively (symlink-/loop-safe, same walk as
+/// `reindex`).
+fn collect_target_sidecars(input: &Path) -> Result<Vec<PathBuf>, CliError> {
+    if input.is_file() {
+        if input.to_string_lossy().ends_with(".lumina.json") {
+            return Ok(vec![input.to_path_buf()]);
+        }
+        return Ok(vec![sidecar_path_for(input)]);
+    }
+    let mut files = Vec::new();
+    collect_sidecars(input, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+/// Portable smart-collection catalog file (G-15 META-MVP, Slice 2). The file
+/// holds versioned rule data only — never absolute paths — and is validated
+/// with the same rules as the sidecar slice.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SmartCatalogFile {
+    format: String,
+    version: u8,
+    collections: Vec<SmartCollectionDef>,
+}
+
+/// Loads and validates a smart-collection catalog file. Every deviation
+/// (unreadable file, invalid JSON, wrong format/version marker, invalid
+/// definition) is a loud error; there is no silent fallback to an empty
+/// catalog.
+fn load_smart_catalog(path: &Path) -> Result<Vec<SmartCollectionDef>, CliError> {
+    let json = fs::read_to_string(path).map_err(|error| io_error(path, error))?;
+    let catalog: SmartCatalogFile = serde_json::from_str(&json).map_err(|error| {
+        CliError::Message(format!(
+            "invalid smart-collection catalog `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    if catalog.format != "lumina-smart-catalog" {
+        return Err(CliError::Message(format!(
+            "invalid smart-collection catalog `{}`: expected format \"lumina-smart-catalog\", got \"{}\"",
+            path.display(),
+            catalog.format
+        )));
+    }
+    if catalog.version != SMART_COLLECTION_VERSION {
+        return Err(CliError::Message(format!(
+            "invalid smart-collection catalog `{}`: unsupported version {}, expected {SMART_COLLECTION_VERSION}",
+            path.display(),
+            catalog.version
+        )));
+    }
+    for def in &catalog.collections {
+        validate_smart_collection_def(def).map_err(|error| {
+            CliError::Message(format!(
+                "invalid smart-collection definition `{}` in catalog `{}`: {error}",
+                def.id,
+                path.display()
+            ))
+        })?;
+    }
+    Ok(catalog.collections)
+}
+
+fn keywords(args: KeywordsArgs) -> Result<(), CliError> {
+    let (path, mut document) = require_sidecar(&args.input)?;
+    let original_bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let mut ops = Vec::with_capacity(args.add.len() + args.remove.len());
+    for keyword in &args.add {
+        ops.push(BatchOp::AddKeyword {
+            keyword: keyword.clone(),
+        });
+    }
+    for keyword in &args.remove {
+        ops.push(BatchOp::RemoveKeyword {
+            keyword: keyword.clone(),
+        });
+    }
+    let mut changed = false;
+    for op in &ops {
+        changed |= apply_batch_op(&mut document, op).map_err(|error| {
+            CliError::Message(format!(
+                "keywords for `{}` rejected: {error}",
+                args.input.display()
+            ))
+        })?;
+    }
+    if changed {
+        document.validate()?;
+        save_sidecar(&path, &document)?;
+        info!(
+            "keywords for `{}` updated ({} operation(s), {} keyword(s))",
+            args.input.display(),
+            ops.len(),
+            document.keywords.len()
+        );
+    } else if ops.is_empty() {
+        info!("keywords for `{}` listed", args.input.display());
+    } else {
+        info!(
+            "keywords for `{}` unchanged (idempotent no-op)",
+            args.input.display()
+        );
+    }
+    // The original image is never modified by a metadata command.
+    debug_assert_eq!(
+        fs::read(&args.input).map_err(|error| io_error(&args.input, error))?,
+        original_bytes
+    );
+    emit(
+        args.json,
+        serde_json::json!({"command":"keywords", "input":args.input, "keywords":document.keywords, "changed":changed, "status":"ok"}),
+        &format_keywords_text(&document.keywords),
+    )
+}
+
+fn format_keywords_text(keywords: &[String]) -> String {
+    if keywords.is_empty() {
+        "keywords: (none)".into()
+    } else {
+        format!("keywords: {}", keywords.join(", "))
+    }
+}
+
+/// Splits an `--add-to` value at the first `=` into `(id, name)`.
+fn split_collection_assignment(value: &str) -> Result<(String, String), CliError> {
+    value.split_once('=').map_or_else(
+        || {
+            Err(CliError::Message(format!(
+                "invalid collection assignment `{value}`: expected `id=name`"
+            )))
+        },
+        |(id, name)| Ok((id.to_string(), name.to_string())),
+    )
+}
+
+fn collections(args: CollectionsArgs) -> Result<(), CliError> {
+    let (path, mut document) = require_sidecar(&args.input)?;
+    let original_bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let mut ops = Vec::with_capacity(args.add_to.len() + args.remove_from.len());
+    for assignment in &args.add_to {
+        let (id, name) = split_collection_assignment(assignment)?;
+        ops.push(BatchOp::AddToCollection { id, name });
+    }
+    for id in &args.remove_from {
+        ops.push(BatchOp::RemoveFromCollection { id: id.clone() });
+    }
+    let mut changed = false;
+    for op in &ops {
+        changed |= apply_batch_op(&mut document, op).map_err(|error| {
+            CliError::Message(format!(
+                "collections for `{}` rejected: {error}",
+                args.input.display()
+            ))
+        })?;
+    }
+    if changed {
+        document.validate()?;
+        save_sidecar(&path, &document)?;
+        info!(
+            "collections for `{}` updated ({} operation(s), {} membership(s))",
+            args.input.display(),
+            ops.len(),
+            document.collections.len()
+        );
+    } else if ops.is_empty() {
+        info!("collections for `{}` listed", args.input.display());
+    } else {
+        info!(
+            "collections for `{}` unchanged (idempotent no-op)",
+            args.input.display()
+        );
+    }
+    debug_assert_eq!(
+        fs::read(&args.input).map_err(|error| io_error(&args.input, error))?,
+        original_bytes
+    );
+    let memberships: Vec<CollectionMembership> = document.collections.clone();
+    emit(
+        args.json,
+        serde_json::json!({"command":"collections", "input":args.input, "collections":memberships, "changed":changed, "status":"ok"}),
+        &format_collections_text(&memberships),
+    )
+}
+
+fn format_collections_text(memberships: &[CollectionMembership]) -> String {
+    if memberships.is_empty() {
+        "collections: (none)".into()
+    } else {
+        let entries = memberships
+            .iter()
+            .map(|m| format!("{} ({})", m.name, m.id))
+            .collect::<Vec<_>>();
+        format!("collections: {}", entries.join(", "))
+    }
+}
+
+/// Parses the single `BatchOp` of `batch-meta` from exactly one of `--op` /
+/// `--op-file`. Anything else (neither, both, invalid JSON, unknown variant)
+/// is a loud error; the operation language itself is owned by
+/// `lumina-sidecar`.
+fn parse_batch_op(args: &BatchMetaArgs) -> Result<BatchOp, CliError> {
+    match (&args.op, &args.op_file) {
+        (Some(_), Some(_)) => Err(CliError::Message(
+            "`batch-meta` accepts exactly one of `--op` / `--op-file`".into(),
+        )),
+        (None, None) => Err(CliError::Message(
+            "`batch-meta` requires one of `--op` / `--op-file`".into(),
+        )),
+        (Some(text), None) => serde_json::from_str(text)
+            .map_err(|error| CliError::Message(format!("invalid batch operation JSON: {error}"))),
+        (None, Some(path)) => {
+            let text = fs::read_to_string(path).map_err(|error| io_error(path, error))?;
+            serde_json::from_str(&text).map_err(|error| {
+                CliError::Message(format!("invalid batch operation JSON: {error}"))
+            })
+        }
+    }
+}
+
+fn batch_meta(args: BatchMetaArgs) -> Result<(), CliError> {
+    let op = parse_batch_op(&args)?;
+    let targets = collect_target_sidecars(&args.input)?;
+    if targets.is_empty() {
+        return Err(CliError::Message(format!(
+            "no sidecars found under `{}`",
+            args.input.display()
+        )));
+    }
+    let mut changed_count = 0usize;
+    let mut unchanged_count = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+    let mut items = Vec::with_capacity(targets.len());
+    for sidecar in &targets {
+        match load_sidecar(sidecar).map_err(CliError::from) {
+            Err(error) => {
+                let message = format!("{}: {error}", sidecar.display());
+                eprintln!("error: batch-meta: {message}");
+                info!("batch-meta: `{}` failed", sidecar.display());
+                failures.push(message);
+                items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
+            }
+            Ok(mut document) => match apply_batch_op(&mut document, &op) {
+                Err(error) => {
+                    let message = format!("{}: {error}", sidecar.display());
+                    eprintln!("error: batch-meta: {message}");
+                    info!("batch-meta: `{}` failed", sidecar.display());
+                    failures.push(message);
+                    items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
+                }
+                Ok(false) => {
+                    info!("batch-meta: `{}` unchanged", sidecar.display());
+                    unchanged_count += 1;
+                    items.push(
+                        serde_json::json!({"sidecar":sidecar, "status":"ok", "changed":false}),
+                    );
+                }
+                Ok(true) => match document
+                    .validate()
+                    .map_err(CliError::from)
+                    .and_then(|()| save_sidecar(sidecar, &document).map_err(CliError::from))
+                {
+                    Err(error) => {
+                        let message = format!("{}: {error}", sidecar.display());
+                        eprintln!("error: batch-meta: {message}");
+                        info!("batch-meta: `{}` failed", sidecar.display());
+                        failures.push(message);
+                        items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
+                    }
+                    Ok(()) => {
+                        info!("batch-meta: `{}` updated", sidecar.display());
+                        changed_count += 1;
+                        items.push(
+                            serde_json::json!({"sidecar":sidecar, "status":"ok", "changed":true}),
+                        );
+                    }
+                },
+            },
+        }
+    }
+    let failed = failures.len();
+    let text = format!(
+        "batch-meta: {changed_count} changed, {unchanged_count} unchanged, {failed} failed"
+    );
+    emit(
+        args.json,
+        serde_json::json!({"command":"batch-meta", "input":args.input, "op":op, "changed":changed_count, "unchanged":unchanged_count, "failed":failed, "errors":failures, "items":items, "status": if failed == 0 { "ok" } else { "partial" }}),
+        &text,
+    )?;
+    info!("{text}");
+    if failed != 0 {
+        return Err(CliError::BatchPartial { failed });
+    }
+    Ok(())
+}
+
+fn smart_collections(args: SmartCollectionsArgs) -> Result<(), CliError> {
+    let defs = load_smart_catalog(&args.catalog)?;
+    let targets = collect_target_sidecars(&args.input)?;
+    if targets.is_empty() {
+        return Err(CliError::Message(format!(
+            "no sidecars found under `{}`",
+            args.input.display()
+        )));
+    }
+    let mut matched_files = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+    let mut items = Vec::with_capacity(targets.len());
+    for sidecar in &targets {
+        match load_sidecar(sidecar).map_err(CliError::from) {
+            Err(error) => {
+                let message = format!("{}: {error}", sidecar.display());
+                eprintln!("error: smart-collections: {message}");
+                info!("smart-collections: `{}` failed", sidecar.display());
+                failures.push(message);
+                items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
+            }
+            Ok(document) => {
+                let mut matched: Vec<String> = Vec::new();
+                let mut item_failed: Option<String> = None;
+                for def in &defs {
+                    match def.matches_any_copy(&document) {
+                        Ok(true) => matched.push(def.id.clone()),
+                        Ok(false) => {}
+                        Err(error) => {
+                            item_failed = Some(format!("{}: {error}", sidecar.display()));
+                            break;
+                        }
+                    }
+                }
+                if let Some(message) = item_failed {
+                    eprintln!("error: smart-collections: {message}");
+                    info!("smart-collections: `{}` failed", sidecar.display());
+                    failures.push(message);
+                    items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
+                } else {
+                    if !matched.is_empty() {
+                        matched_files += 1;
+                    }
+                    info!(
+                        "smart-collections: `{}` matches {} collection(s)",
+                        sidecar.display(),
+                        matched.len()
+                    );
+                    items.push(
+                        serde_json::json!({"sidecar":sidecar, "status":"ok", "matches":matched}),
+                    );
+                }
+            }
+        }
+    }
+    let failed = failures.len();
+    let text = format!(
+        "smart-collections: {} of {} sidecar(s) match, {failed} failed",
+        matched_files,
+        targets.len()
+    );
+    emit(
+        args.json,
+        serde_json::json!({"command":"smart-collections", "input":args.input, "catalog":args.catalog, "matched_files":matched_files, "sidecars":targets.len(), "failed":failed, "errors":failures, "items":items, "status": if failed == 0 { "ok" } else { "partial" }}),
+        &text,
+    )?;
+    info!("{text}");
+    if failed != 0 {
+        return Err(CliError::BatchPartial { failed });
+    }
+    Ok(())
 }
 
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {

@@ -155,6 +155,55 @@ Masken-Neuberechnung und Render-Cache werden explizit angeboten.
   Batch-Inputs werden per Datei-Identität dedupliziert (Unix `(dev, inode)`;
   R2-CLI-11).
 
+### Metadaten-MVP (G-15, Slice 2: CLI)
+
+Normativer CLI-SOLL für Keywords, Sammlungen, Smart-Sammlungen und
+Stapelvergabe. Die Datentypen (`SidecarDocument::{keywords, collections}`,
+`CollectionMembership`, `SmartCollectionDef`/`SmartRule` v1,
+`BatchOp`/`apply_batch_op`) leben in `lumina-sidecar` (Slice 1) und werden
+hier nur genutzt — keine Schemaänderung, kein Bump.
+
+- `lumina keywords --input <bild> [--add <kw>...] [--remove <kw>...] [--json]`:
+  listet die Quellebenen-Keywords des Sidecars. Mit `--add`/`--remove` werden
+  die Operationen in Flag-Reihenfolge als `BatchOp::{AddKeyword,RemoveKeyword}`
+  via `apply_batch_op` angewendet und bei Änderung atomar via `save_sidecar`
+  gespeichert (unverändert → kein Rewrite). Fehlendes Sidecar und ungültige
+  Keywords (leer,Whitespace, Steuerzeichen, > 128 Zeichen) scheitern laut;
+  das Original wird nie verändert.
+- `lumina collections --input <bild> [--add-to <id=name>...]
+  [--remove-from <id>...] [--json]`: listet die statischen
+  Mitgliedschaften (`{ id, name }`, Quellebene). Mutationen laufen als
+  `BatchOp::{AddToCollection,RemoveFromCollection}` über denselben
+  atomaren Pfad; `--add-to` trennt am ersten `=` (fehlendes `=` ist ein
+  lauter Benutzungsfehler). Umbenennen (`id` bekannt, `name` neu) ist
+  Stapel-Semantik pro Sidecar.
+- `lumina batch-meta --input <bild|verzeichnis>
+  (--op <json>|--op-file <pfad>) [--json]`: wendet genau einen `BatchOp`
+  (JSON in der `BatchOp`-Serdeform, z. B.
+  `{"op":"add_keyword","keyword":"portrait"}`) auf jedes gefundene Sidecar an
+  — je Datei atomar (`save_sidecar`, nur bei `changed`), Datei-Iteration
+  laut und isoliert: Ein defektes/fehlendes Sidecar markiert nur sein Item
+  als `failed` (stderr-Zeile + `info!`-Log), die übrigen Items laufen weiter.
+  Exit `0` bei vollem Erfolg, `3` bei Teilfehlern (analog `batch`), `1` bei
+  hartem Fehler (ungültiges `--op`, unlesbares Eingabeverzeichnis).
+- `lumina smart-collections --input <bild|verzeichnis> --catalog <pfad>
+  [--json]`: wertet die portable Smart-Katalog-Datei gegen jedes Sidecar aus
+  (`SmartCollectionDef::matches_any_copy`, deterministisch, nur
+  Sidecar-Inputs). Defekte Sidecars/Regeln werden pro Item laut gemeldet,
+  der Rest läuft weiter (Exit `3` bei Teilfehlern). Reine Leseoperation —
+  kein Sidecar wird geschrieben.
+- **Katalog-Datei (portabel, kein DB-Ersatz):** JSON
+  `{"format":"lumina-smart-catalog","version":1,
+  "collections":[SmartCollectionDef, ...]}`. `version` muss `1`
+  (`SMART_COLLECTION_VERSION`) sein, jede Definition wird mit
+  `validate_smart_collection_def` geprüft; Abweichungen scheitern laut.
+  Die Datei enthält nur versionierte Regel-Daten (`id`/`name`/`rule`) —
+  niemals absolute Pfade. Der Katalogpfad ist ein reines CLI-Argument und
+  wird nie in Rezept- oder Sidecar-Daten persistiert.
+- **Exit-Codes (Ergänzung zur Tabelle oben):** Einzelbefehle
+  (`keywords`, `collections`) nutzen `0`/`1`; Mehrdatei-Befehle
+  (`batch-meta`, `smart-collections`) melden Teilfehler mit `3`.
+
 ## Desktop-GUI
 
 Die GUI zeigt Datei-, Sidecar-, Offline-, Masken- und Konfliktstatus. Vorschau
