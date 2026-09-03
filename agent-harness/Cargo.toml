@@ -84,3 +84,7 @@ path = "tests/export_greenpath.rs"
 [[test]]
 name = "error_paths"
 path = "tests/error_paths.rs"
+
+[[test]]
+name = "preview_fidelity"
+path = "tests/preview_fidelity.rs"

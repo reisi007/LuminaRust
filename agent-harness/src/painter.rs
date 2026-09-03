@@ -34,6 +34,31 @@ pub const BADGE_CHIP_RGB: [u8; 3] = [0x42, 0x42, 0x42];
 /// `crate::theme::ACCENT` (`crates/lumina-gui/src/theme.rs`).
 pub const NAV_RECT_ACCENT_RGB: [u8; 3] = [0x4a, 0x90, 0xd9];
 
+/// Window/panel chrome background, mirroring prod `crate::theme::PANEL`
+/// (`crates/lumina-gui/src/theme.rs:17`, `0x2a`). The `theme` module is
+/// private to `lumina-gui`, so the harness mirrors the value (same pattern
+/// as `BADGE_CHIP_RGB`). Proven by the committed goldens: every
+/// `tests/snapshots/*.png` corner reads exactly `[42, 42, 42]`.
+pub const PANEL_BG_RGB: [u8; 3] = [0x2a, 0x2a, 0x2a];
+
+/// Preview-pane working background, mirroring prod `crate::theme::WORKING`
+/// (`crates/lumina-gui/src/theme.rs:21`, `0x14`). The Fit letterbox (draw
+/// time, `preview_draw_dims` in `crates/lumina-gui/src/lib.rs:6716`) paints
+/// this colour around the fitted texture; the in-app `preview()` frame
+/// itself carries NO letterbox (source geometry, assigned at `:5382`).
+pub const WORKING_BG_RGB: [u8; 3] = [0x14, 0x14, 0x14];
+
+/// Corner inset (px) for background sampling: avoids the 1px window
+/// separator stroke (`theme::SEPARATOR`) at the exact edge.
+pub const CORNER_INSET: u32 = 2;
+
+/// Tolerance for background-corner pixels: flat fills are exact, but the
+/// kittest readback rounds through the GPU swapchain, so 6 LSB headroom
+/// (≈ the `spread <= 6` gray bound used by the stats helpers) keeps AA and
+/// rounding out while any content pixel (≥ 38 LSB away per the HARNESS-4
+/// delta rationale) still fails loudly.
+pub const CORNER_TOL: u8 = 6;
+
 /// Tolerance for chip-fill pixels: the fill is flat, so a tight bound keeps
 /// AA text edges and neighbouring surfaces out of the count.
 pub const BADGE_CHIP_TOL: u8 = 4;
@@ -198,6 +223,43 @@ pub fn frame_psnr(a: &[u8], b: &[u8]) -> Option<f64> {
     Some(10.0 * (255.0 * 255.0 / mse).log10())
 }
 
+/// Maximum per-channel abs difference between the four inset corner pixels
+/// (`CORNER_INSET`) of a composited shot and `rgb`. Returns `u8::MAX` when
+/// the image is smaller than the inset margin.
+pub fn corner_max_abs_diff(img: &RgbaImage, rgb: [u8; 3]) -> u8 {
+    let (w, h) = (img.width(), img.height());
+    if w <= 2 * CORNER_INSET || h <= 2 * CORNER_INSET {
+        return u8::MAX;
+    }
+    let corners = [
+        (CORNER_INSET, CORNER_INSET),
+        (w - 1 - CORNER_INSET, CORNER_INSET),
+        (CORNER_INSET, h - 1 - CORNER_INSET),
+        (w - 1 - CORNER_INSET, h - 1 - CORNER_INSET),
+    ];
+    corners
+        .iter()
+        .map(|(x, y)| {
+            let p = img.get_pixel(*x, *y).0;
+            p[0].abs_diff(rgb[0])
+                .max(p[1].abs_diff(rgb[1]))
+                .max(p[2].abs_diff(rgb[2]))
+        })
+        .max()
+        .unwrap_or(u8::MAX)
+}
+
+/// FNV-1a 64 over raw frame bytes: a stable, dependency-free thumbnail/frame
+/// identity for staleness guards (old frame must not count as new).
+pub fn frame_hash_fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 /// Combined display text of a tree node: static text lives in `value`,
 /// widget names in `label` — callers must match both.
 pub fn combined_text(node: &TreeNode) -> String {
@@ -347,6 +409,30 @@ mod tests {
         b[0] = 101;
         let psnr = frame_psnr(&a, &b).expect("finite");
         assert!(psnr.is_finite() && psnr > 30.0, "psnr={psnr}");
+    }
+
+    #[test]
+    fn corners_match_flat_background_and_reject_content() {
+        let mut img = solid(64, 48, image::Rgba([0x2a, 0x2a, 0x2a, 255]));
+        assert_eq!(corner_max_abs_diff(&img, PANEL_BG_RGB), 0);
+        assert!(corner_max_abs_diff(&img, PANEL_BG_RGB) <= CORNER_TOL);
+        assert!(corner_max_abs_diff(&img, WORKING_BG_RGB) > CORNER_TOL);
+        img.put_pixel(2, 2, image::Rgba([200, 30, 30, 255]));
+        assert!(corner_max_abs_diff(&img, PANEL_BG_RGB) > CORNER_TOL);
+    }
+
+    #[test]
+    fn corners_reject_degenerate_sizes() {
+        let img = solid(3, 3, image::Rgba([0x2a, 0x2a, 0x2a, 255]));
+        assert_eq!(corner_max_abs_diff(&img, PANEL_BG_RGB), u8::MAX);
+    }
+
+    #[test]
+    fn fnv1a_hash_is_stable_and_avalanches() {
+        let a = vec![1u8, 2, 3, 255];
+        assert_eq!(frame_hash_fnv1a(&a), frame_hash_fnv1a(&a));
+        assert_ne!(frame_hash_fnv1a(&a), frame_hash_fnv1a(&[1u8, 2, 4, 255]));
+        assert_ne!(frame_hash_fnv1a(&[]), frame_hash_fnv1a(&[0]));
     }
 
     #[test]

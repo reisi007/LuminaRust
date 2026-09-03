@@ -31,6 +31,9 @@ No tokio, no networking — in-process harness.
   (composited-shot presence proofs), `app_frame_stats` /
   `app_frame_center_stats` / `frame_psnr` (in-app `preview()` RGBA proofs:
   opaque, content, deterministic, edit-delta), `texts_containing`.
+- `painter` additions (AGENT-HARNESS-4) — `PANEL_BG_RGB` / `WORKING_BG_RGB`
+  (theme mirrors), `CORNER_INSET` / `CORNER_TOL`, `corner_max_abs_diff`
+  (Fit-Rahmen/Chrom-Vertrag), `frame_hash_fnv1a` (stale-guard identity).
 
 ## Scenarios (`tests/`, one per open GUI task)
 
@@ -52,6 +55,7 @@ No tokio, no networking — in-process harness.
 | `zoom_pan.rs`        | AGENT-HARNESS-3 Navigator/Zoom/Pan |
 | `export_greenpath.rs` | AGENT-HARNESS-3 Export |
 | `error_paths.rs`     | AGENT-HARNESS-3 Fehlerpfade |
+| `preview_fidelity.rs` | AGENT-HARNESS-4 Bildkorrektheit (F-100 Preview) |
 
 GPU scenarios are `#[ignore]`d (upstream convention — CI without GPU stays
 green); run locally with e.g.:
@@ -257,6 +261,80 @@ Workarounds.
 - **F-HARNESS3-12** (Auto-Tone ohne Bild): `pub fn auto_tone` (:4552)
   gibt `Ok(())` ohne Signal zurück — `Err` oder Status statt
   generischem Default.
+
+## AGENT-HARNESS-4 Bildkorrektheit (F-100 Preview, G-10)
+
+Pixel-Asserts auf dem In-App-Frame (`LuminaApp::preview()`), kein reiner
+Layout-Nachweis. Szenario: `tests/preview_fidelity.rs` (`preview_fidelity`,
+`#[ignore]` — headless wgpu nötig); reine Schwellen-Mathematik (Gamma-Falle,
+Toleranz-Konsistenz) läuft ohne GPU in `cargo test`. Neue Helfer in
+`src/painter.rs`: `PANEL_BG_RGB`/`WORKING_BG_RGB` (Mirrors der privaten
+`crates/lumina-gui/src/theme.rs`-Konstanten — `mod theme` ist privat, daher
+Mirror-Pattern wie `BADGE_CHIP_RGB`), `CORNER_INSET`/`CORNER_TOL`,
+`corner_max_abs_diff`, `frame_hash_fnv1a` (alle unit-getestet).
+
+### Asserts + Schwellen (alle im Code begründet)
+
+| Assert (Verdict-Name) | Schwelle | Begründung (kurz) |
+| --- | --- | --- |
+| `app preview frame is opaque` | alpha == 255 für 100 % der Pixel | HARNESS-2-Vertrag, auf `preview()`-Frame (nicht Composit-Readback — Texturen malen headless schwarz) |
+| `center pixel delta loaded vs empty` | sRGB-Luma-Delta ≥ 0.15 | 1 LSB ≈ 0.0039; Hintergrund streut < 0.02; 0.15 ≈ 38 LSB ≈ 8× über Hintergrund, weit unter Content-Lücke |
+| `composited frame corners are theme background` | max. Kanal-Abw. ≤ 6 LSB vs PANEL | Flat-Fills exakt; 6 LSB Headroom für Swapchain-Rundung/AA (≈ `spread <= 6`-Bound); Content (≥ 38 LSB weg) fällt weiter laut durch |
+| `preview matches sRGB source (PSNR)` | PSNR ≥ 30 dB vs. unabhängiger `image`-Decode | Ident-Pipeline ≥ 40 dB; 30 dB ≙ RMSE ≈ 8 LSB fängt Doppel-Gamma/Profilfehler (≫ 10 dB), klemmt nicht bei Rundung |
+| `thumbnail matches committed fixture (PSNR)` | dto. auf 32×24-Thumbnail + FNV-1a-Hash | Determinismus-Anker ohne Binär-Commit |
+| `generation switches on image change` / `stale frame is not valued as new` | gen strikt monoton, Hash-Ungleichheit | Async-`open_file`-Pfad (A→B, versch. Geometrie/Farben): alter Frame darf nie als neuer gelten |
+
+### Gamma-Falle (dokumentiert, gemessen)
+
+Der Vergleich läuft in **sRGB (Gamma-Domäne), nicht linear**: Auf der
+Referenz klaffen sRGB-Mittel (0.428) und Linear-Licht-Mittel (0.277) um
+0.151 — ein Linear-Vergleich würde einen byte-identischen Pipeline-Output
+als „falsch" verwerfen. Unit-Test `gamma_trap_…` belegt die Domänen-Differenz
+(0.502 vs. 0.216 auf Mid-Gray 128); Szenario-Verdict `gamma domain gap
+documented` misst sie auf der echten Referenz.
+
+### Fixtures (committet, via Pfad — kein neues Binär)
+
+- `LuminaApp::sample_image_png()`-Bytes (committeter Code) als unabhängige
+  sRGB-Referenz: Default-Rezept rendert **byte-identisch** (PSNR=inf).
+- `../crates/lumina-gui/tests/snapshots/develop_basic.png` +
+  `histogram_graphic.png`: Ecken-Anker (alle vier Ecken exakt PANEL,
+  Hash verankert). Byte-PSNR Shot-vs-Golden wird bewusst NICHT assertiert
+  (1280×800 vs. 1024×720 — Junk-Vergleich) → OPEN-Verdict.
+- Beobachtung (kein Scope): `library_with_image.png`-Ecke (1021,717) ist
+  `[0,0,0]` statt PANEL — vorbestehendes Golden-Artefakt, daher als Anker
+  verworfen (kein Rebaseline in diesem Task).
+
+### Ergebnisse (lokal headless wgpu, diese Maschine)
+
+14× PASS (u. a. opaque 1.0, Delta 0.693 ≥ 0.15, PSNR=inf, Thumb-Hash
+`0x74937359ff531256` idle-stabil, gen 1→3 mit Hash-Wechsel 4×3→8×6),
+3× OPEN (s. unten). `cargo test --test preview_fidelity -- --ignored` grün.
+
+### Ehrliche OPENs (bleiben OPEN, mit Grund)
+
+- `preview frame corners carry letterbox background`: **Design-Widerlegung,
+  kein Bug** — der Pipeline-Output hat per Design kein Letterbox
+  (Quellgeometrie, Zuweisung `crates/lumina-gui/src/lib.rs:5382`; Fit passiert
+  draw-seitig per `preview_draw_dims` `:6717`). Ecken = Content
+  (`[20,30,40]…[240,240,240]`). Der Background-Vertrag lebt in der
+  Composit-Ebene und ist dort PASS-belegt.
+- `composited shot PSNR vs golden`: Geometrie-Mismatch s. oben.
+- `composited center shows content`: HARNESS-2-OPEN bleibt OPEN (loaded
+  mean=0.165 vs. empty 0.166 — Textur schwarz headless); In-App-Beleg s.
+  Center-Delta (PASS).
+
+### Folgeaufgaben (prod Getter, NICHT vom Harness geschrieben)
+
+- **F-HARNESS4-NR-1** (Letterbox-Präzision): `crates/lumina-gui/src/lib.rs`
+  (Zeichnung um `:6716`, Felder `preview_pane_w/h` `:6705`, privat ohne
+  Getter) → Vorschlag: `pub fn preview_pane_rect(&self) -> Option<[f32; 4]>`
+  (Pane in Punkten) — damit der Fit-Rahmen (WORKING-Bars) koordinatenscharf
+  statt nur per Fenster-Ecken prüfbar wird.
+- **F-HARNESS4-NR-2** (Theme-Vertrag modellseitig): `crates/lumina-gui/src/theme.rs`
+  (`mod theme`, `:23` in `lib.rs`, privat) → Vorschlag: `pub mod theme`
+  re-exportieren oder `pub fn working_bg(&self) -> [u8; 3]`, damit der
+  Background-Vergleich gegen das echte Prod-Symbol statt Mirror läuft.
 
 ## Gates
 
