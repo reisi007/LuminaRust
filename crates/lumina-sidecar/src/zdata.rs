@@ -16,8 +16,9 @@
 //!   per record:
 //!     RECORD_HEADER (68 bytes):
 //!       id_len      : u16 LE
-//!       kind       : u16 LE   (0 = mask tile, 1 = repair region)
-//!       tile_x     : u32 LE   (repair regions always use 0/0)
+//!       kind       : u16 LE   (0 = mask tile, 1 = repair region,
+//!                              2 = generative canvas, 3 = spot heal generative)
+//!       tile_x     : u32 LE   (non-tile records always use 0/0)
 //!       tile_y     : u32 LE
 //!       width      : u32 LE
 //!       height     : u32 LE
@@ -61,6 +62,29 @@
 //! payload is BLAKE3-checksummed; `RepairRegionArtifact::checksum()` returns the
 //! same canonical hex digest that is stored in the recipe's
 //! `SourceActionArtifactRef.checksum`, so the recipe and the bundle stay aligned.
+//!
+//! ## Generative RGBA payload (before zstd)
+//!
+//! GEN-ZDATA-PERSIST stores two further RGBA8 artifacts in the same bundle
+//! with distinct `kind` discriminators (container `VERSION` stays 1):
+//!
+//! * `GenerativeCanvasArtifact` (`kind = 2`, GEN-EXPAND-1 `generative_canvas`):
+//!   the full composited canvas including unchanged source pixels.
+//! * `SpotHealGenerativeArtifact` (`kind = 3`, SPOT-REMOVE-1
+//!   `spot_heal_generative`): the replaced pixels of the spot tile (no canvas
+//!   expansion).
+//!
+//! ```text
+//!   encoding_version : u32 LE  (= 1)
+//!   width            : u32 LE
+//!   height           : u32 LE
+//!   pixels           : width*height*4 RGBA8 bytes, row-major
+//! ```
+//!
+//! The raw payload is BLAKE3-checksummed (`checksum()`); the JSON recipe keeps
+//! only a portable `ArtifactReference` (relative path, format, checksum,
+//! resolution, channel type, data version) — never absolute paths, never raw
+//! pixels.
 
 use std::collections::HashSet;
 use std::fs;
@@ -73,6 +97,7 @@ const MAGIC: &[u8; 8] = b"LUMZDATA";
 const VERSION: u16 = 1;
 const HEADER_LEN: usize = 40;
 const REPAIR_ENCODING_VERSION: u32 = 1;
+const RGBA_ENCODING_VERSION: u32 = 1;
 const RECORD_HEADER_LEN: usize = 68;
 const INDEX_ENTRY_FIXED_LEN: usize = 36;
 const MAX_CONTAINER_BYTES: usize = 512 * 1024 * 1024;
@@ -112,7 +137,7 @@ pub enum ZDataError {
     DuplicateId(String),
 }
 
-/// Discriminator for the two payload types that share one `.lumina.zdata`
+/// Discriminator for the payload types that share one `.lumina.zdata`
 /// bundle.  Stored in the record-header / index slot that was previously a
 /// reserved zero word, so the on-disk container `VERSION` (1) is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +146,10 @@ pub enum RecordKind {
     MaskTile = 0,
     /// An F-042-N1 repair-region artifact (u16 region + RGBA8 replacement).
     RepairRegion = 1,
+    /// A GEN-EXPAND-1 generative canvas (full composited RGBA8 canvas).
+    GenerativeCanvas = 2,
+    /// A SPOT-REMOVE-1 generative spot-heal tile (RGBA8, no canvas expansion).
+    SpotHealGenerative = 3,
 }
 
 impl RecordKind {
@@ -128,7 +157,18 @@ impl RecordKind {
         match value {
             0 => Ok(RecordKind::MaskTile),
             1 => Ok(RecordKind::RepairRegion),
+            2 => Ok(RecordKind::GenerativeCanvas),
+            3 => Ok(RecordKind::SpotHealGenerative),
             other => Err(invalid(format!("unsupported zdata record kind {other}"))),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            RecordKind::MaskTile => "mask_tile",
+            RecordKind::RepairRegion => "repair_region",
+            RecordKind::GenerativeCanvas => "generative_canvas",
+            RecordKind::SpotHealGenerative => "spot_heal_generative",
         }
     }
 }
@@ -243,6 +283,170 @@ impl RepairRegionArtifact {
     pub fn checksum(&self) -> String {
         blake3::hash(&self.encode_raw()).to_hex().to_string()
     }
+
+    /// Stable kind string used by diagnostics (`repair_region`).
+    pub fn kind_str(&self) -> &'static str {
+        RecordKind::RepairRegion.as_str()
+    }
+}
+
+/// Shared validation for RGBA8 generative payloads (canvas + spot heal):
+/// non-empty portable id, non-zero dimensions within [`MAX_DIMENSION`], and
+/// exactly `width*height*4` pixel bytes inside the container size budget.
+fn validate_rgba_payload(
+    id: &str,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<(), ZDataError> {
+    if id.is_empty() || id.len() > MAX_ID_LEN || !id.is_char_boundary(id.len()) {
+        return Err(invalid("invalid generative artifact id"));
+    }
+    if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(invalid("invalid generative artifact dimensions"));
+    }
+    let count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| invalid("generative artifact dimensions overflow"))?;
+    if count > MAX_UNCOMPRESSED / 4 {
+        return Err(invalid("generative artifact exceeds payload size limit"));
+    }
+    if pixels.len() != count as usize * 4 {
+        return Err(invalid(
+            "generative artifact pixels do not match dimensions",
+        ));
+    }
+    Ok(())
+}
+
+/// Shared canonical RGBA8 encoding (`encoding_version + width + height +
+/// pixels`).  Exactly what the container checksum covers.
+fn encode_rgba_raw(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity(12 + pixels.len());
+    raw.extend_from_slice(&RGBA_ENCODING_VERSION.to_le_bytes());
+    raw.extend_from_slice(&width.to_le_bytes());
+    raw.extend_from_slice(&height.to_le_bytes());
+    raw.extend_from_slice(pixels);
+    raw
+}
+
+/// Shared RGBA8 decoding: verifies the encoding version and that the payload
+/// splits exactly into `width*height*4` bytes.
+fn decode_rgba_raw(raw: &[u8]) -> Result<(u32, u32, Vec<u8>), ZDataError> {
+    if raw.len() < 12 {
+        return Err(invalid("generative artifact payload is truncated"));
+    }
+    let version = u32::from_le_bytes(raw[0..4].try_into().unwrap());
+    if version != RGBA_ENCODING_VERSION {
+        return Err(invalid("unsupported generative artifact encoding version"));
+    }
+    let width = u32::from_le_bytes(raw[4..8].try_into().unwrap());
+    let height = u32::from_le_bytes(raw[8..12].try_into().unwrap());
+    let count = width as usize * height as usize;
+    if raw.len() != 12 + count * 4 {
+        return Err(invalid(
+            "generative artifact payload length does not match dimensions",
+        ));
+    }
+    Ok((width, height, raw[12..].to_vec()))
+}
+
+/// A GEN-EXPAND-1 generative canvas stored in the `.lumina.zdata` bundle.
+///
+/// `pixels` is the **full composited canvas** (including unchanged source
+/// pixels) as row-major RGBA8, `width*height*4` bytes.  The JSON recipe keeps
+/// only a portable `ArtifactReference` (relative path, format, BLAKE3
+/// checksum, resolution, channel type, data version).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerativeCanvasArtifact {
+    pub id: String,
+    pub width: u32,
+    pub height: u32,
+    /// Row-major RGBA8 canvas pixels, `width * height * 4` long.
+    pub pixels: Vec<u8>,
+}
+
+impl GenerativeCanvasArtifact {
+    /// Validates id, dimensions and pixel-byte count.
+    pub fn validate(&self) -> Result<(), ZDataError> {
+        validate_rgba_payload(&self.id, self.width, self.height, &self.pixels)
+    }
+
+    fn encode_raw(&self) -> Vec<u8> {
+        encode_rgba_raw(self.width, self.height, &self.pixels)
+    }
+
+    fn decode_raw(id: String, raw: &[u8]) -> Result<Self, ZDataError> {
+        let (width, height, pixels) = decode_rgba_raw(raw)?;
+        let artifact = GenerativeCanvasArtifact {
+            id,
+            width,
+            height,
+            pixels,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    /// BLAKE3 hex digest of the canonical raw payload (uncompressed RGBA8
+    /// stream).  Stored in the recipe's `ArtifactReference.checksum`.
+    pub fn checksum(&self) -> String {
+        blake3::hash(&self.encode_raw()).to_hex().to_string()
+    }
+
+    /// Stable kind string used by diagnostics (`generative_canvas`).
+    pub fn kind_str(&self) -> &'static str {
+        RecordKind::GenerativeCanvas.as_str()
+    }
+}
+
+/// A SPOT-REMOVE-1 generative spot-heal tile stored in the `.lumina.zdata`
+/// bundle.
+///
+/// Unlike [`GenerativeCanvasArtifact`] this carries only the replaced spot
+/// tile (no canvas expansion) as row-major RGBA8, `width*height*4` bytes.
+/// Separate `kind` discriminator so canvas and spot records never mix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotHealGenerativeArtifact {
+    pub id: String,
+    pub width: u32,
+    pub height: u32,
+    /// Row-major RGBA8 replacement pixels, `width * height * 4` long.
+    pub pixels: Vec<u8>,
+}
+
+impl SpotHealGenerativeArtifact {
+    /// Validates id, dimensions and pixel-byte count.
+    pub fn validate(&self) -> Result<(), ZDataError> {
+        validate_rgba_payload(&self.id, self.width, self.height, &self.pixels)
+    }
+
+    fn encode_raw(&self) -> Vec<u8> {
+        encode_rgba_raw(self.width, self.height, &self.pixels)
+    }
+
+    fn decode_raw(id: String, raw: &[u8]) -> Result<Self, ZDataError> {
+        let (width, height, pixels) = decode_rgba_raw(raw)?;
+        let artifact = SpotHealGenerativeArtifact {
+            id,
+            width,
+            height,
+            pixels,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    /// BLAKE3 hex digest of the canonical raw payload (uncompressed RGBA8
+    /// stream).  Stored in the recipe's `ArtifactReference.checksum`.
+    pub fn checksum(&self) -> String {
+        blake3::hash(&self.encode_raw()).to_hex().to_string()
+    }
+
+    /// Stable kind string used by diagnostics (`spot_heal_generative`).
+    pub fn kind_str(&self) -> &'static str {
+        RecordKind::SpotHealGenerative.as_str()
+    }
 }
 
 /// A single bundle entry, used by the unified constructor and re-reads.
@@ -250,6 +454,8 @@ impl RepairRegionArtifact {
 pub enum RecordSpec {
     MaskTile(MaskTile),
     RepairRegion(RepairRegionArtifact),
+    GenerativeCanvas(GenerativeCanvasArtifact),
+    SpotHealGenerative(SpotHealGenerativeArtifact),
 }
 
 #[derive(Debug, Clone)]
@@ -334,6 +540,42 @@ impl ZDataContainer {
                         region.id.len(),
                     )?;
                 }
+                RecordSpec::GenerativeCanvas(canvas) => {
+                    canvas.validate()?;
+                    if !ids.insert(canvas.id.clone()) {
+                        return Err(ZDataError::DuplicateId(canvas.id.clone()));
+                    }
+                    let count = u64::from(canvas.width)
+                        .checked_mul(u64::from(canvas.height))
+                        .ok_or_else(|| invalid("generative canvas dimensions overflow"))?;
+                    conservative_size = add_conservative_size(
+                        conservative_size,
+                        // raw payload = 12-byte header + RGBA8 (4 bytes/px)
+                        count
+                            .checked_mul(4)
+                            .and_then(|pixels| pixels.checked_add(12))
+                            .ok_or_else(|| invalid("generative canvas dimensions overflow"))?,
+                        canvas.id.len(),
+                    )?;
+                }
+                RecordSpec::SpotHealGenerative(spot) => {
+                    spot.validate()?;
+                    if !ids.insert(spot.id.clone()) {
+                        return Err(ZDataError::DuplicateId(spot.id.clone()));
+                    }
+                    let count = u64::from(spot.width)
+                        .checked_mul(u64::from(spot.height))
+                        .ok_or_else(|| invalid("spot heal dimensions overflow"))?;
+                    conservative_size = add_conservative_size(
+                        conservative_size,
+                        // raw payload = 12-byte header + RGBA8 (4 bytes/px)
+                        count
+                            .checked_mul(4)
+                            .and_then(|pixels| pixels.checked_add(12))
+                            .ok_or_else(|| invalid("spot heal dimensions overflow"))?,
+                        spot.id.len(),
+                    )?;
+                }
             }
         }
         ensure_container_size(conservative_size)?;
@@ -367,6 +609,32 @@ impl ZDataContainer {
                         0,
                         region.width,
                         region.height,
+                        raw,
+                    )
+                }
+                RecordSpec::GenerativeCanvas(canvas) => {
+                    let raw = canvas.encode_raw();
+                    let id = canvas.id;
+                    (
+                        RecordKind::GenerativeCanvas,
+                        id,
+                        0,
+                        0,
+                        canvas.width,
+                        canvas.height,
+                        raw,
+                    )
+                }
+                RecordSpec::SpotHealGenerative(spot) => {
+                    let raw = spot.encode_raw();
+                    let id = spot.id;
+                    (
+                        RecordKind::SpotHealGenerative,
+                        id,
+                        0,
+                        0,
+                        spot.width,
+                        spot.height,
                         raw,
                     )
                 }
@@ -610,7 +878,8 @@ impl ZDataContainer {
         Ok(artifact)
     }
 
-    /// Decompresses and returns every record (mask tiles and repair regions) of
+    /// Decompresses and returns every record (mask tiles, repair regions,
+    /// generative canvases and spot-heal tiles) of
     /// the container.  Used to rebuild a bundle when a new record is appended.
     pub fn decode_all(&self) -> Result<Vec<RecordSpec>, ZDataError> {
         let mut specs = Vec::with_capacity(self.records.len());
@@ -643,6 +912,12 @@ impl ZDataContainer {
                 }
                 RecordKind::RepairRegion => RecordSpec::RepairRegion(
                     RepairRegionArtifact::decode_raw(record.mask_id.clone(), &raw)?,
+                ),
+                RecordKind::GenerativeCanvas => RecordSpec::GenerativeCanvas(
+                    GenerativeCanvasArtifact::decode_raw(record.mask_id.clone(), &raw)?,
+                ),
+                RecordKind::SpotHealGenerative => RecordSpec::SpotHealGenerative(
+                    SpotHealGenerativeArtifact::decode_raw(record.mask_id.clone(), &raw)?,
                 ),
             };
             specs.push(spec);
@@ -683,10 +958,101 @@ impl ZDataContainer {
         if specs.iter().any(|spec| match spec {
             RecordSpec::MaskTile(tile) => tile.mask_id == region.id,
             RecordSpec::RepairRegion(existing) => existing.id == region.id,
+            RecordSpec::GenerativeCanvas(existing) => existing.id == region.id,
+            RecordSpec::SpotHealGenerative(existing) => existing.id == region.id,
         }) {
             return Err(ZDataError::DuplicateId(region.id));
         }
         specs.push(RecordSpec::RepairRegion(region));
+        Self::new_with(specs)
+    }
+
+    /// Reads a GEN-EXPAND-1 generative canvas by record id.  Returns
+    /// [`ZDataError::Invalid`] if no canvas record with that id exists, and
+    /// [`ZDataError::Checksum`] if the stored payload fails its BLAKE3 check.
+    pub fn generative_canvas(&self, id: &str) -> Result<GenerativeCanvasArtifact, ZDataError> {
+        let record = self
+            .records
+            .iter()
+            .find(|r| r.kind == RecordKind::GenerativeCanvas && r.mask_id == id)
+            .ok_or_else(|| invalid("generative canvas not found"))?;
+        let payload_start = record.offset + RECORD_HEADER_LEN + record.mask_id.len();
+        let payload_end = payload_start + record.compressed_len as usize;
+        let raw = decode_payload(
+            &self.bytes[payload_start..payload_end],
+            record.uncompressed_len,
+        )?;
+        if blake3::hash(&raw).as_bytes() != &record.checksum {
+            return Err(ZDataError::Checksum(id.into()));
+        }
+        let artifact = GenerativeCanvasArtifact::decode_raw(id.to_string(), &raw)?;
+        if artifact.width != record.width || artifact.height != record.height {
+            return Err(invalid("generative canvas dimensions disagree with record"));
+        }
+        Ok(artifact)
+    }
+
+    /// Reads a SPOT-REMOVE-1 generative spot-heal tile by record id.  Kind
+    /// separation is strict: a `generative_canvas` record with the same id is
+    /// never returned here.
+    pub fn spot_heal_generative(&self, id: &str) -> Result<SpotHealGenerativeArtifact, ZDataError> {
+        let record = self
+            .records
+            .iter()
+            .find(|r| r.kind == RecordKind::SpotHealGenerative && r.mask_id == id)
+            .ok_or_else(|| invalid("spot heal artifact not found"))?;
+        let payload_start = record.offset + RECORD_HEADER_LEN + record.mask_id.len();
+        let payload_end = payload_start + record.compressed_len as usize;
+        let raw = decode_payload(
+            &self.bytes[payload_start..payload_end],
+            record.uncompressed_len,
+        )?;
+        if blake3::hash(&raw).as_bytes() != &record.checksum {
+            return Err(ZDataError::Checksum(id.into()));
+        }
+        let artifact = SpotHealGenerativeArtifact::decode_raw(id.to_string(), &raw)?;
+        if artifact.width != record.width || artifact.height != record.height {
+            return Err(invalid("spot heal dimensions disagree with record"));
+        }
+        Ok(artifact)
+    }
+
+    fn has_id(&self, specs: &[RecordSpec], id: &str) -> bool {
+        specs.iter().any(|spec| match spec {
+            RecordSpec::MaskTile(tile) => tile.mask_id == id,
+            RecordSpec::RepairRegion(existing) => existing.id == id,
+            RecordSpec::GenerativeCanvas(existing) => existing.id == id,
+            RecordSpec::SpotHealGenerative(existing) => existing.id == id,
+        })
+    }
+
+    /// Returns a new container with `canvas` appended.  Existing records of
+    /// every kind are preserved; a duplicate id (across all kinds) is
+    /// rejected.
+    pub fn add_generative_canvas(
+        &self,
+        canvas: GenerativeCanvasArtifact,
+    ) -> Result<Self, ZDataError> {
+        let mut specs = self.decode_all()?;
+        if self.has_id(&specs, &canvas.id) {
+            return Err(ZDataError::DuplicateId(canvas.id));
+        }
+        specs.push(RecordSpec::GenerativeCanvas(canvas));
+        Self::new_with(specs)
+    }
+
+    /// Returns a new container with `spot` appended.  Existing records of
+    /// every kind are preserved; a duplicate id (across all kinds) is
+    /// rejected.
+    pub fn add_spot_heal_generative(
+        &self,
+        spot: SpotHealGenerativeArtifact,
+    ) -> Result<Self, ZDataError> {
+        let mut specs = self.decode_all()?;
+        if self.has_id(&specs, &spot.id) {
+            return Err(ZDataError::DuplicateId(spot.id));
+        }
+        specs.push(RecordSpec::SpotHealGenerative(spot));
         Self::new_with(specs)
     }
 }
@@ -746,6 +1112,48 @@ pub fn append_repair_region(path: &Path, region: RepairRegionArtifact) -> Result
     let container = match existing {
         Some(container) => container.add_repair_region(region)?,
         None => ZDataContainer::new(vec![])?.add_repair_region(region)?,
+    };
+    save_zdata_locked(path, &container)
+}
+
+/// Appends a GEN-EXPAND-1 generative canvas to the bundle at `path` (creating
+/// it if needed), preserving every pre-existing record.  Runs under the
+/// bundle's `.zdata.lock` and writes atomically (Temp + Rename); a duplicate
+/// id or a pixel/dimension mismatch is reported as an error.
+pub fn append_generative_canvas(
+    path: &Path,
+    canvas: GenerativeCanvasArtifact,
+) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let container = match existing {
+        Some(container) => container.add_generative_canvas(canvas)?,
+        None => ZDataContainer::new(vec![])?.add_generative_canvas(canvas)?,
+    };
+    save_zdata_locked(path, &container)
+}
+
+/// Appends a SPOT-REMOVE-1 generative spot-heal tile to the bundle at `path`
+/// (creating it if needed), preserving every pre-existing record.  Same
+/// locking/atomicity contract as [`append_generative_canvas`]; the two
+/// generative kinds stay strictly separated by their `kind` discriminator.
+pub fn append_spot_heal_generative(
+    path: &Path,
+    spot: SpotHealGenerativeArtifact,
+) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let container = match existing {
+        Some(container) => container.add_spot_heal_generative(spot)?,
+        None => ZDataContainer::new(vec![])?.add_spot_heal_generative(spot)?,
     };
     save_zdata_locked(path, &container)
 }
@@ -867,6 +1275,16 @@ fn parse_record(
             if uncompressed_len != expected {
                 return Err(invalid(
                     "repair region payload length disagrees with dimensions",
+                ));
+            }
+        }
+        RecordKind::GenerativeCanvas | RecordKind::SpotHealGenerative => {
+            // raw = 12-byte encoding header + RGBA8 (4 bytes/px); the exact
+            // split is verified in the RGBA `decode_raw` helpers.
+            let expected = 12u64 + u64::from(width) * u64::from(height) * 4;
+            if uncompressed_len != expected {
+                return Err(invalid(
+                    "generative payload length disagrees with dimensions",
                 ));
             }
         }
@@ -1439,5 +1857,305 @@ mod tests {
         ok_region.id = "after-release".into();
         append_repair_region(&path, ok_region).unwrap();
         assert_eq!(load_zdata(&path).unwrap().tile_count(), 3);
+    }
+
+    // =====================================================================
+    // GEN-ZDATA-PERSIST: generative canvas (kind 2) + spot heal (kind 3).
+    // =====================================================================
+
+    fn generative_canvas() -> GenerativeCanvasArtifact {
+        GenerativeCanvasArtifact {
+            id: "gen-canvas-1".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
+            ],
+        }
+    }
+
+    fn spot_heal() -> SpotHealGenerativeArtifact {
+        SpotHealGenerativeArtifact {
+            id: "spot-heal-1".into(),
+            width: 2,
+            height: 1,
+            pixels: vec![1, 2, 3, 255, 4, 5, 6, 255],
+        }
+    }
+
+    #[test]
+    fn generative_canvas_roundtrip_through_bundle() {
+        let canvas = generative_canvas();
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::GenerativeCanvas(canvas.clone())]).unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 1);
+        assert_eq!(decoded.generative_canvas("gen-canvas-1").unwrap(), canvas);
+        // Strict kind separation: never visible as tile / repair / spot heal.
+        assert!(decoded.tile("gen-canvas-1", 0, 0).is_err());
+        assert!(decoded.repair_region("gen-canvas-1").is_err());
+        assert!(decoded.spot_heal_generative("gen-canvas-1").is_err());
+    }
+
+    #[test]
+    fn spot_heal_generative_roundtrip_through_bundle() {
+        let spot = spot_heal();
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::SpotHealGenerative(spot.clone())]).unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 1);
+        assert_eq!(decoded.spot_heal_generative("spot-heal-1").unwrap(), spot);
+        assert!(decoded.tile("spot-heal-1", 0, 0).is_err());
+        assert!(decoded.repair_region("spot-heal-1").is_err());
+        assert!(decoded.generative_canvas("spot-heal-1").is_err());
+    }
+
+    #[test]
+    fn generative_kinds_coexist_with_tiles_and_repairs() {
+        let container = ZDataContainer::new_with(vec![
+            RecordSpec::MaskTile(tiles()[0].clone()),
+            RecordSpec::RepairRegion(repair_region()),
+            RecordSpec::GenerativeCanvas(generative_canvas()),
+            RecordSpec::SpotHealGenerative(spot_heal()),
+        ])
+        .unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 4);
+        assert_eq!(decoded.tile("subject", 0, 0).unwrap(), tiles()[0]);
+        assert_eq!(decoded.repair_region("repair-1").unwrap(), repair_region());
+        assert_eq!(
+            decoded.generative_canvas("gen-canvas-1").unwrap(),
+            generative_canvas()
+        );
+        assert_eq!(
+            decoded.spot_heal_generative("spot-heal-1").unwrap(),
+            spot_heal()
+        );
+        // Container VERSION stays 1 with four kinds sharing one bundle.
+        let bytes = container.to_bytes();
+        assert_eq!(
+            u16::from_le_bytes(bytes[8..10].try_into().unwrap()),
+            VERSION
+        );
+    }
+
+    #[test]
+    fn generative_checksums_are_stable_and_cover_pixels_not_ids() {
+        let canvas = generative_canvas();
+        let first = canvas.checksum();
+        assert!(!first.is_empty());
+        assert_eq!(first, canvas.checksum());
+        let mut renamed = canvas.clone();
+        renamed.id = "gen-canvas-2".into();
+        assert_eq!(first, renamed.checksum());
+        let mut changed = canvas.clone();
+        changed.pixels[0] ^= 0xff;
+        assert_ne!(first, changed.checksum());
+
+        let spot = spot_heal();
+        assert!(!spot.checksum().is_empty());
+        assert_eq!(spot.checksum(), spot.checksum());
+    }
+
+    #[test]
+    fn generative_missing_ids_return_invalid() {
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::GenerativeCanvas(generative_canvas())])
+                .unwrap();
+        assert!(matches!(
+            container.generative_canvas("absent"),
+            Err(ZDataError::Invalid(_))
+        ));
+        assert!(matches!(
+            container.spot_heal_generative("absent"),
+            Err(ZDataError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn generative_dimension_mismatch_rejected_on_write() {
+        let bad = GenerativeCanvasArtifact {
+            id: "bad".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![0; 12],
+        };
+        assert!(bad.validate().is_err());
+        assert!(ZDataContainer::new_with(vec![RecordSpec::GenerativeCanvas(bad)]).is_err());
+
+        let bad_spot = SpotHealGenerativeArtifact {
+            id: "bad".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![0; 15],
+        };
+        assert!(bad_spot.validate().is_err());
+        assert!(ZDataContainer::new_with(vec![RecordSpec::SpotHealGenerative(bad_spot)]).is_err());
+
+        let empty = GenerativeCanvasArtifact {
+            id: String::new(),
+            width: 1,
+            height: 1,
+            pixels: vec![0; 4],
+        };
+        assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn generative_checksum_corruption_detected_eagerly_and_lazily() {
+        for (spec, read_canvas) in [
+            (RecordSpec::GenerativeCanvas(generative_canvas()), true),
+            (RecordSpec::SpotHealGenerative(spot_heal()), false),
+        ] {
+            let id = match &spec {
+                RecordSpec::GenerativeCanvas(c) => c.id.clone(),
+                RecordSpec::SpotHealGenerative(s) => s.id.clone(),
+                _ => unreachable!(),
+            };
+            let mut bytes = ZDataContainer::new_with(vec![spec])
+                .unwrap()
+                .to_bytes()
+                .to_vec();
+            let index = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+            let record =
+                u64::from_le_bytes(bytes[index + 20..index + 28].try_into().unwrap()) as usize;
+            // Flip a stored-digest byte: payload still decodes, so the
+            // mismatch surfaces as Checksum (lazy path).
+            bytes[record + 36] ^= 1;
+            let corrupt = ZDataContainer::from_bytes(&bytes).unwrap();
+            let error = if read_canvas {
+                corrupt.generative_canvas(&id).unwrap_err()
+            } else {
+                corrupt.spot_heal_generative(&id).unwrap_err()
+            };
+            assert!(
+                matches!(error, ZDataError::Checksum(_)),
+                "digest corruption must be Checksum, got {error}"
+            );
+
+            // Eager path: corrupt the compressed payload on disk so
+            // `load_zdata` fails up front.
+            let directory = tempfile::tempdir().unwrap();
+            let path = zdata_path_for(&directory.path().join("image.raw"));
+            let intact = if read_canvas {
+                ZDataContainer::new_with(vec![RecordSpec::GenerativeCanvas(generative_canvas())])
+                    .unwrap()
+            } else {
+                ZDataContainer::new_with(vec![RecordSpec::SpotHealGenerative(spot_heal())]).unwrap()
+            };
+            save_zdata(&path, &intact).unwrap();
+            let mut on_disk = fs::read(&path).unwrap();
+            let index_offset = u64::from_le_bytes(on_disk[16..24].try_into().unwrap()) as usize;
+            on_disk[index_offset - 1] ^= 0xff;
+            fs::write(&path, &on_disk).unwrap();
+            assert!(
+                load_zdata(&path).is_err(),
+                "corrupt generative payload must fail at load time"
+            );
+        }
+    }
+
+    #[test]
+    fn generative_duplicate_id_rejected_across_all_kinds() {
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::GenerativeCanvas(generative_canvas())])
+                .unwrap();
+        assert!(matches!(
+            container.add_generative_canvas(generative_canvas()),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        // Spot heal with the canvas id clashes.
+        let mut clash = spot_heal();
+        clash.id = "gen-canvas-1".into();
+        assert!(matches!(
+            container.add_spot_heal_generative(clash),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        // Mask tile with the canvas id clashes at construction.
+        let tile_clash = MaskTile {
+            mask_id: "gen-canvas-1".into(),
+            tile_x: 0,
+            tile_y: 0,
+            width: 1,
+            height: 1,
+            values: vec![0],
+        };
+        assert!(matches!(
+            ZDataContainer::new_with(vec![
+                RecordSpec::MaskTile(tile_clash),
+                RecordSpec::GenerativeCanvas(generative_canvas()),
+            ]),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        // Canvas vs spot with identical ids clash at construction.
+        let mut spot_dup = spot_heal();
+        spot_dup.id = "gen-canvas-1".into();
+        assert!(matches!(
+            ZDataContainer::new_with(vec![
+                RecordSpec::GenerativeCanvas(generative_canvas()),
+                RecordSpec::SpotHealGenerative(spot_dup),
+            ]),
+            Err(ZDataError::DuplicateId(_))
+        ));
+    }
+
+    #[test]
+    fn generative_atomic_append_preserves_bundle_and_uses_relative_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("image.raw");
+        let path = zdata_path_for(&source);
+        // Relative bundle reference: file name only, never absolute.
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            "image.raw.lumina.zdata"
+        );
+        assert!(!path.is_absolute() || path.starts_with(directory.path()));
+
+        // Seed bundle with tiles, then append both generative kinds.
+        save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
+        append_generative_canvas(&path, generative_canvas()).unwrap();
+        append_spot_heal_generative(&path, spot_heal()).unwrap();
+
+        let reloaded = load_zdata(&path).unwrap();
+        assert_eq!(reloaded.tile_count(), 4);
+        assert_eq!(reloaded.tile("subject", 0, 0).unwrap(), tiles()[0]);
+        assert_eq!(
+            reloaded.generative_canvas("gen-canvas-1").unwrap(),
+            generative_canvas()
+        );
+        assert_eq!(
+            reloaded.spot_heal_generative("spot-heal-1").unwrap(),
+            spot_heal()
+        );
+
+        // Atomic write leaves no temp files and no lock behind.
+        let leftovers: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-") || name.ends_with(".lock"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp/lock files may leak, found {leftovers:?}"
+        );
+
+        // Appending under a fresh lock fails explicitly and leaves the
+        // bundle untouched.
+        let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
+        std::fs::File::create(&lock_path).unwrap();
+        let mut blocked = generative_canvas();
+        blocked.id = "blocked".into();
+        let error = append_generative_canvas(&path, blocked).unwrap_err();
+        assert!(
+            matches!(&error, ZDataError::Io { operation, .. } if operation.contains("lock")),
+            "generative append must report the held lock, got {error}"
+        );
+        assert_eq!(load_zdata(&path).unwrap().tile_count(), 4);
+        drop(fs::remove_file(&lock_path));
+
+        // Missing bundle file surfaces as I/O, never as an empty container.
+        let missing = directory.path().join("absent.lumina.zdata");
+        assert!(matches!(load_zdata(&missing), Err(ZDataError::Io { .. })));
     }
 }

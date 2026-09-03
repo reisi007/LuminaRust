@@ -18,8 +18,9 @@ use thiserror::Error;
 mod zdata;
 #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
 pub use zdata::{
-    append_repair_region, load_zdata, save_zdata, zdata_path_for, MaskTile, RecordKind,
-    RepairRegionArtifact, ZDataContainer, ZDataError,
+    append_generative_canvas, append_repair_region, append_spot_heal_generative, load_zdata,
+    save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile, RecordKind, RecordSpec,
+    RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer, ZDataError,
 };
 
 // WASM stub for zdata (native-only via zstd-sys, but consumers still import symbols).
@@ -59,9 +60,17 @@ mod zdata_wasm_stub {
         MaskTile = 0,
         RepairRegion = 1,
         GenerativeCanvas = 2,
+        SpotHealGenerative = 3,
     }
     #[derive(Debug, Clone)]
     pub struct GenerativeCanvasArtifact {
+        pub id: String,
+        pub width: u32,
+        pub height: u32,
+        pub pixels: Vec<u8>,
+    }
+    #[derive(Debug, Clone)]
+    pub struct SpotHealGenerativeArtifact {
         pub id: String,
         pub width: u32,
         pub height: u32,
@@ -81,6 +90,16 @@ mod zdata_wasm_stub {
         pub fn generative_canvas(&self, _id: &str) -> Result<GenerativeCanvasArtifact, ZDataError> {
             Err(ZDataError::Io {
                 operation: "generative_canvas".into(),
+                path: "".into(),
+                message: "zdata not available on wasm32".into(),
+            })
+        }
+        pub fn spot_heal_generative(
+            &self,
+            _id: &str,
+        ) -> Result<SpotHealGenerativeArtifact, ZDataError> {
+            Err(ZDataError::Io {
+                operation: "spot_heal_generative".into(),
                 path: "".into(),
                 message: "zdata not available on wasm32".into(),
             })
@@ -105,6 +124,14 @@ mod zdata_wasm_stub {
         }
     }
     impl GenerativeCanvasArtifact {
+        pub fn checksum(&self) -> String {
+            String::new()
+        }
+        pub fn validate(&self) -> Result<(), ZDataError> {
+            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
+        }
+    }
+    impl SpotHealGenerativeArtifact {
         pub fn checksum(&self) -> String {
             String::new()
         }
@@ -148,11 +175,32 @@ mod zdata_wasm_stub {
             message: "zdata not available on wasm32".into(),
         })
     }
+    pub fn append_generative_canvas(
+        _zdata_path: &Path,
+        _canvas: GenerativeCanvasArtifact,
+    ) -> Result<(), ZDataError> {
+        Err(ZDataError::Io {
+            operation: "append generative canvas".into(),
+            path: _zdata_path.display().to_string(),
+            message: "zdata not available on wasm32".into(),
+        })
+    }
+    pub fn append_spot_heal_generative(
+        _zdata_path: &Path,
+        _spot: SpotHealGenerativeArtifact,
+    ) -> Result<(), ZDataError> {
+        Err(ZDataError::Io {
+            operation: "append spot heal".into(),
+            path: _zdata_path.display().to_string(),
+            message: "zdata not available on wasm32".into(),
+        })
+    }
 }
 #[cfg(all(feature = "zdata", target_arch = "wasm32"))]
 pub use zdata_wasm_stub::{
-    append_repair_region, load_zdata, save_zdata, zdata_path_for, GenerativeCanvasArtifact,
-    MaskTile, RecordKind, RepairRegionArtifact, ZDataContainer,
+    append_generative_canvas, append_repair_region, append_spot_heal_generative, load_zdata,
+    save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile, RecordKind,
+    RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer,
 };
 
 pub const FORMAT: &str = "lumina-sidecar";
