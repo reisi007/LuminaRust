@@ -168,6 +168,18 @@ pub struct RenderKey {
 }
 
 impl RenderKey {
+    /// GEN-RENDERKEY-LINK-1: the persisted generative link fields
+    /// (`GenerativeEdit::artifact`, `EditRecipe::spot_removals` including each
+    /// `SpotRemoval::artifact`) are part of the render identity *generically*:
+    /// `recipe_hash` is BLAKE3 over the full serialized recipe, so every link
+    /// field (id, checksum, dimensions, format/channels/data_version) changes
+    /// the hash and invalidates preview/export. The mask stage digest keeps
+    /// these fields too (only geometry/lens/perspective are stripped there),
+    /// so a link swap also invalidates cached mask evaluations. No separate
+    /// link digest exists — none is needed. The decode digest deliberately
+    /// stays stable (decode is upstream of SpotHeal/GenerativeEdit). A
+    /// missing/corrupt bundle record is reported visibly downstream, never
+    /// silently re-rendered or skipped.
     pub fn new(
         source_content_hash: impl Into<String>,
         decode_version: impl Into<String>,
@@ -930,6 +942,203 @@ mod tests {
             rec2020.stage_digest(crate::cache::CacheStage::Histogram)
         );
         assert_ne!(small.digest(), rec2020.digest());
+    }
+
+    // GEN-RENDERKEY-LINK-1: the generative `artifact` link is part of the
+    // serialized recipe bytes, so swapping it must invalidate render + mask
+    // while leaving decode shareable (decode is upstream of GenerativeEdit).
+    #[test]
+    fn generative_artifact_link_changes_render_and_mask_not_decode() {
+        fn link(checksum: &str) -> lumina_sidecar::GenerativeArtifactRef {
+            lumina_sidecar::GenerativeArtifactRef {
+                id: "gen-1".into(),
+                relative_path: "IMG_0001.lumina.zdata".into(),
+                format: "lumina-zdata".into(),
+                checksum: checksum.into(),
+                width: 64,
+                height: 64,
+                channels: "rgba8".into(),
+                data_version: "1".into(),
+                extras: Default::default(),
+            }
+        }
+        fn recipe_with_link(checksum: Option<&str>) -> EditRecipe {
+            EditRecipe {
+                generative_edit: Some(lumina_sidecar::GenerativeEdit {
+                    version: 1,
+                    canvas: None,
+                    artifact: checksum.map(link),
+                    keep_generative_content: None,
+                    auto_fill_transparent: None,
+                    expand_beyond_image: None,
+                    seed: None,
+                    prompt: None,
+                    extras: Default::default(),
+                }),
+                ..Default::default()
+            }
+        }
+        let output = OutputSpec {
+            profile: "sRGB".into(),
+            width: 10,
+            height: 10,
+            format: "png".into(),
+        };
+        let missing = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_link(None),
+            vec![],
+            output.clone(),
+        );
+        let first = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_link(Some("blake3:aaa")),
+            vec![],
+            output.clone(),
+        );
+        let second = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_link(Some("blake3:bbb")),
+            vec![],
+            output.clone(),
+        );
+        // Attaching a link (missing -> available) changes the identity.
+        assert_ne!(missing.recipe_hash, first.recipe_hash);
+        assert_ne!(missing.digest(), first.digest());
+        // Swapping the linked artifact (same recipe, new checksum) changes it.
+        assert_ne!(first.recipe_hash, second.recipe_hash);
+        assert_ne!(first.digest(), second.digest());
+        assert_ne!(
+            first.stage_digest(crate::cache::CacheStage::Mask),
+            second.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        assert_ne!(
+            first.stage_digest(crate::cache::CacheStage::Preview),
+            second.stage_digest(crate::cache::CacheStage::Preview)
+        );
+        // Decode stays shareable: generative work happens downstream.
+        assert_eq!(
+            missing.stage_digest(crate::cache::CacheStage::Decode),
+            first.stage_digest(crate::cache::CacheStage::Decode)
+        );
+        assert_eq!(
+            first.stage_digest(crate::cache::CacheStage::Decode),
+            second.stage_digest(crate::cache::CacheStage::Decode)
+        );
+    }
+
+    // GEN-RENDERKEY-LINK-1: same guarantee for the typed schema-v2
+    // `spot_removals` (a generative spot's `artifact` link and its `mode`).
+    #[test]
+    fn spot_removal_link_changes_render_and_mask_not_decode() {
+        fn generative_spot(checksum: Option<&str>) -> lumina_sidecar::SpotRemoval {
+            lumina_sidecar::SpotRemoval {
+                version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+                mode: lumina_sidecar::SpotRemovalMode::Generative,
+                artifact: checksum.map(|checksum| lumina_sidecar::GenerativeArtifactRef {
+                    id: "spot-1".into(),
+                    relative_path: "IMG_0001.lumina.zdata".into(),
+                    format: "lumina-zdata".into(),
+                    checksum: checksum.into(),
+                    width: 32,
+                    height: 32,
+                    channels: "rgba8".into(),
+                    data_version: "1".into(),
+                    extras: Default::default(),
+                }),
+            }
+        }
+        fn recipe_with_spots(spots: Vec<lumina_sidecar::SpotRemoval>) -> EditRecipe {
+            EditRecipe {
+                spot_removals: spots,
+                ..Default::default()
+            }
+        }
+        let output = OutputSpec {
+            profile: "sRGB".into(),
+            width: 10,
+            height: 10,
+            format: "png".into(),
+        };
+        let empty = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_spots(vec![]),
+            vec![],
+            output.clone(),
+        );
+        let missing = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_spots(vec![generative_spot(None)]),
+            vec![],
+            output.clone(),
+        );
+        let first = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_spots(vec![generative_spot(Some("blake3:aaa"))]),
+            vec![],
+            output.clone(),
+        );
+        let second = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_spots(vec![generative_spot(Some("blake3:bbb"))]),
+            vec![],
+            output.clone(),
+        );
+        // Adding a spot, attaching its link, and swapping the linked artifact
+        // each change the render identity (no stale preview on a new artifact).
+        assert_ne!(empty.recipe_hash, missing.recipe_hash);
+        assert_ne!(missing.recipe_hash, first.recipe_hash);
+        assert_ne!(first.recipe_hash, second.recipe_hash);
+        assert_ne!(first.digest(), second.digest());
+        // SpotHeal runs upstream of masks, so the mask stage invalidates too.
+        assert_ne!(
+            first.stage_digest(crate::cache::CacheStage::Mask),
+            second.stage_digest(crate::cache::CacheStage::Mask)
+        );
+        // Mode is identity as well: heuristic (no bundle record) vs generative.
+        let heuristic = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_spots(vec![lumina_sidecar::SpotRemoval {
+                version: lumina_sidecar::SPOT_REMOVAL_VERSION,
+                mode: lumina_sidecar::SpotRemovalMode::Heuristic,
+                artifact: None,
+            }]),
+            vec![],
+            output.clone(),
+        );
+        assert_ne!(heuristic.recipe_hash, missing.recipe_hash);
+        assert_ne!(heuristic.digest(), missing.digest());
+        // Decode stays shareable: spot healing happens downstream of decode.
+        for key in [&empty, &missing, &first, &second, &heuristic] {
+            assert_eq!(
+                key.stage_digest(crate::cache::CacheStage::Decode),
+                empty.stage_digest(crate::cache::CacheStage::Decode)
+            );
+        }
     }
 
     // GEN-PIPELINE-DECOUPLE: the decoupled geometry sub-stage order is
