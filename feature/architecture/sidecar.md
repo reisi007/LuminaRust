@@ -9,6 +9,7 @@
 - [Manifest](#manifest)
 - [Binärdaten](#binärdaten)
 - [Persistenzregeln](#persistenzregeln)
+- [Metadaten: Keywords, Sammlungen, Stapel-Ops (G-15 META-MVP, Slice 1)](#metadaten-keywords-sammlungen-stapel-ops-g-15-meta-mvp-slice-1)
 - [Migration und Konflikte](#migration-und-konflikte)
 - [Abnahme](#abnahme)
 
@@ -258,6 +259,69 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   historische Bump läuft ausschließlich über den expliziten Migrationspfad.
 - **Verbraucherhinweis:** Konsumenten müssen auf `!= Available` prüfen, um
   `Corrupt` zu erfassen (CLI tut dies; GUI seit 2026-08-25 ebenfalls).
+
+## Metadaten: Keywords, Sammlungen, Stapel-Ops (G-15 META-MVP, Slice 1)
+
+Normativer SOLL-Stand 2026-09-03 (Slice 1 = nur Sidecar-Schema + Persistenz in
+`lumina-sidecar`; CLI/GUI-Anbindung sind Folge-Slices):
+
+- **Keywords liegen auf Quellbild-Ebene** (`SidecarDocument.keywords`,
+  `Vec<String>`), nicht je virtueller Kopie. Begründung: Keywords beschreiben
+  den Bildinhalt (wie Masken-Artefakte auf Quellenebene geteilt); pro-Kopie-
+  Keywords würden Filter, Sync und Smart-Sammlungen fragmentieren und die
+  Stapelvergabe verkomplizieren. Bewertung (`rating`) und Flag bleiben bewusst
+  je Kopie (LR-01). Validierung (laut, kein stiller Fallback): Eintrag muss
+  getrimmt-nicht-leer sein, darf keine führenden/folgenden Whitespaces und
+  keine Steuerzeichen enthalten, ist auf 128 Zeichen begrenzt, maximal 512
+  Einträge je Sidecar; exakte Duplikate werden abgelehnt (kein stilles
+  Deduplizieren). Keyword-Vergleiche (Smart-Regeln) sind exakter,
+  case-sensitiver Vergleich (deterministisch, keine Locale-Abhängigkeit).
+- **Statische Sammlungen sind Sidecar-first:** Die Mitgliedschaft wird pro
+  Sidecar als `SidecarDocument.collections: Vec<CollectionMembership>`
+  (`{ id, name }`, Quellbild-Ebene) persistiert. Es gibt keine
+  DB-autoritative Sammlungsliste: Der optionale Index baut Sammlungen durch
+  Scannen der Sidecars wieder auf (Rebuild-Pflicht wie F-064–F-067).
+  Umbenennen einer Sammlung ist eine Stapel-Operation über alle betroffenen
+  Sidecars (kein stilles Auseinanderlaufen von `id`→`name`). Validierung:
+  `id`/`name` nicht-leer, ohne führende/folgende Whitespaces, `id` ohne
+  `/`, `\`, `:` (portabel, nie pfadartig); maximal 512 Mitgliedschaften je
+  Sidecar. Keine absoluten Pfade.
+- **Smart-Sammlungen sind versionierte Daten, keine DB-Logik:** Der Regel-AST
+  (`SmartCollectionDef { version = 1, id, name, rule: SmartRule }`) und der
+  reine, deterministische Evaluator (`SmartRule::matches`,
+  `SmartCollectionDef::matches_copy/matches_any_copy`) leben in
+  `lumina-sidecar`. Auswertungs-Inputs sind ausschließlich Sidecar-Felder
+  (`keywords` der Quelle + `rating`/`flag` der jeweiligen Kopie). Die
+  Regel-Bibliothek (alle Smart-Definitionen eines Katalogs) wird **nicht** pro
+  Bild-Sidecar dupliziert (Umbenennungen/Edits würden sonst divergieren); ihre
+  portable Datei-Persistenz ist Folge-Slice (CLI/GUI) und nutzt exakt diese
+  versionierten Typen als Format. Regel-Validierung (laut): `version` muss 1
+  sein, `And`/`Or` brauchen mindestens eine Unterregel, maximale
+  Verschachtelungstiefe 32, Keyword-/Rating-Teilregeln unterliegen denselben
+  Grenzen wie ihre Sidecar-Gegenstücke (`rating <= 5`).
+- **Stapel-Operationen als Datenmodell:** `BatchOp` (`add_keyword`,
+  `remove_keyword`, `add_to_collection`, `remove_from_collection`,
+  `set_rating`, `set_flag`) plus `apply_batch_op(document, op) -> bool
+  (changed)` ist die einzige Metadaten-Mutationssprache dieses Slices. Sie ist
+  idempotent (vorhandenes Keyword erneut hinzufügen → `Ok(false)`, kein
+  Duplikat), validiert laut (unbekannte `copy_id`, `rating > 5`, ungültige
+  Keywords/Sammlungen) und mutiert nie Rezepte, Masken oder History. CLI/GUI-
+  Slices iterieren damit über Sidecar-Dateien (je Datei atomar via
+  `save_sidecar`/`save_sidecar_if_unchanged`); Datei-Iteration selbst gehört
+  nicht zu diesem Slice.
+- **Schema-Version-Entscheid: kein Bump, `schema_version` bleibt 2.**
+  Alle Felder sind additiv-optional (`#[serde(default,
+  skip_serializing_if = "Vec::is_empty")]`): abwesend = leer = altes
+  Verhalten, alte Sidecars laden ohne Datenverlust und serialisieren ohne
+  neue Schlüssel zurück. Die Migrations-Maschinerie (`migrate_json`,
+  `migrate_sidecar_file`, `.bak`-Backup, atomarer Replace) bleibt
+  unverändert; der v1→v2-Musterpfad deckt alte Dateien ab. Unbekannte Felder
+  bleiben via `serde(flatten)`-Extras roundtrip-fähig; inkompatible
+  Hauptversionen werden laut abgelehnt.
+
+Ankerpunkte für Folge-Slices: `SidecarDocument::{keywords, collections}`,
+`CollectionMembership`, `SmartCollectionDef`/`SmartRule`
+(+ `matches_copy`/`matches_any_copy`), `BatchOp`/`apply_batch_op`.
 
 ## Migration und Konflikte
 
