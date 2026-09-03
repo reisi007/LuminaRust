@@ -1,0 +1,22 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "png=1280x800 nodes=65 zoom_labels=[\"Zoom: Custom\", \"Zoom: Custom\"]"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/nav_rect/shot.png"
+  },
+  {
+    "check": "custom zoom pinned",
+    "result": "PASS",
+    "detail": "zoom readout names Custom after zoom_step(4.0)"
+  },
+  {
+    "check": "navigator rect vs ROI",
+    "result": "OPEN",
+    "detail": "rect is Painter-drawn (0 navigator tree nodes); PNG needs vision review: rect must be smaller than overview and track the visible preview area"
+  }
+]

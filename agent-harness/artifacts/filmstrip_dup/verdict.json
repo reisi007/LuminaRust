@@ -1,0 +1,17 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "png=1280x800 filmstrip_cells=3 nodes=103"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/filmstrip_dup/shot.png"
+  },
+  {
+    "check": "filmstrip duplication",
+    "result": "PASS",
+    "detail": "each file exactly once: {\"IMG_A.ARW\": 1, \"IMG_B.ARW\": 1, \"IMG_C.ARW\": 1}"
+  }
+]

@@ -1,0 +1,750 @@
+[
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 56.75,
+      "y0": 2.5,
+      "y1": 19.5
+    },
+    "role": "Label",
+    "value": "Lumina"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 56.75,
+      "y0": 2.5,
+      "y1": 19.5
+    },
+    "role": "TextRun",
+    "value": "Lumina"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 74.75,
+      "x1": 101.84375,
+      "y0": 4.0,
+      "y1": 18.0
+    },
+    "role": "Label",
+    "value": "Error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 74.75,
+      "x1": 101.84375,
+      "y0": 4.0,
+      "y1": 18.0
+    },
+    "role": "TextRun",
+    "value": "Error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 740.96875,
+      "y0": 24.0,
+      "y1": 38.0
+    },
+    "role": "Label",
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0/top.ARW: LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 740.96875,
+      "y0": 24.0,
+      "y1": 38.0
+    },
+    "role": "TextRun",
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0/top.ARW: LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "Library (G)",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.71875,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Develop (D)",
+    "rect": {
+      "x0": 76.71875,
+      "x1": 147.4375,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Export",
+    "rect": {
+      "x0": 153.4375,
+      "x1": 197.3125,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Before / After (Y)",
+    "rect": {
+      "x0": 215.3125,
+      "x1": 315.125,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 57.34375,
+      "y0": 66.0,
+      "y1": 83.0
+    },
+    "role": "Label",
+    "value": "Folders"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 57.34375,
+      "y0": 66.0,
+      "y1": 83.0
+    },
+    "role": "TextRun",
+    "value": "Folders"
+  },
+  {
+    "label": "Open",
+    "rect": {
+      "x0": 173.3125,
+      "x1": 211.0,
+      "y0": 433.5,
+      "y1": 451.5
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 167.3125,
+      "y0": 433.5,
+      "y1": 451.5
+    },
+    "role": "TextInput",
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 12.0,
+      "x1": 378.84375,
+      "y0": 435.5,
+      "y1": 449.5
+    },
+    "role": "TextRun",
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmpyEUuJ0"
+  },
+  {
+    "label": "Refresh",
+    "rect": {
+      "x0": 8.0,
+      "x1": 57.53125,
+      "y0": 802.0,
+      "y1": 820.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 20.0,
+      "y0": 835.0,
+      "y1": 851.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": ".tmpyEUuJ0 (3)",
+    "rect": {
+      "x0": 26.0,
+      "x1": 115.71875,
+      "y0": 834.0,
+      "y1": 852.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 22.0,
+      "x1": 34.0,
+      "y0": 857.0,
+      "y1": 873.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "sub (3)",
+    "rect": {
+      "x0": 40.0,
+      "x1": 83.90625,
+      "y0": 856.0,
+      "y1": 874.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 217.0,
+      "x1": 223.0,
+      "y0": 64.0,
+      "y1": 876.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 1181.0,
+      "x1": 1187.0,
+      "y0": 64.0,
+      "y1": 800.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 286.25,
+      "y0": 627.0,
+      "y1": 644.0
+    },
+    "role": "Label",
+    "value": "Filmstrip"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 286.25,
+      "y0": 627.0,
+      "y1": 644.0
+    },
+    "role": "TextRun",
+    "value": "Filmstrip"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 373.4375,
+      "y0": 648.0,
+      "y1": 662.0
+    },
+    "role": "Label",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 373.4375,
+      "y0": 648.0,
+      "y1": 662.0
+    },
+    "role": "TextRun",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "Sync Settings",
+    "rect": {
+      "x0": 228.0,
+      "x1": 306.5625,
+      "y0": 666.0,
+      "y1": 684.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Match Total Exposures",
+    "rect": {
+      "x0": 312.5625,
+      "x1": 441.25,
+      "y0": 666.0,
+      "y1": 684.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 368.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 368.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Label",
+    "value": "a.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 368.0,
+      "y0": 715.0,
+      "y1": 729.0
+    },
+    "role": "TextRun",
+    "value": "a.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 368.0,
+      "y0": 729.0,
+      "y1": 743.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 368.0,
+      "y0": 743.0,
+      "y1": 757.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): Input/output "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 284.0,
+      "x1": 311.5,
+      "y0": 757.0,
+      "y1": 771.0
+    },
+    "role": "TextRun",
+    "value": "error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 374.0,
+      "x1": 514.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 374.0,
+      "x1": 514.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Label",
+    "value": "b.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 374.0,
+      "x1": 514.0,
+      "y0": 715.0,
+      "y1": 729.0
+    },
+    "role": "TextRun",
+    "value": "b.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 374.0,
+      "x1": 514.0,
+      "y0": 729.0,
+      "y1": 743.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 374.0,
+      "x1": 514.0,
+      "y0": 743.0,
+      "y1": 757.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): Input/output "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 430.0,
+      "x1": 457.5,
+      "y0": 757.0,
+      "y1": 771.0
+    },
+    "role": "TextRun",
+    "value": "error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 520.0,
+      "x1": 660.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 520.0,
+      "x1": 660.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Label",
+    "value": "top.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 520.0,
+      "x1": 660.0,
+      "y0": 715.0,
+      "y1": 729.0
+    },
+    "role": "TextRun",
+    "value": "top.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 520.0,
+      "x1": 660.0,
+      "y0": 729.0,
+      "y1": 743.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 520.0,
+      "x1": 660.0,
+      "y0": 743.0,
+      "y1": 757.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): Input/output "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 577.0,
+      "x1": 603.5,
+      "y0": 757.0,
+      "y1": 771.0
+    },
+    "role": "TextRun",
+    "value": "error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 308.15625,
+      "y0": 74.0,
+      "y1": 88.0
+    },
+    "role": "Label",
+    "value": "Thumbnail Size"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 308.15625,
+      "y0": 74.0,
+      "y1": 88.0
+    },
+    "role": "TextRun",
+    "value": "Thumbnail Size"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 314.15625,
+      "x1": 434.15625,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Slider",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 440.15625,
+      "x1": 480.15625,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "SpinButton",
+    "value": "132"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 352.0,
+      "y0": 104.0,
+      "y1": 228.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 352.0,
+      "y0": 104.0,
+      "y1": 228.0
+    },
+    "role": "Label",
+    "value": "a.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 352.0,
+      "y0": 138.0,
+      "y1": 152.0
+    },
+    "role": "TextRun",
+    "value": "a.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 352.0,
+      "y0": 152.0,
+      "y1": 166.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 228.0,
+      "x1": 352.0,
+      "y0": 166.0,
+      "y1": 180.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 240.0,
+      "x1": 339.5,
+      "y0": 180.0,
+      "y1": 194.0
+    },
+    "role": "TextRun",
+    "value": "Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 358.0,
+      "x1": 482.0,
+      "y0": 104.0,
+      "y1": 228.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 358.0,
+      "x1": 482.0,
+      "y0": 104.0,
+      "y1": 228.0
+    },
+    "role": "Label",
+    "value": "b.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 358.0,
+      "x1": 482.0,
+      "y0": 138.0,
+      "y1": 152.0
+    },
+    "role": "TextRun",
+    "value": "b.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 358.0,
+      "x1": 482.0,
+      "y0": 152.0,
+      "y1": 166.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 358.0,
+      "x1": 482.0,
+      "y0": 166.0,
+      "y1": 180.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 370.0,
+      "x1": 469.5,
+      "y0": 180.0,
+      "y1": 194.0
+    },
+    "role": "TextRun",
+    "value": "Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 488.0,
+      "x1": 612.0,
+      "y0": 104.0,
+      "y1": 228.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 488.0,
+      "x1": 612.0,
+      "y0": 104.0,
+      "y1": 228.0
+    },
+    "role": "Label",
+    "value": "top.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 488.0,
+      "x1": 612.0,
+      "y0": 138.0,
+      "y1": 152.0
+    },
+    "role": "TextRun",
+    "value": "top.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 488.0,
+      "x1": 612.0,
+      "y0": 152.0,
+      "y1": 166.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 488.0,
+      "x1": 612.0,
+      "y0": 166.0,
+      "y1": 180.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 500.0,
+      "x1": 599.5,
+      "y0": 180.0,
+      "y1": 194.0
+    },
+    "role": "TextRun",
+    "value": "Input/output error"
+  }
+]

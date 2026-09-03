@@ -1,0 +1,22 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "png=1280x800 flat=1 recursive=3 distinct_keys=3"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/subfolders/shot.png"
+  },
+  {
+    "check": "recursive aggregation",
+    "result": "PASS",
+    "detail": "flat=1 top-level, recursive=3 with distinct thumbnail keys (symlink loop terminated)"
+  },
+  {
+    "check": "path badge",
+    "result": "PASS",
+    "detail": "a 'sub' path label is present in the Library tree"
+  }
+]

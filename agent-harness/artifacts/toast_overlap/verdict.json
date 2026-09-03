@@ -1,0 +1,27 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "frames=8 generation=0 png=1280x800 nodes=93 rail_cells=2 toast_nodes=3"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/toast_overlap/shot.png"
+  },
+  {
+    "check": "no per-cell ready badge",
+    "result": "PASS",
+    "detail": "old \"Vorschau bereit\" cell badge absent (Ready probes raise no cell badge; the overlay toast owns the signal)"
+  },
+  {
+    "check": "overlay toast state machine",
+    "result": "PASS",
+    "detail": "show → visible → visible at deadline → hidden past 4s timeout → dismiss hides immediately"
+  },
+  {
+    "check": "toast accesskit exposure",
+    "result": "PASS",
+    "detail": "3 toast node(s) exposed, all clear of the left rail"
+  }
+]

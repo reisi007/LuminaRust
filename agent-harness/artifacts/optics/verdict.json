@@ -1,0 +1,17 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "optics_header_found=true nodes=108 optics_labels=[\"Lens Correction\", \"Lens Correction\", \"No lens profile — automatic correction inactive (manual sliders below apply on render)\", \"No lens profile — automatic correction inactive (manual sliders below apply on \", \"Vignette (light falloff)\", \"Vignette (light falloff)\", \"Vignette C0 (center)\", \"Vignette C0 (center)\", \"Vignette C1 (mid)\", \"Vignette C1 (mid)\", \"Vignette C2 (corners)\", \"Vignette C2 (corn…\", \"Chromatic aberration (lateral)\", \"Chromatic aberration (lateral)\"]"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/optics/shot.png"
+  },
+  {
+    "check": "optics status visible",
+    "result": "PASS",
+    "detail": "profile status row found (name or explicit inactive note); manual groups present: [\"Distortion (radial)\", \"Distortion (radial)\", \"Vignette (light falloff)\", \"Vignette (light falloff)\", \"Chromatic aberration (lateral)\", \"Chromatic aberration (lateral)\", \"CA Red (lateral)\", \"CA Red (lateral)\", \"CA Blue (lateral)\"]"
+  }
+]

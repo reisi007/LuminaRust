@@ -1,0 +1,17 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "frames=8 generation=1 png=1280x800 nodes=68"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/zoom_custom/shot.png"
+  },
+  {
+    "check": "zoom default Fit",
+    "result": "PASS",
+    "detail": "zoom readout names Fit: [\"Zoom: Fit\", \"Zoom: Fit\"]"
+  }
+]

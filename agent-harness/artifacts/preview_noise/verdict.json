@@ -1,0 +1,22 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "frames=8 generation=1 png=1280x800 readback=1280x800 app_preview=Some(\"4x3 mean=0.437\")"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/preview_noise/shot.png"
+  },
+  {
+    "check": "preview shows content",
+    "result": "OPEN",
+    "detail": "preview paints background only headless (center: FrameStats { width: 640, height: 400, mean_luma: 0.16471822168520936, std_luma: 0.002839544529899479, gray_fraction: 0.99996875 }); matches committed golden baseline — content paint needs the file-open/GPU path, PNG needs vision review"
+  },
+  {
+    "check": "app preview frame has content",
+    "result": "PASS",
+    "detail": "4x3 mean=0.437 std=0.315"
+  }
+]

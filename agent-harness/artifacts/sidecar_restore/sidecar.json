@@ -1,0 +1,50 @@
+{
+  "format": "lumina-sidecar",
+  "schema_version": 2,
+  "source": {
+    "relative_name": "photo.png",
+    "content_hash": "blake3:e3871a19879560bbdac0bd58635e6f18e1153d9925e4cc88e007c16753b6cc21",
+    "byte_length": 119,
+    "modified_at": null,
+    "raw_format": "PNG",
+    "orientation": 1,
+    "decode_fingerprint": {
+      "decoder": "image",
+      "version": "0.1.0",
+      "parameters": {}
+    },
+    "geometry_fingerprint": {
+      "width": 4,
+      "height": 3,
+      "orientation": 1,
+      "pixel_aspect_ratio": 1.0
+    }
+  },
+  "pipeline_version": "raster-mvp-1",
+  "virtual_copies": [
+    {
+      "id": "vc-original",
+      "name": "Original",
+      "is_default": true,
+      "rating": 0,
+      "flag": "unflagged",
+      "recipe": {
+        "adjustments": {
+          "exposure": -0.62
+        },
+        "auto_features": {
+          "enable_auto_tone": false,
+          "match_total_exposure": false,
+          "target_luminance": 0.5
+        },
+        "options": {},
+        "recipe_version": "1"
+      },
+      "mask_library": [],
+      "mask_layers": [],
+      "history": [],
+      "export_records": []
+    }
+  ],
+  "presets": []
+}

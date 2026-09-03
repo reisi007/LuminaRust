@@ -1,0 +1,22 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "frames=8 gen=2 loaded=true load_error=None"
+  },
+  {
+    "check": "edit applies in session",
+    "result": "PASS",
+    "detail": "exposure=-0.62"
+  },
+  {
+    "check": "sidecar commit",
+    "result": "PASS",
+    "detail": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmp475q68/photo.png.lumina.json carries exposure=-0.62"
+  },
+  {
+    "check": "reload restores value",
+    "result": "PASS",
+    "detail": "reopened exposure=-0.62"
+  }
+]

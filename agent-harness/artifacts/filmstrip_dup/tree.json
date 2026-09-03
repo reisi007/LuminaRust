@@ -1,0 +1,1135 @@
+[
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 56.75,
+      "y0": 2.5,
+      "y1": 19.5
+    },
+    "role": "Label",
+    "value": "Lumina"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 56.75,
+      "y0": 2.5,
+      "y1": 19.5
+    },
+    "role": "TextRun",
+    "value": "Lumina"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 74.75,
+      "x1": 101.84375,
+      "y0": 4.0,
+      "y1": 18.0
+    },
+    "role": "Label",
+    "value": "Error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 74.75,
+      "x1": 101.84375,
+      "y0": 4.0,
+      "y1": 18.0
+    },
+    "role": "TextRun",
+    "value": "Error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 760.6875,
+      "y0": 24.0,
+      "y1": 38.0
+    },
+    "role": "Label",
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmp2M40ke/IMG_A.ARW: LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 760.6875,
+      "y0": 24.0,
+      "y1": 38.0
+    },
+    "role": "TextRun",
+    "value": "/var/folders/vq/db6hdqsx32b1xg4z2mnzt8nm0000gn/T/.tmp2M40ke/IMG_A.ARW: LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "Library (G)",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.71875,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Develop (D)",
+    "rect": {
+      "x0": 76.71875,
+      "x1": 147.4375,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Export",
+    "rect": {
+      "x0": 153.4375,
+      "x1": 197.3125,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Before / After (Y)",
+    "rect": {
+      "x0": 215.3125,
+      "x1": 315.125,
+      "y0": 43.0,
+      "y1": 61.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 73.40625,
+      "y0": 66.5,
+      "y1": 83.5
+    },
+    "role": "Label",
+    "value": "Navigator"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 73.40625,
+      "y0": 66.5,
+      "y1": 83.5
+    },
+    "role": "TextRun",
+    "value": "Navigator"
+  },
+  {
+    "label": "‹",
+    "rect": {
+      "x0": 129.6875,
+      "x1": 141.0,
+      "y0": 66.0,
+      "y1": 84.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.25,
+      "y0": 98.0,
+      "y1": 112.0
+    },
+    "role": "Label",
+    "value": "Not current"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 70.25,
+      "y0": 98.0,
+      "y1": 112.0
+    },
+    "role": "TextRun",
+    "value": "Not current"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 115.75,
+      "y0": 126.0,
+      "y1": 154.0
+    },
+    "role": "Label",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 115.75,
+      "y0": 126.0,
+      "y1": 140.0
+    },
+    "role": "TextRun",
+    "value": "Click a thumbnail to "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 45.65625,
+      "y0": 140.0,
+      "y1": 154.0
+    },
+    "role": "TextRun",
+    "value": "open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 158.0,
+      "y1": 248.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 158.0,
+      "y1": 248.0
+    },
+    "role": "Label",
+    "value": "IMG_A.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 175.0,
+      "y1": 189.0
+    },
+    "role": "TextRun",
+    "value": "IMG_A.ARW ⚠ "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 189.0,
+      "y1": 203.0
+    },
+    "role": "TextRun",
+    "value": "LibRaw opening input "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 203.0,
+      "y1": 217.0
+    },
+    "role": "TextRun",
+    "value": "failed (-100009): "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 18.0,
+      "x1": 117.5,
+      "y0": 217.0,
+      "y1": 231.0
+    },
+    "role": "TextRun",
+    "value": "Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 252.0,
+      "y1": 342.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 252.0,
+      "y1": 342.0
+    },
+    "role": "Label",
+    "value": "IMG_B.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 269.0,
+      "y1": 283.0
+    },
+    "role": "TextRun",
+    "value": "IMG_B.ARW ⚠ "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 283.0,
+      "y1": 297.0
+    },
+    "role": "TextRun",
+    "value": "LibRaw opening input "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 297.0,
+      "y1": 311.0
+    },
+    "role": "TextRun",
+    "value": "failed (-100009): "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 18.0,
+      "x1": 117.5,
+      "y0": 311.0,
+      "y1": 325.0
+    },
+    "role": "TextRun",
+    "value": "Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 346.0,
+      "y1": 436.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 346.0,
+      "y1": 436.0
+    },
+    "role": "Label",
+    "value": "IMG_C.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 363.0,
+      "y1": 377.0
+    },
+    "role": "TextRun",
+    "value": "IMG_C.ARW ⚠ "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 377.0,
+      "y1": 391.0
+    },
+    "role": "TextRun",
+    "value": "LibRaw opening input "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 8.0,
+      "x1": 128.0,
+      "y0": 391.0,
+      "y1": 405.0
+    },
+    "role": "TextRun",
+    "value": "failed (-100009): "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 18.0,
+      "x1": 117.5,
+      "y0": 405.0,
+      "y1": 419.0
+    },
+    "role": "TextRun",
+    "value": "Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 147.0,
+      "x1": 153.0,
+      "y0": 64.0,
+      "y1": 800.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "Save Recipe / Sidecar",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1088.8125,
+      "y0": 778.0,
+      "y1": 796.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Reset",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1007.34375,
+      "y0": 756.0,
+      "y1": 774.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Render / Apply",
+    "rect": {
+      "x0": 1013.34375,
+      "x1": 1100.4375,
+      "y0": 756.0,
+      "y1": 774.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Match Total Exposure",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1092.5625,
+      "y0": 734.0,
+      "y1": 752.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Histogram",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1038.75,
+      "y0": 66.0,
+      "y1": 84.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 979.0,
+      "x1": 1041.25,
+      "y0": 88.0,
+      "y1": 102.0
+    },
+    "role": "Label",
+    "value": "Not current"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 979.0,
+      "x1": 1041.25,
+      "y0": 88.0,
+      "y1": 102.0
+    },
+    "role": "TextRun",
+    "value": "Not current"
+  },
+  {
+    "label": "Presets",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1022.65625,
+      "y0": 116.0,
+      "y1": 134.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "History",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1021.34375,
+      "y0": 138.0,
+      "y1": 156.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Rating",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1017.71875,
+      "y0": 160.0,
+      "y1": 178.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Basic",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1010.15625,
+      "y0": 192.0,
+      "y1": 210.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Tone Curve",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1043.28125,
+      "y0": 214.0,
+      "y1": 232.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Color",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1011.8125,
+      "y0": 236.0,
+      "y1": 254.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Detail",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1014.65625,
+      "y0": 258.0,
+      "y1": 276.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Effects",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1020.5625,
+      "y0": 280.0,
+      "y1": 298.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Optics",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1017.4375,
+      "y0": 302.0,
+      "y1": 320.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Geometry",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1036.46875,
+      "y0": 324.0,
+      "y1": 342.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Masking",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1027.125,
+      "y0": 346.0,
+      "y1": 364.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Generative Expand",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1083.71875,
+      "y0": 368.0,
+      "y1": 386.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Dust Removal (Q)",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1076.25,
+      "y0": 390.0,
+      "y1": 408.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Load",
+    "rect": {
+      "x0": 1237.875,
+      "x1": 1272.0,
+      "y0": 562.0,
+      "y1": 580.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1231.875,
+      "y0": 562.0,
+      "y1": 580.0
+    },
+    "role": "TextInput",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 973.0,
+      "x1": 973.0,
+      "y0": 564.0,
+      "y1": 578.0
+    },
+    "role": "TextRun",
+    "value": ""
+  },
+  {
+    "label": "Choose file",
+    "rect": {
+      "x0": 969.0,
+      "x1": 1036.53125,
+      "y0": 724.0,
+      "y1": 742.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 1262.0,
+      "x1": 1272.0,
+      "y0": 66.0,
+      "y1": 720.0
+    },
+    "role": "ScrollBar",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 957.0,
+      "x1": 963.0,
+      "y0": 64.0,
+      "y1": 800.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 216.25,
+      "y0": 627.0,
+      "y1": 644.0
+    },
+    "role": "Label",
+    "value": "Filmstrip"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 216.25,
+      "y0": 627.0,
+      "y1": 644.0
+    },
+    "role": "TextRun",
+    "value": "Filmstrip"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 303.4375,
+      "y0": 648.0,
+      "y1": 662.0
+    },
+    "role": "Label",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 303.4375,
+      "y0": 648.0,
+      "y1": 662.0
+    },
+    "role": "TextRun",
+    "value": "Click a thumbnail to open it"
+  },
+  {
+    "label": "Sync Settings",
+    "rect": {
+      "x0": 158.0,
+      "x1": 236.5625,
+      "y0": 666.0,
+      "y1": 684.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Match Total Exposures",
+    "rect": {
+      "x0": 242.5625,
+      "x1": 371.25,
+      "y0": 666.0,
+      "y1": 684.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 298.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 298.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Label",
+    "value": "IMG_A.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 298.0,
+      "y0": 715.0,
+      "y1": 729.0
+    },
+    "role": "TextRun",
+    "value": "IMG_A.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 298.0,
+      "y0": 729.0,
+      "y1": 743.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 298.0,
+      "y0": 743.0,
+      "y1": 757.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): Input/output "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 214.0,
+      "x1": 241.5,
+      "y0": 757.0,
+      "y1": 771.0
+    },
+    "role": "TextRun",
+    "value": "error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 304.0,
+      "x1": 444.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 304.0,
+      "x1": 444.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Label",
+    "value": "IMG_B.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 304.0,
+      "x1": 444.0,
+      "y0": 715.0,
+      "y1": 729.0
+    },
+    "role": "TextRun",
+    "value": "IMG_B.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 304.0,
+      "x1": 444.0,
+      "y0": 729.0,
+      "y1": 743.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 304.0,
+      "x1": 444.0,
+      "y0": 743.0,
+      "y1": 757.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): Input/output "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 361.0,
+      "x1": 387.5,
+      "y0": 757.0,
+      "y1": 771.0
+    },
+    "role": "TextRun",
+    "value": "error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 450.0,
+      "x1": 590.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Unknown",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 450.0,
+      "x1": 590.0,
+      "y0": 688.0,
+      "y1": 798.0
+    },
+    "role": "Label",
+    "value": "IMG_C.ARW ⚠ LibRaw opening input failed (-100009): Input/output error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 450.0,
+      "x1": 590.0,
+      "y0": 715.0,
+      "y1": 729.0
+    },
+    "role": "TextRun",
+    "value": "IMG_C.ARW ⚠ LibRaw "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 450.0,
+      "x1": 590.0,
+      "y0": 729.0,
+      "y1": 743.0
+    },
+    "role": "TextRun",
+    "value": "opening input failed "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 450.0,
+      "x1": 590.0,
+      "y0": 743.0,
+      "y1": 757.0
+    },
+    "role": "TextRun",
+    "value": "(-100009): Input/output "
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 507.0,
+      "x1": 533.5,
+      "y0": 757.0,
+      "y1": 771.0
+    },
+    "role": "TextRun",
+    "value": "error"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 952.0,
+      "y0": 788.0,
+      "y1": 798.0
+    },
+    "role": "ScrollBar",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 200.65625,
+      "y0": 74.0,
+      "y1": 88.0
+    },
+    "role": "Label",
+    "value": "Preview"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 200.65625,
+      "y0": 74.0,
+      "y1": 88.0
+    },
+    "role": "TextRun",
+    "value": "Preview"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 218.65625,
+      "x1": 269.0,
+      "y0": 74.0,
+      "y1": 88.0
+    },
+    "role": "Label",
+    "value": "Zoom: Fit"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 218.65625,
+      "x1": 269.0,
+      "y0": 74.0,
+      "y1": 88.0
+    },
+    "role": "TextRun",
+    "value": "Zoom: Fit"
+  },
+  {
+    "label": "Fit",
+    "rect": {
+      "x0": 275.0,
+      "x1": 296.71875,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "25%",
+    "rect": {
+      "x0": 302.71875,
+      "x1": 334.21875,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "50%",
+    "rect": {
+      "x0": 340.21875,
+      "x1": 371.71875,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "75%",
+    "rect": {
+      "x0": 377.71875,
+      "x1": 409.21875,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "1:1",
+    "rect": {
+      "x0": 415.21875,
+      "x1": 439.71875,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "200%",
+    "rect": {
+      "x0": 445.71875,
+      "x1": 484.0,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "Fit Width",
+    "rect": {
+      "x0": 490.0,
+      "x1": 546.8125,
+      "y0": 72.0,
+      "y1": 90.0
+    },
+    "role": "Button",
+    "value": ""
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 952.0,
+      "y0": 94.0,
+      "y1": 616.0
+    },
+    "role": "Label",
+    "value": "Drop an image here or load a path"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 465.0,
+      "x1": 645.8125,
+      "y0": 348.0,
+      "y1": 362.0
+    },
+    "role": "TextRun",
+    "value": "Drop an image here or load a path"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 308.71875,
+      "y0": 620.0,
+      "y1": 634.0
+    },
+    "role": "Label",
+    "value": "Render state stale / pending"
+  },
+  {
+    "label": "",
+    "rect": {
+      "x0": 158.0,
+      "x1": 308.71875,
+      "y0": 620.0,
+      "y1": 634.0
+    },
+    "role": "TextRun",
+    "value": "Render state stale / pending"
+  }
+]

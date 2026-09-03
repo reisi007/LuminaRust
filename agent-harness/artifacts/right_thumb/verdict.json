@@ -1,0 +1,17 @@
+[
+  {
+    "check": "harness ran",
+    "result": "PASS",
+    "detail": "png=1280x800 image_nodes=2 left=1 center=1 right=0 bottom=0 presets_expanded=true"
+  },
+  {
+    "check": "shot saved",
+    "result": "PASS",
+    "detail": "artifacts/right_thumb/shot.png"
+  },
+  {
+    "check": "right panel duplication",
+    "result": "PASS",
+    "detail": "no Image node in the right panel band — crop thumbnail removed, no 3x duplication"
+  }
+]
