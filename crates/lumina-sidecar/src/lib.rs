@@ -1088,6 +1088,20 @@ pub struct AutoFeatures {
     pub auto_exposure: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_contrast: Option<f64>,
+    /// AUTO-TONE-2 Spiegelfelder: vom Auto-Algorithmus geschriebene Werte für
+    /// `whites`/`blacks`/`highlights`/`shadows` (Core-`AutoToneResult`, Domäne
+    /// je `-1..=1` wie die gleichnamigen Recipe-Adjustments). `None` = kein
+    /// Auto-Wert persistiert (manuell oder nie Auto-Tone gelaufen). Analog zu
+    /// `auto_exposure`/`auto_contrast`, additiv mit `#[serde(default)]`, daher
+    /// ohne Migration lesbar (Altdateien → `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_whites: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_blacks: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_highlights: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_shadows: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched_exposure: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1102,6 +1116,10 @@ impl Default for AutoFeatures {
             target_luminance: default_target_luminance(),
             auto_exposure: None,
             auto_contrast: None,
+            auto_whites: None,
+            auto_blacks: None,
+            auto_highlights: None,
+            auto_shadows: None,
             matched_exposure: None,
             analysis_fingerprint: None,
         }
@@ -2583,6 +2601,21 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     if !a.auto_features.target_luminance.is_finite() {
         return invalid("invalid auto_features target_luminance");
     }
+    // AUTO-TONE-2 Spiegelfelder: Domäne je `-1..=1` wie die gleichnamigen
+    // Recipe-Adjustments (`whites`/`blacks`/`highlights`/`shadows`, s.
+    // Core-`AutoToneResult`); `None` = kein Auto-Wert persistiert.
+    for (name, value) in [
+        ("auto_whites", a.auto_features.auto_whites),
+        ("auto_blacks", a.auto_features.auto_blacks),
+        ("auto_highlights", a.auto_features.auto_highlights),
+        ("auto_shadows", a.auto_features.auto_shadows),
+    ] {
+        if let Some(v) = value {
+            if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                return invalid(format!("invalid auto_features {name}"));
+            }
+        }
+    }
     for (name, value) in &a.adjustments {
         let (lo, hi) = match name.as_str() {
             "exposure" => (-10.0, 10.0),
@@ -3112,6 +3145,10 @@ mod tests {
         features.target_luminance = 0.42;
         features.auto_exposure = Some(1.25);
         features.auto_contrast = Some(-0.2);
+        features.auto_whites = Some(0.35);
+        features.auto_blacks = Some(-0.45);
+        features.auto_highlights = Some(0.15);
+        features.auto_shadows = Some(-0.25);
         features.matched_exposure = Some(0.5);
         features.analysis_fingerprint = Some(AnalysisFingerprint {
             algorithm: "tone-rgba8-rec709".into(),
@@ -3121,8 +3158,86 @@ mod tests {
         });
         let json = d.to_json().unwrap();
         assert!(json.contains("auto_exposure"));
+        assert!(json.contains("auto_whites"));
+        assert!(json.contains("auto_blacks"));
+        assert!(json.contains("auto_highlights"));
+        assert!(json.contains("auto_shadows"));
         assert!(json.contains("tone-rgba8-rec709:abc"));
         assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn auto_tone_mirror_fields_validate_range_and_finiteness() {
+        // Jede der vier AUTO-TONE-2-Spiegelfelder einzeln: gültige
+        // Randwerte ±1.0 passieren, NaN/∞/Out-of-range wird laut abgelehnt.
+        for (index, valid) in [0.8, -0.8, 1.0, -1.0, 0.0].iter().enumerate() {
+            let mut d = SidecarDocument::new(source(), "pipeline-1");
+            let features = &mut d.virtual_copies[0].recipe.auto_features;
+            match index % 4 {
+                0 => features.auto_whites = Some(*valid),
+                1 => features.auto_blacks = Some(*valid),
+                2 => features.auto_highlights = Some(*valid),
+                _ => features.auto_shadows = Some(*valid),
+            }
+            assert!(d.validate().is_ok(), "valid value {valid} rejected");
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.5, -1.5] {
+            for field in [
+                "auto_whites",
+                "auto_blacks",
+                "auto_highlights",
+                "auto_shadows",
+            ] {
+                let mut d = SidecarDocument::new(source(), "pipeline-1");
+                let features = &mut d.virtual_copies[0].recipe.auto_features;
+                match field {
+                    "auto_whites" => features.auto_whites = Some(bad),
+                    "auto_blacks" => features.auto_blacks = Some(bad),
+                    "auto_highlights" => features.auto_highlights = Some(bad),
+                    _ => features.auto_shadows = Some(bad),
+                }
+                assert!(
+                    d.validate().is_err(),
+                    "field {field} accepted invalid value {bad}"
+                );
+            }
+        }
+        // `None` (kein Auto-Wert) bleibt gültig.
+        assert!(SidecarDocument::new(source(), "pipeline-1")
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn auto_tone_mirror_fields_missing_in_legacy_json_default_to_none() {
+        // Additiv, keine Migration nötig: Alt-JSON ohne die vier Felder
+        // parst dank `#[serde(default)]` und validiert; `schema_version`
+        // bleibt unverändert.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.auto_features.auto_exposure = Some(1.25);
+        d.virtual_copies[0].recipe.auto_features.auto_contrast = Some(-0.2);
+        let mut json_value = serde_json::to_value(&d).expect("sidecar serializes");
+        for field in [
+            "auto_whites",
+            "auto_blacks",
+            "auto_highlights",
+            "auto_shadows",
+        ] {
+            json_value["virtual_copies"][0]["recipe"]["auto_features"]
+                .as_object_mut()
+                .expect("auto_features is an object")
+                .remove(field);
+        }
+        let json = serde_json::to_string(&json_value).expect("json serializes");
+        assert!(!json.contains("auto_whites"));
+        let decoded = SidecarDocument::from_json(&json).expect("legacy json parses");
+        let features = &decoded.virtual_copies[0].recipe.auto_features;
+        assert_eq!(features.auto_whites, None);
+        assert_eq!(features.auto_blacks, None);
+        assert_eq!(features.auto_highlights, None);
+        assert_eq!(features.auto_shadows, None);
+        assert!(decoded.validate().is_ok());
     }
 
     #[test]
