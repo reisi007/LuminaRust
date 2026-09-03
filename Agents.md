@@ -2,7 +2,8 @@
 
 Dieses Dokument definiert die verbindlichen Arbeitsregeln für alle Agenten im
 Projekt. `Agents.todo.md` ist der ausführbare Arbeitsplan. `feature/README.md`
-ist der Einstiegspunkt zum normativen Feature-SOLL. Die verlinkten Dokumente
+ist der Einstiegspunkt zum normativen Feature-SOLL. `DoD.md` ist die
+verbindliche Definition of Done mit den normativen Verifizierungsregeln. Die verlinkten Dokumente
 unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
 Änderungen zuerst aktualisiert werden.
 
@@ -14,7 +15,7 @@ unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
 - [Rollen und Delegation](#rollen-und-delegation)
 - [Verbindlicher Arbeitsablauf](#verbindlicher-arbeitsablauf)
 - [Verifizierung und Tests](#verifizierung-und-tests)
-- [Definition of Done](#definition-of-done)
+- [Definition of Done](#definition-of-done) (normativ: [`DoD.md`](DoD.md))
 - [Dokumentations- und Todo-Regeln](#dokumentations--und-todo-regeln)
 - [Änderungsregeln](#änderungsregeln)
 
@@ -273,7 +274,8 @@ Modell-Download oder externen Netzwerkzugriff abhängen.
 
 ## Definition of Done
 
-Eine Änderung ist erst fertig, wenn:
+Normativ und vollständig: [`DoD.md`](DoD.md). Zusammengefasst ist eine Änderung
+erst fertig, wenn:
 
 - die SOLL-Anforderung eindeutig erfüllt oder bewusst angepasst ist;
 - die betroffenen Datenformate versioniert und migriert werden können;
@@ -286,6 +288,9 @@ Eine Änderung ist erst fertig, wenn:
   Feature-Dokument den erreichten Zustand sowie verbleibende Grenzen kennt;
 - der Abschlussbericht reproduzierbare Prüfkommandos nennt.
 - ein GUI-Feature nur als fertig gilt, wenn ein automatischer headless GUI-Test (egui Context + LuminaApp, tempdir; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram, byte-identisch/PSNR, kein stiller Fallback) vorliegt und `cargo test -p lumina-gui` ohne GPU/WASM grün ist (konsistent mit Produktprinzip „Jede sichtbare Funktion muss im Feature-Dokument beschrieben sein“ und der Verifizierungs-Pflicht für GUI-Features).
+- der Verifizierungsbericht die BESTANDEN-Checkliste aus [`DoD.md`](DoD.md) §7
+  vollständig mit Belegen beantwortet (End-to-End-Kette, zeitbasierte Pfade,
+  Klassen-Vollständigkeit, Log-Level, Spez→Test-Mapping, Gates).
 
 ## Dokumentations- und Todo-Regeln
 

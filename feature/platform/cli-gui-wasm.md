@@ -296,8 +296,21 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   werden.
 - Oben befinden sich die Modul-Leiste mit den Lightroom-Entsprechungen
   **Bibliothek**, **Entwickeln** und **Exportieren** (Library, Develop,
-  Export) sowie das Histogramm. Das Histogramm bezieht sich auf den konkret
-  angezeigten Renderstand.
+  Export).
+- Das Histogramm ist eine echte Grafik (gefüllte 256-Bin-Luminanzkurve per
+  Painter, P01/P99 als schmale Marker, Mean/Median-Text) in einer eigenen
+  einklappbaren Sektion (Default offen) und bezieht sich auf den konkret
+  angezeigten Renderstand (Draft-/Veraltet-Zustände bleiben sichtbar).
+- Der Navigator zeigt das Gesamtbild mit einem Viewport-Rechteck (= aktuell
+  sichtbarer Develop-Arbeitsbereich); Draggen des Rechtecks pannt den
+  sichtbaren Bereich. Das Navigator-Panel ist einklappbar.
+- Zoomstufen: **Fit (Default)**, 25 %, 50 %, 75 %, 100 % (1:1), 200 %,
+  Fit-Breite. Das Mausrad zoomt nur mit Modifier (sonst Scroll/Pan), damit der
+  Zoom nie versehentlich auf Custom springt; Zoom-%- und Draft-Badge bleiben
+  sichtbar.
+- Slider-Commits speichern: Nach Debounce-Ende wird bei erfolgreichem Render
+  das Sidecar geschrieben und per INFO-Log + Status bestätigt („Sidecar
+  saved"); Fehler sind laut, nie still.
 
 ### Regler und Standardinteraktionen
 
