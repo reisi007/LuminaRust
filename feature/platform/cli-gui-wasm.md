@@ -413,6 +413,13 @@ der aktiven Kopie über den normalen Save/Render-Pfad.
   `FOLDER_SCAN_DEPTH`); jede Zelle trägt den relativen Unterordner als
   Pfad-Badge; der Ordnerbaum bleibt als flache Pro-Ordner-Navigation erhalten
   (Klick = dieser Ordner flach listen bleibt möglich).
+- **`.lumina/`-Ausschluss (F-100 Library, GUI-LIBRARY-LUMINA-DIR-1):** Der
+  Library-Scan (flach wie rekursiv, alle Ebenen) steigt niemals in
+  Verzeichnisse mit dem exakten Namen `.lumina` ab und listet keine Dateien
+  darunter — `.lumina/` enthält ausschließlich löschbaren Cache
+  (z. B. `.lumina/previews/*.preview.webp`) und Einstellungen, die ohne
+  Datenverlust gelöscht werden können und daher nie als Bilder im Grid,
+  Sync/Match-fähig oder als Sidecar-Ziel erscheinen dürfen.
 - **Ist-Stand 2026-09-03:** umgesetzt + verifiziert BESTANDEN (236p lib, kittest 11/11 inkl. `library_subfolder_badges`-Golden, Vision: Badges korrekt zugeordnet; Kontrast-Nacharbeit s. GUI-LIBRARY-BADGE-CONTRAST-1).
 
 ### Maskierung

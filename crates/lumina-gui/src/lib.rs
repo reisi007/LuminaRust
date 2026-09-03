@@ -1641,6 +1641,15 @@ impl LuminaApp {
                     .flatten()
                     .map(|entry| entry.path())
                     .filter(|path| path.is_dir())
+                    // GUI-LIBRARY-LUMINA-DIR-1: never descend into `.lumina/`
+                    // cache directories (exact name, every level) — belt and
+                    // braces next to the `scan_entry` guard, so the cache is
+                    // not even walked (and costs no scan depth).
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_none_or(|name| name != ".lumina")
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -1800,6 +1809,14 @@ impl LuminaApp {
     }
 
     fn scan_entry(path: &Path) -> Option<FileBrowserEntry> {
+        // GUI-LIBRARY-LUMINA-DIR-1: `.lumina/` is deletable cache, never
+        // library content — its files must not land in the grid, Sync/Match,
+        // or sidecar writes. The guard lives here (not only in the recursive
+        // driver) so flat listings, direct `.lumina/` navigation,
+        // single-file refreshes, and orphan-sidecar derivations stay clean.
+        if is_lumina_cache_path(path) {
+            return None;
+        }
         if !is_supported_image(path) {
             return None;
         }
@@ -10104,6 +10121,17 @@ fn hsl_channel_mut<'a>(hsl: &'a mut HslAdjustments, ch: &str) -> &'a mut HslChan
     slot.get_or_insert_with(HslChannel::default)
 }
 
+/// True when `path` lies inside a `.lumina/` cache directory (exact
+/// directory name `.lumina`, any level). Pure lexical path logic, no I/O:
+/// `.lumina/` holds only deletable cache and settings (F-100 Library,
+/// GUI-LIBRARY-LUMINA-DIR-1), so the Library scan must never surface files
+/// below it as images — flat or recursive, on every level.
+fn is_lumina_cache_path(path: &Path) -> bool {
+    path.components().any(
+        |component| matches!(component, std::path::Component::Normal(name) if name == ".lumina"),
+    )
+}
+
 fn is_supported_image(path: &Path) -> bool {
     // The file browser lists all editable formats; the filmstrip display applies
     // its own RAW-only filter (see `draw_filmstrip`). v1: PNG/JPEG/WebP plus the
@@ -11893,6 +11921,92 @@ mod tests {
         // `count_raw_files` with `FOLDER_SCAN_DEPTH`).
         assert_eq!(names, vec!["one.arw", "top.arw", "two.arw"]);
         assert_eq!(FOLDER_SCAN_DEPTH, 3);
+    }
+
+    /// GUI-LIBRARY-LUMINA-DIR-1: `.lumina/` cache directories stay out of
+    /// the Library scan — flat and recursive, on every level. Cache
+    /// artifacts (`.lumina/previews/*.preview.webp`, a `.lumina/index`
+    /// dummy, a nested `sub/.lumina/x.webp`) never list; real images next
+    /// to them keep listing. Sentinel bytes suffice — the scan never
+    /// decodes, it only matches supported extensions (WebP included).
+    #[test]
+    fn library_scan_excludes_lumina_cache_dirs_flat_and_recursive() {
+        let root = tempfile::tempdir().unwrap();
+        save_raw(&root.path().join("top.arw"));
+        let sub = root.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        save_raw(&sub.join("mid.arw"));
+        let previews = root.path().join(".lumina").join("previews");
+        std::fs::create_dir_all(&previews).unwrap();
+        std::fs::write(previews.join("top.preview.webp"), b"lumina-preview-fixture").unwrap();
+        std::fs::create_dir_all(root.path().join(".lumina").join("index")).unwrap();
+        std::fs::write(
+            root.path().join(".lumina").join("index").join("index.db"),
+            b"lumina-index-fixture",
+        )
+        .unwrap();
+        let sub_cache = sub.join(".lumina");
+        std::fs::create_dir_all(&sub_cache).unwrap();
+        std::fs::write(sub_cache.join("x.webp"), b"lumina-preview-fixture").unwrap();
+
+        // Unit level: cache webps rejected, the real image accepted.
+        assert!(LuminaApp::scan_entry(&previews.join("top.preview.webp")).is_none());
+        assert!(LuminaApp::scan_entry(&sub_cache.join("x.webp")).is_none());
+        assert!(LuminaApp::scan_entry(&root.path().join("top.arw")).is_some());
+
+        let mut app = new_app();
+        // Flat: only the real top-level image lists.
+        app.set_directory(root.path().display().to_string());
+        let names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["top.arw"]);
+        // Recursive: the subfolder image joins; no cache file ever does.
+        app.list_directory();
+        let mut names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["mid.arw", "top.arw"]);
+        // Sync/Match candidate pool is exactly the entry list — no cache
+        // path is selectable, matchable, or sidecar-writable through it.
+        assert!(app
+            .entries()
+            .iter()
+            .all(|entry| !is_lumina_cache_path(&entry.path)));
+        // Direct navigation into the cache dir itself lists nothing.
+        app.set_directory(previews.display().to_string());
+        assert!(app.entries().is_empty());
+    }
+
+    /// GUI-LIBRARY-LUMINA-DIR-1 rescan stability: preview-cache files
+    /// created *after* the first listing stay out of later rescans.
+    #[test]
+    fn library_rescan_stays_clean_after_cache_creation() {
+        let root = tempfile::tempdir().unwrap();
+        save_raw(&root.path().join("top.arw"));
+
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        app.list_directory();
+        assert_eq!(app.entries().len(), 1);
+
+        // Simulate preview-cache generation after the first listing.
+        let previews = root.path().join(".lumina").join("previews");
+        std::fs::create_dir_all(&previews).unwrap();
+        std::fs::write(previews.join("top.preview.webp"), b"lumina-preview-fixture").unwrap();
+
+        app.list_directory();
+        let names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["top.arw"]);
     }
 
     #[test]
