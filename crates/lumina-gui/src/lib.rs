@@ -1074,6 +1074,11 @@ pub struct FileBrowserEntry {
     /// Color label (`0..=4`, `0` = none) of the default virtual copy (Welle 2),
     /// read from the copy's `extras["color_label"]`; `0` without a sidecar.
     color_label: u8,
+    /// Relative subfolder of the entry vs. the listed directory (`""` for
+    /// top-level files). Powers the Library grid path badge (F-100): the
+    /// recursive aggregation shows subfolder images with their relative
+    /// folder as badge; flat listings (tree click) always carry `""`.
+    folder: String,
 }
 
 /// REVIEW-GUI-THUMB-1: stable thumbnail cache key. The canonicalized absolute
@@ -1484,14 +1489,122 @@ impl LuminaApp {
         self.begin_load_path(p);
     }
 
+    /// Flat per-folder navigation (folder tree clicks): lists exactly the
+    /// chosen folder, badges stay empty. This is the pre-existing behavior
+    /// and stays untouched by the recursive aggregation (F-100: a tree click
+    /// keeps flat-listing a single folder possible).
     pub fn set_directory(&mut self, directory: impl Into<String>) {
         self.directory = directory.into();
         info!("directory set: {}", self.directory);
-        self.list_directory();
+        self.list_directory_flat();
     }
 
+    /// Recursive aggregation (F-100 Library): images of the chosen folder
+    /// *including* subfolders, symlink-/loop-safe via a canonical visited
+    /// set, depth-limited by `FOLDER_SCAN_DEPTH`. Each entry carries its
+    /// relative subfolder in [`FileBrowserEntry::folder`] for the grid path
+    /// badge. The RAW-only grid decision is unchanged — only aggregation.
     pub fn list_directory(&mut self) {
         let directory = std::path::PathBuf::from(self.directory.trim());
+        let mut entries = Vec::new();
+        Self::collect_entries_recursive(&directory, &mut entries);
+        self.apply_listing(directory, entries);
+    }
+
+    /// Flat single-folder listing behind [`Self::set_directory`].
+    pub fn list_directory_flat(&mut self) {
+        let directory = std::path::PathBuf::from(self.directory.trim());
+        let mut entries = Vec::new();
+        Self::collect_entries_flat(&directory, &mut entries);
+        self.apply_listing(directory, entries);
+    }
+
+    /// Flat (single-folder) scan used by [`Self::list_directory_flat`].
+    fn collect_entries_flat(directory: &Path, out: &mut Vec<FileBrowserEntry>) {
+        Self::scan_single_dir(directory, directory, out);
+    }
+
+    /// Recursive aggregation used by [`Self::list_directory`].
+    fn collect_entries_recursive(root: &Path, out: &mut Vec<FileBrowserEntry>) {
+        let mut visited = std::collections::HashSet::new();
+        Self::scan_dir_recursive(root, root, FOLDER_SCAN_DEPTH, &mut visited, out);
+    }
+
+    /// Scan one directory level: supported images plus orphan sidecars whose
+    /// source file is missing. Directory entries are skipped here (the
+    /// recursive driver descends into them separately); every entry gets its
+    /// subfolder badge relative to `root` (`""` for top-level files).
+    fn scan_single_dir(root: &Path, dir: &Path, out: &mut Vec<FileBrowserEntry>) {
+        if let Ok(dir_entries) = std::fs::read_dir(dir) {
+            for entry in dir_entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    continue;
+                }
+                if let Some(mut scanned) = Self::scan_entry(&path) {
+                    scanned.folder = folder_badge(root, &path);
+                    out.push(scanned);
+                }
+            }
+        }
+        // Also pick up orphan sidecars whose source file is missing.
+        // After deleting the source, read_dir won't list it, but the
+        // .lumina.json sidecar still exists on disk.
+        if let Ok(sidecar_entries) = std::fs::read_dir(dir) {
+            for entry in sidecar_entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".lumina.json") {
+                        if let Some(source_name) = name.strip_suffix(".lumina.json") {
+                            let source_path = dir.join(source_name);
+                            if !out.iter().any(|e| e.path == source_path) {
+                                if let Some(mut scanned) = Self::scan_entry(&source_path) {
+                                    scanned.folder = folder_badge(root, &source_path);
+                                    out.push(scanned);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Recursive driver behind [`Self::collect_entries_recursive`]:
+    /// depth-limited, symlink-/loop-safe via canonical `visited` paths.
+    /// `remaining_depth == 0` scans nothing (same convention as
+    /// `count_raw_files`).
+    fn scan_dir_recursive(
+        root: &Path,
+        dir: &Path,
+        remaining_depth: usize,
+        visited: &mut std::collections::HashSet<PathBuf>,
+        out: &mut Vec<FileBrowserEntry>,
+    ) {
+        if remaining_depth == 0 {
+            return;
+        }
+        let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        if !visited.insert(canonical) {
+            return;
+        }
+        Self::scan_single_dir(root, dir, out);
+        let mut subdirs: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default();
+        subdirs.sort();
+        for sub in subdirs {
+            Self::scan_dir_recursive(root, &sub, remaining_depth - 1, visited, out);
+        }
+    }
+
+    fn apply_listing(&mut self, directory: std::path::PathBuf, mut entries: Vec<FileBrowserEntry>) {
         debug!("listing directory: {}", directory.display());
         // REVIEW-GUI-THUMB-1: drop cached thumbnails of a previous folder so
         // they neither resurface nor accumulate unboundedly across a session.
@@ -1505,35 +1618,10 @@ impl LuminaApp {
         if let Some(ctrl) = self.preview_ctrl.as_mut() {
             ctrl.ensure_directory(self.directory.trim());
         }
-        self.entries.clear();
         match std::fs::read_dir(&directory) {
-            Ok(dir_entries) => {
-                for entry in dir_entries.flatten() {
-                    if let Some(scanned) = Self::scan_entry(&entry.path()) {
-                        self.entries.push(scanned);
-                    }
-                }
-                // Also pick up orphan sidecars whose source file is missing.
-                // After deleting the source, read_dir won't list it, but the
-                // .lumina.json sidecar still exists on disk.
-                if let Ok(sidecar_entries) = std::fs::read_dir(&directory) {
-                    for entry in sidecar_entries.flatten() {
-                        let path = entry.path();
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name.ends_with(".lumina.json") {
-                                if let Some(source_name) = name.strip_suffix(".lumina.json") {
-                                    let source_path = directory.join(source_name);
-                                    if !self.entries.iter().any(|e| e.path == source_path) {
-                                        if let Some(scanned) = Self::scan_entry(&source_path) {
-                                            self.entries.push(scanned);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                self.entries.sort_by(|a, b| a.name.cmp(&b.name));
+            Ok(_) => {
+                entries.sort_by(|a, b| a.name.cmp(&b.name));
+                self.entries = entries;
                 self.status = Str::ImagesInDirectory.format_arg(&self.entries.len().to_string());
                 // PERF-GUI-6: when no specific file was requested (e.g. the user
                 // picked a directory, not a single image) and nothing is loaded
@@ -1573,6 +1661,7 @@ impl LuminaApp {
                 }
             }
             Err(error) => {
+                self.entries.clear();
                 self.status = Str::DirectoryNotReadable.format_arg(&error.to_string());
             }
         }
@@ -1585,9 +1674,12 @@ impl LuminaApp {
     /// on folders with large RAWs on every slider-commit save (GUI-VIEW-2,
     /// N6 Develop→Library/save stall class).
     fn refresh_entry(&mut self, path: &Path) {
-        let Some(scanned) = Self::scan_entry(path) else {
+        let Some(mut scanned) = Self::scan_entry(path) else {
             return;
         };
+        // VIEW-2 single-file refresh: keep the subfolder badge consistent
+        // with a full listing (no rescan here — that is the point).
+        scanned.folder = folder_badge(&PathBuf::from(self.directory.trim()), path);
         if let Some(slot) = self.entries.iter_mut().find(|e| e.path == scanned.path) {
             *slot = scanned;
         } else {
@@ -1672,6 +1764,7 @@ impl LuminaApp {
             rating,
             flag,
             color_label,
+            folder: String::new(),
         })
     }
     pub fn status(&self) -> &str {
@@ -8356,11 +8449,43 @@ impl LuminaApp {
                                             egui::Color32::WHITE,
                                         );
                                     }
+                                    // F-100 Library: relative-subfolder badge of
+                                    // the recursive aggregation, painted over
+                                    // the cell's top edge (display-only, like
+                                    // the rating badge). Empty for top-level
+                                    // files, so flat listings (tree click) and
+                                    // the existing goldens stay pixel-identical.
+                                    if !entry.folder.is_empty() {
+                                        let badge_pos = rect.left_top() + egui::vec2(4.0, 2.0);
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                badge_pos - egui::vec2(2.0, 0.0),
+                                                egui::vec2(118.0, 16.0),
+                                            ),
+                                            2.0,
+                                            egui::Color32::from_black_alpha(160),
+                                        );
+                                        ui.painter().text(
+                                            badge_pos,
+                                            egui::Align2::LEFT_TOP,
+                                            folder_badge_display(&entry.folder),
+                                            egui::FontId::monospace(11.0),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
                                     // Sidecar/copy status on hover (kept from the former
-                                    // text file-browser).
+                                    // text file-browser). The full (untruncated)
+                                    // subfolder badge is part of the tooltip so
+                                    // the ellipsized display text loses nothing.
+                                    let hover_folder = if entry.folder.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n{}", entry.folder)
+                                    };
                                     resp.on_hover_text(format!(
-                                        "{}\n[{}] {}:{} {}:{} {}:{} {}:{} {}:{}",
+                                        "{}{}\n[{}] {}:{} {}:{} {}:{} {}:{} {}:{}",
                                         entry.name,
+                                        hover_folder,
                                         entry.status_label(),
                                         Str::Copies.t(),
                                         entry.virtual_copies,
@@ -9554,6 +9679,41 @@ fn folder_label(root: &Path, path: &Path) -> String {
     }
 }
 
+/// Grid path badge of an entry vs. the listed `root`: `""` for top-level
+/// files, otherwise the parent directory relative to `root` (F-100 Library:
+/// recursive aggregation shows subfolder images with their relative folder
+/// as badge). Pure lexical path logic, no I/O.
+fn folder_badge(root: &Path, path: &Path) -> String {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    match parent.strip_prefix(root) {
+        Ok(relative) if !relative.as_os_str().is_empty() => relative.display().to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Maximum display width of the Library grid path badge, in characters.
+/// The badge box is fixed at 118px (`vec2(118.0, 16.0)`) with monospace
+/// 11.0; a monospace glyph advances ~6.6px, so 17 chars (~112px) fit with
+/// padding to spare. Longer badges are middle-truncated (see below); the
+/// stored [`FileBrowserEntry::folder`] keeps the full path.
+const FOLDER_BADGE_MAX_CHARS: usize = 17;
+
+/// Display text for the folder badge: the full badge when it fits, otherwise
+/// middle-truncated with `…` (`head…tail`) so the painted text never
+/// overflows the fixed 118px box. The full name stays available via hover.
+/// Pure string logic (char-based, unicode-safe), no I/O.
+fn folder_badge_display(badge: &str) -> String {
+    let len = badge.chars().count();
+    if len <= FOLDER_BADGE_MAX_CHARS {
+        return badge.to_owned();
+    }
+    let tail_len = (FOLDER_BADGE_MAX_CHARS - 1) / 2;
+    let head_len = FOLDER_BADGE_MAX_CHARS - 1 - tail_len;
+    let head: String = badge.chars().take(head_len).collect();
+    let tail: String = badge.chars().skip(len - tail_len).collect();
+    format!("{head}…{tail}")
+}
+
 /// How many directory levels the RAW-count scan descends at most. Keeps the
 /// per-folder count cheap even under large trees.
 const FOLDER_SCAN_DEPTH: usize = 3;
@@ -9575,9 +9735,24 @@ const BASE_STAGE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
 
 /// Number of RAW files under `dir`, descending at most `remaining_depth`
 /// directory levels (depth 0 scans nothing). Pure read-only helper used by the
-/// Library folder tree.
+/// Library folder tree. Symlink-/loop-safe via a canonical visited set (same
+/// convention as `scan_dir_recursive`); a symlink cycle terminates instead of
+/// recursing forever or double-counting the looped subtree.
 fn count_raw_files(dir: &Path, remaining_depth: usize) -> usize {
+    let mut visited = std::collections::HashSet::new();
+    count_raw_files_inner(dir, remaining_depth, &mut visited)
+}
+
+fn count_raw_files_inner(
+    dir: &Path,
+    remaining_depth: usize,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> usize {
     if remaining_depth == 0 {
+        return 0;
+    }
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(canonical) {
         return 0;
     }
     let mut count = 0usize;
@@ -9585,7 +9760,7 @@ fn count_raw_files(dir: &Path, remaining_depth: usize) -> usize {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                count += count_raw_files(&path, remaining_depth - 1);
+                count += count_raw_files_inner(&path, remaining_depth - 1, visited);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if is_raw_name(name) {
                     count += 1;
@@ -10811,6 +10986,174 @@ mod tests {
             .unwrap();
         assert_eq!(entry.rating, 3);
         assert_eq!(entry.flag, Flag::Pick);
+    }
+
+    /// Raw listing fixture: `scan_entry`/`list_directory` only need a
+    /// supported extension (+ optional sidecar) — no decode runs during a
+    /// directory scan, so a few sentinel bytes suffice.
+    fn save_raw(path: &Path) {
+        std::fs::write(path, b"lumina-raw-fixture").unwrap();
+    }
+
+    /// GUI-LIBRARY-SUBFOLDERS-1: `list_directory` aggregates the chosen
+    /// folder *including* subfolders; every entry carries its relative
+    /// subfolder as path badge (`""` for top-level files).
+    #[test]
+    fn library_list_directory_aggregates_subfolders_with_path_badges() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        let nested = sub.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        save_raw(&root.path().join("top.arw"));
+        save_raw(&sub.join("mid.arw"));
+        save_raw(&nested.join("deep.arw"));
+
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        // Tree-click navigation stays flat (pre-existing behavior).
+        assert_eq!(
+            app.entries().len(),
+            1,
+            "set_directory must keep listing a single folder flat"
+        );
+        // Recursive aggregation shows all three with correct badges.
+        app.list_directory();
+        let mut badges: Vec<(String, String)> = app
+            .entries()
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.folder.clone()))
+            .collect();
+        badges.sort();
+        let nested_badge = Path::new("sub").join("nested").display().to_string();
+        assert_eq!(
+            badges,
+            vec![
+                ("deep.arw".to_string(), nested_badge),
+                ("mid.arw".to_string(), "sub".to_string()),
+                ("top.arw".to_string(), String::new()),
+            ]
+        );
+    }
+
+    /// GUI-LIBRARY-SUBFOLDERS-1-SORT: `apply_listing` sorts the aggregated
+    /// entries globally by name — no folder grouping. Fixture names
+    /// interleave across folder boundaries (`sub/a.arw`,
+    /// `sub/nested/m.arw`, `top/z.arw`), so only a global name sort yields
+    /// `a, m, z` in `entries()` order.
+    #[test]
+    fn library_list_directory_sorts_aggregated_entries_globally_by_name() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        let nested = sub.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        save_raw(&sub.join("a.arw"));
+        save_raw(&nested.join("m.arw"));
+        save_raw(&root.path().join("z.arw"));
+
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        app.list_directory();
+        let names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a.arw", "m.arw", "z.arw"]);
+    }
+
+    /// GUI-LIBRARY-SUBFOLDERS-1: a tree click keeps navigating per folder —
+    /// the clicked folder lists flat with empty badges.
+    #[test]
+    fn folder_tree_click_lists_single_folder_flat() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        let nested = sub.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        save_raw(&root.path().join("top.arw"));
+        save_raw(&sub.join("mid.arw"));
+        save_raw(&nested.join("deep.arw"));
+
+        let mut app = new_app();
+        app.set_directory(sub.display().to_string());
+        let names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["mid.arw"]);
+        assert!(
+            app.entries().iter().all(|entry| entry.folder.is_empty()),
+            "flat listings carry no path badge"
+        );
+        app.set_directory(nested.display().to_string());
+        let names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["deep.arw"]);
+        app.set_directory(root.path().display().to_string());
+        let names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["top.arw"]);
+    }
+
+    /// GUI-LIBRARY-SUBFOLDERS-1: the recursive scan terminates on a symlink
+    /// cycle and never lists an entry twice.
+    #[cfg(unix)]
+    #[test]
+    fn library_list_directory_terminates_on_symlink_loop() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        save_raw(&root.path().join("top.arw"));
+        save_raw(&sub.join("mid.arw"));
+        std::os::unix::fs::symlink(root.path(), sub.join("loop")).unwrap();
+
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        app.list_directory();
+        let mut names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["mid.arw", "top.arw"]);
+    }
+
+    /// GUI-LIBRARY-SUBFOLDERS-1: files deeper than `FOLDER_SCAN_DEPTH`
+    /// directory levels stay out of the aggregation.
+    #[test]
+    fn library_list_directory_respects_folder_scan_depth() {
+        let root = tempfile::tempdir().unwrap();
+        let l1 = root.path().join("l1");
+        let l2 = l1.join("l2");
+        let l3 = l2.join("l3");
+        let l4 = l3.join("l4");
+        std::fs::create_dir_all(&l4).unwrap();
+        save_raw(&root.path().join("top.arw"));
+        save_raw(&l1.join("one.arw"));
+        save_raw(&l2.join("two.arw"));
+        save_raw(&l3.join("three.arw"));
+        save_raw(&l4.join("four.arw"));
+
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        app.list_directory();
+        let mut names: Vec<&str> = app
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        names.sort();
+        // Depth 3 scans root, l1, l2 — l3/l4 stay out (mirrors
+        // `count_raw_files` with `FOLDER_SCAN_DEPTH`).
+        assert_eq!(names, vec!["one.arw", "top.arw", "two.arw"]);
+        assert_eq!(FOLDER_SCAN_DEPTH, 3);
     }
 
     #[test]
@@ -14363,6 +14706,44 @@ mod tests {
         assert_eq!(folder_label(dir.path(), &sub), "sub");
         let root_name = dir.path().file_name().unwrap().to_string_lossy();
         assert_eq!(folder_label(dir.path(), dir.path()), root_name);
+    }
+
+    #[test]
+    fn folder_badge_display_fits_fixed_badge_box() {
+        // Short badges pass through untouched (existing goldens unchanged).
+        assert_eq!(folder_badge_display(""), "");
+        assert_eq!(folder_badge_display("sub"), "sub");
+        let nested = Path::new("sub").join("nested").display().to_string();
+        assert_eq!(folder_badge_display(&nested), nested);
+        // Long paths are middle-truncated with … and never exceed the box:
+        // 17 monospace-11 chars ≈ 112px ≤ 118px box width.
+        let long = "a_very_long_subfolder_name/nested_deep";
+        let shown = folder_badge_display(long);
+        assert!(
+            shown.chars().count() <= FOLDER_BADGE_MAX_CHARS,
+            "display badge {shown:?} exceeds {FOLDER_BADGE_MAX_CHARS} chars"
+        );
+        assert!(shown.contains('…'), "long badge must ellipsize: {shown:?}");
+        assert_ne!(shown, long);
+        // Head and tail survive so the truncated badge stays recognizable.
+        assert!(shown.starts_with("a_very_l"));
+        assert!(shown.ends_with("ted_deep"));
+    }
+
+    /// M2: `count_raw_files` terminates on a symlink cycle and counts the
+    /// looped subtree once (same visited-set convention as the recursive
+    /// listing scan).
+    #[cfg(unix)]
+    #[test]
+    fn count_raw_files_terminates_on_symlink_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(dir.path().join("a.ARW"), b"x").unwrap();
+        std::fs::write(sub.join("b.ARW"), b"x").unwrap();
+        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
+        assert_eq!(count_raw_files(dir.path(), 3), 2);
+        assert_eq!(count_raw_files(dir.path(), 2), 2);
     }
 
     // ---- Display-only crop overlay thumbnail (pure helper) ----

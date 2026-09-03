@@ -390,6 +390,12 @@ Die Filterleiste (`\`, Welle 3) filtert das Raster über die bereits
 gescannten Metadaten (Dateiname, `rating:`, `flag:`, `label:` — kein Index);
 Quick Develop setzt Grundtonung (`exposure/contrast/highlights/shadows`) auf
 der aktiven Kopie über den normalen Save/Render-Pfad.
+- Das Bibliotheks-Raster zeigt Bilder des gewählten Ordners **einschließlich
+  Unterordner** (rekursiv, symlink-/loop-sicher, Tiefe begrenzt analog
+  `FOLDER_SCAN_DEPTH`); jede Zelle trägt den relativen Unterordner als
+  Pfad-Badge; der Ordnerbaum bleibt als flache Pro-Ordner-Navigation erhalten
+  (Klick = dieser Ordner flach listen bleibt möglich).
+- **Ist-Stand 2026-09-03:** umgesetzt + verifiziert BESTANDEN (236p lib, kittest 11/11 inkl. `library_subfolder_badges`-Golden, Vision: Badges korrekt zugeordnet; Kontrast-Nacharbeit s. GUI-LIBRARY-BADGE-CONTRAST-1).
 
 ### Maskierung
 

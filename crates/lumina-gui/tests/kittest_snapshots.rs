@@ -347,3 +347,79 @@ fn navigator_viewport() {
     harness.run();
     harness.snapshot("navigator_viewport");
 }
+
+/// Fixture directory for the subfolder-badge snapshot below.
+///
+/// Committed layout (`top.arw` + `sub/mid.arw` + `sub/nested/deep.arw`);
+/// the files are (re-)written deterministically on every run so a fresh
+/// checkout without the binaries still passes and re-writes are
+/// byte-identical (no git churn). The relative path keeps every rendered
+/// string fixed, and the relative badges (`""`, `"sub"`, `"sub/nested"`)
+/// are machine-independent — unlike a `tempfile::tempdir` path, which
+/// would leak nondeterministic pixels into the golden via the path field
+/// and tree root label.
+const LIBRARY_BADGES_FIXTURE_DIR: &str = "tests/fixtures/library_badges";
+
+/// (Re-)write the deterministic badge-fixture files (idempotent).
+///
+/// RAW sentinel bytes suffice: `scan_entry`/`list_directory` only need a
+/// supported extension (+ optional sidecar) — no decode runs during a
+/// directory scan, and grid cells show placeholders for undecodable bytes.
+/// PNGs do NOT work here: the Library grid is RAW-only, so `.png`
+/// fixtures aggregate into `entries` (status count) but render an empty
+/// grid with no badges. Tradeoff: the golden pins the deterministic LibRaw
+/// "opening input failed" placeholder text for the sentinel bytes (a
+/// LibRaw message change needs a golden refresh); the `sub` / `sub/nested`
+/// badge pixels are the actual regression signal.
+fn ensure_library_badges_fixture() {
+    let root = std::path::Path::new(LIBRARY_BADGES_FIXTURE_DIR);
+    std::fs::create_dir_all(root.join("sub/nested")).expect("create badge fixture dirs");
+    // Remove stale pre-RAW fixtures (H1 first attempt used `.png`).
+    for stale in [
+        "tests/fixtures/library_badges/top.png",
+        "tests/fixtures/library_badges/sub/mid.png",
+        "tests/fixtures/library_badges/sub/nested/deep.png",
+    ] {
+        let _ = std::fs::remove_file(stale);
+    }
+    for path in [
+        "tests/fixtures/library_badges/top.arw",
+        "tests/fixtures/library_badges/sub/mid.arw",
+        "tests/fixtures/library_badges/sub/nested/deep.arw",
+    ] {
+        std::fs::write(path, b"lumina-raw-fixture").expect("write badge fixture");
+    }
+}
+
+/// GUI-LIBRARY-SUBFOLDERS-1: the Library grid aggregates subfolders with a
+/// visible relative-path badge (`sub`, `sub/nested`; empty for top-level).
+/// Golden regression for the badge state (H1).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_subfolder_badges() {
+    ensure_library_badges_fixture();
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    harness
+        .state_mut()
+        .set_directory(LIBRARY_BADGES_FIXTURE_DIR.to_owned());
+    // `set_directory` lists flat; the recursive aggregation carries badges.
+    harness.state_mut().list_directory();
+    // Non-vacuous guard: the recursive listing (not the flat one) must see
+    // all three files, otherwise the golden below could pass on an empty
+    // grid without any badge pixels. (`FileBrowserEntry` fields are
+    // private; `thumb_key()` is the public per-entry path accessor.)
+    let entries = harness.state_mut().entries();
+    assert_eq!(entries.len(), 3, "recursive aggregation must see all files");
+    let mut keys: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.thumb_key().to_owned())
+        .collect();
+    keys.sort();
+    assert!(keys[0].ends_with("mid.arw"), "unexpected key {}", keys[0]);
+    assert!(keys[1].ends_with("deep.arw"), "unexpected key {}", keys[1]);
+    assert!(keys[2].ends_with("top.arw"), "unexpected key {}", keys[2]);
+    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
+    harness.run_steps(3);
+    harness.snapshot("library_subfolder_badges");
+}
