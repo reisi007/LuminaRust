@@ -227,10 +227,22 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   Kinds abgelehnt. `append_generative_canvas`/`append_spot_heal_generative`
   laufen unter derselben `.zdata.lock` und schreiben atomar (Temp + Rename);
   WASM-Stub meldet `zdata not available on wasm32` laut (kein stiller
-  Fallback). Tests: `88p` ohne / `124p` mit `zdata`-Feature, Clippy/Format/
-  wasm32 (`--features zdata`) grün. Offene Folgearbeit: Rezept-Verlinkung
-  (typisierte `GenerativeEdit`-/`spot_removals`-Artefaktreferenz auf Record-IDs,
-  additives Schema-v2-Feld) — siehe `Agents.todo.md` Phase 10b.
+  Fallback). Tests: `88p` ohne / `124p` mit `zdata`-Feature (Stand 1e0ccbd),
+  Clippy/Format/wasm32 (`--features zdata`) gruen.
+- **Rezept-Verlinkung generativ (GEN-ZDATA-LINK-1, 2026-09-03, 69dad91,
+  verifiziert BESTANDEN):** Typisierte, additive Schema-v2-Rezeptfelder
+  verknuepfen `GenerativeEdit` (`generative_canvas`, kind=2) und
+  `spot_removals` (`spot_heal_generative`, kind=3) per Record-ID +
+  `ArtifactReference` (relativer Pfad, Format, BLAKE3-Pruefsumme, Aufloesung,
+  Kanaltyp, Datenversion) mit den `.lumina.zdata`-Records; Validierung lehnt
+  unbekannte Versionen laut ab (gegenseitige Ausschlussregeln je Modus),
+  JSON-Roundtrip + `artifact_status`-Abdeckung
+  (`Available`/`Missing`/`Corrupt` eager), relative Pfade bleiben nach
+  Bundle-Verschiebung gueltig, Writes atomar. Tests: sidecar `96p` ohne /
+  `134p` mit `zdata`-Feature (Stand 69dad91; Folge-Fixes c000c6f/1bbb564:
+  `101p`/`139p`), Clippy/Format/wasm gruen. Offene Folgearbeit: Link-Felder
+  in `recipe_hash`/RenderKey (GEN-RENDERKEY-LINK-1, siehe `Agents.todo.md`
+  Block A).
 - **Artefaktstatus:** `artifact_status` unterscheidet `Missing`, `Available`
   und neu `Corrupt` (leere Datei, <8-Byte-Container ohne Magic,
   zdata-deklariertes Format ohne `LUMZDATA`-Magic, fehlende/falsche Magic,

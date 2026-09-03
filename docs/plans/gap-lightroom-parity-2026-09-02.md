@@ -1,7 +1,8 @@
 # Gap-Analyse Lightroom CC Parität — LuminaRust
 
 **Datum:** 2026-09-02  
-**Status:** Analyse (kein Code, Doku-first)  
+**Status:** Analyse (kein Code, Doku-first)
+**Status 2026-09-03:** LR-PARITY-01 Wellen 1–3 umgesetzt + unabhaengig verifiziert BESTANDEN (c881a62, 1fe6353, 888a391, HEAD 711fe09). Scope-Ehrlichkeit: Compare/Split/Survey/Farbe/Stack/Snapshots sind light-Proxies (reine Anzeige-/Extras-Mechanik ohne Index-/Render-Vollsemantik). Post-MVP-Rest bleibt ausserhalb von Block A: HDR/Panorama-DNG-Merge, Rote-Augen, KI-Denoise/Unchaerfe, Smart-Sammlungen/Index. Die Tabellen unten bleiben Analyse-Stand 2026-09-02 (keine Umschreibung).  
 **Auftrag:** Lightroom-Aufzählung Bibliothek/Entwickeln vs LuminaRust Ist — SOLL/IST/Gap, Shortcuts, priorisierte Lücken, auto-Verifikation  
 **Bezug:** `Agents.md`, `Agents.todo.md` (Block A/C, F-103-INTEGRATION-PREVIEW-SIDECAR 43b1b73, CI-ONNX-RT 953987e), `feature/README.md`, `feature/platform/cli-gui-wasm.md` (F-100, F-103, F-010), `feature/architecture/pipeline.md` (F-089..099, F-036, F-042), `feature/architecture/sidecar.md` (F-001), `feature/product/virtual-copies.md` (F-002/F-014/F-009), `feature/product/ai-masks.md` (F-004/F-079..F-083), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/export.md` (F-037), `feature/platform/capability-matrix.md` (F-006/F-069..F-071), `feature/platform/wasm-limits.md`, `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (28b7782), `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-gui/src/lib.rs` (Module, Shortcuts, Library/Develop Slices), `crates/lumina-core` (`pipeline.rs`, `render.rs`), `crates/lumina-cli`, `crates/lumina-mcp`
 

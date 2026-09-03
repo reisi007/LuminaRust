@@ -234,6 +234,13 @@ einer späteren Architekturentscheidung erneut bewertet werden.
 > Filesystem-Seiteneffekte; ein nur „armierter“ (ohne Bild) Tool-Zustand ist
 > visuell nicht vom Develop-Grundzustand zu unterscheiden.
 
+> **Test-Ist-Stand (2026-09-03, LR-PARITY-01 Wellen 1–3 + SPOT-Fixes, verifiziert
+> BESTANDEN, HEAD 711fe09):** `lumina-gui` 185p, `lumina-core` 328p,
+> `lumina-sidecar` 101p (`--lib`, 139p mit `zdata`-Feature). Die 5 kittest-Goldens
+> bleiben `#[ignore]` (headless GPU noetig); ein Rebaseline nach den Wellen 2/3
+> steht aus (siehe `Agents.todo.md` GUI-KIT-01-REFRESH, `UPDATE_SNAPSHOTS=true`
+> nur bei beabsichtigtem Diff auf einer GPU-Maschine).
+
 ## UI-Konventionen (F-100)
 
 Die Desktop-GUI folgt verbindlich den UI-Konventionen von **Lightroom Desktop**
