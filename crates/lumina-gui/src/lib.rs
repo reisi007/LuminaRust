@@ -267,6 +267,111 @@ pub fn panel_toggle_for_key(key: egui::Key) -> Option<PanelToggle> {
     }
 }
 
+/// Library compare/survey view (Welle 3, LR-20 light): `C` shows the
+/// full-frame Before image through the existing [`LuminaApp::before_after`]
+/// path (compare proxy), `N` jumps to the Library grid (survey proxy over
+/// the file-browser entries). Pure function, unit-tested without an
+/// [`egui::Context`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareMode {
+    Compare,
+    Survey,
+}
+
+pub fn compare_mode_for_key(key: egui::Key) -> Option<CompareMode> {
+    match key {
+        egui::Key::C => Some(CompareMode::Compare),
+        egui::Key::N => Some(CompareMode::Survey),
+        _ => None,
+    }
+}
+
+/// Import/export module shortcut (Welle 3, LR-13 light):
+/// `Cmd/Ctrl+Shift+I` jumps to Library (import lives there),
+/// `Cmd/Ctrl+Shift+E` jumps to Export. The shortcuts only switch the module
+/// and announce it via the status line — file dialogs and the actual export
+/// stay manual. Pure function, unit-tested without an [`egui::Context`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportExportAction {
+    Import,
+    Export,
+}
+
+pub fn import_export_for_key(
+    key: egui::Key,
+    command: bool,
+    shift: bool,
+) -> Option<ImportExportAction> {
+    if !(command && shift) {
+        return None;
+    }
+    match key {
+        egui::Key::I => Some(ImportExportAction::Import),
+        egui::Key::E => Some(ImportExportAction::Export),
+        _ => None,
+    }
+}
+
+/// Simple Library filter match (Welle 3, LR-13 light) over metadata the
+/// directory scan already holds — no index, no extra IO. An empty query
+/// matches everything. A `rating:<0-5>`, `flag:pick|reject|unflagged` or
+/// `label:red|yellow|green|blue|none` prefix filters on that field;
+/// anything else is a case-insensitive substring match on the file name. A
+/// recognised prefix with an unparseable value matches nothing (visible
+/// empty grid, never a silent pass-through). Pure function, unit-tested
+/// headless.
+pub fn library_filter_matches(
+    name: &str,
+    rating: u8,
+    flag: Flag,
+    color_label: u8,
+    query: &str,
+) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let lowered = query.to_lowercase();
+    if let Some(rest) = lowered.strip_prefix("rating:") {
+        return rest.trim().parse::<u8>().is_ok_and(|want| want == rating);
+    }
+    if let Some(rest) = lowered.strip_prefix("flag:") {
+        let want = match rest.trim() {
+            "pick" => Flag::Pick,
+            "reject" => Flag::Reject,
+            "unflagged" => Flag::Unflagged,
+            _ => return false,
+        };
+        return want == flag;
+    }
+    if let Some(rest) = lowered.strip_prefix("label:") {
+        let want = match rest.trim() {
+            "red" => 1,
+            "yellow" => 2,
+            "green" => 3,
+            "blue" => 4,
+            "none" => 0,
+            _ => return false,
+        };
+        return want == color_label;
+    }
+    name.to_lowercase().contains(&lowered)
+}
+
+/// Read the stack-group proxy id (Welle 3, LR-17 light) from a virtual
+/// copy's `extras["stack_group"]` — no sidecar schema change. Missing,
+/// non-string or empty values read as `None`: the field is a
+/// forward-compatible grouping annotation, while the write path
+/// ([`LuminaApp::toggle_stack_group`]) is the only place ids are minted.
+/// Shared by the toggle and headless tests so both read one path.
+pub fn stack_id_of(extras: &BTreeMap<String, serde_json::Value>) -> Option<String> {
+    extras
+        .get("stack_group")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 /// Shadow/highlight clipping fractions (`0..=1`) of a frame: a pixel counts
 /// as shadow-clipped when all channels are `0`, as highlight-clipped when
 /// all are `255`. Pure display diagnostic for the `J` overlay badge — it
@@ -672,6 +777,22 @@ pub struct LuminaApp {
     lights_out: bool,
     panels_hidden: bool,
     crop_mode: bool,
+    /// Welle 3 (LR-13/LR-20/LR-09/LR-12/LR-17 light) display/session state.
+    /// All of these are display-only or `extras`/history-backed, so no
+    /// sidecar schema change was needed:
+    /// * `filter_bar_visible` + `library_filter`: `\` Library drawer (text
+    ///   filter over the scanned entry metadata + Quick Develop sliders).
+    /// * `compare_mode`: `C` compare / `N` survey proxy reusing
+    ///   `before_after` (compare) and the Library grid (survey).
+    /// * `before_after_split`: `Shift+Y` split-view marker (full-frame
+    ///   Before proxy; side-by-side render is follow-up work).
+    /// * `fullscreen`: `F` fullscreen preview (hides the same chrome as
+    ///   lights-out and settles the zoom on Fit).
+    filter_bar_visible: bool,
+    library_filter: String,
+    compare_mode: Option<CompareMode>,
+    before_after_split: bool,
+    fullscreen: bool,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
     /// Generated filmstrip thumbnail textures. Native-only (REVIEW-GUI-
@@ -1167,6 +1288,11 @@ impl LuminaApp {
             lights_out: false,
             panels_hidden: false,
             crop_mode: false,
+            filter_bar_visible: false,
+            library_filter: String::new(),
+            compare_mode: None,
+            before_after_split: false,
+            fullscreen: false,
             wb_pick_mode: false,
             #[cfg(not(target_arch = "wasm32"))]
             thumbnails: ThumbnailManager::new(),
@@ -1886,6 +2012,326 @@ impl LuminaApp {
         } else {
             Str::CropModeOff.t().into()
         };
+    }
+
+    /// Toggle the Library filter drawer (`\`, Welle 3, LR-13 light).
+    /// Display-only: shows/hides the text filter + Quick Develop sliders in
+    /// the Library grid. Never mutates the recipe.
+    pub fn toggle_filter_bar(&mut self) {
+        self.filter_bar_visible = !self.filter_bar_visible;
+        trace!(
+            "GUI interaction: toggle_filter_bar -> {}",
+            self.filter_bar_visible
+        );
+        self.status = if self.filter_bar_visible {
+            Str::FilterShown.t().into()
+        } else {
+            Str::FilterHidden.t().into()
+        };
+    }
+
+    /// Set the Library text filter query (Welle 3, LR-13 light). Display-only;
+    /// matched by [`library_filter_matches`] against the scanned entry
+    /// metadata. Never mutates the recipe.
+    pub fn set_library_filter(&mut self, query: impl Into<String>) {
+        self.library_filter = query.into();
+        trace!(
+            "GUI interaction: set_library_filter {:?}",
+            self.library_filter
+        );
+    }
+
+    /// Active compare/survey proxy mode (Welle 3, LR-20 light). Read-only
+    /// accessor for badges and headless tests.
+    pub fn compare_mode(&self) -> Option<CompareMode> {
+        self.compare_mode
+    }
+
+    /// Toggle a compare/survey view (Welle 3, LR-20 light). `Compare` (`C`)
+    /// reuses the existing Before/After path (full-frame Before proxy, never
+    /// a recipe mutation); `Survey` (`N`) jumps to the Library grid (survey
+    /// proxy over the file-browser entries) and clears Before/After. A repeat
+    /// press leaves the view. Never mutates the recipe.
+    pub fn toggle_compare_mode(&mut self, mode: CompareMode) {
+        trace!("GUI interaction: toggle_compare_mode {:?}", mode);
+        match mode {
+            CompareMode::Compare => {
+                if self.compare_mode == Some(CompareMode::Compare) && self.before_after {
+                    self.compare_mode = None;
+                    self.before_after = false;
+                    self.status = Str::CompareOff.t().into();
+                } else {
+                    self.compare_mode = Some(CompareMode::Compare);
+                    self.before_after = true;
+                    self.status = Str::CompareOnPattern.format_arg(Str::CompareModeCompare.t());
+                }
+            }
+            CompareMode::Survey => {
+                if self.compare_mode == Some(CompareMode::Survey) {
+                    self.compare_mode = None;
+                    self.status = Str::CompareOff.t().into();
+                } else {
+                    self.compare_mode = Some(CompareMode::Survey);
+                    self.before_after = false;
+                    self.active_module = Module::Library;
+                    self.status = Str::SurveyOn.t().into();
+                }
+            }
+        }
+    }
+
+    /// Toggle the split Before/After marker (`Shift+Y`, Welle 3, LR-09
+    /// light). Display-only: enabling also holds the Before image via the
+    /// existing `before_after` path (full-frame Before proxy — a true
+    /// side-by-side split render is documented follow-up work, see
+    /// `feature/platform/cli-gui-wasm.md`). Never mutates the recipe.
+    pub fn toggle_split_view(&mut self) {
+        self.before_after_split = !self.before_after_split;
+        if self.before_after_split {
+            self.before_after = true;
+        }
+        trace!(
+            "GUI interaction: toggle_split_view -> {}",
+            self.before_after_split
+        );
+        self.status = if self.before_after_split {
+            Str::SplitViewOn.t().into()
+        } else {
+            Str::SplitViewOff.t().into()
+        };
+    }
+
+    /// Toggle the fullscreen preview (`F`, Welle 3). Display-only: hides the
+    /// same chrome as lights-out (see [`Self::chrome_hidden`]) and settles
+    /// the zoom on Fit when enabling, so the previous `F`-zoom-to-fit
+    /// behaviour is preserved on entry. Never mutates the recipe.
+    pub fn toggle_fullscreen(&mut self) {
+        self.fullscreen = !self.fullscreen;
+        trace!("GUI interaction: toggle_fullscreen -> {}", self.fullscreen);
+        if self.fullscreen {
+            self.set_zoom_mode(ZoomMode::Fit);
+        }
+        self.status = if self.fullscreen {
+            Str::FullscreenOn.t().into()
+        } else {
+            Str::FullscreenOff.t().into()
+        };
+    }
+
+    /// Whether side chrome (panels, navigator, filmstrip) is hidden: `Tab`
+    /// panels-hide, `L` lights-out or `F` fullscreen (Welle 3). Shared by the
+    /// draw paths so fullscreen hides exactly the lights-out chrome — and,
+    /// with `fullscreen == false`, every condition evaluates exactly as
+    /// before (no default-layout pixel change).
+    pub fn chrome_hidden(&self) -> bool {
+        self.panels_hidden || self.lights_out || self.fullscreen
+    }
+
+    /// Current stack-group proxy id of the active virtual copy (Welle 3,
+    /// LR-17 light), read tolerantly via [`stack_id_of`]. Returns `None`
+    /// when no document is loaded. Read-only accessor for headless tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn stack_group_id(&self) -> Option<String> {
+        self.document.as_ref().and_then(|document| {
+            document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == self.virtual_copy_id)
+                .and_then(|copy| stack_id_of(&copy.extras))
+        })
+    }
+
+    /// Toggle stack-group membership of the active virtual copy (`Cmd/Ctrl+G`,
+    /// Welle 3, LR-17 light). Grouping proxy without a schema change: the
+    /// first press mints a `stack-<n>` id (unique across the loaded
+    /// document's copies) into the copy's `extras["stack_group"]`, the second
+    /// press removes it again. Persists through [`Self::save_sidecar`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn toggle_stack_group(&mut self) -> Result<Option<String>, GuiError> {
+        self.ensure_document_loaded()?;
+        if stack_id_of(&self.active_copy_mut()?.extras).is_some() {
+            self.active_copy_mut()?.extras.remove("stack_group");
+            self.save_sidecar();
+            self.status = Str::StackUngrouped.t().into();
+            return Ok(None);
+        }
+        let mut counter = 0usize;
+        for copy in &self
+            .document
+            .as_ref()
+            .expect("document was ensured")
+            .virtual_copies
+        {
+            if let Some(id) = stack_id_of(&copy.extras) {
+                if let Some(n) = id
+                    .strip_prefix("stack-")
+                    .and_then(|rest| rest.parse::<usize>().ok())
+                {
+                    counter = counter.max(n);
+                }
+            }
+        }
+        let new_id = loop {
+            counter += 1;
+            let candidate = format!("stack-{counter}");
+            let taken = self
+                .document
+                .as_ref()
+                .expect("document was ensured")
+                .virtual_copies
+                .iter()
+                .any(|copy| stack_id_of(&copy.extras).as_deref() == Some(&candidate));
+            if !taken {
+                break candidate;
+            }
+        };
+        self.active_copy_mut()?
+            .extras
+            .insert("stack_group".into(), Value::String(new_id.clone()));
+        self.save_sidecar();
+        self.status = Str::StackGroupedPattern.format_arg(&new_id);
+        Ok(Some(new_id))
+    }
+
+    /// Named snapshot list of the active virtual copy (Welle 3, LR-12
+    /// light): `(entry id, snapshot name)` for history entries carrying the
+    /// `extras["snapshot"] = true` marker — or, tolerantly, the
+    /// `snapshot-<n>` id naming for entries written without the marker. The
+    /// name falls back to the entry id when no `snapshot_name` is stored.
+    /// Plain history entries are skipped. Empty without a loaded document.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn snapshots(&self) -> Vec<(String, String)> {
+        self.document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == self.virtual_copy_id)
+            })
+            .map(|copy| {
+                copy.history
+                    .iter()
+                    .filter(|entry| {
+                        entry.extras.get("snapshot").and_then(Value::as_bool) == Some(true)
+                            || entry.id.starts_with("snapshot-")
+                    })
+                    .map(|entry| {
+                        let name = entry
+                            .extras
+                            .get("snapshot_name")
+                            .and_then(Value::as_str)
+                            .unwrap_or(&entry.id)
+                            .to_string();
+                        (entry.id.clone(), name)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Freeze the session recipe as a named snapshot (`Cmd/Ctrl+Alt+S`,
+    /// Welle 3, LR-12 light). Snapshots are history entries with an
+    /// `extras["snapshot"]` marker — unlike plain history they are named and
+    /// meant to be kept. Persists through [`Self::save_sidecar`]; an empty
+    /// name fails loudly, never silently.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn create_snapshot(&mut self, name: impl Into<String>) -> Result<String, GuiError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io(Str::InvalidSnapshotName.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        let new_id = {
+            let document = self.document.as_ref().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == self.virtual_copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            let mut counter = copy.history.len();
+            loop {
+                counter += 1;
+                let candidate = format!("snapshot-{counter}");
+                if !copy.history.iter().any(|entry| entry.id == candidate) {
+                    break candidate;
+                }
+            }
+        };
+        let mut extras = BTreeMap::new();
+        extras.insert("snapshot".into(), Value::Bool(true));
+        extras.insert("snapshot_name".into(), Value::String(name.clone()));
+        let frozen = self.recipe.clone();
+        self.active_copy_mut()?.history.push(HistoryEntry {
+            id: new_id.clone(),
+            recipe: frozen,
+            recorded_at: None,
+            extras,
+        });
+        self.save_sidecar();
+        // `save_sidecar` overwrites the status ("Sidecar saved"); restore the
+        // snapshot message so the freeze stays visible.
+        self.status = Str::SnapshotCreatedPattern.format_arg(&name);
+        Ok(new_id)
+    }
+
+    /// Restore a named snapshot (Welle 3, LR-12 light): adopts the frozen
+    /// recipe into the session recipe and re-renders, like
+    /// [`Self::restore_history`]. Accepts the `extras["snapshot"]` marker or
+    /// — tolerantly — the `snapshot-<n>` id naming; anything else fails
+    /// loudly as [`Str::NotSnapshot`] instead of restoring plain history
+    /// silently.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn restore_snapshot(&mut self, entry_id: &str) -> Result<(), GuiError> {
+        let is_snapshot = self
+            .document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == self.virtual_copy_id)
+            })
+            .and_then(|copy| copy.history.iter().find(|entry| entry.id == entry_id))
+            .is_some_and(|entry| {
+                entry.extras.get("snapshot").and_then(Value::as_bool) == Some(true)
+                    || entry.id.starts_with("snapshot-")
+            });
+        if !is_snapshot {
+            return Err(GuiError::Io(Str::NotSnapshot.t().to_string()));
+        }
+        self.restore_history(entry_id)
+    }
+
+    /// Quick Develop (Welle 3, LR-13 light): set one of
+    /// `exposure`/`contrast`/`highlights`/`shadows` on the session recipe and
+    /// persist it through the normal save/render path (so the preview
+    /// generation bumps and the sidecar keeps the result). Backs both the
+    /// Library Quick Develop drawer and
+    /// [`Self::apply_adjustment_to_selection`]'s key gate. Unknown keys, a
+    /// missing image or a path-less (byte-drop) session fail loudly — never
+    /// a silent no-op.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_quick_develop(&mut self, key: &str, value: f64) -> Result<(), GuiError> {
+        if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") {
+            return Err(GuiError::Io(Str::UnknownAdjustment.format_arg(key)));
+        }
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        if self.path.trim().is_empty() {
+            return Err(GuiError::Io(Str::SaveNeedsLocalPath.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        trace!("GUI interaction: apply_quick_develop {key}={value}");
+        self.recipe.adjustments.insert(key.into(), value);
+        self.mark_dirty();
+        self.save_sidecar();
+        self.render()?;
+        // `render` overwrites the status ("Preview current"); restore the
+        // quick-develop message so the action stays visible.
+        self.status = Str::QuickDevelopAppliedPattern.format_arg(key);
+        Ok(())
     }
 
     /// Current rating and flag of the active virtual copy (LR-01). Returns
@@ -6577,15 +7023,63 @@ impl LuminaApp {
             }
         });
         ui.separator();
+        // Welle 3 (LR-13 light): `\` Library drawer — text filter over the
+        // scanned entry metadata plus Quick Develop sliders. Hidden by
+        // default, so the default grid layout (and its kittest goldens) are
+        // pixel-identical without it.
+        if self.filter_bar_visible {
+            ui.horizontal(|ui| {
+                ui.label(Str::FilterBar.t());
+                let mut query = self.library_filter.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut query)
+                            .hint_text(Str::FilterPlaceholder.t()),
+                    )
+                    .changed()
+                {
+                    self.set_library_filter(query);
+                }
+            });
+            ui.collapsing(Str::QuickDevelop.t(), |ui| {
+                for (key, label, range) in [
+                    ("exposure", Str::Exposure, -10.0..=10.0),
+                    ("contrast", Str::Contrast, -1.0..=1.0),
+                    ("highlights", Str::Highlights, -1.0..=1.0),
+                    ("shadows", Str::Shadows, -1.0..=1.0),
+                ] {
+                    let mut value = self.recipe.adjustments.get(key).copied().unwrap_or(0.0);
+                    if ui
+                        .add(egui::Slider::new(&mut value, range).text(label.t()))
+                        .changed()
+                    {
+                        if let Err(error) = self.apply_quick_develop(key, value) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            });
+            ui.separator();
+        }
         // GUI-SCROLL-200-1: index-based view over the RAW entries. Only the
         // visible rows are laid out (show_rows) and only the buffered window's
         // thumbnails are ensured per frame — never an O(n) loop over all
         // entries.
+        let query = self.library_filter.clone();
         let raw_indices: Vec<usize> = self
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| is_raw_name(&entry.name))
+            .filter(|(_, entry)| {
+                is_raw_name(&entry.name)
+                    && library_filter_matches(
+                        &entry.name,
+                        entry.rating,
+                        entry.flag,
+                        entry.color_label,
+                        &query,
+                    )
+            })
             .map(|(i, _)| i)
             .collect();
         if raw_indices.is_empty() {
@@ -7903,9 +8397,16 @@ impl eframe::App for LuminaApp {
         apply_lightroom_dark(&ctx);
 
         // Keyboard: `Y` toggles Before/After (which never mutates the recipe);
-        // `Esc` cancels an armed white-balance eyedropper.
+        // `Shift+Y` toggles the split Before/After marker (Welle 3, same
+        // recipe-free guarantee). `Esc` cancels an armed white-balance
+        // eyedropper.
+        let shift_held = ctx.input(|i| i.modifiers.shift);
         if ctx.input(|i| i.key_pressed(egui::Key::Y)) {
-            self.toggle_before_after();
+            if shift_held {
+                self.toggle_split_view();
+            } else {
+                self.toggle_before_after();
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Q)) && !ctx.egui_wants_keyboard_input() {
             let next = if self.spot_tool == SpotTool::None {
@@ -7978,7 +8479,10 @@ impl eframe::App for LuminaApp {
                 self.zoom_step(1.0 / 1.2);
             }
             if ctx.input(|i| i.key_pressed(egui::Key::F)) {
-                self.set_zoom_mode(ZoomMode::Fit);
+                // Welle 3 (LR-09 light): `F` is the fullscreen preview (hides
+                // the lights-out chrome and settles the zoom on Fit when
+                // enabling, so the previous zoom-to-fit role is preserved).
+                self.toggle_fullscreen();
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
                 // `Num0` clears the rating only when a document is loaded;
@@ -8085,6 +8589,31 @@ impl eframe::App for LuminaApp {
                     self.show_error(error);
                 }
             }
+            // Welle 3 (LR-17 light): stack-group proxy `Cmd/Ctrl+G` for the
+            // active virtual copy. Failures surface via `show_error`, never
+            // silently.
+            if ctx
+                .input(|i| i.key_pressed(egui::Key::G) && (i.modifiers.ctrl || i.modifiers.command))
+            {
+                match self.toggle_stack_group() {
+                    Ok(_) => {}
+                    Err(error) => self.show_error(error),
+                }
+            }
+            // Welle 3 (LR-12 light): snapshot `Cmd/Ctrl+Alt+S` freezes the
+            // session recipe under an auto name (`Snapshot <n>`).
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::S)
+                    && (i.modifiers.ctrl || i.modifiers.command)
+                    && i.modifiers.alt
+            }) {
+                let name =
+                    Str::SnapshotNamePattern.format_arg(&(self.snapshots().len() + 1).to_string());
+                match self.create_snapshot(name).map(|_| ()) {
+                    Ok(()) => {}
+                    Err(error) => self.show_error(error),
+                }
+            }
         }
 
         // Welle 2 display-only view toggles (`J` clipping, `L` lights-out,
@@ -8105,6 +8634,44 @@ impl eframe::App for LuminaApp {
                     match panel_toggle_for_key(key) {
                         Some(PanelToggle::CropMode) => self.toggle_crop_mode(),
                         Some(PanelToggle::PanelsHidden) => self.toggle_panels_hidden(),
+                        None => {}
+                    }
+                }
+            }
+            // Welle 3 (LR-13 light): `\` toggles the Library filter drawer
+            // (text filter + Quick Develop). Recipe-free like the other view
+            // toggles, so it stays available on every platform.
+            if ctx.input(|i| i.key_pressed(egui::Key::Backslash)) {
+                self.toggle_filter_bar();
+            }
+            // Welle 3 (LR-20 light): `C` compare reuses Before/After, `N`
+            // survey jumps to the Library grid. Plain presses only —
+            // `Cmd/Ctrl+Shift+C` stays copy-settings (native block below).
+            for key in [egui::Key::C, egui::Key::N] {
+                if ctx.input(|i| i.key_pressed(key) && !i.modifiers.ctrl && !i.modifiers.command) {
+                    if let Some(mode) = compare_mode_for_key(key) {
+                        self.toggle_compare_mode(mode);
+                    }
+                }
+            }
+            // Welle 3 (LR-13 light): `Cmd/Ctrl+Shift+I` jumps to Library
+            // (import lives there), `Cmd/Ctrl+Shift+E` jumps to Export. Both
+            // only switch the module and announce it — dialogs stay manual.
+            for key in [egui::Key::I, egui::Key::E] {
+                if ctx.input(|i| {
+                    i.key_pressed(key)
+                        && (i.modifiers.ctrl || i.modifiers.command)
+                        && i.modifiers.shift
+                }) {
+                    match import_export_for_key(key, true, true) {
+                        Some(ImportExportAction::Import) => {
+                            self.active_module = Module::Library;
+                            self.status = Str::GotoLibraryImport.t().into();
+                        }
+                        Some(ImportExportAction::Export) => {
+                            self.active_module = Module::Export;
+                            self.status = Str::GotoExport.t().into();
+                        }
                         None => {}
                     }
                 }
@@ -8342,10 +8909,10 @@ impl eframe::App for LuminaApp {
 
         // Left: Lightroom-like Library folder tree. Develop/Export leave the
         // left edge to the navigator/preview working area. Hidden under `Tab`
-        // panels-hide and `L` lights-out (Welle 2); the header/module bar
-        // stay so status and errors remain visible.
+        // panels-hide, `L` lights-out and `F` fullscreen (Welle 2/3); the
+        // header/module bar stay so status and errors remain visible.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.active_module == Module::Library && !self.panels_hidden && !self.lights_out {
+        if self.active_module == Module::Library && !self.chrome_hidden() {
             egui::Panel::left("folders")
                 .resizable(true)
                 .default_size(220.0)
@@ -8360,8 +8927,7 @@ impl eframe::App for LuminaApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.navigator_open
             && !matches!(self.active_module, Module::Library)
-            && !self.panels_hidden
-            && !self.lights_out
+            && !self.chrome_hidden()
         {
             egui::Panel::left("navigator")
                 .resizable(true)
@@ -8374,8 +8940,8 @@ impl eframe::App for LuminaApp {
         // two-pane layout (folder tree left, thumbnail grid center) with no
         // right-hand Source panel — that source/sidecar/copy info belongs to
         // the Develop/Export context (Lightroom-parity: the Source panel was
-        // removed from Library). Hidden under `Tab`/`L` like the left panels.
-        if !self.panels_hidden && !self.lights_out {
+        // removed from Library). Hidden under `Tab`/`L`/`F` like the left panels.
+        if !self.chrome_hidden() {
             egui::Panel::right("controls")
                 .resizable(true)
                 .default_size(320.0)
@@ -8403,9 +8969,11 @@ impl eframe::App for LuminaApp {
         // Bottom: filmstrip in Library/Develop. Native builds show generated
         // thumbnails (miss -> background job); the wasm build shows placeholders
         // only, since in-browser RAW/file IO is a documented native capability.
-        // `L` lights-out hides it (Welle 2); `Tab` panels-hide keeps it.
-        let show_filmstrip =
-            matches!(self.active_module, Module::Library | Module::Develop) && !self.lights_out;
+        // `L` lights-out and `F` fullscreen hide it (Welle 2/3); `Tab`
+        // panels-hide keeps it.
+        let show_filmstrip = matches!(self.active_module, Module::Library | Module::Develop)
+            && !self.lights_out
+            && !self.fullscreen;
         if show_filmstrip {
             #[cfg(not(target_arch = "wasm32"))]
             egui::Panel::bottom("filmstrip").show(ui, |ui| self.draw_filmstrip(&ctx, ui));
@@ -13152,5 +13720,334 @@ mod tests {
         // Q disarm
         app.set_spot_tool(SpotTool::None);
         assert_eq!(app.spot_tool(), SpotTool::None);
+    }
+
+    // ---- LR-PARITY-01 Welle 3 (lumina-gui only, no schema change) --------
+    #[test]
+    fn w3_shortcut_mappings_are_exact() {
+        // Compare/survey (LR-20 light) and import/export (LR-13 light) pure
+        // key mappings: every bound key maps, neighbours don't.
+        assert_eq!(
+            compare_mode_for_key(egui::Key::C),
+            Some(CompareMode::Compare)
+        );
+        assert_eq!(
+            compare_mode_for_key(egui::Key::N),
+            Some(CompareMode::Survey)
+        );
+        assert_eq!(compare_mode_for_key(egui::Key::G), None);
+        assert_eq!(compare_mode_for_key(egui::Key::Y), None);
+        assert_eq!(compare_mode_for_key(egui::Key::V), None);
+        assert_eq!(
+            import_export_for_key(egui::Key::I, true, true),
+            Some(ImportExportAction::Import)
+        );
+        assert_eq!(
+            import_export_for_key(egui::Key::E, true, true),
+            Some(ImportExportAction::Export)
+        );
+        assert_eq!(import_export_for_key(egui::Key::I, false, true), None);
+        assert_eq!(import_export_for_key(egui::Key::I, true, false), None);
+        assert_eq!(import_export_for_key(egui::Key::E, true, false), None);
+        assert_eq!(import_export_for_key(egui::Key::C, true, true), None);
+    }
+
+    #[test]
+    fn w3_library_filter_matches_names_and_metadata() {
+        // Empty query matches everything (default grid is unfiltered).
+        assert!(library_filter_matches(
+            "IMG_0001.ARW",
+            0,
+            Flag::Unflagged,
+            0,
+            ""
+        ));
+        assert!(library_filter_matches(
+            "IMG_0001.ARW",
+            4,
+            Flag::Pick,
+            1,
+            "   "
+        ));
+        // Plain text: case-insensitive substring on the file name.
+        assert!(library_filter_matches(
+            "IMG_0001.ARW",
+            0,
+            Flag::Unflagged,
+            0,
+            "img_0001"
+        ));
+        assert!(!library_filter_matches(
+            "IMG_0001.ARW",
+            0,
+            Flag::Unflagged,
+            0,
+            "cr2"
+        ));
+        // Structured rating filter.
+        assert!(library_filter_matches(
+            "a.arw",
+            4,
+            Flag::Unflagged,
+            0,
+            "rating:4"
+        ));
+        assert!(!library_filter_matches(
+            "a.arw",
+            4,
+            Flag::Unflagged,
+            0,
+            "rating:5"
+        ));
+        // Recognised prefix with an unparseable value matches nothing
+        // (visible empty grid, never a silent pass-through).
+        assert!(!library_filter_matches(
+            "rating:4.arw",
+            4,
+            Flag::Unflagged,
+            0,
+            "rating:x"
+        ));
+        // Structured flag filter.
+        assert!(library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Pick,
+            0,
+            "flag:pick"
+        ));
+        assert!(!library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Pick,
+            0,
+            "flag:reject"
+        ));
+        assert!(!library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Pick,
+            0,
+            "flag:bogus"
+        ));
+        // Structured color-label filter.
+        assert!(library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Unflagged,
+            1,
+            "label:red"
+        ));
+        assert!(library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Unflagged,
+            0,
+            "label:none"
+        ));
+        assert!(!library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Unflagged,
+            1,
+            "label:blue"
+        ));
+        assert!(!library_filter_matches(
+            "a.arw",
+            0,
+            Flag::Unflagged,
+            1,
+            "label:bogus"
+        ));
+    }
+
+    #[test]
+    fn w3_filter_bar_toggle_is_display_only() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        let generation = app.preview_generation();
+        assert!(!app.filter_bar_visible);
+        app.toggle_filter_bar();
+        assert!(app.filter_bar_visible);
+        app.set_library_filter("img");
+        assert_eq!(app.library_filter, "img");
+        app.toggle_filter_bar();
+        assert!(!app.filter_bar_visible);
+        // View state only: recipe and render generation are untouched.
+        assert!(app.recipe().adjustments.is_empty());
+        assert_eq!(app.preview_generation(), generation);
+    }
+
+    #[test]
+    fn w3_compare_toggle_reuses_before_after() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        let generation = app.preview_generation();
+        assert_eq!(app.compare_mode(), None);
+        assert!(!app.before_after);
+        app.toggle_compare_mode(CompareMode::Compare);
+        assert_eq!(app.compare_mode(), Some(CompareMode::Compare));
+        assert!(app.before_after);
+        // Display-only: the recipe (and therefore any sidecar state) and the
+        // render generation are untouched.
+        assert!(app.recipe().adjustments.is_empty());
+        assert_eq!(app.preview_generation(), generation);
+        app.toggle_compare_mode(CompareMode::Compare);
+        assert_eq!(app.compare_mode(), None);
+        assert!(!app.before_after);
+    }
+
+    #[test]
+    fn w3_survey_toggle_jumps_to_library_grid() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.set_module(Module::Develop);
+        app.toggle_compare_mode(CompareMode::Survey);
+        assert_eq!(app.compare_mode(), Some(CompareMode::Survey));
+        assert_eq!(app.active_module, Module::Library);
+        assert!(!app.before_after);
+        assert!(app.recipe().adjustments.is_empty());
+        // A repeat press leaves survey mode but stays on the grid (no forced
+        // module return).
+        app.toggle_compare_mode(CompareMode::Survey);
+        assert_eq!(app.compare_mode(), None);
+        assert_eq!(app.active_module, Module::Library);
+    }
+
+    #[test]
+    fn w3_split_toggle_holds_before_image() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        assert!(!app.before_after_split);
+        app.toggle_split_view();
+        assert!(app.before_after_split);
+        // Enabling holds the Before image through the existing path.
+        assert!(app.before_after);
+        assert!(app.recipe().adjustments.is_empty());
+        app.toggle_split_view();
+        assert!(!app.before_after_split);
+    }
+
+    #[test]
+    fn w3_fullscreen_toggle_settles_zoom_on_fit() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.zoom_step(2.0);
+        assert_eq!(app.zoom_mode, ZoomMode::Custom);
+        assert!(!app.chrome_hidden());
+        app.toggle_fullscreen();
+        assert!(app.fullscreen);
+        // Entering fullscreen settles the zoom on Fit (the previous `F`
+        // role) and hides the lights-out chrome.
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert!(app.chrome_hidden());
+        assert!(app.recipe().adjustments.is_empty());
+        app.toggle_fullscreen();
+        assert!(!app.fullscreen);
+        assert!(!app.chrome_hidden());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn w3_stack_group_toggle_roundtrip() {
+        // LR-17 light: `Cmd+G` grouping proxy via `extras["stack_group"]`
+        // (no schema change), persisted and restored across reopen.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert_eq!(app.stack_group_id(), None);
+        let id = app
+            .toggle_stack_group()
+            .unwrap()
+            .expect("first toggle groups");
+        assert!(id.starts_with("stack-"));
+        assert_eq!(app.stack_group_id(), Some(id.clone()));
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(
+            stack_id_of(&document.virtual_copies[0].extras),
+            Some(id.clone())
+        );
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.stack_group_id(), Some(id));
+        // A second press ungroups again and persists the removal.
+        assert_eq!(reopened.toggle_stack_group().unwrap(), None);
+        assert_eq!(reopened.stack_group_id(), None);
+        // Tolerant read: missing, non-string or empty values are `None`.
+        assert_eq!(stack_id_of(&BTreeMap::new()), None);
+        let numeric = BTreeMap::from([("stack_group".to_string(), serde_json::Value::from(7))]);
+        assert_eq!(stack_id_of(&numeric), None);
+        let empty = BTreeMap::from([("stack_group".to_string(), serde_json::Value::from(""))]);
+        assert_eq!(stack_id_of(&empty), None);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn w3_snapshot_freeze_list_restore() {
+        // LR-12 light: named history freeze (extras marker), list, restore.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.snapshots().is_empty());
+        assert!(app.create_snapshot("").is_err());
+        assert!(app.create_snapshot("   ").is_err());
+        app.set_adjustment("exposure", 1.5);
+        let id = app.create_snapshot("grade-a").unwrap();
+        assert!(id.starts_with("snapshot-"));
+        assert_eq!(app.snapshots(), vec![(id.clone(), "grade-a".to_string())]);
+        // The frozen recipe survives later edits and restores exactly.
+        app.set_adjustment("exposure", -2.0);
+        assert_eq!(app.recipe().adjustments["exposure"], -2.0);
+        app.restore_snapshot(&id).unwrap();
+        assert_eq!(app.recipe().adjustments["exposure"], 1.5);
+        // Unknown ids and plain history fail loudly, never silently.
+        assert!(app.restore_snapshot("nope").is_err());
+        // Naming fallback (tolerant): an entry with a `snapshot-<n>` id but
+        // no marker still restores; the marker is what lists it by name.
+        app.active_copy_mut().unwrap().history.push(HistoryEntry {
+            id: "snapshot-legacy".into(),
+            recipe: EditRecipe::default(),
+            recorded_at: None,
+            extras: BTreeMap::new(),
+        });
+        app.restore_snapshot("snapshot-legacy").unwrap();
+        assert!(app.recipe().adjustments.is_empty());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn w3_quick_develop_applies_saves_and_renders() {
+        // LR-13 light: Quick Develop through the save/render path.
+        let mut bare = new_app();
+        assert!(bare.apply_quick_develop("exposure", 1.0).is_err());
+        bare.load_bytes(png(), "test.png").unwrap();
+        // Path-less (byte-drop) sessions and unknown keys fail loudly.
+        assert!(bare.apply_quick_develop("exposure", 1.0).is_err());
+        assert!(bare.apply_quick_develop("bogus", 1.0).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let generation = app.preview_generation();
+        app.apply_quick_develop("exposure", 2.0).unwrap();
+        assert_eq!(app.recipe().adjustments["exposure"], 2.0);
+        assert!(app.preview_generation() > generation);
+        // The value reached the persisted sidecar copy, not just the session.
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            2.0
+        );
+        for key in ["contrast", "highlights", "shadows"] {
+            app.apply_quick_develop(key, 0.5).unwrap();
+            assert_eq!(app.recipe().adjustments[key], 0.5);
+        }
     }
 }

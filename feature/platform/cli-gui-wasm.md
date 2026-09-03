@@ -314,7 +314,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Pipette (White Balance Eyedropper), die einen Punkt aus Navigator oder
   Vorschau übernimmt.
 
-### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2)
+### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2, Welle 3)
 
 Alle Kürzel werden ignoriert, solange ein Widget Tastatureingaben erwartet
 (z. B. ein fokussiertes Textfeld), damit sie keinen eingegebenen Text
@@ -337,10 +337,22 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `R` | Crop-Modus-Badge umschalten | Welle 2; reine Anzeige, Edits in Geometrie-Crop |
 | `Tab` | Seitenpanels ein-/ausblenden (Filmstreifen bleibt) | Welle 2; nie Rezept |
 | `Y` | Vorher/Nachher | gebunden |
-| `F` / `Num0`, `+` / `-` | Vorschau-Zoom Fit / Zoomstufen | gebunden |
+| `Shift+Y` | Split-Vorher/Nachher-Markierung (Vollbild-Before-Proxy über `before_after`; Side-by-Side-Render ist Folgearbeit) | Welle 3; nie Rezept |
+| `C` | Compare (Vorher-Bild über `before_after`, erneutes `C` verlässt) | Welle 3, LR-20 light; nie Rezept |
+| `N` | Survey (Sprung ins Bibliotheks-Raster, erneutes `N` verlässt den Modus) | Welle 3, LR-20 light; nie Rezept |
+| `\` | Library-Filterleiste + Quick Develop (Textfilter über gescannte Metadaten: Name, `rating:0-5`, `flag:pick/reject`, `label:Farbe`; Quick Develop `exposure/contrast/highlights/shadows` über Save/Render-Pfad) | Welle 3, LR-13 light; kein Index |
+| `Cmd/Ctrl+G` | Stapel-Gruppen-Proxy der aktiven Kopie (`extras["stack_group"]`, erneutes Drücken gruppiert aus) | Welle 3, LR-17 light; kein Schema-Change |
+| `Cmd/Ctrl+Alt+S` | Schnappschuss (benannter History-Freeze `Snapshot <n>`, Wiederherstellen über History-Pfad) | Welle 3, LR-12 light; kein Schema-Change |
+| `Cmd/Ctrl+Shift+I` / `Cmd/Ctrl+Shift+E` | Bibliothek (Import) / Exportieren anspringen (reiner Modulwechsel, Dialoge bleiben manuell) | Welle 3, LR-13 light; nie Rezept |
+| `F` | Vollbild-Vorschau (versteckt dieselbe Chrome wie Lights-Out, setzt beim Einschalten Zoom auf Fit) | Welle 3; nie Rezept |
+| `Num0`, `+` / `-` | Zoom Fit (ohne Dokument) / Zoomstufen | gebunden (`Num0` mit Dokument = Bewertung 0, LR-01) |
 
 Die Bibliotheks-Rasteransicht zeigt je Datei ein Bewertungs-Badge (Sterne der
 Standardkopie plus Pick-/Reject-Markierung); Details stehen im Hover-Text.
+Die Filterleiste (`\`, Welle 3) filtert das Raster über die bereits
+gescannten Metadaten (Dateiname, `rating:`, `flag:`, `label:` — kein Index);
+Quick Develop setzt Grundtonung (`exposure/contrast/highlights/shadows`) auf
+der aktiven Kopie über den normalen Save/Render-Pfad.
 
 ### Maskierung
 
