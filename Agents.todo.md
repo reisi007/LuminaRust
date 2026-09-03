@@ -16,13 +16,10 @@ Feature-Dokumenten und der Git-Historie.
   LuminaRust, dokumentiert in `sample-data/raw/README.md` §4/§8). Lensfun
   (LGPL-3.0 dynamisch gelinkt, DB CC-BY-SA-3.0) ist in
   `THIRD-PARTY-NOTICES.md` dokumentiert und gilt unabhängig von der Wahl.
-- **MVP-Grenze:** MVP = CLI + native Desktop-GUI inkl. nativem RAW. Web/WASM-RAW
-  (via `libraw-wasm`, Feature `wasm-js`), Browser-Dateispeichern, ONNX im
-  Browser, Masken-Inferenz im Browser, Cache- und Mehrbild-Synchronisierung
-  sind bewusst Post-MVP; WASM ist dokumentierte Capability-Grenze
-  (`feature/platform/capability-matrix.md`), keine MVP-GUI. Architektur bleibt
-  kompatibel (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag,
-  `cfg(target_arch = "wasm32")`-Kapselung).
+- **MVP-Grenze:** MVP = CLI + native Desktop-GUI inkl. nativem RAW. WASM/Browser
+  ist ersatzlos gestrichen (2026-09-04, kein Post-MVP). Cache- und
+  Mehrbild-Synchronisierung sind bewusst Post-MVP. Architektur bleibt nativ
+  (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag).
 - **Sidecar-Schema Pre-MVP:** Schemaänderungen sind bis zum MVP Breaking Changes
   (keine Abwärtskompatibilitätspflicht, Altdateien müssen nicht lesbar
   bleiben); die Migrations-Maschinerie (`migrate_sidecar_file`, `.bak`-Backup,
@@ -41,10 +38,11 @@ Feature-Dokumenten und der Git-Historie.
   (Beispiel `chunks_exact_to_as_chunks`). Lokal vor jedem Push `rustup update`
   + workspace-clippy laufen lassen.
 - **Post-MVP Backlog (nicht MVP-blockierend):** F-019 (siehe Phase 2), Phase 9
-  Index (F-064…F-067), WASM-Browser (F-069…F-071), MCP-Erweiterungen (siehe
+  Index (F-064…F-067), MCP-Erweiterungen (siehe
   F-101-F1), Lensfun-Ausbau (CA via Lensfun, automatische Profil-Erkennung per
-  EXIF, WASM-Port), Produktnamen-Entscheidung (`docs/naming-brainstorm.md`,
-  Brainstorm-Phase offen bis MVP-Entscheidung).
+  EXIF), Produktnamen-Entscheidung (`docs/naming-brainstorm.md`,
+  Brainstorm-Phase offen bis MVP-Entscheidung). WASM-Browser (F-069…F-071)
+  ist ersatzlos gestrichen, kein Backlog.
 
 ## Arbeitsregeln
 
@@ -96,9 +94,6 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] WASM-REMOVE-GUI** `lumina-gui`: alle `cfg(target_arch = "wasm32")`-Zweige + `wasm-bindgen`-/`web-sys`-Deps + `index.html` entfernen, Dropped-File-Handling nur nativ. Abnahme: `cargo test -p lumina-gui --lib` + clippy/fmt grün, kein `wasm32`-Grep-Treffer im Crate.
-- [ ] **[PRIO: hoch] WASM-REMOVE-ONNX** `lumina-onnx`: `wasm_stub.rs` + Target-Gates entfernen (`ort` nativ-only direkt). Abnahme: `cargo test -p lumina-onnx --features onnx-rt` + clippy grün, kein `wasm32`-Treffer.
-- [ ] **[PRIO: hoch] WASM-REMOVE-REST** `lumina-core/-sidecar/-raw/-cli/-bench/-mcp/-gpu`: alle `cfg(target_arch = "wasm32")`-Zweige + Target-Deps entfernen. Abnahme: Workspace-Tests + clippy grün, repo-weit kein `wasm32`-Treffer außer Historie (`docs/reviews`, `docs/plans`).
 - [ ] **[PRIO: hoch] R2-GUIMOD-04a** Drag-Render-Instrumentierung (lumina-gui): pro-Tick-Timings CPU-Draft/GPU/Analyse ins Log (trace), damit F-103-N6 Zahlen liefert. Kein Verhalten ändern. Abnahme: headless Test (Timings fallen an), `cargo test -p lumina-gui` grün.
 
 _(weitere ehemals offene hoch-prio Tasks BESTANDEN s. Git-Historie: GUI-AUTOTONE-SAVE-1 204p c29e609a/5e36133, GUI-KIT-01-REFRESH kittest 10/10 a75b42f, CLI-GUI-PARITY-1 Matrix-Doc a75b42f; F-103-INTEGRATION-PREVIEW-SIDECAR 147p 43b1b73; CI-ONNX-RT 953987e/c5e5e06/67690ec)_
@@ -116,9 +111,10 @@ _(keine offenen Tasks — F-064…F-067 BESTANDEN verifiziert 2026-09-02, Commit
 Ist-Stand 2026-09-02: kein Index-Modul im Workspace; CLI-`reindex` ist nur ein
 Sidecar-Scan (zählt valide Sidecars, persistiert nichts); `feature/architecture/index.md` ist normativ vervollständigt und verifiziert.
 
-**Phase 10: WASM und Plattformen (Post-MVP)**
+**Phase 10: WASM und Plattformen — ENTFERNT 2026-09-04**
 
-_(keine offenen Tasks — F-069…F-071 BESTANDEN verifiziert 2026-09-02, Commits 287fe75/e60a9ad: Browser-Import/Speicher/Export Doku-first + OPFS 2-stufig löschbar zdata not available, ONNX onnx-wasm off-by-default RuntimeDisabled, quantitative Limits 45MP/24MP LibRaw 0.22.2 RAM 8GB/1.5GiB/48MiB VRAM 1024/4 Threads Rayon/1 zdata native-only; Gates `cargo check --workspace` + `wasm32` core/gui --no-default-features + workspace wasm (+zdata/+onnx-rt) grün)_
+_(WASM/Browser ersatzlos gestrichen; F-069…F-071 entfallen, WASM-CI-Job gelöscht.
+Historisch: F-069…F-071 Doku-first 2026-09-02, Commits 287fe75/e60a9ad)_
 
 **Phase 10b: Generatives Entfernen + Erweitern (Post-MVP)**
 

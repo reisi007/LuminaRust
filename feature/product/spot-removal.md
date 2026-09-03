@@ -27,7 +27,7 @@
 
 SPOT-REMOVE-1 beschreibt einen nicht-destruktiven **Staub-/Spot-Heal** in zwei Modi, die als **eine** versionierte Rezept-Stufe pro Spot gemeinsam gedacht werden (Pro Spot: entweder schnell oder generativ), analog Lightroom „Heilen/Klonen" vs. „Generatives Entfernen":
 
-1. **Schnell (heuristisch/Clone):** Sofortiger Spot-Heal ohne Modell — Klon-/Heal-Brush (Kreis/Spot, Radius + Feather + Source-Offset), rein CPU/WASM-kompatibel, **kein Modell**, **instant**, **kein zdata-Artefakt** (nur Rezeptparameter). Ergebnis ist deterministisch aus Original + Rezept ableitbar.
+1. **Schnell (heuristisch/Clone):** Sofortiger Spot-Heal ohne Modell — Klon-/Heal-Brush (Kreis/Spot, Radius + Feather + Source-Offset), rein CPU-nativ, **kein Modell**, **instant**, **kein zdata-Artefakt** (nur Rezeptparameter). Ergebnis ist deterministisch aus Original + Rezept ableitbar.
 2. **Generativ lokal (ONNX Inpaint):** Lokale generative Heilung — Maske malen (Pinsel/Box), optional Prompt/Negativ-Prompt/Seed, ONNX-Inpaint Modell lokal (`lumina-onnx`), Persistenz als binäres Canvas-Artefakt `.lumina.zdata` mit `kind = "spot_heal_generative"`, Identität wie AI-Masken (Quelle/Decode/Modell/Hash/Inferenzauflösung/Koordinaten/Prüfsumme), **kein stiller Fallback**.
 
 Beide Modi sind nicht-destruktiv: Das Original wird niemals überschrieben. Vorschauen/Exporte sind aus Original + Rezept + (bei generativ) Modell + Artefakt reproduzierbar (Agents.md Produktprinzipien).
@@ -152,8 +152,8 @@ Decode → SourceActions → SpotHeal(quick heuristic) → SpotHeal(generative O
 
 ## Sidecar-Artefakt und Persistenz
 
-- **Heuristisch:** Kein binäres Artefakt. Nur Rezeptparameter (`center`, `radius`, `feather`, `source_offset`, `opacity`) werden in `<original>.lumina.json` persistiert. Kein `ArtifactReference`, kein `zdata`-Record. Instant-Anwendung (kein Job), deterministisch CPU/WASM-kompatibel.
-- **Generativ:** Das Ergebnis (ersetzte Pixel im Spot-Bereich) wird als binäres Sidecar-Artefakt persistiert — analog AI-Masken/`GenerativeEdit` in `.lumina.zdata` (Record mit `kind`-Diskriminator, unverändertem Container-`VERSION`-Muster wie Repair-Regionen aus F-042-N1). Vorgeschlagener Kind: `kind = "spot_heal_generative"` (eigener Diskriminator, damit Masken-, Repair- und Generative-Canvas-Records unverändert bleiben). JSON referenziert das Artefakt (relativer Pfad, Format, BLAKE3-Prüfsumme, Auflösung, Kanaltyp, `data_version`); absolute Pfade verboten. Prüfsumme ist **BLAKE3** über unkomprimierten Pixelstrom (RGBA8, Little-Endian, Zeilen-major, konsistent zur zdata-Semantik); bitflipped Artefakt ≡ `Corrupt` (eager, beim Laden geprüft, nie als verfügbar). Atomarer Write (Temp + Rename unter `.zdata.lock` auf nativ). Auf WASM ist `zdata`/`zstd` nicht verfügbar (native-only, target-gegatet) — dort gilt generatives Artefakt als `missing`/`unverifizierbar`.
+- **Heuristisch:** Kein binäres Artefakt. Nur Rezeptparameter (`center`, `radius`, `feather`, `source_offset`, `opacity`) werden in `<original>.lumina.json` persistiert. Kein `ArtifactReference`, kein `zdata`-Record. Instant-Anwendung (kein Job), deterministisch CPU-nativ.
+- **Generativ:** Das Ergebnis (ersetzte Pixel im Spot-Bereich) wird als binäres Sidecar-Artefakt persistiert — analog AI-Masken/`GenerativeEdit` in `.lumina.zdata` (Record mit `kind`-Diskriminator, unverändertem Container-`VERSION`-Muster wie Repair-Regionen aus F-042-N1). Vorgeschlagener Kind: `kind = "spot_heal_generative"` (eigener Diskriminator, damit Masken-, Repair- und Generative-Canvas-Records unverändert bleiben). JSON referenziert das Artefakt (relativer Pfad, Format, BLAKE3-Prüfsumme, Auflösung, Kanaltyp, `data_version`); absolute Pfade verboten. Prüfsumme ist **BLAKE3** über unkomprimierten Pixelstrom (RGBA8, Little-Endian, Zeilen-major, konsistent zur zdata-Semantik); bitflipped Artefakt ≡ `Corrupt` (eager, beim Laden geprüft, nie als verfügbar). Atomarer Write (Temp + Rename unter `.zdata.lock`).
 - **Sidecar-Schema:** Versioniert (`version` 1), Schema- und Migrationsentscheidung vor Einführung (additives v2-Feld, Migration dokumentiert, kein Pre-MVP-Bruch ohne Bump). Relative Pfade, atomar, Bundle-Verschiebung erhält Referenzen. `ArtifactReference` trägt mindestens `path`, `format`, `checksum`, `width`, `height`, `channels`, `data_version`.
 
 ## Identität und Veraltung
@@ -176,15 +176,15 @@ Ein Spot ohne gültiges Modell (z. B. `pending-integration`) oder ohne gültiges
 - **Heimat lokaler Modelle (generativ):** `lumina-onnx` (native). Inpaint-Heal-Modelle werden wie BiRefNet/SAM 2 über `ModelManifest` mit deklarierten Fähigkeiten eingebunden; Fähigkeit wird aus Manifest gelesen, nicht erraten. Geplante Fähigkeit: `inpaint_heal` (bzw. `inpaint` generisch, dann dokumentiert als Spot-Heal-tauglich) — getrennt prüfbar; Modell ohne passende Fähigkeit wird abgelehnt (kein stiller Ersatz, deterministisch).
 - **Lokal vs. Cloud getrennt:** Capability-Matrix (`feature/platform/capability-matrix.md`) führt lokale ONNX-Inferenz und (nicht geplante) Cloud-API als **getrennte** Capabilities. Cloud ist kein stiller Fallback für lokale Inferenz und umgekehrt; ohne dokumentierte Capability-Entscheidung keine Cloud-Anbindung. Vorgeschlagener Matrix-Eintrag:
 
-  | Fähigkeit | native CLI | Desktop (eframe) | Browser (WASM) |
-  | --- | --- | --- | --- |
-  | Staub schnell (heuristisch, kein ONNX) | geplant, `lumina-core` | geplant, `lumina-core` | geplant (CPU, portabler Core) |
-  | Staub generativ (`inpaint_heal`, lokal ONNX) | geplant, `lumina-onnx` | geplant, `lumina-onnx` | nein (kein lokales ONNX ohne `onnx-wasm`) |
-  | Staub generativ (Cloud-API) | nicht geplant — nur mit expliziter Capability-Entscheidung | nicht geplant | nicht geplant |
+  | Fähigkeit | native CLI | Desktop (eframe) |
+  | --- | --- | --- |
+  | Staub schnell (heuristisch, kein ONNX) | geplant, `lumina-core` | geplant, `lumina-core` |
+  | Staub generativ (`inpaint_heal`, lokal ONNX) | geplant, `lumina-onnx` | geplant, `lumina-onnx` |
+  | Staub generativ (Cloud-API) | nicht geplant — nur mit expliziter Capability-Entscheidung | nicht geplant |
 
-- **Browser:** ONNX im Browser optional (`onnx-wasm`, off by default, F-070) — generativer Spot im Browser erst mit dieser Capability, sonst sichtbar `missing`/`RuntimeDisabled`.
+  (Browser-Spalte ENTFERNT 2026-09-04.)
+
 - **Lizenz:** Modelle vor Integration lizenz- und hash-gepinnt dokumentieren (F-078, `feature/quality/fixtures-licensing.md`); keine spontanen Downloads, keine Tests gegen Netz. Modell ohne Lizenz/Provenienz wird nicht eingebunden. `THIRD-PARTY-NOTICES.md` führt Lizenzen vor dem ersten Commit der Gewichte. Viele SOTA Inpaint-Modelle sind non-commercial — vor Einbindung Lizenz prüfen (analog `ultralytics` AGPL-Falle in `fixtures-licensing.md` §5).
-- **WASM-Gating:** `zdata`/`zstd` native-only target-gegatet (`feature/platform/capability-matrix.md`); generatives Spot-Artefakt auf WASM `missing`/`unverifizierbar` (kein stiller Fallback).
 
 ## UI-Flow (GUI)
 
@@ -224,7 +224,7 @@ Jede Implementierung muss vor Verifizierung mindestens diese Prüfungen bestehen
 - **Artefakt und zdata — nur generativ:** `artifact_status` (`Available`/`Missing`/`Corrupt`) für Spot-Heal-Artefakte (Pfad fehlt, keine reguläre Datei, Magic/Version/Prüfsummenfehler); relative Pfade nach Bundle-Verschiebung gültig; atomarer Write (Temp + Rename) und `.zdata.lock`-Serialisierung; `kind = "spot_heal_generative"` getrennt von `generative_canvas`/`repair_region`.
 - **Pipeline und Geometrie:** Beide Modi wirken vor Lens/Perspective/Crop (Reihenfolge getestet: `SpotHeal → Lens → Perspective → Crop`); Geometrie-Wechsel invalidiert Digest sichtbar (kein stilles Re-Interpretieren); schnelle Heilung und generatives Canvas behindern sich nicht (Reihenfolge SpotHeal vor GenerativeEdit getestet).
 - **Virtuelle Kopien:** Stabile ID, eigenes Rezept pro Kopie; Artefakt-Sharing auf Quell-Ebene nur bei identischer Identität; Masken-Layer/Invertierung bleiben kopienspezifisch.
-- **Capability und Lizenz:** Fehlendes Modell wird ohne Crash gemeldet; Capability-Matrix trennt heuristisch vs. lokal ONNX vs. Cloud (kein Fallback); Lizenz/Hash-Pin vor Integration dokumentiert; Tests ohne Netz/Download, nur lokale Fixtures. Heuristisch läuft auch ohne `onnx-rt`/WASM (portabler Core).
+- **Capability und Lizenz:** Fehlendes Modell wird ohne Crash gemeldet; Capability-Matrix trennt heuristisch vs. lokal ONNX vs. Cloud (kein Fallback); Lizenz/Hash-Pin vor Integration dokumentiert; Tests ohne Netz/Download, nur lokale Fixtures. Heuristisch läuft auch ohne `onnx-rt` (nativer CPU-Core).
 - **CLI/GUI:** CLI warnt bei `stale`/`missing` (generativ, analog `--update-masks`, `strict` vs. Warn-and-continue); GUI zeigt Status sichtbar und bietet Neuberechnung explizit an. Kein Modell-Download im Test. Staub-Tool Toggle Schnell↔Generativ getestet.
 - **Visuelle Analyse automatisch (je Modus):** Golden-Image für heuristisch (byte-identisch) + generativ (PSNR/SSIM-Gate mit Seed-Pin), Histogram-Digest Delta (1/256-Toleranz), kittest Snapshots für Spot-Panel (Schnell/Generativ/Badge), Before/After (`Y`) Toggle hält Rezept unverändert.
 
@@ -237,9 +237,9 @@ Jede Implementierung muss vor Verifizierung mindestens diese Prüfungen bestehen
 - Pipeline `SpotHeal → Lens → Perspective → Crop` eingehalten; `GenerativeEdit` (GEN-EXPAND-1) und `spot_heal_generative` sind getrennte Kinds/Capabilities und behindern sich nicht.
 - Capability-Matrix trennt heuristisch vs. lokal ONNX vs. Cloud (kein stiller Fallback); Lizenz/Hash-Pin vor Integration dokumentiert (F-078).
 - Modus-spezifische Veraltungs-, Artefakt-, Pipeline- und Geometrie-Tests sind durch unabhängigen Verifizierungs-Agenten bestätigt.
-- `cargo check --workspace` (und wasm-Gates) grün.
+- `cargo check --workspace` grün.
 
 ## Offene Punkte und Abhängigkeiten
 
 - **Abhängigkeiten:** F-042 (Source-Actions, `lumina-onnx` existiert), F-082/F-083 (SAM-Adapter existiert; Inpaint-Modelle `pending-integration`), GUI-STAGE-1/GUI-WGPU-PRESENT-1; `lumina-gpu`/Present-Pfad berührt (Staub-Heal auf GPU optional, Post-MVP).
-- **Offen:** Schema-Entscheidung vor Implementierung (neues Feld `spot_removals` vs. Erweiterung `source_actions` — additives Schema-v2-Feld, Migration dokumentiert, kein Pre-MVP-Bruch ohne Bump); Inpaint-Modellauswahl (Modellfamilie vs. fixes Modell, Lizenz F-078); Cloud-API-Capability (bewusst getrennt); WASM-Pfad (F-070 `onnx-wasm` off by default); Pipeline-Entkopplung von `apply_geometry` 5-in-1 in eigene Stages (G2).
+- **Offen:** Schema-Entscheidung vor Implementierung (neues Feld `spot_removals` vs. Erweiterung `source_actions` — additives Schema-v2-Feld, Migration dokumentiert, kein Pre-MVP-Bruch ohne Bump); Inpaint-Modellauswahl (Modellfamilie vs. fixes Modell, Lizenz F-078); Cloud-API-Capability (bewusst getrennt); Pipeline-Entkopplung von `apply_geometry` 5-in-1 in eigene Stages (G2).

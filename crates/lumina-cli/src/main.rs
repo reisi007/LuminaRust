@@ -12,13 +12,12 @@ use lumina_core::{
 // never a stub). The deterministic `StubBackend` stays the wiring default for
 // default builds (no `onnx-rt`); it is never substituted for a requested real
 // engine. `birefnet_manifest` is the model identity/contract both paths share.
-#[cfg(not(target_arch = "wasm32"))]
 use lumina_onnx::birefnet_manifest;
-#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+#[cfg(feature = "onnx-rt")]
 use lumina_onnx::try_load_onnx_engine;
-#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+#[cfg(feature = "onnx-rt")]
 use lumina_onnx::OnnxEngine;
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "onnx-rt")))]
+#[cfg(not(feature = "onnx-rt"))]
 use lumina_onnx::StubBackend;
 use lumina_raw::{RawError, RawMetadata};
 // F-098-N2: the Lensfun corrector types are only available under the `lensfun`
@@ -34,7 +33,6 @@ use lumina_lensfun::{Corrector, LensfunDb};
 use lumina_gpu::{unsupported_gpu_stages_with_context, Frame, GpuContext};
 // Visible backend-selection logging (no silent fallback to CPU).
 use log::info;
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_imports)]
 use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
 use lumina_sidecar::{
@@ -908,15 +906,6 @@ fn validate(args: IndexArgs) -> Result<(), CliError> {
     )
 }
 
-#[cfg(target_arch = "wasm32")]
-fn dust_removal(_args: DustRemovalArgs) -> Result<(), CliError> {
-    Err(CliError::Message(
-        "zdata not available on wasm32: dust-removal requires the native `.lumina.zdata` bundle (zstd)"
-            .into(),
-    ))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     // Never overwrite the original — or its Lumina bundle files — with the
     // optional render output (REVIEW-CLI-WRITE-1).
@@ -1069,18 +1058,6 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
 /// reading the `.lumina.zdata` bundle.  A missing bundle, a missing artifact id
 /// or a checksum mismatch against the recipe reference is a hard error — there
 /// is no silent fallback (reproducibility over convenience).
-#[cfg(target_arch = "wasm32")]
-fn resolve_source_actions(
-    _recipe: &EditRecipe,
-    _zdata_path: &Path,
-) -> Result<Vec<SourceActionArtifact>, CliError> {
-    Err(CliError::Message(
-        "zdata not available on wasm32: source actions require the native `.lumina.zdata` bundle"
-            .into(),
-    ))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn resolve_source_actions(
     recipe: &EditRecipe,
     zdata_path: &Path,
@@ -1574,16 +1551,6 @@ fn zdata_mask_tile_id(copy_id: &str, mask_id: &str) -> String {
 /// a clean load need no extra corruption handling: `load_zdata` already
 /// verifies every record checksum up front (REVIEW-SIDECAR-ZDATA-1), so a
 /// surviving tile miss is plain absence.
-#[cfg(target_arch = "wasm32")]
-fn load_persisted_mask_planes(
-    _document: &SidecarDocument,
-    _zdata_path: &Path,
-    _warnings_out: &mut Vec<String>,
-) -> BTreeMap<(String, String), MaskPlane> {
-    BTreeMap::new()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn load_persisted_mask_planes(
     document: &SidecarDocument,
     zdata_path: &Path,
@@ -1716,13 +1683,7 @@ fn sanitize_camera_white_balance(wb: [f32; 4]) -> Option<[f32; 4]> {
 /// under `onnx-rt` a requested real engine is **never** downgraded to the stub
 /// (Agents.md: „Fehlende oder inkompatible Artefakte werden sichtbar als
 /// veraltet oder nicht verfügbar gemeldet"; ai-masks.md F-082-FOLLOWUP).
-#[cfg(target_arch = "wasm32")]
-fn resolve_mask_inference_engine(
-    _needs_inference: bool,
-) -> Result<Option<Box<dyn MaskInference>>, CliError> {
-    Ok(None)
-}
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "onnx-rt")))]
+#[cfg(not(feature = "onnx-rt"))]
 fn resolve_mask_inference_engine(
     _needs_inference: bool,
 ) -> Result<Option<Box<dyn MaskInference>>, CliError> {
@@ -1733,7 +1694,7 @@ fn resolve_mask_inference_engine(
         Err(_) => Ok(None),
     }
 }
-#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+#[cfg(feature = "onnx-rt")]
 fn resolve_mask_inference_engine(
     needs_inference: bool,
 ) -> Result<Option<Box<dyn MaskInference>>, CliError> {
@@ -1761,7 +1722,7 @@ fn resolve_mask_inference_engine(
 /// off — impossible here), `OnnxRuntime` (artifact verified) or a hard
 /// [`OnnxError`](lumina_onnx::OnnxError): a missing/stale/mismatched artifact is
 /// a loud error, never a silent stub.
-#[cfg(all(not(target_arch = "wasm32"), feature = "onnx-rt"))]
+#[cfg(feature = "onnx-rt")]
 fn resolve_onnx_engine_from_path(
     model_path: &Path,
 ) -> Result<Option<Box<dyn MaskInference>>, CliError> {
@@ -1928,18 +1889,10 @@ fn process_selected(
     // validates identity and decides whether to use it, re-infer, or fail.
     // R2-CLI-05: a corrupt bundle surfaces as an explicit warning through the
     // same channel as the other mask warnings instead of being silent.
-    // On wasm32 the bundle codec (zstd) is unavailable — treat as missing.
-    #[cfg(not(target_arch = "wasm32"))]
     let (zdata_path, loaded_planes) = {
         let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
         let loaded_planes = load_persisted_mask_planes(&document, &zdata_path, mask_warnings_out);
         (zdata_path, loaded_planes)
-    };
-    #[cfg(target_arch = "wasm32")]
-    let (zdata_path, loaded_planes) = {
-        let dummy_path = std::path::PathBuf::from("");
-        let loaded_planes = load_persisted_mask_planes(&document, &dummy_path, mask_warnings_out);
-        (dummy_path, loaded_planes)
     };
 
     // F-082-FOLLOWUP: wire the ONNX inference engine into the F-048/F-051
@@ -1951,18 +1904,11 @@ fn process_selected(
     // unconfigurable request fails HARD — the stub is never silently
     // substituted (see `resolve_mask_inference_engine`). Runs without mask
     // work request no engine at all.
-    #[cfg(not(target_arch = "wasm32"))]
     let can_need_inference = !document.virtual_copies[copy_index].mask_layers.is_empty();
-    #[cfg(not(target_arch = "wasm32"))]
     let engine = resolve_mask_inference_engine(can_need_inference)?;
-    #[cfg(target_arch = "wasm32")]
-    let engine: Option<Box<dyn MaskInference>> = None;
-    #[cfg(not(target_arch = "wasm32"))]
     let model_identity = engine
         .is_some()
         .then(|| birefnet_manifest().to_model_identity());
-    #[cfg(target_arch = "wasm32")]
-    let model_identity: Option<lumina_sidecar::ModelIdentity> = None;
     let inference = engine.as_deref();
 
     let resolved = resolve_mask_planes(
@@ -2421,13 +2367,13 @@ fn reject_same_path(input: &Path, output: &Path) -> Result<(), CliError> {
 fn reject_protected_output(input: &Path, output: &Path) -> Result<(), CliError> {
     reject_same_path(input, output)?;
     let output_resolved = resolve_candidate(output).map_err(|error| io_error(output, error))?;
-    let mut protected: Vec<(&str, PathBuf)> =
-        vec![("sidecar", lumina_sidecar::sidecar_path_for(input))];
-    #[cfg(not(target_arch = "wasm32"))]
-    protected.push((
-        "mask/source-action bundle",
-        lumina_sidecar::zdata_path_for(input),
-    ));
+    let protected: Vec<(&str, PathBuf)> = vec![
+        ("sidecar", lumina_sidecar::sidecar_path_for(input)),
+        (
+            "mask/source-action bundle",
+            lumina_sidecar::zdata_path_for(input),
+        ),
+    ];
     for (kind, target) in protected {
         let target_resolved =
             resolve_candidate(&target).map_err(|error| io_error(&target, error))?;

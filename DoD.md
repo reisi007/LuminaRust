@@ -72,5 +72,5 @@ beantwortet sind:
 3. Welche Klassenmitglieder wurden geprüft (vollständige Liste)?
 4. Welches Log-Level hat jede neue User-Aktion (Beleg)?
 5. Welche Spez-Aussagen wurden auf welche Tests gemappt?
-6. Gates: `cargo test`, `clippy -D warnings`, `fmt --check`, WASM (falls
-   betroffen) — Kommandos + Ergebnis im Bericht.
+6. Gates: `cargo test`, `clippy -D warnings`, `fmt --check` — Kommandos +
+   Ergebnis im Bericht.

@@ -226,8 +226,6 @@ Zeit-Tausch ohne Entscheidung).
 
 ## Bewusste Nichtziele
 
-- keine feingranularen WASM-Thresholds in CI – die native Criterion-Messung
-  ist Proxy für alle Archs (identische Core-Codepfade);
 - keine absoluten Laufzeitziele als Abnahme ohne Umgebungskontext;
 - kein Benchmark auf verrauschten CI-Runnern als alleiniger harter Gate;
 - **in diesem Stand keine Messungen:** F-074-N1/N2 dokumentieren nur die
@@ -365,7 +363,7 @@ Job (`needs: detect`, `if: has_cargo == 'true'`), der `cargo bench -p lumina-ben
 `node scripts/perf/compare.mjs --mode warn --report-dir perf/results` und das
 Report-Artefakt hochlädt (`perf/results/`, gitignored). Das harte Gate läuft
 **bewusst nicht in CI** (CI-Runner-Rauschen-Regel); CI nutzt nur report/warn.
-Die bestehenden `rust`/`wasm`/`docs`-Jobs bleiben unverändert. Feature-Wachstum
+Die bestehenden `rust`- und `docs`-Jobs bleiben unverändert. Feature-Wachstum
 wird als bewusste Budget-Anpassung im selben Commit wie das Feature behandelt
 (Begründung im `note`-Feld und im betroffenen Feature-Dokument).
 

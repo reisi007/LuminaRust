@@ -4,8 +4,8 @@ Native ONNX inference adapter for Lumina (F-047), implementing the exchangeable
 backend for `BiRefNet` as the first automatic subject model, with the model
 capability surface from F-080.
 
-This crate is **native-only** (mirrors `lumina-raw`): it is gated out on
-`wasm32` and is never built for the browser. It depends on `lumina-sidecar`
+This crate is **native-only** (mirrors `lumina-raw`): it is never built
+for the browser. It depends on `lumina-sidecar`
 solely for the identity mapping `ModelManifest → ModelIdentity`
 (F-048/`to_model_identity`); all native/ONNX concerns stay inside this crate.
 
@@ -14,12 +14,9 @@ solely for the identity mapping `ModelManifest → ModelIdentity`
 | Target | `onnx-rt` default | `onnx-rt` enabled |
 | --- | --- | --- |
 | native (macOS/Linux) | StubBackend, `resolve` reports `RuntimeDisabled` | `resolve` loads/verifies the real ORT engine or fails visibly |
-| `wasm32-unknown-unknown` | **not compiled** (`#![cfg(not(target_arch = "wasm32"))]`) | **not compiled** — `ort` is a native dependency and would break the WASM gate; `onnx-rt` must not be enabled for wasm targets |
 
-The wasm32 build of this crate is an empty stub (verified:
-`cargo check --target wasm32-unknown-unknown -p lumina-onnx`). This mirrors
-the capability decision in `feature/platform/capability-matrix.md`: ONNX
-inference is a native capability, the browser remains explicitly "offen".
+ONNX inference is a native capability, the browser remains explicitly "offen"
+(see `feature/platform/capability-matrix.md`).
 
 ## Layout
 
@@ -116,9 +113,8 @@ identity. Real BiRefNet/SAM-2 model weights remain `pending-integration`
   weight source before any hash pin lands (same caution as the `ultralytics`
   AGPL note in `feature/quality/fixtures-licensing.md` §5). Tests run against
   the deterministic stub only and require no network access.
-- **Browser (WASM):** outpaint is unavailable (`wasm_stub::StubOutpaintBackend`
-  reports `ModelUnavailable`, engine resolves to `RuntimeDisabled` until the
-  optional `onnx-wasm` capability exists — F-070, off by default).
+- **Browser:** outpaint is unavailable (native `StubOutpaintBackend`
+  reports `ModelUnavailable`, engine resolves to `RuntimeDisabled`).
 
 ## Error handling
 

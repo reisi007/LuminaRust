@@ -2197,9 +2197,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

@@ -15,8 +15,8 @@
 //! priority-ordered dispatch, the per-key in-flight/miss/retry bookkeeping (no
 //! silent fallback) and the hand-off of decoded frames to the UI thread.
 //!
-//! Native only: wasm32 has no background threads or native file IO (documented
-//! capability boundary in `feature/platform/capability-matrix.md`).
+//! The controller owns background threads and native file IO (capability
+//! boundary documented in `feature/platform/capability-matrix.md`).
 
 #[cfg(test)]
 use lumina_core::preview_cache::decode_webp;
@@ -533,7 +533,6 @@ impl PreviewController {
     /// decode), then from the disk tier (A4, by the previously stored digest).
     /// `None` is a genuine miss: the caller keeps the visible „wird vorbereitet"
     /// state and the ordinary lazy render path applies.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn neighbor_preview(
         &mut self,
         probe_id: &str,

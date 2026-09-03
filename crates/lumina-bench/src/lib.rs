@@ -7,10 +7,10 @@
 //! [`docs/adr/0003-performance-benchmarking.md`](../../docs/adr/0003-performance-benchmarking.md)
 //! (ADR 0003).
 //!
-//! This crate is intentionally native-only: it is never built for `wasm32`,
-//! so the portable `lumina-core` kernel stays free of native benchmark
-//! dependencies. Native Criterion measurements act as the proxy for all
-//! architectures because the core code paths are identical.
+//! This crate is intentionally native-only: the portable `lumina-core`
+//! kernel stays free of native benchmark dependencies. Native Criterion
+//! measurements act as the proxy for all configurations because the core
+//! code paths are identical.
 //!
 //! Benchmarks themselves are not part of this crate yet — they follow in
 //! F-074-N3. The conventions for benchmark IDs and fixtures are described in

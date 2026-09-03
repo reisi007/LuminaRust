@@ -1,8 +1,7 @@
 //! Native on-disk half of the folder cache.
 //!
-//! This module is deliberately kept behind the `wasm32` boundary.  Nothing in
-//! this module is authoritative: deleting its directory only causes previews
-//! to be rendered again; recipes remain in their sidecars.
+//! Nothing in this module is authoritative: deleting its directory only causes
+//! previews to be rendered again; recipes remain in their sidecars.
 
 use super::{preview_cache_key, FolderCacheSettings, PreviewKind};
 use serde::{Deserialize, Serialize};

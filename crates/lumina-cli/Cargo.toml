@@ -11,13 +11,7 @@ blake3 = "1"
 lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-onnx = { path = "../lumina-onnx" }
-# `zdata` (native `.lumina.zdata` bundle codec) is native-only (zstd-sys). On
-# wasm32 the codec is unavailable — the consumer gates it via
-# `cfg(not(target_arch="wasm32"))` and the sidecar stub reports "not available".
-# The feature is therefore enabled only for non-wasm32 targets so a
-# workspace-wide `cargo check --target wasm32-unknown-unknown` never pulls
-# `zstd-sys` via this crate, even when the native build uses `zdata`.
-lumina-sidecar = { path = "../lumina-sidecar" }
+lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 # F-098-N2: optional Lensfun dependency so the CLI can build a corrector from
 # EXIF metadata. Only compiled/linked when the `lensfun` feature is on.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
@@ -56,6 +50,3 @@ lensfun = ["lumina-core/lensfun", "lumina-lensfun/native"]
 # `LUMINA_MODEL_PATH` artifact and fails hard when the artifact is unusable —
 # never a silent stub substitute.
 onnx-rt = ["lumina-onnx/onnx-rt"]
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }

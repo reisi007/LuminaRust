@@ -19,9 +19,9 @@
 //!   rendering continues correctly without it — that is a documented capacity
 //!   limit, not a silent fallback.
 //!
-//! Platform-neutral by design (plain RAM), so the wasm32 build keeps
-//! compiling. A GPU/VRAM variant is deliberately out of scope here
-//! (`lumina-core` must stay GPU-free; see GPU-STAGE-1 / Agents.md).
+//! Platform-neutral by design (plain RAM). A GPU/VRAM variant is deliberately
+//! out of scope here (`lumina-core` must stay GPU-free; see GPU-STAGE-1 /
+//! Agents.md).
 
 use crate::ImageFrame;
 use std::collections::HashMap;

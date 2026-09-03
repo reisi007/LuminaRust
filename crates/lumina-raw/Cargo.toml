@@ -8,8 +8,6 @@ description = "Native LibRaw adapter for Lumina"
 lumina-core = { path = "../lumina-core" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libraw-sys = "0.1.1"
 
 [dev-dependencies]

@@ -1,11 +1,5 @@
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-extern "C" {}
-
-#[cfg(not(target_arch = "wasm32"))]
 mod logger;
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     logger::install_panic_hook();
     // R2-GUIMOD-07: `Info` is the default so the per-line format!/Mutex/
@@ -27,7 +21,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |creation_context| {
             let mut app = lumina_gui::LuminaApp::new(creation_context.egui_ctx.clone());
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             lumina_gui::attach_wgpu_render_state(
                 &mut app,
                 creation_context.wgpu_render_state.clone(),
@@ -45,7 +39,6 @@ fn main() -> eframe::Result {
 /// the initial workdir for the GUI (F-???-GUI-CLI: command-line workdir
 /// override). Flags (`-h`/`--help`, `-v`/`--version`, and any recognized
 /// long option) are ignored here so they don't accidentally bind.
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_workdir() -> Option<String> {
     let args = std::env::args().skip(1);
     for arg in args {
@@ -68,6 +61,3 @@ fn parse_workdir() -> Option<String> {
     }
     None
 }
-
-#[cfg(target_arch = "wasm32")]
-fn main() {}

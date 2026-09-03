@@ -192,7 +192,7 @@ Beim Aktivieren von Bild N wird ein **asymmetrisches Fenster** vorbereitet:
   kombiniert, dynamisch/LRU, aktiv nie evictet)** — damit passen 7
   Vollauflösungs-Frames je 96 MB (RGBA8, 24 MP) ≈ 672 MB (selbst 45 MP ≈
   1,3 GB) locker ins Budget; **CLI/Headless minimal (kein Preload, nur
-  aktiver Frame, ~512 MB)**, **wasm32 48 MiB** (F-075-abgestimmt). 1:1 braucht
+  aktiver Frame, ~512 MB)**. 1:1 braucht
   keine Slot-Reduktion oder WebP-im-RAM-Kompression.
 - **Eviction:** Least-Recently-Used. Das aktive Bild wird nie evictet
   (promotet bei jedem Zugriff). Die evictierte Frame wird bei vorhandenem
@@ -283,9 +283,7 @@ Siehe `feature/platform/capability-matrix.md`:
 - **CLI/Headless:** kein Scroll-/GUI-Kontext; der WebP-Cache ist hier kein
   Feature. Die WebP-Encode-Decode-Fähigkeit bleibt über den F-037-Exportpfad
   in `lumina-core` verfügbar.
-- **Browser (WASM):** post-MVP. RAW fehlt (Capability-Grenze), native
-  Datei-I/O fehlt; ein RAM-only-LRU ohne Disk-Tier wäre der maximal
-  mögliche Umfang. Kein Funktionsentwicklungsziel im MVP.
+- **Browser-Anteil ENTFERNT 2026-09-04.** Kein Funktionsziel.
 
 ## Akzeptanzkriterien und Tests
 
@@ -299,8 +297,8 @@ Abnahme der Implementierung gegen dieses SOLL:
    `+1 > +2 > -1 > +3 > -2 > +4` genau die vorhandenen Nachbarn vorbereitet;
    am Ordnerrand weniger, **kein Wrap**.
 3. **RAM-LRU:** Maximal 7 Einträge; Eviction nach LRU; das aktive Bild wird
-   nie evictet; Byte-Budget (**GUI 8 GB gesamt RAM+VRAM**, CLI minimal ~512 MB,
-   wasm 48 MiB, F-075-abgestimmt) wird eingehalten — Test inkl. 1:1-Fall
+   nie evictet; Byte-Budget (**GUI 8 GB gesamt RAM+VRAM**, CLI minimal ~512 MB)
+   wird eingehalten — Test inkl. 1:1-Fall
    (7×24 MP ≈ 672 MB liegt weit unter 8 GB).
 4. **Cache-Key/Veraltung:** Quelländerung (Content-Hash) oder Rezeptänderung
    (Render-Key) macht einen gecachten Nachbarn sichtbar „veraltet" und löst

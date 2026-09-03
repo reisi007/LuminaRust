@@ -17,14 +17,9 @@
 /// [`Str::t`] is the translation table.  Adding a string without wiring it here
 /// is a compile error, which keeps the table exhaustive.
 ///
-/// REVIEW-GUI-WASM-FOLLOWUP: the table is deliberately platform-complete while
-/// the wasm32 build surfaces only a subset of panels (Export/Library/masking
-/// are documented native capabilities, see
-/// `feature/platform/cli-gui-wasm.md` § WASM). Unused-on-wasm variants are an
-/// intentional property of the shared table, so the dead-code lint is relaxed
-/// for that target only — not for the native build.
+/// The table covers every panel of the desktop GUI
+/// (`feature/platform/cli-gui-wasm.md` § UI-Konventionen).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[allow(dead_code)]
 pub enum Str {
     // Module bar

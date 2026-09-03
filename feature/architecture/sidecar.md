@@ -226,9 +226,9 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   Record wird nie als Spot-Heal gelesen und umgekehrt), Duplikat-IDs über alle
   Kinds abgelehnt. `append_generative_canvas`/`append_spot_heal_generative`
   laufen unter derselben `.zdata.lock` und schreiben atomar (Temp + Rename);
-  WASM-Stub meldet `zdata not available on wasm32` laut (kein stiller
-  Fallback). Tests: `88p` ohne / `124p` mit `zdata`-Feature (Stand 1e0ccbd),
-  Clippy/Format/wasm32 (`--features zdata`) gruen.
+  WASM-Stub ersatzlos gestrichen (2026-09-04, kein stiller
+  Fallback nötig — kein WASM-Build mehr). Tests: `88p` ohne / `124p` mit `zdata`-Feature (Stand 1e0ccbd),
+  Clippy/Format (`--features zdata`) gruen.
 - **Rezept-Verlinkung generativ (GEN-ZDATA-LINK-1, 2026-09-03, 69dad91,
   verifiziert BESTANDEN):** Typisierte, additive Schema-v2-Rezeptfelder
   verknuepfen `GenerativeEdit` (`generative_canvas`, kind=2) und

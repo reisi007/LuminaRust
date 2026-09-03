@@ -199,8 +199,7 @@ erfolgt im aktuellen Raster-MVP **nicht**.
   persistierte Masken, statt sie stillschweigend wiederzuverwenden — CR3-
   Dimensionen ändern sich z.B. zwischen LibRaw 0.21.x (6160×4144) und
   0.22.x (6032×4024). Nicht-RAW-Decoder (`"image"`/raster) behalten die
-  Anwendungsversion. Auf WASM (kein nativer LibRaw) fällt die Version auf
-  `"unknown"` zurück. Bekannte Grenze: `libraw_version()` liefert das
+  Anwendungsversion. `libraw_version()` liefert das
   Build-Suffix (z.B. `"0.22.2-Release"`); ein reiner Formatwechsel
   (Release↔Debug bei gleicher Nummer) invalidiert aktuell unnötig und könnte
   später auf das numerische Tripel normalisiert werden.
@@ -554,8 +553,8 @@ ohne ein nicht reproduzierbares KI-Modell vorauszusetzen.
 `color`, jeweils `0..=1`; 0 ist Identität. Das MVP verwendet einen
 deterministischen, kantenbewussten lokalen Mittelwert (5x5-Fenster): Luminanz
 wird nach Ähnlichkeit der Luminanz gewichtet geglättet, Farbrauschen wird im
-Chromakanal stärker geglättet. Das ist bewusst ein einfaches, CPU/WASM-
-kompatibles Modell statt eines nicht reproduzierbaren KI-Verfahrens.
+Chromakanal stärker geglättet. Das ist bewusst ein einfaches, deterministisches
+CPU-Modell statt eines nicht reproduzierbaren KI-Verfahrens.
 
 Rauschreduzierung liegt in `Adjustments` vor Schärfen, Masken und Crop.
 Felder/Version gehen in den `recipe_hash`; Änderungen invalidieren ab dieser
@@ -632,12 +631,11 @@ Architektur- und Lizenzgrenzen:
   Sie wird **dynamisch** gelinkt (kein statisches Einbetten → keine
   LGPL-Ausweitung auf das Gesamtwerk); Lensfun-Lizenztext + Quellangebot
   müssen im Release gebündelt werden (F-078, analog LibRaw).
-- Lensfun ist **nicht WASM-fähig** → reine Desktop-/native-Capability. Die
+- Lensfun ist eine native Desktop-Capability. Die
   native Bindung lebt in einem separaten, feature-gated Crate (`lumina-lensfun`),
-  damit `lumina-core` plattformneutral und WASM-kompatibel bleibt. Ohne Feature
+  damit `lumina-core` keine nativen FFI-Abhängigkeiten voraussetzt. Ohne Feature
   (oder fehlende Lib/Profile) greift automatisch das manuelle Modell.
-- Ein Capability-Matrix-Eintrag (native/desktop: ja, WASM: nein) ist
-  erforderlich. Die Lensfun-Profil-Datenbank wird mit dem Release distribuiert.
+- Die Lensfun-Profil-Datenbank wird mit dem Release distribuiert.
 
 Abhängigkeiten: F-031, F-037, F-078, F-099.
 
@@ -651,12 +649,12 @@ radialen Verzeichnungspolynoms + Vignette-Polynom, Grün-Referenz/RGB),
 CA → crop. `mask_recipe.lens_correction = None` schließt Geometrie aus dem
 Masken-Hash aus; `recipe_hash` invalidiert den RenderKey. Lensfun-Integration
 ist seit 2026-08-20 MVP-Ziel (native, dynamisch gelinkte LGPL-3.0-Capability,
-Datenbank CC-BY-SA, nicht WASM-fähig; Umsetzung in `lumina-lensfun` +
+Datenbank CC-BY-SA; Umsetzung in `lumina-lensfun` +
 `lumina-core`-Feature, siehe Abschnitt oben).
 **Lensfun-Capability und Pipeline-Integration sind implementiert und
 unabhängig verifiziert (2026-08-20, BESTANDEN):** `lumina-lensfun` (FFI +
 Safe Wrapper, 6 Native-Tests gegen die reale Profil-DB), lumina-core-Feature
-`lensfun` (default off, wasm32-neutral), per-Pixel-Verzeichnung/Vignette mit
+`lensfun` (default off, nativ-only), per-Pixel-Verzeichnung/Vignette mit
 byte-identischem Fallback auf das manuelle Modell (Test
 `lensfun_none_is_byte_identical_to_default_pipeline`).
 **Folgeaufgaben N2–N4 sind umgesetzt und unabhängig verifiziert
@@ -875,8 +873,7 @@ Fallback. Ein Dimensions-Mismatch zwischen Masken-Ebene und Frame wird mit
 normative Festschreibung von Crop/Geometrie im Messbereich sowie die
 CLI-/GUI-Verdrahtung: Das CLI misst das Render-Ergebnis mit den effektiven
 Ebenen aus `render_output.mask_layers`; die GUI misst die gerenderte Vorschau
-mit den Masken-Ebenen des letzten Renderings (wasm32: leeres Slice,
-dokumentierter Post-MVP-Zustand). `match_total_exposure` bleibt in Signatur
+mit den Masken-Ebenen des letzten Renderings. `match_total_exposure` bleibt in Signatur
 und Verhalten unverändert (interne Delegation auf die gemeinsame
 Delta-Logik). F-049 (Pixel-Modulation invert/feather/blur/density) und
 F-042-N1 (Source-Actions-Persistenz) sind umgesetzt und verifiziert.
@@ -937,8 +934,7 @@ gelöscht werden, sobald ein Bild über Lumina verschoben oder umbenannt wurde
 beziehungsweise beim Scan nicht mehr gefunden wird.
 
 > **Implementierungsstatus (F-086, 2026-08-17):** Umgesetzt und unabhängig
-> verifiziert. `lumina-core` besitzt eine native, per
-> `#[cfg(not(target_arch = "wasm32"))]` gekapselte Disk-Schicht
+> verifiziert. `lumina-core` besitzt eine native Disk-Schicht
 > (`DiskFolderCache`, crates/lumina-core/src/cache/disk.rs): atomare Writes,
 > `settings.json` mit feldweiser Eltern-Vererbung, Vorschauen pro Quelle +
 > virtueller Kopie unter `.lumina/previews/` (Standard- vs. 1:1-Vorschau) und
@@ -955,7 +951,7 @@ Rezeptstand gehören.
 > Stufen-Cache-Schicht für die GUI-Vorschau umgesetzt. Die demosaizierte Basis
 > (`Decode`/`SourceActions`/ROI-Crop, vor `Adjustments`) liegt als `ImageFrame`
 > im RAM ([`StageFrameCache`, crates/lumina-core/src/stage_cache.rs],
-> byte-budgetiert mit LRU; nativ 512 MiB, wasm32 48 MiB) und wird über einen
+> byte-budgetiert mit LRU; nativ 512 MiB) und wird über einen
 > rezeptblinden Basis-Digest identifiziert:
 > `RenderKey::stage_digest(CacheStage::Base)` (= `digest_for("base")`; deckt
 > Quell-Hash, Decode-Version, Pipeline-Version, Virtual-Copy-ID,

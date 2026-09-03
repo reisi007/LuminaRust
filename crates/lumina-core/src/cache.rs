@@ -8,9 +8,7 @@ use std::sync::{
 };
 use thiserror::Error;
 
-/// On-disk half of the folder cache. Only available on targets with a file
-/// system so that the portable core keeps compiling for `wasm32`.
-#[cfg(not(target_arch = "wasm32"))]
+/// On-disk half of the folder cache. Only available via the native file system.
 pub mod disk;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

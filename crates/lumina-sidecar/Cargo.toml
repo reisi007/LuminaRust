@@ -10,17 +10,7 @@ serde_json = "1"
 thiserror = "2"
 tempfile = "3"
 blake3 = "1"
-
-# `zstd` (native C backend via `zstd-sys`) is the `.lumina.zdata` payload
-# codec. R2-SIDECAR-ZDATA-WASM: it is target-gated to non-wasm32 so an
-# optional `dep:zstd` in the `zdata` feature never pulls the native
-# `zstd-sys` build script into a wasm32 dependency graph. Even when a
-# downstream crate (cli/mcp/gui) enables `zdata`, a workspace-wide
-# `cargo check --target wasm32-unknown-unknown` stays green because the
-# `zstd` dependency simply does not exist for that target; the `zdata`
-# code is itself `cfg(all(feature = "zdata", not(target_arch = "wasm32")))`
-# gated in `src/lib.rs`, so no zstd code is compiled on WASM.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `zstd` is the `.lumina.zdata` payload codec.
 zstd = { version = "0.13", optional = true }
 
 [features]

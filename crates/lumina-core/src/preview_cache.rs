@@ -7,7 +7,7 @@
 //! next image switch has no visible decode/render stall.
 //!
 //! What lives here (kept deliberately GPU-free and, except for the native disk
-//! tier, file-system-free so `wasm32` keeps compiling):
+//! tier, file-system-free):
 //!
 //! - [`PreviewKey`]: the full cache identity derived from source content hash,
 //!   decode/pipeline context, virtual copy + render key, and preview
@@ -374,10 +374,8 @@ pub fn decode_webp(bytes: &[u8]) -> Result<ImageFrame, crate::CoreError> {
 }
 
 // ---------------------------------------------------------------------------
-// Native disk tier (`.lumina/previews/*.webp`). Behind `not(wasm32)` because it
-// touches the file system; the RAM LRU + key + window + encode helpers above
-// stay fully portable so `wasm32` keeps compiling (RAM-only LRU is the
-// documented maximal WASM scope).
+// Native disk tier (`.lumina/previews/*.webp`). It touches the file system;
+// the RAM LRU + key + window + encode helpers above stay fully portable.
 // ---------------------------------------------------------------------------
 
 /// Native on-disk preview tier rooted at `<folder>/.lumina/previews/`.
@@ -385,13 +383,11 @@ pub fn decode_webp(bytes: &[u8]) -> Result<ImageFrame, crate::CoreError> {
 /// Addresses entries by the digest of [`PreviewKey`]. Atomic write via
 /// write-to-temp + rename; a file that does not decode (partial write, corrupt)
 /// is reported as a miss — never a valid hit.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct PreviewDiskCache {
     previews_dir: std::path::PathBuf,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl PreviewDiskCache {
     /// Root the disk tier at the given folder's `.lumina/previews` directory
     /// (created on demand).
@@ -650,7 +646,6 @@ mod tests {
 
     // ---- Disk tier (native) ----
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn disk_tier_roundtrip_prune_and_clear() {
         use std::sync::atomic::{AtomicU64, Ordering};

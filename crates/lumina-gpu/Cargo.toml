@@ -14,8 +14,7 @@ lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
 # Logging for the bootstrap stubs (no-op unless a logger is installed).
 log = "0.4"
-# GPU backend dependencies. Optional + feature-gated so the crate still builds
-# (CPU-only) on targets without a native GPU stack such as `wasm32`, and so a
+# GPU backend dependencies. Optional + feature-gated so a
 # `--no-default-features` build stays dependency-light for headless CI.
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
@@ -25,8 +24,7 @@ pollster = { version = "1.0", optional = true }
 # Primary GPU path for native desktop (Metal on Apple Silicon, Vulkan/DX12
 # elsewhere). Enabled by default so a plain `cargo build -p lumina-gpu` pulls
 # in the wgpu stack and the adapter/device init below compiles. Disable it with
-# `--no-default-features` to get a pure-CPU build (e.g. for wasm32 consumers,
-# which instead omit the `lumina-gpu` dependency entirely).
+# `--no-default-features` to get a pure-CPU build.
 default = ["gpu"]
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 

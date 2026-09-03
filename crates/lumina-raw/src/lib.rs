@@ -1,4 +1,4 @@
-//! LibRaw-backed RAW decoding. The native backend is deliberately absent from WASM.
+//! LibRaw-backed RAW decoding (native-only).
 
 use lumina_core::ImageFrame;
 use serde::{Deserialize, Serialize};
@@ -15,8 +15,7 @@ use thiserror::Error;
 /// skipped 9 of the 18 formats in `lumina batch`.
 ///
 /// Values are lowercase, without the leading dot. Matching is ASCII-case-
-/// insensitive via [`is_raw_extension`]. This constant is plain data and stays
-/// available on WASM (the decoder itself does not).
+/// insensitive via [`is_raw_extension`].
 pub const RAW_EXTENSIONS: &[&str] = &[
     "arw", "cr2", "cr3", "dng", "nef", "orf", "raf", "rw2", "crw", "pef", "srw", "3fr", "iiq",
     "rwl", "mos", "erf", "kdc", "x3f",
@@ -68,7 +67,6 @@ impl DemosaicMethod {
     /// non-default choice ran the wrong algorithm and `Aahd` silently degraded
     /// to AHD. The table is pinned byte-exactly by
     /// `demosaic_libraw_values_match_dcraw_process_user_qual_table`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn libraw_value(self) -> Option<i32> {
         match self {
             Self::LibRawDefault => None,
@@ -207,23 +205,15 @@ pub enum RawError {
 }
 
 pub fn decode_file(path: impl AsRef<std::path::Path>) -> Result<RawImage, RawError> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = path;
-        Err(RawError::UnsupportedPlatform)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // R2-RAW-02: hand the path to LibRaw directly (`libraw_open_file`
-        // streams through its own datastream) instead of reading the whole
-        // RAW — up to 50–150 MB for a CR3 — into a heap buffer first. Peak
-        // memory drops by roughly the file size; `open_buffer` remains in
-        // use only for the byte-oriented `decode_bytes*` entry points.
-        native::decode_with_options(
-            native::DecodeInput::File(path.as_ref().to_path_buf()),
-            &RawDecodeOptions::default(),
-        )
-    }
+    // R2-RAW-02: hand the path to LibRaw directly (`libraw_open_file`
+    // streams through its own datastream) instead of reading the whole
+    // RAW — up to 50–150 MB for a CR3 — into a heap buffer first. Peak
+    // memory drops by roughly the file size; `open_buffer` remains in
+    // use only for the byte-oriented `decode_bytes*` entry points.
+    native::decode_with_options(
+        native::DecodeInput::File(path.as_ref().to_path_buf()),
+        &RawDecodeOptions::default(),
+    )
 }
 
 pub fn decode_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawImage, RawError> {
@@ -240,19 +230,10 @@ pub fn decode_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawImage, Raw
     if name_ref.trim().is_empty() {
         return Err(RawError::InvalidData("missing file name"));
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = bytes;
-        let _ = name_ref;
-        Err(RawError::UnsupportedPlatform)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        native::decode_with_options(
-            native::DecodeInput::Buffer(bytes),
-            &RawDecodeOptions::default(),
-        )
-    }
+    native::decode_with_options(
+        native::DecodeInput::Buffer(bytes),
+        &RawDecodeOptions::default(),
+    )
 }
 
 pub fn decode_bytes_with_options(
@@ -264,16 +245,7 @@ pub fn decode_bytes_with_options(
     if name_ref.trim().is_empty() {
         return Err(RawError::InvalidData("missing file name"));
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (bytes, options);
-        let _ = name_ref;
-        Err(RawError::UnsupportedPlatform)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        native::decode_with_options(native::DecodeInput::Buffer(bytes), options)
-    }
+    native::decode_with_options(native::DecodeInput::Buffer(bytes), options)
 }
 
 /// Reads only the metadata of a RAW file — **without** decoding pixels
@@ -300,15 +272,7 @@ pub fn decode_bytes_with_options(
 /// The geometry/orientation values match a full [`decode_file`] of the same
 /// source bit-for-bit; this is pinned by tests against committed fixtures.
 pub fn read_metadata(path: impl AsRef<std::path::Path>) -> Result<RawMetadata, RawError> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = path;
-        Err(RawError::UnsupportedPlatform)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        native::read_metadata_with_input(native::DecodeInput::File(path.as_ref().to_path_buf()))
-    }
+    native::read_metadata_with_input(native::DecodeInput::File(path.as_ref().to_path_buf()))
 }
 
 /// Metadata-only variant of [`read_metadata`] for in-memory bytes.
@@ -321,21 +285,10 @@ pub fn read_metadata_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawMet
     if name_ref.trim().is_empty() {
         return Err(RawError::InvalidData("missing file name"));
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = bytes;
-        let _ = name_ref;
-        Err(RawError::UnsupportedPlatform)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        native::read_metadata_with_input(native::DecodeInput::Buffer(bytes))
-    }
+    native::read_metadata_with_input(native::DecodeInput::Buffer(bytes))
 }
 
-/// Returns the linked LibRaw version string (e.g. `"0.22.2"`) when native RAW
-/// decoding is available. On platforms without native LibRaw (WASM/browser)
-/// this returns `None`.
+/// Returns the linked LibRaw version string (e.g. `"0.22.2"`).
 ///
 /// Including the linked decoder version in the decode identity lets LuminaRust
 /// detect when an upgraded LibRaw produces different output geometry or pixel
@@ -343,20 +296,10 @@ pub fn read_metadata_bytes(bytes: &[u8], name: impl AsRef<str>) -> Result<RawMet
 /// LibRaw 0.21.x (6160×4144) and 0.22.x (6032×4024) — so cached renders and
 /// masks are invalidated instead of silently reused.
 pub fn libraw_version() -> Option<String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        native::libraw_version()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    native::libraw_version()
 }
 
 /// Decode-identity version string for the LibRaw decoder.
-///
-/// Falls back to `"unknown"` when no native LibRaw is linked (WASM), keeping
-/// the decoder identity stable for non-native targets.
 ///
 /// The value carries a `+luminaabiN` generation suffix. It changes whenever a
 /// LuminaRust-side fix alters observable decode output **without** changing the
@@ -400,7 +343,6 @@ pub fn libraw_decode_version() -> String {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
     use libraw_sys as raw;
@@ -1288,7 +1230,6 @@ mod tests {
     /// without running demosaic/processing. The portrait fixture carries dcraw
     /// flip 5 → EXIF orientation 8, so this also pins the width/height swap
     /// rule for the 90° family on the metadata-only path.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn read_metadata_matches_full_decode_on_portrait_fixture() {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
@@ -1313,7 +1254,6 @@ mod tests {
 
     /// R2-CLI-04 landscape counterpart: identity orientation must keep
     /// width/height unswapped on the metadata-only path.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn read_metadata_matches_full_decode_on_landscape_fixture() {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
@@ -1325,7 +1265,6 @@ mod tests {
 
     /// R2-CLI-04: garbage input fails loudly (never `UnsupportedPlatform`),
     /// mirroring the decode-path error contract.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn read_metadata_reports_non_raw_input_as_decode_error() {
         let error = read_metadata_bytes(b"not a raw", "bad.cr2").unwrap_err();
@@ -1358,7 +1297,6 @@ mod tests {
     /// algorithm (silent fallback). Before this test existed, the mapping was
     /// shifted by +1 (`Linear→1 … Aahd→13`), so every explicit choice ran the
     /// wrong algorithm and AAHD silently degraded to AHD.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn demosaic_libraw_values_match_dcraw_process_user_qual_table() {
         let expected = [
@@ -1385,7 +1323,6 @@ mod tests {
     /// Guard against future variants reintroducing the silent fallback: every
     /// explicit method must land on a `user_qual` that dcraw_process actually
     /// dispatches on (0..=4, 11, 12) — never on an unmapped value.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn demosaic_values_never_hit_the_dcraw_silent_fallback() {
         let all = [
@@ -1410,7 +1347,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     #[ignore = "set LUMINA_RAW_FIXTURE to a licensed fixture"]
     fn optional_real_fixture_checks_decode_orientation_and_dimensions() {
@@ -1429,7 +1365,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn aircraft_landscape_fixture_has_expected_geometry_and_metadata() {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
@@ -1450,7 +1385,6 @@ mod tests {
     /// LibRaw's OWN rotation (`user_flip=k` → `dcraw_make_mem_image`, which
     /// applies `flip_index`), for every dcraw flip 0..=7 and for this fixture
     /// end-to-end.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn aircraft_portrait_fixture_applies_exif_orientation() {
         // The fixture carries dcraw flip 5, which is EXIF orientation **8**
@@ -1467,7 +1401,6 @@ mod tests {
         assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn aircraft_fixtures_expose_exif_lens_model() {
         // REVIEW-RAW-N2: both committed CR3 fixtures carry the EXIF LensModel
@@ -1500,7 +1433,6 @@ mod tests {
     /// in synthetic unit tests, so the real Budget-Gate/Promotion chain was
     /// never exercised end-to-end. This test decodes a committed fixture at
     /// 16 bit and pins the same geometry as the verified 8-bit decode.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn aircraft_landscape_fixture_decodes_with_output_bits_16() {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
@@ -1536,7 +1468,6 @@ mod tests {
     /// temporary copy of a committed fixture exercises the file path
     /// end-to-end and must produce the known geometry. The second half pins
     /// the error contract: an unopenable path stays a `RawError::Io`.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn decode_file_streams_a_fixture_via_libraw_open_file() {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
@@ -1611,16 +1542,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    #[test]
-    fn wasm_is_explicitly_unsupported() {
-        assert!(matches!(
-            decode_bytes(b"raw", "x.cr2"),
-            Err(RawError::UnsupportedPlatform)
-        ));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn libraw_version_is_present_and_well_formed() {
         let version = libraw_version().expect("native LibRaw should report a version");
@@ -1636,7 +1557,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn libraw_decode_version_carries_decode_generation() {
         let decode_version = libraw_decode_version();
@@ -1648,17 +1568,5 @@ mod tests {
             decode_version.starts_with("0.22."),
             "native decode identity should start with the linked version, got `{decode_version}`"
         );
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    #[test]
-    fn libraw_decode_version_falls_back_to_unknown_with_generation() {
-        assert_eq!(libraw_decode_version(), "unknown+luminaabi3");
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    #[test]
-    fn libraw_version_is_none_on_wasm() {
-        assert!(libraw_version().is_none());
     }
 }

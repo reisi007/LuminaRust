@@ -351,10 +351,7 @@ zugeschnitten wird.
   (Read-Modify-Write unter `.zdata.lock` auf nativ). Unvollständige
   temporäre Dateien gelten nie als gültig; `artifact_status` unterscheidet
   `Available`/`Missing`/`Corrupt` eager (Prüfsumme beim Laden geprüft, nicht
-  lazy).
-- Auf WASM ist `zdata`/`zstd` nicht verfügbar (native-only, target-gegatet,
-  `feature/platform/capability-matrix.md`); dort gilt das Artefakt als
-  `missing`/`unverifizierbar` und wird nicht still ersetzt.
+  lazy). Artefakte werden nie still ersetzt.
 
 ## Identität und Veraltung
 
@@ -523,15 +520,13 @@ manueller Expand **vor** Crop (und nach Perspective).
   und umgekehrt; ohne dokumentierte Capability-Entscheidung gibt es keine
   Cloud-Anbindung. Vorgeschlagener Matrix-Eintrag:
 
-  | Fähigkeit | native CLI | Desktop (eframe) | Browser (WASM) |
-  | --- | --- | --- | --- |
-  | Generatives Entfernen (`inpaint`, lokal ONNX) | geplant, `lumina-onnx` | geplant, `lumina-onnx` | nein (kein lokales ONNX im Browser ohne `onnx-wasm`) |
-  | Generatives Erweitern (`outpaint`/`canvas expansion >100 %`, lokal ONNX) | geplant | geplant | nein |
-  | Generatives Entfernen/Erweitern (Cloud-API) | nicht geplant — nur mit expliziter Capability-Entscheidung | nicht geplant | nicht geplant |
+  | Fähigkeit | native CLI | Desktop (eframe) |
+  | --- | --- | --- |
+  | Generatives Entfernen (`inpaint`, lokal ONNX) | geplant, `lumina-onnx` | geplant, `lumina-onnx` |
+  | Generatives Erweitern (`outpaint`/`canvas expansion >100 %`, lokal ONNX) | geplant | geplant |
+  | Generatives Entfernen/Erweitern (Cloud-API) | nicht geplant — nur mit expliziter Capability-Entscheidung | nicht geplant |
 
-- **Browser:** ONNX im Browser ist eine optionale Fähigkeit (F-070,
-  `onnx-wasm`, off by default) — eine `GenerativeEdit`-Nutzung im Browser ist
-  erst mit dieser Capability möglich und wird sichtbar ausgewiesen.
+  (Browser-Spalte ENTFERNT 2026-09-04.)
 - **Lizenz:** Die Modelle werden **vor Integration** lizenz- und
   hash-gepinnt dokumentiert (F-078, `feature/quality/fixtures-licensing.md`);
   keine spontanen Downloads, keine Tests gegen Netz. Ein Modell ohne
@@ -691,7 +686,7 @@ AI-Masken/virtuellen Kopien):
   Lizenz/Hash-Pin vor Integration dokumentiert (F-078).
 - Veraltungs-, Artefakt-, Canvas- und Geometrie-Interaktionstests sind durch
   einen unabhängigen Verifizierungs-Agenten bestätigt.
-- `cargo check --workspace` (und wasm-Gates) grün.
+- `cargo check --workspace` grün.
 
 ## Offene Punkte und Abhängigkeiten
 
@@ -701,7 +696,7 @@ AI-Masken/virtuellen Kopien):
   GUI-WGPU-PRESENT-1; `lumina-gpu`/Present-Pfad berührt.
 - **Offen:** Modellauswahl (Modellfamilie mit dynamischer Variantenwahl wie bei
   SAM 2.1 oder fixe Modelle), Cloud-API-Capability (bewusst getrennt, siehe
-  oben), WASM-Pfad (F-070, `onnx-wasm` off by default), Schema-/
+  oben), Schema-/
   Migrationsentscheidung für die Rezept-Stufe vor Implementierung (neue
   versionierte Stufe `GenerativeEdit`, additives Schema-v2-Feld, Migration
   dokumentiert, kein Pre-MVP-Bruch ohne Bump).

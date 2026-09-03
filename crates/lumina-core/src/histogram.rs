@@ -486,13 +486,8 @@ mod tests {
         assert!((single.median() - analyze_tone(&image).median).abs() <= 1.0 / 256.0 + 1e-9);
     }
 
-    // REVIEW-CORE-WASM-FOLLOWUP: these properties depend on `proptest`, which
-    // is a non-wasm32 dev-dependency (its transitive `getrandom`/`wait-timeout`
-    // do not compile for wasm32-unknown-unknown). The module is gated with the
-    // exact same condition as the dependency in `Cargo.toml`, so test targets
-    // compile for every platform; on wasm32 only the deterministic unit tests
-    // above are built.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    // These properties depend on `proptest` (a dev-dependency).
+    #[cfg(test)]
     mod proptests {
         use super::super::LuminanceHistogram;
         use super::frame;

@@ -12,9 +12,9 @@
 //! directory scan reports every failing file individually instead of hiding
 //! it.
 //!
-//! Native-only capability (`platform/capability-matrix.md`, "Virtuelle Kopien
-//! / Presets"): the whole module is compiled out on wasm32, where file-backed
-//! presets remain post-MVP.
+//! Desktop capability (`platform/capability-matrix.md`, "Virtuelle Kopien
+//! / Presets"): file-backed user presets live in the user's global presets
+//! directory.
 
 use std::fs;
 use std::io::ErrorKind;

@@ -119,7 +119,7 @@
 - Source-Action-Tests vor Auto-Analyse und vor Maskenanwendung
 - Golden-Image-Tests mit dokumentierten Toleranzen
 - CLI-End-to-End-Tests mit Exit-Codes
-- native und betroffene WASM-Build-/Smoke-Tests
+- native Build-/Smoke-Tests
 - Performance- und Speicherbenchmarks für RAW, Vorschau, Masken und Batch
 
 RAW-Fixtures, Referenzbilder und AI-Modelle werden reproduzierbar versioniert
@@ -134,7 +134,6 @@ Netzwerk-Download benötigen.
 - implizite Rezeptvererbung in v1
 - zweite GUI-spezifische Renderpipeline
 - automatische Modell-Downloads
-- vollständige WASM-Unterstützung für native RAW- und ONNX-Backends
 
 ## Änderungsregeln
 

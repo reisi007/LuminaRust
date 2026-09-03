@@ -196,9 +196,7 @@ still übersprungen.
 
 ### Plattformgrenze und Umsetzungsstand
 
-- Dateibasierte Presets sind eine native GUI-Fähigkeit; im WASM-Build bleiben
-  sie Post-MVP (`platform/capability-matrix.md`, „Virtuelle Kopien /
-  Presets“). Das In-Memory-Erstellen/Anwenden bleibt plattformübergreifend
+- Dateibasierte Presets sind eine native GUI-Fähigkeit. Das In-Memory-Erstellen/Anwenden bleibt plattformübergreifend
   verfügbar.
 - Umgesetzt (GUI v1): Speichern des aktuellen Ausschnitts als
   `<name>.lumina-preset.json` über das geteilte atomare Schreibmuster

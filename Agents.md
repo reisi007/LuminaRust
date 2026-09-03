@@ -119,8 +119,8 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
   zweite Implementierung der Renderpipeline.
 - Ein optionaler Index-/Katalogadapter darf später als eigenes Modul ergänzt
   werden. Er muss aus Sidecars vollständig neu aufgebaut werden können.
-- Native Abhängigkeiten und WASM-Fähigkeiten werden über eine dokumentierte
-  Capability-Matrix getrennt behandelt.
+- Native Abhängigkeiten werden über eine dokumentierte
+  Capability-Matrix getrennt behandelt (WASM/Browser ENTFERNT 2026-09-04).
 - Jede Pipeline besitzt eine explizite Version. Rezeptversion und
   Pipelineversion werden getrennt migriert und validiert.
 
@@ -247,8 +247,8 @@ Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
 - Masken-Cache-Hit-, Miss- und Invalidierungstests
 - Golden-Image-Tests mit dokumentierten Toleranzen
 - CLI-End-to-End-Tests inklusive Exit-Codes
-- GUI-Features: Jede sichtbare GUI-Funktion (Regler, Module, Shortcuts, Preview, Sidecar-Persistenz) wird mit automatischem headless GUI-Test (egui Context + LuminaApp, tempdir) abgedeckt; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram (byte-identisch/PSNR, kein stiller Fallback), kein manueller Test als einzige Absicherung. Tests laufen in `cargo test -p lumina-gui` grün ohne GPU/WASM.
-- native und, sofern betroffen, WASM-Build-/Smoke-Tests
+- GUI-Features: Jede sichtbare GUI-Funktion (Regler, Module, Shortcuts, Preview, Sidecar-Persistenz) wird mit automatischem headless GUI-Test (egui Context + LuminaApp, tempdir) abgedeckt; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram (byte-identisch/PSNR, kein stiller Fallback), kein manueller Test als einzige Absicherung. Tests laufen in `cargo test -p lumina-gui` grün ohne GPU.
+- native Build-/Smoke-Tests (kein Browser-Build mehr)
 - Tests für fehlende Modelle, fehlende Maskenartefakte und veränderte Quellen
 - Performance-Methodik gemäß `feature/quality/performance-benchmarks.md`
   (F-074): Benchmarks laufen gegen die committeten Baseline-/Budget-Stores
@@ -287,7 +287,7 @@ erst fertig, wenn:
 - `feature/README.md` auf das richtige Dokument verweist und das betroffene
   Feature-Dokument den erreichten Zustand sowie verbleibende Grenzen kennt;
 - der Abschlussbericht reproduzierbare Prüfkommandos nennt.
-- ein GUI-Feature nur als fertig gilt, wenn ein automatischer headless GUI-Test (egui Context + LuminaApp, tempdir; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram, byte-identisch/PSNR, kein stiller Fallback) vorliegt und `cargo test -p lumina-gui` ohne GPU/WASM grün ist (konsistent mit Produktprinzip „Jede sichtbare Funktion muss im Feature-Dokument beschrieben sein“ und der Verifizierungs-Pflicht für GUI-Features).
+- ein GUI-Feature nur als fertig gilt, wenn ein automatischer headless GUI-Test (egui Context + LuminaApp, tempdir; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram, byte-identisch/PSNR, kein stiller Fallback) vorliegt und `cargo test -p lumina-gui` ohne GPU grün ist (konsistent mit Produktprinzip „Jede sichtbare Funktion muss im Feature-Dokument beschrieben sein“ und der Verifizierungs-Pflicht für GUI-Features).
 - der Verifizierungsbericht die BESTANDEN-Checkliste aus [`DoD.md`](DoD.md) §7
   vollständig mit Belegen beantwortet (End-to-End-Kette, zeitbasierte Pfade,
   Klassen-Vollständigkeit, Log-Level, Spez→Test-Mapping, Gates).
@@ -325,7 +325,7 @@ erst fertig, wenn:
 - Keine absolute Pfadangabe in einem portablen Sidecar.
 - Keine zentrale DB-Funktion, die ohne Sidecar-Datenverlust verursachen würde.
 - Keine GUI-spezifische Bildlogik außerhalb der gemeinsamen Pipeline.
-- Keine native Dependency im WASM-kompatiblen Pfad ohne dokumentierte
+- Keine native Dependency ohne dokumentierte
   Capability-Entscheidung.
 - Lizenzbedingungen von RAW-Backends, ONNX-Runtime und Modellen werden vor
   Integration geprüft und dokumentiert.

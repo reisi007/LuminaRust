@@ -13,7 +13,6 @@
 //!    write corrupted the makernotes region and was silently ignored;
 //! 4. EXIF/matrix metadata decoded from the committed CR3 fixtures is finite,
 //!    positive and non-empty (garbage reads used to flow into Sidecars).
-#![cfg(not(target_arch = "wasm32"))]
 
 use libraw_sys as raw;
 use libraw_sys::abi;

@@ -7,9 +7,9 @@
 //! preview and uses it.  Until a thumbnail is ready a placeholder cell is shown
 //! — there is deliberately no silent fallback to a wrong/sized-up image.
 //!
-//! The disk cache and native RAW decode are gated to `not(target_arch =
-//! "wasm32")`; under wasm the filmstrip shows placeholders only (RAW/in-file IO
-//! are a documented native capability).
+//! Disk cache probes and RAW decode back the thumbnail jobs above; in-file
+//! IO is a desktop capability
+//! (`feature/platform/cli-gui-wasm.md` § WASM-ENTFERNT).
 
 use eframe::egui;
 use lumina_core::cache::PreviewKind;
@@ -163,7 +163,6 @@ pub fn downscale_rgba(pixels: &[u8], width: u32, height: u32, max_dim: u32) -> (
 ///
 /// A `None` result (I/O or settings gate) is treated as "not cached" so the
 /// caller falls back to generating a thumbnail rather than assuming a stale hit.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn filmstrip_preview_cached(
     cache: &lumina_core::cache::disk::DiskFolderCache,
     source: &str,
@@ -175,7 +174,7 @@ pub fn filmstrip_preview_cached(
         .unwrap_or(false)
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -21,9 +21,8 @@
 //!
 //! Fixtures are deterministic (fixed seed, locally generated RGBA8 frames —
 //! identical rule as `crates/lumina-bench/bench/common/mod.rs`). No network
-//! access. This harness is a native-only Criterion target in `lumina-gui`
-//! (wasm CI checks only the lib target), matching the F-074 "separate native
-//! harness" policy in spirit; the preview-cache primitives are addressed here
+//! access. This harness is a native-only Criterion target in `lumina-gui`,
+//! matching the F-074 "separate native harness" policy in spirit; the preview-cache primitives are addressed here
 //! because they are GUI-side (`preview_ctrl.rs` / `preview_cache.rs`) and the
 //! `lumina-bench` crate is a separate workspace member.
 

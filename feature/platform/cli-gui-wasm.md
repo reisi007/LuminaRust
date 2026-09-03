@@ -396,55 +396,8 @@ Rezept gespeichert.
 
 WASM/Browser ist ersatzlos gestrichen (Eigentümer-Entscheidung). F-069…F-071
 entfallen; `cfg(target_arch = "wasm32")`-Pfade, `wasm-bindgen`-/`trunk`-Artefakte
-und der WASM-CI-Job werden ausgebaut (Task WASM-REMOVE-01). Der Rest dieses
-Abschnitts ist historisch und nicht normativ:
-
-WASM unterstützt zunächst den portablen Core und klar begrenzte Preview-
-Szenarien. Browser-Dateiimport, Speicherlimits, Export und GPU werden getrennt
-behandelt. Native RAW- und ONNX-Backends gelten nicht automatisch als
-browserfähig.
-
-**WASM-RAW-Backend (post-MVP, vorbereitet):** Für die spätere Browser-Anbindung
-ist `libraw-wasm` (Emscripten/npm) vorgesehen. Die Rust-Seite würde die JS-
-`LibRaw`-Klasse als `wasm-bindgen`-Extern deklarieren und `open`/`metadata`/
-`imageData` in `lumina-raw::decode_bytes` bzw. `RawMetadata` übersetzen. Das
-Backend ist hinter dem Feature `wasm-js` gekapselt und nur für
-`cfg(target_arch = "wasm32")` aktiv; der native Pfad bleibt Default für CLI/
-Desktop. Ein unabhängiger Verifizierungs-Agent prüft später, dass derselbe
-`decode_bytes`-Vertrag (Orientierung, Metadaten, 8/16-bit) in beiden Backends
-gilt. Im MVP ist WASM-RAW ausgeschaltet (`UnsupportedPlatform`).
-
-**WASM Drag-and-Drop (MVP-Capability, egui 0.36):** `egui 0.36` modelliert
-`DroppedFile` als trait object (`DroppedFileHandle = Arc<dyn DroppedFile>`).
-Auf **native** liefert `DroppedFile::bytes() -> Result<Vec<u8>, String>` den
-Inhalt synchron; der Pfad ist absolut und `LuminaApp` lädt via `load_bytes` bzw.
-`begin_load_path`. Auf **wasm32** existiert `bytes()` nicht — stattdessen
-`bytes_async() -> Future<Output = Result<Vec<u8>, String>>` (async, Browser-API)
-und `path()` ist nur relativ (Dateiname). Das synchrone `update()`-Loop kann
-dies nicht ohne `wasm_bindgen_futures::spawn_local`-Brücke bedienen; die Brücke
-ist im MVP **nicht verdrahtet**. Drag-and-drop auf WASM ist daher bewusst **nicht
-unterstützt**: ein Drop setzt `status`/`error` sichtbar ("Drag-and-drop on WASM
-requires async file reading — not yet implemented; use the file picker") und
-loggt `warn!`, statt still ignoriert zu werden (Agents.md: kein stiller Fallback).
-Siehe `crates/lumina-gui/src/lib.rs` Dropped-File-Handling `#[cfg(target_arch =
-"wasm32")]`. File-Picker bleibt der WASM-Importpfad (Post-MVP: async-Brücke
-nachrüsten, dann `bytes_async().await` → `load_bytes`).
-
-**Ist-Stand 2026-09-02 (F-069…F-071, e60a9ad):** Browser-Dateiimport ist
-Upload/File-Picker + OPFS + Download-Export (SOLL normativ in
-`feature/platform/wasm-limits.md` F-069); ONNX ist native-only (`lumina-onnx`
-`#![cfg(not(wasm32))]` + `wasm_stub` `RuntimeDisabled`, `ort` target-gegatet;
-`cargo check --target wasm32 -p lumina-onnx --features onnx-rt` grün; Browser-
-Option `onnx-wasm` off by default, F-070); `zdata`/`zstd` native-only target-gegatet
-(sidecar + cli/mcp/gui consumer gating). Quantitative Limits je Plattform sind in
-`feature/platform/wasm-limits.md` (F-071) und `feature/platform/capability-matrix.md`
-normativ dokumentiert (Bildgröße 45 MP/24 MP, RAM 8 GB gesamt / 512 MiB CLI /
-48 MiB WASM + LRU-Cap 1,5 GiB, VRAM 1024 MiB/4, Threads Rayon/1, RAW LibRaw 0.22.2).
-`cargo check -p lumina-core --target wasm32-unknown-unknown` und
-`cargo check -p lumina-gui --target wasm32-unknown-unknown --no-default-features`
-sind grün; `cargo check --workspace --target wasm32-unknown-unknown` (auch mit
-`zdata`/`onnx-rt`) grün — `feature/README.md` verlinkt `platform/wasm-limits.md`
-(Zeile 90) konsistent.
+und der WASM-CI-Job werden ausgebaut (Tasks WASM-REMOVE-GUI/-ONNX/-REST).
+Frühere Inhalte dieses Abschnitts leben in der Git-Historie weiter.
 
 ### Capability-Matrix Native — `wgpu`-Renderer mit Shared Device (GUI-WGPU-PRESENT-1, 2026-08-26)
 
@@ -454,14 +407,14 @@ Der native Desktop nutzt `eframe` mit dem **wgpu**-Renderer;
 Present-Target liegen auf dem **dieselben** Device, das die Swapchain bedient —
 der frühere glow/wgpu-Dual-Backend-Konflikt ist aufgelöst.
 
-| Capability | CLI (nativ) | GUI Desktop — `wgpu` present | WASM (Browser) |
-|------------|-------------|------------------------------|----------------|
-| `lumina-core` (CPU-Referenz) | ✅ verfügbar | ✅ Fallback (Before/After, ROI-Zoom, nicht-GPU-unterstützte Rezepte) | ✅ verfügbar |
-| `lumina-gpu` (`gpu` feature, `wgpu`/`bytemuck`/`pollster`) | ✅ optional (`--features gpu`) | ✅ default on, shared device via `from_parts` | ❌ nicht verfügbar (kein `wgpu` Stack für lumina-gpu) |
-| Decode/Demosaic (`lumina-raw` LibRaw) | ✅ | ✅ (Worker-Thread) | ❌ `UnsupportedPlatform` (Post-MVP `libraw-wasm`/`wasm-js`) |
-| Color/Tone GPU Shader (`lumina-gpu::shaders`) | ✅ `render_with_gpu` / `render_to_vram` | ✅ VRAM-resident (`render_to_vram`, Uniform → UBO) | ❌ |
-| SourceAction GPU Stage (`SOURCE_ACTION_STAGE_SRC`) | ✅ bei gebundenen Artefakten (`set_source_action_artifacts`), sonst CPU-Route | ✅ Drag-Pfad compositiert vor Tone; Present-Gate hält nicht unterstützte Rezepte auf CPU | ❌ |
-| Masken‑Brush + evaluierte Ebenen im VRAM (`R16Uint`) | — | ✅ persistente `Vec<u16>` Plane → dirty 512² Tiles (`upload_mask_tile`) + evaluierte Planes nach Full-Render (`combine_mask_planes` → `upload_mask_plane`, byte-exakt) | — |
+| Capability | CLI (nativ) | GUI Desktop — `wgpu` present |
+|------------|-------------|------------------------------|
+| `lumina-core` (CPU-Referenz) | ✅ verfügbar | ✅ Fallback (Before/After, ROI-Zoom, nicht-GPU-unterstützte Rezepte) |
+| `lumina-gpu` (`gpu` feature, `wgpu`/`bytemuck`/`pollster`) | ✅ optional (`--features gpu`) | ✅ default on, shared device via `from_parts` |
+| Decode/Demosaic (`lumina-raw` LibRaw) | ✅ | ✅ (Worker-Thread) |
+| Color/Tone GPU Shader (`lumina-gpu::shaders`) | ✅ `render_with_gpu` / `render_to_vram` | ✅ VRAM-resident (`render_to_vram`, Uniform → UBO) |
+| SourceAction GPU Stage (`SOURCE_ACTION_STAGE_SRC`) | ✅ bei gebundenen Artefakten (`set_source_action_artifacts`), sonst CPU-Route | ✅ Drag-Pfad compositiert vor Tone; Present-Gate hält nicht unterstützte Rezepte auf CPU |
+| Masken‑Brush + evaluierte Ebenen im VRAM (`R16Uint`) | — | ✅ persistente `Vec<u16>` Plane → dirty 512² Tiles (`upload_mask_tile`) + evaluierte Planes nach Full-Render (`combine_mask_planes` → `upload_mask_plane`, byte-exakt) |
 | Overlay‑Composite + Present | — | ✅ readback-frei: `copy_vram_to_texture(present_target)` → `register_native_texture` → `painter().image`; CPU-Upload als Fallback erhalten | — |
 | `VramState` Management | — | LRU-Pool dimensionsschlüsselt (`LUMINA_GPU_VRAM_POOL_ENTRIES`=4, `LUMINA_GPU_VRAM_BUDGET_MB`=1024); 512² `TiledCache`/`DraftPyramid` bleibt M2 | — |
 | Fehlerreporting | `warn!`/CPU-Route-Logs einmal pro Grundmenge | `warn!` bei Tile-/Plane-/Overlay-Fehlern; Init-Fehler via `log_gpu_init_failure` (getestet) | — |
@@ -505,4 +458,4 @@ wiederherstellen können.
 - Sidecar-only-CLI funktioniert ohne DB.
 - GUI und CLI erzeugen dasselbe Rezeptmodell.
 - Der Index kann gelöscht und aus Sidecars neu erstellt werden.
-- WASM-Build und native Capability-Grenzen sind dokumentiert.
+- Native Capability-Grenzen sind dokumentiert.

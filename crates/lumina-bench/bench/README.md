@@ -9,8 +9,8 @@ ersten Benchmarks folgen in F-074-N3.
 - Normatives SOLL: [`feature/quality/performance-benchmarks.md`](../../feature/quality/performance-benchmarks.md) (F-074)
 - Architekturentscheidung: [`docs/adr/0003-performance-benchmarking.md`](../../docs/adr/0003-performance-benchmarking.md) (ADR 0003)
 
-`lumina-bench` ist das einzige native Timing-Harness (Criterion) und wird nie
-für `wasm32` gebaut. Die native Messung ist Proxy für alle Archs.
+`lumina-bench` ist das einzige native Timing-Harness (Criterion). Die native
+Messung ist Proxy für alle Konfigurationen.
 
 ## ID-Schema
 

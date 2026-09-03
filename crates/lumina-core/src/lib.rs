@@ -1,4 +1,4 @@
-//! Small, portable raster MVP shared by native CLI and future WASM clients.
+//! Small, portable raster MVP shared by the native CLI and GUI.
 
 use image::{
     codecs::jpeg::JpegEncoder, codecs::png::PngEncoder, codecs::webp::WebPEncoder, ColorType,
@@ -22,13 +22,9 @@ pub mod render;
 pub mod spot_heal;
 pub mod stage_cache;
 pub mod tone;
-// REVIEW-CORE-WASM-FOLLOWUP: this module holds real `proptest` properties;
-// `proptest` is a non-wasm32 dev-dependency (its transitive `getrandom`/
-// `wait-timeout` do not compile for wasm32-unknown-unknown), so the module is
-// gated with the same condition as the dependency in `Cargo.toml`.
-#[cfg(all(test, not(target_arch = "wasm32")))]
+// This module holds real `proptest` properties.
+#[cfg(test)]
 mod tone_props;
-#[cfg(not(target_arch = "wasm32"))]
 pub use cache::disk::{DiskCacheError, DiskFolderCache};
 pub use cache::{
     CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
@@ -48,7 +44,6 @@ pub use mask_modulation::modulate_mask_plane;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use memory::{MemoryBudget, MemoryBudgetError};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
-#[cfg(not(target_arch = "wasm32"))]
 pub use preview_cache::PreviewDiskCache;
 pub use preview_cache::{
     decode_webp, encode_webp_lossless, prefetch_window, LruPreviewCache, PrefetchSlot,
@@ -946,7 +941,7 @@ impl ImageFrame {
 /// representable exactly by `f64`, so composing the stages in `f64` without
 /// re-casting to `u8` between them yields the same result as the original code
 /// that casts back to `u8` after every stage. This keeps the kernel fully
-/// Portable (no native/SIMD intrinsics) and therefore WASM-compatible.
+/// portable (no native/SIMD intrinsics).
 ///
 /// Bundles the per-channel scalar adjustment parameters so the fused kernel keeps
 /// a small, clippy-clean signature while remaining easy to extend.

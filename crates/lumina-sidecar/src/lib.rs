@@ -7,200 +7,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-// Bare `thread::sleep` is used only by the native file-lock retry loop below;
-// the wasm32 lock stub never blocks, so the import is gated to match.
-#[cfg(not(target_arch = "wasm32"))]
+// Bare `thread::sleep` is used only by the native file-lock retry loop below.
 use std::thread;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
 
-#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+#[cfg(feature = "zdata")]
 mod zdata;
-#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+#[cfg(feature = "zdata")]
 pub use zdata::{
     append_generative_canvas, append_repair_region, append_spot_heal_generative, load_zdata,
     save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile, RecordKind, RecordSpec,
     RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer, ZDataError,
-};
-
-// WASM stub for zdata (native-only via zstd-sys, but consumers still import symbols).
-// On wasm32 the codec is unavailable — callers treat zdata as not available/unverifiable.
-#[cfg(all(feature = "zdata", target_arch = "wasm32"))]
-mod zdata_wasm_stub {
-    use super::{Path, PathBuf};
-    use std::vec::Vec;
-    #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-    pub enum ZDataError {
-        #[error("zdata is truncated or malformed: {0}")]
-        Invalid(String),
-        #[error("unsupported zdata format version {0}")]
-        UnsupportedVersion(u16),
-        #[error("zdata I/O failed while {operation} `{path}`: {message}")]
-        Io {
-            operation: String,
-            path: String,
-            message: String,
-        },
-        #[error("zdata checksum mismatch for tile `{0}`")]
-        Checksum(String),
-        #[error("duplicate zdata tile id `{0}`")]
-        DuplicateId(String),
-    }
-    #[derive(Debug, Clone)]
-    pub struct MaskTile {
-        pub mask_id: String,
-        pub tile_x: u32,
-        pub tile_y: u32,
-        pub width: u32,
-        pub height: u32,
-        pub values: Vec<u16>,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum RecordKind {
-        MaskTile = 0,
-        RepairRegion = 1,
-        GenerativeCanvas = 2,
-        SpotHealGenerative = 3,
-    }
-    #[derive(Debug, Clone)]
-    pub struct GenerativeCanvasArtifact {
-        pub id: String,
-        pub width: u32,
-        pub height: u32,
-        pub pixels: Vec<u8>,
-    }
-    #[derive(Debug, Clone)]
-    pub struct SpotHealGenerativeArtifact {
-        pub id: String,
-        pub width: u32,
-        pub height: u32,
-        pub pixels: Vec<u8>,
-    }
-    #[derive(Debug, Clone)]
-    pub struct RepairRegionArtifact {
-        pub id: String,
-        pub width: u32,
-        pub height: u32,
-        pub region: Vec<u16>,
-        pub replacement: Vec<u8>,
-    }
-    #[derive(Debug, Clone)]
-    pub struct ZDataContainer;
-    impl ZDataContainer {
-        pub fn generative_canvas(&self, _id: &str) -> Result<GenerativeCanvasArtifact, ZDataError> {
-            Err(ZDataError::Io {
-                operation: "generative_canvas".into(),
-                path: "".into(),
-                message: "zdata not available on wasm32".into(),
-            })
-        }
-        pub fn spot_heal_generative(
-            &self,
-            _id: &str,
-        ) -> Result<SpotHealGenerativeArtifact, ZDataError> {
-            Err(ZDataError::Io {
-                operation: "spot_heal_generative".into(),
-                path: "".into(),
-                message: "zdata not available on wasm32".into(),
-            })
-        }
-        pub fn repair_region(&self, _id: &str) -> Result<RepairRegionArtifact, ZDataError> {
-            Err(ZDataError::Io {
-                operation: "repair_region".into(),
-                path: "".into(),
-                message: "zdata not available on wasm32".into(),
-            })
-        }
-        pub fn tile(&self, _id: &str, _x: u32, _y: u32) -> Result<MaskTile, ZDataError> {
-            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
-        }
-    }
-    impl RepairRegionArtifact {
-        pub fn checksum(&self) -> String {
-            String::new()
-        }
-        pub fn validate(&self) -> Result<(), ZDataError> {
-            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
-        }
-    }
-    impl GenerativeCanvasArtifact {
-        pub fn checksum(&self) -> String {
-            String::new()
-        }
-        pub fn validate(&self) -> Result<(), ZDataError> {
-            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
-        }
-    }
-    impl SpotHealGenerativeArtifact {
-        pub fn checksum(&self) -> String {
-            String::new()
-        }
-        pub fn validate(&self) -> Result<(), ZDataError> {
-            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
-        }
-    }
-    impl MaskTile {
-        pub fn validate(&self) -> Result<(), ZDataError> {
-            Err(ZDataError::Invalid("zdata not available on wasm32".into()))
-        }
-    }
-    pub fn zdata_path_for(source: &Path) -> PathBuf {
-        let filename = source
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_default();
-        source.with_file_name(format!("{filename}.lumina.zdata"))
-    }
-    pub fn load_zdata(path: &Path) -> Result<ZDataContainer, ZDataError> {
-        Err(ZDataError::Io {
-            operation: "load zdata".into(),
-            path: path.display().to_string(),
-            message: "zdata not available on wasm32".into(),
-        })
-    }
-    pub fn save_zdata(path: &Path, _container: &ZDataContainer) -> Result<(), ZDataError> {
-        Err(ZDataError::Io {
-            operation: "save zdata".into(),
-            path: path.display().to_string(),
-            message: "zdata not available on wasm32".into(),
-        })
-    }
-    pub fn append_repair_region(
-        _zdata_path: &Path,
-        _region: crate::RepairRegionArtifact,
-    ) -> Result<(), ZDataError> {
-        Err(ZDataError::Io {
-            operation: "append repair region".into(),
-            path: _zdata_path.display().to_string(),
-            message: "zdata not available on wasm32".into(),
-        })
-    }
-    pub fn append_generative_canvas(
-        _zdata_path: &Path,
-        _canvas: GenerativeCanvasArtifact,
-    ) -> Result<(), ZDataError> {
-        Err(ZDataError::Io {
-            operation: "append generative canvas".into(),
-            path: _zdata_path.display().to_string(),
-            message: "zdata not available on wasm32".into(),
-        })
-    }
-    pub fn append_spot_heal_generative(
-        _zdata_path: &Path,
-        _spot: SpotHealGenerativeArtifact,
-    ) -> Result<(), ZDataError> {
-        Err(ZDataError::Io {
-            operation: "append spot heal".into(),
-            path: _zdata_path.display().to_string(),
-            message: "zdata not available on wasm32".into(),
-        })
-    }
-}
-#[cfg(all(feature = "zdata", target_arch = "wasm32"))]
-pub use zdata_wasm_stub::{
-    append_generative_canvas, append_repair_region, append_spot_heal_generative, load_zdata,
-    save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile, RecordKind,
-    RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer,
 };
 
 pub const FORMAT: &str = "lumina-sidecar";
@@ -1400,24 +1218,14 @@ pub struct RecoveryReport {
 /// serialize against each other. `pub(crate)` because `zdata` reuses it for the
 /// `.zdata.lock`.
 pub(crate) struct WriteLock {
-    // Only the native lock cleanup (see `Drop`) ever reads the lock file path;
-    // on wasm32 there is no filesystem lock, so the field does not exist there.
-    #[cfg(not(target_arch = "wasm32"))]
     path: PathBuf,
 }
 
 impl Drop for WriteLock {
     fn drop(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // A failed cleanup is deliberately ignored: the next writer can report
-            // the lock as stale, and the actual sidecar remains untouched.
-            let _ = fs::remove_file(&self.path);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // No filesystem on WASM; nothing to clean up (capability-separated).
-        }
+        // A failed cleanup is deliberately ignored: the next writer can report
+        // the lock as stale, and the actual sidecar remains untouched.
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -1680,13 +1488,6 @@ pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
     })
 }
 
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn acquire_write_lock(_path: &Path) -> Result<WriteLock, SidecarError> {
-    // WASM is capability-separated: no filesystem locking, single writer.
-    Ok(WriteLock {})
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().map(|name| name.to_string_lossy());
@@ -1880,13 +1681,11 @@ fn basic_artifact_file_check(
 /// mask plane and has no generic mapping onto bundle records either; see
 /// `feature/architecture/sidecar.md` ("Artefaktstatus-Prüfung") for why this
 /// validation belongs to the consuming pipeline loader, not this function.
-/// R2-SIDECAR-ZDATA-WASM: the deep (codec) verification variant is only
-/// compiled when the `.lumina.zdata` codec is actually available, i.e. with
-/// the `zdata` feature **and** on a non-wasm32 target. On WASM the `zstd`
-/// dependency is target-gated away, so `load_zdata` does not exist there;
-/// the structural-only variant below takes over so `artifact_status` keeps
-/// a definition in every build configuration.
-#[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+/// The deep (codec) verification variant is compiled when the
+/// `.lumina.zdata` codec is available, i.e. with the `zdata` feature; the
+/// structural-only variant below takes over without it so `artifact_status`
+/// keeps a definition in every build configuration.
+#[cfg(feature = "zdata")]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
     let path = match basic_artifact_file_check(bundle_root, artifact) {
         BasicArtifactCheck::Missing => return ArtifactStatus::Missing,
@@ -1908,12 +1707,12 @@ pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> Arti
     ArtifactStatus::Available
 }
 
-/// Non-zdata build OR wasm32+zdata (R2-SIDECAR-ZDATA-WASM): without the
-/// container codec a magic-bearing file cannot be deep-verified here; it
+/// Non-zdata build: without the container codec a magic-bearing file cannot
+/// be deep-verified here; it
 /// counts as usable once it passes the structural checks (documented
 /// limitation, not a silent fallback — the same rules as the `zdata` build
 /// apply up to the eager checksum pass).
-#[cfg(not(all(feature = "zdata", not(target_arch = "wasm32"))))]
+#[cfg(not(feature = "zdata"))]
 pub fn artifact_status(bundle_root: &Path, artifact: &ArtifactReference) -> ArtifactStatus {
     let path = match basic_artifact_file_check(bundle_root, artifact) {
         BasicArtifactCheck::Missing => return ArtifactStatus::Missing,
@@ -4973,8 +4772,8 @@ mod tests {
         );
     }
 
-    // R2-SIDECAR-ZDATA-WASM: end-to-end bundle linkage needs the native codec.
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    // End-to-end bundle linkage needs the codec.
+    #[cfg(feature = "zdata")]
     #[test]
     fn generative_links_resolve_against_real_bundle_eager() {
         use crate::{GenerativeCanvasArtifact, SpotHealGenerativeArtifact};
@@ -5061,8 +4860,8 @@ mod tests {
         );
     }
 
-    // R2-SIDECAR-ZDATA-WASM: bundle moves keep relative links valid (native).
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    // Bundle moves keep relative links valid.
+    #[cfg(feature = "zdata")]
     #[test]
     fn generative_links_survive_bundle_move() {
         use crate::GenerativeCanvasArtifact;
@@ -5127,11 +4926,7 @@ mod tests {
         assert!(!temp.exists());
     }
 
-    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
-    // exists on native targets with the `zdata` feature; on wasm32 (even with
-    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
-    // match.
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[cfg(feature = "zdata")]
     #[test]
     fn zdata_write_is_atomic_against_partial_temp_file() {
         let directory = tempfile::tempdir().unwrap();
@@ -5366,11 +5161,7 @@ mod tests {
         assert_eq!(std::fs::read(&source_path).unwrap(), original_bytes);
     }
 
-    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
-    // exists on native targets with the `zdata` feature; on wasm32 (even with
-    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
-    // match.
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[cfg(feature = "zdata")]
     #[test]
     fn zdata_bundle_can_be_deleted_without_affecting_sidecar() {
         let directory = tempfile::tempdir().unwrap();
@@ -5392,11 +5183,7 @@ mod tests {
         assert!(load_sidecar(&sidecar_path).is_ok());
     }
 
-    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
-    // exists on native targets with the `zdata` feature; on wasm32 (even with
-    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
-    // match.
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[cfg(feature = "zdata")]
     #[test]
     fn partial_zdata_is_detected_not_silent_garbage() {
         let directory = tempfile::tempdir().unwrap();
@@ -5533,9 +5320,9 @@ mod tests {
         assert_eq!(rb, document_revision(&b).unwrap());
     }
 
-    // ----- F-077: zdata-gated helpers (native-only, R2-SIDECAR-ZDATA-WASM) -----
+    // ----- F-077: zdata-gated helpers -----
 
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[cfg(feature = "zdata")]
     fn f077_tiles() -> Vec<MaskTile> {
         vec![MaskTile {
             mask_id: "subject".into(),
@@ -6054,11 +5841,7 @@ mod tests {
 
     // ----- REVIEW-SIDECAR-STATUS-1: corrupt artifacts are visible -----
 
-    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
-    // exists on native targets with the `zdata` feature; on wasm32 (even with
-    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
-    // match.
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[cfg(feature = "zdata")]
     #[test]
     fn artifact_status_verifies_container_content_not_just_existence() {
         let directory = tempfile::tempdir().unwrap();
@@ -6117,11 +5900,7 @@ mod tests {
     /// magic used to slip past the failed magic read as `Available`, and a
     /// `zdata`-declared file without the magic used to fall through as an
     /// unverifiable "opaque" payload.
-    // R2-SIDECAR-ZDATA-WASM: these tests drive the zdata codec, which only
-    // exists on native targets with the `zdata` feature; on wasm32 (even with
-    // `zdata` on) the codec symbols are cfg'd out, so the tests are gated to
-    // match.
-    #[cfg(all(feature = "zdata", not(target_arch = "wasm32")))]
+    #[cfg(feature = "zdata")]
     #[test]
     fn artifact_status_rejects_undersized_and_magicless_declared_zdata() {
         let directory = tempfile::tempdir().unwrap();

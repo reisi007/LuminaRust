@@ -478,15 +478,14 @@ pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpEr
             target.display()
         ))
     })?;
-    let mut protected: Vec<(&str, PathBuf)> = vec![
+    let protected: Vec<(&str, PathBuf)> = vec![
         ("source image", source.to_path_buf()),
         ("sidecar", lumina_sidecar::sidecar_path_for(source)),
+        (
+            "mask/source-action bundle",
+            lumina_sidecar::zdata_path_for(source),
+        ),
     ];
-    #[cfg(not(target_arch = "wasm32"))]
-    protected.push((
-        "mask/source-action bundle",
-        lumina_sidecar::zdata_path_for(source),
-    ));
     for (kind, path) in protected {
         // Both sides use the candidate convention (existing paths are
         // canonicalized; missing ones resolve against their canonical parent),

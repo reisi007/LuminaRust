@@ -5,50 +5,39 @@
     unused_variables,
     unused_mut
 )]
-//! Shared eframe application for the native and browser MVP.
+//! Shared eframe application for the native desktop GUI.
 
-// REVIEW-GUI-WASM-FOLLOWUP: `filmstrip` (background thumbnail pool, disk-cache
-// probes) and `viewport` (filmstrip/navigator windowing math) are native-only
-// capabilities — the WASM filmstrip is a static capability hint. Gating the
-// modules themselves keeps the wasm32 build free of dead-code warnings.
-#[cfg(not(target_arch = "wasm32"))]
+// Native-only capabilities (background thumbnail pool, disk-cache probes,
+// filmstrip/navigator windowing math, file-backed presets, neighbor-preview
+// controller with background threads + native file IO) live in their own
+// modules without platform gates: the GUI is native-only
+// (`feature/platform/cli-gui-wasm.md` § WASM-ENTFERNT).
 mod filmstrip;
 mod i18n;
-// F-009: file-backed user presets (`<name>.lumina-preset.json`) are a native
-// capability; wasm32 keeps the in-memory create/apply flow only.
-#[cfg(not(target_arch = "wasm32"))]
+// F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
 // PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk
-// LRU) is a native capability (background threads + native file IO).
-#[cfg(not(target_arch = "wasm32"))]
+// LRU).
 mod preview_ctrl;
 mod slider;
 mod theme;
-#[cfg(not(target_arch = "wasm32"))]
 mod viewport;
 
 use eframe::egui;
-#[cfg(not(target_arch = "wasm32"))]
 use lumina_core::cache::disk::DiskFolderCache;
-#[cfg(not(target_arch = "wasm32"))]
 use lumina_core::cache::PreviewKind;
-#[cfg(not(target_arch = "wasm32"))]
 use lumina_core::MaskPolicy;
-// REVIEW-GUI-WASM-FOLLOWUP: `export_image`/`ExportOptions` (Export module) and
-// `rasterize_prompt` (mask overlay) are only reachable on native.
+// `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
     analyze_tone, analyze_tone_with_histogram, match_total_exposure_masked, prepare_source_base,
     render_frame_from_base, suggest_auto_tone, tone_fingerprint, AutoToneConfig, CacheStage,
     ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
     OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
-// PERF-FILMSTRIP only (native thumbnail worker); unused on wasm32.
-#[cfg(not(target_arch = "wasm32"))]
+// PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
-#[cfg(not(target_arch = "wasm32"))]
 use lumina_core::{export_image, masks::rasterize_prompt, ExportOptions};
 use lumina_raw::RawError;
-#[cfg(not(target_arch = "wasm32"))]
 use lumina_sidecar::{
     load_zdata, zdata_path_for, ArtifactStatus, BrushMark, BrushMarkSign, CoordinateSystem,
     DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskDefinition, MaskLayer, MaskOperation,
@@ -61,27 +50,19 @@ use lumina_sidecar::{
     HslChannel, LensCorrection, NoiseReduction, Perspective, Presence, Preset, Sharpening,
     Vignette,
 };
-#[cfg(not(target_arch = "wasm32"))]
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
 use std::collections::BTreeMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeSet;
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{mpsc, Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-// REVIEW-GUI-WASM-FOLLOWUP: every `debug!` call site sits behind a native
-// thumbnail/decode path, so the import is gated with them.
-#[cfg(not(target_arch = "wasm32"))]
+// `debug!` is used by the thumbnail/decode paths.
 use log::debug;
 use log::{error, info, trace, warn};
 use theme::apply_lightroom_dark;
 
-#[cfg(not(target_arch = "wasm32"))]
 use filmstrip::{downscale_rgba, ThumbnailManager, THUMBNAIL_MAX_DIM};
 use i18n::Str;
 
@@ -92,14 +73,8 @@ use i18n::Str;
 /// result of an explicit user action (or a future CLI/GUI command).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdleTask {
-    MaskInference {
-        mask_id: String,
-    },
-    #[cfg(not(target_arch = "wasm32"))]
-    Thumbnail {
-        source: PathBuf,
-        name: String,
-    },
+    MaskInference { mask_id: String },
+    Thumbnail { source: PathBuf, name: String },
 }
 
 /// Top-level module selected in the module bar (Library / Develop / Export).
@@ -108,6 +83,22 @@ pub enum Module {
     Library,
     Develop,
     Export,
+}
+
+/// R2-GUIMOD-04a: per-tick timings of one coalesced pointer-drag render tick
+/// (measurement only — never read for logic, feeds F-103-N6).
+///
+/// * `cpu_draft_ms` — wall time of the CPU draft render (`render_draft`,
+///   including the analysis pass below).
+/// * `gpu_ms` — wall time of the VRAM tone stage (`render_to_vram`, 0 when
+///   the GPU path is off or unavailable).
+/// * `analyse_ms` — wall time of the shared `analyze_tone_with_histogram`
+///   pass inside that draft render.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DragTickTimings {
+    pub cpu_draft_ms: f64,
+    pub gpu_ms: f64,
+    pub analyse_ms: f64,
 }
 
 /// Maps a Lightroom-style module-switch keyboard shortcut to its target module.
@@ -557,7 +548,6 @@ impl IdleQueue {
 /// froze generating them synchronously on the main thread (M5 Pro: unusable
 /// switching). Thumbnails are now decoded/downscaled/rendered on worker threads
 /// and the resulting pixels are uploaded to a texture on the main thread.
-#[cfg(not(target_arch = "wasm32"))]
 struct ThumbnailJob {
     source: PathBuf,
     name: String,
@@ -570,7 +560,6 @@ struct ThumbnailJob {
 /// [`ThumbnailOutcome::Failed`] so the main thread can show a visible error and
 /// schedule a bounded retry instead of leaving a gray placeholder for the rest
 /// of the session (REVIEW-GUI-THUMB-2, no silent fallback).
-#[cfg(not(target_arch = "wasm32"))]
 enum ThumbnailOutcome {
     Ready(ImageFrame),
     Failed(String),
@@ -580,7 +569,6 @@ enum ThumbnailOutcome {
 /// by a [`ThumbnailJob`]. The worker computes the frame, caches the PNG to disk
 /// and sends the pixels; the texture itself is created on the main thread (it
 /// needs the `egui::Context`) from these pixels.
-#[cfg(not(target_arch = "wasm32"))]
 struct ThumbnailResult {
     key: String,
     name: String,
@@ -591,7 +579,6 @@ struct ThumbnailResult {
 /// thread (PERF-FILMSTRIP). Returns the rendered frame so the main thread can
 /// build the `egui` texture (it needs the `Context`). Errors are returned
 /// visibly to the worker caller, never swallowed into `None`.
-#[cfg(not(target_arch = "wasm32"))]
 fn decode_thumbnail_frame(source: &Path, name: &str) -> Result<ImageFrame, String> {
     let bytes = std::fs::read(source).map_err(|error| format!("{}: {error}", source.display()))?;
     let frame = if is_raw_name(name) {
@@ -626,7 +613,6 @@ fn decode_thumbnail_frame(source: &Path, name: &str) -> Result<ImageFrame, Strin
 
 /// Worker entry point: never drops a job silently; failures travel back to the
 /// main thread as [`ThumbnailOutcome::Failed`] (REVIEW-GUI-THUMB-2).
-#[cfg(not(target_arch = "wasm32"))]
 fn worker_thumbnail(job: ThumbnailJob) -> ThumbnailResult {
     let outcome = match decode_thumbnail_frame(&job.source, &job.name) {
         Ok(frame) => ThumbnailOutcome::Ready(frame),
@@ -659,11 +645,8 @@ pub struct LuminaApp {
     raw_orientation: u8,
     camera_white_balance: Option<[f32; 4]>,
     source_name: String,
-    #[cfg(not(target_arch = "wasm32"))]
     path: String,
-    #[cfg(not(target_arch = "wasm32"))]
     directory: String,
-    #[cfg(not(target_arch = "wasm32"))]
     entries: Vec<FileBrowserEntry>,
     recipe: EditRecipe,
     texture: Option<egui::TextureHandle>,
@@ -673,7 +656,6 @@ pub struct LuminaApp {
     /// be displayed, instead of rebuilding a full-screen [`egui::ColorImage`]
     /// and re-creating the texture on every repaint (mousemoves over panels
     /// used to pay a full-frame memcpy + upload per frame).
-    #[cfg(not(target_arch = "wasm32"))]
     texture_identity: Option<(u64, bool, [usize; 2])>,
     /// R2-GUIMOD-02: bumped whenever `self.preview` receives new content.
     /// Part of [`Self::texture_identity`]; together with the Before/After flag
@@ -689,7 +671,6 @@ pub struct LuminaApp {
     /// assignment today is `render_from`; a new source clears `preview`
     /// implicitly by resetting render state before the next render bumps the
     /// generation again.
-    #[cfg(not(target_arch = "wasm32"))]
     preview_generation: u64,
     status: String,
     error: Option<String>,
@@ -710,42 +691,28 @@ pub struct LuminaApp {
     pending_slider_commit: Option<(String, f64)>,
     /// Effective mask layers of the last [`Self::render`] (F-041): the
     /// measurement domain of `Match Total Exposure` is the rendered preview
-    /// weighted by these planes. Empty on wasm32 (no mask context, documented
-    /// post-MVP state) and whenever the render produced no layers.
+    /// weighted by these planes. Empty whenever the render produced no layers.
     render_mask_layers: Vec<MaskLayerResult>,
-    #[cfg(not(target_arch = "wasm32"))]
     document: Option<SidecarDocument>,
-    #[cfg(not(target_arch = "wasm32"))]
     virtual_copy_id: String,
-    #[cfg(not(target_arch = "wasm32"))]
     selected_mask_id: Option<String>,
-    #[cfg(not(target_arch = "wasm32"))]
     mask_name_input: String,
     mask_tool: MaskTool,
     /// Normalized brush radius (0..=1 in source space). Driven by a slider.
-    #[cfg(not(target_arch = "wasm32"))]
     brush_radius: f32,
     /// When true, brush marks use the negative (eraser) sign.
-    #[cfg(not(target_arch = "wasm32"))]
     brush_eraser: bool,
     /// Marks accumulated during an in-progress brush drag (cleared on release).
-    #[cfg(not(target_arch = "wasm32"))]
     pending_brush_marks: Vec<BrushMark>,
     /// Drag start/current normalized points for gradient/radial gestures.
-    #[cfg(not(target_arch = "wasm32"))]
     drag_start: Option<Point2>,
-    #[cfg(not(target_arch = "wasm32"))]
     drag_current: Option<Point2>,
     /// True while a mask-tool drag is in progress (drives the live overlay).
-    #[cfg(not(target_arch = "wasm32"))]
     drawing: bool,
     spot_tool: SpotTool,
     spot_mode: SpotMode,
-    #[cfg(not(target_arch = "wasm32"))]
     spot_radius: f32,
-    #[cfg(not(target_arch = "wasm32"))]
     spot_feather: f32,
-    #[cfg(not(target_arch = "wasm32"))]
     spot_opacity: f32,
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
@@ -753,32 +720,23 @@ pub struct LuminaApp {
     /// F-009: user-global presets directory; `None` means the platform config
     /// base could not be determined and file presets are shown as unavailable
     /// (no silent fallback directory).
-    #[cfg(not(target_arch = "wasm32"))]
     presets_dir: Option<std::path::PathBuf>,
     /// F-009: current snapshot of the presets directory. Failed files stay in
     /// the list with their error text instead of being skipped silently.
-    #[cfg(not(target_arch = "wasm32"))]
     preset_entries: Vec<presets::PresetEntry>,
     idle_queue: IdleQueue,
     /// PERF-FILMSTRIP: dedicated background thread pool for filmstrip
     /// thumbnails. `thumbnail_tx` enqueues jobs (unbounded mpsc, no capacity
     /// gate); `thumbnail_rx` delivers rendered frames to be textured on the
-    /// main thread. Native-only (no threads on wasm).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// main thread.
     thumbnail_tx: mpsc::Sender<ThumbnailJob>,
-    #[cfg(not(target_arch = "wasm32"))]
     thumbnail_rx: mpsc::Receiver<ThumbnailResult>,
     /// Active top-level module (Library / Develop / Export).
     active_module: Module,
     /// Export module UI state (F-103-N5). The target path is chosen via a
     /// native save dialog; the format/quality drive the shared export path.
-    /// Native-only: the wasm Export module is a capability hint
-    /// (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
     export_path: String,
-    #[cfg(not(target_arch = "wasm32"))]
     export_format: ImageFileFormat,
-    #[cfg(not(target_arch = "wasm32"))]
     export_quality: u8,
     /// Before/After toggle state. Never mutates the recipe.
     before_after: bool,
@@ -787,7 +745,6 @@ pub struct LuminaApp {
     /// copy. Never persisted (Lightroom behaviour) — paste applies it to the
     /// active copy through the normal save/render path. Native-only: clipboard
     /// and sidecar persistence are file-system capabilities.
-    #[cfg(not(target_arch = "wasm32"))]
     settings_clipboard: Option<EditRecipe>,
     /// Welle 2 display-only view flags (`J` clipping overlay, `L` lights-out,
     /// `Tab` panel hide, `R` crop mode). None of them mutates the recipe; the
@@ -814,9 +771,7 @@ pub struct LuminaApp {
     fullscreen: bool,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
-    /// Generated filmstrip thumbnail textures. Native-only (REVIEW-GUI-
-    /// WASM-FOLLOWUP): the wasm filmstrip is a static placeholder.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Generated filmstrip thumbnail textures.
     thumbnails: ThumbnailManager,
     // ---- PERF-GUI-* (CPU interactivity quick-wins, no GPU) ----
     /// True while the preview shows a low-resolution draft (rendered from
@@ -838,6 +793,12 @@ pub struct LuminaApp {
     /// PERF-GUI-1: stage work counters of the last completed render
     /// (diagnostics + cache-hit tests). `None` until the first staged render.
     last_stage_work: Option<StageWork>,
+    /// R2-GUIMOD-04a: milliseconds of the `analyze_tone_with_histogram` pass
+    /// inside the last `render_from` (measurement only, never read for logic).
+    last_analysis_ms: f64,
+    /// R2-GUIMOD-04a: per-tick drag-render timings of the last coalesced
+    /// pointer-drag tick (measurement only, feeds F-103-N6).
+    last_drag_tick: Option<DragTickTimings>,
     /// Long-edge cap (px) for the cached draft source (viewport resolution).
     draft_max_dim: u32,
     /// Timestamp (egui `ctx.input(|i| i.time)`) of the last frame that still
@@ -876,32 +837,24 @@ pub struct LuminaApp {
     preview_src_h: f32,
     /// Effective on-screen scale (screen px per source px) for the zoom readout.
     preview_effective_scale: f32,
-    /// Whether the left thumbnail navigator rail is open. Native-only (the
-    /// navigator rail is a native module; REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Whether the left thumbnail navigator rail is open.
     navigator_open: bool,
     /// Library module: expanded folder-tree nodes, keyed by absolute path.
-    #[cfg(not(target_arch = "wasm32"))]
     open_folders: BTreeSet<String>,
     /// Library module: lazy per-folder children cache, filled via `read_dir`
     /// the first time a folder node is expanded.
-    #[cfg(not(target_arch = "wasm32"))]
     folder_children: BTreeMap<String, Vec<String>>,
     /// Library module: depth-limited RAW file count per folder node
     /// (display only; computed once per folder).
-    #[cfg(not(target_arch = "wasm32"))]
     folder_raw_counts: BTreeMap<String, usize>,
     /// Library module: current thumbnail cell size (px) for the center grid,
     /// driven by a toolbar slider (Lightroom-like resizable library thumbs).
-    #[cfg(not(target_arch = "wasm32"))]
     library_thumb_size: f32,
     /// Develop history section: currently selected (last restored) history
     /// entry id of the active virtual copy.
-    #[cfg(not(target_arch = "wasm32"))]
     history_selected: Option<String>,
     /// PERF-GUI-7: receiver for a background RAW/raster decode. `Some` while a
-    /// decode is in flight on a worker thread; native-only (no threads on wasm).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// decode is in flight on a worker thread.
     decode_rx: Option<std::sync::mpsc::Receiver<DecodeResult>>,
     /// REVIEW-GUI-N1: revision (BLAKE3 over the JSON) of the on-disk sidecar
     /// that the in-memory `document` lineage is based on. `None` means no
@@ -909,7 +862,6 @@ pub struct LuminaApp {
     /// to the compare-and-swap write in [`Self::save_sidecar`] so an
     /// externally modified sidecar surfaces as a visible conflict instead of
     /// being silently overwritten; refreshed after every successful save.
-    #[cfg(not(target_arch = "wasm32"))]
     sidecar_revision: Option<String>,
     /// True while an edit (slider drag, presence change, etc.) needs a
     /// full-quality render. Drives the debounced full render after a pointer
@@ -921,11 +873,10 @@ pub struct LuminaApp {
     /// finishes). Left unset while no RAW entry exists, so a later scan of a
     /// now-populated directory can still auto-load. Native-only (directory
     /// auto-load is a native file-system capability).
-    #[cfg(not(target_arch = "wasm32"))]
     auto_load_attempted: bool,
-    /// GUI-60FPS-1: optional GPU context for the native desktop. `None` on wasm
-    /// or when no adapter is bound (CPU fallback remains fully functional).
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    /// GUI-60FPS-1: optional GPU context for the desktop. `None` when no adapter
+    /// is bound (CPU fallback remains fully functional).
+    #[cfg(feature = "gpu")]
     gpu: Option<lumina_gpu::GpuContext>,
     /// GUI-60FPS-1 H1: persistent R16 mask plane (Vec<u16> u16-LE, row-major,
     /// `width × height`) backing the interactive brush. Kept CPU-side so each
@@ -933,20 +884,20 @@ pub struct LuminaApp {
     /// `lumina_core::mask_tiles::stamp_brush_mark` and then uploaded with
     /// `queue.write_texture` (`bytemuck::cast_slice` → `&[u8]`). Only dirty tiles
     /// are uploaded per stroke (no whole-plane rewrite, no dummy zeros).
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     brush_mask_plane: Option<Vec<u16>>,
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     brush_mask_plane_dims: Option<(u32, u32)>,
     /// GUI-WGPU-PRESENT-1: the eframe wgpu renderer's shared state. When
     /// present, `lumina-gpu` was constructed on the *same* Device/Queue
     /// (see `attach_wgpu_render_state`), so the VRAM overlay composite can be
     /// registered as an egui user texture and presented without any CPU
     /// readback.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     wgpu_render_state: Option<eframe::egui_wgpu::RenderState>,
     /// Offscreen target the VRAM overlay pass composites into; registered once
     /// as an egui user texture and re-created only when dimensions change.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     present_target: Option<PresentTarget>,
     /// True while the VRAM output corresponds to the current recipe/source:
     /// set right after a successful `render_to_vram`, cleared by every edit
@@ -955,7 +906,7 @@ pub struct LuminaApp {
     /// render (`render_from` on the non-draft path) — otherwise the debounced
     /// full render after a drag would compute sharp pixels that are then never
     /// shown because the gate kept presenting the superseded VRAM draft.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     vram_fresh: bool,
     /// R2-GUIMOD-05: memoized `unsupported_gpu_stages(&self.recipe)` verdict,
     /// keyed by the [`RenderKey`] of the render it was computed for. The gate
@@ -964,16 +915,16 @@ pub struct LuminaApp {
     /// key-backed verdict is stored; queried without a render key (dirty
     /// preview) deliberately bypasses the memo because the recipe may have
     /// drifted since the last render.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     gpu_stage_gate: Option<GpuStageGate>,
     /// True while the VRAM mask texture carries the pipeline-*evaluated* layer
     /// planes (pushed after a full render) rather than only live brush stamps —
     /// then the shader overlay already shows what the CPU overlay would paint.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     vram_mask_is_evaluated: bool,
     /// The egui user-texture id + size of the GPU-presented preview for THIS
     /// frame (recomputed in `update_texture`, consumed in `draw_preview`).
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     gpu_present_frame: Option<(egui::TextureId, [usize; 2])>,
     /// R2-GUIMOD-06: visible (non-stderr) feedback for the GPU→CPU routing
     /// fallback. `Some(reason)` when a GPU context is available and usable but
@@ -982,7 +933,7 @@ pub struct LuminaApp {
     /// `None` while the GPU present path is usable (or when no GPU context
     /// exists at all, in which case there is no "fallback" to report). Surfaced
     /// as a status badge in the preview HUD; it never affects rendered pixels.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     gpu_route_fallback: Option<String>,
     /// GUI-SCROLL-200-1: per-frame diagnostic counters for `LUMINA_PERF_LOG=1`.
     /// `frame_thumb_enqueued` counts worker jobs enqueued (or cached previews
@@ -990,24 +941,19 @@ pub struct LuminaApp {
     /// Both are reset at the start of [`Self::update`]; a scroll spike while
     /// thumbnail jobs run shows up as large values in the same frame that
     /// exceeds the 16.7 ms budget.
-    #[cfg(not(target_arch = "wasm32"))]
     frame_thumb_enqueued: usize,
-    #[cfg(not(target_arch = "wasm32"))]
     frame_thumbs_ready: usize,
     /// PREVIEW-CACHE-FEATURE: neighbor-preview controller (worker pool + RAM/disk
     /// LRU + prefetch window). Lazy-created on first navigation so unit tests
     /// that never schedule neighbors stay thread-free.
-    #[cfg(not(target_arch = "wasm32"))]
     preview_ctrl: Option<preview_ctrl::PreviewController>,
     /// PREVIEW-CACHE-FEATURE: per-frame counters for the neighbor-preview work
     /// (LUMINA_PERF_LOG diagnostics).
-    #[cfg(not(target_arch = "wasm32"))]
     frame_previews_enqueued: usize,
-    #[cfg(not(target_arch = "wasm32"))]
     frame_previews_ready: usize,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+#[cfg(feature = "gpu")]
 type GpuStageGate = ((RenderKey, Option<[f32; 4]>), bool);
 
 /// GUI-WGPU-PRESENT-1: offscreen present target + its egui registration.
@@ -1017,7 +963,7 @@ type GpuStageGate = ((RenderKey, Option<[f32; 4]>), bool);
 /// texture (`register_native_texture`) so `painter().image(id, ..)` draws it
 /// directly on screen. Re-created only when the VRAM dimensions change; the
 /// old registration is freed to avoid leaking GPU-side bind groups.
-#[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+#[cfg(feature = "gpu")]
 struct PresentTarget {
     texture: eframe::wgpu::Texture,
     #[allow(dead_code)]
@@ -1037,8 +983,8 @@ struct PresentTarget {
 /// handed over, a standalone context is created here (same capability as the
 /// old eager constructor) so non-present GPU paths keep working; headless
 /// callers that never invoke this function simply stay CPU-only.
-/// No-op under wasm32 or without the `gpu` feature (CPU present path stays).
-#[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+/// No-op without the `gpu` feature (CPU present path stays).
+#[cfg(feature = "gpu")]
 pub fn attach_wgpu_render_state(
     app: &mut LuminaApp,
     state: Option<eframe::egui_wgpu::RenderState>,
@@ -1087,7 +1033,6 @@ pub fn attach_wgpu_render_state(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub struct FileBrowserEntry {
     path: PathBuf,
@@ -1116,7 +1061,6 @@ pub struct FileBrowserEntry {
 /// path guarantees that the same filename in two folders maps to different
 /// entries; a canonicalize failure (e.g. a missing file) falls back to the
 /// lossy path string, which is still folder-scoped.
-#[cfg(not(target_arch = "wasm32"))]
 fn thumbnail_key(path: &Path) -> String {
     path.canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
@@ -1124,7 +1068,6 @@ fn thumbnail_key(path: &Path) -> String {
         .into_owned()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl FileBrowserEntry {
     fn status_label(&self) -> &'static str {
         if self.conflict {
@@ -1151,7 +1094,6 @@ impl FileBrowserEntry {
 /// frame plus the metadata needed to apply it on the main thread (and to load
 /// the matching sidecar). `Err` carries the (path, message) so the GUI can show
 /// the decode failure without blocking the worker thread.
-#[cfg(not(target_arch = "wasm32"))]
 struct DecodedFrame {
     path: String,
     name: String,
@@ -1162,7 +1104,6 @@ struct DecodedFrame {
     source_is_raw: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 type DecodeResult = Result<DecodedFrame, (String, String)>;
 
 /// Draw method of one Develop section: `fn(&mut LuminaApp, &mut egui::Ui)`.
@@ -1185,7 +1126,6 @@ impl LuminaApp {
         // drops below 2). Workers share one (mutex-guarded) job receiver and
         // send results back over an unbounded channel the main thread drains
         // every frame via `poll_thumbnails`.
-        #[cfg(not(target_arch = "wasm32"))]
         let (thumbnail_tx, thumbnail_rx) = {
             let (job_tx, job_rx) = mpsc::channel::<ThumbnailJob>();
             let (result_tx, result_rx) = mpsc::channel::<ThumbnailResult>();
@@ -1224,18 +1164,13 @@ impl LuminaApp {
             raw_orientation: 1,
             camera_white_balance: None,
             source_name: String::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             path: String::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             directory: ".".into(),
-            #[cfg(not(target_arch = "wasm32"))]
             entries: Vec::new(),
             recipe: EditRecipe::default(),
             texture: None,
             // R2-GUIMOD-02: no CPU pixels uploaded yet (see `texture_identity`).
-            #[cfg(not(target_arch = "wasm32"))]
             texture_identity: None,
-            #[cfg(not(target_arch = "wasm32"))]
             preview_generation: 0,
             status: Str::ReadyForImage.t().into(),
             error: None,
@@ -1244,34 +1179,21 @@ impl LuminaApp {
             preview_histogram: None,
             pending_slider_commit: None,
             render_mask_layers: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             document: None,
-            #[cfg(not(target_arch = "wasm32"))]
             virtual_copy_id: "vc-original".into(),
-            #[cfg(not(target_arch = "wasm32"))]
             selected_mask_id: None,
-            #[cfg(not(target_arch = "wasm32"))]
             mask_name_input: String::new(),
             mask_tool: MaskTool::None,
-            #[cfg(not(target_arch = "wasm32"))]
             brush_radius: 0.05,
-            #[cfg(not(target_arch = "wasm32"))]
             brush_eraser: false,
-            #[cfg(not(target_arch = "wasm32"))]
             pending_brush_marks: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             drag_start: None,
-            #[cfg(not(target_arch = "wasm32"))]
             drag_current: None,
-            #[cfg(not(target_arch = "wasm32"))]
             drawing: false,
             spot_tool: SpotTool::None,
             spot_mode: SpotMode::Heuristic,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_radius: 18.0,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_feather: 0.5,
-            #[cfg(not(target_arch = "wasm32"))]
             spot_opacity: 1.0,
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
@@ -1281,29 +1203,21 @@ impl LuminaApp {
                 ("shadows".into(), false),
             ]),
             preset_relative_exposure: false,
-            #[cfg(not(target_arch = "wasm32"))]
             presets_dir: presets::default_presets_dir(),
             // F-009: initial directory scan so saved presets survive restarts.
             // A scan error surfaces through the entry list, never silently.
-            #[cfg(not(target_arch = "wasm32"))]
             preset_entries: presets::default_presets_dir()
                 .as_deref()
                 .map(presets::scan_presets_dir)
                 .unwrap_or_default(),
             idle_queue: IdleQueue::new(32),
-            #[cfg(not(target_arch = "wasm32"))]
             thumbnail_tx,
-            #[cfg(not(target_arch = "wasm32"))]
             thumbnail_rx,
             active_module: Module::Develop,
-            #[cfg(not(target_arch = "wasm32"))]
             export_path: String::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             export_format: ImageFileFormat::Png,
-            #[cfg(not(target_arch = "wasm32"))]
             export_quality: 90,
             before_after: false,
-            #[cfg(not(target_arch = "wasm32"))]
             settings_clipboard: None,
             clipping_overlay: false,
             lights_out: false,
@@ -1315,13 +1229,14 @@ impl LuminaApp {
             before_after_split: false,
             fullscreen: false,
             wb_pick_mode: false,
-            #[cfg(not(target_arch = "wasm32"))]
             thumbnails: ThumbnailManager::new(),
             preview_is_draft: false,
             draft_original: None,
             base_stage_cache: StageFrameCache::new(BASE_STAGE_CACHE_MAX_BYTES),
             source_hash_memo: None,
             last_stage_work: None,
+            last_analysis_ms: 0.0,
+            last_drag_tick: None,
             draft_max_dim: 1280,
             last_edit_time: 0.0,
             preview_zoom: 1.0,
@@ -1336,26 +1251,17 @@ impl LuminaApp {
             preview_effective_scale: 1.0,
             // Navigator defaults to collapsed (hidden) and is revealed via the
             // "Navigator" toggle button in the preview toolbar (Lightroom-like).
-            #[cfg(not(target_arch = "wasm32"))]
             navigator_open: false,
-            #[cfg(not(target_arch = "wasm32"))]
             open_folders: BTreeSet::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             folder_children: BTreeMap::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             folder_raw_counts: BTreeMap::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             library_thumb_size: 132.0,
-            #[cfg(not(target_arch = "wasm32"))]
             history_selected: None,
-            #[cfg(not(target_arch = "wasm32"))]
             decode_rx: None,
-            #[cfg(not(target_arch = "wasm32"))]
             sidecar_revision: None,
             pending_full_render: false,
-            #[cfg(not(target_arch = "wasm32"))]
             auto_load_attempted: false,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             // R2-GUIMOD-09: deliberately `None` here. Constructing a standalone
             // `GpuContext` performs a blocking adapter/device request that
             // `attach_wgpu_render_state` immediately replaced with the
@@ -1364,36 +1270,31 @@ impl LuminaApp {
             // [`attach_wgpu_render_state`] (native entry point wires it right
             // after construction; headless tests stay GPU-free).
             gpu: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             wgpu_render_state: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             present_target: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             vram_fresh: false,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             gpu_stage_gate: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             vram_mask_is_evaluated: false,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             gpu_present_frame: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             // R2-GUIMOD-06: no routing fallback until a present decision runs.
             gpu_route_fallback: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             brush_mask_plane: None,
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             brush_mask_plane_dims: None,
-            #[cfg(not(target_arch = "wasm32"))]
             frame_thumb_enqueued: 0,
-            #[cfg(not(target_arch = "wasm32"))]
             frame_thumbs_ready: 0,
-            #[cfg(not(target_arch = "wasm32"))]
             // PREVIEW-CACHE-FEATURE: lazy — no worker pool until the first
             // neighbor prefetch (keeps headless tests thread-free).
             preview_ctrl: None,
-            #[cfg(not(target_arch = "wasm32"))]
             frame_previews_enqueued: 0,
-            #[cfg(not(target_arch = "wasm32"))]
             frame_previews_ready: 0,
         }
     }
@@ -1405,12 +1306,10 @@ impl LuminaApp {
     /// Monotonic counter of how many times `self.preview` received new content
     /// (bumped in `render_from`). Exposed read-only for headless integration
     /// tests (F-103-N9 interaction tests) to assert that an edit re-renders.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn preview_generation(&self) -> u64 {
         self.preview_generation
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn open_file(&mut self, path: impl Into<String>) {
         let p = path.into();
         trace!("GUI interaction: open_file {}", p);
@@ -1432,14 +1331,12 @@ impl LuminaApp {
         self.begin_load_path(p);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_directory(&mut self, directory: impl Into<String>) {
         self.directory = directory.into();
         info!("directory set: {}", self.directory);
         self.list_directory();
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn list_directory(&mut self) {
         let directory = std::path::PathBuf::from(self.directory.trim());
         debug!("listing directory: {}", directory.display());
@@ -1528,12 +1425,10 @@ impl LuminaApp {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn entries(&self) -> &[FileBrowserEntry] {
         &self.entries
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn scan_entry(path: &Path) -> Option<FileBrowserEntry> {
         if !is_supported_image(path) {
             return None;
@@ -1627,6 +1522,14 @@ impl LuminaApp {
     pub fn preview_is_draft(&self) -> bool {
         self.preview_is_draft
     }
+    /// R2-GUIMOD-04a: timings of the last instrumented drag tick, if any.
+    pub fn last_drag_tick(&self) -> Option<DragTickTimings> {
+        self.last_drag_tick
+    }
+    /// R2-GUIMOD-04a: milliseconds of the analysis pass inside the last render.
+    pub fn last_analysis_ms(&self) -> f64 {
+        self.last_analysis_ms
+    }
     pub fn render_key(&self) -> Option<&RenderKey> {
         self.render_key.as_ref()
     }
@@ -1701,7 +1604,6 @@ impl LuminaApp {
                 Str::RelativeExposureRequiresAutoTone.t().to_string(),
             ));
         }
-        #[cfg(not(target_arch = "wasm32"))]
         let previous = self.recipe.clone();
         for (key, value) in &preset.recipe.adjustments {
             let value = if key == "exposure"
@@ -1718,7 +1620,6 @@ impl LuminaApp {
             };
             self.recipe.adjustments.insert(key.clone(), value);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(document) = &mut self.document {
             if let Some(copy) = document
                 .virtual_copies
@@ -1741,7 +1642,6 @@ impl LuminaApp {
     /// recipe state of a history step of the active virtual copy into the
     /// session recipe and re-renders. Nothing is persisted until the user
     /// presses Save Recipe / Sidecar.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn restore_history(&mut self, entry_id: &str) -> Result<(), GuiError> {
         let document = self
             .document
@@ -1760,7 +1660,6 @@ impl LuminaApp {
         self.render()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn duplicate_virtual_copy(
         &mut self,
         id: impl Into<String>,
@@ -1776,7 +1675,6 @@ impl LuminaApp {
     /// Set the star rating (`0..=5`, `0` = unrated) of the active virtual copy
     /// (LR-01). Persists through [`Self::save_sidecar`] so the value survives
     /// restarts; values `> 5` are rejected loudly, never clamped.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_rating(&mut self, rating: u8) -> Result<(), GuiError> {
         if rating > 5 {
             return Err(GuiError::Io(Str::InvalidRating.t().to_string()));
@@ -1790,7 +1688,6 @@ impl LuminaApp {
 
     /// Set the pick flag of the active virtual copy (LR-01). Persists through
     /// [`Self::save_sidecar`] so the value survives restarts.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_flag(&mut self, flag: Flag) -> Result<(), GuiError> {
         self.ensure_document_loaded()?;
         self.active_copy_mut()?.flag = flag;
@@ -1804,7 +1701,6 @@ impl LuminaApp {
     /// cosmetic annotation, no sidecar schema change. Returns `None` when no
     /// document is loaded; read-only accessor for the rating section, the
     /// Library badge and headless tests.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn color_label(&self) -> Option<u8> {
         self.document.as_ref().and_then(|document| {
             document
@@ -1819,7 +1715,6 @@ impl LuminaApp {
     /// (Welle 2, keys `6`–`9` select `1`–`4`). Persists through
     /// [`Self::save_sidecar`] so the value survives restarts; values `> 4`
     /// are rejected loudly, never clamped.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_color_label(&mut self, label: u8) -> Result<(), GuiError> {
         if label > 4 {
             return Err(GuiError::Io(Str::InvalidColorLabel.t().to_string()));
@@ -1836,7 +1731,6 @@ impl LuminaApp {
     /// Copy the session recipe into the session clipboard (Welle 2, LR-09,
     /// `Cmd/Ctrl+Shift+C`). Session-only — never persisted. Fails loudly
     /// when no image is loaded so an empty copy can never silently succeed.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn copy_settings(&mut self) -> Result<(), GuiError> {
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
@@ -1849,7 +1743,6 @@ impl LuminaApp {
 
     /// Whether the session clipboard holds copied settings (read-only
     /// accessor for headless tests).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn clipboard_has_settings(&self) -> bool {
         self.settings_clipboard.is_some()
     }
@@ -1859,7 +1752,6 @@ impl LuminaApp {
     /// path, so the preview generation bumps and the sidecar persists the
     /// result. Fails loudly on an empty clipboard or without a loaded image —
     /// never a silent no-op.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn paste_settings(&mut self) -> Result<(), GuiError> {
         let Some(snapshot) = self.settings_clipboard.clone() else {
             return Err(GuiError::Io(Str::ClipboardEmpty.t().to_string()));
@@ -1896,7 +1788,6 @@ impl LuminaApp {
     /// again, never left at `-1`). Persists via [`Self::save_sidecar`] and
     /// re-renders, so the preview generation bumps. Fails loudly without a
     /// loaded image.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn toggle_black_white(&mut self) -> Result<(), GuiError> {
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
@@ -2151,7 +2042,6 @@ impl LuminaApp {
     /// Current stack-group proxy id of the active virtual copy (Welle 3,
     /// LR-17 light), read tolerantly via [`stack_id_of`]. Returns `None`
     /// when no document is loaded. Read-only accessor for headless tests.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn stack_group_id(&self) -> Option<String> {
         self.document.as_ref().and_then(|document| {
             document
@@ -2167,7 +2057,6 @@ impl LuminaApp {
     /// first press mints a `stack-<n>` id (unique across the loaded
     /// document's copies) into the copy's `extras["stack_group"]`, the second
     /// press removes it again. Persists through [`Self::save_sidecar`].
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn toggle_stack_group(&mut self) -> Result<Option<String>, GuiError> {
         self.ensure_document_loaded()?;
         if stack_id_of(&self.active_copy_mut()?.extras).is_some() {
@@ -2220,7 +2109,6 @@ impl LuminaApp {
     /// `snapshot-<n>` id naming for entries written without the marker. The
     /// name falls back to the entry id when no `snapshot_name` is stored.
     /// Plain history entries are skipped. Empty without a loaded document.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn snapshots(&self) -> Vec<(String, String)> {
         self.document
             .as_ref()
@@ -2256,7 +2144,6 @@ impl LuminaApp {
     /// `extras["snapshot"]` marker — unlike plain history they are named and
     /// meant to be kept. Persists through [`Self::save_sidecar`]; an empty
     /// name fails loudly, never silently.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn create_snapshot(&mut self, name: impl Into<String>) -> Result<String, GuiError> {
         let name = name.into();
         if name.trim().is_empty() {
@@ -2302,7 +2189,6 @@ impl LuminaApp {
     /// — tolerantly — the `snapshot-<n>` id naming; anything else fails
     /// loudly as [`Str::NotSnapshot`] instead of restoring plain history
     /// silently.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn restore_snapshot(&mut self, entry_id: &str) -> Result<(), GuiError> {
         let is_snapshot = self
             .document
@@ -2332,7 +2218,6 @@ impl LuminaApp {
     /// [`Self::apply_adjustment_to_selection`]'s key gate. Unknown keys, a
     /// missing image or a path-less (byte-drop) session fail loudly — never
     /// a silent no-op.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn apply_quick_develop(&mut self, key: &str, value: f64) -> Result<(), GuiError> {
         if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") {
             return Err(GuiError::Io(Str::UnknownAdjustment.format_arg(key)));
@@ -2358,7 +2243,6 @@ impl LuminaApp {
     /// Current rating and flag of the active virtual copy (LR-01). Returns
     /// `None` when no document is loaded; read-only accessor for the rating
     /// section and headless tests.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn active_rating_flag(&self) -> Option<(u8, Flag)> {
         self.document.as_ref().and_then(|document| {
             document
@@ -2374,7 +2258,6 @@ impl LuminaApp {
     /// the duplicate inherits the currently visible recipe rather than the
     /// last saved one; the new copy is then selected (Lightroom behaviour).
     /// Fails loudly when no image/document is loaded.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn duplicate_active_copy(&mut self) -> Result<String, GuiError> {
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
@@ -2421,7 +2304,6 @@ impl LuminaApp {
         Ok(new_id)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     /// Switch the active virtual copy (REVIEW-GUI-VCSWITCH-1).
     ///
     /// Switching adopts the target copy's stored recipe. Session state that
@@ -2459,7 +2341,6 @@ impl LuminaApp {
         // Per-copy session state resets (REVIEW-GUI-VCSWITCH-1): a history
         // selection or an in-progress drag of the previous copy must never
         // leak into the newly selected one.
-        #[cfg(not(target_arch = "wasm32"))]
         {
             self.history_selected = None;
             self.pending_brush_marks.clear();
@@ -2492,7 +2373,6 @@ impl LuminaApp {
 
     /// Select a mask from the active copy's library and make it the active layer.
     /// The matte is only referenced; no payload is copied or modified.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn select_mask(&mut self, mask_id: &str) -> Result<(), GuiError> {
         self.ensure_document_loaded()?;
         let document = self.document.as_mut().expect("document was ensured");
@@ -2531,13 +2411,11 @@ impl LuminaApp {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn selected_mask_id(&self) -> Option<&str> {
         self.selected_mask_id.as_deref()
     }
 
     /// Create a pending library entry. Inference is deliberately not started here.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn create_mask(&mut self, name: impl Into<String>) -> Result<String, GuiError> {
         self.ensure_document_loaded()?;
         let name = name.into();
@@ -2621,7 +2499,6 @@ impl LuminaApp {
         Ok(id)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn rename_mask(&mut self, mask_id: &str, name: impl Into<String>) -> Result<(), GuiError> {
         self.ensure_document_loaded()?;
         let name = name.into();
@@ -2639,7 +2516,6 @@ impl LuminaApp {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_inverted(&mut self, inverted: bool) -> Result<(), GuiError> {
         let layer = self.active_layer_mut()?;
         layer.inverted = inverted;
@@ -2651,7 +2527,6 @@ impl LuminaApp {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_feather(&mut self, feather: f32) -> Result<(), GuiError> {
         if !feather.is_finite() || !(0.0..=1.0).contains(&feather) {
             return Err(GuiError::Io(Str::FeatheringMustBeBetween.t().to_string()));
@@ -2666,7 +2541,6 @@ impl LuminaApp {
 
     /// Store a local adjustment as declarative layer metadata. Applying it to pixels
     /// requires the not-yet-implemented masked core pipeline; it is never baked in.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_local_adjustment(&mut self, key: &str, value: f64) -> Result<(), GuiError> {
         if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") || !value.is_finite()
         {
@@ -2682,7 +2556,6 @@ impl LuminaApp {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn offer_mask_recalculation(&mut self) -> Result<bool, GuiError> {
         let mask_id = self
             .selected_mask_id
@@ -2704,7 +2577,6 @@ impl LuminaApp {
         Ok(offered)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn mark_mask_for_recalculation(&mut self) -> Result<(), GuiError> {
         let mask_id = self
             .selected_mask_id
@@ -2736,7 +2608,6 @@ impl LuminaApp {
     /// Visible reason shown when a source-coordinate tool is refused because
     /// active recipe geometry changes the mapping between the displayed
     /// (post-geometry) preview and the source frame (REVIEW-GUI-MASKGEO-1).
-    #[cfg(not(target_arch = "wasm32"))]
     const GEOMETRY_TOOL_BLOCKED: &str = "Mask and white-balance tools are unavailable while Crop, Rotation, Mirror or Perspective is active — drawn/picked source coordinates would land transformed-wrong. Reset the geometry to use them.";
 
     /// True while recipe geometry changes the mapping between the displayed
@@ -2751,7 +2622,6 @@ impl LuminaApp {
     /// core applies geometry to mask planes (documented F-041 alignment limit)
     /// the honest behaviour is to refuse these tools visibly instead of
     /// writing wrong data.
-    #[cfg(not(target_arch = "wasm32"))]
     fn geometry_blocks_source_mapping(&self) -> bool {
         let geometry_active = self.recipe.geometry.as_ref().is_some_and(|g| {
             g.crop.is_some()
@@ -2779,7 +2649,6 @@ impl LuminaApp {
     /// while recipe geometry is active — see
     /// [`Self::geometry_blocks_source_mapping`]. No silent fallback into
     /// transformed-wrong marks.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_tool(&mut self, tool: MaskTool) {
         if tool != MaskTool::None && self.geometry_blocks_source_mapping() {
             warn!("mask tool {tool:?} refused while recipe geometry is active");
@@ -2813,7 +2682,6 @@ impl LuminaApp {
     pub fn spot_mode(&self) -> SpotMode {
         self.spot_mode
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn commit_spot_heal(
         &mut self,
         center: lumina_sidecar::Point2,
@@ -2859,7 +2727,6 @@ impl LuminaApp {
         let _ = self.render();
         Ok(())
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn clear_spot_heals(&mut self) {
         self.recipe.extras.remove("spot_removals");
         self.mark_dirty();
@@ -2869,7 +2736,6 @@ impl LuminaApp {
 
     /// Set the normalized brush radius. Rejected (no state change) if not finite
     /// or outside the open-closed `(0, 1]` range.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_brush_radius(&mut self, radius: f32) -> Result<(), GuiError> {
         if !radius.is_finite() || !(0.0..=1.0).contains(&radius) || radius <= 0.0 {
             return Err(GuiError::Io(
@@ -2885,7 +2751,6 @@ impl LuminaApp {
     }
 
     /// Toggle the brush eraser (negative) sign.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_brush_eraser(&mut self, eraser: bool) {
         self.brush_eraser = eraser;
     }
@@ -2893,8 +2758,7 @@ impl LuminaApp {
     /// Set the spot-heal radius tool default (GUI-SLIDER-SAVE-1). Tool-only
     /// session state (not recipe): still records a save commit so the
     /// debounced path persists loudly instead of dropping concurrent edits.
-    /// Native-only with the spot-heal panel (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Visible in the spot-heal panel.
     pub fn set_spot_radius(&mut self, radius: f32) {
         trace!("GUI interaction: set_spot_radius {}", radius);
         self.spot_radius = radius;
@@ -2903,7 +2767,6 @@ impl LuminaApp {
 
     /// Set the spot-heal feather tool default (GUI-SLIDER-SAVE-1, see
     /// [`Self::set_spot_radius`]).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_spot_feather(&mut self, feather: f32) {
         trace!("GUI interaction: set_spot_feather {}", feather);
         self.spot_feather = feather;
@@ -2912,7 +2775,6 @@ impl LuminaApp {
 
     /// Set the spot-heal opacity tool default (GUI-SLIDER-SAVE-1, see
     /// [`Self::set_spot_radius`]).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_spot_opacity(&mut self, opacity: f32) {
         trace!("GUI interaction: set_spot_opacity {}", opacity);
         self.spot_opacity = opacity;
@@ -2920,7 +2782,6 @@ impl LuminaApp {
     }
 
     /// Set the blur of the selected mask layer (0..=1).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_blur(&mut self, blur: f32) -> Result<(), GuiError> {
         if !blur.is_finite() || !(0.0..=1.0).contains(&blur) {
             return Err(GuiError::Io("Blur must be between 0 and 1".into()));
@@ -2933,7 +2794,6 @@ impl LuminaApp {
     }
 
     /// Set the density of the selected mask layer (0..=1).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_mask_density(&mut self, density: f32) -> Result<(), GuiError> {
         if !density.is_finite() || !(0.0..=1.0).contains(&density) {
             return Err(GuiError::Io("Density must be between 0 and 1".into()));
@@ -3018,7 +2878,6 @@ impl LuminaApp {
         }
         self.recipe.generative_edit = Some(ge);
         self.mark_dirty();
-        #[cfg(not(target_arch = "wasm32"))]
         {
             if self.document.is_some() {
                 self.save_sidecar();
@@ -3057,7 +2916,6 @@ impl LuminaApp {
         ge.canvas = Some(canvas);
         self.recipe.generative_edit = Some(ge);
         self.mark_dirty();
-        #[cfg(not(target_arch = "wasm32"))]
         {
             if self.document.is_some() {
                 self.save_sidecar();
@@ -3071,7 +2929,6 @@ impl LuminaApp {
 
     /// Returns the active virtual copy's source dimensions, used as the brush
     /// prompt resolution and overlay rasterization size.
-    #[cfg(not(target_arch = "wasm32"))]
     fn image_dims(&self) -> Result<(u32, u32), GuiError> {
         let frame = self
             .original
@@ -3082,7 +2939,6 @@ impl LuminaApp {
 
     /// Ensure a mask is selected; create a default one if the active copy has
     /// none yet so a drawn prompt always has a home.
-    #[cfg(not(target_arch = "wasm32"))]
     fn ensure_selected_mask(&mut self) -> Result<String, GuiError> {
         if let Some(id) = self.selected_mask_id.clone() {
             return Ok(id);
@@ -3104,7 +2960,6 @@ impl LuminaApp {
     /// geometric rasterizer (F-079) supplies the matte — so it is marked
     /// `Valid` (the file browser would otherwise report a phantom "missing
     /// model"). No silent fallback: a missing sidecar/document is a hard error.
-    #[cfg(not(target_arch = "wasm32"))]
     fn apply_mask_prompt(&mut self, prompt: MaskPrompt) -> Result<(), GuiError> {
         let mask_id = self.ensure_selected_mask()?;
         let document = self
@@ -3133,7 +2988,6 @@ impl LuminaApp {
     /// Finalize a brush stroke. An empty stroke is a hard error and writes
     /// nothing (no silent fallback). Every mark is validated against the F-079
     /// prompt rules before persistence.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn commit_brush_stroke(&mut self, marks: Vec<BrushMark>) -> Result<(), GuiError> {
         if marks.is_empty() {
             return Err(GuiError::Io("A brush mask needs at least one mark".into()));
@@ -3169,7 +3023,6 @@ impl LuminaApp {
     /// (`atan2(dy, dx)`, normalized to `[0, 360)`); `start`/`end` are the matte
     /// values (1.0 → 0.0) along that axis, matching the F-079 geometric
     /// rasterizer (`start` + t·(end−start) across the normalized projection).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn gradient_prompt_from_drag(a: Point2, b: Point2) -> MaskPrompt {
         let a = Point2 {
             x: a.x.clamp(0.0, 1.0),
@@ -3195,7 +3048,6 @@ impl LuminaApp {
 
     /// Finalize a linear-gradient drag. A zero-length drag (the two endpoints
     /// coincide within tolerance) is rejected.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn commit_gradient(&mut self, a: Point2, b: Point2) -> Result<(), GuiError> {
         let a = Point2 {
             x: a.x.clamp(0.0, 1.0),
@@ -3214,7 +3066,6 @@ impl LuminaApp {
     /// Build a radial-gradient (ellipse) prompt from a drag. The drag defines
     /// the ellipse bounding box: `center` is the segment midpoint and `radii`
     /// are half the absolute (clamped) deltas, clamped to `(0, 1]`.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn ellipse_prompt_from_drag(a: Point2, b: Point2) -> MaskPrompt {
         let a = Point2 {
             x: a.x.clamp(0.0, 1.0),
@@ -3239,7 +3090,6 @@ impl LuminaApp {
 
     /// Finalize a radial-gradient drag. A zero-size drag (both radii below
     /// tolerance) is rejected.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn commit_radial(&mut self, a: Point2, b: Point2) -> Result<(), GuiError> {
         let rx = ((b.x - a.x).abs() / 2.0).clamp(1e-3, 1.0);
         let ry = ((b.y - a.y).abs() / 2.0).clamp(1e-3, 1.0);
@@ -3251,7 +3101,6 @@ impl LuminaApp {
 
     /// Finish the in-progress mask-tool drag, dispatching to the right commit
     /// based on the active tool. Errors are surfaced as visible [`GuiError`]s.
-    #[cfg(not(target_arch = "wasm32"))]
     fn finish_drawing(&mut self) {
         let tool = self.mask_tool;
         let start = self.drag_start;
@@ -3277,7 +3126,6 @@ impl LuminaApp {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn ensure_document_loaded(&mut self) -> Result<(), GuiError> {
         if self.document.is_none() {
             let frame = self
@@ -3293,7 +3141,6 @@ impl LuminaApp {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn active_copy_mut(&mut self) -> Result<&mut lumina_sidecar::VirtualCopy, GuiError> {
         self.document
             .as_mut()
@@ -3305,7 +3152,6 @@ impl LuminaApp {
             .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn active_layer_mut(&mut self) -> Result<&mut MaskLayer, GuiError> {
         self.active_copy_mut()?
             .mask_layers
@@ -3313,7 +3159,6 @@ impl LuminaApp {
             .ok_or_else(|| GuiError::Io(Str::NoMaskSelected.t().to_string()))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn apply_adjustment_to_selection(
         paths: &[std::path::PathBuf],
         key: &str,
@@ -3406,7 +3251,6 @@ impl LuminaApp {
         self.source_is_raw = source_is_raw;
         self.raw_orientation = orientation;
         self.camera_white_balance = camera_white_balance;
-        #[cfg(not(target_arch = "wasm32"))]
         {
             self.document = None;
             self.virtual_copy_id = "vc-original".into();
@@ -3450,7 +3294,7 @@ impl LuminaApp {
         self.last_stage_work = None;
         // PERF-GUI-3: cache a downscaled source for fast draft renders.
         self.draft_original = Some(frame.downscale(self.draft_max_dim));
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         {
             // H1: invalidate the persistent R16 brush plane — a new source size needs
             // a fresh zeroed plane; stale dimensions would mis-align tile uploads.
@@ -3503,7 +3347,7 @@ impl LuminaApp {
         // path) did not, so a stale VRAM frame could keep being presented after a
         // slider change that did not immediately re-run `render_to_vram` (e.g.
         // in headless tests / programmatic `set_adjustment` with no pointer drag).
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         {
             self.vram_fresh = false;
             self.vram_mask_is_evaluated = false;
@@ -3929,8 +3773,8 @@ impl LuminaApp {
         );
         // F-041: measure the final visible domain — the rendered preview
         // (post crop/geometry, same frame that is displayed) weighted by the
-        // effective mask planes of the last render. wasm32 renders without
-        // mask layers, so the empty slice keeps the raster measurement.
+        // effective mask planes of the last render; the empty slice keeps the
+        // raster measurement when no layers exist.
         let mask_planes: Vec<MaskPlane> = self
             .render_mask_layers
             .iter()
@@ -4047,6 +3891,62 @@ impl LuminaApp {
         result
     }
 
+    /// One coalesced pointer-drag tick (PERF-GUI-3/4 hot path): VRAM tone
+    /// stage first (readback-free present), then the CPU draft render.
+    ///
+    /// R2-GUIMOD-04a: the tick is instrumented — GPU wall time, CPU draft
+    /// wall time and the analysis pass inside the draft are recorded in
+    /// [`Self::last_drag_tick`] and logged via `trace!`. Measurement only:
+    /// the renders, flags and error paths are identical to the inlined
+    /// sequence this method replaces.
+    fn render_draft_tick(&mut self, viewport: [u32; 2]) {
+        let gpu_t0 = std::time::Instant::now();
+        #[cfg(feature = "gpu")]
+        {
+            if let Some(gpu) = self.gpu.as_ref() {
+                if gpu.is_available() {
+                    // R2-GUIMOD-03: borrow instead of clone. The fallback
+                    // branch (`draft_original` absent on the first tick
+                    // after a full render) used to memcpy the entire
+                    // full-resolution original (~180 MB worst case) into
+                    // a temporary that was dropped immediately after the
+                    // call — `render_to_vram` only needs `&ImageFrame`.
+                    let source = self.draft_original.as_ref().or(self.original.as_ref());
+                    if let Some(src) = source {
+                        match gpu.render_to_vram(src, &self.recipe) {
+                            Ok(()) => {
+                                // GUI-WGPU-PRESENT-1: the VRAM output now
+                                // matches the current recipe/source — the
+                                // present path may use it this frame.
+                                self.vram_fresh = true;
+                            }
+                            Err(err) => {
+                                warn!("gpu render_to_vram failed: {err}");
+                                self.vram_fresh = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let gpu_ms = gpu_t0.elapsed().as_secs_f64() * 1000.0;
+        let cpu_t0 = std::time::Instant::now();
+        let result = self.render_draft(viewport, None);
+        let cpu_draft_ms = cpu_t0.elapsed().as_secs_f64() * 1000.0;
+        if let Err(e) = result {
+            self.show_error(e);
+        }
+        let analyse_ms = self.last_analysis_ms;
+        self.last_drag_tick = Some(DragTickTimings {
+            cpu_draft_ms,
+            gpu_ms,
+            analyse_ms,
+        });
+        trace!(
+            "GUI drag tick: cpu_draft_ms={cpu_draft_ms:.2} gpu_ms={gpu_ms:.2} analyse_ms={analyse_ms:.2}"
+        );
+    }
+
     /// Compute the source ROI `(x, y, w, h)` that is visible in the preview
     /// pane for a zoom factor `> 1.0` (PERF-GUI-5, REVIEW-GUI-PANROI-1).
     ///
@@ -4097,9 +3997,7 @@ impl LuminaApp {
     }
 
     /// Open or collapse the navigator rail (GUI-PREVIEW-NAV-1). Pure view
-    /// state — never touches the recipe or the sidecar. Native-only with the
-    /// navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// state — never touches the recipe or the sidecar.
     pub fn set_navigator_open(&mut self, open: bool) {
         trace!("GUI interaction: set_navigator_open {}", open);
         self.navigator_open = open;
@@ -4119,7 +4017,6 @@ impl LuminaApp {
         // cached neighbors no longer match the new key, so the +4/−2 window is
         // re-planned at the new resolution. Only native (the neighbor cache is a
         // native capability); no-op while nothing is loaded.
-        #[cfg(not(target_arch = "wasm32"))]
         if !self.path.is_empty() && self.original.is_some() {
             let active = self.path.clone();
             self.schedule_neighbor_previews(&active);
@@ -4179,8 +4076,6 @@ impl LuminaApp {
     /// and `pan` the preview pan offset. At fit (or degenerate geometry) the
     /// whole frame is visible and the returned rect equals `nav_rect`. Pure
     /// helper so the pan-rectangle roundtrip is unit-testable headless.
-    /// Native-only with the navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
     fn navigator_viewport_rect(
         nav_rect: egui::Rect,
         src_w: f32,
@@ -4214,9 +4109,7 @@ impl LuminaApp {
     /// dragging the viewport rectangle by `drag_nav` (navigator points) moves
     /// the visible window with the cursor. `nav_scale` is navigator points per
     /// source pixel, `preview_scale` the on-screen preview scale. Pure helper
-    /// for the headless pan-rectangle roundtrip test. Native-only with the
-    /// navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// for the headless pan-rectangle roundtrip test.
     fn pan_for_navigator_drag(
         pan: egui::Vec2,
         drag_nav: egui::Vec2,
@@ -4248,7 +4141,7 @@ impl LuminaApp {
     fn render_from(
         &mut self,
         source: &ImageFrame,
-        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] with_masks: bool,
+        with_masks: bool,
         roi: Option<[u32; 4]>,
     ) -> Result<(), GuiError> {
         // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
@@ -4277,39 +4170,22 @@ impl LuminaApp {
         } else {
             env!("CARGO_PKG_VERSION").into()
         };
-        let copy_id = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                self.virtual_copy_id.clone()
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                "vc-original".to_owned()
-            }
-        };
-        let mask_hashes = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                self.document
-                    .as_ref()
-                    .and_then(|d| {
-                        d.virtual_copies
-                            .iter()
-                            .find(|c| c.id == self.virtual_copy_id)
-                    })
-                    .map(|c| {
-                        c.mask_library
-                            .iter()
-                            .filter_map(|m| m.artifact.as_ref().map(|a| a.checksum.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                Vec::new()
-            }
-        };
+        let copy_id = self.virtual_copy_id.clone();
+        let mask_hashes = self
+            .document
+            .as_ref()
+            .and_then(|d| {
+                d.virtual_copies
+                    .iter()
+                    .find(|c| c.id == self.virtual_copy_id)
+            })
+            .map(|c| {
+                c.mask_library
+                    .iter()
+                    .filter_map(|m| m.artifact.as_ref().map(|a| a.checksum.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         // Base-stage identity (recipe-blind): source identity + decoder +
         // virtual copy + ROI window + resulting frame geometry. Two recipes
         // that differ only in exposure/color share this digest, which is what
@@ -4382,7 +4258,6 @@ impl LuminaApp {
         // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
         // (native only).  Missing or unreadable zdata is not a hard error:
         // affected layers are reported through the `MaskPolicy::Warn` path.
-        #[cfg(not(target_arch = "wasm32"))]
         let masks_context = if with_masks {
             let planes = self.load_mask_planes();
             match &self.document {
@@ -4401,8 +4276,6 @@ impl LuminaApp {
         } else {
             None
         };
-        #[cfg(target_arch = "wasm32")]
-        let masks_context: Option<MaskContext<'_>> = None;
         // ---- Downstream stages: Adjustments → geometry → Masks ----
         let output = render_frame_from_base(
             base_frame,
@@ -4456,13 +4329,16 @@ impl LuminaApp {
         ));
         // GUI-HISTOGRAM-1: one shared pass yields both the tone panel values
         // and the 256-bin histogram feeding the Painter curve.
+        // R2-GUIMOD-04a: timed for the per-tick drag instrumentation
+        // (measurement only — the result is used exactly as before).
+        let ana_t0 = std::time::Instant::now();
         let (analysis, histogram) = analyze_tone_with_histogram(&preview);
+        self.last_analysis_ms = ana_t0.elapsed().as_secs_f64() * 1000.0;
         self.tone_analysis = Some(analysis);
         self.preview_histogram = Some(histogram);
         self.preview = Some(preview);
         // R2-GUIMOD-02: new preview content — any CPU-present identity cached
         // in `texture_identity` is now stale and will re-upload once.
-        #[cfg(not(target_arch = "wasm32"))]
         {
             self.preview_generation += 1;
         }
@@ -4474,7 +4350,7 @@ impl LuminaApp {
         // never shown. Draft renders (which run *after* `render_to_vram` in
         // the same tick, by design feeding the VRAM present path) must keep
         // the flag — hence the `preview_is_draft` discriminator.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         if !self.preview_is_draft {
             self.vram_fresh = false;
         }
@@ -4494,7 +4370,7 @@ impl LuminaApp {
         // coverage visible in the GPU present composite by pushing the combined
         // effective planes into the VRAM mask texture. Failures are loud but
         // never break the CPU preview path.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         {
             self.vram_mask_is_evaluated = false;
             if !self.render_mask_layers.is_empty() {
@@ -4580,7 +4456,6 @@ impl LuminaApp {
     /// Containers written before that convention carry the bare `mask_id`;
     /// those records stay readable through an explicitly logged legacy lookup
     /// (documented read compatibility — not a silent fallback).
-    #[cfg(not(target_arch = "wasm32"))]
     fn load_mask_planes(&self) -> BTreeMap<(String, String), MaskPlane> {
         let mut planes = BTreeMap::new();
         let Some(document) = &self.document else {
@@ -4631,7 +4506,6 @@ impl LuminaApp {
     /// Composite zdata tile-record id shared with the CLI (REVIEW-CLI-N1):
     /// `"{copy_id}/{mask_id}"`. The field order mirrors the
     /// `(copy_id, mask_id)` planes key of `MaskContext`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn zdata_tile_record_id(copy_id: &str, mask_id: &str) -> String {
         format!("{copy_id}/{mask_id}")
     }
@@ -4642,8 +4516,7 @@ impl LuminaApp {
         self.error = Some(message);
     }
 
-    /// REVIEW-GUI-WASM-FOLLOWUP: the texture upload is driven by the native
-    /// preview-area path only.
+    /// The texture upload is driven by the preview-area path.
     ///
     /// R2-GUIMOD-02: the CPU upload used to run on **every** repaint —
     /// `ColorImage::from_rgba_unmultiplied` (full-frame memcpy) plus
@@ -4653,14 +4526,13 @@ impl LuminaApp {
     /// identity changes; the [`egui::TextureHandle`] itself is retained and
     /// updated in place (`handle.set`) so the egui texture id stays stable.
     /// Pixel output is unchanged: identical RGBA bytes, identical options.
-    #[cfg(not(target_arch = "wasm32"))]
     fn update_texture(&mut self, ctx: &egui::Context) {
         // GUI-WGPU-PRESENT-1: when the wgpu renderer shares its device with
         // `lumina-gpu` and the VRAM content is fresh, present straight from
         // VRAM (overlay composite → registered user texture). No CPU readback,
         // no `ColorImage` upload. Every fallback condition below drops to the
         // historical CPU upload, which remains fully functional.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         {
             self.gpu_present_frame = None;
             // R2-GUIMOD-06: record whether the GPU present path was taken or the
@@ -4722,7 +4594,7 @@ impl LuminaApp {
     ///   dimensions must match the preview dimensions — a full-resolution CPU
     ///   result whose geometry differs from the (draft-sized) VRAM content
     ///   must win even if a stale freshness flag ever slipped through.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn gpu_present_if_ready(&mut self) -> Option<(egui::TextureId, [usize; 2])> {
         if !self.vram_fresh || self.before_after || self.preview_roi.is_some() {
             return None;
@@ -4766,7 +4638,7 @@ impl LuminaApp {
     /// source; any mismatch keeps the (exact) CPU present path. A displayed
     /// *draft* is exempt by design: the interactive drag path presents exactly
     /// the draft-source VRAM render it just produced.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn vram_content_matches_displayed_preview(&self, dims: (u32, u32)) -> bool {
         if self.preview_is_draft {
             return true;
@@ -4787,7 +4659,7 @@ impl LuminaApp {
     /// bypassed *and* not populated: the recipe may drift between edits
     /// without ever producing an intermediate key, so a `None`-keyed entry
     /// could serve a verdict for a long-gone recipe.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn recipe_has_unsupported_gpu_stages(&mut self) -> bool {
         let wb = self.camera_white_balance;
         let cached = self
@@ -4828,7 +4700,7 @@ impl LuminaApp {
     ///
     /// Reuses the memoized [`Self::recipe_has_unsupported_gpu_stages`] verdict,
     /// so calling it every frame is cheap once the render key is stable.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn routing_fallback_reason(&mut self) -> Option<String> {
         let gpu = self.gpu.as_ref()?;
         if !gpu.is_available() {
@@ -4843,7 +4715,7 @@ impl LuminaApp {
 
     /// Create or resize the offscreen present target and keep it registered as
     /// an egui user texture with the eframe wgpu renderer.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn ensure_present_target(
         &mut self,
         render_state: &eframe::egui_wgpu::RenderState,
@@ -4878,7 +4750,6 @@ impl LuminaApp {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn source_identity(&self, frame: &ImageFrame) -> SourceIdentity {
         SourceIdentity {
             relative_name: if self.source_name.is_empty() {
@@ -4923,7 +4794,6 @@ impl LuminaApp {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     // ---- PERF-GUI-7: asynchronous (off-main-thread) file decode ----
     //
     // `begin_load_path` starts a background decode and returns immediately so
@@ -4932,7 +4802,6 @@ impl LuminaApp {
     // `update`). `is_supported_image` keeps the RAW-only / raster filter.
     /// Start a background decode of `path`. The previous preview stays on screen
     /// until the decoded frame arrives; failures are surfaced via `show_error`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn begin_load_path(&mut self, path: String) {
         if path.trim().is_empty() {
             return;
@@ -5006,7 +4875,6 @@ impl LuminaApp {
 
     /// Apply a completed background decode: set the source, then restore the
     /// sidecar recipe for that path (mirroring the old synchronous `load_path`).
-    #[cfg(not(target_arch = "wasm32"))]
     fn finish_decode(&mut self, result: DecodeResult) {
         match result {
             Ok(frame) => {
@@ -5101,7 +4969,6 @@ impl LuminaApp {
 
     /// Drain any completed background decode (PERF-GUI-7). Called every frame
     /// from `update` so the UI stays responsive while decoding.
-    #[cfg(not(target_arch = "wasm32"))]
     fn poll_decode(&mut self) {
         let Some(rx) = &self.decode_rx else {
             return;
@@ -5128,7 +4995,6 @@ impl LuminaApp {
 
     /// Drain completed neighbor-preview results and request a repaint when work
     /// arrived. Non-blocking; called every frame from `update`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn poll_neighbor_previews(&mut self, ctx: &egui::Context) {
         let Some(ctrl) = self.preview_ctrl.as_mut() else {
             return;
@@ -5157,7 +5023,6 @@ impl LuminaApp {
     /// on first navigation so headless tests stay thread-free. The authoritative
     /// state of each neighbor (content hash, sidecar recipe) is resolved inside
     /// the workers, never on the UI thread.
-    #[cfg(not(target_arch = "wasm32"))]
     fn schedule_neighbor_previews(&mut self, active_path: &str) -> usize {
         if self.entries.is_empty() {
             return 0;
@@ -5219,7 +5084,6 @@ impl LuminaApp {
     /// no decode/render wait. Serves first from the RAM LRU, then from the disk
     /// tier; a miss is a genuine miss (the standard lazy loading path applies —
     /// never a silently wrong/upscaled image).
-    #[cfg(not(target_arch = "wasm32"))]
     fn paint_cached_neighbor_preview(&mut self, path: &str) {
         let canonical = Path::new(path)
             .canonicalize()
@@ -5255,7 +5119,6 @@ impl LuminaApp {
     /// neighbor-preview state, or `None` when no state applies (e.g. the probe
     /// was consumed/active). Maps the controller's per-probe state to a cell
     /// overlay so „wird vorbereitet / Veraltet / Fehler" is never only a log.
-    #[cfg(not(target_arch = "wasm32"))]
     fn neighbor_preview_badge(&self, probe_id: &str) -> Option<(String, egui::Color32)> {
         let ctrl = self.preview_ctrl.as_ref()?;
         // The active image is never displayed via the neighbor cache — skip the
@@ -5299,7 +5162,6 @@ impl LuminaApp {
             self.show_error(error);
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some((key, value)) = self.pending_slider_commit.take() {
             self.save_sidecar();
             if self.error().is_none() {
@@ -5320,7 +5182,6 @@ impl LuminaApp {
     /// as loaded — recomputing it from the live bytes would silently launder a
     /// source/conflict state (the fresh identity is only set for documents
     /// newly created in this session).
-    #[cfg(not(target_arch = "wasm32"))]
     fn save_sidecar(&mut self) {
         if self.path.trim().is_empty() {
             self.show_error(Str::SaveNeedsLocalPath.t());
@@ -5398,7 +5259,6 @@ impl LuminaApp {
     /// the original or its sidecar data — e.g. target `/d/photo` with format
     /// PNG must be refused when `/d/photo.png` is the loaded source, which a
     /// pre-extension check would miss. Pure helper, unit-tested headless.
-    #[cfg(not(target_arch = "wasm32"))]
     fn resolve_export_target(
         source: &str,
         output: PathBuf,
@@ -5412,8 +5272,7 @@ impl LuminaApp {
         let sidecar = lumina_sidecar::sidecar_path_for(source);
         let zdata = lumina_sidecar::zdata_path_for(source);
         // `zdata_path_for` requires the sidecar crate's `zdata` feature, which
-        // the GUI enables for every native target (this helper is
-        // `not(wasm32)`-gated together with the whole export module).
+        // the GUI enables.
         let protected: Vec<(&Path, &str)> = vec![
             (source, "the original image"),
             (sidecar.as_path(), "its sidecar"),
@@ -5439,7 +5298,6 @@ impl LuminaApp {
     /// which fails ENOENT for a sidecar/zdata artefact that was never written).
     /// Existing paths are canonicalized directly; a missing path is resolved
     /// against its parent directory so name collisions are still caught.
-    #[cfg(not(target_arch = "wasm32"))]
     fn paths_resolve_equal_symmetric(a: &Path, b: &Path) -> std::io::Result<bool> {
         let resolve = |path: &Path| -> std::io::Result<std::path::PathBuf> {
             if path.exists() {
@@ -5462,7 +5320,6 @@ impl LuminaApp {
     /// (no silent fallback). The artifact is written atomically; the declarative
     /// recipe/sidecar is left untouched by the export itself (the user saves
     /// the recipe explicitly via "Save Recipe / Sidecar").
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn export_to(&mut self, output: PathBuf) -> Result<(), GuiError> {
         let Some(original) = self.original.as_ref() else {
             return Err(GuiError::Io(
@@ -5529,7 +5386,6 @@ impl LuminaApp {
     /// Suggested export file name derived from the source name and the selected
     /// format (e.g. `photo.jpg` from `photo.png`). Used to prefill the save
     /// dialog and the path field.
-    #[cfg(not(target_arch = "wasm32"))]
     fn suggested_export_name(&self) -> String {
         let base = if self.source_name.is_empty() {
             "export".to_string()
@@ -5543,9 +5399,7 @@ impl LuminaApp {
         format!("{}.{}", stem, self.export_format.default_extension())
     }
 
-    /// Draw the Export module controls (native only). Under wasm32 the module is
-    /// shown as a clear capability hint instead (no file-system export).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Draw the Export module controls.
     fn draw_export_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading(Str::Export.t());
         ui.label(Str::ExportTarget.t());
@@ -5623,9 +5477,9 @@ impl LuminaApp {
         // always present once any CPU render ran (warm-up before the very first
         // render still shows the empty-state label).
         if let Some(texture) = self.texture.clone() {
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+            #[cfg(feature = "gpu")]
             let gpu_present = self.gpu_present_frame;
-            #[cfg(not(all(not(target_arch = "wasm32"), feature = "gpu")))]
+            #[cfg(not(feature = "gpu"))]
             #[allow(clippy::infallible_destructuring_match)]
             let gpu_present: Option<(egui::TextureId, [usize; 2])> = None;
             // The preview pane is laid out somewhere inside the window, so its
@@ -5753,14 +5607,8 @@ impl LuminaApp {
             // then is panning meaningful.
             let pan_eligible = draw.x > pane.width() + 0.5 || draw.y > pane.height() + 0.5;
 
-            #[cfg(not(target_arch = "wasm32"))]
             let armed = self.mask_tool != MaskTool::None;
-            #[cfg(not(target_arch = "wasm32"))]
             let pick = self.wb_pick_mode;
-            #[cfg(target_arch = "wasm32")]
-            let armed = false;
-            #[cfg(target_arch = "wasm32")]
-            let pick = false;
 
             // A mask tool arms the preview for a drag gesture; the WB eyedropper
             // keeps a plain click; otherwise a zoomed image drags to pan (hand
@@ -5848,8 +5696,7 @@ impl LuminaApp {
             }
 
             // WB eyedropper needs the source-coordinate mapping, which is part
-            // of the native (non-wasm) capability set.
-            #[cfg(not(target_arch = "wasm32"))]
+            // of the desktop capability set.
             if pick && response.clicked() {
                 // REVIEW-GUI-MASKGEO-1: the picker may have been armed before
                 // geometry was edited; refuse the pick visibly instead of
@@ -5876,11 +5723,9 @@ impl LuminaApp {
                     egui::StrokeKind::Middle,
                 );
             }
-            #[cfg(not(target_arch = "wasm32"))]
             self.handle_mask_tool_drag(&response, rect);
             // Mask overlay is painted over the full-frame rect (accounting for the
             // current ROI crop) so it lines up with the zoomed/panned view.
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 let (full_w, full_h) = self.image_dims().unwrap_or((1, 1));
                 let roi = self.preview_roi.unwrap_or([0, 0, full_w, full_h]);
@@ -5906,7 +5751,6 @@ impl LuminaApp {
     /// the source (see [`Self::preview_roi`]); `roi`/`full` translate the local
     /// rect fraction into absolute source space so the WB eyedropper and mask
     /// tools stay accurate at any zoom/offset.
-    #[cfg(not(target_arch = "wasm32"))]
     fn to_normalized(
         pos: egui::Pos2,
         rect: egui::Rect,
@@ -5927,7 +5771,6 @@ impl LuminaApp {
     }
 
     /// Drive an interactive mask-tool drag on the preview widget.
-    #[cfg(not(target_arch = "wasm32"))]
     fn handle_mask_tool_drag(&mut self, response: &egui::Response, rect: egui::Rect) {
         if self.mask_tool == MaskTool::None || self.wb_pick_mode {
             return;
@@ -5964,7 +5807,7 @@ impl LuminaApp {
                         BrushMarkSign::Positive
                     },
                 });
-                #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+                #[cfg(feature = "gpu")]
                 self.gpu_upload_brush_tile(nx, ny);
             }
         } else if response.dragged() {
@@ -5983,7 +5826,7 @@ impl LuminaApp {
                                 BrushMarkSign::Positive
                             },
                         });
-                        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+                        #[cfg(feature = "gpu")]
                         self.gpu_upload_brush_tile(nx, ny);
                     }
                 }
@@ -5994,7 +5837,7 @@ impl LuminaApp {
         }
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn gpu_upload_brush_tile(&mut self, nx: f32, ny: f32) {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
@@ -6099,9 +5942,8 @@ impl LuminaApp {
     /// (`vram_mask_is_evaluated`, pushed after each full render via
     /// `combine_mask_planes` + `upload_mask_plane`) are shown by the GPU
     /// composite instead — same tint strength, same u16 coverage domain.
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_mask_overlay(&mut self, ui: &mut egui::Ui, full_rect: egui::Rect) {
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         if self.gpu_present_frame.is_some() {
             let live_brush_in_vram = self.drawing && self.mask_tool == MaskTool::Brush;
             if live_brush_in_vram || self.vram_mask_is_evaluated {
@@ -6155,7 +5997,6 @@ impl LuminaApp {
 
     /// The prompt to display in the overlay: the live in-progress gesture while
     /// drawing, otherwise the selected mask's saved prompt (if any).
-    #[cfg(not(target_arch = "wasm32"))]
     fn current_overlay_prompt(&self) -> Option<MaskPrompt> {
         if self.drawing && self.mask_tool != MaskTool::None {
             let (start, end) = (self.drag_start?, self.drag_current?);
@@ -6269,8 +6110,7 @@ impl LuminaApp {
         );
         let painter = ui.painter();
         painter.rect_filled(rect, 2.0, egui::Color32::from_gray(35));
-        // Filled luminance bars in the theme accent (WASM-portable Painter
-        // rects, no native dependency).
+        // Filled luminance bars in the theme accent (plain Painter rects).
         let n = histogram.bins.len().max(1) as f32;
         let max = histogram.bins.iter().copied().max().unwrap_or(0).max(1) as f32;
         for (i, &count) in histogram.bins.iter().enumerate() {
@@ -6325,7 +6165,7 @@ impl LuminaApp {
         self.pending_full_render = true;
         // GUI-WGPU-PRESENT-1: the VRAM tone result no longer matches the
         // recipe — never present it until the drag path re-renders it.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         {
             self.vram_fresh = false;
             self.vram_mask_is_evaluated = false;
@@ -6420,9 +6260,7 @@ impl LuminaApp {
         Ok(())
     }
 
-    /// REVIEW-GUI-WASM-FOLLOWUP: the eyedropper reads source pixels from the
-    /// loaded frame — a native capability (no file IO on wasm).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The eyedropper reads source pixels from the loaded frame.
     fn pick_white_balance_at(&mut self, nx: f64, ny: f64) {
         trace!(
             "GUI interaction: pick_white_balance_at nx={:.4} ny={:.4}",
@@ -6487,13 +6325,9 @@ impl LuminaApp {
                 // Perspective the clicked preview position no longer maps
                 // 1:1 onto source pixels — refuse visibly instead of picking
                 // transformed-wrong values.
-                #[cfg(not(target_arch = "wasm32"))]
                 let geometry_blocked = self.geometry_blocks_source_mapping();
-                #[cfg(target_arch = "wasm32")]
-                let geometry_blocked = false;
                 if geometry_blocked {
                     warn!("WB eyedropper refused while recipe geometry is active");
-                    #[cfg(not(target_arch = "wasm32"))]
                     {
                         self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
                     }
@@ -7320,7 +7154,6 @@ impl LuminaApp {
     }
 
     fn draw_masking(&mut self, ui: &mut egui::Ui) {
-        #[cfg(not(target_arch = "wasm32"))]
         ui.collapsing(Str::Masking.t(), |ui| {
             let Some(document) = self.document.clone() else {
                 return;
@@ -7505,12 +7338,7 @@ impl LuminaApp {
                 }
             }
         });
-        #[cfg(target_arch = "wasm32")]
-        ui.collapsing(Str::Masking.t(), |ui| {
-            ui.label(Str::NotAvailable.t());
-        });
     }
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_spot_heal(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Dust Removal (Q)", |ui| {
             let spot_armed = self.spot_tool != SpotTool::None;
@@ -7526,17 +7354,13 @@ impl LuminaApp {
             if ui.button("Clear spots").clicked() { self.clear_spot_heals(); }
             let spots: Vec<serde_json::Value> = self.recipe.extras.get("spot_removals").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
             for spot in &spots { let id = spot.get("id").and_then(|v| v.as_str()).unwrap_or("?"); let status = spot.get("status").and_then(|v| v.as_str()).unwrap_or("valid"); ui.label(format!("spot {id}: {status}")); }
-            ui.label("SpotHeal → Lens → Perspective → Crop (quick heuristic instant, WASM portable, no zdata; generative local ONNX Box/Pinsel/Prompt/Seed artifact kind=spot_heal_generative)");
+            ui.label("SpotHeal → Lens → Perspective → Crop (quick heuristic instant, native desktop-only, no zdata; generative local ONNX Box/Pinsel/Prompt/Seed artifact kind=spot_heal_generative)");
         });
     }
-    #[cfg(target_arch = "wasm32")]
-    fn draw_spot_heal(&mut self, _ui: &mut egui::Ui) {}
-
     /// Lightroom-like Library folder tree (left panel): directory hierarchy
     /// rooted at `$HOME` (or two ancestors above the current directory when it
     /// lives outside the home tree), lazily expanded via `read_dir`, showing a
     /// depth-limited RAW count per node. Clicking a node selects the directory.
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_folder_tree(&mut self, ui: &mut egui::Ui) {
         ui.heading(Str::Folders.t());
         // Direct path entry stays available (replaces the old text browser's
@@ -7567,7 +7391,6 @@ impl LuminaApp {
 
     /// One folder-tree node: disclosure arrow + label with RAW count, then the
     /// lazily cached children when expanded.
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_folder_node(
         &mut self,
         ui: &mut egui::Ui,
@@ -7637,7 +7460,6 @@ impl LuminaApp {
     /// duplicate generation). Double-click opens a file and switches to
     /// Develop (Loupe). The thumbnail cell size is user-adjustable via a
     /// toolbar slider (Lightroom "Grid" thumbnails).
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_library_grid(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         // Toolbar: a thumbnail-size slider (Lightroom-like). Small/simple stub
         // for now — it drives the cell size of the grid below.
@@ -7935,7 +7757,6 @@ impl LuminaApp {
     /// current field selection.
     fn draw_presets_section(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::PresetsSection.t(), |ui| {
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 self.draw_preset_file_list(ui);
                 ui.separator();
@@ -7958,7 +7779,6 @@ impl LuminaApp {
                     Err(error) => self.show_error(error),
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
             if ui.button(Str::SavePresetFile.t()).clicked() {
                 match self.save_current_selection_as_preset_file() {
                     Ok(path) => {
@@ -7976,7 +7796,6 @@ impl LuminaApp {
     /// that failed validation is rendered with its error instead of being
     /// skipped silently. Entries are cloned first so clicking can borrow
     /// `self` mutably for [`Self::apply_preset`].
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_preset_file_list(&mut self, ui: &mut egui::Ui) {
         let Some(directory) = self.presets_dir.clone() else {
             ui.label(Str::PresetsUnavailable.t());
@@ -8018,7 +7837,6 @@ impl LuminaApp {
 
     /// F-009: rescans the user presets directory. Scan problems surface as
     /// failed entries inside the list, never as silent drops.
-    #[cfg(not(target_arch = "wasm32"))]
     fn reload_preset_entries(&mut self) {
         if let Some(directory) = self.presets_dir.as_deref() {
             self.preset_entries = presets::scan_presets_dir(directory);
@@ -8030,7 +7848,6 @@ impl LuminaApp {
     /// the list. Overwriting an existing name is the documented update
     /// semantics (the display name is the identity and the list above shows
     /// the names before replacement); validation failures are loud errors.
-    #[cfg(not(target_arch = "wasm32"))]
     fn save_current_selection_as_preset_file(&mut self) -> Result<std::path::PathBuf, GuiError> {
         let directory = self
             .presets_dir
@@ -8046,7 +7863,6 @@ impl LuminaApp {
     /// Lightroom-style History section: reverse-chronological entries of the
     /// active virtual copy; clicking an entry restores its stored recipe into
     /// the session recipe (non-destructive until Save Recipe / Sidecar).
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_history_section(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::History.t(), |ui| {
             let Some(document) = self.document.clone() else {
@@ -8091,7 +7907,6 @@ impl LuminaApp {
     /// [`Self::set_rating`]/[`Self::set_flag`]/[`Self::set_color_label`] —
     /// the same paths the `1-5`/`6-9`/`P`/`X`/`U` shortcuts use — so panel
     /// and keyboard can never diverge.
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_rating_section(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::Rating.t(), |ui| {
             let Some((rating, flag)) = self.active_rating_flag() else {
@@ -8201,9 +8016,7 @@ impl LuminaApp {
                 // History collapsible sections.
                 self.draw_crop_thumb(ui);
                 self.draw_presets_section(ui);
-                #[cfg(not(target_arch = "wasm32"))]
                 self.draw_history_section(ui);
-                #[cfg(not(target_arch = "wasm32"))]
                 self.draw_rating_section(ui);
                 ui.separator();
                 // The eight adjustment sections are grayed and non-interactive until an
@@ -8219,7 +8032,6 @@ impl LuminaApp {
                     self.draw_spot_heal(ui);
                 });
                 ui.separator();
-                #[cfg(not(target_arch = "wasm32"))]
                 {
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.path);
@@ -8236,10 +8048,6 @@ impl LuminaApp {
                         }
                     }
                 }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    ui.label(Str::NotAvailable.t());
-                }
                 if ui.button(Str::MatchExposure.t()).clicked() {
                     if let Err(error) = self.match_total_exposure(0.5) {
                         self.show_error(error);
@@ -8255,7 +8063,6 @@ impl LuminaApp {
                         }
                     }
                 });
-                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button(Str::SaveRecipe.t()).clicked() {
                     self.save_sidecar();
                 }
@@ -8265,7 +8072,6 @@ impl LuminaApp {
     /// Library-module sidecar / virtual-copy manager (native only).  Mask editing
     /// lives in the Develop panel's Masking section; here the user picks which
     /// source copy to work on and can duplicate it.
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_filmstrip(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.heading(Str::Filmstrip.t());
         ui.label(Str::FilmstripHint.t());
@@ -8378,7 +8184,6 @@ impl LuminaApp {
     ///
     /// Returns how many worker jobs were enqueued / cached previews loaded
     /// this call (fed into the `LUMINA_PERF_LOG` counters).
-    #[cfg(not(target_arch = "wasm32"))]
     fn ensure_thumbnail_priority(
         &mut self,
         ctx: &egui::Context,
@@ -8417,7 +8222,6 @@ impl LuminaApp {
         enqueued
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     /// Ensure a thumbnail exists for `entry`.
     ///
     /// Returns `true` when this call did potentially expensive work: enqueued a
@@ -8493,7 +8297,6 @@ impl LuminaApp {
     /// Placeholder caption for a thumbnail cell: the filename, plus the visible
     /// failure message once the retry budget is exhausted
     /// (REVIEW-GUI-THUMB-2 — never a silent gray cell).
-    #[cfg(not(target_arch = "wasm32"))]
     fn thumbnail_placeholder_label(&self, entry: &FileBrowserEntry) -> String {
         match self.thumbnails.failure(&entry.thumb_key) {
             Some(message) => format!("{} ⚠ {}", entry.name, message),
@@ -8501,9 +8304,7 @@ impl LuminaApp {
         }
     }
 
-    /// REVIEW-GUI-WASM-FOLLOWUP: thumbnail textures are produced by the native
-    /// worker pool only.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Thumbnail textures are produced by the worker pool.
     fn make_thumbnail_texture(
         &self,
         ctx: &egui::Context,
@@ -8515,14 +8316,12 @@ impl LuminaApp {
         ctx.load_texture(format!("thumb-{key}"), image, egui::TextureOptions::LINEAR)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     /// Central working area: a zoom toolbar (Lightroom-like Fit / 1:1 / 200% /
     /// Fit Width + a live zoom readout and a collapsed-navigator reopen button),
     /// then the rendered preview and the render-state label. Shared by the
     /// Develop and Export modules.
     fn draw_preview_area(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 if !self.navigator_open {
                     if ui.button(Str::Navigator.t()).clicked() {
@@ -8579,7 +8378,7 @@ impl LuminaApp {
         // as a visible status badge (with tooltip) instead of only a stderr
         // `log::warn!`. No-op while `gpu_route_fallback` is `None` (GPU present
         // path usable, or no GPU context bound at all).
-        #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+        #[cfg(feature = "gpu")]
         if let Some(reason) = &self.gpu_route_fallback {
             ui.colored_label(egui::Color32::YELLOW, reason)
                 .on_hover_text(Str::CpuFallbackTooltip.t().to_string());
@@ -8588,9 +8387,7 @@ impl LuminaApp {
 
     /// Lightroom-like zoom toolbar: absolute zoom modes (re-derived each frame
     /// from the pane) plus a live zoom percentage readout. The active mode is
-    /// highlighted. Native-only (REVIEW-GUI-WASM-FOLLOWUP): rendered by the
-    /// native preview-area header.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// highlighted. Rendered by the preview-area header.
     fn zoom_toolbar(&mut self, ui: &mut egui::Ui) {
         // GUI-PREVIEW-NAV-1 (F-100): the readout names the nominal step, never
         // the effective on-screen scale.
@@ -8647,9 +8444,7 @@ impl LuminaApp {
     /// absolute modes name their nominal step (Fit/25/50/75/100/200 %,
     /// Fit-Breite); `Custom` — the pinned zoom+pan view — names itself. The
     /// effective on-screen scale is deliberately not shown (F-100: höchstens
-    /// Tooltip). Pure helper, unit-tested headless. Native-only with the zoom
-    /// toolbar (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Tooltip). Pure helper, unit-tested headless.
     fn zoom_label(&self) -> String {
         match self.zoom_mode {
             ZoomMode::Fit => Str::ZoomFit.t().to_string(),
@@ -8667,8 +8462,6 @@ impl LuminaApp {
     /// currently visible Develop working-area rectangle. Dragging the rectangle
     /// pans (`preview_pan` + `mark_dirty`); panning pins the mode to `Custom`
     /// because absolute modes re-centre every frame (see [`Self::sync_zoom`]).
-    /// Native-only with the navigator rail (REVIEW-GUI-WASM-FOLLOWUP).
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_navigator_viewport(&mut self, ui: &mut egui::Ui) {
         let Some(texture) = self.texture.clone() else {
             ui.label(Str::NotCurrent.t());
@@ -8720,7 +8513,6 @@ impl LuminaApp {
     /// [`Self::ensure_thumbnail`] / [`ThumbnailManager`] pipeline — no duplicate
     /// thumbnail generation — shows a vertical scroll of directory entries,
     /// highlights the active image and opens an entry on click.
-    #[cfg(not(target_arch = "wasm32"))]
     fn draw_navigator(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(Str::Navigator.t());
@@ -8925,7 +8717,6 @@ fn hsl_channel_mut<'a>(hsl: &'a mut HslAdjustments, ch: &str) -> &'a mut HslChan
     slot.get_or_insert_with(HslChannel::default)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn is_supported_image(path: &Path) -> bool {
     // The file browser lists all editable formats; the filmstrip display applies
     // its own RAW-only filter (see `draw_filmstrip`). v1: PNG/JPEG/WebP plus the
@@ -8942,9 +8733,6 @@ fn is_supported_image(path: &Path) -> bool {
 }
 
 /// Human-readable label for an [`ImageFileFormat`] used by the Export panel.
-/// Native-only (REVIEW-GUI-WASM-FOLLOWUP): the wasm Export module is a
-/// capability hint without a format picker.
-#[cfg(not(target_arch = "wasm32"))]
 fn format_label(format: ImageFileFormat) -> &'static str {
     match format {
         ImageFileFormat::Png => "PNG",
@@ -8971,7 +8759,6 @@ fn is_raw_name(name: &str) -> bool {
 /// so headless tests can exercise it without mutating process environment
 /// state. Previously this rooted at `$HOME` (or a grandparent); the user asked
 /// for root = workdir so the Library only ever browses the opened folder.
-#[cfg(not(target_arch = "wasm32"))]
 fn library_root(directory: &str) -> PathBuf {
     let dir = Path::new(directory).to_path_buf();
     if dir.as_os_str().is_empty() {
@@ -8983,7 +8770,6 @@ fn library_root(directory: &str) -> PathBuf {
 
 /// Short display label of a folder node: path relative to the tree root, or
 /// the final component for the root itself.
-#[cfg(not(target_arch = "wasm32"))]
 fn folder_label(root: &Path, path: &Path) -> String {
     match path.strip_prefix(root) {
         Ok(relative) if !relative.as_os_str().is_empty() => relative.display().to_string(),
@@ -8996,7 +8782,6 @@ fn folder_label(root: &Path, path: &Path) -> String {
 
 /// How many directory levels the RAW-count scan descends at most. Keeps the
 /// per-folder count cheap even under large trees.
-#[cfg(not(target_arch = "wasm32"))]
 const FOLDER_SCAN_DEPTH: usize = 3;
 
 /// How much larger than the strictly visible window the zoom ROI is rendered
@@ -9010,17 +8795,13 @@ const PREVIEW_ROI_MARGIN: f64 = 1.3;
 /// ([`lumina_core::StageFrameCache`]). Holds prepared, pre-adjustment frames
 /// (post decode/source-actions/ROI-crop) so an exposure/color slider change
 /// re-renders only the adjustment stage instead of re-running the crop +
-/// source-action head and re-hashing the whole source file per tick. Native
-/// desktop gets a generous budget; wasm32 a small one (browser heap).
-#[cfg(not(target_arch = "wasm32"))]
+/// source-action head and re-hashing the whole source file per tick. The
+/// desktop cache budget is generous (512 MiB of prepared frames).
 const BASE_STAGE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
-#[cfg(target_arch = "wasm32")]
-const BASE_STAGE_CACHE_MAX_BYTES: usize = 48 * 1024 * 1024;
 
 /// Number of RAW files under `dir`, descending at most `remaining_depth`
 /// directory levels (depth 0 scans nothing). Pure read-only helper used by the
 /// Library folder tree.
-#[cfg(not(target_arch = "wasm32"))]
 fn count_raw_files(dir: &Path, remaining_depth: usize) -> usize {
     if remaining_depth == 0 {
         return 0;
@@ -9043,7 +8824,6 @@ fn count_raw_files(dir: &Path, remaining_depth: usize) -> usize {
 
 /// Immediate subdirectories of `dir`, sorted; empty when unreadable so a
 /// permission error degrades to "no children" instead of a broken node.
-#[cfg(not(target_arch = "wasm32"))]
 fn subdirectories(dir: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|entries| {
@@ -9097,7 +8877,6 @@ fn crop_overlay_rect(crop: Option<&Crop>, img_rect: egui::Rect) -> Option<egui::
 // the canvas is no longer larger than the frame, so `validate_with_source`
 // fails and the export aborts.
 
-#[cfg(not(target_arch = "wasm32"))]
 fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
     recipe.auto_features.auto_exposure = None;
     recipe.auto_features.auto_contrast = None;
@@ -9105,12 +8884,10 @@ fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
     recipe.adjustments.remove("contrast");
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn is_current_tone_analysis(stored: &AnalysisFingerprint, input_fingerprint: &str) -> bool {
     stored.input_fingerprint == input_fingerprint
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn decoder_identity(source_is_raw: bool) -> &'static str {
     if source_is_raw {
         "libraw"
@@ -9187,7 +8964,6 @@ impl eframe::App for LuminaApp {
         // Only mask inference remains here; filmstrip thumbnails are produced by
         // the dedicated background thread pool (handled just below, without a
         // pointer gate, so switching the filmstrip never freezes).
-        #[cfg(not(target_arch = "wasm32"))]
         if !ctx.input(|input| input.pointer.any_down()) {
             if let Some((_id, task)) = self.idle_queue.pop_next() {
                 match task {
@@ -9225,7 +9001,6 @@ impl eframe::App for LuminaApp {
             if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
                 // `Num0` clears the rating only when a document is loaded;
                 // without an image it keeps its historical zoom-to-fit role.
-                #[cfg(not(target_arch = "wasm32"))]
                 if self.document.is_some() {
                     if let Err(error) = self.set_rating(0) {
                         self.show_error(error);
@@ -9233,8 +9008,6 @@ impl eframe::App for LuminaApp {
                 } else {
                     self.set_zoom_mode(ZoomMode::Fit);
                 }
-                #[cfg(target_arch = "wasm32")]
-                self.set_zoom_mode(ZoomMode::Fit);
             }
         }
 
@@ -9242,7 +9015,6 @@ impl eframe::App for LuminaApp {
         // Ignored while a widget wants keyboard input so typing (mask names,
         // preset names, paths) is never hijacked. Failures surface via
         // `show_error`, never silently.
-        #[cfg(not(target_arch = "wasm32"))]
         if !ctx.egui_wants_keyboard_input() {
             for key in [
                 egui::Key::Num1,
@@ -9356,7 +9128,7 @@ impl eframe::App for LuminaApp {
 
         // Welle 2 display-only view toggles (`J` clipping, `L` lights-out,
         // `R` crop mode, `Tab` side panels). Recipe-free by construction, so
-        // they stay available on every platform (wasm32 included).
+        // they stay available globally.
         if !ctx.egui_wants_keyboard_input() {
             for key in [egui::Key::J, egui::Key::L] {
                 if ctx.input(|i| i.key_pressed(key)) {
@@ -9421,7 +9193,6 @@ impl eframe::App for LuminaApp {
         // *regardless of pointer state* — thumbnails stream in while the user
         // scrolls/clicks the filmstrip, so switching directories no longer blocks
         // on a synchronous decode+render on the UI thread.
-        #[cfg(not(target_arch = "wasm32"))]
         {
             // GUI-SCROLL-200-1: reset the per-frame diagnostic counters before
             // any thumbnail work of this frame runs.
@@ -9449,7 +9220,6 @@ impl eframe::App for LuminaApp {
 
         // PREVIEW-CACHE-FEATURE: per-frame LUMINA_PERF_LOG counters reset before any
         // neighbor work of this frame (a schedule inside `poll_decode` counts).
-        #[cfg(not(target_arch = "wasm32"))]
         {
             self.frame_previews_enqueued = 0;
             self.frame_previews_ready = 0;
@@ -9458,13 +9228,11 @@ impl eframe::App for LuminaApp {
         // PERF-GUI-7: drain any completed background RAW/raster decode without
         // blocking the UI (non-blocking `try_recv`). The decoded frame is applied
         // on the main thread here, so a slow decode never freezes interaction.
-        #[cfg(not(target_arch = "wasm32"))]
         self.poll_decode();
 
         // PREVIEW-CACHE-FEATURE: drain neighbor-preview worker results (RAM LRU
         // insert + visible failure states) on the main thread; the prefetch
         // itself runs on dedicated background workers, never the IdleQueue.
-        #[cfg(not(target_arch = "wasm32"))]
         self.poll_neighbor_previews(&ctx);
 
         // Derive `preview_zoom` from the active mode using the geometry cached by
@@ -9488,39 +9256,9 @@ impl eframe::App for LuminaApp {
             && self.render_key.is_none()
         {
             trace!("GUI render: draft render during pointer drag");
-            #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
-            {
-                if let Some(gpu) = self.gpu.as_ref() {
-                    if gpu.is_available() {
-                        // R2-GUIMOD-03: borrow instead of clone. The fallback
-                        // branch (`draft_original` absent on the first tick
-                        // after a full render) used to memcpy the entire
-                        // full-resolution original (~180 MB worst case) into
-                        // a temporary that was dropped immediately after the
-                        // call — `render_to_vram` only needs `&ImageFrame`.
-                        let source = self.draft_original.as_ref().or(self.original.as_ref());
-                        if let Some(src) = source {
-                            match gpu.render_to_vram(src, &self.recipe) {
-                                Ok(()) => {
-                                    // GUI-WGPU-PRESENT-1: the VRAM output now
-                                    // matches the current recipe/source — the
-                                    // present path may use it this frame.
-                                    self.vram_fresh = true;
-                                }
-                                Err(err) => {
-                                    warn!("gpu render_to_vram failed: {err}");
-                                    self.vram_fresh = false;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             let screen = ctx.input(|i| i.viewport_rect());
             let viewport = [screen.width() as u32, screen.height() as u32];
-            if let Err(e) = self.render_draft(viewport, None) {
-                self.show_error(e);
-            }
+            self.render_draft_tick(viewport);
             self.last_edit_time = now;
             ctx.request_repaint();
         } else if !pointer_down && self.pending_full_render {
@@ -9556,12 +9294,9 @@ impl eframe::App for LuminaApp {
             }
         }
 
-        // Dropped files (path or bytes) load a new source.
-        // egui 0.36: dropped files are trait objects (`DroppedFileHandle`);
-        // on native contents are read synchronously via `bytes() -> Result`,
-        // on wasm via `bytes_async() -> Future` (async) and a relative `path()`.
-        // See `feature/platform/cli-gui-wasm.md` Capability-Matrix § WASM.
-        #[cfg(not(target_arch = "wasm32"))]
+        // Dropped files (path or bytes) load a new source (native only).
+        // egui 0.36: dropped files are trait objects (`DroppedFileHandle`)
+        // whose contents are read synchronously via `bytes() -> Result`.
         for file in ctx.input(|input| input.raw.dropped_files.clone()) {
             match file.bytes() {
                 Ok(bytes) => {
@@ -9586,27 +9321,6 @@ impl eframe::App for LuminaApp {
                 // `finish_decode` adopts the path after a successful decode.
                 self.begin_load_path(file.path().display().to_string());
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        for file in ctx.input(|input| input.raw.dropped_files.clone()) {
-            // Capability decision (MVP): WASM drag-and-drop is intentionally not
-            // supported. egui 0.36 exposes `DroppedFile::bytes_async()` (async)
-            // on wasm32 with only a relative `path()` (no absolute fs path); the
-            // synchronous `bytes()` used on native does not exist on wasm. Bridging
-            // the async read via `wasm_bindgen_futures::spawn_local` and wiring the
-            // result back into the synchronous `update()` loop is not yet
-            // implemented. The drop is therefore surfaced visibly instead of
-            // silently ignored (Agents.md: no silent fallbacks). File loading on
-            // WASM remains via the file picker; native drag-and-drop stays fully
-            // functional. See `feature/platform/cli-gui-wasm.md` § WASM.
-            let name = file.path().display().to_string();
-            let display = if name.is_empty() { "file" } else { &name };
-            log::warn!("WASM drag-and-drop not supported yet (requires bytes_async): {display}");
-            self.status = format!("Drop not supported on WASM yet: {display}");
-            self.error = Some(
-                "Drag-and-drop on WASM requires async file reading (DroppedFile::bytes_async) — not yet implemented; use the file picker"
-                    .into(),
-            );
         }
 
         // Top: brand + status/error.
@@ -9650,7 +9364,6 @@ impl eframe::App for LuminaApp {
         // left edge to the navigator/preview working area. Hidden under `Tab`
         // panels-hide, `L` lights-out and `F` fullscreen (Welle 2/3); the
         // header/module bar stay so status and errors remain visible.
-        #[cfg(not(target_arch = "wasm32"))]
         if self.active_module == Module::Library && !self.chrome_hidden() {
             egui::Panel::left("folders")
                 .resizable(true)
@@ -9663,7 +9376,6 @@ impl eframe::App for LuminaApp {
         // two never collide on the same side. It reuses the filmstrip
         // ThumbnailManager (no duplicate generation) and highlights the active
         // image.
-        #[cfg(not(target_arch = "wasm32"))]
         if self.navigator_open
             && !matches!(self.active_module, Module::Library)
             && !self.chrome_hidden()
@@ -9687,75 +9399,38 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| match self.active_module {
                     Module::Develop => self.draw_develop_panel(ui),
                     Module::Library => {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            // No right Source panel in Library — intentional.
-                        }
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            ui.label(Str::NotAvailable.t());
-                        }
+                        // No right Source panel in Library — intentional.
                     }
                     Module::Export => {
-                        #[cfg(not(target_arch = "wasm32"))]
                         self.draw_export_panel(ui);
-                        #[cfg(target_arch = "wasm32")]
-                        ui.label(Str::NotAvailable.t());
                     }
                 });
         }
 
-        // Bottom: filmstrip in Library/Develop. Native builds show generated
-        // thumbnails (miss -> background job); the wasm build shows placeholders
-        // only, since in-browser RAW/file IO is a documented native capability.
+        // Bottom: filmstrip in Library/Develop. Generated thumbnails are
+        // produced by the background worker pool (miss -> background job).
         // `L` lights-out and `F` fullscreen hide it (Welle 2/3); `Tab`
         // panels-hide keeps it.
         let show_filmstrip = matches!(self.active_module, Module::Library | Module::Develop)
             && !self.lights_out
             && !self.fullscreen;
         if show_filmstrip {
-            #[cfg(not(target_arch = "wasm32"))]
             egui::Panel::bottom("filmstrip").show(ui, |ui| self.draw_filmstrip(&ctx, ui));
-            #[cfg(target_arch = "wasm32")]
-            egui::Panel::bottom("filmstrip").show(ui, |ui| {
-                ui.heading(Str::Filmstrip.t());
-                ui.label(Str::NotAvailable.t());
-            });
         }
 
         // Central: the large preview/navigator. The Export module shows the
         // current render (what will be exported); the controls live in the
-        // right-side Export panel. Under wasm32 (no file-system export) the
-        // module is a clear capability hint.
+        // right-side Export panel.
         egui::CentralPanel::default().show(ui, |ui| match self.active_module {
             Module::Export => {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    ui.centered_and_justified(|ui| ui.label(Str::NotAvailable.t()));
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.draw_preview_area(&ctx, ui);
-                }
+                self.draw_preview_area(&ctx, ui);
             }
             // Library: Lightroom-like grid view (folders tree left, RAW
             // thumbnail grid center); Develop/Export keep the large preview.
-            // Under wasm32 the grid import path is not available; fall back to
-            // the plain preview like the other modules.
             Module::Library => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.draw_library_grid(&ctx, ui);
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.draw_preview(ui);
-                }
+                self.draw_library_grid(&ctx, ui);
             }
-            #[cfg(not(target_arch = "wasm32"))]
             _ => self.draw_preview_area(&ctx, ui),
-            #[cfg(target_arch = "wasm32")]
-            _ => self.draw_preview(ui),
         });
         if let Some(t0) = perf_t0 {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -9764,15 +9439,12 @@ impl eframe::App for LuminaApp {
             // jobs run; `thumb_jobs_enqueued`/`thumbs_ready` correlate a spike
             // with same-frame thumbnail work.
             let slow_frame = ms > 16.7;
-            #[cfg(not(target_arch = "wasm32"))]
             let counters = (
                 self.frame_thumb_enqueued,
                 self.frame_thumbs_ready,
                 self.frame_previews_enqueued,
                 self.frame_previews_ready,
             );
-            #[cfg(target_arch = "wasm32")]
-            let counters = (0usize, 0usize, 0usize, 0usize);
             log::info!(
                 "LUMINA_PERF frame={:.2}ms pointer_down={} thumb_jobs_enqueued={} thumbs_ready={} neighbor_previews_enqueued={} neighbor_previews_ready={} slow_frame={}",
                 ms,
@@ -9789,30 +9461,6 @@ impl eframe::App for LuminaApp {
             );
         }
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen(start)]
-pub fn start() -> Result<(), wasm_bindgen::JsValue> {
-    use wasm_bindgen::JsCast;
-    let canvas = web_sys::window()
-        .and_then(|window| window.document())
-        .and_then(|document| document.get_element_by_id("lumina_canvas"))
-        .and_then(|element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-        .ok_or_else(|| wasm_bindgen::JsValue::from_str("Lumina canvas was not found"))?;
-    wasm_bindgen_futures::spawn_local(async {
-        let result = eframe::WebRunner::new()
-            .start(
-                canvas,
-                eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(LuminaApp::new(cc.egui_ctx.clone())))),
-            )
-            .await;
-        if let Err(error) = result {
-            web_sys::console::error_1(&error);
-        }
-    });
-    Ok(())
 }
 
 #[cfg(test)]
@@ -9832,7 +9480,6 @@ mod tests {
     /// Open a file and synchronously drain the background decode (PERF-GUI-7)
     /// channel. The headless test harness has no `update()` event loop, so the
     /// async `decode_rx` must be pumped here before asserting on the result.
-    #[cfg(not(target_arch = "wasm32"))]
     fn open_and_decode(app: &mut LuminaApp, path: impl Into<String>) {
         app.open_file(path);
         // Pump the background decode channel; yield so the worker thread is
@@ -10037,7 +9684,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn set_rating_and_flag_persist_across_save_and_reopen() {
         // LR-01: rating/flag of the active copy survive a sidecar roundtrip
         // and are restored on reopen; out-of-range ratings fail loudly.
@@ -10072,7 +9718,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn duplicate_active_copy_inherits_visible_recipe_and_rating() {
         // LR-09: the shortcut path saves unsaved edits first (the duplicate
         // inherits what the user sees), selects the new copy, and carries
@@ -10104,7 +9749,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn scan_entry_reports_default_copy_rating_flag() {
         // LR-01: the Library grid badge reads the default copy's rating/flag
         // through the normal directory scan (no separate code path).
@@ -10199,7 +9843,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn copy_paste_settings_roundtrip_persists_and_bumps_generation() {
         // Welle 2 (LR-09): copy snapshots the visible recipe, paste applies
         // it through save/render (generation bump + sidecar persistence).
@@ -10230,7 +9873,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn clipboard_and_bw_without_image_fail_loudly() {
         // No silent no-ops: copy/paste/B&W without a loaded image are errors.
         let mut app = new_app();
@@ -10242,7 +9884,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn color_label_set_persists_and_rejects_invalid() {
         // Welle 2: `extras["color_label"]` roundtrips through save/reopen and
         // the Library scan; out-of-range values fail loudly.
@@ -10289,7 +9930,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn black_white_treatment_sets_and_restores_saturation() {
         // Welle 2 (`V`): enabling drives saturation/vibrance to -1 through
         // the shared pipeline (grayscale preview pixels), disabling restores
@@ -10671,14 +10311,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn sidecar_decoder_identity_distinguishes_raw_from_raster() {
         assert_eq!(decoder_identity(true), "libraw");
         assert_eq!(decoder_identity(false), "image");
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn to_normalized_is_finite_for_zero_size_rect() {
         // Regression guard for the division-by-zero / NaN protection in
         // `to_normalized`: a momentarily empty preview rect (zero width/height)
@@ -10691,7 +10329,6 @@ mod tests {
         assert!(ny.is_finite(), "ny must be finite, got {ny}");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn save_png(path: &Path) {
         let png = ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
             .unwrap()
@@ -10701,7 +10338,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn gui_writes_sidecar_and_restores_recipe_on_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10724,7 +10360,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn gui_persists_virtual_copies_across_save_and_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10755,7 +10390,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn file_browser_index_reports_sidecar_and_copy_count() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10780,7 +10414,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn file_browser_detects_offline_source_and_conflict() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10811,7 +10444,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn file_browser_reports_missing_mask_models() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10893,7 +10525,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn mask_selection_and_name_roundtrip_through_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10914,7 +10545,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn mask_layer_parameters_are_non_destructive_and_persisted() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10938,7 +10568,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn stale_mask_offers_recalculation_without_running_inference() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -10953,7 +10582,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn local_mask_adjustments_roundtrip_through_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -11139,7 +10767,6 @@ mod tests {
     /// REVIEW-GUI-THUMB-1: identical filenames in two folders must produce
     /// distinct thumbnail keys so neither cell can show the other's image.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn thumbnail_keys_distinguish_same_filename_across_folders() {
         let root = tempfile::tempdir().unwrap();
         let dir_a = root.path().join("album-a");
@@ -11181,7 +10808,6 @@ mod tests {
     /// the asynchronous decode is running; `finish_decode` commits it on
     /// success only.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn open_file_commits_path_only_after_successful_decode() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -11207,7 +10833,6 @@ mod tests {
     /// image/path pair intact and reports the failure visibly — no phantom
     /// sidecar target, no silent fallback.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn failed_decode_keeps_previous_path_and_reports_error() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("good.png");
@@ -11293,7 +10918,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn filmstrip_cache_miss_then_hit_roundtrip() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -11329,7 +10953,6 @@ mod tests {
     // ---- F-103-N4: interactive mask tools (Brush / Linear / Radial) ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn brush_marks_roundtrip_through_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -11398,7 +11021,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn empty_brush_stroke_is_visible_error_and_writes_no_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -11427,7 +11049,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn gradient_coordinate_calculation_from_drag() {
         // Helper exposes the prompt-building math directly.
         let p = LuminaApp::gradient_prompt_from_drag(
@@ -11500,7 +11121,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn ellipse_generated_from_center_and_radii() {
         match LuminaApp::ellipse_prompt_from_drag(
             Point2 { x: 0.2, y: 0.2 },
@@ -11548,7 +11168,6 @@ mod tests {
     // ---- F-103-N5: shared export path is byte-identical to the CLI ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn gui_export_is_byte_identical_to_shared_export_path() {
         // The GUI export module must produce the exact same bytes as the CLI's
         // shared `lumina_core::export_image` (render + encode) for the same
@@ -11602,7 +11221,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn gui_jpeg_export_is_functional_and_byte_identical_to_shared_path() {
         // JPEG is functionally validated (deterministic within one encoder
         // version, see feature/platform/cli-gui-wasm.md,
@@ -11649,7 +11267,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn export_rejects_same_path_as_gui_error() {
         // Exporting onto the source file is rejected (non-destructive contract);
         // nothing is written.
@@ -11667,7 +11284,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn export_rejects_extensionless_target_resolving_onto_source() {
         // REVIEW-GUI-EXPORT-1 regression: the extension must be applied BEFORE
         // the same-path check. Target `/d/photo` with format PNG resolves to
@@ -11708,7 +11324,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn resolve_export_target_applies_extension_before_guard() {
         // Pure-logic coverage of the REVIEW-GUI-EXPORT-1 guard.
         let directory = tempfile::tempdir().unwrap();
@@ -12180,7 +11795,6 @@ mod tests {
     /// GUI-PREVIEW-NAV-1: the navigator viewport rectangle tracks zoom/pan and
     /// a drag of the rectangle round-trips back through `preview_pan`.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn navigator_viewport_rect_roundtrip() {
         // 300×200 source shown in a 150×100 navigator cell (scale 0.5);
         // preview pane 800×600, source fit 8/3 ≈ 2.667. At 4× zoom the
@@ -12278,11 +11892,36 @@ mod tests {
         assert!(empty.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
     }
 
+    /// R2-GUIMOD-04a: one coalesced drag tick records per-tick timings
+    /// (CPU draft / GPU / analysis) headless. Measurement only — the tick
+    /// renders the same draft the pointer-drag branch shows.
+    #[test]
+    fn drag_tick_records_timings() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.render().unwrap();
+        assert!(app.last_drag_tick().is_none());
+        // The exact call the pointer-drag branch makes per tick.
+        app.render_draft_tick([320, 200]);
+        assert!(app.preview_is_draft());
+        let tick = app.last_drag_tick().expect("drag tick records timings");
+        for (name, ms) in [
+            ("cpu_draft_ms", tick.cpu_draft_ms),
+            ("gpu_ms", tick.gpu_ms),
+            ("analyse_ms", tick.analyse_ms),
+        ] {
+            assert!(
+                ms.is_finite() && ms >= 0.0,
+                "{name} must be finite non-negative ms, got {ms}"
+            );
+        }
+        assert_eq!(app.last_analysis_ms(), tick.analyse_ms);
+    }
+
     /// GUI-SLIDER-SAVE-1: a slider commit renders, writes the sidecar with the
     /// committed value and clears the pending commit. Zoom/pan view state never
     /// enters the recipe — panning/zooming records no commit.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn slider_commit_saves_sidecar_with_value() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12327,7 +11966,6 @@ mod tests {
     /// Shared commit-save-assert for the struct-backed slider classes
     /// (GUI-SLIDER-SAVE-1, native only): runs the debounced commit, loads the
     /// written sidecar document and fails loudly when no file was written.
-    #[cfg(not(target_arch = "wasm32"))]
     fn commit_and_load_doc(
         app: &mut LuminaApp,
         source: &std::path::Path,
@@ -12344,7 +11982,6 @@ mod tests {
     }
 
     /// Reopen a source in a fresh app (DoD §1: values survive restarts).
-    #[cfg(not(target_arch = "wasm32"))]
     fn reopen_app(source: &std::path::Path) -> LuminaApp {
         let mut app = new_app();
         open_and_decode(&mut app, source.display().to_string());
@@ -12354,7 +11991,6 @@ mod tests {
     /// B4: the toolbar readout names the nominal zoom step (F-100), never the
     /// effective on-screen scale; `Custom` names itself.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn zoom_label_names_nominal_step() {
         let mut app = new_app();
         for (mode, expected) in [
@@ -12374,7 +12010,6 @@ mod tests {
 
     /// GUI-SLIDER-SAVE-1: presence sliders commit, persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn presence_slider_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12399,7 +12034,6 @@ mod tests {
 
     /// GUI-SLIDER-SAVE-1: tone-curve region sliders commit, persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn tone_curve_slider_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12424,7 +12058,6 @@ mod tests {
 
     /// GUI-SLIDER-SAVE-1: HSL mixer sliders commit, persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn hsl_slider_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12457,7 +12090,6 @@ mod tests {
     /// GUI-SLIDER-SAVE-1: color-grading sliders (range + balance) commit,
     /// persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn color_grading_sliders_commit_and_reload() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12487,7 +12119,6 @@ mod tests {
     /// GUI-SLIDER-SAVE-1: effects sliders (vignette + grain seed) commit,
     /// persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn effects_sliders_commit_and_reload() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12513,7 +12144,6 @@ mod tests {
     /// GUI-SLIDER-SAVE-1: detail sliders (sharpening + noise reduction)
     /// commit, persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn detail_sliders_commit_and_reload() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12538,7 +12168,6 @@ mod tests {
     /// GUI-SLIDER-SAVE-1: optics, geometry and perspective sliders commit,
     /// persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn optics_geometry_perspective_sliders_commit_and_reload() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12591,7 +12220,6 @@ mod tests {
     /// GUI-SLIDER-SAVE-1: mask layer sliders (feather/blur/density) and local
     /// adjustments commit, persist and reload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn mask_layer_sliders_commit_and_reload() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12631,7 +12259,6 @@ mod tests {
     /// record a commit and trigger the sidecar write; the values themselves
     /// are session state, so the test pins the app fields plus the file.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn tool_settings_record_commit_and_write_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12660,7 +12287,6 @@ mod tests {
     /// GUI-SLIDER-SAVE-1: the WB eyedropper pick commits both fields, persists
     /// and reloads.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn white_balance_pick_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12682,7 +12308,6 @@ mod tests {
     /// sidecar (Datei + Wert) and reloads (DoD §1-§4, F-100 „Auto-Tone
     /// schreiben anschließend das Sidecar"). Zoom/pan stay untouched.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn auto_tone_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12712,7 +12337,6 @@ mod tests {
     /// persists the sidecar (Datei + Wert) and reloads (DoD §1-§4, F-100).
     /// Zoom/pan stay untouched.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn match_total_exposure_commits_and_reloads() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12766,7 +12390,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn export_preserves_original_bytes_unchanged() {
         // The original source file is byte-for-byte untouched by an export.
         let directory = tempfile::tempdir().unwrap();
@@ -12853,7 +12476,6 @@ mod tests {
     // ---- Lightroom-like Library folder tree (pure helpers) ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn library_root_is_the_workdir() {
         // Lightroom-parity: the Folders tree roots at the current workdir
         // (`directory` field), never at `$HOME` or an ancestor. Deterministic
@@ -12870,7 +12492,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn folder_scan_helpers_count_raw_files_with_depth_limit() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
@@ -12943,7 +12564,6 @@ mod tests {
     // ---- History restore (non-destructive session state change) ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn history_restore_swaps_session_recipe_without_touching_sidecar() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -12995,7 +12615,6 @@ mod tests {
     /// Build an app browsing a folder with `count` supported images and return
     /// the app plus all entry indices (the scheduling helpers are format-
     /// agnostic; the RAW filter only applies to which views show entries).
-    #[cfg(not(target_arch = "wasm32"))]
     fn app_with_entries(count: usize) -> (LuminaApp, tempfile::TempDir, Vec<usize>) {
         let directory = tempfile::tempdir().unwrap();
         for i in 0..count {
@@ -13011,7 +12630,6 @@ mod tests {
     /// Visible cells (+ buffer ring) are enqueued first and in full; off-screen
     /// cells receive at most `PREFETCH_BUDGET_PER_FRAME` nearest-first jobs.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn thumbnail_scheduling_prioritizes_visible_over_off_screen() {
         let (mut app, _dir, indices) = app_with_entries(40);
         let keys: Vec<String> = indices
@@ -13071,7 +12689,6 @@ mod tests {
     /// Scrolling to the end schedules the end first and prefetches backwards
     /// from there (nearest-first), never the far-away start.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn thumbnail_scheduling_follows_the_viewport_nearest_first() {
         let (mut app, _dir, indices) = app_with_entries(40);
         let keys: Vec<String> = indices
@@ -13117,7 +12734,6 @@ mod tests {
     /// retry budget — scheduling never re-enqueues beyond
     /// [`filmstrip::THUMBNAIL_MAX_ATTEMPTS`] (REVIEW-GUI-THUMB-2 regression).
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn thumbnail_scheduling_respects_retry_budget() {
         let (mut app, _dir, indices) = app_with_entries(1);
         let key = app.entries()[indices[0]].thumb_key().to_owned();
@@ -13154,7 +12770,6 @@ mod tests {
     /// the controller and enqueue exactly the available +4/−2 neighbors in the
     /// mandated priority order (no wrap at the edges).
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn neighbor_prefetch_schedules_asymmetric_window_around_active() {
         let (mut app, _dir, indices) = app_with_entries(8);
         let active_path = app.entries()[indices[3]].path.display().to_string();
@@ -13188,7 +12803,6 @@ mod tests {
 
     /// At the folder start the window shrinks (no wrap-around).
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn neighbor_prefetch_window_shrinks_at_folder_edge() {
         let (mut app, _dir, indices) = app_with_entries(8);
         let start_path = app.entries()[indices[0]].path.display().to_string();
@@ -13209,7 +12823,6 @@ mod tests {
     /// A directory change discards the neighbor-cache state for the previous
     /// folder (RAM LRU, jobs, failures) so stale entries never resurface.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn directory_change_resets_neighbor_cache() {
         let (mut app, _dir, indices) = app_with_entries(4);
         let active_path = app.entries()[indices[0]].path.display().to_string();
@@ -13283,7 +12896,6 @@ mod tests {
     // ---- REVIEW-GUI-MASKGEO-1: geometry blocks source-coordinate tools ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn geometry_blocks_source_mapping_flags_each_dimension() {
         let mut app = new_app();
         assert!(!app.geometry_blocks_source_mapping(), "default is neutral");
@@ -13345,7 +12957,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn set_mask_tool_refused_visibly_while_geometry_active() {
         let mut app = new_app();
         app.load_bytes(png(), "geo.png").unwrap();
@@ -13380,7 +12991,6 @@ mod tests {
     // ---- REVIEW-GUI-SAVEMSG-1 / REVIEW-GUI-N1: save status + CAS ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn failed_save_reports_error_and_never_claims_sidecar_saved() {
         use lumina_sidecar::{load_sidecar, save_sidecar as raw_save, sidecar_path_for};
         let directory = tempfile::tempdir().unwrap();
@@ -13431,7 +13041,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn successful_save_keeps_loaded_source_identity_instead_of_recomputing_it() {
         use lumina_sidecar::{load_sidecar, sidecar_path_for};
         let directory = tempfile::tempdir().unwrap();
@@ -13467,7 +13076,6 @@ mod tests {
     // ---- REVIEW-GUI-VCSWITCH-1: copy switch resets state, surfaces errors ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn select_virtual_copy_resets_session_state_and_notes_discarded_edits() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("photo.png");
@@ -13541,7 +13149,6 @@ mod tests {
     // ---- REVIEW-GUI-MASKRENDER-1: layer edits schedule a render ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn mask_layer_edits_route_through_mark_dirty() {
         let mut app = new_app();
         app.load_bytes(png(), "layer.png").unwrap();
@@ -13572,7 +13179,6 @@ mod tests {
     // ---- REVIEW-GUI-N2: recipe restore resolves copies by identity ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn finish_decode_restores_recipe_by_copy_identity_not_position() {
         use lumina_sidecar::{load_sidecar, save_sidecar as raw_save, sidecar_path_for};
         let directory = tempfile::tempdir().unwrap();
@@ -13618,7 +13224,6 @@ mod tests {
     // ---- REVIEW-GUI-N3: file switch resets viewport/session state ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn loading_a_new_image_resets_viewport_and_session_state() {
         let mut app = new_app();
         app.load_bytes(png(), "a.png").unwrap();
@@ -13647,7 +13252,6 @@ mod tests {
     // ---- REVIEW-GUI-N5: draft preview is never silently measured ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn match_total_exposure_commits_draft_before_measuring() {
         let mut app = new_app();
         app.load_bytes(png(), "draft.png").unwrap();
@@ -13668,7 +13272,6 @@ mod tests {
     // ---- REVIEW-GUI-N6: failed ROI crop clears preview_roi ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn failed_roi_crop_falls_back_to_full_frame_and_clears_preview_roi() {
         let mut app = new_app();
         app.load_bytes(png(), "roi.png").unwrap(); // 2×1 image
@@ -13693,7 +13296,6 @@ mod tests {
     // ---- KONSISTENZ (REVIEW-CLI-N1): composite zdata tile key ----
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn load_mask_planes_reads_composite_tile_key_and_legacy_fallback() {
         use lumina_sidecar::{save_zdata, zdata_path_for, MaskTile, ZDataContainer};
 
@@ -13764,7 +13366,7 @@ mod tests {
     /// the gate stops presenting the soft draft and the sharp CPU pixels get
     /// uploaded instead (the reported "preview stays blurry forever" bug).
     #[test]
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn full_render_invalidates_stale_vram_but_draft_render_keeps_it() {
         let mut app = new_app();
         app.load_bytes(png(), "vram.png").unwrap();
@@ -13795,7 +13397,7 @@ mod tests {
     /// preview. Draft previews are exempt by design: the interactive path
     /// presents exactly the draft-source VRAM render.
     #[test]
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn vram_geometry_gate_rejects_dimension_mismatch_for_full_previews() {
         let mut app = new_app();
         app.load_bytes(png(), "geom.png").unwrap(); // 2×1 source
@@ -13828,7 +13430,6 @@ mod tests {
     /// never re-created per frame (`load_texture` would mint a fresh id every
     /// time and pay a full-frame upload even for pure mousemoves).
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn cpu_present_reuses_texture_handle_until_content_changes() {
         let mut app = new_app();
         let ctx = egui::Context::default();
@@ -13880,7 +13481,6 @@ mod tests {
     /// preview generation — the identity must catch the flag change so the
     /// toggle still swaps the visible pixels exactly once per flip.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn cpu_present_uploads_again_when_before_after_flips() {
         let mut app = new_app();
         let ctx = egui::Context::default();
@@ -13902,7 +13502,7 @@ mod tests {
     // ---- R2-GUIMOD-05: unsupported-stage verdict memoized per render key ----
 
     #[test]
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn unsupported_gpu_stage_verdict_is_memoized_per_render_key() {
         let mut app = new_app();
         app.load_bytes(png(), "stages.png").unwrap();
@@ -13936,7 +13536,7 @@ mod tests {
     // ---- R2-GUIMOD-09: GPU context construction is deferred to attach ----
 
     #[test]
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn gpu_context_is_not_created_eagerly_in_new() {
         let app = LuminaApp::new(egui::Context::default());
         assert!(
@@ -13950,7 +13550,7 @@ mod tests {
 
     // ---- GUI-GPU-01 / T06: camera_white_balance forces CPU route (no silent fallback) ----
     #[test]
-    #[cfg(all(not(target_arch = "wasm32"), feature = "gpu"))]
+    #[cfg(feature = "gpu")]
     fn camera_white_balance_forces_gpu_fallback() {
         // Pure function: any present WB context is flagged as unsupported.
         let recipe = EditRecipe::default();
@@ -14056,7 +13656,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn preview_correctly_rendered() {
         // (1) Preview korrekt gerendert — synthetisches 8×8 via LuminaApp
         let (png, original) = synthetic_8x8_png();
@@ -14109,7 +13708,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn slider_changes_preview() {
         // (2) Regler-Bewegung ändert Preview — exposure/contrast/whites/blacks
         let (png, _) = synthetic_8x8_png();
@@ -14204,7 +13802,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn sidecar_persist_on_close_and_reload() {
         // (3) Änderungen spätestens beim Schließen im Sidecar persistiert und nach
         // Reload byte-identisch wiederhergestellt — CAS, Konflikt sichtbar, atomar,
@@ -14946,7 +14543,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn generative_expand_export_is_single_core_expand() {
         // GUI-DOUBLE-EXPAND-FIX: exporting with an expand recipe must succeed
         // (the old post-render expand aborted the export at
@@ -15017,7 +14613,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn generative_expand_without_canvas_export_fails_loudly() {
         // Same loud failure on the export path: no file, no silent fallback.
         let directory = tempfile::tempdir().unwrap();
@@ -15048,9 +14643,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn spot_heal_headless_quick_heal_q_shortcut_and_render() {
-        // SPOT-REMOVE-01 headless: Q toggles SpotTool, quick heal via commit_spot_heal is instant, no model, WASM portable, no zdata.
+        // SPOT-REMOVE-01 headless: Q toggles SpotTool, quick heal via commit_spot_heal is instant, no model, native desktop-only, no zdata.
         // Verifies recipe, preview_generation bump, PSNR vs histogram, sidecar roundtrip, no silent fallback.
         use crate::{SpotMode, SpotTool};
         use lumina_core::{psnr, LuminanceHistogram};
@@ -15384,7 +14978,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn w3_stack_group_toggle_roundtrip() {
         // LR-17 light: `Cmd+G` grouping proxy via `extras["stack_group"]`
         // (no schema change), persisted and restored across reopen.
@@ -15421,7 +15014,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn w3_snapshot_freeze_list_restore() {
         // LR-12 light: named history freeze (extras marker), list, restore.
         let directory = tempfile::tempdir().unwrap();
@@ -15456,7 +15048,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn w3_quick_develop_applies_saves_and_renders() {
         // LR-13 light: Quick Develop through the save/render path.
         let mut bare = new_app();

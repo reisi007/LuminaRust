@@ -29,7 +29,8 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
 ## Leitbild
 
 LuminaRust soll ein nicht-destruktiver, Lightroom-ähnlicher RAW-Prozessor mit
-Headless-CLI und optionaler Desktop-/Web-Oberfläche werden. Originale bleiben
+Headless-CLI und nativer Desktop-Oberfläche werden (WASM/Browser ersatzlos
+gestrichen 2026-09-04). Originale bleiben
 unverändert. Bearbeitungen, virtuelle Kopien, Maskenreferenzen und relevante
 Versionen werden portabel in Sidecars neben den Originalen gespeichert.
 
@@ -79,8 +80,8 @@ Sidecars vollständig wiederherstellbar sein.
 ### Plattformen
 
 - [`platform/cli-gui-wasm.md`](platform/cli-gui-wasm.md): CLI, Desktop-GUI,
-  verbindliche Lightroom-UI-Konventionen (F-100), WASM-Capabilities und
-  optionale zentrale Indizierung
+  verbindliche Lightroom-UI-Konventionen (F-100) und
+  optionale zentrale Indizierung (WASM-Anteile ENTFERNT 2026-09-04)
 - [`platform/mcp-server.md`](platform/mcp-server.md): MCP AI-Agent-
   Schnittstelle für programmatischen Bildzugriff, Rezept-Bearbeitung und
   Schnellvorschau (F-101)

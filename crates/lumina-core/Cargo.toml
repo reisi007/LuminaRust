@@ -12,28 +12,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 # PERF-GUI: optional multi-threaded pixel pass. Kept optional + feature-gated so
-# the default build (and the `wasm32` build, where rayon cannot compile) stays
-# green; native desktops opt in via `lumina-core/parallel` (see `lumina-gui`).
+# the default build stays green; native desktops opt in via
+# `lumina-core/parallel` (see `lumina-gui`).
 rayon = { version = "1", optional = true }
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
 
 [features]
 # PERF-GUI-* (CPU quick-wins): parallelize the per-pixel adjustment passes with
 # `rayon::par_chunks_exact_mut(4)`. Platform-neutral (no GPU/wgpu); enabled only
-# on native desktops. Never default and never enabled for `wasm32`.
+# on native desktops. Never default.
 parallel = ["dep:rayon"]
 # Enables automatic lens correction via the system Lensfun database (native
 # LGPL-3.0 C library, dynamically linked). Also pulls in the crate's `native`
 # feature so the FFI bindings and `liblensfun` linkage are active.
 lensfun = ["dep:lumina-lensfun", "lumina-lensfun/native"]
 
-# REVIEW-CORE-WASM-FOLLOWUP: `proptest` transitively pulls `getrandom` and
-# `wait-timeout` (via rand/rusty-fork), neither of which compiles for
-# wasm32-unknown-unknown. Target-gating the dev-dependency keeps
-# `cargo check -p lumina-core --target wasm32-unknown-unknown --all-targets`
-# green; the only two consumers of the crate are cfg-gated identically
-# (`histogram.rs::tests::proptests`, `tone_props.rs`). Native builds/tests are
-# unaffected — on every non-wasm32 target the dependency resolves exactly as
-# before.
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+[dev-dependencies]
 proptest = "1"

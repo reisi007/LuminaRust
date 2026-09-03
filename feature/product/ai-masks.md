@@ -285,7 +285,7 @@ die Reihenfolge ab.
 **Stand 2026-08-19 (F-047 Adapter-Crate `lumina-onnx` implementiert):**
 
 - Der austauschbare ONNX-Adapter existiert als native-only-Crate `lumina-onnx`
-  (spiegelt `lumina-raw`, nie im WASM-Build). Er entlastet `lumina-core` und
+  (spiegelt `lumina-raw`). Er entlastet `lumina-core` und
   kapselt native Inferenz, Modellverwaltung und Maskenartefakte.
 - `ModelManifest` (serde) trägt Modellname, -version, -hash, Lizenz,
   Eingabespezifikation (Auflösung, Kanal-Layout, Tensorname/-format) und
@@ -375,7 +375,7 @@ hash-gepinnte BiRefNet/SAM-2-`.onnx`-Fixtures benötigt (keine spontanen
 Downloads); das handgenerierte Testmodell dient ausschließlich der
 Verhaltensabsicherung der Backend-Pfade.
 
-**Status (F-082-FOLLOWUP, 2026-09-02):** ORT-Pfad + hash-gepinnte Fixtures + MaskGraph **BESTANDEN** (unabhängig verifiziert 2026-09-02, 107p unter `onnx-rt`, wasm32 `onnx-rt` grün, Commit 49f4f76, wasm-gating e60a9ad).
+**Status (F-082-FOLLOWUP, 2026-09-02):** ORT-Pfad + hash-gepinnte Fixtures + MaskGraph **BESTANDEN** (unabhängig verifiziert 2026-09-02, 107p unter `onnx-rt`, Commit 49f4f76; wasm-Anteile historisch — WASM gestrichen 2026-09-04).
 
 - **Echter ORT-Pfad resolvable ohne stillen Fallback:** `lumina-onnx` bietet
   nun die Konsumenten-Fläche `try_load_onnx_engine` (in

@@ -5,8 +5,8 @@
 //! camera/lens profile is found in the installed database.
 //!
 //! The crate is intentionally feature-gated: without the `native` feature it
-//! compiles to an **empty** library with no link dependencies, so default and
-//! WASM builds stay green without `liblensfun` present. Linking is dynamic
+//! compiles to an **empty** library with no link dependencies, so default
+//! builds stay green without `liblensfun` present. Linking is dynamic
 //! (`-llensfun`, performed by `build.rs` via `pkg-config`) and only happens
 //! when `native` is enabled.
 //!

@@ -6,7 +6,7 @@ publish = false
 description = "Safe Rust wrapper around the system liblensfun (LGPL-3.0) for automatic lens correction (F-098-N1)"
 
 # `native` is OFF by default. Without it the crate compiles to an empty library
-# with no link dependencies, so default, WASM and CI builds stay green even
+# with no link dependencies, so default and CI builds stay green even
 # when liblensfun is not installed on the machine.
 [features]
 native = []

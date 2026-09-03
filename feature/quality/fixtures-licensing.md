@@ -191,9 +191,9 @@ abgeglichen. Vollständige Tabelle: `THIRD-PARTY-NOTICES.md`.
 - Dominanz: MIT / `MIT OR Apache-2.0` / Apache-2.0 / BSD / ISC / Zlib / 0BSD /
   CC0-1.0 / Unlicense / BSL-1.0 — alles OSI-konform.
 - Schwach-copyleft (`LGPL-2.1-or-later`): **nur `r-efi`**, und **nur für
-  `uefi`**-Targets (transitiv über `getrandom`-UEFI-Backend); in keiner
-  ausgelieferten macOS/Linux/Windows/WASM-Build kompiliert. Über die `OR`-Klausel
-  unter MIT/Apache erfüllbar.
+  `uefi`**-Targets (transitiv über `getrandom`-UEFI-Backend); in keinem
+  ausgelieferten Build enthalten, über die `OR`-Klausel unter MIT/Apache
+  erfüllbar.
 - **Einzig reale Pflicht (Default-Build):** LibRaw (siehe §6.3). Zusätzlich
   **feature-gated** (nur bei aktiviertem `native`-Feature): Lensfun (siehe §6.5).
 
@@ -238,7 +238,7 @@ zählt zur F-078-Abnahme.
 | --- | --- |
 | Rolle | Automatische Objektivkorrektur (Distortion + Vignetting); CA bleibt manuell (F-098-N1-MVP-Grenze) |
 | Integration | Pre-MVP (F-098-N1), verifiziert 2026-08-20 |
-| Feature-Gating | `native`-Feature im Crate `lumina-lensfun` — **Standard AUS**; Default-, WASM- und CI-Builds linken nichts und bleiben grün |
+| Feature-Gating | `native`-Feature im Crate `lumina-lensfun` — **Standard AUS**; Default- und CI-Builds linken nichts und bleiben grün |
 | Linkart | **dynamisch** über `pkg-config` (`build.rs` → `cargo:rustc-link-lib=dylib=lensfun`), nur wenn `native` an |
 | Version (bewiesen) | **0.3.4** — `brew info lensfun` **und** `LF_VERSION_*` in `/opt/homebrew/include/lensfun/lensfun.h` (`LF_VERSION_MAJOR 0` / `_MINOR 3` / `_MICRO 4`) |
 | Bibliotheks-Lizenz | **LGPL-3.0-or-later** laut Projekt-FFI und Header-Text („version 2 … or (at your option) any later version“); Homebrew-Formel deklariert `LGPL-3.0-only AND GPL-3.0-only AND CC-BY-3.0 AND LicenseRef-Homebrew-public-domain` → **zu verifizieren** (exakte SPDX gegen upstream `COPYING`/`README`) |
