@@ -96,7 +96,7 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] GUI-KIT-01-REFRESH** kittest 5 Goldens Rebaseline auf GPU-Maschine nach LR-PARITY-01 Welle 2/3 (c881a62, 1fe6353, 888a391): beabsichtigte UI-Diffs (Shortcuts, Filterleiste, Compare/Survey-Proxys, Snapshots) per UPDATE_SNAPSHOTS=true rebaselinen, unbeabsichtigte Diffs als Regression zurueckweisen. Abnahme: cargo test -p lumina-gui --test kittest_snapshots -- --ignored gruen auf GPU-Maschine.
+- [ ] **[PRIO: hoch] GUI-KIT-01-REFRESH** kittest 5 Goldens Rebaseline auf GPU-Maschine nach LR-PARITY-01 Welle 2/3 (c881a62, 1fe6353, 888a391): Develop-Goldens erledigt (a09e7d4 Rating/Expand/Dust-Removal); offen nur Library-Determinismus (Tests auf tempdir/fixen Inhalt oder Baum im Snapshot-Modus deterministisch; CWD-live `crates/lumina-gui` macht Goldens filesystem-fragil, 415px-Diff durch `benches/`-Zeile). Abnahme: cargo test -p lumina-gui --test kittest_snapshots -- --ignored gruen auf GPU-Maschine.
 
 _(keine weiteren offenen hoch-prio Tasks — F-103-INTEGRATION-PREVIEW-SIDECAR verifiziert BESTANDEN am 2026-09-02, 147p (144→147 +3), core 277+7, sidecar 86p, clippy/fmt/wasm grün, Commit 43b1b73; CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
