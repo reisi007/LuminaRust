@@ -773,6 +773,12 @@ pub struct LuminaApp {
     wb_pick_mode: bool,
     /// Generated filmstrip thumbnail textures.
     thumbnails: ThumbnailManager,
+    /// GUI-FILMSTRIP-SYNC-1: multi-selection of filmstrip entries
+    /// (Lightroom-like). Paths are stored as display strings (the same key
+    /// [`Self::open_file`] takes), never indices — entries re-sort on rescan.
+    filmstrip_selection: BTreeSet<String>,
+    /// Anchor for Shift-Click range selection (last plain/toggle click).
+    filmstrip_anchor: Option<String>,
     // ---- PERF-GUI-* (CPU interactivity quick-wins, no GPU) ----
     /// True while the preview shows a low-resolution draft (rendered from
     /// `draft_original` during a slider drag); cleared on the full render.
@@ -1081,6 +1087,102 @@ fn thumbnail_key(path: &Path) -> String {
         .into_owned()
 }
 
+/// GUI-FILMSTRIP-SYNC-1: per-image outcome of a selection sync/match run.
+/// `applied` holds the display-string paths whose sidecar was written;
+/// `failed` holds `(path, message)` pairs — every failure is loud (surfaced
+/// via `error!` at the call site and summarized in the status line), and a
+/// failure never aborts the remaining targets.
+#[derive(Debug, Clone, Default)]
+pub struct SelectionSyncReport {
+    pub applied: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
+
+impl SelectionSyncReport {
+    pub fn applied_count(&self) -> usize {
+        self.applied.len()
+    }
+
+    pub fn failed_count(&self) -> usize {
+        self.failed.len()
+    }
+}
+
+/// The default virtual copy of `document` (first copy when no default is
+/// flagged). `None` only when the document carries no copies at all.
+fn default_copy_mut(document: &mut SidecarDocument) -> Option<&mut lumina_sidecar::VirtualCopy> {
+    if document.virtual_copies.is_empty() {
+        return None;
+    }
+    let index = document
+        .virtual_copies
+        .iter()
+        .position(|copy| copy.is_default)
+        .unwrap_or(0);
+    document.virtual_copies.get_mut(index)
+}
+
+/// Decode a selection target: `(raw bytes, frame, orientation)`. RAW names go
+/// through the native LibRaw adapter, everything else through the raster
+/// decoder. Errors are message strings so the per-image report stays loud
+/// without a `GuiError` roundtrip.
+fn decode_selection_frame(path: &Path) -> Result<(Vec<u8>, ImageFrame, u8), String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if is_raw_name(name) {
+        let image = lumina_raw::decode_bytes(&bytes, name).map_err(|error| error.to_string())?;
+        let orientation = image.metadata.orientation;
+        Ok((bytes, image.frame, orientation))
+    } else {
+        let frame = ImageFrame::decode(&bytes).map_err(|error| error.to_string())?;
+        Ok((bytes, frame, 1))
+    }
+}
+
+/// Source identity for a freshly created selection sidecar, mirroring
+/// [`LuminaApp::source_identity`] without requiring loaded-app state.
+fn selection_source_identity(
+    name: &str,
+    bytes: &[u8],
+    frame: &ImageFrame,
+    orientation: u8,
+    source_is_raw: bool,
+) -> SourceIdentity {
+    SourceIdentity {
+        relative_name: name.to_string(),
+        content_hash: format!("blake3:{}", blake3::hash(bytes).to_hex()),
+        byte_length: bytes.len() as u64,
+        modified_at: None,
+        raw_format: Path::new(name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("raster")
+            .to_ascii_uppercase(),
+        orientation,
+        decode_fingerprint: DecodeFingerprint {
+            decoder: decoder_identity(source_is_raw).into(),
+            version: if source_is_raw {
+                lumina_raw::libraw_decode_version()
+            } else {
+                env!("CARGO_PKG_VERSION").into()
+            },
+            parameters: BTreeMap::new(),
+            extras: BTreeMap::new(),
+        },
+        geometry_fingerprint: GeometryFingerprint {
+            width: frame.width,
+            height: frame.height,
+            orientation,
+            pixel_aspect_ratio: 1.0,
+            extras: BTreeMap::new(),
+        },
+        extras: BTreeMap::new(),
+    }
+}
+
 impl FileBrowserEntry {
     fn status_label(&self) -> &'static str {
         if self.conflict {
@@ -1243,6 +1345,8 @@ impl LuminaApp {
             fullscreen: false,
             wb_pick_mode: false,
             thumbnails: ThumbnailManager::new(),
+            filmstrip_selection: BTreeSet::new(),
+            filmstrip_anchor: None,
             preview_is_draft: false,
             draft_original: None,
             base_stage_cache: StageFrameCache::new(BASE_STAGE_CACHE_MAX_BYTES),
@@ -3272,6 +3376,340 @@ impl LuminaApp {
             changed += 1;
         }
         Ok(changed)
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: pure filmstrip click semantics (Lightroom-like),
+    /// headless-testable without an [`egui::Context`].
+    ///
+    /// * plain click → the selection is exactly `clicked`, anchor becomes `clicked`;
+    /// * `toggle` (Cmd/Ctrl-Click) → `clicked` is added or removed, anchor becomes `clicked`;
+    /// * `range` (Shift-Click) → the inclusive span from the anchor (or `clicked`
+    ///   when there is no usable anchor) to `clicked` over `order` is added to
+    ///   the selection; the anchor is kept so repeated Shift-Clicks extend from
+    ///   the same origin.
+    ///
+    /// Clicking a path that is not in `order` leaves selection and anchor unchanged.
+    pub fn apply_filmstrip_click(
+        order: &[String],
+        selection: &BTreeSet<String>,
+        anchor: Option<&str>,
+        clicked: &str,
+        toggle: bool,
+        range: bool,
+    ) -> (BTreeSet<String>, Option<String>) {
+        let end = order.iter().position(|path| path == clicked);
+        let Some(end) = end else {
+            return (selection.clone(), anchor.map(str::to_string));
+        };
+        if range {
+            let start = anchor
+                .and_then(|known| order.iter().position(|path| path == known))
+                .unwrap_or(end);
+            let (low, high) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            let mut next = selection.clone();
+            for path in &order[low..=high] {
+                next.insert(path.clone());
+            }
+            return (next, anchor.map(str::to_string));
+        }
+        if toggle {
+            let mut next = selection.clone();
+            if !next.remove(clicked) {
+                next.insert(clicked.to_string());
+            }
+            return (next, Some(clicked.to_string()));
+        }
+        (
+            BTreeSet::from([clicked.to_string()]),
+            Some(clicked.to_string()),
+        )
+    }
+
+    /// Display-string paths of the filmstrip entries in strip order (the same
+    /// RAW-only order [`Self::draw_filmstrip`] renders).
+    fn filmstrip_order(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|entry| is_raw_name(&entry.name))
+            .map(|entry| entry.path.display().to_string())
+            .collect()
+    }
+
+    /// Currently selected filmstrip paths, sorted.
+    pub fn filmstrip_selection(&self) -> Vec<String> {
+        self.filmstrip_selection.iter().cloned().collect()
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: update the multi-selection for a filmstrip click
+    /// and open the clicked image. Selection bookkeeping is synchronous (it
+    /// never waits for the background decode started by [`Self::open_file`]).
+    pub fn handle_filmstrip_click(&mut self, path: String, toggle: bool, range: bool) {
+        let order = self.filmstrip_order();
+        let (next, anchor) = Self::apply_filmstrip_click(
+            &order,
+            &self.filmstrip_selection,
+            self.filmstrip_anchor.as_deref(),
+            &path,
+            toggle,
+            range,
+        );
+        self.filmstrip_selection = next;
+        self.filmstrip_anchor = anchor;
+        trace!(
+            "GUI interaction: filmstrip click {} (toggle={toggle}, range={range}, selected={})",
+            path,
+            self.filmstrip_selection.len()
+        );
+        self.open_file(path);
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: apply the active copy's recipe to every selected
+    /// image (Lightroom "Sync Settings"). Each target keeps its own sidecar
+    /// (created when missing) written via CAS; per-image failures are loud
+    /// (`error!` + report entry) and never abort the remaining targets. Every
+    /// applied image logs `info!` and bumps `preview_generation`.
+    pub fn sync_settings_to_selection(&mut self) -> SelectionSyncReport {
+        let targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
+        let mut report = SelectionSyncReport::default();
+        if targets.is_empty() {
+            self.status = "No images selected".into();
+            return report;
+        }
+        let recipe = self.recipe.clone();
+        for (index, target) in targets.iter().enumerate() {
+            match self.apply_recipe_to_path(target, &recipe, &format!("sync-{index}")) {
+                Ok(()) => {
+                    info!("sync settings: {target} updated");
+                    self.preview_generation += 1;
+                    self.refresh_entry(Path::new(target));
+                    report.applied.push(target.clone());
+                }
+                Err(message) => {
+                    error!("sync settings failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if report.failed.is_empty() {
+            self.status = format!("Synced settings to {} image(s)", report.applied.len());
+        } else {
+            let joined = report
+                .failed
+                .iter()
+                .map(|(path, message)| format!("{path}: {message}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.show_error(format!(
+                "Sync failed for {} image(s): {joined}",
+                report.failed.len()
+            ));
+        }
+        report
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: equalize exposure over the selection (Lightroom
+    /// "Match Total Exposures"). Each selected image is measured with Core's
+    /// [`analyze_tone`](lumina_core::analyze_tone); the selection median of
+    /// those means is the common target, and each image receives its own Core
+    /// [`match_total_exposure`](lumina_core::match_total_exposure) delta on
+    /// top of its current exposure (read-only Core use — no Core change).
+    /// Persistence, logging and `preview_generation` behave like
+    /// [`Self::sync_settings_to_selection`].
+    pub fn match_exposures_of_selection(&mut self) -> SelectionSyncReport {
+        let targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
+        let mut report = SelectionSyncReport::default();
+        if targets.is_empty() {
+            self.status = "No images selected".into();
+            return report;
+        }
+        // Pass 1 (measure): decode every target and read its mean luminance.
+        // A decode failure is a loud per-image entry, never an abort.
+        let mut measured: Vec<(String, ImageFrame, f64)> = Vec::new();
+        for target in &targets {
+            match decode_selection_frame(Path::new(target)) {
+                Ok((_, frame, _)) => {
+                    let mean = analyze_tone(&frame).mean;
+                    measured.push((target.clone(), frame, mean));
+                }
+                Err(message) => {
+                    error!("match exposures: cannot decode {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if measured.is_empty() {
+            self.show_error("Match exposures: no selectable image could be decoded");
+            return report;
+        }
+        let mut means: Vec<f64> = measured.iter().map(|(_, _, mean)| *mean).collect();
+        means.sort_by(f64::total_cmp);
+        let middle = means.len() / 2;
+        let median = if means.len() % 2 == 1 {
+            means[middle]
+        } else {
+            (means[middle - 1] + means[middle]) / 2.0
+        }
+        .clamp(0.0, 1.0);
+        // Pass 2 (apply): one Core delta per image against the median.
+        for (index, (target, frame, _)) in measured.iter().enumerate() {
+            let delta = match lumina_core::match_total_exposure(frame, median) {
+                Ok(delta) => delta,
+                Err(error) => {
+                    let message = error.to_string();
+                    error!("match exposures failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                    continue;
+                }
+            };
+            match self.apply_match_delta_to_path(target, delta, median, &format!("match-{index}")) {
+                Ok((old, new)) => {
+                    info!(
+                        "match exposures: {target} exposure {old:+.3} -> {new:+.3} (median luminance {median:.4})"
+                    );
+                    self.preview_generation += 1;
+                    self.refresh_entry(Path::new(target));
+                    report.applied.push(target.clone());
+                }
+                Err(message) => {
+                    error!("match exposures failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if report.failed.is_empty() {
+            self.status = format!(
+                "Matched exposures of {} image(s) to median luminance {median:.4}",
+                report.applied.len()
+            );
+        } else {
+            let joined = report
+                .failed
+                .iter()
+                .map(|(path, message)| format!("{path}: {message}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.show_error(format!(
+                "Match exposures failed for {} image(s): {joined}",
+                report.failed.len()
+            ));
+        }
+        report
+    }
+
+    /// Write `recipe` into the default copy of `target`'s sidecar (creating
+    /// the sidecar when missing) through the CAS API. The source is decoded
+    /// first so a missing/unreadable image fails loudly before any write.
+    fn apply_recipe_to_path(
+        &self,
+        target: &str,
+        recipe: &EditRecipe,
+        history_id: &str,
+    ) -> Result<(), String> {
+        let path = PathBuf::from(target);
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
+        let (bytes, frame, orientation) = decode_selection_frame(&path)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(target);
+        let mut document = if sidecar_path.exists() {
+            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?
+        } else {
+            SidecarDocument::new(
+                selection_source_identity(name, &bytes, &frame, orientation, is_raw_name(name)),
+                "raster-mvp-1",
+            )
+        };
+        let expected =
+            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
+        // CAS against the revision just read: an external modification between
+        // our load and this write surfaces as a loud conflict instead of being
+        // silently overwritten. A missing file expects `None` (fresh lineage).
+        let expected_revision = if sidecar_path.exists() {
+            Some(expected)
+        } else {
+            None
+        };
+        let copy = default_copy_mut(&mut document)
+            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        copy.recipe = recipe.clone();
+        copy.history.push(HistoryEntry {
+            id: history_id.into(),
+            recipe: recipe.clone(),
+            recorded_at: None,
+            extras: BTreeMap::new(),
+        });
+        lumina_sidecar::save_sidecar_if_unchanged(
+            &sidecar_path,
+            &document,
+            expected_revision.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Add `delta` to the current exposure of `target`'s default copy and tag
+    /// the match state (`target_luminance` = selection median). Returns
+    /// `(old_exposure, new_exposure)` for the per-image `info!` log.
+    fn apply_match_delta_to_path(
+        &self,
+        target: &str,
+        delta: f64,
+        median: f64,
+        history_id: &str,
+    ) -> Result<(f64, f64), String> {
+        let path = PathBuf::from(target);
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
+        let (bytes, frame, orientation) = decode_selection_frame(&path)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(target);
+        let mut document = if sidecar_path.exists() {
+            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?
+        } else {
+            SidecarDocument::new(
+                selection_source_identity(name, &bytes, &frame, orientation, is_raw_name(name)),
+                "raster-mvp-1",
+            )
+        };
+        let expected =
+            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
+        let expected_revision = if sidecar_path.exists() {
+            Some(expected)
+        } else {
+            None
+        };
+        let copy = default_copy_mut(&mut document)
+            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        let old = copy
+            .recipe
+            .adjustments
+            .get("exposure")
+            .copied()
+            .unwrap_or(0.0);
+        let new = old + delta;
+        copy.recipe.adjustments.insert("exposure".into(), new);
+        copy.recipe.auto_features.match_total_exposure = true;
+        copy.recipe.auto_features.target_luminance = median;
+        copy.recipe.auto_features.matched_exposure = Some(delta);
+        copy.history.push(HistoryEntry {
+            id: history_id.into(),
+            recipe: copy.recipe.clone(),
+            recorded_at: None,
+            extras: BTreeMap::new(),
+        });
+        lumina_sidecar::save_sidecar_if_unchanged(
+            &sidecar_path,
+            &document,
+            expected_revision.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok((old, new))
     }
 
     pub fn load_bytes(&mut self, bytes: Vec<u8>, name: impl Into<String>) -> Result<(), GuiError> {
@@ -8370,6 +8808,24 @@ impl LuminaApp {
     fn draw_filmstrip(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.heading(Str::Filmstrip.t());
         ui.label(Str::FilmstripHint.t());
+        // GUI-FILMSTRIP-SYNC-1: selection actions (Lightroom Sync Settings /
+        // Match Total Exposures). They apply to the multi-selection below and
+        // live here — not in the Develop footer — so they stay reachable in
+        // all three modules like the filmstrip itself.
+        ui.horizontal(|ui| {
+            let selected = self.filmstrip_selection.len();
+            let sync_label = if selected == 0 {
+                Str::SyncSettings.t().to_string()
+            } else {
+                format!("{} ({selected})", Str::SyncSettings.t())
+            };
+            if ui.button(sync_label).clicked() {
+                self.sync_settings_to_selection();
+            }
+            if ui.button(Str::MatchSelection.t()).clicked() {
+                self.match_exposures_of_selection();
+            }
+        });
         // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
         // filmstrip never shows jpg/png/webp/raster entries (those remain
         // browseable in the Library file-browser via `is_supported_image`).
@@ -8444,9 +8900,32 @@ impl LuminaApp {
                                     .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
                                 ui.put(rect, egui::Label::new(placeholder_label));
                             }
+                            // GUI-FILMSTRIP-SYNC-1: the multi-selection is
+                            // always visible — never implied by soft pixels.
+                            if self
+                                .filmstrip_selection
+                                .contains(&entry.path.display().to_string())
+                            {
+                                ui.painter().rect_stroke(
+                                    rect.expand(2.0),
+                                    3.0,
+                                    egui::Stroke::new(2.0_f32, ui.visuals().selection.bg_fill),
+                                    egui::StrokeKind::Outside,
+                                );
+                            }
                             if resp.clicked() {
+                                // Cmd/Ctrl-Click toggles, Shift-Click extends
+                                // the range from the anchor; a plain click
+                                // selects exactly this image.
+                                let modifiers = ctx.input(|state| state.modifiers);
+                                let toggle = modifiers.command || modifiers.ctrl;
+                                let range = modifiers.shift;
                                 trace!("GUI interaction: filmstrip click {}", entry.path.display());
-                                self.open_file(entry.path.display().to_string());
+                                self.handle_filmstrip_click(
+                                    entry.path.display().to_string(),
+                                    toggle,
+                                    range,
+                                );
                             }
                         }
                         let total_width =
@@ -10936,6 +11415,287 @@ mod tests {
         let mut reopened = new_app();
         open_and_decode(&mut reopened, source.display().to_string());
         assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: pure click semantics — plain click selects exactly
+    /// the clicked image, Cmd/Ctrl-Click toggles membership, Shift-Click adds
+    /// the inclusive anchor→clicked range and keeps the anchor.
+    #[test]
+    fn filmstrip_click_toggle_and_range_semantics() {
+        let order: Vec<String> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        let empty = BTreeSet::new();
+        // Plain click selects exactly one image and sets the anchor.
+        let (selected, anchor) =
+            LuminaApp::apply_filmstrip_click(&order, &empty, None, "b", false, false);
+        assert_eq!(selected, BTreeSet::from(["b".to_string()]));
+        assert_eq!(anchor.as_deref(), Some("b"));
+        // Toggle adds a second image and moves the anchor.
+        let (selected, anchor) = LuminaApp::apply_filmstrip_click(
+            &order,
+            &selected,
+            anchor.as_deref(),
+            "d",
+            true,
+            false,
+        );
+        assert_eq!(selected, BTreeSet::from(["b".to_string(), "d".to_string()]));
+        assert_eq!(anchor.as_deref(), Some("d"));
+        // Toggling the same image again removes it.
+        let (selected, anchor) = LuminaApp::apply_filmstrip_click(
+            &order,
+            &selected,
+            anchor.as_deref(),
+            "b",
+            true,
+            false,
+        );
+        assert_eq!(selected, BTreeSet::from(["d".to_string()]));
+        assert_eq!(anchor.as_deref(), Some("b"));
+        // Range from the anchor adds the inclusive span and keeps the anchor.
+        let (selected, anchor) = LuminaApp::apply_filmstrip_click(
+            &order,
+            &selected,
+            anchor.as_deref(),
+            "a",
+            false,
+            true,
+        );
+        assert_eq!(
+            selected,
+            BTreeSet::from(["a".to_string(), "b".to_string(), "d".to_string()])
+        );
+        assert_eq!(anchor.as_deref(), Some("b"));
+        // Range without an anchor covers only the clicked image.
+        let (selected, anchor) =
+            LuminaApp::apply_filmstrip_click(&order, &empty, None, "c", false, true);
+        assert_eq!(selected, BTreeSet::from(["c".to_string()]));
+        assert_eq!(anchor, None);
+        // Unknown paths never mutate selection or anchor.
+        let (kept, kept_anchor) = LuminaApp::apply_filmstrip_click(
+            &order,
+            &selected,
+            anchor.as_deref(),
+            "zzz",
+            false,
+            false,
+        );
+        assert_eq!(kept, selected);
+        assert_eq!(kept_anchor, anchor);
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1, End-to-End (DoD §1): recipe → sync → N sidecar
+    /// files → reload → recipe restored. Every applied image also bumps
+    /// `preview_generation`.
+    #[test]
+    fn sync_settings_writes_each_selected_sidecar_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let sources: Vec<PathBuf> = ["a.png", "b.png", "c.png"]
+            .iter()
+            .map(|name| directory.path().join(name))
+            .collect();
+        for source in &sources {
+            save_png(source);
+        }
+        let mut app = new_app();
+        open_and_decode(&mut app, sources[0].display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        for source in &sources {
+            app.filmstrip_selection.insert(source.display().to_string());
+        }
+        let generation = app.preview_generation();
+        let report = app.sync_settings_to_selection();
+        assert_eq!(report.applied_count(), 3);
+        assert_eq!(report.failed_count(), 0);
+        assert_eq!(app.preview_generation(), generation + 3);
+        for source in &sources {
+            let document =
+                lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(source)).unwrap();
+            let copy = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.is_default)
+                .unwrap();
+            assert_eq!(copy.recipe.adjustments["exposure"], 1.5);
+        }
+        // Reload anchor: reopening a synced image restores the recipe.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, sources[1].display().to_string());
+        assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: one unreadable target is a loud per-image entry
+    /// and never aborts the remaining targets.
+    #[test]
+    fn sync_settings_reports_per_image_failure_without_aborting_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let good = directory.path().join("good.png");
+        save_png(&good);
+        let missing = directory.path().join("gone.png");
+        let mut app = new_app();
+        open_and_decode(&mut app, good.display().to_string());
+        app.set_adjustment("contrast", 0.3);
+        app.filmstrip_selection.insert(good.display().to_string());
+        app.filmstrip_selection
+            .insert(missing.display().to_string());
+        let report = app.sync_settings_to_selection();
+        assert_eq!(report.applied_count(), 1);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.failed[0].0, missing.display().to_string());
+        assert!(app.error().is_some(), "failure must stay loud");
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&good)).unwrap();
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.is_default)
+            .unwrap();
+        assert_eq!(copy.recipe.adjustments["contrast"], 0.3);
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1 (follow-up): an empty selection is a loud no-op
+    /// for both actions — empty report, "No images selected" status, no
+    /// `preview_generation` bump, no sidecar write.
+    #[test]
+    fn empty_selection_is_noop_for_sync_and_match() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.0);
+        assert!(app.filmstrip_selection.is_empty());
+        let generation = app.preview_generation();
+        let synced = app.sync_settings_to_selection();
+        assert_eq!(synced.applied_count(), 0);
+        assert_eq!(synced.failed_count(), 0);
+        let matched = app.match_exposures_of_selection();
+        assert_eq!(matched.applied_count(), 0);
+        assert_eq!(matched.failed_count(), 0);
+        assert_eq!(app.status(), "No images selected");
+        assert_eq!(app.preview_generation(), generation);
+        assert!(
+            !lumina_sidecar::sidecar_path_for(&source).exists(),
+            "the no-op must not write a sidecar"
+        );
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: Match Total Exposures over the selection — the
+    /// darker image gains more exposure than the brighter one, both sidecars
+    /// carry the same median target, and each image bumps `preview_generation`.
+    #[test]
+    fn match_exposures_equalizes_selection_around_median() {
+        fn solid_gray(path: &Path, level: u8) {
+            let pixels = vec![level, level, level, 255, level, level, level, 255];
+            let png = ImageFrame::new(2, 1, pixels)
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap();
+            std::fs::write(path, png).unwrap();
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let dark = directory.path().join("dark.png");
+        let bright = directory.path().join("bright.png");
+        solid_gray(&dark, 30);
+        solid_gray(&bright, 220);
+        let mut app = new_app();
+        open_and_decode(&mut app, dark.display().to_string());
+        app.filmstrip_selection.insert(dark.display().to_string());
+        app.filmstrip_selection.insert(bright.display().to_string());
+        let generation = app.preview_generation();
+        let report = app.match_exposures_of_selection();
+        assert_eq!(report.applied_count(), 2);
+        assert_eq!(report.failed_count(), 0);
+        assert_eq!(app.preview_generation(), generation + 2);
+        let exposure_of = |path: &PathBuf| {
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(path))
+                .unwrap()
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.is_default)
+                .unwrap()
+                .recipe
+                .adjustments["exposure"]
+        };
+        let dark_exposure = exposure_of(&dark);
+        let bright_exposure = exposure_of(&bright);
+        assert!(
+            dark_exposure > bright_exposure,
+            "darker image must gain more exposure (dark={dark_exposure}, bright={bright_exposure})"
+        );
+        // Both copies share the same median target and carry their own delta.
+        let target_of = |path: &PathBuf| {
+            let copy = lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(path))
+                .unwrap()
+                .virtual_copies
+                .into_iter()
+                .find(|copy| copy.is_default)
+                .unwrap();
+            (
+                copy.recipe.auto_features.target_luminance,
+                copy.recipe.auto_features.matched_exposure,
+            )
+        };
+        let (dark_target, dark_delta) = target_of(&dark);
+        let (bright_target, bright_delta) = target_of(&bright);
+        assert_eq!(dark_target, bright_target);
+        assert!(dark_delta.is_some() && bright_delta.is_some());
+        assert!(
+            dark_delta.unwrap() > bright_delta.unwrap(),
+            "Core delta must favour the darker image"
+        );
+        // Reload anchor: reopening a matched image restores its exposure.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, dark.display().to_string());
+        assert_eq!(reopened.recipe().adjustments["exposure"], dark_exposure);
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1 (follow-up): an undecodable match target is a loud
+    /// per-image entry and never aborts the remaining targets.
+    #[test]
+    fn match_exposures_reports_per_image_failure_without_aborting_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let good = directory.path().join("good.png");
+        save_png(&good);
+        let missing = directory.path().join("gone.png");
+        let mut app = new_app();
+        open_and_decode(&mut app, good.display().to_string());
+        app.filmstrip_selection.insert(good.display().to_string());
+        app.filmstrip_selection
+            .insert(missing.display().to_string());
+        let report = app.match_exposures_of_selection();
+        assert_eq!(report.applied_count(), 1);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.failed[0].0, missing.display().to_string());
+        assert!(app.error().is_some(), "failure must stay loud");
+        assert!(
+            lumina_sidecar::sidecar_path_for(&good).is_file(),
+            "the decodable target must still be written"
+        );
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: the selection actions paint headless (no GPU) so
+    /// a missing button fails `cargo test -p lumina-gui --lib` instead of
+    /// only a visual review.
+    #[test]
+    fn filmstrip_selection_actions_are_visible() {
+        let mut app = new_app();
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1024.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.draw_filmstrip(&ctx, ui));
+        });
+        output.textures_delta.clear();
+        assert_fully_visible(&output.shapes, Str::SyncSettings.t());
+        assert_fully_visible(&output.shapes, Str::MatchSelection.t());
     }
 
     #[test]

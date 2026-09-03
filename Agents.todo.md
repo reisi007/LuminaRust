@@ -94,7 +94,7 @@ GUI/User-Test ab.**
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: mittel] GUI-FILMSTRIP-SYNC-1** Filmstrip-Mehrfachauswahl + Lightroom-Sync (Settings auf Auswahl anwenden, Match Total Exposures über Auswahl). SOLL: F-100-Sync-Semantik in `cli-gui-wasm.md` ergänzen, dann GUI + headless Tests.
+_(Block A leer — FILMSTRIP-SYNC-1 BESTANDEN 229p + kittest 10/10 + Vision 7/7, Commit folgt; Details Git-Historie)_
 
 _(Block A leer — R2-GUIMOD-04a BESTANDEN 2026-09-04 575f834, WASM-REMOVE BESTANDEN; Details Git-Historie)_
 
