@@ -160,13 +160,15 @@ fn mismatched_plane_strategy(frame: &ImageFrame) -> impl Strategy<Value = MaskPl
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// Invariant (F-043, Wertebereiche): for every frame (including the empty
-    /// frame) and both configurations, `suggest_auto_tone` returns `Ok` with a
-    /// finite exposure inside `exposure_bounds` and a finite contrast inside
-    /// `contrast_bounds`. Both bounds keep `0.0` inside `contrast_bounds`; the
-    /// reason is the source boundary documented on
-    /// `auto_tone_uniform_frame_has_zero_contrast` (the `span <= epsilon`
-    /// identity path returns 0.0 unclamped).
+    /// Invariant (F-043, Wertebereiche; AUTO-TONE-2): for every frame
+    /// (including the empty frame) and both configurations,
+    /// `suggest_auto_tone` returns `Ok` with a finite exposure inside
+    /// `exposure_bounds`, a finite contrast inside `contrast_bounds`, and
+    /// finite end/balance sliders inside the recipe domains `-1..=1` (the
+    /// validation in `lib.rs` rejects anything outside). Both contrast bounds
+    /// keep `0.0` inside `contrast_bounds`; the reason is the source boundary
+    /// documented on `auto_tone_uniform_frame_has_zero_contrast` (the
+    /// `span <= epsilon` identity path returns 0.0 unclamped).
     #[test]
     fn auto_tone_bounds_and_finite(frame in any_frame_strategy()) {
         for config in [AutoToneConfig::default(), CUSTOM_CONFIG] {
@@ -186,6 +188,41 @@ proptest! {
                 "contrast {} outside {:?}",
                 result.contrast,
                 config.contrast_bounds,
+            );
+            for (name, value) in [
+                ("whites", result.whites),
+                ("blacks", result.blacks),
+                ("highlights", result.highlights),
+                ("shadows", result.shadows),
+            ] {
+                prop_assert!(value.is_finite(), "{name} must be finite");
+                prop_assert!(
+                    (-1.0..=1.0).contains(&value),
+                    "{name} {value} outside -1..=1"
+                );
+            }
+        }
+    }
+
+    /// Invariant (AUTO-TONE-2, kein Anschlag): the soft limiter caps contrast
+    /// at `0.9` and the end/balance sliders at `0.8`, so on reachable targets
+    /// no tone slider sits on the hard `±1` recipe limit. Exposure is
+    /// excluded: the documented black/white fallbacks legitimately produce
+    /// the `±10` bounds on degenerate frames.
+    #[test]
+    fn auto_tone_sliders_never_pin_to_the_hard_limit(frame in any_frame_strategy()) {
+        let config = AutoToneConfig::default();
+        let result = suggest_auto_tone(&frame, config).unwrap();
+        for (name, value) in [
+            ("contrast", result.contrast),
+            ("whites", result.whites),
+            ("blacks", result.blacks),
+            ("highlights", result.highlights),
+            ("shadows", result.shadows),
+        ] {
+            prop_assert!(
+                value.abs() < 1.0,
+                "{name} {value} sits on the hard limit"
             );
         }
     }
@@ -366,6 +403,12 @@ proptest! {
         };
         prop_assert_eq!(result.exposure, expected, "value {}", value);
         prop_assert_eq!(result.contrast, 0.0, "uniform frame, value {}", value);
+        // AUTO-TONE-2: the zero-span gate yields identity for the four
+        // end/balance sliders as well (single-pixel frames have no span).
+        prop_assert_eq!(result.whites, 0.0, "uniform frame, value {}", value);
+        prop_assert_eq!(result.blacks, 0.0, "uniform frame, value {}", value);
+        prop_assert_eq!(result.highlights, 0.0, "uniform frame, value {}", value);
+        prop_assert_eq!(result.shadows, 0.0, "uniform frame, value {}", value);
     }
 
     /// Invariant (F-043, Gleichverteilung): a frame with a single pixel value
@@ -394,6 +437,11 @@ proptest! {
         let config = AutoToneConfig::default();
         let result = suggest_auto_tone(&frame, config).unwrap();
         prop_assert_eq!(result.contrast, 0.0, "value {}", value);
+        // AUTO-TONE-2: same zero-span identity for the end/balance sliders.
+        prop_assert_eq!(result.whites, 0.0, "value {}", value);
+        prop_assert_eq!(result.blacks, 0.0, "value {}", value);
+        prop_assert_eq!(result.highlights, 0.0, "value {}", value);
+        prop_assert_eq!(result.shadows, 0.0, "value {}", value);
         let median = match value {
             0 => 0.0,
             255 => 1.0,

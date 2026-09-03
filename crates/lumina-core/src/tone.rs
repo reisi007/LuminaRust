@@ -80,6 +80,52 @@ pub struct AutoToneResult {
     pub analysis: ToneAnalysis,
     pub exposure: f64,
     pub contrast: f64,
+    /// Lightroom-style end/balance sliders (AUTO-TONE-2, normativ:
+    /// `feature/architecture/pipeline.md` § Auto-Tone, Mehrregler-Absatz
+    /// 2026-09-04). Domains match the recipe validation in `lib.rs`:
+    /// each in `-1..=1`. Consumers persist them into `recipe.adjustments`
+    /// under the keys `whites`, `blacks`, `highlights`, `shadows`
+    /// (GUI/CLI map `result.<field>` 1:1 onto the same-named key).
+    pub whites: f64,
+    pub blacks: f64,
+    pub highlights: f64,
+    pub shadows: f64,
+}
+
+/// Targets of the AUTO-TONE-2 six-slider distribution (same 256-bin
+/// p01/median/p99 pass, no extra measurement):
+/// - contrast drives the p01/p99 span toward `0.8` (unchanged target);
+/// - whites/blacks straighten the p99/p01 ends toward `0.95`/`0.05`;
+/// - highlights/shadows balance each half-span (p99−median, median−p01)
+///   toward `0.4` (= half the span target, so a balanced frame yields `0.0`).
+const AUTO_TONE_TARGET_SPAN: f64 = 0.8;
+const AUTO_TONE_WHITE_TARGET: f64 = 0.95;
+const AUTO_TONE_BLACK_TARGET: f64 = 0.05;
+const AUTO_TONE_HALF_SPAN_TARGET: f64 = 0.4;
+/// Soft-limit shape (AUTO-TONE-2): the raw value passes through unchanged
+/// inside `|raw| <= linear`; beyond that it compresses with shoulder `0.5`
+/// toward the asymptote `cap` without ever reaching it. Contrast caps at
+/// `0.9`, the four end/balance sliders at `0.8` — auto-tone therefore never
+/// pins a slider at the hard `±1` recipe limit on reachable targets (the
+/// observed `Contrast = 100` bug). Exposure keeps its documented
+/// black/white fallback bounds (`±10` EV); those are the explicit
+/// unreachable-target branches, not silent clamps.
+const CONTRAST_LINEAR_REGION: f64 = 0.6;
+const CONTRAST_SOFT_CAP: f64 = 0.9;
+const TONE_LINEAR_REGION: f64 = 0.6;
+const TONE_SOFT_CAP: f64 = 0.8;
+const SOFT_SHOULDER: f64 = 0.5;
+
+/// Soft limiter for auto-tone sliders: odd, monotone, continuous at
+/// `linear` (`linear + 0 = linear`), asymptotically approaching `cap`.
+/// Deterministic closed form; finite in, finite out.
+fn soft_limit(raw: f64, linear: f64, cap: f64) -> f64 {
+    let magnitude = raw.abs();
+    if magnitude <= linear {
+        return raw;
+    }
+    let excess = magnitude - linear;
+    raw.signum() * (linear + (cap - linear) * excess / (excess + SOFT_SHOULDER))
 }
 
 /// Per-pixel Rec.709 luminance of an RGBA8 sample in `0..=1` (alpha ignored).
@@ -253,12 +299,24 @@ pub fn analyze_tone_with_histogram(frame: &ImageFrame) -> (ToneAnalysis, Luminan
     (analysis, histogram)
 }
 
-pub fn suggest_auto_tone(
-    frame: &ImageFrame,
-    config: AutoToneConfig,
-) -> Result<AutoToneResult, CoreError> {
-    config.validate()?;
-    let analysis = analyze_tone(frame);
+/// Shared AUTO-TONE-2 slider formula over an already computed analysis
+/// (used by [`suggest_auto_tone`] with the 256-bin analysis and by the test
+/// reference with the sorted-sample analysis, so the drift comparison stays
+/// meaningful after the algorithm change).
+///
+/// - `exposure`: `log2(target/median)` with the documented empty/black/white
+///   fallback branches, clamped to `exposure_bounds` (bit-identical to before).
+/// - `contrast`: `target_span/span − 1`, softly limited (never hard `±1`).
+/// - `whites`/`blacks`: `(white_target − p99)` / `(p01 − black_target)`.
+/// - `highlights`/`shadows`: `(half_span_target − upper_half)` /
+///   `(half_span_target − lower_half)` with `upper_half = p99 − median`,
+///   `lower_half = median − p01`.
+/// - Degenerate frames (`sample_count == 0`) and zero-span frames
+///   (`span <= epsilon`, covering uniform black/white) yield `0.0` for all
+///   five sliders except the exposure fallback — the uniform-frame identity
+///   (`contrast == 0.0`) is preserved bit-exactly and extended to the four
+///   new sliders.
+fn auto_tone_from_analysis(analysis: &ToneAnalysis, config: &AutoToneConfig) -> AutoToneResult {
     let epsilon = config.epsilon;
     let target = config.target_luminance.clamp(epsilon, 1.0);
     let exposure = if analysis.sample_count == 0 {
@@ -272,16 +330,60 @@ pub fn suggest_auto_tone(
     }
     .clamp(config.exposure_bounds.0, config.exposure_bounds.1);
     let span = analysis.p99 - analysis.p01;
-    let contrast = if span <= epsilon {
-        0.0
-    } else {
-        (0.8 / span - 1.0).clamp(config.contrast_bounds.0, config.contrast_bounds.1)
-    };
-    Ok(AutoToneResult {
-        analysis,
+    let (contrast, whites, blacks, highlights, shadows) =
+        if analysis.sample_count == 0 || span <= epsilon {
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        } else {
+            let contrast = soft_limit(
+                AUTO_TONE_TARGET_SPAN / span - 1.0,
+                CONTRAST_LINEAR_REGION,
+                CONTRAST_SOFT_CAP,
+            )
+            .clamp(config.contrast_bounds.0, config.contrast_bounds.1);
+            let whites = soft_limit(
+                AUTO_TONE_WHITE_TARGET - analysis.p99,
+                TONE_LINEAR_REGION,
+                TONE_SOFT_CAP,
+            )
+            .clamp(-1.0, 1.0);
+            let blacks = soft_limit(
+                analysis.p01 - AUTO_TONE_BLACK_TARGET,
+                TONE_LINEAR_REGION,
+                TONE_SOFT_CAP,
+            )
+            .clamp(-1.0, 1.0);
+            let highlights = soft_limit(
+                AUTO_TONE_HALF_SPAN_TARGET - (analysis.p99 - analysis.median),
+                TONE_LINEAR_REGION,
+                TONE_SOFT_CAP,
+            )
+            .clamp(-1.0, 1.0);
+            let shadows = soft_limit(
+                AUTO_TONE_HALF_SPAN_TARGET - (analysis.median - analysis.p01),
+                TONE_LINEAR_REGION,
+                TONE_SOFT_CAP,
+            )
+            .clamp(-1.0, 1.0);
+            (contrast, whites, blacks, highlights, shadows)
+        };
+    AutoToneResult {
+        analysis: *analysis,
         exposure: finite(exposure),
         contrast: finite(contrast),
-    })
+        whites: finite(whites),
+        blacks: finite(blacks),
+        highlights: finite(highlights),
+        shadows: finite(shadows),
+    }
+}
+
+pub fn suggest_auto_tone(
+    frame: &ImageFrame,
+    config: AutoToneConfig,
+) -> Result<AutoToneResult, CoreError> {
+    config.validate()?;
+    let analysis = analyze_tone(frame);
+    Ok(auto_tone_from_analysis(&analysis, &config))
 }
 
 pub fn match_total_exposure(frame: &ImageFrame, target_luminance: f64) -> Result<f64, CoreError> {
@@ -545,11 +647,16 @@ mod tests {
         };
         config.validate().unwrap();
         // Every uniform frame stays on a well-defined branch and yields the
-        // documented zero-contrast identity (span = 0 ≤ epsilon).
+        // documented zero-contrast identity (span = 0 ≤ epsilon); AUTO-TONE-2
+        // extends the identity to the four end/balance sliders.
         for value in [0u8, 1, 64, 127, 128, 200, 254, 255] {
             let frame = ImageFrame::new(1, 1, vec![value, value, value, 255]).unwrap();
             let result = suggest_auto_tone(&frame, config).unwrap();
             assert_eq!(result.contrast, 0.0);
+            assert_eq!(result.whites, 0.0, "value {value}");
+            assert_eq!(result.blacks, 0.0, "value {value}");
+            assert_eq!(result.highlights, 0.0, "value {value}");
+            assert_eq!(result.shadows, 0.0, "value {value}");
             assert!((-10.0..=10.0).contains(&result.exposure));
         }
     }
@@ -668,6 +775,21 @@ mod tests {
             assert!(
                 (config.contrast_bounds.0..=config.contrast_bounds.1).contains(&result.contrast)
             );
+            // AUTO-TONE-2: the four end/balance sliders are finite and honor
+            // the recipe domains (`-1..=1`, the validation in `lib.rs`
+            // rejects anything outside).
+            for (name, value) in [
+                ("whites", result.whites),
+                ("blacks", result.blacks),
+                ("highlights", result.highlights),
+                ("shadows", result.shadows),
+            ] {
+                assert!(value.is_finite(), "{name} must be finite");
+                assert!(
+                    (-1.0..=1.0).contains(&value),
+                    "{name} {value} outside -1..=1"
+                );
+            }
         }
     }
 
@@ -695,6 +817,12 @@ mod tests {
             assert_eq!(result.analysis, expected.analysis);
             assert_eq!(result.exposure, expected.exposure);
             assert_eq!(result.contrast, expected.contrast);
+            // AUTO-TONE-2: the full six-slider result is alpha-independent.
+            assert_eq!(result.whites, expected.whites);
+            assert_eq!(result.blacks, expected.blacks);
+            assert_eq!(result.highlights, expected.highlights);
+            assert_eq!(result.shadows, expected.shadows);
+            assert_eq!(result, expected);
         }
     }
 
@@ -1002,36 +1130,18 @@ mod tests {
         }
     }
 
-    /// Original `suggest_auto_tone`, delegating to [`reference_analyze_tone`].
+    /// Current `suggest_auto_tone` formula applied to the ORIGINAL
+    /// (pre-R2-PERF-01) sorted-sample analysis. Both sides share
+    /// [`super::auto_tone_from_analysis`], so the drift comparison below
+    /// isolates the analysis-method difference (256-bin class marks vs.
+    /// sorted samples) from the AUTO-TONE-2 formula itself.
     fn reference_suggest_auto_tone(
         frame: &ImageFrame,
         config: AutoToneConfig,
     ) -> Result<AutoToneResult, CoreError> {
         config.validate()?;
         let analysis = reference_analyze_tone(frame);
-        let epsilon = config.epsilon;
-        let target = config.target_luminance.clamp(epsilon, 1.0);
-        let exposure = if analysis.sample_count == 0 {
-            0.0
-        } else if analysis.median <= epsilon {
-            config.exposure_bounds.1
-        } else if analysis.median >= 1.0 - config.epsilon {
-            config.exposure_bounds.0
-        } else {
-            (target / analysis.median).log2()
-        }
-        .clamp(config.exposure_bounds.0, config.exposure_bounds.1);
-        let span = analysis.p99 - analysis.p01;
-        let contrast = if span <= epsilon {
-            0.0
-        } else {
-            (0.8 / span - 1.0).clamp(config.contrast_bounds.0, config.contrast_bounds.1)
-        };
-        Ok(AutoToneResult {
-            analysis,
-            exposure: super::finite(exposure),
-            contrast: super::finite(contrast),
-        })
+        Ok(super::auto_tone_from_analysis(&analysis, &config))
     }
 
     /// Original `match_total_exposure`: sorted-sum mean via the original
@@ -1142,12 +1252,23 @@ mod tests {
                 opt_auto.exposure,
                 ref_auto.exposure
             );
-            assert!(
-                (opt_auto.contrast - ref_auto.contrast).abs() <= 0.05,
-                "auto contrast: optimized {} vs reference {}",
-                opt_auto.contrast,
-                ref_auto.contrast
-            );
+            // AUTO-TONE-2: both sides share `auto_tone_from_analysis`, so the
+            // same 0.05 log-sensitivity budget covers contrast; the four
+            // end/balance sliders are gain-1.0 linear maps of the quantiles
+            // (input drift ≤ 2/256 through the soft limiter, whose slope never
+            // exceeds 1), hence the same bound with wide margin.
+            for (name, value, expected) in [
+                ("contrast", opt_auto.contrast, ref_auto.contrast),
+                ("whites", opt_auto.whites, ref_auto.whites),
+                ("blacks", opt_auto.blacks, ref_auto.blacks),
+                ("highlights", opt_auto.highlights, ref_auto.highlights),
+                ("shadows", opt_auto.shadows, ref_auto.shadows),
+            ] {
+                assert!(
+                    (value - expected).abs() <= 0.05,
+                    "auto {name}: optimized {value} vs reference {expected}"
+                );
+            }
 
             for target in [0.0, 1e-6, 0.25, 0.5, 0.63, 0.9, 1.0] {
                 let diff = (match_total_exposure(frame, target).unwrap()
@@ -1209,6 +1330,12 @@ mod tests {
             }
             let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
             assert_eq!(result.contrast, 0.0, "value {value}");
+            // AUTO-TONE-2: zero span yields identity for all end/balance
+            // sliders as well (uniform frames carry no end/balance signal).
+            assert_eq!(result.whites, 0.0, "value {value}");
+            assert_eq!(result.blacks, 0.0, "value {value}");
+            assert_eq!(result.highlights, 0.0, "value {value}");
+            assert_eq!(result.shadows, 0.0, "value {value}");
             if value == 0 {
                 assert_eq!(result.exposure, AutoToneConfig::default().exposure_bounds.1);
             } else if value == 255 {
@@ -1250,6 +1377,158 @@ mod tests {
         let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
         assert!((result.exposure - 0.0).abs() <= 1e-9);
         assert!((result.contrast - (-0.2)).abs() <= 1e-9);
+        // AUTO-TONE-2: p01 = 0.0, median = 0.5, p99 = 1.0 sit in the linear
+        // region, so the end/balance sliders are exact:
+        // whites = 0.95 − 1.0 = −0.05, blacks = 0.0 − 0.05 = −0.05,
+        // highlights = shadows = 0.4 − 0.5 = −0.1.
+        assert!((result.whites - (-0.05)).abs() <= 1e-9);
+        assert!((result.blacks - (-0.05)).abs() <= 1e-9);
+        assert!((result.highlights - (-0.1)).abs() <= 1e-9);
+        assert!((result.shadows - (-0.1)).abs() <= 1e-9);
+    }
+
+    #[test]
+    fn auto_tone_sets_all_six_sliders_on_an_asymmetric_frame() {
+        // AUTO-TONE-2: an asymmetric photo-like ramp (dark-shifted median,
+        // narrow span, lifted blacks, unbalanced halves) must populate all
+        // six sliders with finite, in-domain, non-identity values — and none
+        // may sit on a hard recipe limit although every target is reachable.
+        // Bin mapping for gray g < 255 is bin g with mark (g+0.5)/256, so:
+        // p01 ≈ 31.2/256, median = 65.5/256, p99 ≈ 194.9/256.
+        let grays = [30u8, 40, 50, 60, 70, 80, 120, 200];
+        let mut pixels = Vec::with_capacity(8 * 4);
+        for gray in grays {
+            pixels.extend_from_slice(&[gray, gray, gray, 255]);
+        }
+        let frame = ImageFrame::new(8, 1, pixels).unwrap();
+        let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
+        for (name, value) in [
+            ("exposure", result.exposure),
+            ("contrast", result.contrast),
+            ("whites", result.whites),
+            ("blacks", result.blacks),
+            ("highlights", result.highlights),
+            ("shadows", result.shadows),
+        ] {
+            assert!(value.is_finite(), "{name} must be finite");
+            assert_ne!(value, 0.0, "{name} must be set on this frame");
+        }
+        // Median ≈ 0.256 < 0.5 → positive exposure, reachable (far from ±10).
+        assert!(result.exposure > 0.5 && result.exposure < 10.0);
+        // Span ≈ 0.64 → raw contrast ≈ 0.25 (linear region, exact passthrough).
+        assert!((result.contrast - 0.25).abs() < 0.02);
+        // Ends: whites = 0.95 − p99 ≈ 0.19, blacks = p01 − 0.05 ≈ 0.07.
+        assert!(result.whites > 0.1 && result.whites < 0.3);
+        assert!(result.blacks > 0.03 && result.blacks < 0.15);
+        // Halves: upper ≈ 0.51 → highlights ≈ −0.11; lower ≈ 0.13 → shadows ≈ 0.27.
+        assert!(result.highlights < -0.05 && result.highlights > -0.2);
+        assert!(result.shadows > 0.2 && result.shadows < 0.35);
+        // No slider on a hard limit.
+        assert!(result.contrast.abs() < 1.0);
+        assert!(result.whites.abs() < 1.0);
+        assert!(result.blacks.abs() < 1.0);
+        assert!(result.highlights.abs() < 1.0);
+        assert!(result.shadows.abs() < 1.0);
+        // Bit-exact determinism over the full six-slider result.
+        for _ in 0..8 {
+            assert_eq!(
+                suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap(),
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_span_contrast_is_soft_and_never_pins_to_one() {
+        // Regression for the observed `Contrast = 100` bug: the old formula
+        // `0.8/span − 1` hard-clamped to exactly 1.0 for narrow spans. The
+        // soft limiter must compress toward the 0.9 asymptote instead.
+        // Values 100..=140 → span ≈ 40/256 ≈ 0.156 → raw ≈ 4.1.
+        let mut pixels = Vec::with_capacity(41 * 4);
+        for gray in 100u8..=140 {
+            pixels.extend_from_slice(&[gray, gray, gray, 255]);
+        }
+        let frame = ImageFrame::new(41, 1, pixels).unwrap();
+        let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
+        assert!(
+            result.contrast > 0.8 && result.contrast < 1.0,
+            "narrow-span contrast {} must be strong but strictly below 1.0",
+            result.contrast
+        );
+        // Soft-cap asymptote is 0.9: even a near-degenerate span cannot pin.
+        let mut pixels = Vec::with_capacity(64 * 4);
+        for i in 0..64 {
+            let gray = if i < 62 { 128u8 } else { 129u8 };
+            pixels.extend_from_slice(&[gray, gray, gray, 255]);
+        }
+        let frame = ImageFrame::new(64, 1, pixels).unwrap();
+        let result = suggest_auto_tone(&frame, AutoToneConfig::default()).unwrap();
+        assert!(
+            result.contrast <= 0.9 + 1e-12,
+            "contrast {} must respect the 0.9 soft cap",
+            result.contrast
+        );
+        assert!(result.contrast < 1.0);
+    }
+
+    #[test]
+    fn degenerate_frames_yield_zero_for_all_end_and_balance_sliders() {
+        // Empty frames: all six sliders are identity (exposure 0.0 is the
+        // documented `sample_count == 0` path).
+        let empty = ImageFrame::new(0, 0, vec![]).unwrap();
+        let result = suggest_auto_tone(&empty, AutoToneConfig::default()).unwrap();
+        assert_eq!(result.exposure, 0.0);
+        assert_eq!(result.contrast, 0.0);
+        assert_eq!(result.whites, 0.0);
+        assert_eq!(result.blacks, 0.0);
+        assert_eq!(result.highlights, 0.0);
+        assert_eq!(result.shadows, 0.0);
+        // Uniform black/white: exposure takes the documented fallback bound,
+        // every other slider stays identity (span = 0 ≤ epsilon gate).
+        let black = ImageFrame::new(
+            2,
+            2,
+            vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255],
+        )
+        .unwrap();
+        let result = suggest_auto_tone(&black, AutoToneConfig::default()).unwrap();
+        assert_eq!(result.exposure, 10.0);
+        assert_eq!(result.contrast, 0.0);
+        assert_eq!(result.whites, 0.0);
+        assert_eq!(result.blacks, 0.0);
+        assert_eq!(result.highlights, 0.0);
+        assert_eq!(result.shadows, 0.0);
+        let white = ImageFrame::new(1, 1, vec![255, 255, 255, 255]).unwrap();
+        let result = suggest_auto_tone(&white, AutoToneConfig::default()).unwrap();
+        assert_eq!(result.exposure, -10.0);
+        assert_eq!(result.contrast, 0.0);
+        assert_eq!(result.whites, 0.0);
+        assert_eq!(result.blacks, 0.0);
+        assert_eq!(result.highlights, 0.0);
+        assert_eq!(result.shadows, 0.0);
+    }
+
+    #[test]
+    fn soft_limit_is_identity_in_the_linear_region_and_capped_outside() {
+        // Shape contract of the AUTO-TONE-2 limiter (used for every slider).
+        assert_eq!(soft_limit(0.0, 0.6, 0.9), 0.0);
+        assert_eq!(soft_limit(0.6, 0.6, 0.9), 0.6);
+        assert_eq!(soft_limit(-0.6, 0.6, 0.9), -0.6);
+        assert_eq!(soft_limit(0.25, 0.6, 0.9), 0.25);
+        // Continuity at the shoulder: just above 0.6 the value barely moves.
+        assert!((soft_limit(0.61, 0.6, 0.9) - 0.6058823529).abs() < 1e-9);
+        // Oddness and asymptote: large magnitudes approach but never reach cap.
+        assert_eq!(soft_limit(-3.0, 0.6, 0.9), -soft_limit(3.0, 0.6, 0.9));
+        assert!(soft_limit(1e6, 0.6, 0.9) < 0.9);
+        assert!(soft_limit(1e6, 0.6, 0.9) > 0.899);
+        assert!(soft_limit(-1e6, 0.6, 0.9) > -0.9);
+        // Monotone in magnitude.
+        let mut previous = 0.0;
+        for raw in [0.0, 0.3, 0.6, 1.0, 2.0, 5.0, 50.0] {
+            let value = soft_limit(raw, 0.6, 0.9);
+            assert!(value >= previous);
+            previous = value;
+        }
     }
 
     #[test]

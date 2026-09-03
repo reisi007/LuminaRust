@@ -20,13 +20,16 @@
 //!   (pipeline.md § Auto-Tone). The closed forms remain the physical
 //!   reference; the checker fixture additionally pins exact reproduction
 //!   (outer-bin edge marks) at the tight tolerance below.
-//! - `suggest_auto_tone` exposure/contrast and `match_total_exposure`:
-//!   0.01 (the task's default), absorbing `f64::log2` rounding and the
-//!   clamped boundary cases. Where the value is pinned by a clamp or is
-//!   exactly representable, a tighter bound is documented in the test.
-//!   The gradient fixture's auto-tone exposure uses the bin-quantized median,
-//!   so its tolerance carries the documented amplification
-//!   `(1/256)/(m·ln2)` ≈ 0.046 EV at m ≈ 0.1235 → 0.05.
+//! - `suggest_auto_tone` exposure/contrast/end/balance and
+//!   `match_total_exposure`: 0.01 (the task's default), absorbing `f64::log2`
+//!   rounding and the clamped boundary cases. Where the value is pinned by a
+//!   clamp or is exactly representable, a tighter bound is documented in the
+//!   test. The gradient fixture's auto-tone exposure uses the bin-quantized
+//!   median, so its tolerance carries the documented amplification
+//!   `(1/256)/(m·ln2)` ≈ 0.046 EV at m ≈ 0.1235 → 0.05. AUTO-TONE-2: the
+//!   gradient contrast golden pins the soft limiter (≈ 0.8320, strictly below
+//!   the old hard-clamped 1.0); the checker/zone end/balance goldens are exact
+//!   linear-region values at 1e-9.
 
 use lumina_core::{
     analyze_tone, match_total_exposure, suggest_auto_tone, AutoToneConfig, ImageFrame,
@@ -121,14 +124,45 @@ fn gradient_auto_tone_and_matching_follow_formula() {
         "gradient exposure {} != ~2.0171 ({expected_exposure})",
         result.exposure
     );
-    // contrast = 0.8/span - 1 ≈ 2.3042 -> clamped exactly to the upper bound
-    // contrast_bounds.1 = 1.0 of the default configuration. The span
-    // (p99 - p01 = 62.5/256) stays far above the clamp threshold, so the
-    // pinned exact bound is preserved.
+    // contrast = soft(0.8/span − 1): raw ≈ 2.3072 compresses through the
+    // AUTO-TONE-2 soft limiter (linear 0.6, cap 0.9, shoulder 0.5) to
+    // ≈ 0.8320 — strong but STRICTLY below the hard 1.0 bound the old
+    // formula pinned exactly (`Contrast = 100` bug). Span from the
+    // bin-quantized analysis: p99 − p01 = (62.87 − 0.945)/256.
     assert!(
-        (result.contrast - 1.0).abs() < 1e-12,
-        "gradient contrast {} != clamped upper bound 1.0",
+        (result.contrast - 0.8320413).abs() < 1e-4,
+        "gradient contrast {} != soft-limited ~0.8320",
         result.contrast
+    );
+    assert!(
+        result.contrast < 1.0,
+        "gradient contrast {} must never pin to the hard limit",
+        result.contrast
+    );
+    // Six-slider ends/balance from the same pass (bin-quantized analysis:
+    // p01 = 0.945/256, median = 32/256, p99 = 62.87/256; all raw values in
+    // the linear region except whites, which takes the shoulder):
+    // whites = soft(0.95 − 62.87/256) ≈ 0.6346, blacks = 0.945/256 − 0.05,
+    // highlights = 0.4 − 30.87/256, shadows = 0.4 − 31.055/256.
+    assert!(
+        (result.whites - 0.6345505).abs() < 1e-4,
+        "gradient whites {} != ~0.6346",
+        result.whites
+    );
+    assert!(
+        (result.blacks - (-0.0463086)).abs() < 1e-4,
+        "gradient blacks {} != ~-0.0463",
+        result.blacks
+    );
+    assert!(
+        (result.highlights - 0.2794141).abs() < 1e-4,
+        "gradient highlights {} != ~0.2794",
+        result.highlights
+    );
+    assert!(
+        (result.shadows - 0.2786914).abs() < 1e-4,
+        "gradient shadows {} != ~0.2787",
+        result.shadows
     );
     let delta = match_total_exposure(&frame, 0.5).unwrap();
     assert!(
@@ -208,6 +242,21 @@ fn checker_auto_tone_and_matching_follow_formula() {
         "checker contrast {} != -0.2",
         result.contrast
     );
+    // AUTO-TONE-2 six-slider ends/balance (exact: p01 = 0.0, median = 0.5,
+    // p99 = 1.0, all raw values in the linear region):
+    // whites = 0.95 − 1.0 = −0.05, blacks = 0.0 − 0.05 = −0.05,
+    // highlights = shadows = 0.4 − 0.5 = −0.1.
+    for (name, value, expected) in [
+        ("whites", result.whites, -0.05),
+        ("blacks", result.blacks, -0.05),
+        ("highlights", result.highlights, -0.1),
+        ("shadows", result.shadows, -0.1),
+    ] {
+        assert!(
+            (value - expected).abs() < 1e-9,
+            "checker {name} {value} != {expected}"
+        );
+    }
     // mean is 0.5 up to ~1e-16, so log2(0.5/mean) = log2(1 ± 2e-16) ≈ 0.0;
     // the residual is far below 1e-9 (delta = log2 of a value within a few
     // ULP of 1.0).
@@ -285,6 +334,22 @@ fn zone_auto_tone_and_matching_follow_formula() {
         "zone contrast {} != -1/35 ({expected_contrast})",
         result.contrast
     );
+    // AUTO-TONE-2 six-slider ends/balance from the bin-quantized analysis
+    // (p01 = 20.5/256, median = 125.5/256, p99 = 230.5/256; exact bin marks,
+    // all raw values in the linear region):
+    // whites = 0.95 − 230.5/256, blacks = 20.5/256 − 0.05,
+    // highlights = shadows = 0.4 − 105/256.
+    for (name, value, expected) in [
+        ("whites", result.whites, 0.95 - 230.5 / 256.0),
+        ("blacks", result.blacks, 20.5 / 256.0 - 0.05),
+        ("highlights", result.highlights, 0.4 - 105.0 / 256.0),
+        ("shadows", result.shadows, 0.4 - 105.0 / 256.0),
+    ] {
+        assert!(
+            (value - expected).abs() < 1e-9,
+            "zone {name} {value} != {expected}"
+        );
+    }
     let delta = match_total_exposure(&frame, 0.5).unwrap();
     assert!(
         (delta - expected_exposure).abs() < LOG_TOLERANCE,
