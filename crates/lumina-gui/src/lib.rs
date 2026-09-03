@@ -45,7 +45,7 @@ use lumina_sidecar::{
     Resolution, SidecarDocument, SourceFingerprint, SourceIdentity, SourceStatus,
 };
 use lumina_sidecar::{
-    AnalysisFingerprint, ColorGrading, ColorGradingRange, Crop, CurveChannels, CurvePoint, Curves,
+    AnalysisFingerprint, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves,
     EditRecipe, Effects, Flag, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
     HslChannel, LensCorrection, NoiseReduction, Perspective, Presence, Preset, Sharpening,
     Vignette,
@@ -657,6 +657,17 @@ pub struct LuminaApp {
     /// and re-creating the texture on every repaint (mousemoves over panels
     /// used to pay a full-frame memcpy + upload per frame).
     texture_identity: Option<(u64, bool, [usize; 2])>,
+    /// GUI-NAV-RECT-1: overview texture of the FULL source for the navigator
+    /// viewport (never the ROI-cropped preview texture) + its cache key
+    /// `(path, full_w, full_h)`. Rebuilt only on source change.
+    navigator_texture: Option<egui::TextureHandle>,
+    navigator_texture_key: Option<(String, u32, u32)>,
+    /// GUI-NAV-RECT-1: cached downscaled full-frame overview render (current
+    /// recipe) for the zoomed navigator + its key
+    /// `(path, full_w, full_h, recipe_digest)`. Recomputed only when source
+    /// or recipe change; at Fit the preview texture is reused instead.
+    navigator_overview: Option<ImageFrame>,
+    navigator_overview_key: Option<(String, u32, u32, String)>,
     /// R2-GUIMOD-02: bumped whenever `self.preview` receives new content.
     /// Part of [`Self::texture_identity`]; together with the Before/After flag
     /// and pixel size it gates the CPU texture upload to actual content
@@ -676,10 +687,12 @@ pub struct LuminaApp {
     error: Option<String>,
     render_key: Option<RenderKey>,
     tone_analysis: Option<lumina_core::ToneAnalysis>,
-    /// 256-bin luminance histogram of the currently displayed preview, stored
-    /// together with [`Self::tone_analysis`] from the single shared
-    /// `analyze_tone_with_histogram` pass (GUI-HISTOGRAM-1). Feeds the filled
-    /// Painter curve; `None` until the first render (panel shows `NotCurrent`).
+    /// 256-bin luminance histogram of the full-frame render (GUI-HISTOGRAM-FULL-1,
+    /// F-100): always computed from the un-cropped full frame — never from the
+    /// ROI-cropped viewport texture — stored together with
+    /// [`Self::tone_analysis`] from the single shared
+    /// `analyze_tone_with_histogram` pass. Feeds the filled Painter curve;
+    /// `None` until the first render (panel shows `NotCurrent`).
     preview_histogram: Option<LuminanceHistogram>,
     /// Pending slider commit awaiting the debounced full render
     /// (GUI-SLIDER-SAVE-1): `(recipe_key, value)` recorded by
@@ -970,7 +983,21 @@ pub struct LuminaApp {
     /// (LUMINA_PERF_LOG diagnostics).
     frame_previews_enqueued: usize,
     frame_previews_ready: usize,
+    /// GUI-TOAST-OVERLAP-1: transient overlay toast (message + egui-time
+    /// deadline). Shown in its own [`egui::Area`] so it never takes layout
+    /// width or covers thumbnails persistently; auto-dismissed after
+    /// [`TOAST_TIMEOUT_SECONDS`], manually dismissible via its button.
+    toast_message: Option<String>,
+    toast_until: f64,
 }
+
+/// Long edge (px) of the cached zoomed-navigator overview render
+/// (GUI-NAV-RECT-1): thumbnail-grade, full-frame, current recipe.
+const NAVIGATOR_OVERVIEW_MAX_DIM: u32 = 256;
+
+/// GUI-TOAST-OVERLAP-1: seconds a toast stays visible without interaction
+/// before it auto-dismisses.
+const TOAST_TIMEOUT_SECONDS: f64 = 4.0;
 
 #[cfg(feature = "gpu")]
 type GpuStageGate = ((RenderKey, Option<[f32; 4]>), bool);
@@ -1291,6 +1318,10 @@ impl LuminaApp {
             texture: None,
             // R2-GUIMOD-02: no CPU pixels uploaded yet (see `texture_identity`).
             texture_identity: None,
+            navigator_texture: None,
+            navigator_texture_key: None,
+            navigator_overview: None,
+            navigator_overview_key: None,
             preview_generation: 0,
             status: Str::ReadyForImage.t().into(),
             error: None,
@@ -1421,6 +1452,9 @@ impl LuminaApp {
             preview_ctrl: None,
             frame_previews_enqueued: 0,
             frame_previews_ready: 0,
+            // GUI-TOAST-OVERLAP-1: no toast until the first background event.
+            toast_message: None,
+            toast_until: 0.0,
         }
     }
 
@@ -3525,10 +3559,22 @@ impl LuminaApp {
     /// Display-string paths of the filmstrip entries in strip order (the same
     /// RAW-only order [`Self::draw_filmstrip`] renders).
     fn filmstrip_order(&self) -> Vec<String> {
+        self.raw_entry_indices()
+            .iter()
+            .map(|&index| self.entries[index].path.display().to_string())
+            .collect()
+    }
+
+    /// Indices of the RAW entries in display order (GUI-FILMSTRIP-DUP-1):
+    /// the single source behind the filmstrip, the navigator rail and the
+    /// Library grid — every image appears exactly once per view, and every
+    /// view shares the same selection bookkeeping.
+    fn raw_entry_indices(&self) -> Vec<usize> {
         self.entries
             .iter()
-            .filter(|entry| is_raw_name(&entry.name))
-            .map(|entry| entry.path.display().to_string())
+            .enumerate()
+            .filter(|(_, entry)| is_raw_name(&entry.name))
+            .map(|(index, _)| index)
             .collect()
     }
 
@@ -3537,10 +3583,12 @@ impl LuminaApp {
         self.filmstrip_selection.iter().cloned().collect()
     }
 
-    /// GUI-FILMSTRIP-SYNC-1: update the multi-selection for a filmstrip click
-    /// and open the clicked image. Selection bookkeeping is synchronous (it
-    /// never waits for the background decode started by [`Self::open_file`]).
-    pub fn handle_filmstrip_click(&mut self, path: String, toggle: bool, range: bool) {
+    /// GUI-FILMSTRIP-SYNC-1: update the multi-selection for a click WITHOUT
+    /// opening the image (Library grid single-click selects; opening stays
+    /// on double-click). Selection bookkeeping is shared with
+    /// [`Self::handle_filmstrip_click`] so every entry point syncs
+    /// identically (GUI-FILMSTRIP-DUP-1).
+    pub fn select_filmstrip_path(&mut self, path: String, toggle: bool, range: bool) {
         let order = self.filmstrip_order();
         let (next, anchor) = Self::apply_filmstrip_click(
             &order,
@@ -3553,7 +3601,19 @@ impl LuminaApp {
         self.filmstrip_selection = next;
         self.filmstrip_anchor = anchor;
         trace!(
-            "GUI interaction: filmstrip click {} (toggle={toggle}, range={range}, selected={})",
+            "GUI interaction: filmstrip select {} (toggle={toggle}, range={range}, selected={})",
+            path,
+            self.filmstrip_selection.len()
+        );
+    }
+
+    /// GUI-FILMSTRIP-SYNC-1: update the multi-selection for a filmstrip click
+    /// and open the clicked image. Selection bookkeeping is synchronous (it
+    /// never waits for the background decode started by [`Self::open_file`]).
+    pub fn handle_filmstrip_click(&mut self, path: String, toggle: bool, range: bool) {
+        self.select_filmstrip_path(path.clone(), toggle, range);
+        trace!(
+            "GUI interaction: filmstrip click {} (selected={})",
             path,
             self.filmstrip_selection.len()
         );
@@ -3892,6 +3952,11 @@ impl LuminaApp {
         self.preview_pan = egui::Vec2::ZERO;
         self.preview_roi = None;
         self.preview_render_src = None;
+        // GUI-NAV-RECT-1: the overview belongs to the previous source.
+        self.navigator_texture = None;
+        self.navigator_texture_key = None;
+        self.navigator_overview = None;
+        self.navigator_overview_key = None;
         self.before_after = false;
         self.wb_pick_mode = false;
         self.render_mask_layers.clear();
@@ -4715,6 +4780,23 @@ impl LuminaApp {
         }
     }
 
+    /// Whether a pan gesture (modifier-free wheel over the preview, hand-tool
+    /// drag) may pin the zoom mode to `Custom` (GUI-ZOOM-CUSTOM-1, F-100):
+    /// only when actually zoomed in (`zoom > 1.0`) AND the drawn image
+    /// overflows the pane. At Fit (or zoomed out) there is nothing to pan,
+    /// so the gesture must never flip the readout to `Custom` — `Custom`
+    /// arises solely from explicit zoom/pan of a magnified view. Pure helper
+    /// so the Fit-guard is unit-testable headless.
+    fn pan_gesture_pins_custom(
+        zoom: f32,
+        draw_w: f32,
+        draw_h: f32,
+        pane_w: f32,
+        pane_h: f32,
+    ) -> bool {
+        zoom > 1.0 && (draw_w > pane_w + 0.5 || draw_h > pane_h + 0.5)
+    }
+
     /// Open or collapse the navigator rail (GUI-PREVIEW-NAV-1). Pure view
     /// state — never touches the recipe or the sidecar.
     pub fn set_navigator_open(&mut self, open: bool) {
@@ -4848,7 +4930,9 @@ impl LuminaApp {
     /// `with_masks` enables the sidecar mask planes (skipped for the draft,
     /// whose source is downscaled and therefore misaligned with full-res masks).
     /// `roi` optionally crops the source to the visible region before the render
-    /// (PERF-GUI-5).
+    /// (PERF-GUI-5). The crop applies to the DISPLAY texture only — the tone /
+    /// histogram analysis always runs on the un-cropped full frame
+    /// (GUI-HISTOGRAM-FULL-1).
     ///
     /// PERF-GUI-1 (staged invalidation): the pipeline runs as
     /// `base → Adjustments → geometry → Masks`, and the **base stage** (post
@@ -5020,6 +5104,33 @@ impl LuminaApp {
         // (Agents.md: keine GUI-spezifische Bildlogik außerhalb der Pipeline).
         let mask_warnings = output.mask_warnings;
         let preview = output.frame;
+        // GUI-HISTOGRAM-FULL-1: identity of the un-cropped full-frame base for
+        // the histogram analysis render below. Computed here while
+        // `source_hash`/`decode_version`/`copy_id` are still owned — the
+        // `render_key` construction beneath moves them. `None` when no ROI
+        // was requested (the preview already is the full frame, so no second
+        // analysis render is needed).
+        let full_analysis_digest: Option<String> = if effective_roi.is_some() {
+            Some(
+                RenderKey::new(
+                    source_hash.clone(),
+                    decode_version.clone(),
+                    "raster-mvp-1",
+                    copy_id.clone(),
+                    &EditRecipe::default(),
+                    Vec::new(),
+                    OutputSpec {
+                        profile: "sRGB".into(),
+                        width: source.width,
+                        height: source.height,
+                        format: "rgba8".into(),
+                    },
+                )
+                .stage_digest(CacheStage::Base),
+            )
+        } else {
+            None
+        };
         // REVIEW-CORE-DIGEST-WIRING: this preview key deliberately stays on the
         // neutral `RenderKey::new` defaults instead of attaching the `with_*`
         // builders, because neither builder input exists at this site:
@@ -5049,12 +5160,87 @@ impl LuminaApp {
                 format: "rgba8".into(),
             },
         ));
-        // GUI-HISTOGRAM-1: one shared pass yields both the tone panel values
-        // and the 256-bin histogram feeding the Painter curve.
+        // GUI-HISTOGRAM-FULL-1 (F-100): one shared pass yields both the tone
+        // panel values and the 256-bin histogram feeding the Painter curve.
+        // The analysis input is ALWAYS the un-cropped full frame — never the
+        // ROI-cropped viewport texture: while zoomed the display preview is a
+        // magnified crop, but the histogram must still describe the whole
+        // image. Only when an ROI was actually rendered is a second,
+        // un-cropped analysis render needed (at Fit the preview already is
+        // the full frame, so it is analyzed directly with zero extra cost).
+        // The draft/full distinction is untouched: a draft analysis render
+        // uses the draft source, so `preview_is_draft` keeps describing the
+        // histogram (REVIEW-GUI-N5).
         // R2-GUIMOD-04a: timed for the per-tick drag instrumentation
         // (measurement only — the result is used exactly as before).
         let ana_t0 = std::time::Instant::now();
-        let (analysis, histogram) = analyze_tone_with_histogram(&preview);
+        let (analysis, histogram) = match (
+            effective_roi.is_some() && !crop_failed,
+            full_analysis_digest,
+        ) {
+            (true, Some(full_digest)) => {
+                // Resolve the full-frame base first (mutable cache borrow only —
+                // no recipe borrow yet, so this never aliases the render below).
+                // The digest matches a settled Fit render byte-for-byte, hence a
+                // warm cache hit whenever the full frame was rendered before and
+                // only the cheaper downstream stages re-execute here.
+                let mut analysis_work = StageWork::default();
+                let full_base = match self.base_stage_cache.get(&full_digest) {
+                    Some(hit) => {
+                        analysis_work.base_cache_hit = true;
+                        trace!(
+                            "GUI render: full-frame analysis base cache HIT ({}x{})",
+                            source.width,
+                            source.height
+                        );
+                        hit
+                    }
+                    None => {
+                        let prepared = prepare_source_base(source, &[], &mut analysis_work)?;
+                        self.base_stage_cache
+                            .insert(full_digest.clone(), prepared.clone());
+                        analysis_work.base_cache_hit = false;
+                        trace!(
+                            "GUI render: full-frame analysis base cache MISS — rebuilt ({}x{})",
+                            source.width,
+                            source.height
+                        );
+                        prepared
+                    }
+                };
+                let full_masks = if with_masks {
+                    let planes = self.load_mask_planes();
+                    match &self.document {
+                        Some(document) => document
+                            .virtual_copies
+                            .iter()
+                            .find(|c| c.id == self.virtual_copy_id)
+                            .map(|_| MaskContext {
+                                copies: &document.virtual_copies,
+                                active_copy_id: &self.virtual_copy_id,
+                                planes,
+                                policy: MaskPolicy::Warn,
+                            }),
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let full_output = render_frame_from_base(
+                    full_base,
+                    &RenderContext {
+                        recipe: &self.recipe,
+                        camera_white_balance: self.camera_white_balance,
+                        source_actions: &[],
+                        masks: full_masks,
+                        lensfun: None,
+                    },
+                    &mut analysis_work,
+                )?;
+                analyze_tone_with_histogram(&full_output.frame)
+            }
+            _ => analyze_tone_with_histogram(&preview),
+        };
         self.last_analysis_ms = ana_t0.elapsed().as_secs_f64() * 1000.0;
         self.tone_analysis = Some(analysis);
         self.preview_histogram = Some(histogram);
@@ -5750,6 +5936,13 @@ impl LuminaApp {
         if ready > 0 || failure_count > 0 {
             ctx.request_repaint();
         }
+        // GUI-TOAST-OVERLAP-1: a batch of freshly prepared neighbor previews
+        // raises the transient overlay toast (coalesced while one is
+        // visible) instead of a persistent per-cell badge over a thumbnail.
+        if ready > 0 {
+            let now = ctx.input(|i| i.time);
+            self.show_toast(Str::ToastPreviewReady.t().to_string(), now);
+        }
     }
 
     /// Plan and enqueue the asymmetric +4/−2 neighbor-preview window around the
@@ -5818,6 +6011,31 @@ impl LuminaApp {
     /// no decode/render wait. Serves first from the RAM LRU, then from the disk
     /// tier; a miss is a genuine miss (the standard lazy loading path applies —
     /// never a silently wrong/upscaled image).
+    /// Adopt a cached neighbor frame as the *transient* main preview
+    /// (GUI-PREVIEW-NOISE-1): a neighbor frame is a low-resolution stand-in
+    /// rendered with the neighbor window's recipe — never the committed render
+    /// of this image. It is therefore bookkept as a draft: the placement math
+    /// (`preview_render_src`), the HUD draft badge (`preview_is_draft`) and
+    /// the derived analysis state (tone/histogram/render key) all describe
+    /// this frame honestly until `finish_decode` replaces it with the full
+    /// render. Painting it as a "current" full render instead showed an
+    /// upscaled low-res image with a "Preview current" status while the
+    /// navigator thumbnail (separate pipeline) stayed correct.
+    fn adopt_neighbor_preview_frame(&mut self, frame: ImageFrame) {
+        let (width, height) = (frame.width, frame.height);
+        self.preview = Some(frame);
+        self.preview_generation += 1;
+        // Force `update_texture` to (re-)upload the new pixels this frame.
+        self.texture_identity = None;
+        self.preview_render_src = Some((width, height));
+        self.preview_roi = None;
+        self.preview_is_draft = true;
+        self.tone_analysis = None;
+        self.preview_histogram = None;
+        self.render_key = None;
+        self.render_mask_layers.clear();
+    }
+
     fn paint_cached_neighbor_preview(&mut self, path: &str) {
         let canonical = Path::new(path)
             .canonicalize()
@@ -5842,10 +6060,91 @@ impl LuminaApp {
         });
         if let Some(frame) = cached {
             log::debug!("neighbor preview cache-hit, painting immediately: {path}");
-            self.preview = Some(frame);
-            self.preview_generation += 1;
-            // Force `update_texture` to (re-)upload the new pixels this frame.
-            self.texture_identity = None;
+            self.adopt_neighbor_preview_frame(frame);
+        }
+    }
+
+    /// Whether the overlay toast is currently visible at egui-time `now`
+    /// (GUI-TOAST-OVERLAP-1). Pure so the show/dismiss/timeout state machine
+    /// is unit-testable headless without an event loop.
+    pub fn toast_visible(&self, now: f64) -> bool {
+        self.toast_message.is_some() && now <= self.toast_until
+    }
+
+    /// Show the overlay toast until `now + TOAST_TIMEOUT_SECONDS`
+    /// (GUI-TOAST-OVERLAP-1). A visible toast is never stacked — the call is
+    /// a no-op while one is showing, so a burst of background completions
+    /// produces a single transient notice instead of a queue.
+    pub fn show_toast(&mut self, message: String, now: f64) {
+        if self.toast_visible(now) {
+            return;
+        }
+        info!("toast: {message}");
+        self.toast_message = Some(message);
+        self.toast_until = now + TOAST_TIMEOUT_SECONDS;
+    }
+
+    /// Manually dismiss the overlay toast (its ✕ button).
+    pub fn dismiss_toast(&mut self) {
+        trace!("GUI interaction: toast dismissed");
+        self.toast_message = None;
+        self.toast_until = 0.0;
+    }
+
+    /// Fixed toast anchor for a viewport of width `viewport_w`
+    /// (GUI-TOAST-OVERLAP-1): top-right, below the header/module bars and
+    /// clear of the left navigator rail, the Library grid origin and the
+    /// bottom filmstrip. Pure so the no-overlap placement is unit-testable
+    /// headless.
+    fn toast_anchor(viewport_w: f32) -> egui::Pos2 {
+        egui::pos2((viewport_w - 300.0).max(0.0), 64.0)
+    }
+
+    /// Expire the toast past its deadline and keep a visible one alive across
+    /// frames by scheduling the repaint exactly at its deadline
+    /// (GUI-TOAST-OVERLAP-1): without the timed repaint egui would sleep and
+    /// the toast would linger until the next unrelated input.
+    fn update_toast(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if self.toast_message.is_none() {
+            return;
+        }
+        if self.toast_visible(now) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                (self.toast_until - now).max(0.0),
+            ));
+        } else {
+            trace!("toast auto-dismissed after timeout");
+            self.dismiss_toast();
+        }
+    }
+
+    /// Draw the transient overlay toast in its own [`egui::Area`]
+    /// (GUI-TOAST-OVERLAP-1): an overlay takes no layout width, so it can
+    /// neither shift nor cover thumbnails the way the old in-cell badge did.
+    /// The ✕ button dismisses it immediately.
+    fn draw_toast(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if !self.toast_visible(now) {
+            return;
+        }
+        let message = self.toast_message.clone().unwrap_or_default();
+        let viewport_w = ctx.input(|i| i.viewport_rect().width());
+        let mut dismissed = false;
+        egui::Area::new(egui::Id::new("lumina-toast"))
+            .fixed_pos(Self::toast_anchor(viewport_w))
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(&message);
+                    if ui.button(Str::ToastDismiss.t()).clicked() {
+                        dismissed = true;
+                    }
+                });
+            });
+        if dismissed {
+            self.dismiss_toast();
         }
     }
 
@@ -5853,6 +6152,11 @@ impl LuminaApp {
     /// neighbor-preview state, or `None` when no state applies (e.g. the probe
     /// was consumed/active). Maps the controller's per-probe state to a cell
     /// overlay so „wird vorbereitet / Veraltet / Fehler" is never only a log.
+    ///
+    /// GUI-TOAST-OVERLAP-1: a `Ready` probe shows NO badge — the transient
+    /// overlay toast owns that signal now. The old green "ready" badge sat on
+    /// top of the thumbnail cell indefinitely (no timeout, no dismiss) and
+    /// covered the image it announced.
     fn neighbor_preview_badge(&self, probe_id: &str) -> Option<(String, egui::Color32)> {
         let ctrl = self.preview_ctrl.as_ref()?;
         // The active image is never displayed via the neighbor cache — skip the
@@ -5862,20 +6166,18 @@ impl LuminaApp {
         }
         let (label, color) = match ctrl.probe_state(probe_id) {
             preview_ctrl::PreviewProbeState::Miss => return None,
+            preview_ctrl::PreviewProbeState::Ready => return None,
             preview_ctrl::PreviewProbeState::Loading => (
-                "wird vorbereitet…".to_owned(),
+                Str::NeighborLoading.t().to_owned(),
                 egui::Color32::from_rgb(0x44, 0x66, 0x88),
             ),
-            preview_ctrl::PreviewProbeState::Ready => (
-                "Vorschau bereit".to_owned(),
-                egui::Color32::from_rgb(0x2e, 0x7d, 0x32),
-            ),
             preview_ctrl::PreviewProbeState::Stale => (
-                "Veraltet".to_owned(),
+                Str::NeighborStale.t().to_owned(),
                 egui::Color32::from_rgb(0xb0, 0x8a, 0x00),
             ),
             preview_ctrl::PreviewProbeState::Failed => (
-                format!("Fehler: {}", ctrl.failure(probe_id).unwrap_or("unbekannt")),
+                Str::NeighborFailedPattern
+                    .format_arg(ctrl.failure(probe_id).unwrap_or("unbekannt")),
                 egui::Color32::from_rgb(0xb0, 0x2a, 0x2a),
             ),
         };
@@ -6347,12 +6649,20 @@ impl LuminaApp {
                             center = new_center;
                             rect = egui::Rect::from_center_size(center, draw);
                             self.mark_dirty();
-                        } else if draw.x > pane.width() + 0.5 || draw.y > pane.height() + 0.5 {
+                        } else if Self::pan_gesture_pins_custom(
+                            self.preview_zoom,
+                            draw.x,
+                            draw.y,
+                            pane.width(),
+                            pane.height(),
+                        ) {
                             // Modifier-free wheel pans the zoomed image (the
                             // clamp below keeps it covering the pane). Panning
                             // only persists in `Custom` (see `sync_zoom`), so
                             // the mode follows — the zoom factor itself is
                             // untouched, never an accidental zoom.
+                            // GUI-ZOOM-CUSTOM-1: at Fit there is nothing to
+                            // pan — the gate above keeps the mode Fit.
                             self.zoom_mode = ZoomMode::Custom;
                             center += wheel;
                             self.preview_pan = center - pane.center();
@@ -6365,8 +6675,17 @@ impl LuminaApp {
             }
 
             // Whether the (zoomed) image overflows the pane on either axis — only
-            // then is panning meaningful.
-            let pan_eligible = draw.x > pane.width() + 0.5 || draw.y > pane.height() + 0.5;
+            // then is panning meaningful. GUI-ZOOM-CUSTOM-1: panning (and the
+            // `Custom` pin) additionally requires an actual magnification
+            // (`preview_zoom > 1.0`) — at Fit a stale/oversized texture must
+            // never flip the readout to `Custom`.
+            let pan_eligible = Self::pan_gesture_pins_custom(
+                self.preview_zoom,
+                draw.x,
+                draw.y,
+                pane.width(),
+                pane.height(),
+            );
 
             let armed = self.mask_tool != MaskTool::None;
             let pick = self.wb_pick_mode;
@@ -6438,7 +6757,17 @@ impl LuminaApp {
                 }
                 center.y = center.y.clamp(lo, hi);
             }
-            self.preview_pan = center - pane.center();
+            self.preview_pan = if self.zoom_mode == ZoomMode::Custom {
+                center - pane.center()
+            } else {
+                // GUI-ZOOM-CUSTOM-1 / GUI-NAV-RECT-1: pan is only meaningful
+                // in `Custom`. Absolute modes re-centre every frame
+                // (`sync_zoom`), so a stale offset (e.g. an oversized
+                // texture right after an image switch) must never leak into
+                // the ROI crop or the navigator rectangle — Fit stays
+                // centred with zero pan.
+                egui::Vec2::ZERO
+            };
             let rect = egui::Rect::from_center_size(center, draw);
             self.preview_effective_scale = scale;
 
@@ -7576,10 +7905,26 @@ impl LuminaApp {
         });
     }
 
+    /// Visible lens-profile status (GUI-OPTICS-1): the profile name when the
+    /// recipe carries one, otherwise the explicit inactive notice — a missing
+    /// profile is an inactive automatic correction, never a silent one.
+    /// Returns `(text, has_profile)`. Pure helper so the status wording is
+    /// unit-testable headless.
+    fn lens_profile_status(lens: &Option<LensCorrection>) -> (String, bool) {
+        match lens.as_ref().and_then(|lens| lens.profile.as_deref()) {
+            Some(name) if !name.is_empty() => (Str::OpticsProfilePattern.format_arg(name), true),
+            _ => (Str::OpticsProfileNone.t().to_string(), false),
+        }
+    }
+
     fn draw_optics(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::Optics.t(), |ui| {
             if cfg!(feature = "lensfun") {
                 ui.label(Str::LensCorrection.t());
+                // GUI-OPTICS-1: the profile status is always visible (name or
+                // "no profile — correction inactive"), never implied.
+                let (status, _) = Self::lens_profile_status(&self.recipe.lens_correction);
+                ui.label(status);
                 let mut lc = self
                     .recipe
                     .lens_correction
@@ -7596,73 +7941,99 @@ impl LuminaApp {
                         ca_red: None,
                         ca_blue: None,
                     });
+                // GUI-OPTICS-1: every manual parameter is always settable.
+                // The previous build rendered sliders only for `Some` values
+                // and a bare "(unset)" label otherwise, so a fresh recipe
+                // could never receive a correction from this panel at all
+                // (the reported "no effect"). Each slider binds
+                // `current.unwrap_or(0.0)` — the identity for all eight
+                // params — and nothing is written until the user moves or
+                // resets it, so `None` stays `None`.
                 // GUI-SLIDER-SAVE-1: optics sliders commit through
                 // `set_lens_correction_value` (save at debounce); `lc` is only
                 // a slider binding buffer.
-                for (field, label, spec) in [
+                ui.label(Str::OpticsDistortionGroup.t())
+                    .on_hover_text(Str::OpticsDistortionHint.t());
+                for (field, name, label, spec) in [
                     (
                         &mut lc.distortion_k1,
+                        "distortion_k1",
                         Str::DistortionK1,
                         percent_spec(-1.0..=1.0, 0.0),
                     ),
                     (
                         &mut lc.distortion_k2,
+                        "distortion_k2",
                         Str::DistortionK2,
                         percent_spec(-1.0..=1.0, 0.0),
                     ),
                     (
                         &mut lc.distortion_k3,
+                        "distortion_k3",
                         Str::DistortionK3,
                         percent_spec(-1.0..=1.0, 0.0),
                     ),
+                ] {
+                    let mut v = field.as_ref().copied().unwrap_or(0.0);
+                    if matches!(
+                        lr_slider(ui, label.t(), &mut v, spec),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        self.set_lens_correction_value(name, f64::from(v));
+                    }
+                }
+                ui.label(Str::OpticsVignetteGroup.t())
+                    .on_hover_text(Str::OpticsVignetteHint.t());
+                for (field, name, label, spec) in [
                     (
                         &mut lc.vignette_c0,
+                        "vignette_c0",
                         Str::VignetteC0,
                         percent_spec(-1.0..=1.0, 0.0),
                     ),
                     (
                         &mut lc.vignette_c1,
+                        "vignette_c1",
                         Str::VignetteC1,
                         percent_spec(-1.0..=1.0, 0.0),
                     ),
                     (
                         &mut lc.vignette_c2,
+                        "vignette_c2",
                         Str::VignetteC2,
                         percent_spec(-1.0..=1.0, 0.0),
                     ),
+                ] {
+                    let mut v = field.as_ref().copied().unwrap_or(0.0);
+                    if matches!(
+                        lr_slider(ui, label.t(), &mut v, spec),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        self.set_lens_correction_value(name, f64::from(v));
+                    }
+                }
+                ui.label(Str::OpticsCaGroup.t())
+                    .on_hover_text(Str::OpticsCaHint.t());
+                for (field, name, label, spec) in [
                     (
                         &mut lc.ca_red,
+                        "ca_red",
                         Str::ChromaticRed,
                         identity_spec(-0.05..=0.05, 0.0, 0.001),
                     ),
                     (
                         &mut lc.ca_blue,
+                        "ca_blue",
                         Str::ChromaticBlue,
                         identity_spec(-0.05..=0.05, 0.0, 0.001),
                     ),
                 ] {
-                    let current = field.as_ref().copied();
-                    if let Some(c) = current {
-                        let mut v = c;
-                        if matches!(
-                            lr_slider(ui, label.t(), &mut v, spec),
-                            SliderAction::Changed | SliderAction::ResetRequested
-                        ) {
-                            let name = match label {
-                                Str::DistortionK1 => "distortion_k1",
-                                Str::DistortionK2 => "distortion_k2",
-                                Str::DistortionK3 => "distortion_k3",
-                                Str::VignetteC0 => "vignette_c0",
-                                Str::VignetteC1 => "vignette_c1",
-                                Str::VignetteC2 => "vignette_c2",
-                                Str::ChromaticRed => "ca_red",
-                                Str::ChromaticBlue => "ca_blue",
-                                _ => continue,
-                            };
-                            self.set_lens_correction_value(name, f64::from(v));
-                        }
-                    } else {
-                        ui.label(Str::UnsetPattern.format_arg(label.t()));
+                    let mut v = field.as_ref().copied().unwrap_or(0.0);
+                    if matches!(
+                        lr_slider(ui, label.t(), &mut v, spec),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        self.set_lens_correction_value(name, f64::from(v));
                     }
                 }
             } else {
@@ -8320,23 +8691,21 @@ impl LuminaApp {
         // GUI-SCROLL-200-1: index-based view over the RAW entries. Only the
         // visible rows are laid out (show_rows) and only the buffered window's
         // thumbnails are ensured per frame — never an O(n) loop over all
-        // entries.
+        // entries. GUI-FILMSTRIP-DUP-1: one shared index source.
         let query = self.library_filter.clone();
-        let raw_indices: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                is_raw_name(&entry.name)
-                    && library_filter_matches(
-                        &entry.name,
-                        entry.rating,
-                        entry.flag,
-                        entry.color_label,
-                        &query,
-                    )
+        let all_raw = self.raw_entry_indices();
+        let raw_indices: Vec<usize> = all_raw
+            .into_iter()
+            .filter(|&entry_idx| {
+                let entry = &self.entries[entry_idx];
+                library_filter_matches(
+                    &entry.name,
+                    entry.rating,
+                    entry.flag,
+                    entry.color_label,
+                    &query,
+                )
             })
-            .map(|(i, _)| i)
             .collect();
         if raw_indices.is_empty() {
             ui.heading(Str::Library.t());
@@ -8397,12 +8766,28 @@ impl LuminaApp {
                                         );
                                         ui.put(rect, egui::Label::new(placeholder_label));
                                     }
+                                    // GUI-FILMSTRIP-DUP-1: single click selects
+                                    // (shared filmstrip selection, no open);
+                                    // double-click opens in Develop. All
+                                    // views stay in sync through the same
+                                    // selection bookkeeping.
+                                    if resp.clicked() {
+                                        self.select_filmstrip_path(
+                                            entry.path.display().to_string(),
+                                            false,
+                                            false,
+                                        );
+                                    }
                                     if resp.double_clicked() {
                                         trace!(
                                             "GUI interaction: library grid open {}",
                                             entry.path.display()
                                         );
-                                        self.open_file(entry.path.display().to_string());
+                                        self.handle_filmstrip_click(
+                                            entry.path.display().to_string(),
+                                            false,
+                                            false,
+                                        );
                                         self.active_module = Module::Develop;
                                     }
                                     // LR-01 + Welle 2: rating/flag/color-label
@@ -8439,7 +8824,7 @@ impl LuminaApp {
                                                 egui::vec2(118.0, 16.0),
                                             ),
                                             2.0,
-                                            egui::Color32::from_black_alpha(160),
+                                            LIBRARY_BADGE_BG,
                                         );
                                         ui.painter().text(
                                             badge_pos,
@@ -8463,7 +8848,7 @@ impl LuminaApp {
                                                 egui::vec2(118.0, 16.0),
                                             ),
                                             2.0,
-                                            egui::Color32::from_black_alpha(160),
+                                            LIBRARY_BADGE_BG,
                                         );
                                         ui.painter().text(
                                             badge_pos,
@@ -8510,77 +8895,6 @@ impl LuminaApp {
         // window (+ buffer), then a bounded nearest-first off-screen prefetch.
         let window = visible_rows.start * cols..(visible_rows.end * cols).min(count);
         self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
-    }
-
-    /// Display-only crop/histogram thumbnail at the top of the right Develop
-    /// panel (Lightroom-like): the current render texture with the recipe's
-    /// free-crop rectangle overlaid and the outside dimmed. Purely visual —
-    /// no interaction, no recipe mutation.
-    fn draw_crop_thumb(&mut self, ui: &mut egui::Ui) {
-        let Some(texture) = self.texture.clone() else {
-            return;
-        };
-        let size = texture.size();
-        let (tex_w, tex_h) = (size[0] as f32, size[1] as f32);
-        let width = ui.available_width();
-        let height = 120.0_f32.min(ui.available_height().min(160.0));
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 2.0, egui::Color32::from_gray(24));
-        if tex_w <= 0.0 || tex_h <= 0.0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
-            return;
-        }
-        let scale = (rect.width() / tex_w).min(rect.height() / tex_h);
-        let draw_size = egui::vec2(tex_w * scale, tex_h * scale);
-        let img_rect = egui::Rect::from_center_size(rect.center(), draw_size);
-        ui.put(
-            img_rect,
-            egui::Image::from_texture(&texture).max_size(draw_size),
-        );
-        let crop = self
-            .recipe
-            .geometry
-            .as_ref()
-            .and_then(|geometry| geometry.crop.as_ref());
-        let Some(crop_rect) = crop_overlay_rect(crop, img_rect) else {
-            return;
-        };
-        let painter = ui.painter();
-        let dim = egui::Color32::from_black_alpha(140);
-        // Four border bands around the crop window keep the outside dimmed
-        // without a second texture pass.
-        painter.rect_filled(
-            egui::Rect::from_min_max(img_rect.min, egui::pos2(img_rect.max.x, crop_rect.top())),
-            0.0,
-            dim,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(img_rect.min.x, crop_rect.bottom()), img_rect.max),
-            0.0,
-            dim,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(img_rect.min.x, crop_rect.top()),
-                egui::pos2(crop_rect.left(), crop_rect.bottom()),
-            ),
-            0.0,
-            dim,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(crop_rect.right(), crop_rect.top()),
-                egui::pos2(img_rect.max.x, crop_rect.bottom()),
-            ),
-            0.0,
-            dim,
-        );
-        painter.rect_stroke(
-            crop_rect,
-            0.0,
-            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 214, 0)),
-            egui::StrokeKind::Inside,
-        );
     }
 
     /// Lightroom-style Presets section (F-009): the file-backed preset list
@@ -8883,10 +9197,11 @@ impl LuminaApp {
         // never in the module bar.
         self.draw_histogram_section(ui);
         ui.separator();
-        // Lightroom-style panel head: display-only crop/histogram
-        // thumbnail with the active crop overlay, then the Presets and
-        // History collapsible sections.
-        self.draw_crop_thumb(ui);
+        // GUI-RIGHT-THUMB-1: no panel thumbnail here. The removed
+        // `draw_crop_thumb` duplicated the main preview a third time (left
+        // rail overview + bottom filmstrip + right panel) and showed the
+        // possibly ROI-cropped preview texture as if it were the full frame
+        // when zoomed. The Develop panel starts with Presets/History.
         self.draw_presets_section(ui);
         self.draw_history_section(ui);
         self.draw_rating_section(ui);
@@ -8954,13 +9269,8 @@ impl LuminaApp {
         // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
         // filmstrip never shows jpg/png/webp/raster entries (those remain
         // browseable in the Library file-browser via `is_supported_image`).
-        let raw_indices: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| is_raw_name(&e.name))
-            .map(|(i, _)| i)
-            .collect();
+        // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
+        let raw_indices: Vec<usize> = self.raw_entry_indices();
         let count = raw_indices.len();
         // GUI-SCROLL-200-1: fixed-size cells let us lay out only the visible
         // window (+ a small buffer). Off-screen cells are never allocated,
@@ -9357,20 +9667,101 @@ impl LuminaApp {
         }
     }
 
+    /// Full-frame overview for the navigator (GUI-NAV-RECT-1): the viewport
+    /// rectangle math maps full-source coordinates, so the overview image
+    /// must be the full source too — never the ROI-cropped preview texture
+    /// (at zoom the preview shows a crop; mapping full-source rect math onto
+    /// a crop image doubles the error). At Fit the preview texture itself is
+    /// full-frame and is reused verbatim; while zoomed a downscaled
+    /// full-frame render with the current recipe is served from
+    /// [`Self::navigator_zoomed_overview`] (thumbnail-grade, cached by
+    /// source + recipe).
+    fn navigator_frame(&self) -> Option<&ImageFrame> {
+        self.original.as_ref()
+    }
+
+    /// Downscaled full-frame overview render with the current recipe for the
+    /// zoomed navigator (GUI-NAV-RECT-1): the preview texture is an ROI crop
+    /// while zoomed, so the overview renders the downscaled full source
+    /// instead (masks stay out — full-resolution planes do not align with the
+    /// downscaled source — exactly like the draft path). Returns the cached
+    /// frame when source + recipe are unchanged, re-renders otherwise. `None`
+    /// without a loaded source.
+    fn navigator_zoomed_overview(&mut self) -> Option<ImageFrame> {
+        let (width, height) = self
+            .navigator_frame()
+            .map(|frame| (frame.width, frame.height))?;
+        let recipe_json = serde_json::to_vec(&self.recipe).ok()?;
+        let digest = format!("blake3:{}", blake3::hash(&recipe_json).to_hex());
+        let key = (self.path.clone(), width, height, digest);
+        if self.navigator_overview_key.as_ref() == Some(&key) {
+            return self.navigator_overview.clone();
+        }
+        let small = self
+            .navigator_frame()
+            .map(|frame| frame.downscale(NAVIGATOR_OVERVIEW_MAX_DIM))?;
+        let context = RenderContext {
+            recipe: &self.recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let frame = render_frame(&small, &context).map(|o| o.frame).ok()?;
+        self.navigator_overview = Some(frame.clone());
+        self.navigator_overview_key = Some(key);
+        Some(frame)
+    }
+
     /// Navigator viewport overview (GUI-PREVIEW-NAV-1): the full image with the
     /// currently visible Develop working-area rectangle. Dragging the rectangle
     /// pans (`preview_pan` + `mark_dirty`); panning pins the mode to `Custom`
     /// because absolute modes re-centre every frame (see [`Self::sync_zoom`]).
-    fn draw_navigator_viewport(&mut self, ui: &mut egui::Ui) {
-        let Some(texture) = self.texture.clone() else {
-            ui.label(Str::NotCurrent.t());
-            return;
-        };
+    fn draw_navigator_viewport(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let (src_w, src_h) = self.image_dims().unwrap_or((1, 1));
         if src_w == 0 || src_h == 0 {
             ui.label(Str::NotCurrent.t());
             return;
         }
+        // GUI-NAV-RECT-1: overview texture from the FULL source (see
+        // `navigator_frame`), refreshed only on source change. At Fit the
+        // preview texture itself is full-frame and is reused verbatim (no
+        // extra render, pixel-identical); while zoomed the cached downscaled
+        // full-frame render stands in so rect math meets full-frame pixels.
+        if self.preview_roi.is_none() {
+            let key = (self.path.clone(), src_w, src_h);
+            match self.texture.clone() {
+                Some(texture) => {
+                    self.navigator_texture = Some(texture);
+                    self.navigator_texture_key = Some(key);
+                }
+                None => {
+                    ui.label(Str::NotCurrent.t());
+                    return;
+                }
+            }
+        } else {
+            let key = (self.path.clone(), src_w, src_h);
+            let texture = self.navigator_zoomed_overview().map(|frame| {
+                let size = [frame.width as usize, frame.height as usize];
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
+                ctx.load_texture("lumina-navigator", image, egui::TextureOptions::LINEAR)
+            });
+            match texture {
+                Some(texture) => {
+                    self.navigator_texture = Some(texture);
+                    self.navigator_texture_key = Some(key);
+                }
+                None => {
+                    ui.label(Str::NotCurrent.t());
+                    return;
+                }
+            }
+        }
+        let texture = self
+            .navigator_texture
+            .clone()
+            .expect("navigator texture set above");
         // Aspect-fitted overview (no letterboxing, so the navigator scale is
         // uniform on both axes and the drag mapping stays exact).
         let avail_w = ui.available_width().max(40.0);
@@ -9423,20 +9814,15 @@ impl LuminaApp {
             });
         });
         ui.separator();
-        self.draw_navigator_viewport(ui);
+        self.draw_navigator_viewport(ctx, ui);
         ui.separator();
         ui.label(Str::FilmstripHint.t());
         // RAW-only: mirror the filmstrip filter so the left navigator rail shows
         // only RAW entries (jpg/png/webp are excluded from the Develop preview).
+        // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
         // GUI-SCROLL-200-1: index view + `show_rows` — one fixed-height row per
         // entry, only the visible window is laid out and scheduled.
-        let raw_indices: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| is_raw_name(&e.name))
-            .map(|(i, _)| i)
-            .collect();
+        let raw_indices: Vec<usize> = self.raw_entry_indices();
         let count = raw_indices.len();
         const CELL_W: f32 = 120.0;
         const CELL_H: f32 = 90.0;
@@ -9493,8 +9879,11 @@ impl LuminaApp {
                         );
                     }
                     if resp.clicked() {
+                        // GUI-FILMSTRIP-DUP-1: the rail shares the filmstrip
+                        // selection — clicking here selects AND opens, exactly
+                        // like a filmstrip click, so all views stay in sync.
                         trace!("GUI interaction: navigator open {}", entry.path.display());
-                        self.open_file(entry.path.display().to_string());
+                        self.handle_filmstrip_click(entry.path.display().to_string(), false, false);
                     }
                 }
                 rows
@@ -9698,6 +10087,13 @@ fn folder_badge(root: &Path, path: &Path) -> String {
 /// stored [`FileBrowserEntry::folder`] keeps the full path.
 const FOLDER_BADGE_MAX_CHARS: usize = 17;
 
+/// Library grid badge chip background (GUI-LIBRARY-BADGE-CONTRAST-1): a
+/// solid mid-grey instead of translucent black. Over dark thumbnails the old
+/// chip melted into the image ("dark on dark") while the white 11px monospace
+/// text needs AA contrast — pinned by `library_badge_contrast_meets_aa`.
+/// Shared by the path badge and the rating badge (same chip style).
+const LIBRARY_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(0x42, 0x42, 0x42);
+
 /// Display text for the folder badge: the full badge when it fits, otherwise
 /// middle-truncated with `…` (`head…tail`) so the painted text never
 /// overflows the fixed 118px box. The full name stays available via hover.
@@ -9788,11 +10184,19 @@ fn subdirectories(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Maps the recipe's normalized free-crop rectangle (`Crop::Free` coordinates
-/// are `0..=1`) into an on-screen image rect for the display-only crop overlay
-/// thumbnail. Returns `None` for no crop / aspect presets (whose normalized
-/// rect depends on the decoded aspect ratio and is not tracked here).
-fn crop_overlay_rect(crop: Option<&Crop>, img_rect: egui::Rect) -> Option<egui::Rect> {
-    let Some(Crop::Free {
+/// are `0..=1`) into an on-screen image rect for a display-only crop overlay.
+/// Returns `None` for no crop / aspect presets (whose normalized rect depends
+/// on the decoded aspect ratio and is not tracked here).
+///
+/// GUI-RIGHT-THUMB-1: the right-panel thumbnail that consumed this helper was
+/// removed (it tripled the preview and showed ROI crops as full frames); the
+/// helper stays as a `cfg(test)`-gated math pin for future crop UI.
+#[cfg(test)]
+fn crop_overlay_rect(
+    crop: Option<&lumina_sidecar::Crop>,
+    img_rect: egui::Rect,
+) -> Option<egui::Rect> {
+    let Some(lumina_sidecar::Crop::Free {
         x,
         y,
         width,
@@ -10396,6 +10800,11 @@ impl eframe::App for LuminaApp {
             }
             _ => self.draw_preview_area(&ctx, ui),
         });
+        // GUI-TOAST-OVERLAP-1: transient overlay toast (own Area, auto-dismiss
+        // + manual ✕) — drawn last so it floats above the panels without
+        // taking layout width.
+        self.update_toast(&ctx);
+        self.draw_toast(&ctx);
         if let Some(t0) = perf_t0 {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             // GUI-SCROLL-200-1: `slow_frame` flags every frame over the 16.7 ms
@@ -10432,7 +10841,7 @@ mod tests {
     use super::*;
     use lumina_core::ImageFileFormat;
     use lumina_sidecar::{
-        BrushMark, BrushMarkSign, CoordinateSystem, DecodeFingerprint, GenerativeCanvas,
+        BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint, GenerativeCanvas,
         GenerativeEdit, GeometryFingerprint, LensCorrection, MaskDefinition, MaskOperation,
         MaskPrompt, MaskStatus, ModelIdentity, Point2, Preprocessing, PromptTransform, Resolution,
         SourceFingerprint, SourceStatus,
@@ -13917,6 +14326,124 @@ mod tests {
         assert!(empty.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
     }
 
+    /// GUI-HISTOGRAM-FULL-1 (F-100): the histogram is always computed from the
+    /// full frame — never from the zoomed viewport/ROI crop. Zoom+pan produce
+    /// an ROI-cropped display texture, but the stored histogram keeps
+    /// full-frame dims, full-frame sample count and full-frame bins, and it
+    /// must not move when only the view changes. The draft flag still
+    /// describes the render path (REVIEW-GUI-N5).
+    #[test]
+    fn histogram_uses_full_frame_despite_zoom_pan() {
+        // 64×40 luminance gradient: an ROI crop of the middle covers a
+        // different luminance range than the whole frame, so an ROI-fed
+        // histogram is measurably distinct from the full-frame one.
+        let (w, h) = (64_u32, 40_u32);
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x * 255 / (w - 1)) as u8;
+                let g = (y * 255 / (h - 1)) as u8;
+                let b = ((x + y) * 255 / (w - 1 + h - 1)) as u8;
+                pixels.extend_from_slice(&[r, g, b, 255]);
+            }
+        }
+        let png = ImageFrame::new(w, h, pixels)
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        // Settled Fit render: full-frame preview, full-frame histogram baseline.
+        app.render().unwrap();
+        assert!(app.preview_roi.is_none());
+        let fit_preview = app.preview().expect("preview after load").clone();
+        assert_eq!((fit_preview.width, fit_preview.height), (w, h));
+        let fit_histogram = app.current_histogram().expect("stored histogram at Fit");
+        assert_eq!((fit_histogram.width, fit_histogram.height), (w, h));
+        assert_eq!(fit_histogram.bins.iter().sum::<u64>(), u64::from(w * h));
+
+        // Zoom into the frame with a pan offset: the display preview becomes
+        // an ROI crop while the histogram must stay full-frame.
+        app.preview_zoom = 4.0;
+        app.preview_pan = egui::vec2(120.0, 40.0);
+        app.render_full([800, 600], None).unwrap();
+        let roi = app
+            .preview_roi
+            .expect("zoomed render must record an ROI crop");
+        assert!(
+            roi[2] < w && roi[3] < h,
+            "ROI must be a true crop, got {roi:?}"
+        );
+        let zoomed_preview = app.preview().expect("zoomed preview").clone();
+        assert_eq!(
+            (zoomed_preview.width, zoomed_preview.height),
+            (roi[2], roi[3]),
+            "the display texture stays ROI-cropped (viewport render)"
+        );
+        assert!(
+            !app.preview_is_draft(),
+            "render_full is never a draft even when zoomed"
+        );
+        let zoomed_histogram = app
+            .current_histogram()
+            .expect("stored histogram when zoomed");
+        // Analysis-input dims == full dims, never the ROI dims.
+        assert_eq!((zoomed_histogram.width, zoomed_histogram.height), (w, h));
+        assert_eq!(zoomed_histogram.bins.iter().sum::<u64>(), u64::from(w * h));
+        assert_eq!(
+            app.tone_analysis().expect("tone analysis").sample_count,
+            (w * h) as usize,
+            "tone sample count must cover the full frame, not the ROI crop"
+        );
+        // Full-frame invariant: zooming must not move the histogram.
+        assert_eq!(
+            zoomed_histogram.bins, fit_histogram.bins,
+            "zoom/pan must not change the full-frame histogram"
+        );
+        // …and the stored histogram must NOT describe the ROI crop that is
+        // actually displayed (the pre-fix behaviour). Normalized L1 distance
+        // (`0` = identical, `2` = disjoint) between the two distributions.
+        let (_, roi_histogram) = analyze_tone_with_histogram(&zoomed_preview);
+        let sum_full: u64 = zoomed_histogram.bins.iter().sum();
+        let sum_roi: u64 = roi_histogram.bins.iter().sum();
+        let distance: f64 = zoomed_histogram
+            .bins
+            .iter()
+            .zip(roi_histogram.bins.iter())
+            .map(|(&a, &b)| (a as f64 / sum_full as f64 - b as f64 / sum_roi as f64).abs())
+            .sum();
+        assert!(
+            distance > 0.2,
+            "stored histogram must differ from the ROI-crop histogram (L1 {distance:.3} <= 0.2)"
+        );
+
+        // Draft path: same full-frame guarantee, draft marking intact. The
+        // 64×40 draft source is un-downscaled (`downscale` never upscales),
+        // so the full draft frame matches the full render pixel-for-pixel
+        // under the default recipe with no masks.
+        app.render_draft([800, 600], None).unwrap();
+        assert!(
+            app.preview_is_draft(),
+            "render_draft keeps the draft marking (REVIEW-GUI-N5)"
+        );
+        assert!(
+            app.preview_roi.is_some(),
+            "the zoomed draft display stays ROI-cropped"
+        );
+        let draft_histogram = app
+            .current_histogram()
+            .expect("stored histogram for the zoomed draft");
+        assert_eq!(
+            (draft_histogram.width, draft_histogram.height),
+            (w, h),
+            "draft analysis input is the full draft frame, not the ROI"
+        );
+        assert_eq!(
+            draft_histogram.bins, fit_histogram.bins,
+            "draft histogram must match the full-frame histogram"
+        );
+    }
+
     /// R2-GUIMOD-04a: one coalesced drag tick records per-tick timings
     /// (CPU draft / GPU / analysis) headless. Measurement only — the tick
     /// renders the same draft the pointer-drag branch shows.
@@ -17379,5 +17906,1093 @@ mod tests {
             app.apply_quick_develop(key, 0.5).unwrap();
             assert_eq!(app.recipe().adjustments[key], 0.5);
         }
+    }
+
+    /// GUI-PREVIEW-NOISE-1: a synthetic 64×40 RGB gradient (content spread
+    /// over the whole luminance range, like a real photo — never a flat
+    /// field). Pure helper, no app side effects.
+    fn synthetic_gradient_png() -> (Vec<u8>, ImageFrame) {
+        let (w, h) = (64u32, 40u32);
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x * 255 / (w - 1)) as u8;
+                let g = (y * 255 / (h - 1)) as u8;
+                let b = ((x + y) * 255 / (w - 1 + h - 1)) as u8;
+                pixels.extend_from_slice(&[r, g, b, 255]);
+            }
+        }
+        let frame = ImageFrame::new(w, h, pixels).unwrap();
+        let png = frame.encode(ImageFileFormat::Png).unwrap();
+        (png, frame)
+    }
+
+    /// Normalized L1 distance of two 256-bin histograms (`0` = identical
+    /// distributions, `2` = disjoint). Scale-free so a full-res preview and a
+    /// downscaled thumbnail of the same content compare directly.
+    fn histogram_l1(a: &[u64], b: &[u64]) -> f64 {
+        assert_eq!(a.len(), b.len());
+        let sum_a: u64 = a.iter().sum();
+        let sum_b: u64 = b.iter().sum();
+        assert!(sum_a > 0 && sum_b > 0, "histograms must be non-empty");
+        a.iter()
+            .zip(b.iter())
+            .map(|(&x, &y)| (x as f64 / sum_a as f64 - y as f64 / sum_b as f64).abs())
+            .sum()
+    }
+
+    /// GUI-PREVIEW-NOISE-1: at Fit the main preview must show the full frame
+    /// (ROI `None`, no draft) and its pixel histogram must match the
+    /// navigator/filmstrip thumbnail histogram — the exact user finding (gray
+    /// noise in the main preview while the thumbnail is correct).
+    #[test]
+    fn fit_preview_histogram_matches_thumbnail() {
+        let (png, original) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        // Fit state: full-frame render, no ROI crop, no draft.
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert!(
+            app.preview_roi.is_none(),
+            "Fit must render the full frame (ROI None), got {:?}",
+            app.preview_roi
+        );
+        assert!(
+            !app.preview_is_draft,
+            "a settled Fit render is never a draft"
+        );
+        let preview = app.preview().expect("preview after load").clone();
+        assert_eq!((preview.width, preview.height), (64, 40));
+        // Thumbnail pipeline (mirrors `decode_thumbnail_frame` sans disk
+        // cache): downscale + default-recipe render.
+        let (small, w, h) = crate::filmstrip::downscale_rgba(
+            &original.pixels,
+            original.width,
+            original.height,
+            crate::filmstrip::THUMBNAIL_MAX_DIM,
+        );
+        let small_frame = ImageFrame::new(w, h, small).unwrap();
+        let thumb_ctx = RenderContext {
+            recipe: &EditRecipe::default(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let thumb = render_frame(&small_frame, &thumb_ctx).unwrap().frame;
+        let (_, preview_hist) = analyze_tone_with_histogram(&preview);
+        let (_, thumb_hist) = analyze_tone_with_histogram(&thumb);
+        // The app's own stored histogram must describe the preview.
+        let stored = app.current_histogram().expect("stored preview histogram");
+        assert_eq!(
+            stored.bins, preview_hist.bins,
+            "stored histogram must describe the displayed preview"
+        );
+        // Same content at different scales: distributions must be close.
+        let distance = histogram_l1(&preview_hist.bins, &thumb_hist.bins);
+        assert!(
+            distance < 0.35,
+            "Fit preview histogram must match the thumbnail (L1 {distance:.3} >= 0.35)"
+        );
+        // Noise-flat guard: content spread over many bins, no dominant spike
+        // (gray noise / a flat field would concentrate into few bins).
+        let total: u64 = preview_hist.bins.iter().sum();
+        let populated = preview_hist
+            .bins
+            .iter()
+            .filter(|&&c| c as f64 > total as f64 * 0.001)
+            .count();
+        let peak = *preview_hist.bins.iter().max().unwrap() as f64 / total as f64;
+        assert!(
+            populated >= 16,
+            "preview histogram must spread over >= 16 bins, got {populated}"
+        );
+        assert!(
+            peak < 0.5,
+            "no single bin may dominate the preview histogram (peak {peak:.3})"
+        );
+    }
+
+    /// GUI-PREVIEW-NOISE-1: adopting a cached neighbor frame books it as a
+    /// low-res draft stand-in — placement source, draft flag and derived
+    /// analysis state describe the stand-in, never a committed full render.
+    #[test]
+    fn neighbor_preview_paint_books_draft_state() {
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        assert!(app.render_key().is_some());
+        assert!(app.current_histogram().is_some());
+        let generation = app.preview_generation();
+        // A smaller stand-in frame, as the neighbor cache would serve it.
+        let stand_in = ImageFrame::new(16, 10, vec![90u8; 16 * 10 * 4]).unwrap();
+        app.adopt_neighbor_preview_frame(stand_in);
+        assert!(app.preview_generation() > generation);
+        assert!(app.texture_identity.is_none());
+        assert_eq!(app.preview_render_src, Some((16, 10)));
+        assert!(app.preview_roi.is_none());
+        assert!(
+            app.preview_is_draft,
+            "a neighbor stand-in must read as draft in the HUD"
+        );
+        assert!(
+            app.render_key().is_none(),
+            "no committed render key may describe the stand-in"
+        );
+        assert!(
+            app.current_histogram().is_none(),
+            "no stale histogram may describe the stand-in"
+        );
+        assert!(
+            app.tone_analysis.is_none(),
+            "no stale tone analysis may describe the stand-in"
+        );
+    }
+
+    /// GUI-SIDECAR-RESTORE-1 (DoD-§1-Anker): values that reach the disk
+    /// sidecar from *outside* the session (here: exposure −0.62 written by an
+    /// external edit, simulating the user's file) must reappear after reopen
+    /// in the recipe, on the Basic slider readout AND in the rendered preview
+    /// — proving the display comes from the file, never from session memory.
+    #[test]
+    fn sidecar_restore_from_file_applies_to_sliders_and_preview() {
+        use lumina_sidecar::{load_sidecar, save_sidecar as raw_save, sidecar_path_for};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("restore.png");
+        let (png, original) = synthetic_gradient_png();
+        std::fs::write(&source, &png).unwrap();
+
+        // Session 1 only creates the sidecar (exposure +1.0, unrelated value).
+        let mut first = new_app();
+        open_and_decode(&mut first, source.display().to_string());
+        assert!(first.error().is_none());
+        first.set_adjustment("exposure", 1.0);
+        first.render().unwrap();
+        first.save_sidecar();
+        assert!(first.error().is_none());
+        drop(first);
+
+        // External edit (another session / hand edit): exposure −0.62.
+        let sidecar_path = sidecar_path_for(&source);
+        let mut external = load_sidecar(&sidecar_path).unwrap();
+        external.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("exposure".into(), -0.62);
+        raw_save(&sidecar_path, &external).unwrap();
+
+        // Session 2 (fresh): reopen must restore the FILE value, not the
+        // first session's +1.0.
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.error().is_none(), "reopen must succeed");
+        assert_eq!(
+            app.recipe().adjustments.get("exposure"),
+            Some(&-0.62),
+            "recipe must carry the file value −0.62, not the old session value"
+        );
+        // Preview applies the restored recipe: byte-identical to a direct
+        // core render with the restored recipe, and visibly darker than the
+        // default render.
+        let preview = app.preview().expect("preview after reopen").clone();
+        let restored_ctx = RenderContext {
+            recipe: app.recipe(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let direct = render_frame(&original, &restored_ctx).unwrap().frame;
+        assert_eq!(
+            preview.pixels, direct.pixels,
+            "reopened preview must render the restored recipe"
+        );
+        let default_ctx = RenderContext {
+            recipe: &EditRecipe::default(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+        };
+        let default_frame = render_frame(&original, &default_ctx).unwrap().frame;
+        assert_ne!(
+            preview.pixels, default_frame.pixels,
+            "restored exposure must visibly change the preview"
+        );
+        assert!(
+            avg_luminance(&preview) < avg_luminance(&default_frame),
+            "exposure −0.62 must darken the preview"
+        );
+        // Basic slider readout shows the restored value (identity scale,
+        // 1 decimal → "-0.6"): the slider binds the recipe every frame.
+        let shapes = headless_shapes(&mut app, |app, ui| {
+            app.adjustment_slider(
+                ui,
+                "exposure",
+                Str::Exposure.t(),
+                identity_spec(-10.0..=10.0, 0.0, 0.1),
+            );
+        });
+        let texts: Vec<String> = shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "-0.6"),
+            "exposure slider must display the restored value (−0.6), painted: {texts:?}"
+        );
+    }
+
+    /// GUI-OPTICS-1: the profile status names the profile when the recipe
+    /// carries one and reports the inactive automatic correction otherwise —
+    /// never a silent state.
+    #[test]
+    fn optics_profile_status_names_profile_or_reports_inactive() {
+        let (text, active) = LuminaApp::lens_profile_status(&None);
+        assert!(!active);
+        assert_eq!(text, Str::OpticsProfileNone.t());
+        let mut lc = LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: None,
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        let (text, active) = LuminaApp::lens_profile_status(&Some(lc.clone()));
+        assert!(!active, "profile None reads as inactive");
+        assert_eq!(text, Str::OpticsProfileNone.t());
+        lc.profile = Some(String::new());
+        let (_, active) = LuminaApp::lens_profile_status(&Some(lc.clone()));
+        assert!(!active, "empty profile reads as inactive");
+        lc.profile = Some("Canon RF 24-105mm".into());
+        let (text, active) = LuminaApp::lens_profile_status(&Some(lc));
+        assert!(active);
+        assert!(
+            text.contains("Canon RF 24-105mm"),
+            "status must name the profile, got {text:?}"
+        );
+    }
+
+    /// GUI-OPTICS-1 (DoD-§3 Klassen-Vollständigkeit): all eight manual
+    /// optics fields commit through the single `set_lens_correction_value`
+    /// path; unknown names are ignored loudly without creating state.
+    #[test]
+    fn optics_all_fields_commit_through_one_path() {
+        let mut app = new_app();
+        assert!(app.recipe.lens_correction.is_none());
+        for (field, value) in [
+            ("distortion_k1", 0.1),
+            ("distortion_k2", -0.2),
+            ("distortion_k3", 0.3),
+            ("vignette_c0", 0.05),
+            ("vignette_c1", -0.05),
+            ("vignette_c2", 0.01),
+            ("ca_red", 0.004),
+            ("ca_blue", -0.004),
+        ] {
+            app.set_lens_correction_value(field, value);
+            let lens = app.recipe.lens_correction.as_ref().expect("lens block");
+            let stored = match field {
+                "distortion_k1" => lens.distortion_k1,
+                "distortion_k2" => lens.distortion_k2,
+                "distortion_k3" => lens.distortion_k3,
+                "vignette_c0" => lens.vignette_c0,
+                "vignette_c1" => lens.vignette_c1,
+                "vignette_c2" => lens.vignette_c2,
+                "ca_red" => lens.ca_red,
+                "ca_blue" => lens.ca_blue,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                stored,
+                Some(value as f32),
+                "field {field} must persist {value}"
+            );
+            // Every optics edit arms the debounced save, like all sliders.
+            assert_eq!(
+                app.pending_slider_commit,
+                Some((format!("lens_correction.{field}"), value))
+            );
+        }
+        let mut fresh = new_app();
+        fresh.set_lens_correction_value("bogus_field", 1.0);
+        assert!(
+            fresh.recipe.lens_correction.is_none(),
+            "unknown optics fields must not create recipe state"
+        );
+    }
+
+    /// GUI-OPTICS-1: a manual optics value set from the GUI path visibly
+    /// changes the rendered preview (the reported "no effect" is gone once
+    /// the panel can actually write values).
+    #[test]
+    fn optics_manual_distortion_changes_render() {
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        app.render().unwrap();
+        let before = app.preview().unwrap().pixels.clone();
+        app.set_lens_correction_value("distortion_k1", 0.5);
+        app.render().unwrap();
+        let after = app.preview().unwrap().pixels.clone();
+        assert_ne!(
+            before, after,
+            "distortion_k1=0.5 must visibly change the preview"
+        );
+    }
+
+    /// GUI-TOAST-OVERLAP-1: the toast state machine — show makes it visible,
+    /// a second show while visible coalesces (no queue), manual dismiss
+    /// hides it, and the timeout hides it without interaction.
+    #[test]
+    fn toast_show_dismiss_timeout_state_machine() {
+        let mut app = new_app();
+        assert!(!app.toast_visible(100.0));
+        app.show_toast("Preview ready".into(), 100.0);
+        assert!(app.toast_visible(100.0));
+        assert!(app.toast_visible(104.0));
+        assert!(!app.toast_visible(104.1), "timeout must hide the toast");
+        // Coalescing: a second show while visible keeps the first deadline.
+        app.show_toast("Preview ready".into(), 200.0);
+        app.show_toast("Other message".into(), 201.0);
+        assert_eq!(app.toast_message.as_deref(), Some("Preview ready"));
+        assert!(app.toast_visible(204.0));
+        assert!(!app.toast_visible(204.1));
+        // Manual dismiss hides immediately.
+        app.show_toast("Preview ready".into(), 300.0);
+        assert!(app.toast_visible(300.0));
+        app.dismiss_toast();
+        assert!(!app.toast_visible(300.0));
+        assert!(app.toast_message.is_none());
+    }
+
+    /// GUI-TOAST-OVERLAP-1: the toast anchor stays top-right, below the
+    /// header/module bars and clear of the left rail, grid origin and bottom
+    /// filmstrip — it cannot cover thumbnails by construction.
+    #[test]
+    fn toast_anchor_stays_clear_of_thumbnails() {
+        let anchor = LuminaApp::toast_anchor(1280.0);
+        assert_eq!(anchor, egui::pos2(980.0, 64.0));
+        assert!(anchor.x > 900.0, "toast stays in the right third");
+        assert!(anchor.y < 120.0, "toast stays below the header bars");
+        let narrow = LuminaApp::toast_anchor(800.0);
+        assert_eq!(narrow, egui::pos2(500.0, 64.0));
+        assert!(narrow.x >= 0.0);
+    }
+
+    /// GUI-TOAST-OVERLAP-1: a `Ready` neighbor probe raises NO per-cell badge
+    /// (the transient overlay toast owns that signal) — the thumbnail cell
+    /// stays uncovered. Loading/Stale/Failed keep their small corner chips.
+    #[test]
+    fn ready_probe_shows_no_cell_badge() {
+        use lumina_core::preview_cache::PreviewKind;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("neighbor.png");
+        let (png, _) = synthetic_gradient_png();
+        std::fs::write(&source, &png).unwrap();
+
+        let (mut ctrl, _queue) = preview_ctrl::PreviewController::spawn(1);
+        ctrl.enqueue(preview_ctrl::PreviewJob {
+            probe_id: "neighbor-probe".into(),
+            source: source.clone(),
+            name: "neighbor.png".into(),
+            virtual_copy: "vc-original".into(),
+            target: (64, 64),
+            kind: PreviewKind::Screen,
+            priority: 0,
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ctrl.probe_state("neighbor-probe") != preview_ctrl::PreviewProbeState::Ready
+            && Instant::now() < deadline
+        {
+            ctrl.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        ctrl.poll();
+        assert_eq!(
+            ctrl.probe_state("neighbor-probe"),
+            preview_ctrl::PreviewProbeState::Ready
+        );
+        let mut app = new_app();
+        app.preview_ctrl = Some(ctrl);
+        // Not the active image (the active image never shows a badge).
+        app.preview_ctrl.as_mut().unwrap().set_active("other-probe");
+        assert!(
+            app.neighbor_preview_badge("neighbor-probe").is_none(),
+            "a Ready probe must not cover its thumbnail cell with a badge"
+        );
+        assert!(
+            app.neighbor_preview_badge("unknown-probe").is_none(),
+            "a Miss probe shows no badge either"
+        );
+    }
+
+    /// GUI-TOAST-OVERLAP-1: the overlay toast paints its message plus the
+    /// manual ✕ button in its own area next to (not inside) the thumbnail
+    /// views — both the toast and the filmstrip heading are painted.
+    #[test]
+    fn toast_overlay_paints_message_and_dismiss() {
+        let mut app = new_app();
+        app.show_toast(Str::ToastPreviewReady.t().to_string(), 0.0);
+        // egui `Area`s take a sizing pass on first show — drive two headless
+        // frames on the SAME context (like the live event loop) and assert
+        // on the second.
+        let ctx = egui::Context::default();
+        let mut run = |app: &mut LuminaApp| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(1024.0, 720.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| {
+                let c = ui.ctx().clone();
+                app.draw_toast(&c);
+                app.draw_filmstrip(&c, ui);
+            });
+            output.textures_delta.clear();
+            output.shapes
+        };
+        let _ = run(&mut app);
+        let shapes = run(&mut app);
+        let texts: Vec<String> = shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == Str::ToastPreviewReady.t()),
+            "toast message must be painted, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == Str::ToastDismiss.t()),
+            "toast dismiss button must be painted, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == Str::Filmstrip.t()),
+            "filmstrip heading must still be painted, got {texts:?}"
+        );
+    }
+
+    /// GUI-ZOOM-CUSTOM-1: the pan-gesture gate matrix — `Custom` pins only
+    /// for a genuinely magnified, overflowing view. At Fit (or zoomed out)
+    /// no pan gesture may flip the mode, however far the drawn image
+    /// overflows (e.g. a stale oversized texture right after load).
+    #[test]
+    fn pan_gesture_pins_custom_matrix() {
+        // At Fit: never, even with a hugely overflowing draw rect.
+        assert!(!LuminaApp::pan_gesture_pins_custom(
+            1.0, 800.0, 600.0, 800.0, 600.0
+        ));
+        assert!(!LuminaApp::pan_gesture_pins_custom(
+            1.0, 5000.0, 4000.0, 800.0, 600.0
+        ));
+        // Zoomed out: never.
+        assert!(!LuminaApp::pan_gesture_pins_custom(
+            0.5, 900.0, 700.0, 800.0, 600.0
+        ));
+        // Zoomed in but fully visible: nothing to pan, never.
+        assert!(!LuminaApp::pan_gesture_pins_custom(
+            2.0, 800.0, 600.0, 800.0, 600.0
+        ));
+        assert!(!LuminaApp::pan_gesture_pins_custom(
+            2.0, 800.4, 600.4, 800.0, 600.0
+        ));
+        // Zoomed in and overflowing: the only pinning case.
+        assert!(LuminaApp::pan_gesture_pins_custom(
+            2.0, 1600.0, 1200.0, 800.0, 600.0
+        ));
+        assert!(LuminaApp::pan_gesture_pins_custom(
+            2.0, 800.0, 600.6, 800.0, 600.0
+        ));
+        assert!(LuminaApp::pan_gesture_pins_custom(
+            1.01, 810.0, 600.0, 800.0, 600.0
+        ));
+    }
+
+    /// GUI-ZOOM-CUSTOM-1: a fresh load reads Fit, and a drawn Fit frame
+    /// keeps the mode Fit with zero pan even when a stale pan offset is
+    /// pending (the load-window caricature of the user finding).
+    #[test]
+    fn fit_load_reads_fit_and_draw_keeps_zero_pan() {
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert_eq!(app.zoom_label(), Str::ZoomFit.t());
+        // Stale pan offset (e.g. carried geometry before the load reset).
+        app.preview_pan = egui::vec2(42.0, -17.0);
+        app.render().unwrap();
+        let shapes = headless_shapes(&mut app, |app, ui| {
+            let ctx = ui.ctx().clone();
+            app.update_texture(&ctx);
+            app.draw_preview(ui);
+        });
+        assert!(!shapes.is_empty(), "preview must paint");
+        assert_eq!(app.zoom_mode, ZoomMode::Fit, "drawing at Fit keeps Fit");
+        assert_eq!(
+            app.preview_pan,
+            egui::Vec2::ZERO,
+            "drawing at Fit neutralizes pan"
+        );
+    }
+
+    /// Build a synthetic RAW-only browser entry (no disk IO — the name
+    /// extension alone drives the RAW filter).
+    fn raw_entry(dir: &std::path::Path, name: &str) -> FileBrowserEntry {
+        let path = dir.join(name);
+        FileBrowserEntry {
+            thumb_key: path.display().to_string(),
+            name: name.to_string(),
+            path,
+            has_sidecar: false,
+            source_status: SourceStatus::Missing,
+            conflict: false,
+            virtual_copies: 0,
+            missing_models: 0,
+            rating: 0,
+            flag: lumina_sidecar::Flag::Unflagged,
+            color_label: 0,
+            folder: String::new(),
+        }
+    }
+
+    /// GUI-RIGHT-THUMB-1 + GUI-FILMSTRIP-DUP-1: every image appears exactly
+    /// once per view — the filmstrip order, the navigator rail and the
+    /// Library grid share one RAW index source with no duplicates.
+    #[test]
+    fn each_image_once_per_view_no_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        app.entries = vec![
+            raw_entry(dir.path(), "a.cr3"),
+            raw_entry(dir.path(), "b.cr3"),
+            raw_entry(dir.path(), "notes.png"),
+            raw_entry(dir.path(), "c.cr3"),
+        ];
+        let indices = app.raw_entry_indices();
+        assert_eq!(indices, vec![0, 1, 3], "RAW-only indices in display order");
+        let order = app.filmstrip_order();
+        assert_eq!(order.len(), 3);
+        let mut sorted = order.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 3, "filmstrip order must hold no duplicates");
+        // The rail and the grid iterate the same index source.
+        let rail: Vec<String> = indices
+            .iter()
+            .map(|&i| app.entries[i].path.display().to_string())
+            .collect();
+        assert_eq!(rail, order);
+    }
+
+    /// GUI-FILMSTRIP-DUP-1: selection syncs identically no matter which view
+    /// was clicked — filmstrip, navigator rail and Library grid all route
+    /// through the same bookkeeping (rail/grid call the shared helpers).
+    #[test]
+    fn selection_syncs_identically_from_every_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        app.entries = vec![
+            raw_entry(dir.path(), "a.cr3"),
+            raw_entry(dir.path(), "b.cr3"),
+            raw_entry(dir.path(), "c.cr3"),
+        ];
+        let order = app.filmstrip_order();
+        // Plain click (filmstrip, rail, grid single-click): exactly the image.
+        app.select_filmstrip_path(order[1].clone(), false, false);
+        assert_eq!(app.filmstrip_selection(), vec![order[1].clone()]);
+        // Toggle (Cmd/Ctrl-click): adds without opening.
+        app.select_filmstrip_path(order[2].clone(), true, false);
+        assert_eq!(
+            app.filmstrip_selection(),
+            vec![order[1].clone(), order[2].clone()]
+        );
+        // Range (Shift-click from the anchor): fills the span.
+        app.select_filmstrip_path(order[0].clone(), false, true);
+        assert_eq!(app.filmstrip_selection(), order);
+        // Unknown paths (e.g. a non-RAW grid entry) leave everything alone.
+        app.select_filmstrip_path(
+            dir.path().join("notes.png").display().to_string(),
+            false,
+            false,
+        );
+        assert_eq!(app.filmstrip_selection(), order);
+    }
+
+    /// GUI-NAV-RECT-1 (Zoom×Pan-Matrix, gemeinsam mit GUI-ZOOM-CUSTOM-1
+    /// diagnostiziert): the navigator rectangle is the visible window in
+    /// source pixels mapped into the overview — full at Fit, smaller and
+    /// centred at 100 %, shifted by pan, always clamped inside.
+    #[test]
+    fn navigator_rect_zoom_pan_matrix() {
+        let nav = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 200.0));
+        // Fit: the whole frame is visible — the rect equals the overview.
+        let fit = LuminaApp::navigator_viewport_rect(
+            nav,
+            600.0,
+            400.0,
+            600.0,
+            400.0,
+            1.0,
+            egui::Vec2::ZERO,
+        );
+        assert_eq!(fit, nav, "Fit must show the full frame");
+        // 100 % in a half-size pane: quarter-area window, centred without pan.
+        let zoomed = LuminaApp::navigator_viewport_rect(
+            nav,
+            600.0,
+            400.0,
+            300.0,
+            200.0,
+            1.0,
+            egui::Vec2::ZERO,
+        );
+        assert!(
+            nav.contains_rect(zoomed),
+            "zoomed rect must stay inside the overview"
+        );
+        assert!(
+            (zoomed.width() - 150.0).abs() < 1.0 && (zoomed.height() - 100.0).abs() < 1.0,
+            "100 % in a half pane shows a quarter window, got {zoomed:?}"
+        );
+        assert!(
+            (zoomed.center().x - nav.center().x).abs() < 1.0
+                && (zoomed.center().y - nav.center().y).abs() < 1.0,
+            "zero pan centres the window, got {zoomed:?}"
+        );
+        // Custom zoom 2 + pan: same-size window as above (pane/scale equal),
+        // shifted against the pan direction.
+        let custom = LuminaApp::navigator_viewport_rect(
+            nav,
+            600.0,
+            400.0,
+            600.0,
+            400.0,
+            2.0,
+            egui::vec2(60.0, -40.0),
+        );
+        assert!(nav.contains_rect(custom));
+        assert!(
+            (custom.width() - zoomed.width()).abs() < 1.0,
+            "equal pane/scale ratios show equal windows: {custom:?} vs {zoomed:?}"
+        );
+        assert!(
+            custom.center().x < zoomed.center().x,
+            "positive pan.x shifts the window left in source space: {custom:?} vs {zoomed:?}"
+        );
+        assert!(
+            custom.center().y > zoomed.center().y,
+            "negative pan.y shifts the window down: {custom:?}"
+        );
+        // Higher zoom: strictly smaller window.
+        let closer = LuminaApp::navigator_viewport_rect(
+            nav,
+            600.0,
+            400.0,
+            600.0,
+            400.0,
+            4.0,
+            egui::Vec2::ZERO,
+        );
+        assert!(closer.width() < zoomed.width() && closer.height() < zoomed.height());
+        // Absurd pan clamps inside instead of leaving the overview.
+        let clamped = LuminaApp::navigator_viewport_rect(
+            nav,
+            600.0,
+            400.0,
+            600.0,
+            400.0,
+            4.0,
+            egui::vec2(5000.0, -5000.0),
+        );
+        assert!(
+            nav.contains_rect(clamped),
+            "clamped rect must stay inside, got {clamped:?}"
+        );
+        // Degenerate geometry falls back to the full overview, never NaN.
+        let degenerate =
+            LuminaApp::navigator_viewport_rect(nav, 600.0, 400.0, 0.0, 0.0, 0.0, egui::Vec2::ZERO);
+        assert_eq!(degenerate, nav);
+        assert!(degenerate.is_finite());
+    }
+
+    /// GUI-NAV-RECT-1: the navigator overview is the FULL source even when
+    /// the preview is an ROI crop (zoomed) — the rect math maps full-source
+    /// coordinates and must see a full-source image.
+    #[test]
+    fn navigator_overview_is_full_source_despite_roi_crop() {
+        let (png, _) = synthetic_gradient_png();
+        let mut app = new_app();
+        app.load_bytes(png, "gradient.png").unwrap();
+        // Zoom into an ROI crop.
+        app.preview_zoom = 8.0;
+        app.zoom_mode = ZoomMode::Custom;
+        app.preview_pan = egui::vec2(42.0, -17.0);
+        app.render().unwrap();
+        let preview = app.preview().unwrap().clone();
+        assert!(
+            app.preview_roi.is_some(),
+            "zoomed render must carry an ROI crop"
+        );
+        assert!(
+            (preview.width, preview.height) != (64, 40),
+            "the preview texture is a crop, not the full frame"
+        );
+        let overview = app.navigator_frame().expect("navigator source").clone();
+        assert_eq!(
+            (overview.width, overview.height),
+            (64, 40),
+            "navigator overview must stay full-frame under zoom"
+        );
+        // The drawn overview serves the same full-frame source (headless
+        // draw of the viewport, zoomed path): key + texture follow the
+        // source identity, never the ROI crop.
+        let shapes = headless_shapes(&mut app, |app, ui| {
+            let ctx = ui.ctx().clone();
+            app.draw_navigator_viewport(&ctx, ui);
+        });
+        assert!(!shapes.is_empty(), "navigator viewport must paint");
+        let key = app.navigator_texture_key.clone().expect("navigator key");
+        assert_eq!(key.1, 64);
+        assert_eq!(key.2, 40);
+        assert!(
+            app.navigator_texture.is_some(),
+            "navigator overview texture must exist"
+        );
+    }
+
+    /// P0-Audit (DoD §3): alle sechs Basic-Regler überleben einen externen
+    /// Sidecar-Edit und werden beim Reopen in Rezept, Slider-Readout und
+    /// Preview sichtbar.
+    #[test]
+    fn sidecar_restore_all_basic_sliders_reopen() {
+        use crate::slider::{to_display, DisplayScale};
+        // (key, externer Wert, Display-Skala, erwarteter Readout).
+        // Exposure ist Identity-Domain, der Rest Prozent-Domain (×100).
+        let cases: [(&str, f64, DisplayScale, f64); 6] = [
+            ("exposure", 1.5, DisplayScale::Identity, 1.5),
+            ("contrast", 0.4, DisplayScale::Percent, 40.0),
+            ("highlights", -0.3, DisplayScale::Percent, -30.0),
+            ("shadows", 0.5, DisplayScale::Percent, 50.0),
+            ("whites", 0.6, DisplayScale::Percent, 60.0),
+            ("blacks", -0.5, DisplayScale::Percent, -50.0),
+        ];
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.render().unwrap();
+        let baseline = app.preview().unwrap().pixels.clone();
+        // Sidecar-Datei materialisieren, dann EXTERN (am App vorbei, wie ein
+        // fremder Prozess) alle sechs Regler setzen.
+        app.set_adjustment("exposure", 0.1);
+        app.save_sidecar();
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&source);
+        let mut document = lumina_sidecar::load_sidecar(&sidecar_path).unwrap();
+        for (key, value, _, _) in &cases {
+            document.virtual_copies[0]
+                .recipe
+                .adjustments
+                .insert((*key).into(), *value);
+        }
+        lumina_sidecar::save_sidecar(&sidecar_path, &document).unwrap();
+        // Reopen: Rezept, Readout-Mapping und Preview müssen den Edit zeigen.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        reopened.render().unwrap();
+        for (key, value, scale, readout) in &cases {
+            assert_eq!(
+                reopened.recipe().adjustments.get(*key),
+                Some(value),
+                "rezept muss {key}={value} nach Reopen enthalten"
+            );
+            // Slider-Readout: exakt die Abbildung, die `lr_slider` malt.
+            let shown = to_display(*value, *scale);
+            assert!(
+                (shown - readout).abs() < 1e-12,
+                "readout für {key}: gezeigt {shown}, erwartet {readout}"
+            );
+        }
+        let pixels = reopened.preview().unwrap().pixels.clone();
+        assert_ne!(
+            pixels, baseline,
+            "preview muss sich nach dem externen 6-Regler-Edit ändern"
+        );
+    }
+
+    /// P0-Audit (DoD §3, GUI-TOAST-OVERLAP-1): ein sichtbarer Toast liegt in
+    /// einer eigenen Foreground-Area und schluckt keinen Klick auf ein
+    /// darunterliegendes Thumbnail.
+    #[test]
+    fn toast_does_not_block_thumbnail_clicks() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
+        let mut app = new_app();
+        app.show_toast("preview ready".to_string(), 0.0);
+        let mut t = 0.0;
+        let thumb_center = std::cell::RefCell::new(None);
+        let thumb_clicked = std::cell::Cell::new(false);
+        let toast_painted = std::cell::Cell::new(false);
+        // `run` lebt nur in diesem Block: Danach endet sein Mutable-Borrow
+        // von `app`, sodass die Abschluss-Asserts wieder an `app` dürfen
+        // (ohne `drop` auf einem Non-Drop-Typ — Clippy `drop_non_drop`).
+        let (center, end_time) = {
+            let mut run = |events: Vec<egui::Event>| {
+                t += 1.0 / 60.0;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        time: Some(t),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        // Produktionspfad: Toast als Overlay-Area …
+                        app.draw_toast(ui.ctx());
+                        // … plus Thumbnail-Button im Panel abseits des
+                        // Toast-Ankers (Anker x = 1024-300 = 724, y = 64),
+                        // wie der echte Filmstrip in seiner Panel-Spalte.
+                        egui::Panel::left("thumbs")
+                            .default_size(220.0)
+                            .show(ui, |ui| {
+                                let response = ui.button("thumb-a");
+                                if response.clicked() {
+                                    thumb_clicked.set(true);
+                                }
+                                if thumb_center.borrow().is_none() {
+                                    *thumb_center.borrow_mut() = Some(response.rect.center());
+                                }
+                            });
+                    },
+                );
+                for clipped in &output.shapes {
+                    if let egui::Shape::Text(text) = &clipped.shape {
+                        if text.galley.text() == "preview ready" {
+                            toast_painted.set(true);
+                        }
+                    }
+                }
+                output.textures_delta.clear();
+            };
+            run(vec![]);
+            // Areas brauchen einen Sizing-Pass: der erste Frame vermisst nur,
+            // erst danach wird gemalt (Produktionsverhalten, kein Test-Artefakt).
+            run(vec![]);
+            run(vec![]);
+            let center = thumb_center
+                .borrow()
+                .expect("thumbnail button must be laid out");
+            assert!(
+                center.x < 700.0,
+                "thumbnail ({center:?}) muss abseits des Toast-Ankers liegen"
+            );
+            assert!(toast_painted.get(), "toast must be painted while visible");
+            let press = |pressed: bool| egui::Event::PointerButton {
+                pos: center,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            run(vec![egui::Event::PointerMoved(center), press(true)]);
+            run(vec![egui::Event::PointerMoved(center), press(false)]);
+            (center, t)
+        };
+        assert!(
+            thumb_clicked.get(),
+            "click on the thumbnail beneath the visible toast must arrive"
+        );
+        assert!(
+            app.toast_visible(end_time),
+            "toast must still be visible (no auto-dismiss by the click)"
+        );
+    }
+
+    /// P0-Audit (DoD §2-Anker, DoD §3): der Toast-Timeout wird von der
+    /// simulierten ctx-Zeit über `update_toast` getrieben — kein Wall-Clock-,
+    /// kein Frame-Zähler-Verhalten.
+    #[test]
+    fn toast_timeout_driven_by_update_loop() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
+        let mut app = new_app();
+        app.show_toast("preview ready".to_string(), 10.0);
+        // Rein lesbar: sichtbar bis inkl. Deadline, danach abgelaufen.
+        assert!(app.toast_visible(10.0));
+        assert!(app.toast_visible(14.0));
+        assert!(!app.toast_visible(14.000_001));
+        // Über den Update-Loop getrieben: vor der Deadline bleibt die
+        // Message bestehen …
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(12.0),
+                ..Default::default()
+            },
+            |ui| app.update_toast(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert!(
+            app.toast_message.is_some(),
+            "toast must survive update_toast before its deadline"
+        );
+        // … nach der Deadline räumt derselbe Pfad sie ab (DoD §2: zeitbasiert).
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(20.0),
+                ..Default::default()
+            },
+            |ui| app.update_toast(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            app.toast_message, None,
+            "update_toast past the deadline must auto-dismiss"
+        );
+        assert!(!app.toast_visible(20.0));
+    }
+
+    /// P0-Audit (DoD §3, GUI-RIGHT-THUMB-1): das Develop-Panel malt kein
+    /// dupliziertes Vorschaubild — maximal eine Bild-Textur.
+    #[test]
+    fn right_panel_paints_no_duplicate_thumbnail() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Develop);
+        let shapes = headless_shapes(&mut app, |app, ctx| {
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ctx, |ui| app.draw_develop_panel(ui));
+        });
+        let blank = egui::TextureId::default();
+        let images = shapes
+            .iter()
+            .filter(|clipped| match &clipped.shape {
+                // egui malt Bilder als texturierte Meshes (kein eigenes
+                // Shape-Tag): alles mit echter Textur zählt.
+                egui::Shape::Mesh(mesh) => mesh.texture_id != blank,
+                _ => false,
+            })
+            .count();
+        assert!(
+            images <= 1,
+            "Develop panel must paint at most one image texture, got {images}"
+        );
+    }
+
+    /// P0-Audit (DoD §3, GUI-PREVIEW-NAV-1): Navigator-Drag Ende-zu-Ende —
+    /// derselbe Dreischritt wie `draw_navigator_viewport` (Helper → Custom-Pin
+    /// → dirty) bewegt das sichtbare Fenster mit dem Cursor.
+    #[test]
+    fn navigator_drag_pans_preview_and_pins_custom() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        // Zoomed Zustand wie im laufenden Betrieb (Custom trägt den ROI).
+        app.zoom_mode = ZoomMode::Custom;
+        app.preview_zoom = 4.0;
+        app.preview_pan = egui::Vec2::ZERO;
+        app.preview_effective_scale = 32.0 / 3.0;
+        let nav_scale = 0.5_f32;
+        let preview_scale = app.preview_effective_scale;
+        let drag = egui::vec2(10.0, -4.0);
+        // Produktions-Dreischritt aus `draw_navigator_viewport`.
+        app.preview_pan =
+            LuminaApp::pan_for_navigator_drag(app.preview_pan, drag, nav_scale, preview_scale);
+        app.zoom_mode = ZoomMode::Custom;
+        app.mark_dirty();
+        let expect_x = -drag.x * (preview_scale / nav_scale);
+        let expect_y = -drag.y * (preview_scale / nav_scale);
+        assert!(
+            (app.preview_pan.x - expect_x).abs() < 1e-3,
+            "pan.x = {}, erwartet {expect_x}",
+            app.preview_pan.x
+        );
+        assert!(
+            (app.preview_pan.y - expect_y).abs() < 1e-3,
+            "pan.y = {}, erwartet {expect_y}",
+            app.preview_pan.y
+        );
+        assert_eq!(
+            app.zoom_mode,
+            ZoomMode::Custom,
+            "navigator drag must pin Custom so sync_zoom keeps the pan"
+        );
+        assert_ne!(
+            app.preview_pan,
+            egui::Vec2::ZERO,
+            "drag must move the visible window"
+        );
+        // Roundtrip durch das Viewport-Rechteck: das Fenster folgt dem Cursor
+        // exakt um den Drag in Navigator-Punkten.
+        let nav = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(150.0, 100.0));
+        let before = LuminaApp::navigator_viewport_rect(
+            nav,
+            300.0,
+            200.0,
+            800.0,
+            600.0,
+            preview_scale,
+            egui::Vec2::ZERO,
+        );
+        let after = LuminaApp::navigator_viewport_rect(
+            nav,
+            300.0,
+            200.0,
+            800.0,
+            600.0,
+            preview_scale,
+            app.preview_pan,
+        );
+        assert!((after.center().x - before.center().x - drag.x).abs() < 1e-2);
+        assert!((after.center().y - before.center().y - drag.y).abs() < 1e-2);
+    }
+
+    /// GUI-LIBRARY-BADGE-CONTRAST-1: white badge text on the badge chip meets
+    /// AA normal-text contrast (≥ 4.5), while the chip itself stays a
+    /// dark-theme surface (luminance < 0.12, same bar as `theme.rs`).
+    #[test]
+    fn library_badge_contrast_meets_aa() {
+        fn linearize(c: u8) -> f32 {
+            let s = c as f32 / 255.0;
+            if s <= 0.03928 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        fn luminance(c: egui::Color32) -> f32 {
+            0.2126 * linearize(c.r()) + 0.7152 * linearize(c.g()) + 0.0722 * linearize(c.b())
+        }
+        let lum_bg = luminance(LIBRARY_BADGE_BG);
+        assert!(
+            lum_bg < 0.12,
+            "badge chip must stay a dark-theme surface, luminance {lum_bg:.4}"
+        );
+        let ratio = (1.0 + 0.05) / (lum_bg + 0.05);
+        assert!(
+            ratio >= 4.5,
+            "white badge text on the chip must meet AA (ratio {ratio:.2} < 4.5)"
+        );
     }
 }

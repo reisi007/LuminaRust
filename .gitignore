@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+agent-harness/target/
 /crates/lumina-gui/dist/
 
 # Local Rust tooling

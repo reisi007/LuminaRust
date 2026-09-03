@@ -304,13 +304,15 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 - Globale Develop-Aktionen (Save Recipe/Sidecar, Reset, Render/Apply, Match
   Total Exposure) stehen als fixierter Footer unterhalb der ScrollArea; die
   Sektionsreihenfolge darüber bleibt unverändert.
+- **Ist-Stand 2026-09-03:** Preview-Noise (Neighbor-Stand-in ehrlich als Draft verbucht), Toast-Overlay (4 s + ✕), Optics-Profilstatus + stellbare Slider, Custom-Gate, Single-Source-Auswahl, Nav-Hybrid-Overview, Histogramm-Full-Frame umgesetzt + verifiziert BESTANDEN (259p lib, kittest 11/11, Vision 6/6); rechtes Panel-Thumb bewusst entfernt (nicht in F-100 normiert, zeigte ROI-Crop als Vollbild).
 - Oben befinden sich die Modul-Leiste mit den Lightroom-Entsprechungen
   **Bibliothek**, **Entwickeln** und **Exportieren** (Library, Develop,
   Export).
 - Das Histogramm ist eine echte Grafik (gefüllte 256-Bin-Luminanzkurve per
   Painter, P01/P99 als schmale Marker, Mean/Median-Text) in einer eigenen
-  einklappbaren Sektion (Default offen) und bezieht sich auf den konkret
-  angezeigten Renderstand (Draft-/Veraltet-Zustände bleiben sichtbar).
+  einklappbaren Sektion (Default offen) und wird immer aus dem **gesamten
+  Bild** (Full-Render, nie nur sichtbarer Viewport/ROI-Ausschnitt) berechnet;
+  Draft-/Veraltet-Zustände bleiben sichtbar markiert.
 - Der Navigator zeigt das Gesamtbild mit einem Viewport-Rechteck (= aktuell
   sichtbarer Develop-Arbeitsbereich); Draggen des Rechtecks pannt den
   sichtbaren Bereich. Das Navigator-Panel ist einklappbar.

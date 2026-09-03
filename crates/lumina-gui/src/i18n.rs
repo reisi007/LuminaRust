@@ -150,6 +150,16 @@ pub enum Str {
     ChromaticRed,
     ChromaticBlue,
     OpticsRequiresLensfun,
+    // GUI-OPTICS-1: visible profile status + grouped, self-explanatory
+    // manual-correction controls (no silent inactive state).
+    OpticsProfileNone,
+    OpticsProfilePattern,
+    OpticsDistortionGroup,
+    OpticsDistortionHint,
+    OpticsVignetteGroup,
+    OpticsVignetteHint,
+    OpticsCaGroup,
+    OpticsCaHint,
 
     // Geometry (F-093 / F-099)
     Crop,
@@ -256,6 +266,13 @@ pub enum Str {
     RelativeExposureRequiresAutoTone,
     FeatheringMustBeBetween,
     Loaded,
+    // GUI-TOAST-OVERLAP-1: transient overlay toast + neighbor-preview cell
+    // states (previously free-form German literals painted over thumbnails).
+    ToastPreviewReady,
+    ToastDismiss,
+    NeighborLoading,
+    NeighborStale,
+    NeighborFailedPattern,
 
     // Parameterized patterns (use with `format!`); the `{}` placeholder is
     // replaced positionally by the caller.
@@ -470,16 +487,38 @@ impl Str {
             Str::NoiseReduction => "Noise Reduction",
 
             Str::LensCorrection => "Lens Correction",
-            Str::DistortionK1 => "Distortion k1",
-            Str::DistortionK2 => "Distortion k2",
-            Str::DistortionK3 => "Distortion k3",
-            Str::VignetteC0 => "Vignette c0",
-            Str::VignetteC1 => "Vignette c1",
-            Str::VignetteC2 => "Vignette c2",
-            Str::ChromaticRed => "CA Red",
-            Str::ChromaticBlue => "CA Blue",
+            Str::DistortionK1 => "Distortion K1 (r²)",
+            Str::DistortionK2 => "Distortion K2 (r⁴)",
+            Str::DistortionK3 => "Distortion K3 (r⁶)",
+            Str::VignetteC0 => "Vignette C0 (center)",
+            Str::VignetteC1 => "Vignette C1 (mid)",
+            Str::VignetteC2 => "Vignette C2 (corners)",
+            Str::ChromaticRed => "CA Red (lateral)",
+            Str::ChromaticBlue => "CA Blue (lateral)",
             Str::OpticsRequiresLensfun => {
                 "Not available: the native Lensfun pipeline stage is disabled in this build."
+            }
+            Str::OpticsProfileNone => {
+                "No lens profile — automatic correction inactive (manual sliders below apply on render)"
+            }
+            Str::OpticsProfilePattern => "Lens profile: {}",
+            Str::OpticsDistortionGroup => "Distortion (radial)",
+            Str::OpticsDistortionHint => {
+                "Radial distortion, K1·r² + K2·r⁴ + K3·r⁶: negative values correct \
+                 barrel distortion, positive values pincushion. Manual model — it \
+                 applies on render even without a lens profile."
+            }
+            Str::OpticsVignetteGroup => "Vignette (light falloff)",
+            Str::OpticsVignetteHint => {
+                "Vignette correction, C0 + C1·r² + C2·r⁴: brightens darkened \
+                 corners. Manual model — it applies on render even without a \
+                 lens profile."
+            }
+            Str::OpticsCaGroup => "Chromatic aberration (lateral)",
+            Str::OpticsCaHint => {
+                "Lateral chromatic aberration: shifts the red/blue channels \
+                 radially to cancel color fringes. Manual model — it applies \
+                 on render even without a lens profile."
             }
 
             Str::Crop => "Crop",
@@ -587,6 +626,11 @@ impl Str {
             }
             Str::FeatheringMustBeBetween => "Feathering must be between 0 and 1",
             Str::Loaded => "Loaded: {}",
+            Str::ToastPreviewReady => "Preview ready",
+            Str::ToastDismiss => "Dismiss",
+            Str::NeighborLoading => "Preparing preview…",
+            Str::NeighborStale => "Stale",
+            Str::NeighborFailedPattern => "Error: {}",
 
             Str::ImagesInDirectory => "{} images in directory",
             Str::DirectoryNotReadable => "Directory not readable: {}",
