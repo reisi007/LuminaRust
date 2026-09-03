@@ -59,6 +59,17 @@ genau diese Lücken.
   cargo run -p lumina-gui` (o. ä.), damit Slider-/Debounce-/Render-Pfade im Log
   sichtbar sind (`trace!` ist unter INFO unsichtbar). Der Befundbericht nennt
   den Log-Ausschnitt.
+- **KI-Validierungs-Loop (GUI, verpflichtend nach jedem GUI-Batch):**
+  1. `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` erzeugt
+     aktuelle Frames (Goldens + `.diff.png`/`.new.png` bei Abweichung).
+  2. Der Build-Agent legt alle neuen/geänderten Snapshots einem
+     Vision-Agenten (`vision-technical`, max. 10 Bilder) vor mit der Frage nach
+     Layout-Bugs (Overlap, abgeschnittene Panels, fehlende/falsche Elemente,
+     Platzierung, Zoom/Fit-Stimmigkeit gegen Navigator).
+  3. Jeder Vision-Befund wird als Todo-Task (Block A) angelegt oder widerlegt
+     begründet verworfen — kein Befund versandet.
+  4. Erst danach startet die unabhängige Code-Verifizierung. Vision-Befunde
+     laufen wie Test-Failures: Sie blockieren BESTANDEN.
 - `F-103-N6` und jeder folgende manuelle Test gelten erst als abgeschlossen,
   wenn alle Befunde einen automatischen Test-Anker haben.
 

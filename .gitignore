@@ -21,6 +21,10 @@
 *.lumina-index.sqlite-*
 *.lumina-cache/
 .lumina/
+# User sidecars (per-image edit recipes) are never committed — local only
+*.lumina.json
+*.lumina.zdata
+*.lumina-preset.json
 
 # Benchmark reports and outputs
 /perf/results/
