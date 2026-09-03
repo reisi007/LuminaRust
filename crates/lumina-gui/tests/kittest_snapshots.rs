@@ -35,9 +35,8 @@ use lumina_gui::{LuminaApp, Module};
 /// `crates/lumina-gui/src/i18n.rs`): `Presets` + `History` (top, collapsible)
 /// followed by the eight F-100 sections `Basic` … `Masking`.
 /// F-103-N10 (user decision 2026-08-25): Detail BEFORE Effects (Lightroom
-/// Classic panel order). NOTE: the committed goldens still show the old
-/// Effects-before-Detail layout and need a one-off refresh on a GPU machine:
-/// `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored`
+/// Classic panel order). The committed goldens were rebaselined to the
+/// Detail-before-Effects layout (GUI-KIT-01-REFRESH).
 const DEVELOP_SECTIONS: &[&str] = &[
     "Presets",
     "History",
