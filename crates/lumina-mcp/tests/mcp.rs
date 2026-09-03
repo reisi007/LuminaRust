@@ -32,8 +32,11 @@ const TOOL_NAMES: &[&str] = &[
 ];
 
 fn new_server(preview_dir: &Path) -> Server {
-    std::env::set_var("LUMINA_MCP_PREVIEW_DIR", preview_dir);
-    Server::new()
+    // Race-free injection: `Server::new` resolves the process-global
+    // `LUMINA_MCP_PREVIEW_DIR`, which parallel test threads would clobber via
+    // `set_var` (CI-MCP-PREVIEW-FLAKY-1). The explicit constructor binds each
+    // server to its own tempdir deterministically.
+    Server::with_preview_dir(preview_dir.to_path_buf())
 }
 
 fn call(server: &mut Server, method: &str, params: Value) -> Value {
@@ -55,6 +58,16 @@ fn tool_ok(server: &mut Server, name: &str, args: Value) -> Value {
         response.get("error").is_none(),
         "unexpected error for `{name}`: {:?}",
         response.get("error")
+    );
+    // A tool *execution* failure arrives inside the result (`isError: true`,
+    // no top-level `error`); assert success here so a failing tool cannot
+    // slip through and panic later as a missing payload field
+    // (CI-MCP-PREVIEW-FLAKY-1: `preview_path` unwrap on an error payload).
+    assert_eq!(
+        response["result"]["isError"],
+        false,
+        "`{name}` must succeed: {:?}",
+        response["result"]["structuredContent"].get("error")
     );
     response["result"]["structuredContent"].clone()
 }

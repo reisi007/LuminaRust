@@ -332,8 +332,10 @@ mod tests {
     /// handler pipeline (parse → dispatch → serialize shape).
     #[test]
     fn handle_line_answers_initialize_handshake() {
-        std::env::set_var("LUMINA_MCP_PREVIEW_DIR", std::env::temp_dir());
-        let mut server = Server::new();
+        // Race-free construction (CI-MCP-PREVIEW-FLAKY-1): the explicit
+        // constructor binds the server to its directory without mutating the
+        // process-global `LUMINA_MCP_PREVIEW_DIR`.
+        let mut server = Server::with_preview_dir(std::env::temp_dir());
         let response = server
             .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
             .expect("initialize expects a response");

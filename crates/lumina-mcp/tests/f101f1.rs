@@ -12,8 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn new_server(preview_dir: &Path) -> Server {
-    std::env::set_var("LUMINA_MCP_PREVIEW_DIR", preview_dir);
-    Server::new()
+    // Race-free injection (CI-MCP-PREVIEW-FLAKY-1): never mutate the
+    // process-global `LUMINA_MCP_PREVIEW_DIR` from parallel test threads.
+    Server::with_preview_dir(preview_dir.to_path_buf())
 }
 
 fn call_tool(server: &mut Server, name: &str, args: Value) -> Value {
