@@ -20,8 +20,12 @@ Feature-Dokumenten und der Git-Historie.
   ist ersatzlos gestrichen (2026-09-04, kein Post-MVP). Cache- und
   Mehrbild-Synchronisierung sind bewusst Post-MVP. Architektur bleibt nativ
   (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag).
-- **Release-Staffel (User-Entscheid 2026-09-03, MVP = 1.0):** 1.5 = HDR/Panorama-
-  Merge, Rote Augen, IPTC-/Metadaten-Presets + -Verwaltung, Auto-Upright;
+- **Release-Staffel (User-Entscheid 2026-09-03, MVP = 1.0; Aktualisierung
+  2026-09-04):** IPTC-/Metadaten-Presets + -Verwaltung wurden per
+  User-Entscheid 2026-09-04 von 1.5 nach **1.0** vorgezogen (LRPAR-G15-IPTC-
+  S1…S8; Entscheid: `feature/decisions/LRPAR-G15-META-15.md`, Sidecar-Draft,
+  pure-Rust-Bake-In ohne Runtime-Abhängigkeit, JPEG-only, GUI-Panel gleich
+  mit). Damit: 1.5 = HDR/Panorama-Merge, Rote Augen, Auto-Upright;
   2.0 = Gesichtserkennung, KI-Denoise; 2.5 = KI-Culling; nie Ziel:
   Karten-Modul/GPS, Veröffentlichungsdienste. Lensfun-Vollausbau,
   Keywords/Filter/Sammlungen/Smart-Sammlungen sind MVP (1.0).
@@ -102,7 +106,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | AGENT-HARNESS-2 | alle G | AccessKit-Semantik |
 | 1.0 | AGENT-HARNESS-3 | G-01/G-07/G-08/G-10 | Green-Path-Matrix |
 | 1.0 | AGENT-HARNESS-4 | G-10 | Bildkorrektheit |
-| 1.0 | LRPAR-G09-LIB | G-09 | Library-Kern |
 | 1.0 | LRPAR-G10-VIEWER | G-10 | Viewer/Softproof |
 | 1.0 | LRPAR-G11-OVERLAYS | G-11 | Overlays/Pins |
 | 1.0 | LRPAR-G16-POWER | G-16 | Power-Shortcuts |
@@ -112,11 +115,18 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | KITTEST-EXPANDED-VIEWPORT-1 | G-01 | Expanded-Snapshot |
 | 1.0 | KITTEST-PREEXIST-1 | alle G | Rote Goldens klären |
+| 1.0 | LRPAR-G15-IPTC-S1 | G-15 | Sidecar-`metadata`-Draft |
+| 1.0 | LRPAR-G15-IPTC-S2 | G-15 | `lumina-iptc` IIM/XMP |
+| 1.0 | LRPAR-G15-IPTC-S3 | G-15 | CLI `meta inspect/draft` |
+| 1.0 | LRPAR-G15-IPTC-S4 | G-15 | Meta-Presets |
+| 1.0 | LRPAR-G15-IPTC-S5 | G-15 | `meta sync` |
+| 1.0 | LRPAR-G15-IPTC-S6 | G-15 | Export-Bake-In |
+| 1.0 | LRPAR-G15-IPTC-S7 | G-15 | MCP Metadaten |
+| 1.0 | LRPAR-G15-IPTC-S8 | G-15 | GUI Metadaten-Panel |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
 | 1.5 | LRPAR-G14-REDEYE-15 | G-14 | Rote Augen |
-| 1.5 | LRPAR-G15-META-15 | G-15 | IPTC/Presets |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
@@ -151,7 +161,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 ### PRIO: mittel
 
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] LRPAR-G09-LIB (Release: 1.0)** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-EXPANDED-VIEWPORT-1 (Release: 1.0)** `develop_sections_expanded` zeigt Color/Masking nie pixel-sichtbar (1024×720-Viewport-Clipping, schon vor G-01 so): im Test zu Color/Masking scrollen und/oder Sektionen einzeln snapshotten. Abnahme: Color-/Masking-Widgets pixel-sichtbar im Golden + Vision-Check per DoD §6. (Gefunden 2026-09-04 im G01-Vision-Loop.)
 - [ ] **[PRIO: mittel] KITTEST-PREEXIST-1 (Release: 1.0)** Vorbestehende rote kittest-Goldens `histogram_graphic` + `navigator_viewport` klären (per `git stash`-Gegenprobe auf sauberem Tree reproduziert, umgebungsbedingt vermutet, außerhalb G-01-Scope): Ursache verifizieren (Umgebung vs. echter Bug), fixen oder begründet rebaselinen + Vision-Review per DoD §6. Abnahme: `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` voll grün. (Gefunden 2026-09-04 in G01-B1-Gegenprobe; Änderungsregel: keine vorbestehenden Fehler als „bekannt" abhaken.)

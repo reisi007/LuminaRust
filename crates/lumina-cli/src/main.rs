@@ -332,6 +332,13 @@ enum Command {
     /// modified. See `feature/platform/cli-gui-wasm.md` § „Previous-
     /// Übernahme (G-08, LRPAR-G08-PREVIOUS)“.
     Previous(PreviousArgs),
+    /// G-09 Library-Parität (LRPAR-G09-LIB): move one image with its
+    /// sidecar companions (`.lumina.json`, `.lumina.zdata` when present) to
+    /// a new path. Loud on missing source or existing target (exit 1, no
+    /// half state beyond the reported step); recipes roundtrip via
+    /// `load_sidecar`/`save_sidecar` paths (`inspect` stays `valid`). See
+    /// `feature/platform/cli-gui-wasm.md` § „Library-Parität G-09“.
+    Relocate(RelocateArgs),
     /// F-101-F1: run the Lumina MCP server over stdio (JSON-RPC on
     /// stdin/stdout). Takes no arguments; see `feature/platform/mcp-server.md`.
     #[cfg(feature = "mcp")]
@@ -631,6 +638,22 @@ struct PreviousArgs {
     /// `vc-original`).
     #[arg(long)]
     to_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// G-09 Library-Parität (LRPAR-G09-LIB): move one image with its sidecar
+/// companions. The destination is the full target image path (rename and
+/// folder move in one); companions keep their sidecar-derived file names
+/// next to the target. No schema change — only filesystem moves.
+#[derive(Debug, Args)]
+struct RelocateArgs {
+    /// Source image to move (must exist).
+    #[arg(long)]
+    from: PathBuf,
+    /// Destination image path (must not exist; parent must exist).
+    #[arg(long)]
+    to: PathBuf,
     #[arg(long)]
     json: bool,
 }
@@ -1091,6 +1114,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::BatchMeta(args) => batch_meta(args),
         Command::SmartCollections(args) => smart_collections(args),
         Command::Previous(args) => previous(args),
+        Command::Relocate(args) => relocate(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -2531,6 +2555,90 @@ fn previous(args: PreviousArgs) -> Result<(), CliError> {
     if failed != 0 {
         return Err(CliError::BatchPartial { failed });
     }
+    Ok(())
+}
+
+/// G-09 Library-Parität (LRPAR-G09-LIB): move one image with its sidecar
+/// companions (`.lumina.json`, `.lumina.zdata` when present) to `--to`.
+/// Companion targets are derived from the TARGET image path
+/// (`sidecar_path_for(&args.to)` / `zdata_path_for(&args.to)`), so renames
+/// keep the recipe attached to the new name. An existing target (image or
+/// companion) aborts loudly before anything is moved (exit 1, never a
+/// silent overwrite); a missing source is a loud error as well. The image
+/// moves first, then each present companion. A failed companion move is
+/// loud (exit 1) and names the step reached — the image may already sit at
+/// the target, which the error text says explicitly (no silent half state,
+/// no data loss by overwrite).
+fn relocate(args: RelocateArgs) -> Result<(), CliError> {
+    if !args.from.is_file() {
+        return Err(CliError::Message(format!(
+            "relocate: source `{}` does not exist",
+            args.from.display()
+        )));
+    }
+    if args.to.exists() {
+        return Err(CliError::Message(format!(
+            "relocate: target `{}` already exists; refusing to overwrite",
+            args.to.display()
+        )));
+    }
+    if let Some(parent) = args
+        .to
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if !parent.is_dir() {
+            return Err(CliError::Message(format!(
+                "relocate: target parent `{}` is no directory",
+                parent.display()
+            )));
+        }
+    }
+    let moves = [
+        (sidecar_path_for(&args.from), sidecar_path_for(&args.to)),
+        (zdata_path_for(&args.from), zdata_path_for(&args.to)),
+    ];
+    for (source, target) in &moves {
+        if source.is_file() && target.exists() {
+            return Err(CliError::Message(format!(
+                "relocate: companion target `{}` already exists; refusing to overwrite",
+                target.display()
+            )));
+        }
+    }
+    fs::rename(&args.from, &args.to).map_err(|error| io_error(&args.from, error))?;
+    info!(
+        "relocate: image `{}` -> `{}`",
+        args.from.display(),
+        args.to.display()
+    );
+    for (source, target) in &moves {
+        if source.is_file() {
+            fs::rename(source, target).map_err(|error| {
+                CliError::Message(format!(
+                    "relocate: image moved to `{}` but companion `{}` failed: {error}",
+                    args.to.display(),
+                    source.display()
+                ))
+            })?;
+            info!(
+                "relocate: companion `{}` -> `{}`",
+                source.display(),
+                target.display()
+            );
+        }
+    }
+    let text = format!(
+        "relocated `{}` -> `{}`",
+        args.from.display(),
+        args.to.display()
+    );
+    emit(
+        args.json,
+        serde_json::json!({"command":"relocate", "from":args.from, "to":args.to, "status":"ok"}),
+        &text,
+    )?;
+    info!("{text}");
     Ok(())
 }
 
@@ -8048,6 +8156,182 @@ mod tests {
             before,
             "no target may be touched without a valid reference"
         );
+    }
+
+    /// LRPAR-G09-LIB: `relocate` moves the image with its sidecar
+    /// companion; the recipe roundtrips and `inspect` stays valid.
+    #[test]
+    fn relocate_moves_image_with_sidecar_and_roundtrips() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = png_input(directory.path(), "photo.png", 100);
+        import_file(ImportArgs {
+            input: source.clone(),
+            json: false,
+            migrate: false,
+        })
+        .unwrap();
+        develop(DevelopArgs {
+            input: source.clone(),
+            virtual_copy: None,
+            exposure: Some(1.5),
+            contrast: None,
+            treatment: None,
+            profile: None,
+            update_masks: false,
+            migrate: false,
+            json: false,
+        })
+        .unwrap();
+        let album = directory.path().join("album");
+        std::fs::create_dir(&album).unwrap();
+        let target = album.join("photo.png");
+
+        relocate(RelocateArgs {
+            from: source.clone(),
+            to: target.clone(),
+            json: false,
+        })
+        .unwrap();
+
+        assert!(!source.exists(), "the source must be gone");
+        assert!(target.is_file(), "the image must sit at the target");
+        assert!(!sidecar_path_for(&source).exists());
+        let moved = sidecar_path_for(&target);
+        assert!(moved.is_file(), "the sidecar must follow the image");
+        let document = load_sidecar(&moved).unwrap();
+        assert!(document.validate().is_ok());
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            1.5
+        );
+        // Rezept-relevant roundtrip: inspect the moved image.
+        inspect(InspectArgs {
+            input: target,
+            json: true,
+        })
+        .unwrap();
+    }
+
+    /// LRPAR-G09-LIB (B1): same-directory rename derives companion targets
+    /// from `--to` — the sidecar follows the new name instead of colliding
+    /// with the source companion.
+    #[test]
+    fn relocate_same_dir_rename_moves_sidecar_to_new_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = png_input(directory.path(), "photo.png", 100);
+        import_file(ImportArgs {
+            input: source.clone(),
+            json: false,
+            migrate: false,
+        })
+        .unwrap();
+        let target = directory.path().join("renamed.png");
+
+        relocate(RelocateArgs {
+            from: source.clone(),
+            to: target.clone(),
+            json: false,
+        })
+        .unwrap();
+
+        assert!(!source.exists());
+        assert!(target.is_file());
+        assert!(!sidecar_path_for(&source).exists());
+        let moved = sidecar_path_for(&target);
+        assert!(moved.is_file(), "sidecar must follow the new name");
+        inspect(InspectArgs {
+            input: target,
+            json: true,
+        })
+        .unwrap();
+    }
+
+    /// LRPAR-G09-LIB (B1): cross-directory rename with both companions —
+    /// `.lumina.json` and `.lumina.zdata` land under the target-derived
+    /// names, never under the source names.
+    #[test]
+    fn relocate_cross_dir_rename_moves_json_and_zdata() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = png_input(directory.path(), "photo.png", 100);
+        import_file(ImportArgs {
+            input: source.clone(),
+            json: false,
+            migrate: false,
+        })
+        .unwrap();
+        let source_zdata = zdata_path_for(&source);
+        lumina_sidecar::save_zdata(
+            &source_zdata,
+            &lumina_sidecar::ZDataContainer::new(vec![]).unwrap(),
+        )
+        .unwrap();
+        let album = directory.path().join("album");
+        std::fs::create_dir(&album).unwrap();
+        let target = album.join("renamed.png");
+
+        relocate(RelocateArgs {
+            from: source.clone(),
+            to: target.clone(),
+            json: false,
+        })
+        .unwrap();
+
+        assert!(!source.exists());
+        assert!(!sidecar_path_for(&source).exists());
+        assert!(!source_zdata.exists());
+        assert!(target.is_file());
+        let moved_json = sidecar_path_for(&target);
+        let moved_zdata = zdata_path_for(&target);
+        assert!(moved_json.is_file(), "json must follow the target name");
+        assert!(moved_zdata.is_file(), "zdata must follow the target name");
+        // No stale source-named companions linger next to the target.
+        assert!(!album.join("photo.png.lumina.json").exists());
+        assert!(!album.join("photo.png.lumina.zdata").exists());
+        inspect(InspectArgs {
+            input: target,
+            json: true,
+        })
+        .unwrap();
+    }
+
+    /// LRPAR-G09-LIB: an existing target aborts loudly (exit 1) before
+    /// anything is moved — never a silent overwrite.
+    #[test]
+    fn relocate_refuses_existing_target_without_moving() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = png_input(directory.path(), "photo.png", 100);
+        let (blocker, _) = png_input(directory.path(), "blocker.png", 120);
+        import_file(ImportArgs {
+            input: source.clone(),
+            json: false,
+            migrate: false,
+        })
+        .unwrap();
+        let before = fs::read(&source).unwrap();
+        let before_sidecar = fs::read(sidecar_path_for(&source)).unwrap();
+
+        let error = relocate(RelocateArgs {
+            from: source.clone(),
+            to: blocker,
+            json: false,
+        })
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 1);
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert_eq!(fs::read(sidecar_path_for(&source)).unwrap(), before_sidecar);
+    }
+
+    /// LRPAR-G09-LIB: a missing source is a loud error (exit 1).
+    #[test]
+    fn relocate_missing_source_fails_loudly() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = relocate(RelocateArgs {
+            from: directory.path().join("gone.png"),
+            to: directory.path().join("elsewhere.png"),
+            json: false,
+        })
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 1);
     }
 
     /// R2-CLI-10: `import` no longer accepts render-only flags that were

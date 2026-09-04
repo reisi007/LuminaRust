@@ -471,6 +471,47 @@ pub fn compare_mode_for_key(key: egui::Key) -> Option<CompareMode> {
     }
 }
 
+/// Library view (G-09, LRPAR-G09-LIB): the four Library views sharing one
+/// selection (`filmstrip_selection`) and one filter (`\` query + active
+/// collection). `Grid` is the default thumbnail raster; `Loupe` shows the
+/// active selection large; `Compare` shows the active image's Before/After
+/// proxy (existing `before_after` path); `Survey` shows the multi-selection
+/// side by side (falls back to the filtered raster below two selections).
+/// Pure display state — never recipe/sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LibraryView {
+    #[default]
+    Grid,
+    Loupe,
+    Compare,
+    Survey,
+}
+
+/// Maps a Lightroom-style Library view key to its view (G-09): `G` grid,
+/// `E` loupe (module alias documented in [`module_for_key`]), `C` compare,
+/// `N` survey. Pure function, unit-tested without an [`egui::Context`].
+pub fn library_view_for_key(key: egui::Key) -> Option<LibraryView> {
+    match key {
+        egui::Key::G => Some(LibraryView::Grid),
+        egui::Key::E => Some(LibraryView::Loupe),
+        egui::Key::C => Some(LibraryView::Compare),
+        egui::Key::N => Some(LibraryView::Survey),
+        _ => None,
+    }
+}
+
+/// Clamped Library raster navigation (G-09): move `current` by `delta`
+/// entries over `count` entries. Clamps at both ends (Lightroom-conform, no
+/// wrap); empty listings and out-of-range starts clamp to `0`. Pure
+/// function, unit-tested headless.
+pub fn library_move_index(current: usize, delta: isize, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let current = current.min(count - 1);
+    current.saturating_add_signed(delta).min(count - 1)
+}
+
 /// Import/export module shortcut (Welle 3, LR-13 light):
 /// `Cmd/Ctrl+Shift+I` jumps to Library (import lives there),
 /// `Cmd/Ctrl+Shift+E` jumps to Export. The shortcuts only switch the module
@@ -1510,6 +1551,10 @@ pub struct LuminaApp {
     filter_bar_visible: bool,
     library_filter: String,
     compare_mode: Option<CompareMode>,
+    /// G-09 (LRPAR-G09-LIB) Library view: Grid/Loupe/Compare/Survey over the
+    /// same selection and filter. Display-only (never recipe/sidecar); a
+    /// reload restores the default (`Grid`).
+    library_view: LibraryView,
     before_after_split: bool,
     fullscreen: bool,
     /// G-16 (LRPAR-G16-POWER) session-only display state. Never persisted to
@@ -1641,6 +1686,10 @@ pub struct LuminaApp {
     /// Library module: current thumbnail cell size (px) for the center grid,
     /// driven by a toolbar slider (Lightroom-like resizable library thumbs).
     library_thumb_size: f32,
+    /// G-09 (LRPAR-G09-LIB) Library grid columns of the last laid-out grid
+    /// (drives ArrowUp/ArrowDown navigation by one row; headless default 4
+    /// until the first draw measures the real width).
+    library_cols: usize,
     /// G-15 META-MVP (Slice 3) Library metadata session state. The persisted
     /// truth stays Sidecar-first (`SidecarDocument.keywords` /
     /// `.collections` via `apply_batch_op` + `save_sidecar`); these fields
@@ -2317,6 +2366,7 @@ impl LuminaApp {
             filter_bar_visible: false,
             library_filter: String::new(),
             compare_mode: None,
+            library_view: LibraryView::Grid,
             before_after_split: false,
             fullscreen: false,
             softproof_preview: false,
@@ -2358,6 +2408,7 @@ impl LuminaApp {
             folder_children: BTreeMap::new(),
             folder_raw_counts: BTreeMap::new(),
             library_thumb_size: 132.0,
+            library_cols: 4,
             keyword_input: String::new(),
             collection_id_input: String::new(),
             collection_name_input: String::new(),
@@ -4124,15 +4175,342 @@ impl LuminaApp {
             CompareMode::Survey => {
                 if self.compare_mode == Some(CompareMode::Survey) {
                     self.compare_mode = None;
+                    self.library_view = LibraryView::Grid;
                     self.status = Str::CompareOff.t().into();
                 } else {
                     self.compare_mode = Some(CompareMode::Survey);
                     self.before_after = false;
                     self.active_module = Module::Library;
+                    self.library_view = LibraryView::Survey;
                     self.status = Str::SurveyOn.t().into();
                 }
             }
         }
+    }
+
+    /// Active Library view (G-09, LRPAR-G09-LIB). Read-only accessor for
+    /// badges and headless tests.
+    pub fn library_view(&self) -> LibraryView {
+        self.library_view
+    }
+
+    /// Set the Library view deterministically (G-09). Display-only like
+    /// [`Self::toggle_compare_mode`]: `Compare` holds the Before image via
+    /// the existing `before_after` path, `Survey`/`Grid`/`Loupe` clear it;
+    /// `Survey` and `Grid` and `Loupe` all live in the Library module, so
+    /// they switch `active_module` there. Never mutates the recipe.
+    pub fn set_library_view(&mut self, view: LibraryView) {
+        trace!("GUI interaction: set_library_view {:?}", view);
+        self.library_view = view;
+        match view {
+            LibraryView::Grid | LibraryView::Loupe | LibraryView::Survey => {
+                self.active_module = Module::Library;
+                self.before_after = false;
+                self.compare_mode = match view {
+                    LibraryView::Survey => Some(CompareMode::Survey),
+                    _ => None,
+                };
+                self.status = match view {
+                    LibraryView::Survey => Str::SurveyOn.t().into(),
+                    LibraryView::Loupe => Str::LoupeOn.t().into(),
+                    _ => Str::LibraryGridOn.t().into(),
+                };
+            }
+            LibraryView::Compare => {
+                self.active_module = Module::Library;
+                self.compare_mode = Some(CompareMode::Compare);
+                self.before_after = true;
+                self.status = Str::CompareOnPattern.format_arg(Str::CompareModeCompare.t());
+            }
+        }
+    }
+
+    /// Filtered Library raster order behind every G-09 view: the RAW-only
+    /// display order ([`Self::raw_entry_indices`]) narrowed by the active
+    /// collection view and the `\` query. Pure read over `&self`, shared by
+    /// grid painting and keyboard navigation so both see the same list.
+    pub fn filtered_library_order(&self) -> Vec<usize> {
+        let query = self.library_filter.clone();
+        let active_collection = self.active_collection.clone();
+        let smart_catalog = self.smart_catalog.clone();
+        self.raw_entry_indices()
+            .into_iter()
+            .filter(|&entry_idx| {
+                let entry = &self.entries[entry_idx];
+                if let Some(filter) = &active_collection {
+                    if !collection_filter_matches_entry(entry, filter, &smart_catalog) {
+                        return false;
+                    }
+                }
+                library_entry_matches(entry, &query)
+            })
+            .collect()
+    }
+
+    /// Move the Library selection by `delta` entries over the filtered
+    /// raster (G-09 keyboard navigation). The active image (`self.path`)
+    /// anchors the move; selection and anchor follow without opening the
+    /// image. Empty listings are a loud no-op (status, no panic). Returns
+    /// the newly selected display-string path, if any.
+    pub fn move_library_selection(&mut self, delta: isize) -> Option<String> {
+        let order = self.filtered_library_order();
+        if order.is_empty() {
+            self.status = Str::NoImagesSelected.t().into();
+            return None;
+        }
+        let paths: Vec<String> = order
+            .iter()
+            .map(|&index| self.entries[index].path.display().to_string())
+            .collect();
+        let current = paths
+            .iter()
+            .position(|path| *path == self.path)
+            .unwrap_or(0);
+        let next = library_move_index(current, delta, paths.len());
+        let target = paths[next].clone();
+        self.select_filmstrip_path(target.clone(), false, false);
+        trace!("GUI interaction: move_library_selection {delta} -> {target}");
+        Some(target)
+    }
+
+    /// Open the active Library selection in Loupe (G-09): loads the image
+    /// and shows the single-image view. Without a selection this is a loud
+    /// no-op (status, never a silent fallback).
+    pub fn open_library_selection(&mut self) {
+        let Some(target) = self
+            .filmstrip_selection
+            .iter()
+            .next()
+            .cloned()
+            .or_else(|| Some(self.path.clone()))
+            .filter(|path| !path.is_empty())
+        else {
+            self.status = Str::NoImagesSelected.t().into();
+            return;
+        };
+        trace!("GUI interaction: library open {target}");
+        self.handle_filmstrip_click(target, false, false);
+        self.set_library_view(LibraryView::Loupe);
+    }
+
+    /// Create a folder (G-09 catalog management). Loud when the target
+    /// already exists as a non-directory or when creation fails; never
+    /// touches recipes or sidecars (there is nothing to accompany yet).
+    pub fn create_folder(&mut self, path: &Path) -> Result<(), GuiError> {
+        if path.exists() {
+            if !path.is_dir() {
+                return Err(GuiError::Io(format!(
+                    "cannot create folder `{}`: a file already exists",
+                    path.display()
+                )));
+            }
+            info!("folder already exists: {}", path.display());
+            self.status = Str::FolderExistsPattern.format_arg(&path.display().to_string());
+            return Ok(());
+        }
+        std::fs::create_dir_all(path).map_err(|error| {
+            GuiError::Io(format!(
+                "cannot create folder `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        info!("folder created: {}", path.display());
+        self.status = Str::FolderCreatedPattern.format_arg(&path.display().to_string());
+        Ok(())
+    }
+
+    /// Rename (move) a folder (G-09 catalog management). Sidecars live next
+    /// to their sources inside the folder, so they travel with the single
+    /// directory `rename` — no per-file bookkeeping, no absolute paths.
+    /// Loud when the source is missing or the target already exists.
+    pub fn rename_folder(&mut self, from: &Path, to: &Path) -> Result<(), GuiError> {
+        if !from.is_dir() {
+            return Err(GuiError::Io(format!(
+                "cannot rename folder `{}`: no such directory",
+                from.display()
+            )));
+        }
+        if to.exists() {
+            return Err(GuiError::Io(format!(
+                "cannot rename folder `{}` to `{}`: target already exists",
+                from.display(),
+                to.display()
+            )));
+        }
+        std::fs::rename(from, to).map_err(|error| {
+            GuiError::Io(format!(
+                "cannot rename folder `{}`: {error}",
+                from.display()
+            ))
+        })?;
+        info!("folder renamed: {} -> {}", from.display(), to.display());
+        self.status =
+            Str::FolderRenamedPattern.format_arg(&format!("{} → {}", from.display(), to.display()));
+        self.list_directory();
+        Ok(())
+    }
+
+    /// Move one image plus its sidecar companions into `dest_dir` (G-09
+    /// catalog management): `<name>.lumina.json` and `<name>.lumina.zdata`
+    /// travel with the source when present; missing companions are no error.
+    /// An existing target (image or companion) aborts loudly before anything
+    /// is moved — never a silent overwrite. Each moved path logs `info!`.
+    pub fn move_image_to_folder(
+        &mut self,
+        image: &Path,
+        dest_dir: &Path,
+    ) -> Result<PathBuf, GuiError> {
+        if !image.is_file() {
+            return Err(GuiError::Io(format!(
+                "cannot move `{}`: no such file",
+                image.display()
+            )));
+        }
+        if !dest_dir.is_dir() {
+            return Err(GuiError::Io(format!(
+                "cannot move `{}`: destination `{}` is no directory",
+                image.display(),
+                dest_dir.display()
+            )));
+        }
+        let file_name = image
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                GuiError::Io(format!("cannot move `{}`: no file name", image.display()))
+            })?;
+        let target = dest_dir.join(&file_name);
+        if target.exists() {
+            return Err(GuiError::Io(format!(
+                "cannot move `{}` to `{}`: target already exists",
+                image.display(),
+                target.display()
+            )));
+        }
+        for companion in [
+            lumina_sidecar::sidecar_path_for(image),
+            zdata_path_for(image),
+        ] {
+            if companion.is_file() {
+                let companion_name = companion
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if dest_dir.join(&companion_name).exists() {
+                    return Err(GuiError::Io(format!(
+                        "cannot move `{}` to `{}`: companion `{}` already exists",
+                        image.display(),
+                        target.display(),
+                        companion_name
+                    )));
+                }
+            }
+        }
+        std::fs::rename(image, &target)
+            .map_err(|error| GuiError::Io(format!("cannot move `{}`: {error}", image.display())))?;
+        info!("moved image: {} -> {}", image.display(), target.display());
+        for companion in [
+            lumina_sidecar::sidecar_path_for(image),
+            zdata_path_for(image),
+        ] {
+            if companion.is_file() {
+                let companion_name = companion
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let companion_target = dest_dir.join(&companion_name);
+                match std::fs::rename(&companion, &companion_target) {
+                    Ok(()) => info!(
+                        "moved sidecar companion: {} -> {}",
+                        companion.display(),
+                        companion_target.display()
+                    ),
+                    Err(error) => {
+                        self.status = Str::CompanionMoveFailedPattern
+                            .format_arg(&format!("{companion_name}: {error}"));
+                        return Err(GuiError::Io(format!(
+                            "moved `{}` to `{}` but companion `{}` failed: {error}",
+                            image.display(),
+                            target.display(),
+                            companion.display()
+                        )));
+                    }
+                }
+            }
+        }
+        self.status = Str::ImageMovedPattern.format_arg(&format!(
+            "{} → {}",
+            image.display(),
+            target.display()
+        ));
+        self.list_directory();
+        Ok(target)
+    }
+
+    /// Delete one image plus its sidecar companions (G-09 catalog
+    /// management). Missing companions are no error; a missing image is a
+    /// loud error. The selection stabilizes on the successor afterwards.
+    pub fn delete_image_with_sidecars(&mut self, image: &Path) -> Result<(), GuiError> {
+        if !image.is_file() {
+            return Err(GuiError::Io(format!(
+                "cannot delete `{}`: no such file",
+                image.display()
+            )));
+        }
+        std::fs::remove_file(image).map_err(|error| {
+            GuiError::Io(format!("cannot delete `{}`: {error}", image.display()))
+        })?;
+        info!("deleted image: {}", image.display());
+        for companion in [
+            lumina_sidecar::sidecar_path_for(image),
+            zdata_path_for(image),
+        ] {
+            if companion.is_file() {
+                std::fs::remove_file(&companion).map_err(|error| {
+                    GuiError::Io(format!("cannot delete `{}`: {error}", companion.display()))
+                })?;
+                info!("deleted sidecar companion: {}", companion.display());
+            }
+        }
+        self.status = Str::ImageDeletedPattern.format_arg(&image.display().to_string());
+        self.list_directory();
+        Ok(())
+    }
+
+    /// Delete an empty folder (G-09 catalog management). Non-empty folders
+    /// are loudly refused (no recursive delete, no data loss); `.lumina`
+    /// cache folders are never special-cased here — they delete like any
+    /// other empty folder.
+    pub fn delete_empty_folder(&mut self, path: &Path) -> Result<(), GuiError> {
+        if !path.is_dir() {
+            return Err(GuiError::Io(format!(
+                "cannot delete folder `{}`: no such directory",
+                path.display()
+            )));
+        }
+        let is_empty = std::fs::read_dir(path)
+            .map_err(|error| {
+                GuiError::Io(format!("cannot read folder `{}`: {error}", path.display()))
+            })?
+            .next()
+            .is_none();
+        if !is_empty {
+            return Err(GuiError::Io(format!(
+                "cannot delete folder `{}`: directory is not empty",
+                path.display()
+            )));
+        }
+        std::fs::remove_dir(path).map_err(|error| {
+            GuiError::Io(format!(
+                "cannot delete folder `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        info!("deleted empty folder: {}", path.display());
+        self.status = Str::FolderDeletedPattern.format_arg(&path.display().to_string());
+        self.list_directory();
+        Ok(())
     }
 
     /// Toggle the split Before/After marker (`Shift+Y`, Welle 3, LR-09
@@ -14323,25 +14701,30 @@ impl LuminaApp {
         // visible rows are laid out (show_rows) and only the buffered window's
         // thumbnails are ensured per frame — never an O(n) loop over all
         // entries. GUI-FILMSTRIP-DUP-1: one shared index source.
-        let query = self.library_filter.clone();
-        // G-15 META-MVP (Slice 3): full entry-aware filter (extended `\`
-        // predicates over cached keywords/collections/EXIF) plus the active
-        // collection view. Cloned so the predicate loop holds no `&mut self`.
-        let active_collection = self.active_collection.clone();
-        let smart_catalog = self.smart_catalog.clone();
-        let all_raw = self.raw_entry_indices();
-        let raw_indices: Vec<usize> = all_raw
-            .into_iter()
-            .filter(|&entry_idx| {
-                let entry = &self.entries[entry_idx];
-                if let Some(filter) = &active_collection {
-                    if !collection_filter_matches_entry(entry, filter, &smart_catalog) {
-                        return false;
-                    }
-                }
-                library_entry_matches(entry, &query)
-            })
-            .collect();
+        // G-09 (LRPAR-G09-LIB): grid, loupe, compare and survey share this
+        // filtered order ([`Self::filtered_library_order`]: RAW-only display
+        // order narrowed by the active collection view and the `\` query),
+        // so painting and keyboard navigation always see the same list.
+        let raw_indices: Vec<usize> = self.filtered_library_order();
+        // G-09: non-grid views branch here; the grid body below (and its
+        // kittest goldens) stays pixel-identical for `LibraryView::Grid`.
+        match self.library_view {
+            LibraryView::Loupe => {
+                self.library_cols = 1;
+                self.draw_library_loupe(ctx, ui, &raw_indices);
+                return;
+            }
+            LibraryView::Compare => {
+                self.library_cols = 1;
+                self.draw_library_compare(ctx, ui, &raw_indices);
+                return;
+            }
+            LibraryView::Survey => {
+                self.draw_library_survey(ctx, ui, &raw_indices);
+                return;
+            }
+            LibraryView::Grid => {}
+        }
         if raw_indices.is_empty() {
             ui.heading(Str::Library.t());
             ui.label(Str::ReadyForImage.t());
@@ -14351,6 +14734,7 @@ impl LuminaApp {
         const CELL_INNER_PAD: f32 = 8.0;
         let cell_inner = (thumb - CELL_INNER_PAD).max(32.0);
         let cols = ((ui.available_width() / thumb).floor() as usize).max(1);
+        self.library_cols = cols;
         let count = raw_indices.len();
         let total_rows = count.div_ceil(cols);
         // The closure returns the laid-out row window so scheduling below runs
@@ -14530,6 +14914,213 @@ impl LuminaApp {
         // window (+ buffer), then a bounded nearest-first off-screen prefetch.
         let window = visible_rows.start * cols..(visible_rows.end * cols).min(count);
         self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
+    }
+
+    /// G-09 (LRPAR-G09-LIB) Loupe: the active selection shown large
+    /// (Lightroom `E`). Single image, same badges/hover as the grid cells,
+    /// no second render path — the filmstrip thumbnail texture is reused.
+    /// Display-only; edits stay on the rating keys and Quick Develop.
+    fn draw_library_loupe(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        raw_indices: &[usize],
+    ) {
+        if raw_indices.is_empty() {
+            ui.heading(Str::Library.t());
+            ui.label(Str::ReadyForImage.t());
+            return;
+        }
+        let active = raw_indices
+            .iter()
+            .find(|&&index| self.entries[index].path.display().to_string() == self.path)
+            .or(raw_indices.first())
+            .copied()
+            .unwrap_or(0);
+        let entry = self.entries[active].clone();
+        ui.heading(Str::LoupeOn.t());
+        ui.label(format!("{}  [{}]", entry.name, entry.status_label()));
+        let size = egui::vec2(ui.available_width().max(64.0), 420.0);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        if let Some(texture) = self.thumbnails.get(&entry.thumb_key).cloned() {
+            ui.put(
+                rect,
+                egui::Image::from_texture(&texture).max_size(rect.size()),
+            );
+        } else {
+            ui.painter()
+                .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+            ui.put(
+                rect,
+                egui::Label::new(self.thumbnail_placeholder_label(&entry)),
+            );
+            self.frame_thumb_enqueued +=
+                self.ensure_thumbnail_priority(ctx, raw_indices, 0..raw_indices.len().min(4));
+        }
+        ui.label(format!(
+            "{}:{} {}:{} {}:{}",
+            Str::Rating.t(),
+            stars_for_rating(entry.rating),
+            Str::FlagLabel.t(),
+            flag_label(entry.flag),
+            Str::ColorLabel.t(),
+            color_label_name(entry.color_label),
+        ));
+    }
+
+    /// G-09 (LRPAR-G09-LIB) Compare: Before/After of the active image
+    /// (Lightroom `C`). Reuses the existing `before_after` proxy — the full
+    /// Before/After toggle stays `Y` in Develop; this view only surfaces the
+    /// same proxy state in the Library module. Display-only, never recipe.
+    fn draw_library_compare(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        raw_indices: &[usize],
+    ) {
+        if raw_indices.is_empty() {
+            ui.heading(Str::Library.t());
+            ui.label(Str::ReadyForImage.t());
+            return;
+        }
+        let active = raw_indices
+            .iter()
+            .find(|&&index| self.entries[index].path.display().to_string() == self.path)
+            .or(raw_indices.first())
+            .copied()
+            .unwrap_or(0);
+        let entry = self.entries[active].clone();
+        ui.heading(Str::CompareModeCompare.t());
+        ui.label(format!(
+            "{}  ({})",
+            entry.name,
+            if self.before_after {
+                Str::CompareOnPattern.format_arg(Str::CompareModeCompare.t())
+            } else {
+                Str::CompareOff.t().to_string()
+            }
+        ));
+        ui.horizontal(|ui| {
+            let left = entry.clone();
+            for (title, _active_before) in [
+                (Str::CompareBefore.t(), true),
+                (Str::CompareAfter.t(), false),
+            ] {
+                ui.vertical(|ui| {
+                    ui.label(title);
+                    let size = egui::vec2((ui.available_width() / 2.0).max(64.0), 360.0);
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    if let Some(texture) = self.thumbnails.get(&left.thumb_key).cloned() {
+                        ui.put(
+                            rect,
+                            egui::Image::from_texture(&texture).max_size(rect.size()),
+                        );
+                    } else {
+                        ui.painter()
+                            .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+                        ui.put(
+                            rect,
+                            egui::Label::new(self.thumbnail_placeholder_label(&left)),
+                        );
+                    }
+                });
+            }
+        });
+        self.frame_thumb_enqueued +=
+            self.ensure_thumbnail_priority(ctx, raw_indices, 0..raw_indices.len().min(4));
+    }
+
+    /// G-09 (LRPAR-G09-LIB) Survey: the multi-selection side by side
+    /// (Lightroom `N`). Below two selected images the view falls back to the
+    /// filtered raster so the pane never goes empty while images exist.
+    /// Click selects, double-click opens in Loupe (same bookkeeping as the
+    /// grid). Display-only, never recipe.
+    fn draw_library_survey(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        raw_indices: &[usize],
+    ) {
+        if raw_indices.is_empty() {
+            ui.heading(Str::Library.t());
+            ui.label(Str::ReadyForImage.t());
+            return;
+        }
+        let selected: Vec<usize> = raw_indices
+            .iter()
+            .copied()
+            .filter(|&index| {
+                self.filmstrip_selection
+                    .contains(&self.entries[index].path.display().to_string())
+            })
+            .collect();
+        let show: Vec<usize> = if selected.len() >= 2 {
+            selected
+        } else {
+            raw_indices.to_vec()
+        };
+        ui.heading(Str::CompareModeSurvey.t());
+        ui.label(
+            Str::SelectionCountPattern.format_arg(&self.filmstrip_selection.len().to_string()),
+        );
+        let thumb = (self.library_thumb_size * 1.5).clamp(108.0, 360.0);
+        let cols = ((ui.available_width() / thumb).floor() as usize).max(1);
+        self.library_cols = cols;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for chunk in show.chunks(cols) {
+                ui.horizontal(|ui| {
+                    for &entry_idx in chunk {
+                        let entry = self.entries[entry_idx].clone();
+                        let selected = self
+                            .filmstrip_selection
+                            .contains(&entry.path.display().to_string());
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(thumb, thumb), egui::Sense::click());
+                        if selected {
+                            ui.painter().rect_stroke(
+                                rect.expand(2.0),
+                                3.0,
+                                egui::Stroke::new(2.0_f32, ui.visuals().selection.bg_fill),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        if let Some(texture) = self.thumbnails.get(&entry.thumb_key).cloned() {
+                            ui.put(
+                                rect,
+                                egui::Image::from_texture(&texture).max_size(rect.size()),
+                            );
+                        } else {
+                            ui.painter()
+                                .rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+                            ui.put(
+                                rect,
+                                egui::Label::new(self.thumbnail_placeholder_label(&entry)),
+                            );
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(entry.name.clone());
+                        });
+                        if resp.clicked() {
+                            self.select_filmstrip_path(
+                                entry.path.display().to_string(),
+                                false,
+                                false,
+                            );
+                        }
+                        if resp.double_clicked() {
+                            self.handle_filmstrip_click(
+                                entry.path.display().to_string(),
+                                false,
+                                false,
+                            );
+                            self.set_library_view(LibraryView::Loupe);
+                        }
+                    }
+                });
+            }
+        });
+        self.frame_thumb_enqueued +=
+            self.ensure_thumbnail_priority(ctx, &show, 0..show.len().min(8));
     }
 
     /// Lightroom-style Presets section (F-009): the file-backed preset list
@@ -16033,10 +16624,12 @@ impl eframe::App for LuminaApp {
             self.spot_tool = SpotTool::None;
         }
 
-        // Module-switch shortcuts (`G` Library, `D` Develop, `E` Library alias).
-        // They are ignored while a widget wants keyboard input — e.g. a focused
-        // text field for mask/preset names — so they cannot hijack typing.
-        // Switching modules never mutates the recipe or sidecar.
+        // Module-switch shortcuts (`G` Library grid, `D` Develop, `E`
+        // Library loupe). They are ignored while a widget wants keyboard
+        // input — e.g. a focused text field for mask/preset names — so they
+        // cannot hijack typing. Switching modules never mutates the recipe
+        // or sidecar. `G`/`E` route through the G-09 Library view so the
+        // grid and the loupe are distinct, headless-testable states.
         if !ctx.egui_wants_keyboard_input() {
             if let Some(module) = ctx.input(|i| {
                 for key in [egui::Key::G, egui::Key::D, egui::Key::E] {
@@ -16048,7 +16641,13 @@ impl eframe::App for LuminaApp {
                 }
                 None
             }) {
-                self.active_module = module;
+                if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+                    self.set_library_view(LibraryView::Loupe);
+                } else if ctx.input(|i| i.key_pressed(egui::Key::G)) {
+                    self.set_library_view(LibraryView::Grid);
+                } else {
+                    self.active_module = module;
+                }
             }
         }
 
@@ -16266,14 +16865,54 @@ impl eframe::App for LuminaApp {
             if ctx.input(|i| i.key_pressed(egui::Key::Backslash)) {
                 self.toggle_filter_bar();
             }
-            // Welle 3 (LR-20 light): `C` compare reuses Before/After, `N`
-            // survey jumps to the Library grid. Plain presses only —
+            // Welle 3 (LR-20 light) + G-09: `C` compare reuses Before/After,
+            // `N` survey jumps to the Library grid. Plain presses only —
             // `Cmd/Ctrl+Shift+C` stays copy-settings (native block below).
+            // The G-09 Library view follows the compare proxy so both stay
+            // in sync (repeat press leaves the view back to Grid).
             for key in [egui::Key::C, egui::Key::N] {
                 if ctx.input(|i| i.key_pressed(key) && !i.modifiers.ctrl && !i.modifiers.command) {
                     if let Some(mode) = compare_mode_for_key(key) {
                         self.toggle_compare_mode(mode);
+                        self.library_view = match self.compare_mode {
+                            Some(CompareMode::Compare) => LibraryView::Compare,
+                            Some(CompareMode::Survey) => LibraryView::Survey,
+                            None => LibraryView::Grid,
+                        };
                     }
+                }
+            }
+            // G-09 (LRPAR-G09-LIB) Library keyboard navigation: arrows move
+            // the selection over the filtered raster (no open), `Home`/`End`
+            // jump to the ends, `Enter` opens the active image in Loupe,
+            // `Esc` returns to Grid. Ignored outside the Library module and
+            // while a widget wants keyboard input, like every F-100 shortcut.
+            if self.active_module == Module::Library {
+                let cols = self.library_cols.max(1) as isize;
+                let mut delta: Option<isize> = None;
+                if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+                    delta = Some(1);
+                } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                    delta = Some(-1);
+                } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                    delta = Some(cols);
+                } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                    delta = Some(-cols);
+                } else if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
+                    delta = Some(isize::MIN / 2);
+                } else if ctx.input(|i| i.key_pressed(egui::Key::End)) {
+                    delta = Some(isize::MAX / 2);
+                }
+                if let Some(step) = delta {
+                    self.move_library_selection(step);
+                }
+                if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    self.open_library_selection();
+                }
+                if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                    && self.library_view != LibraryView::Grid
+                {
+                    self.set_library_view(LibraryView::Grid);
                 }
             }
             // Welle 3 (LR-13 light): `Cmd/Ctrl+Shift+I` jumps to Library
@@ -26361,6 +27000,265 @@ mod tests {
         app.toggle_compare_mode(CompareMode::Survey);
         assert_eq!(app.compare_mode(), None);
         assert_eq!(app.active_module, Module::Library);
+    }
+
+    // ---- G-09 Library parity (LRPAR-G09-LIB): views, navigation, folders ----
+
+    #[test]
+    fn g09_library_view_for_key_maps_g_e_c_n() {
+        assert_eq!(library_view_for_key(egui::Key::G), Some(LibraryView::Grid));
+        assert_eq!(library_view_for_key(egui::Key::E), Some(LibraryView::Loupe));
+        assert_eq!(
+            library_view_for_key(egui::Key::C),
+            Some(LibraryView::Compare)
+        );
+        assert_eq!(
+            library_view_for_key(egui::Key::N),
+            Some(LibraryView::Survey)
+        );
+        assert_eq!(library_view_for_key(egui::Key::Y), None);
+        assert_eq!(library_view_for_key(egui::Key::D), None);
+        assert_eq!(library_view_for_key(egui::Key::V), None);
+    }
+
+    #[test]
+    fn g09_library_move_index_clamps_without_wrap() {
+        assert_eq!(library_move_index(0, 0, 0), 0);
+        assert_eq!(library_move_index(0, 1, 3), 1);
+        assert_eq!(library_move_index(2, 1, 3), 2);
+        assert_eq!(library_move_index(0, -1, 3), 0);
+        assert_eq!(library_move_index(1, -5, 3), 0);
+        assert_eq!(library_move_index(1, 99, 3), 2);
+        assert_eq!(library_move_index(9, 1, 3), 2);
+        assert_eq!(library_move_index(0, isize::MIN / 2, 3), 0);
+        assert_eq!(library_move_index(0, isize::MAX / 2, 3), 2);
+    }
+
+    #[test]
+    fn g09_set_library_view_syncs_module_and_before_after() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        let generation = app.preview_generation();
+        assert_eq!(app.library_view(), LibraryView::Grid);
+        app.set_library_view(LibraryView::Loupe);
+        assert_eq!(app.library_view(), LibraryView::Loupe);
+        assert_eq!(app.module(), Module::Library);
+        assert!(!app.before_after);
+        app.set_library_view(LibraryView::Compare);
+        assert_eq!(app.library_view(), LibraryView::Compare);
+        assert_eq!(app.compare_mode(), Some(CompareMode::Compare));
+        assert!(app.before_after);
+        app.set_library_view(LibraryView::Survey);
+        assert_eq!(app.library_view(), LibraryView::Survey);
+        assert_eq!(app.compare_mode(), Some(CompareMode::Survey));
+        assert!(!app.before_after);
+        app.set_library_view(LibraryView::Grid);
+        assert_eq!(app.library_view(), LibraryView::Grid);
+        assert_eq!(app.compare_mode(), None);
+        // Display-only: recipe and render generation are untouched.
+        assert!(app.recipe().adjustments.is_empty());
+        assert_eq!(app.preview_generation(), generation);
+    }
+
+    #[test]
+    fn g09_compare_toggle_syncs_library_view() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.toggle_compare_mode(CompareMode::Compare);
+        assert_eq!(app.library_view(), LibraryView::Grid);
+        // The G-09 key path (update loop) syncs the view after the toggle;
+        // mirror that here: Compare proxy -> Compare view, repeat -> Grid.
+        app.set_library_view(LibraryView::Compare);
+        assert!(app.before_after);
+        app.toggle_compare_mode(CompareMode::Survey);
+        app.set_library_view(LibraryView::Survey);
+        assert_eq!(app.module(), Module::Library);
+        assert!(!app.before_after);
+    }
+
+    #[test]
+    fn g09_move_library_selection_walks_filtered_raster() {
+        let root = tempfile::tempdir().unwrap();
+        save_raw(&root.path().join("a.arw"));
+        save_raw(&root.path().join("b.arw"));
+        save_raw(&root.path().join("c.arw"));
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        app.list_directory();
+        assert_eq!(app.filtered_library_order().len(), 3);
+        let first = app.entries()[app.filtered_library_order()[0]]
+            .path
+            .display()
+            .to_string();
+        app.select_filmstrip_path(first.clone(), false, false);
+        app.path = first.clone();
+        let second = app.move_library_selection(1).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(app.filmstrip_selection(), vec![second.clone()]);
+        // Clamp at the end: moving past the last entry stays.
+        app.path = second.clone();
+        let last = app.move_library_selection(99).unwrap();
+        app.path = last.clone();
+        assert_eq!(app.move_library_selection(1).unwrap(), last);
+        // Home clamps to the first entry.
+        assert_eq!(app.move_library_selection(isize::MIN / 2).unwrap(), first);
+        // The shared filter narrows navigation and painting identically.
+        app.set_library_filter("b.arw");
+        assert_eq!(app.filtered_library_order().len(), 1);
+    }
+
+    #[test]
+    fn g09_open_library_selection_loads_and_shows_loupe() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        let path = source.display().to_string();
+        app.filmstrip_selection = BTreeSet::from([path.clone()]);
+        app.open_library_selection();
+        assert_eq!(app.library_view(), LibraryView::Loupe);
+        for _ in 0..2000 {
+            app.poll_decode();
+            if app.original.is_some() || app.error().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(app.original.is_some(), "loupe opens the selected file");
+    }
+
+    /// G-09 (B2): opening the selection routes through `set_library_view`,
+    /// so a stale Compare proxy (`compare_mode`/`before_after`) is cleared.
+    #[test]
+    fn g09_open_library_selection_clears_stale_compare_proxy() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        let path = source.display().to_string();
+        app.filmstrip_selection = BTreeSet::from([path.clone()]);
+        app.set_library_view(LibraryView::Compare);
+        assert!(app.before_after);
+        app.open_library_selection();
+        assert_eq!(app.library_view(), LibraryView::Loupe);
+        assert_eq!(app.compare_mode(), None);
+        assert!(!app.before_after);
+        assert!(app.recipe().adjustments.is_empty());
+    }
+
+    #[test]
+    fn g09_create_and_rename_folder_roundtrip() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        let fresh = root.path().join("fresh");
+        app.create_folder(&fresh).unwrap();
+        assert!(fresh.is_dir());
+        // Creating over an existing directory is idempotent, not an error.
+        app.create_folder(&fresh).unwrap();
+        // A file at the target path is a loud error, never a silent clobber.
+        let blocker = root.path().join("blocker.png");
+        save_png(&blocker);
+        assert!(app.create_folder(&blocker).is_err());
+        let renamed = root.path().join("renamed");
+        app.rename_folder(&fresh, &renamed).unwrap();
+        assert!(renamed.is_dir());
+        assert!(!fresh.exists());
+        // Renaming onto an existing target is loudly refused.
+        assert!(app.rename_folder(&renamed, root.path()).is_err());
+        assert!(app
+            .rename_folder(&root.path().join("missing"), &fresh)
+            .is_err());
+    }
+
+    #[test]
+    fn g09_move_image_carries_sidecars_and_reloads() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        app.save_sidecar();
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        assert!(sidecar.is_file(), "sidecar must exist before the move");
+        let dest_dir = root.path().join("album");
+        app.create_folder(&dest_dir).unwrap();
+        let target = app.move_image_to_folder(&source, &dest_dir).unwrap();
+        assert!(!source.exists());
+        assert!(target.is_file());
+        let moved_sidecar = lumina_sidecar::sidecar_path_for(&target);
+        assert!(moved_sidecar.is_file(), "sidecar must follow the image");
+        assert!(!sidecar.exists());
+        // Roundtrip: the moved sidecar still validates and carries the edit.
+        let document = lumina_sidecar::load_sidecar(&moved_sidecar).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.adjustments["exposure"],
+            1.5
+        );
+        // The moved image reloads with its recipe (Edit -> Commit -> Datei
+        // -> Reload over a folder move).
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, target.display().to_string());
+        assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+        // No absolute paths leaked into the persisted sidecar.
+        let raw = std::fs::read_to_string(&moved_sidecar).unwrap();
+        assert!(
+            !raw.contains(&root.path().display().to_string()),
+            "sidecar must not persist absolute paths"
+        );
+    }
+
+    #[test]
+    fn g09_move_image_refuses_existing_target() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("photo.png");
+        save_png(&source);
+        let dest_dir = root.path().join("album");
+        std::fs::create_dir(&dest_dir).unwrap();
+        save_png(&dest_dir.join("photo.png"));
+        let mut app = new_app();
+        let before = std::fs::read(&source).unwrap();
+        assert!(app.move_image_to_folder(&source, &dest_dir).is_err());
+        assert!(source.is_file(), "refused move must keep the source");
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+    }
+
+    #[test]
+    fn g09_delete_image_removes_companions_and_keeps_selection_sane() {
+        let root = tempfile::tempdir().unwrap();
+        let gone = root.path().join("gone.png");
+        let kept = root.path().join("kept.png");
+        save_png(&gone);
+        save_png(&kept);
+        let mut app = new_app();
+        app.set_directory(root.path().display().to_string());
+        open_and_decode(&mut app, gone.display().to_string());
+        app.save_sidecar();
+        let sidecar = lumina_sidecar::sidecar_path_for(&gone);
+        assert!(sidecar.is_file());
+        app.delete_image_with_sidecars(&gone).unwrap();
+        assert!(!gone.exists());
+        assert!(!sidecar.exists(), "companions must go with the image");
+        assert!(kept.is_file(), "siblings must survive");
+        assert!(app.delete_image_with_sidecars(&gone).is_err());
+    }
+
+    #[test]
+    fn g09_delete_empty_folder_refuses_non_empty() {
+        let root = tempfile::tempdir().unwrap();
+        let full = root.path().join("full");
+        let empty = root.path().join("empty");
+        std::fs::create_dir(&full).unwrap();
+        std::fs::create_dir(&empty).unwrap();
+        save_png(&full.join("photo.png"));
+        let mut app = new_app();
+        assert!(app.delete_empty_folder(&full).is_err());
+        assert!(full.is_dir(), "non-empty folders are never deleted");
+        app.delete_empty_folder(&empty).unwrap();
+        assert!(!empty.exists());
+        assert!(app.delete_empty_folder(&empty).is_err());
     }
 
     #[test]

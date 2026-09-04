@@ -492,6 +492,73 @@ der aktiven Kopie über den normalen Save/Render-Pfad.
   Sync/Match-fähig oder als Sidecar-Ziel erscheinen dürfen.
 - **Ist-Stand 2026-09-03:** umgesetzt + verifiziert BESTANDEN (236p lib, kittest 11/11 inkl. `library_subfolder_badges`-Golden, Vision: Badges korrekt zugeordnet; Kontrast-Nacharbeit s. GUI-LIBRARY-BADGE-CONTRAST-1).
 
+### Library-Parität G-09 (LRPAR-G09-LIB, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-09 (Grid/Loupe/Compare/
+Survey-Vollparität + Katalog-/Ordner-Verwaltung). Assisted/KI-Culling ist
+explizit **nicht** Teil dieses Slices (2.5, LRPAR-G09-CULL-IMPL-25).
+Bestehende Library-/Metadata-Pfade (Filter, Badges, `apply_batch_op`,
+`save_sidecar`/`load_sidecar`, Smart-Katalog) werden wiederverwendet — kein
+Zweit-Mechanismus.
+
+- **Ansichten:** Das Bibliotheks-Modul kennt vier Ansichten (`LibraryView`):
+  `Grid` (Miniatur-Raster, Default), `Loupe` (Einzelbild groß: aktive
+  Auswahl), `Compare` (Vorher/Nachher-Vergleich des aktiven Bildes über den
+  bestehenden `before_after`-Pfad) und `Survey` (Mehrbild-Vergleich der
+  Filmstreifen-Auswahl, größere Zellen; bei < 2 ausgewählten Bildern das
+  gefilterte Raster). Alle Ansichten teilen dieselbe Auswahl-Buchhaltung
+  (`filmstrip_selection`, Pfad-schlüssel, nie Index) und dieselben Filter
+  (`\`-Leiste + aktive Sammlung). Der Ansichtswechsel ist reiner
+  Session-Display-State (nie Rezept/Sidecar) und loggt `trace!`.
+- **Shortcuts:** `G` → Bibliothek/Grid, `E` → Bibliothek/Loupe (Alias-Doku
+  aus `module_for_key` bleibt: kein separates Loupe-Modul),
+  `C` → Compare (setzt `before_after`, erneutes `C` verlässt),
+  `N` → Survey (Sprung ins Bibliotheks-Raster, erneutes `N` verlässt den
+  Modus). Alle vier werden wie alle F-100-Kürzel ignoriert, solange ein
+  Widget Tastatureingaben erwartet. `Cmd/Ctrl+Shift+I` (Bibliothek/Import)
+  und `Cmd/Ctrl+Shift+E` (Exportieren) bleiben reine Modulwechsel.
+- **Auswahl-Semantik:** Einfachklick = Auswahl (ohne Öffnen),
+  `Cmd/Ctrl`-Klick = Toggle, `Shift`-Klick = Bereich ab Anker. Öffnen:
+  Doppelklick im Grid = Laden + Wechsel zu Develop, Doppelklick in Survey
+  und `Enter` (alle Library-Ansichten) = Laden + Wechsel zu Loupe.
+  Löschen oder
+  Verschieben eines Bildes stabilisiert die Auswahl auf den Nachfolger an
+  der entfernten Rasterposition (Bestand: `stabilize_selection`).
+- **Tastatur-Navigation (Bibliothek, ohne Textfokus):** `Pfeil links/rechts`
+  = ±1 im gefilterten Raster (Auswahl + Anker folgen, ohne Öffnen),
+  `Pfeil hoch/runter` = ±eine Rasterzeile, `Home`/`End` = erstes/letztes
+  Bild, `Enter` = Öffnen des aktiven Bildes, `Esc` = zurück zu Grid. Reine
+  Index-Arithmetik (`library_move_index`, Clamp, nie Wrap) als pure
+  Funktion, headless getestet.
+- **Katalog-/Ordner-Verwaltung (ordentlich, mit Sidecar-Begleitung):**
+  `create_folder` (laut bei existierendem Ziel), `rename_folder`
+  (Verzeichnis-`rename`; Sidecars liegen neben den Quellen und ziehen
+  automatisch mit), `move_image_to_folder` (Bild **plus**
+  `<name>.lumina.json` **plus** `<name>.lumina.zdata`, sofern vorhanden;
+  Ziel-Überschreiben wird laut verweigert, kein stiller Datenverlust),
+  `delete_image_with_sidecars` (Bild + beide Begleiter; fehlende Begleiter
+  sind kein Fehler), `delete_empty_folder` (nur leere Verzeichnisse, laut
+  sonst). Jede Aktion loggt `info!` je Pfad, meldet Fehler laut (Status +
+  `GuiError`, nie still) und listet danach das Verzeichnis neu. Das
+  Verschieben auf Benutzerwunsch ist eine ausdrückliche Datei-Operation und
+  keine Pipeline-Überschreibung: Die Nicht-Destruktivitäts-Regel (kein
+  Render/Export ersetzt je ein Original) bleibt unberührt. Persistierte
+  Daten enthalten nie absolute Pfade (Sidecar-Relativitäts-Regel).
+- **CLI:** `lumina relocate --from <bild> --to <bild> [--json]` verschiebt
+  ein Bild **mit** seinen Sidecar-Begleitern (`.lumina.json`,
+  `.lumina.zdata`, sofern vorhanden) an den Zielpfad. Verweigert laut ein
+  existierendes Ziel und eine fehlende Quelle (Exit 1, kein Halb-Zustand:
+  Begleiter werden erst nach erfolgreichem Bild-Move versetzt; ein
+  fehlgeschlagener Begleiter-Move meldet laut, das Bild liegt dann bereits
+  am Ziel — kein stiller Verlust). Nach dem Move verifiziert `inspect`
+  den Roundtrip (`valid`). Exit-Codes wie Bestand: `0` Erfolg, `1`
+  Laufzeitfehler, `2` Benutzungsfehler (clap).
+- **Status (LRPAR-G09-LIB):** umgesetzt — `LibraryView` (Grid/Loupe/
+  Compare/Survey) mit `G`/`E`/`C`/`N`-Bindung, Auswahl-Semantik +
+  Tastatur-Navigation (Arrows/Home/End/Enter/Esc), Ordner-Operationen mit
+  Sidecar-Begleitung + headless E2E-Tests (Setter → Datei → Reload),
+  CLI-`relocate` mit Exit-Codes; kein KI-Culling (2.5).
+
 ### Power-Shortcuts Rest (G-16, LRPAR-G16-POWER)
 
 GUI-contained, keine Kollision mit Bestand (vollständiger Kollisionscheck gegen
