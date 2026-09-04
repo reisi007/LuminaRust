@@ -2,10 +2,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[cfg(feature = "lensfun")]
 use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
-    export_image, match_total_exposure_masked, render_frame, resolve_mask_planes,
-    suggest_auto_tone, tone_fingerprint, AutoToneConfig, ExportOptions, ImageFileFormat,
-    ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
-    RenderOutput, SourceActionArtifact,
+    detect_spots_heuristic, export_image, generative_variant_seed, match_total_exposure_masked,
+    render_frame, resolve_mask_planes, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
+    ExportOptions, ImageFileFormat, ImageFrame, MaskContext, MaskInference, MaskLoadContext,
+    MaskPlane, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -42,8 +42,8 @@ use lumina_sidecar::{
     GeometryFingerprint, HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt,
     MaskReference, MaskStatus, ModelIdentity, Preprocessing, Preset, PromptTransform, Resolution,
     SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SourceFingerprint, SourceIdentity, SMART_COLLECTION_VERSION,
-    SOURCE_ACTION_VERSION,
+    SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction, SMART_COLLECTION_VERSION,
+    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -286,6 +286,13 @@ enum Command {
     Reindex(IndexArgs),
     Validate(IndexArgs),
     DustRemoval(DustRemovalArgs),
+    /// G-04 Remove-Parität (LRPAR-G04-REMOVE): inspect and edit spot-heal
+    /// recipe state (heuristic spots, visualize threshold, distraction
+    /// switches, heuristic detection, generative variant seeds). Reads and
+    /// writes are loud (unknown copies/spots, bad ranges abort with exit 1);
+    /// the original image is never modified. See
+    /// `feature/product/spot-removal.md` § „G-04 Remove-Parität“.
+    Spot(SpotArgs),
     /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
     /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
     Keywords(KeywordsArgs),
@@ -590,6 +597,76 @@ struct DustRemovalArgs {
     json: bool,
 }
 
+/// G-04 Remove-Parität: inspect and edit the spot-heal recipe state of one
+/// image sidecar. Without mutation flags the command lists spots + settings
+/// (read-only). Every mutation validates loudly before anything is written;
+/// `--detect-objects` only lists candidates unless `--detect-apply` is given
+/// (never silent auto-apply).
+#[derive(Debug, Args)]
+struct SpotArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+    /// List spots + G-04 settings (default when no mutation flag is given).
+    #[arg(long)]
+    list: bool,
+    /// Add one heuristic spot (requires `--center-x/--center-y/--radius`).
+    #[arg(long)]
+    add_heuristic: bool,
+    #[arg(long, value_name = "0..=1")]
+    center_x: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    center_y: Option<f32>,
+    #[arg(long, value_name = "(0,512]")]
+    radius: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    feather: Option<f32>,
+    #[arg(long, value_name = "-1..=1")]
+    offset_dx: Option<f32>,
+    #[arg(long, value_name = "-1..=1")]
+    offset_dy: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    opacity: Option<f32>,
+    /// Remove all heuristic/generative spot entries of the copy.
+    #[arg(long)]
+    clear: bool,
+    /// Set the visualize threshold (`0..=1`).
+    #[arg(long, value_name = "0..=1")]
+    set_visualize_threshold: Option<f32>,
+    /// Clear the visualize threshold (visualization off).
+    #[arg(long)]
+    clear_visualize: bool,
+    /// Set distraction switches as `k=v,...` with keys
+    /// `reflections|people|dust|auto` and values `true|false`.
+    #[arg(long, value_name = "K=V,...")]
+    set_distraction: Option<String>,
+    /// List heuristic spot candidates (stage 1, no model).
+    #[arg(long)]
+    detect_objects: bool,
+    /// Persist the detected candidates as heuristic spots (explicit only).
+    #[arg(long)]
+    detect_apply: bool,
+    /// Detection threshold (`0..=1`, default 0.5).
+    #[arg(long, value_name = "0..=1")]
+    detect_threshold: Option<f32>,
+    /// Detection cap (`1..=4096`, default 32).
+    #[arg(long, value_name = "1..=4096")]
+    detect_max: Option<usize>,
+    /// Regenerate a generative spot variant: sets
+    /// `seed = variant_seed(base, variant)` on `--spot-id`.
+    #[arg(long, value_name = "ID")]
+    regenerate_variant: Option<String>,
+    /// Variant index for `--regenerate-variant` (0 keeps the base seed).
+    #[arg(long, value_name = "N")]
+    variant: Option<u64>,
+    /// Base seed for `--regenerate-variant` (required with it).
+    #[arg(long, value_name = "N")]
+    seed: Option<u64>,
+}
+
 /// Repair-region definition consumed by the `dust-removal` command.  The
 /// `region_values` are little-endian `u16` (0..=u16::MAX); pixels `>= 32768`
 /// are replaced by the corresponding `replacement_path` RGBA8 pixel.  Region
@@ -729,6 +806,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Reindex(args) => reindex(args),
         Command::Validate(args) => validate(args),
         Command::DustRemoval(args) => dust_removal(args),
+        Command::Spot(args) => spot(args),
         Command::Keywords(args) => keywords(args),
         Command::Collections(args) => collections(args),
         Command::BatchMeta(args) => batch_meta(args),
@@ -2065,6 +2143,427 @@ fn smart_collections(args: SmartCollectionsArgs) -> Result<(), CliError> {
         return Err(CliError::BatchPartial { failed });
     }
     Ok(())
+}
+
+/// G-04 Remove-Parität: list and edit the spot-heal recipe state of one
+/// image sidecar. The original image is never modified; every write goes
+/// through `save_sidecar` after `document.validate()`. Mutations are loud
+/// (`CliError::Message`, exit 1) and `--detect-objects` never applies
+/// silently (only `--detect-apply` persists candidates).
+fn spot(args: SpotArgs) -> Result<(), CliError> {
+    if args.regenerate_variant.is_some() && (args.variant.is_none() || args.seed.is_none()) {
+        return Err(CliError::Message(
+            "--regenerate-variant requires --variant <N> and --seed <N>".into(),
+        ));
+    }
+    if args.detect_apply && !args.detect_objects {
+        return Err(CliError::Message(
+            "--detect-apply requires --detect-objects".into(),
+        ));
+    }
+    if args.set_visualize_threshold.is_some() && args.clear_visualize {
+        return Err(CliError::Message(
+            "--set-visualize-threshold and --clear-visualize are mutually exclusive".into(),
+        ));
+    }
+    let wants_mutation = args.add_heuristic
+        || args.clear
+        || args.set_visualize_threshold.is_some()
+        || args.clear_visualize
+        || args.set_distraction.is_some()
+        || args.detect_apply
+        || args.regenerate_variant.is_some();
+    // Detection needs the decoded frame even in list-only mode.
+    let needs_frame = args.detect_objects || args.add_heuristic || args.detect_apply;
+    let frame = if needs_frame {
+        let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+        let (frame, _) = decode_input(&args.input, &bytes)?;
+        Some(frame)
+    } else {
+        None
+    };
+    let path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+    // Detection results are computed before mutation so `--detect-apply`
+    // persists exactly what was listed.
+    let mut detected: Vec<lumina_core::DetectedSpot> = Vec::new();
+    if args.detect_objects {
+        let frame = frame.as_ref().expect("decoded for detection");
+        let threshold = args.detect_threshold.unwrap_or(0.5);
+        let max = args.detect_max.unwrap_or(32);
+        detected = detect_spots_heuristic(frame, threshold, max)
+            .map_err(|error| CliError::Message(format!("spot detection rejected: {error}")))?;
+        info!(
+            "spot: detected {} candidate(s) on copy `{copy_id}` (threshold {threshold}, max {max})",
+            detected.len()
+        );
+    }
+    if args.add_heuristic {
+        let (cx, cy, radius) = match (args.center_x, args.center_y, args.radius) {
+            (Some(x), Some(y), Some(r)) => (x, y, r),
+            _ => {
+                return Err(CliError::Message(
+                    "--add-heuristic requires --center-x, --center-y and --radius".into(),
+                ));
+            }
+        };
+        spot_add_heuristic(
+            &mut document,
+            &copy_id,
+            cx,
+            cy,
+            radius,
+            args.feather.unwrap_or(0.0),
+            args.offset_dx.unwrap_or(0.0),
+            args.offset_dy.unwrap_or(0.0),
+            args.opacity.unwrap_or(1.0),
+        )?;
+        info!("spot: added heuristic spot on copy `{copy_id}`");
+        actions.push("add-heuristic".into());
+    }
+    if args.detect_apply {
+        let mut added = 0usize;
+        for candidate in &detected {
+            spot_add_heuristic(
+                &mut document,
+                &copy_id,
+                candidate.x,
+                candidate.y,
+                candidate.radius.max(1.0),
+                0.0,
+                0.05,
+                0.0,
+                1.0,
+            )?;
+            added += 1;
+        }
+        info!("spot: applied {added} detected candidate(s) on copy `{copy_id}`");
+        actions.push(format!("detect-apply:{added}"));
+    }
+    if let Some(threshold) = args.set_visualize_threshold {
+        spot_copy_mut(&mut document, &copy_id)?
+            .recipe
+            .set_spot_visualize_threshold(Some(threshold))
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        info!("spot: visualize threshold {threshold} on copy `{copy_id}`");
+        actions.push(format!("visualize:{threshold}"));
+    }
+    if args.clear_visualize {
+        spot_copy_mut(&mut document, &copy_id)?
+            .recipe
+            .set_spot_visualize_threshold(None)
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        info!("spot: visualize cleared on copy `{copy_id}`");
+        actions.push("visualize:off".into());
+    }
+    if let Some(spec) = args.set_distraction.as_deref() {
+        let setting = parse_distraction_spec(spec)?;
+        spot_copy_mut(&mut document, &copy_id)?
+            .recipe
+            .set_spot_distraction(setting);
+        info!("spot: distraction {setting:?} on copy `{copy_id}`");
+        actions.push("distraction".into());
+    }
+    if let Some(spot_id) = args.regenerate_variant.as_deref() {
+        let base = args.seed.expect("guarded above");
+        let variant = args.variant.expect("guarded above");
+        let derived = generative_variant_seed(base, variant);
+        spot_regenerate_variant(&mut document, &copy_id, spot_id, base, variant, derived)?;
+        info!("spot: regenerated variant {variant} (seed {derived}) for `{spot_id}` on copy `{copy_id}`");
+        actions.push(format!("regenerate-variant:{spot_id}:{variant}"));
+    }
+    if args.clear {
+        let copy = spot_copy_mut(&mut document, &copy_id)?;
+        copy.recipe.extras.remove("spot_removals");
+        copy.recipe.spot_removals.clear();
+        info!("spot: cleared all spots on copy `{copy_id}`");
+        actions.push("clear".into());
+    }
+    if wants_mutation {
+        // Loud gate: geometry, visualize/distraction extras and variant
+        // controls are rejected before anything is written.
+        document.validate()?;
+        save_sidecar(&path, &document)?;
+    }
+    spot_list(&args, &document, &copy_id, &detected, &actions)
+}
+
+/// Mutable access to one virtual copy's recipe owner (loud on unknown ids).
+fn spot_copy_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut lumina_sidecar::VirtualCopy, CliError> {
+    mask_copy_mut(document, copy_id)
+}
+
+/// Appends one heuristic spot entry to the extras view (validated loudly on
+/// save; the typed mirror shadow is derived by the sidecar serde layer).
+#[allow(clippy::too_many_arguments)]
+fn spot_add_heuristic(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    feather: f32,
+    offset_dx: f32,
+    offset_dy: f32,
+    opacity: f32,
+) -> Result<(), CliError> {
+    for (name, value, lo, hi) in [
+        ("center_x", center_x, 0.0, 1.0),
+        ("center_y", center_y, 0.0, 1.0),
+        ("radius", radius, f32::MIN_POSITIVE, 512.0),
+        ("feather", feather, 0.0, 1.0),
+        ("offset_dx", offset_dx, -1.0, 1.0),
+        ("offset_dy", offset_dy, -1.0, 1.0),
+        ("opacity", opacity, 0.0, 1.0),
+    ] {
+        if !value.is_finite() || value < lo || value > hi {
+            return Err(CliError::Message(format!(
+                "invalid heuristic spot `{name}`: value {value} outside allowed range {lo}..={hi}"
+            )));
+        }
+    }
+    if radius <= 0.0 {
+        return Err(CliError::Message(
+            "invalid heuristic spot `radius`: must be > 0".into(),
+        ));
+    }
+    let id = format!(
+        "spot-{}",
+        blake3::hash(format!("{center_x:.6},{center_y:.6},{radius:.2}").as_bytes()).to_hex()
+    );
+    let entry = serde_json::json!({
+        "id": id,
+        "version": SPOT_REMOVAL_VERSION,
+        "mode": "heuristic",
+        "center_x": center_x,
+        "center_y": center_y,
+        "radius": radius,
+        "feather": feather,
+        "offset_dx": offset_dx,
+        "offset_dy": offset_dy,
+        "opacity": opacity,
+        "status": "valid",
+    });
+    let copy = spot_copy_mut(document, copy_id)?;
+    let mut spots: Vec<serde_json::Value> = copy
+        .recipe
+        .extras
+        .get("spot_removals")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    spots.push(entry);
+    copy.recipe.extras.insert(
+        "spot_removals".into(),
+        serde_json::to_value(spots).map_err(|error| CliError::Message(error.to_string()))?,
+    );
+    Ok(())
+}
+
+/// Parses `--set-distraction k=v,...` (keys `reflections|people|dust|auto`,
+/// values `true|false`). Unknown keys or values fail loudly.
+fn parse_distraction_spec(spec: &str) -> Result<SpotDistraction, CliError> {
+    let mut setting = SpotDistraction::default();
+    if spec.trim().is_empty() {
+        return Err(CliError::Message(
+            "invalid distraction spec: expected `k=v,...` with keys reflections|people|dust|auto"
+                .into(),
+        ));
+    }
+    for part in spec.split(',') {
+        let (key, value) = part.split_once('=').ok_or_else(|| {
+            CliError::Message(format!(
+                "invalid distraction assignment `{part}`: expected `k=v`"
+            ))
+        })?;
+        let enabled = match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => true,
+            "false" | "0" | "no" => false,
+            _ => {
+                return Err(CliError::Message(format!(
+                    "invalid distraction value `{value}`: expected true|false"
+                )));
+            }
+        };
+        match key.trim().to_ascii_lowercase().as_str() {
+            "reflections" => setting.reflections = enabled,
+            "people" => setting.people = enabled,
+            "dust" => setting.dust = enabled,
+            "auto" | "auto_mode" => setting.auto_mode = enabled,
+            _ => {
+                return Err(CliError::Message(format!(
+                    "unknown distraction key `{key}`: expected reflections|people|dust|auto"
+                )));
+            }
+        }
+    }
+    Ok(setting)
+}
+
+/// Sets `seed = derived` (+ `variant`, preserving `prompt`) on a generative
+/// extras entry. Heuristic entries and unknown ids fail loudly — a variant
+/// never silently retargets another spot.
+fn spot_regenerate_variant(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    spot_id: &str,
+    base: u64,
+    variant: u64,
+    derived: u64,
+) -> Result<(), CliError> {
+    let copy = spot_copy_mut(document, copy_id)?;
+    let mut spots: Vec<serde_json::Value> = copy
+        .recipe
+        .extras
+        .get("spot_removals")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let mut found = false;
+    for entry in &mut spots {
+        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        if id != spot_id {
+            continue;
+        }
+        let mode = entry
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("heuristic");
+        if mode != "generative" {
+            return Err(CliError::Message(format!(
+                "spot `{spot_id}` is not generative (mode `{mode}`); variants apply to generative spots only"
+            )));
+        }
+        entry["seed"] = serde_json::json!(derived);
+        entry["variant"] = serde_json::json!(variant);
+        entry["base_seed"] = serde_json::json!(base);
+        found = true;
+    }
+    if !found {
+        return Err(CliError::Message(format!(
+            "unknown spot `{spot_id}` on copy `{copy_id}`"
+        )));
+    }
+    copy.recipe.extras.insert(
+        "spot_removals".into(),
+        serde_json::to_value(spots).map_err(|error| CliError::Message(error.to_string()))?,
+    );
+    Ok(())
+}
+
+/// Reports the copy's spots, G-04 settings and (when requested) detection
+/// candidates. Read-only: the sidecar is never written here.
+fn spot_list(
+    args: &SpotArgs,
+    document: &SidecarDocument,
+    copy_id: &str,
+    detected: &[lumina_core::DetectedSpot],
+    actions: &[String],
+) -> Result<(), CliError> {
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    let spots: Vec<serde_json::Value> = copy
+        .recipe
+        .extras
+        .get("spot_removals")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let distraction = copy.recipe.spot_distraction();
+    // reflections/people without a model are visibly NeedsModel (F-078 gate,
+    // heuristic stage 1 covers dust only) — surfaced in both formats.
+    let mut needs_model: Vec<&str> = Vec::new();
+    if distraction.reflections {
+        needs_model.push("reflections");
+    }
+    if distraction.people {
+        needs_model.push("people");
+    }
+    if args.json {
+        emit(
+            true,
+            serde_json::json!({
+                "command": "spot",
+                "input": args.input,
+                "copy": copy_id,
+                "spots": spots,
+                "visualize_threshold": copy.recipe.spot_visualize_threshold(),
+                "distraction": distraction,
+                "distraction_needs_model": needs_model,
+                "detected": detected.iter().map(|d| serde_json::json!({
+                    "x": d.x, "y": d.y, "radius": d.radius, "confidence": d.confidence,
+                })).collect::<Vec<_>>(),
+                "actions": actions,
+                "status": "ok",
+            }),
+            "spot status listed",
+        )
+    } else {
+        println!("copy: {} [{}]", copy.name, copy.id);
+        println!("  spots: {}", spots.len());
+        for entry in &spots {
+            let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            let mode = entry
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("heuristic");
+            let status = entry
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("valid");
+            println!("    spot {id}: mode={mode} status={status}");
+        }
+        match copy.recipe.spot_visualize_threshold() {
+            Some(t) => println!("  visualize: threshold={t}"),
+            None => println!("  visualize: off"),
+        }
+        println!(
+            "  distraction: reflections={} people={} dust={} auto={}",
+            distraction.reflections, distraction.people, distraction.dust, distraction.auto_mode
+        );
+        if !needs_model.is_empty() {
+            println!(
+                "  distraction needs model (F-078 gate, heuristic covers dust only): {}",
+                needs_model.join(", ")
+            );
+        }
+        if args.detect_objects {
+            println!("  detected candidates: {}", detected.len());
+            for candidate in detected {
+                println!(
+                    "    candidate x={:.4} y={:.4} r={:.1} conf={:.2}",
+                    candidate.x, candidate.y, candidate.radius, candidate.confidence
+                );
+            }
+        }
+        if actions.is_empty() {
+            emit(
+                false,
+                serde_json::json!({"command":"spot","status":"ok"}),
+                "spot status listed",
+            )
+        } else {
+            emit(
+                false,
+                serde_json::json!({"command":"spot","status":"ok"}),
+                &format!("spot updated: {}", actions.join(", ")),
+            )
+        }
+    }
 }
 
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
@@ -5776,6 +6275,282 @@ mod tests {
     // source-action list (`source_actions: &[]` in `process_selected`).
     // Source actions reach the CLI only with F-042-N1 (persistence +
     // CLI command); no CLI source-action test is written yet.
+
+    // ---- LRPAR-G04-REMOVE: `spot` command ----
+    fn spot_base_args(input: PathBuf) -> SpotArgs {
+        SpotArgs {
+            input,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            add_heuristic: false,
+            center_x: None,
+            center_y: None,
+            radius: None,
+            feather: None,
+            offset_dx: None,
+            offset_dy: None,
+            opacity: None,
+            clear: false,
+            set_visualize_threshold: None,
+            clear_visualize: false,
+            set_distraction: None,
+            detect_objects: false,
+            detect_apply: false,
+            detect_threshold: None,
+            detect_max: None,
+            regenerate_variant: None,
+            variant: None,
+            seed: None,
+        }
+    }
+
+    fn import_sidecar_for(input: &Path) {
+        let bytes = fs::read(input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        save_sidecar(
+            &sidecar_path_for(input),
+            &SidecarDocument::new(
+                source_identity(input, &bytes, &frame, None).unwrap(),
+                "raster-mvp-1",
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn spot_add_list_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        import_sidecar_for(&input);
+        // Add one heuristic spot.
+        let mut add = spot_base_args(input.clone());
+        add.add_heuristic = true;
+        add.center_x = Some(0.5);
+        add.center_y = Some(0.5);
+        add.radius = Some(4.0);
+        spot(add).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let spots: Vec<serde_json::Value> = serde_json::from_value(
+            document.virtual_copies[0].recipe.extras["spot_removals"].clone(),
+        )
+        .unwrap();
+        assert_eq!(spots.len(), 1);
+        assert_eq!(spots[0]["mode"], "heuristic");
+        // List-only is read-only: sidecar bytes unchanged.
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+        spot(spot_base_args(input.clone())).unwrap();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+        // Clear removes spots.
+        let mut clear = spot_base_args(input.clone());
+        clear.clear = true;
+        spot(clear).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(!document.virtual_copies[0]
+            .recipe
+            .extras
+            .contains_key("spot_removals"));
+        // Original image untouched throughout.
+        assert_eq!(
+            fs::read(&input).unwrap().len(),
+            fs::read(&input).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn spot_rejects_bad_geometry_and_unknown_copies_loudly() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        import_sidecar_for(&input);
+        // Missing radius.
+        let mut add = spot_base_args(input.clone());
+        add.add_heuristic = true;
+        add.center_x = Some(0.5);
+        add.center_y = Some(0.5);
+        assert!(spot(add)
+            .unwrap_err()
+            .to_string()
+            .contains("--add-heuristic requires"));
+        // Out-of-range center.
+        let mut add = spot_base_args(input.clone());
+        add.add_heuristic = true;
+        add.center_x = Some(1.5);
+        add.center_y = Some(0.5);
+        add.radius = Some(4.0);
+        assert!(spot(add)
+            .unwrap_err()
+            .to_string()
+            .contains("outside allowed range"));
+        // Unknown copy.
+        let mut add = spot_base_args(input.clone());
+        add.virtual_copy = Some("ghost".into());
+        add.add_heuristic = true;
+        add.center_x = Some(0.5);
+        add.center_y = Some(0.5);
+        add.radius = Some(4.0);
+        assert!(spot(add)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown virtual copy"));
+        // Failed runs never mutated the sidecar.
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(!document.virtual_copies[0]
+            .recipe
+            .extras
+            .contains_key("spot_removals"));
+    }
+
+    #[test]
+    fn spot_visualize_and_distraction_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        import_sidecar_for(&input);
+        let mut vis = spot_base_args(input.clone());
+        vis.set_visualize_threshold = Some(0.3);
+        spot(vis).unwrap();
+        let mut dis = spot_base_args(input.clone());
+        dis.set_distraction = Some("dust=true,auto=true".into());
+        spot(dis).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_visualize_threshold(),
+            Some(0.3)
+        );
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_distraction(),
+            lumina_sidecar::SpotDistraction {
+                dust: true,
+                auto_mode: true,
+                ..Default::default()
+            }
+        );
+        // Reload leg: JSON roundtrip preserves both.
+        let decoded = SidecarDocument::from_json(&document.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.spot_visualize_threshold(),
+            Some(0.3)
+        );
+        // Clear visualize.
+        let mut clear = spot_base_args(input.clone());
+        clear.clear_visualize = true;
+        spot(clear).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_visualize_threshold(),
+            None
+        );
+        // Bad specs fail loudly.
+        let mut bad = spot_base_args(input.clone());
+        bad.set_visualize_threshold = Some(2.0);
+        assert!(spot(bad).is_err());
+        let mut bad = spot_base_args(input.clone());
+        bad.set_distraction = Some("dust=maybe".into());
+        assert!(spot(bad)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid distraction value"));
+        let mut bad = spot_base_args(input.clone());
+        bad.set_distraction = Some("cats=true".into());
+        assert!(spot(bad)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown distraction key"));
+    }
+
+    #[test]
+    fn spot_detect_lists_without_apply_and_applies_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        // 16x16 frame with a dark 8x8 block (one heuristic cell).
+        let mut pixels = vec![255u8; 16 * 16 * 4];
+        for y in 0..8 {
+            for x in 0..8 {
+                let idx = (y * 16 + x) as usize * 4;
+                pixels[idx] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+            }
+        }
+        let frame = ImageFrame::new(16, 16, pixels).unwrap();
+        let input = directory.path().join("dark.png");
+        fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        import_sidecar_for(&input);
+        // List-only: candidates found, nothing persisted.
+        let mut detect = spot_base_args(input.clone());
+        detect.detect_objects = true;
+        spot(detect).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(!document.virtual_copies[0]
+            .recipe
+            .extras
+            .contains_key("spot_removals"));
+        // Explicit apply persists exactly the candidates.
+        let mut apply = spot_base_args(input.clone());
+        apply.detect_objects = true;
+        apply.detect_apply = true;
+        spot(apply).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let spots: Vec<serde_json::Value> = serde_json::from_value(
+            document.virtual_copies[0].recipe.extras["spot_removals"].clone(),
+        )
+        .unwrap();
+        assert_eq!(spots.len(), 1);
+        // --detect-apply without --detect-objects fails loudly.
+        let mut lonely = spot_base_args(input.clone());
+        lonely.detect_apply = true;
+        assert!(spot(lonely)
+            .unwrap_err()
+            .to_string()
+            .contains("--detect-apply requires"));
+    }
+
+    #[test]
+    fn spot_regenerate_variant_sets_derived_seed_deterministically() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        import_sidecar_for(&input);
+        // Seed one generative entry directly (heuristic path has no variants).
+        let path = sidecar_path_for(&input);
+        let mut document = load_sidecar(&path).unwrap();
+        document.virtual_copies[0].recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id": "g1", "version": 1, "mode": "generative", "prompt": "x"}]),
+        );
+        document.validate().unwrap();
+        save_sidecar(&path, &document).unwrap();
+        let mut regen = spot_base_args(input.clone());
+        regen.regenerate_variant = Some("g1".into());
+        regen.variant = Some(2);
+        regen.seed = Some(7);
+        spot(regen).unwrap();
+        let document = load_sidecar(&path).unwrap();
+        let spots: Vec<serde_json::Value> = serde_json::from_value(
+            document.virtual_copies[0].recipe.extras["spot_removals"].clone(),
+        )
+        .unwrap();
+        let expected = lumina_core::generative_variant_seed(7, 2);
+        assert_eq!(spots[0]["seed"], expected);
+        assert_eq!(spots[0]["variant"], 2);
+        // Deterministic: re-running the same variant is a stable no-op.
+        let before = fs::read(&path).unwrap();
+        let mut regen = spot_base_args(input.clone());
+        regen.regenerate_variant = Some("g1".into());
+        regen.variant = Some(2);
+        regen.seed = Some(7);
+        spot(regen).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), before);
+        // Unknown ids and heuristic spots fail loudly.
+        let mut bad = spot_base_args(input.clone());
+        bad.regenerate_variant = Some("nope".into());
+        bad.variant = Some(1);
+        bad.seed = Some(7);
+        assert!(spot(bad).unwrap_err().to_string().contains("unknown spot"));
+        let mut bad = spot_base_args(input.clone());
+        bad.regenerate_variant = Some("g1".into());
+        assert!(spot(bad)
+            .unwrap_err()
+            .to_string()
+            .contains("--regenerate-variant requires"));
+    }
 
     #[test]
     fn history_entry_stores_final_recipe_and_snapshot_reproduces_output() {

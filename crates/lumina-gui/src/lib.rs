@@ -29,10 +29,12 @@ use lumina_core::cache::PreviewKind;
 use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
-    analyze_tone, analyze_tone_with_histogram, match_total_exposure_masked, prepare_source_base,
+    analyze_tone, analyze_tone_with_histogram, detect_spots_heuristic, distraction_candidates,
+    generative_variant_seed, match_total_exposure_masked, prepare_source_base,
     render_frame_from_base, suggest_auto_tone, tone_fingerprint, AutoToneConfig, AutoToneResult,
-    CacheStage, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult,
-    MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
+    CacheStage, DetectedSpot, DistractionKind, DistractionSetting, DistractionStatus,
+    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
+    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
@@ -49,7 +51,7 @@ use lumina_sidecar::{
     AnalysisFingerprint, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves,
     EditRecipe, Effects, Flag, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
     HslChannel, LensCorrection, NoiseReduction, Perspective, Presence, Preset, Sharpening,
-    Vignette,
+    SpotDistraction, Vignette,
 };
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
@@ -977,6 +979,25 @@ pub struct LuminaApp {
     spot_radius: f32,
     spot_feather: f32,
     spot_opacity: f32,
+    /// LRPAR-G04-REMOVE session/panel state (display inputs, never recipe —
+    /// except where noted): `spot_detect_threshold` is the input for heuristic
+    /// Detect-Objects (`0..=1`); `spot_detect_status` holds the last detection
+    /// outcome text (candidates listed, never silently applied);
+    /// `spot_gen_prompt`/`spot_gen_seed`/`spot_gen_variant` are the inputs for
+    /// generative variant regeneration (persisted per spot on Regenerate);
+    /// `spot_gen_status` holds the last regeneration outcome text and
+    /// `spot_gen_target` the target spot id (panel input, session state).
+    /// The visualize threshold itself is recipe-backed (see
+    /// [`Self::set_spot_visualize`]); the distraction switches are
+    /// recipe-backed too (see [`Self::set_spot_distraction`]).
+    spot_detect_threshold: f32,
+    spot_detect_status: String,
+    spot_gen_prompt: String,
+    spot_gen_seed: u64,
+    spot_gen_variant: u64,
+    spot_gen_status: String,
+    /// Target spot id for variant regeneration (panel input, session state).
+    spot_gen_target: String,
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
@@ -1658,6 +1679,13 @@ impl LuminaApp {
             spot_radius: 18.0,
             spot_feather: 0.5,
             spot_opacity: 1.0,
+            spot_detect_threshold: 0.5,
+            spot_detect_status: String::new(),
+            spot_gen_prompt: String::new(),
+            spot_gen_seed: 7,
+            spot_gen_variant: 1,
+            spot_gen_status: String::new(),
+            spot_gen_target: String::new(),
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
                 ("exposure".into(), true),
@@ -4448,6 +4476,245 @@ impl LuminaApp {
         self.mark_dirty();
         self.save_sidecar();
         let _ = self.render();
+    }
+
+    // ---- LRPAR-G04-REMOVE (G-04 Remove-Parität) ---------------------------
+
+    /// Recipe-backed visualize threshold (`None` = off). Read-only accessor
+    /// for the panel slider and headless tests.
+    pub fn spot_visualize_threshold(&self) -> Option<f32> {
+        self.recipe.spot_visualize_threshold()
+    }
+
+    /// Set (`Some(0..=1)`) or clear (`None`) the visualize threshold (G-04).
+    /// Recipe-backed: persists through the debounced slider-save path
+    /// ([`Self::commit_pending_slider_save`], `info!`-logged), so headless
+    /// tests drive it without a timer. Loud on out-of-range values.
+    pub fn set_spot_visualize(&mut self, threshold: Option<f32>) -> Result<(), GuiError> {
+        if let Some(t) = threshold {
+            if !t.is_finite() || !(0.0..=1.0).contains(&t) {
+                return Err(GuiError::Io("Visualize threshold must be 0..=1".into()));
+            }
+        }
+        self.recipe
+            .set_spot_visualize_threshold(threshold)
+            .map_err(|error| GuiError::Io(error.to_string()))?;
+        match threshold {
+            Some(t) => self.mark_recipe_dirty("spot.visualize", f64::from(t)),
+            None => self.mark_recipe_dirty("spot.visualize", -1.0),
+        }
+        info!("GUI interaction: set_spot_visualize -> {threshold:?}");
+        Ok(())
+    }
+
+    /// Detection threshold input for heuristic Detect-Objects (`0..=1`).
+    /// Session display state (never recipe); loud on bad values.
+    pub fn set_spot_detect_threshold(&mut self, threshold: f32) -> Result<(), GuiError> {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(GuiError::Io("Detect threshold must be 0..=1".into()));
+        }
+        self.spot_detect_threshold = threshold;
+        info!("GUI interaction: set_spot_detect_threshold -> {threshold}");
+        Ok(())
+    }
+
+    /// Heuristic Detect-Objects (G-04, stage 1, no model): lists candidates on
+    /// the loaded frame without persisting anything. The outcome text lands in
+    /// `spot_detect_status` (visible, never silent); the candidates are
+    /// returned for an explicit [`Self::apply_detected_spots`].
+    pub fn detect_spot_candidates(&mut self) -> Result<Vec<DetectedSpot>, GuiError> {
+        let frame = self
+            .original
+            .as_ref()
+            .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?
+            .clone();
+        let candidates = detect_spots_heuristic(&frame, self.spot_detect_threshold, 32)?;
+        info!(
+            "GUI interaction: detect_spot_candidates -> {} candidate(s) at threshold {}",
+            candidates.len(),
+            self.spot_detect_threshold
+        );
+        self.spot_detect_status = format!(
+            "Detected {} candidate(s) at threshold {:.2} (not applied — use Apply)",
+            candidates.len(),
+            self.spot_detect_threshold
+        );
+        Ok(candidates)
+    }
+
+    /// Persist detected candidates as heuristic spots (G-04, explicit only):
+    /// one atomic recipe update + save + render. Never called implicitly —
+    /// the panel wires it to an "Apply detected" button, `auto` modes only
+    /// list.
+    pub fn apply_detected_spots(&mut self, candidates: &[DetectedSpot]) -> Result<usize, GuiError> {
+        if candidates.is_empty() {
+            self.spot_detect_status = "No candidates to apply".into();
+            return Ok(0);
+        }
+        let mut spots: Vec<serde_json::Value> = self
+            .recipe
+            .extras
+            .get("spot_removals")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        for candidate in candidates {
+            if !candidate.x.is_finite()
+                || !candidate.y.is_finite()
+                || !(0.0..=1.0).contains(&candidate.x)
+                || !(0.0..=1.0).contains(&candidate.y)
+            {
+                return Err(GuiError::Io(
+                    "Detected candidate has invalid coordinates".into(),
+                ));
+            }
+            let id = format!(
+                "spot-{}",
+                blake3::hash(
+                    format!(
+                        "{:.6},{:.6},{:.2}",
+                        candidate.x, candidate.y, candidate.radius
+                    )
+                    .as_bytes()
+                )
+                .to_hex()
+            );
+            spots.push(serde_json::json!({
+                "id": id, "version": 1, "mode": "heuristic",
+                "center_x": candidate.x, "center_y": candidate.y,
+                "radius": candidate.radius.clamp(1.0, 512.0),
+                "feather": 0.0, "offset_dx": 0.05, "offset_dy": 0.0,
+                "opacity": 1.0, "status": "valid",
+            }));
+        }
+        let applied = candidates.len();
+        self.recipe
+            .extras
+            .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
+        self.mark_dirty();
+        self.save_sidecar();
+        let _ = self.render();
+        info!("GUI interaction: apply_detected_spots -> {applied} spot(s)");
+        self.spot_detect_status = format!("Applied {applied} detected spot(s)");
+        Ok(applied)
+    }
+
+    /// Recipe-backed distraction switches (G-04). `auto_mode` only lists —
+    /// applying stays explicit via [`Self::apply_detected_spots`] (the panel
+    /// Apply button); enabling `auto` never persists spots by itself.
+    pub fn spot_distraction(&self) -> SpotDistraction {
+        self.recipe.spot_distraction()
+    }
+
+    pub fn set_spot_distraction(&mut self, setting: SpotDistraction) {
+        self.recipe.set_spot_distraction(setting);
+        self.mark_recipe_dirty(
+            "spot.distraction",
+            f64::from(setting.reflections as u8)
+                + 2.0 * f64::from(setting.people as u8)
+                + 4.0 * f64::from(setting.dust as u8)
+                + 8.0 * f64::from(setting.auto_mode as u8),
+        );
+        info!("GUI interaction: set_spot_distraction -> {setting:?}");
+    }
+
+    /// Visible distraction status (G-04): per-kind outcome of
+    /// [`distraction_candidates`] on the loaded frame — heuristic dust
+    /// candidates or an explicit `needs model (F-078 gate)` marker for
+    /// reflections/people. Never a silent substitute.
+    pub fn distraction_status(&self) -> Vec<(String, String)> {
+        let Some(frame) = self.original.as_ref() else {
+            return vec![("none".into(), "no image loaded".into())];
+        };
+        let setting = self.recipe.spot_distraction();
+        let core_setting = DistractionSetting {
+            reflections: setting.reflections,
+            people: setting.people,
+            dust: setting.dust,
+            auto_mode: setting.auto_mode,
+        };
+        let threshold = self.spot_detect_threshold;
+        let Ok(outcomes) = distraction_candidates(frame, core_setting, threshold, 32) else {
+            return vec![("error".into(), "invalid threshold".into())];
+        };
+        outcomes
+            .into_iter()
+            .map(|(kind, status)| {
+                let name = match kind {
+                    DistractionKind::Reflections => "reflections",
+                    DistractionKind::People => "people",
+                    DistractionKind::Dust => "dust",
+                }
+                .to_string();
+                let text = match status {
+                    DistractionStatus::Ready(spots) => format!("{} candidate(s)", spots.len()),
+                    DistractionStatus::NeedsModel { reason, .. } => {
+                        format!("needs model (F-078 gate): {reason}")
+                    }
+                };
+                (name, text)
+            })
+            .collect()
+    }
+
+    /// Session inputs for generative variant regeneration (G-04). Display
+    /// state (never recipe until Regenerate); loud on empty prompts.
+    pub fn set_spot_gen_inputs(&mut self, prompt: String, seed: u64, variant: u64) {
+        self.spot_gen_prompt = prompt;
+        self.spot_gen_seed = seed;
+        self.spot_gen_variant = variant;
+        info!("GUI interaction: set_spot_gen_inputs seed={seed} variant={variant}");
+    }
+
+    /// Regenerate a generative spot variant (G-04, explicit only): sets
+    /// `seed = variant_seed(base, variant)` (+ `variant`, `prompt`) on the
+    /// named extras entry, then saves. Heuristic entries and unknown ids fail
+    /// loudly — a variant never silently retargets another spot.
+    pub fn regenerate_spot_variant(&mut self, spot_id: &str) -> Result<u64, GuiError> {
+        let derived = generative_variant_seed(self.spot_gen_seed, self.spot_gen_variant);
+        let mut spots: Vec<serde_json::Value> = self
+            .recipe
+            .extras
+            .get("spot_removals")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let mut found = false;
+        for entry in &mut spots {
+            let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if id != spot_id {
+                continue;
+            }
+            let mode = entry
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("heuristic");
+            if mode != "generative" {
+                return Err(GuiError::Io(format!(
+                    "Spot `{spot_id}` is not generative (mode `{mode}`)"
+                )));
+            }
+            entry["seed"] = serde_json::json!(derived);
+            entry["variant"] = serde_json::json!(self.spot_gen_variant);
+            entry["base_seed"] = serde_json::json!(self.spot_gen_seed);
+            if !self.spot_gen_prompt.is_empty() {
+                entry["prompt"] = serde_json::json!(self.spot_gen_prompt);
+            }
+            found = true;
+        }
+        if !found {
+            return Err(GuiError::Io(format!("Unknown spot `{spot_id}`")));
+        }
+        self.recipe
+            .extras
+            .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
+        self.mark_dirty();
+        self.save_sidecar();
+        let _ = self.render();
+        info!("GUI interaction: regenerate_spot_variant {spot_id} -> seed {derived}");
+        self.spot_gen_status = format!(
+            "Regenerated `{spot_id}` variant {} (seed {derived})",
+            self.spot_gen_variant
+        );
+        Ok(derived)
     }
 
     /// Set the normalized brush radius. Rejected (no state change) if not finite
@@ -10384,9 +10651,97 @@ impl LuminaApp {
                 if ui.selectable_label(self.spot_mode == SpotMode::Generative, "Generative").clicked() { self.set_spot_mode(SpotMode::Generative); }
             });
             if self.spot_mode == SpotMode::Generative { ui.colored_label(egui::Color32::YELLOW, "Generative inpaint requires model inpaint-heal-xl (lumina-onnx, BLAKE3 .lumina.zdata kind=spot_heal_generative). Missing → stale."); }
+            // G-04: tool-overlay modes (G-11 session state, never recipe).
+            ui.horizontal(|ui| {
+                ui.label("Tool overlay:");
+                let mode = self.overlay_mode;
+                if ui.selectable_label(mode == OverlayMode::Always, "Always").clicked() { self.set_overlay_mode(OverlayMode::Always); }
+                if ui.selectable_label(mode == OverlayMode::Auto, "Auto").clicked() { self.set_overlay_mode(OverlayMode::Auto); }
+                if ui.selectable_label(mode == OverlayMode::Never, "Never").clicked() { self.set_overlay_mode(OverlayMode::Never); }
+            });
             let mut radius = self.spot_radius; if ui.add(egui::Slider::new(&mut radius, 1.0..=512.0).text("Radius")).changed() { self.set_spot_radius(radius); }
             let mut feather = self.spot_feather; if ui.add(egui::Slider::new(&mut feather, 0.0..=1.0).text("Feather")).changed() { self.set_spot_feather(feather); }
             let mut opacity = self.spot_opacity; if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity")).changed() { self.set_spot_opacity(opacity); }
+            // G-04: visualize-spots slider (recipe-persisted, deterministic).
+            {
+                let current = self.spot_visualize_threshold();
+                let mut value = current.unwrap_or(0.5);
+                let changed = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Visualize spots")).changed();
+                if changed {
+                    if let Err(error) = self.set_spot_visualize(Some(value)) { self.show_error(error); }
+                }
+                ui.horizontal(|ui| {
+                    ui.label(if current.is_some() { format!("Visualize: {:.2}", current.unwrap_or(0.0)) } else { "Visualize: off".into() });
+                    if ui.button("Visualize off").clicked() {
+                        if let Err(error) = self.set_spot_visualize(None) { self.show_error(error); }
+                    }
+                });
+            }
+            // G-04: detect objects (heuristic stage 1, explicit apply only).
+            {
+                let mut threshold = self.spot_detect_threshold;
+                if ui.add(egui::Slider::new(&mut threshold, 0.0..=1.0).text("Detect threshold")).changed() {
+                    if let Err(error) = self.set_spot_detect_threshold(threshold) { self.show_error(error); }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Detect objects").clicked() {
+                        if let Err(error) = self.detect_spot_candidates().map(|_| ()) { self.show_error(error); }
+                    }
+                    if ui.button("Apply detected").clicked() {
+                        match self.detect_spot_candidates() {
+                            Ok(candidates) => {
+                                if let Err(error) = self.apply_detected_spots(&candidates).map(|_| ()) { self.show_error(error); }
+                            }
+                            Err(error) => self.show_error(error),
+                        }
+                    }
+                });
+                if !self.spot_detect_status.is_empty() {
+                    ui.label(&self.spot_detect_status);
+                }
+            }
+            // G-04: distraction removal switches (recipe-persisted, auto lists only).
+            {
+                let mut setting = self.spot_distraction();
+                let mut changed = false;
+                changed |= ui.checkbox(&mut setting.reflections, "Reflections").changed();
+                changed |= ui.checkbox(&mut setting.people, "People").changed();
+                changed |= ui.checkbox(&mut setting.dust, "Dust").changed();
+                changed |= ui.checkbox(&mut setting.auto_mode, "Auto (list only, never auto-apply)").changed();
+                if changed {
+                    self.set_spot_distraction(setting);
+                }
+                for (kind, text) in self.distraction_status() {
+                    ui.label(format!("{kind}: {text}"));
+                }
+            }
+            // G-04: generative variant regeneration (explicit, deterministic).
+            {
+                ui.text_edit_singleline(&mut self.spot_gen_prompt);
+                let mut seed = self.spot_gen_seed;
+                let mut variant = self.spot_gen_variant;
+                ui.horizontal(|ui| {
+                    ui.label("Seed:");
+                    ui.add(egui::DragValue::new(&mut seed));
+                    ui.label("Variant:");
+                    ui.add(egui::DragValue::new(&mut variant));
+                });
+                if seed != self.spot_gen_seed || variant != self.spot_gen_variant {
+                    let prompt = self.spot_gen_prompt.clone();
+                    self.set_spot_gen_inputs(prompt, seed, variant);
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Spot id:");
+                    ui.text_edit_singleline(&mut self.spot_gen_target);
+                    let target = self.spot_gen_target.trim().to_string();
+                    if ui.button("Regenerate variant").clicked() && !target.is_empty() {
+                        if let Err(error) = self.regenerate_spot_variant(&target).map(|_| ()) { self.show_error(error); }
+                    }
+                });
+                if !self.spot_gen_status.is_empty() {
+                    ui.label(&self.spot_gen_status);
+                }
+            }
             if ui.button("Clear spots").clicked() { self.clear_spot_heals(); }
             let spots: Vec<serde_json::Value> = self.recipe.extras.get("spot_removals").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
             for spot in &spots { let id = spot.get("id").and_then(|v| v.as_str()).unwrap_or("?"); let status = spot.get("status").and_then(|v| v.as_str()).unwrap_or("valid"); ui.label(format!("spot {id}: {status}")); }
@@ -20558,6 +20913,410 @@ mod tests {
         // Q disarm
         app.set_spot_tool(SpotTool::None);
         assert_eq!(app.spot_tool(), SpotTool::None);
+    }
+
+    // ---- LRPAR-G04-REMOVE (G-04 Remove-Parität) ---------------------------
+    /// 16×16 fixture with a dark 8×8 block (top-left): exactly one heuristic
+    /// 8×8 cell at threshold 0.5, deterministic across runs.
+    fn dark_block_png() -> Vec<u8> {
+        let mut pixels = vec![255u8; 16 * 16 * 4];
+        for y in 0..8 {
+            for x in 0..8 {
+                let idx = (y * 16 + x) as usize * 4;
+                pixels[idx] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+            }
+        }
+        ImageFrame::new(16, 16, pixels)
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap()
+    }
+
+    #[test]
+    fn g04_spot_visualize_slider_persists_file_to_reload() {
+        // DoD §1 E2E: slider edit → debounced commit → sidecar file → reload.
+        // DoD §2: the 150-ms debounce path is driven headless via
+        // `commit_pending_slider_save` (the same hook all sliders use).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, dark_block_png()).unwrap();
+        let original_bytes = std::fs::read(&source).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert_eq!(app.spot_visualize_threshold(), None);
+        // Out-of-range values fail loudly and change nothing.
+        assert!(app.set_spot_visualize(Some(1.5)).is_err());
+        assert!(app.set_spot_visualize(Some(f32::NAN)).is_err());
+        assert_eq!(app.spot_visualize_threshold(), None);
+        // Set + drive the debounced commit hook (render + save + info! log).
+        app.set_spot_visualize(Some(0.3)).unwrap();
+        assert_eq!(app.spot_visualize_threshold(), Some(0.3));
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("spot.visualize".into(), f64::from(0.3f32)))
+        );
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_visualize_threshold(),
+            Some(0.3)
+        );
+        // Reload leg: a fresh app restores the threshold from the file alone.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.spot_visualize_threshold(), Some(0.3));
+        // Clearing persists the removal too.
+        reopened.set_spot_visualize(None).unwrap();
+        reopened.commit_pending_slider_save([0, 0]);
+        assert!(reopened.error().is_none());
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_visualize_threshold(),
+            None
+        );
+        let mut reopened2 = new_app();
+        open_and_decode(&mut reopened2, source.display().to_string());
+        assert_eq!(reopened2.spot_visualize_threshold(), None);
+        // The original image is byte-identical throughout.
+        assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn g04_spot_detect_lists_then_applies_explicitly() {
+        // Detect lists without persisting; Apply persists + re-renders.
+        // Golden/PSNR gate: applied heal visibly changes the preview and is
+        // byte-identical to a direct core heal of the same geometry.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("dark.png");
+        std::fs::write(&source, dark_block_png()).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.set_spot_detect_threshold(2.0).is_err());
+        app.set_spot_detect_threshold(0.5).unwrap();
+        let before_pixels = app.preview().expect("preview after load").pixels.clone();
+        let candidates = app.detect_spot_candidates().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(!app.spot_detect_status.is_empty());
+        // Listing wrote nothing: recipe and sidecar untouched.
+        assert!(!app.recipe().extras.contains_key("spot_removals"));
+        // Explicit apply: one spot, generation bump, preview visibly healed.
+        let generation = app.preview_generation();
+        let applied = app.apply_detected_spots(&candidates).unwrap();
+        assert_eq!(applied, 1);
+        assert!(app.preview_generation() > generation);
+        let spots: Vec<serde_json::Value> =
+            serde_json::from_value(app.recipe().extras["spot_removals"].clone()).unwrap();
+        assert_eq!(spots.len(), 1);
+        assert_eq!(spots[0]["mode"], "heuristic");
+        let after_pixels = app.preview().expect("preview after apply").pixels.clone();
+        assert_ne!(
+            before_pixels, after_pixels,
+            "applied heal must change the preview"
+        );
+        // Byte-identity against a direct core heal of the same geometry.
+        let frame = app.original.clone().expect("decode loaded");
+        let mut direct = frame.clone();
+        lumina_core::apply_spot_heals(
+            &mut direct,
+            &[lumina_core::SpotHeuristic {
+                id: "x".into(),
+                version: 1,
+                center_x: candidates[0].x,
+                center_y: candidates[0].y,
+                radius: candidates[0].radius.clamp(1.0, 512.0),
+                feather: 0.0,
+                offset_dx: 0.05,
+                offset_dy: 0.0,
+                opacity: 1.0,
+                status: "valid".into(),
+            }],
+        )
+        .unwrap();
+        let ps = lumina_core::psnr(&frame, &direct);
+        assert!(ps.is_finite() && ps > 5.0, "heal PSNR gate: {ps}");
+        // Reload leg: the applied spot survives a fresh open.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        let spots: Vec<serde_json::Value> =
+            serde_json::from_value(reopened.recipe().extras["spot_removals"].clone()).unwrap();
+        assert_eq!(spots.len(), 1);
+        // Empty apply is a loud no-op, never an error.
+        assert_eq!(app.apply_detected_spots(&[]).unwrap(), 0);
+    }
+
+    #[test]
+    fn g04_spot_distraction_auto_never_applies_silently() {
+        // Auto lists only: enabling every switch adds no spots by itself, and
+        // reflections/people report NeedsModel loudly (no silent heuristic).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("dark.png");
+        std::fs::write(&source, dark_block_png()).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert_eq!(
+            app.spot_distraction(),
+            lumina_sidecar::SpotDistraction::default()
+        );
+        app.set_spot_distraction(lumina_sidecar::SpotDistraction {
+            reflections: true,
+            people: true,
+            dust: true,
+            auto_mode: true,
+        });
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        // Auto applied nothing: no spots exist.
+        assert!(!app.recipe().extras.contains_key("spot_removals"));
+        let status = app.distraction_status();
+        let text_of = |kind: &str| {
+            status
+                .iter()
+                .find(|(k, _)| k == kind)
+                .map(|(_, t)| t.clone())
+                .unwrap()
+        };
+        assert!(
+            text_of("reflections").contains("needs model"),
+            "{}",
+            text_of("reflections")
+        );
+        assert!(
+            text_of("people").contains("needs model"),
+            "{}",
+            text_of("people")
+        );
+        assert!(
+            text_of("dust").contains("1 candidate"),
+            "{}",
+            text_of("dust")
+        );
+        // Switches persist and reload (recipe-backed, per copy).
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert!(reopened.spot_distraction().auto_mode);
+        assert!(reopened.spot_distraction().dust);
+        assert!(!reopened.recipe().extras.contains_key("spot_removals"));
+        // DoD §3 class completeness: every switch toggles independently.
+        for setting in [
+            lumina_sidecar::SpotDistraction {
+                reflections: true,
+                ..Default::default()
+            },
+            lumina_sidecar::SpotDistraction {
+                people: true,
+                ..Default::default()
+            },
+            lumina_sidecar::SpotDistraction {
+                dust: true,
+                ..Default::default()
+            },
+            lumina_sidecar::SpotDistraction {
+                auto_mode: true,
+                ..Default::default()
+            },
+            lumina_sidecar::SpotDistraction::default(),
+        ] {
+            reopened.set_spot_distraction(setting);
+            assert_eq!(reopened.spot_distraction(), setting);
+        }
+    }
+
+    #[test]
+    fn g04_spot_variant_regenerate_is_deterministic_and_loud() {
+        // Explicit regeneration sets seed = variant_seed(base, variant);
+        // same inputs are a stable no-op, wrong targets fail loudly, and the
+        // original file is never touched.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, dark_block_png()).unwrap();
+        let original_bytes = std::fs::read(&source).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // Seed one generative entry (recipe-level, then saved).
+        app.recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{"id": "g1", "version": 1, "mode": "generative", "prompt": "x"}]),
+        );
+        app.save_sidecar();
+        assert!(app.error().is_none());
+        app.set_spot_gen_inputs("remove dust".into(), 7, 2);
+        let derived = app.regenerate_spot_variant("g1").unwrap();
+        assert_eq!(derived, lumina_core::generative_variant_seed(7, 2));
+        assert_ne!(derived, 7);
+        let entry = &serde_json::from_value::<Vec<serde_json::Value>>(
+            app.recipe().extras["spot_removals"].clone(),
+        )
+        .unwrap()[0];
+        assert_eq!(entry["seed"], derived);
+        assert_eq!(entry["variant"], 2);
+        assert_eq!(entry["prompt"], "remove dust");
+        // Same inputs re-run byte-identically on disk (stable no-op).
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let before = std::fs::read(&sidecar).unwrap();
+        assert_eq!(app.regenerate_spot_variant("g1").unwrap(), derived);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), before);
+        // A new variant differs (explicit regeneration, never silent).
+        app.set_spot_gen_inputs("remove dust".into(), 7, 3);
+        let derived3 = app.regenerate_spot_variant("g1").unwrap();
+        assert_ne!(derived3, derived);
+        // Unknown ids and heuristic spots fail loudly.
+        assert!(app
+            .regenerate_spot_variant("nope")
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown spot"));
+        app.recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([
+                {"id": "g1", "version": 1, "mode": "generative", "prompt": "x", "seed": derived3, "variant": 3},
+                {"id": "h1", "version": 1, "mode": "heuristic", "center_x": 0.5, "center_y": 0.5,
+                 "radius": 4.0, "offset_dx": 0.0, "offset_dy": 0.0, "status": "valid"},
+            ]),
+        );
+        assert!(app
+            .regenerate_spot_variant("h1")
+            .unwrap_err()
+            .to_string()
+            .contains("not generative"));
+        // Reload leg: the regenerated seed survives a fresh open.
+        app.save_sidecar();
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        let entry = &serde_json::from_value::<Vec<serde_json::Value>>(
+            reopened.recipe().extras["spot_removals"].clone(),
+        )
+        .unwrap()[0];
+        assert_eq!(entry["seed"], derived3);
+        assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn g04_spot_overlay_modes_cover_all_variants_session_only() {
+        // DoD §3: every OverlayMode variant is exercised; the mode is session
+        // display state (recipe + sidecar bytes untouched, reload → Always).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, dark_block_png()).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.commit_spot_heal(
+            lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+            2.0,
+            0.0,
+            lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+            1.0,
+        )
+        .unwrap();
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let recipe_before = serde_json::to_string(app.recipe()).unwrap();
+        let sidecar_before = std::fs::read(&sidecar).unwrap();
+        // Always: overlay paints whenever spots exist (historical behaviour).
+        app.set_overlay_mode(OverlayMode::Always);
+        assert!(app.overlay_visible());
+        // Auto: only while the Q tool is armed.
+        app.set_overlay_mode(OverlayMode::Auto);
+        assert!(!app.overlay_visible());
+        app.set_spot_tool(SpotTool::Heal);
+        assert!(app.overlay_visible());
+        app.set_spot_tool(SpotTool::None);
+        assert!(!app.overlay_visible());
+        // Never: never paints, even armed.
+        app.set_overlay_mode(OverlayMode::Never);
+        app.set_spot_tool(SpotTool::Heal);
+        assert!(!app.overlay_visible());
+        app.set_spot_tool(SpotTool::None);
+        // Session-only: recipe and sidecar bytes never moved.
+        assert_eq!(serde_json::to_string(app.recipe()).unwrap(), recipe_before);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_before);
+        // Pins follow the same gate (Auto + disarmed → no pins).
+        app.set_overlay_mode(OverlayMode::Auto);
+        assert!(app.visible_edit_pins().is_empty());
+        app.set_pin_visibility(PinVisibility::Always);
+        app.set_spot_tool(SpotTool::Heal);
+        assert_eq!(app.visible_edit_pins().len(), 1);
+        // Reload leg: a fresh session defaults back to Always.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.overlay_mode(), OverlayMode::Always);
+        assert!(reopened.overlay_visible());
+    }
+
+    #[test]
+    fn g04_spot_panel_paints_g04_controls() {
+        // The Dust Removal panel exposes every G-04 control headless (no GPU):
+        // overlay modes, visualize slider, detect + apply, all four
+        // distraction switches, seed/variant regeneration, clear.
+        let mut app = new_app();
+        app.load_bytes(dark_block_png(), "dark.png").unwrap();
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
+        let mut t = 0.0;
+        let mut run = |events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Panel::right("controls")
+                        .resizable(true)
+                        .default_size(320.0)
+                        .show(ui, |ui| app.draw_spot_heal(ui));
+                },
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        let shapes = run(vec![]);
+        let pos = text_shapes_for(&shapes, "Dust Removal (Q)")
+            .into_iter()
+            .next()
+            .expect("Dust Removal header must be painted")
+            .0
+            .center();
+        let click = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run(vec![egui::Event::PointerMoved(pos), click(true)]);
+        run(vec![egui::Event::PointerMoved(pos), click(false)]);
+        let mut shapes = Vec::new();
+        for _ in 0..30 {
+            shapes = run(vec![]);
+        }
+        let texts = painted_texts(&shapes);
+        for needle in [
+            "Tool overlay:",
+            "Always",
+            "Auto",
+            "Never",
+            "Visualize spots",
+            "Visualize: off",
+            "Visualize off",
+            "Detect threshold",
+            "Detect objects",
+            "Apply detected",
+            "Reflections",
+            "People",
+            "Dust",
+            "Auto (list only, never auto-apply)",
+            "Regenerate variant",
+            "Clear spots",
+        ] {
+            assert!(
+                texts.iter().any(|t| t == needle),
+                "{needle:?} must be painted, got {texts:?}"
+            );
+        }
     }
 
     // ---- LR-PARITY-01 Welle 3 (lumina-gui only, no schema change) --------

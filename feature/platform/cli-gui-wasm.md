@@ -574,6 +574,35 @@ Maskierungs-Parität“):
   `save_sidecar`/`load_sidecar`, laute Fehler (Exit 1 Benutzungs-/Laufzeit-
   fehler wie Bestand, kein stiller Fallback, keine absoluten Pfade).
 
+### Remove-Parität G-04 (LRPAR-G04-REMOVE, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-04 (Details, Feldsemantik und
+Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
+
+- **Visualize-Slider:** Schwellwert-Slider im Spot-Panel
+  (`spot_visualize_threshold`, `0..=1`), rezept-persistiert (Reload stellt
+  ihn wieder her); deterministische Kandidaten-Tönung, kein Modell.
+- **Tool-Overlay-Modi:** derselbe G-11-`OverlayMode`-Umschalter
+  (`Always`/`Auto`/`Never`) gilt für das Spot-Werkzeug (`Q`) — reiner
+  Session-Display-State (nie Sidecar, Reload → `Always`), `info!`-Log. Die
+  CLI kennt kein Overlay-Flag und rendert immer ohne Overlay.
+- **Detect-Objects:** Button im Spot-Panel + CLI `lumina spot
+  --detect-objects` (Heuristik Stufe 1, ohne Modell, ONNX nur hinter
+  F-078-Gate, Status laut); `--detect-apply` übernimmt explizit.
+- **Distraction Removal:** Schalter `Reflections`/`People`/`Dust` + `Auto`
+  (alle Default aus, Rezept-persistiert); `Auto` listet nur, wendet nie
+  still an. `Reflections`/`People` ohne Modell → sichtbarer
+  `NeedsModel`-Status.
+- **Generativ-Varianten:** Prompt-/Seed-/Varianten-Steuerung im Spot-Panel +
+  CLI `lumina spot --regenerate-variant --spot-id <id> --variant <n>`;
+  deterministisch (`variant_seed`), persistiert, `info!`-Log.
+- **CLI:** `lumina spot --list` (Spots + Einstellungen je Kopie),
+  `--add-heuristic`, `--clear`, `--set-visualize-threshold`,
+  `--set-distraction k=v,...`, `--detect-objects/--detect-apply`,
+  `--regenerate-variant`; Roundtrip über `save_sidecar`/`load_sidecar`,
+  laute Fehler (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller
+  Fallback, keine absoluten Pfade).
+
 ### Tool-Overlays, Edit-Pins, Solo-Mode, Shift+Tab (G-11, LRPAR-G11-OVERLAYS)
 
 Overlay-/Panel-Comfort nach Lightroom-Vorbild, GUI-contained (kein CLI-Anteil).

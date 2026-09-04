@@ -239,6 +239,73 @@ Jede Implementierung muss vor Verifizierung mindestens diese Prüfungen bestehen
 - Modus-spezifische Veraltungs-, Artefakt-, Pipeline- und Geometrie-Tests sind durch unabhängigen Verifizierungs-Agenten bestätigt.
 - `cargo check --workspace` grün.
 
+## G-04 Remove-Parität (LRPAR-G04-REMOVE, Release 1.0)
+
+Normative Erweiterung gegenüber SPOT-REMOVE-1 für Lightroom-Parität
+(`.goal/Goal.md` G-04, Referenz `…18.48.30.png`): Visualize-Spots,
+Tool-Overlay-Modi, Detect-Objects, Distraction Removal und
+Generativ-Varianten. Alle fünf Bausteine sind additiv, deterministisch und
+laut — kein stiller Fallback, keine Original-Mutation, keine absoluten Pfade.
+
+### Visualize-Spots-Schwellwert
+
+- Ein optionaler Schwellwert `spot_visualize_threshold` (`f32`, `0..=1`,
+  Rezept-`extras`, absent = aus) steuert eine deterministische
+  Schwellwert-Visualisierung: Pixel mit Rec.709-Luminanz `<= Schwellwert`
+  gelten als Spot-Kandidaten (`lumina-core::visualize_spots_mask`,
+  Byte-Maske `0/255`, reiner Pixel-Pfad, kein Modell, kein RNG).
+- `apply_visualize_overlay` tönt Kandidaten-Pixel deterministisch rot — nur
+  Kandidaten-Pixel ändern sich (PSNR-Gate), alles andere ist byte-identisch.
+- Der Schwellwert ist Teil der Rezept-Identität (Roundtrip, Validierung laut:
+  nicht-finite oder Out-of-range-Werte werden abgelehnt).
+
+### Tool-Overlay-Modi (Session-Entscheid)
+
+- Die G-11-`OverlayMode`-Modi (`Always`/`Auto`/`Never`) gelten unverändert
+  für das Spot-Werkzeug: `Always` malt Spot-Pins/Overlay sobald Spots
+  existieren (bisheriges Verhalten, Default); `Auto` nur solange das
+  Spot-Heal-Werkzeug (`Q`) armiert ist oder ein Drag läuft; `Never` malt nie.
+- **Entscheid:** Session-Display-State, nie Rezept/Sidecar (wie `Tab`/`L`/
+  `F` in G-11) — das Sidecar bleibt portabel, ein Reload stellt `Always`
+  wieder her. Es gibt daher **kein** CLI-Overlay-Flag; die CLI rendert immer
+  ohne Overlay (kein stiller Anzeigezustand im Export).
+
+### Detect-Objects (Heuristik Stufe 1)
+
+- `lumina-core::detect_spots_heuristic(frame, threshold, max_spots)` findet
+  Spot-Kandidaten ohne Modell: dunkle 8×8-Zellen (Dunkelanteil `> 50 %`)
+  werden zu `DetectedSpot { x, y, radius, confidence }`, sortiert nach
+  Confidence, gedeckelt auf `max_spots` (deterministisch, kein RNG).
+- ONNX-Modelle bleiben hinter dem F-078-Gate (Lizenz/Hash-Pin, Capability
+  `inpaint_heal`): Stufe 1 braucht kein Modell und täuscht keines vor.
+  CLI (`spot --detect-objects`) listet Kandidaten; `--detect-apply` übernimmt
+  sie explizit als heuristische Spots — nie automatisch.
+
+### Distraction Removal (Reflections/People/Dust, Auto explizit)
+
+- Rezept-`extras["spot_distraction"]` (`{ reflections, people, dust,
+  auto_mode }`, alle Default `false`): jeder Schalter ist explizit, `auto`
+  allein löst **nichts** aus — Kandidaten werden nur aufgelistet und erst per
+  explizitem Apply (`spot --detect-apply`, GUI-Button) zu Spots.
+- Heuristik Stufe 1 bedient nur `dust` (identisch zu Detect-Objects);
+  `reflections`/`people` melden ohne F-078-freigegebenes Modell laut
+  `NeedsModel` (Status sichtbar, kein stiller Fallback, keine stille
+  Heuristik als Ersatz).
+
+### Generativ-Varianten neu generieren
+
+- `generative_variant_seed(base_seed, variant)` (`variant == 0` → `base`
+  unverändert, sonst SplitMix64-Hash aus Basis + Variante): gleiche
+  Eingaben → byte-identisches Ergebnis, andere Variante → anderes Ergebnis
+  (deterministisch, getestet).
+- Generativ-`extras`-Einträge dürfen optional `seed`/`variant`/`prompt`
+  tragen (validiert, roundtrip-stabil); `spot --regenerate-variant` und der
+  GUI-Regenerate-Button setzen `seed = variant_seed(base, variant)` explizit
+  — nie still, immer mit `info!`-Log und Sidecar-Save.
+- Echte ONNX-Inpaint-Artefakte bleiben `kind = "spot_heal_generative"`
+  (unverändert); der Stub (`lumina-onnx::heal_variant`) nutzt denselben
+  Seed-Pfad.
+
 ## Offene Punkte und Abhängigkeiten
 
 - **Abhängigkeiten:** F-042 (Source-Actions, `lumina-onnx` existiert), F-082/F-083 (SAM-Adapter existiert; Inpaint-Modelle `pending-integration`), GUI-STAGE-1/GUI-WGPU-PRESENT-1; `lumina-gpu`/Present-Pfad berührt (Staub-Heal auf GPU optional, Post-MVP).

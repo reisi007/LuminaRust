@@ -54,7 +54,11 @@ pub use render::{
     prepare_source_base, render_frame, render_frame_from_base, LensfunCorrectorRef, MaskContext,
     MaskLayerResult, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, StageWork,
 };
-pub use spot_heal::{apply_spot_heals, psnr, spots_from_recipe, SpotHeuristic};
+pub use spot_heal::{
+    apply_spot_heals, apply_visualize_overlay, detect_spots_heuristic, distraction_candidates,
+    generative_variant_seed, psnr, spots_from_recipe, visualize_spots_mask, DetectedSpot,
+    DistractionKind, DistractionSetting, DistractionStatus, SpotHeuristic,
+};
 pub use stage_cache::StageFrameCache;
 pub use tone::{
     analyze_tone, analyze_tone_with_histogram, match_total_exposure, match_total_exposure_masked,

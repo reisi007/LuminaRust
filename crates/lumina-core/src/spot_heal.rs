@@ -213,6 +213,244 @@ pub fn psnr(a: &ImageFrame, b: &ImageFrame) -> f64 {
     }
     20.0 * (255.0 / mse.sqrt()).log10()
 }
+/// LRPAR-G04-REMOVE: deterministic spot-candidate detection, threshold
+/// visualization, distraction policy and generative variant seeds.
+///
+/// All functions here are pure, model-free and RNG-free: identical inputs
+/// yield byte-identical outputs. ONNX-backed stages stay behind the F-078
+/// gate and are never silently substituted (see `lumina-onnx::inpaint`).
+/// A heuristic spot candidate (G-04 Detect-Objects, stage 1, no model).
+/// Coordinates are source-normalized `0..=1`, `radius` is in source pixels,
+/// `confidence` is the dark-pixel fraction `0..=1` of the winning cell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetectedSpot {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub confidence: f32,
+}
+
+/// Distraction category (G-04 Distraction Removal). Only `Dust` is served by
+/// the heuristic stage 1; the others need an F-078-gated model and report
+/// [`DistractionStatus::NeedsModel`] instead of guessing silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistractionKind {
+    Reflections,
+    People,
+    Dust,
+}
+
+/// Explicit distraction switches (G-04). All default to off; `auto_mode`
+/// only lists candidates and never applies anything silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DistractionSetting {
+    pub reflections: bool,
+    pub people: bool,
+    pub dust: bool,
+    pub auto_mode: bool,
+}
+
+/// Per-kind outcome of a distraction query: either heuristic candidates or
+/// an explicit missing-model status (never a silent fallback).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DistractionStatus {
+    Ready(Vec<DetectedSpot>),
+    NeedsModel {
+        kind: DistractionKind,
+        reason: String,
+    },
+}
+
+fn luminance_rec709(r: u8, g: u8, b: u8) -> f32 {
+    (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0
+}
+
+fn check_threshold(threshold: f32) -> Result<(), CoreError> {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(CoreError::InvalidAdjustment {
+            name: "spot_visualize.threshold".into(),
+            value: threshold as f64,
+            minimum: 0.0,
+            maximum: 1.0,
+        });
+    }
+    Ok(())
+}
+
+/// Byte mask (`0`/`255`, row-major, `width × height`) of pixels whose
+/// Rec.709 luminance is `<= threshold`. Deterministic, model-free.
+pub fn visualize_spots_mask(frame: &ImageFrame, threshold: f32) -> Result<Vec<u8>, CoreError> {
+    check_threshold(threshold)?;
+    let mut out = Vec::with_capacity(frame.width as usize * frame.height as usize);
+    for px in frame.pixels.as_chunks::<4>().0 {
+        let lum = luminance_rec709(px[0], px[1], px[2]);
+        out.push(u8::from(lum <= threshold) * 255);
+    }
+    Ok(out)
+}
+
+/// Deterministic red tint overlay for threshold candidates (G-04 Visualize):
+/// masked pixels blend `50 %` towards pure red, all other pixels (and alpha)
+/// are byte-identical.
+pub fn apply_visualize_overlay(frame: &mut ImageFrame, threshold: f32) -> Result<usize, CoreError> {
+    let mask = visualize_spots_mask(frame, threshold)?;
+    let mut count = 0usize;
+    for (px, &m) in frame
+        .pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(mask.iter())
+    {
+        if m == 255 {
+            count += 1;
+            px[0] = ((u16::from(px[0]) + 255) / 2).min(255) as u8;
+            px[1] = (u16::from(px[1]) / 2) as u8;
+            px[2] = (u16::from(px[2]) / 2) as u8;
+        }
+    }
+    Ok(count)
+}
+
+/// Heuristic stage-1 spot detection (G-04 Detect-Objects, no model): dark
+/// 8×8 cells (dark-pixel fraction `> 50 %` at `threshold`) become candidates
+/// at the cell centre, sorted by confidence (descending, then position for
+/// determinism) and capped at `max_spots`. Empty for empty frames; loud on
+/// bad parameters.
+pub fn detect_spots_heuristic(
+    frame: &ImageFrame,
+    threshold: f32,
+    max_spots: usize,
+) -> Result<Vec<DetectedSpot>, CoreError> {
+    check_threshold(threshold)?;
+    if max_spots == 0 || max_spots > 4096 {
+        return Err(CoreError::InvalidAdjustment {
+            name: "spot_detect.max_spots".into(),
+            value: max_spots as f64,
+            minimum: 1.0,
+            maximum: 4096.0,
+        });
+    }
+    if frame.width == 0 || frame.height == 0 {
+        return Ok(Vec::new());
+    }
+    const CELL: u32 = 8;
+    let mut out = Vec::new();
+    let nx = frame.width.div_ceil(CELL);
+    let ny = frame.height.div_ceil(CELL);
+    for cy in 0..ny {
+        for cx in 0..nx {
+            let x0 = cx * CELL;
+            let y0 = cy * CELL;
+            let x1 = (x0 + CELL).min(frame.width);
+            let y1 = (y0 + CELL).min(frame.height);
+            let mut dark = 0u32;
+            let mut total = 0u32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let idx = (y * frame.width + x) as usize * 4;
+                    let px = &frame.pixels[idx..idx + 4];
+                    total += 1;
+                    if luminance_rec709(px[0], px[1], px[2]) <= threshold {
+                        dark += 1;
+                    }
+                }
+            }
+            let fraction = dark as f32 / total as f32;
+            if fraction > 0.5 {
+                let w = (x1 - x0) as f32;
+                let h = (y1 - y0) as f32;
+                out.push(DetectedSpot {
+                    x: ((x0 as f32 + w / 2.0) + 0.5) / frame.width as f32,
+                    y: ((y0 as f32 + h / 2.0) + 0.5) / frame.height as f32,
+                    radius: (w.min(h) / 2.0).clamp(1.0, 512.0),
+                    confidence: fraction,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        b.confidence
+            .total_cmp(&a.confidence)
+            .then_with(|| a.y.total_cmp(&b.y))
+            .then_with(|| a.x.total_cmp(&b.x))
+    });
+    out.truncate(max_spots);
+    Ok(out)
+}
+
+/// Distraction query (G-04): `dust` reuses the heuristic detector when
+/// enabled (empty when disabled); `reflections`/`people` report
+/// `NeedsModel` when enabled (F-078 gate, no silent heuristic substitute)
+/// and empty-`Ready` when disabled. `auto_mode` never applies anything — it
+/// only travels with the setting so callers can log that listing (not
+/// applying) happened.
+pub fn distraction_candidates(
+    frame: &ImageFrame,
+    setting: DistractionSetting,
+    threshold: f32,
+    max_spots: usize,
+) -> Result<Vec<(DistractionKind, DistractionStatus)>, CoreError> {
+    check_threshold(threshold)?;
+    let mut out = Vec::with_capacity(3);
+    if setting.reflections {
+        out.push((
+            DistractionKind::Reflections,
+            DistractionStatus::NeedsModel {
+                kind: DistractionKind::Reflections,
+                reason: "no F-078-gated reflections model configured; heuristic stage 1 covers dust only"
+                    .into(),
+            },
+        ));
+    } else {
+        out.push((
+            DistractionKind::Reflections,
+            DistractionStatus::Ready(Vec::new()),
+        ));
+    }
+    if setting.people {
+        out.push((
+            DistractionKind::People,
+            DistractionStatus::NeedsModel {
+                kind: DistractionKind::People,
+                reason:
+                    "no F-078-gated people model configured; heuristic stage 1 covers dust only"
+                        .into(),
+            },
+        ));
+    } else {
+        out.push((
+            DistractionKind::People,
+            DistractionStatus::Ready(Vec::new()),
+        ));
+    }
+    if setting.dust {
+        out.push((
+            DistractionKind::Dust,
+            DistractionStatus::Ready(detect_spots_heuristic(frame, threshold, max_spots)?),
+        ));
+    } else {
+        out.push((DistractionKind::Dust, DistractionStatus::Ready(Vec::new())));
+    }
+    Ok(out)
+}
+
+/// Deterministic generative variant seed (G-04): `variant == 0` keeps `base`
+/// (back-compatible with pre-variant recipes); any other variant hashes
+/// base + variant with SplitMix64 (same algorithm as
+/// `lumina-onnx::variant_seed` — keep the twins in sync).
+pub fn generative_variant_seed(base_seed: u64, variant: u64) -> u64 {
+    if variant == 0 {
+        return base_seed;
+    }
+    let mut z = base_seed
+        .wrapping_add(0x9E3779B97F4A7C15)
+        .wrapping_add(variant.wrapping_mul(0xBF58476D1CE4E5B9));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,5 +662,133 @@ mod tests {
         let parsed = spots_from_recipe(&recipe);
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, "spot-1");
+    }
+    // ---- LRPAR-G04-REMOVE -------------------------------------------------
+    fn dark_frame(w: u32, h: u32, dark: &[(u32, u32)]) -> ImageFrame {
+        let mut pixels = vec![255u8; w as usize * h as usize * 4];
+        for (x, y) in dark {
+            let idx = (*y * w + *x) as usize * 4;
+            pixels[idx] = 0;
+            pixels[idx + 1] = 0;
+            pixels[idx + 2] = 0;
+        }
+        ImageFrame::new(w, h, pixels).unwrap()
+    }
+    #[test]
+    fn visualize_mask_is_deterministic_and_threshold_bounded() {
+        let dark: Vec<(u32, u32)> = (0..8).flat_map(|y| (0..8).map(move |x| (x, y))).collect();
+        let frame = dark_frame(16, 16, &dark);
+        let a = visualize_spots_mask(&frame, 0.5).unwrap();
+        let b = visualize_spots_mask(&frame, 0.5).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 256);
+        assert_eq!(a.iter().filter(|&&m| m == 255).count(), 64);
+        assert_eq!(a.iter().filter(|&&m| m == 0).count(), 192);
+        assert!(visualize_spots_mask(&frame, f32::NAN).is_err());
+        assert!(visualize_spots_mask(&frame, 1.5).is_err());
+        assert!(visualize_spots_mask(&frame, -0.1).is_err());
+    }
+    #[test]
+    fn visualize_overlay_tints_only_candidates() {
+        let dark: Vec<(u32, u32)> = (0..8).flat_map(|y| (0..8).map(move |x| (x, y))).collect();
+        let frame = dark_frame(16, 16, &dark);
+        let mut over = frame.clone();
+        let count = apply_visualize_overlay(&mut over, 0.5).unwrap();
+        assert_eq!(count, 64);
+        // Untinted pixels (white area) are byte-identical, alpha untouched.
+        for y in 0..16 {
+            for x in 8..16 {
+                let i = (y * 16 + x) as usize * 4;
+                assert_eq!(over.pixels[i..i + 4], frame.pixels[i..i + 4]);
+            }
+        }
+        // Tinted pixels moved towards red.
+        let i = 0;
+        assert!(over.pixels[i] >= frame.pixels[i]);
+        assert!(over.pixels[i + 3] == 255);
+        let ps = psnr(&frame, &over);
+        assert!(ps.is_finite() && ps > 5.0, "overlay PSNR gate: {ps}");
+        // Deterministic: same inputs byte-identical.
+        let mut over2 = frame.clone();
+        apply_visualize_overlay(&mut over2, 0.5).unwrap();
+        assert_eq!(over.pixels, over2.pixels);
+    }
+    #[test]
+    fn detect_heuristic_finds_dark_cells_deterministically() {
+        let dark: Vec<(u32, u32)> = (0..8).flat_map(|y| (0..8).map(move |x| (x, y))).collect();
+        let frame = dark_frame(16, 16, &dark);
+        let a = detect_spots_heuristic(&frame, 0.5, 16).unwrap();
+        let b = detect_spots_heuristic(&frame, 0.5, 16).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 1);
+        assert!((a[0].confidence - 1.0).abs() < 1e-6);
+        // Bright frame: no candidates.
+        let bright = ImageFrame::new(16, 16, vec![255u8; 16 * 16 * 4]).unwrap();
+        assert!(detect_spots_heuristic(&bright, 0.5, 16).unwrap().is_empty());
+        // max_spots caps deterministically.
+        let all_dark: Vec<(u32, u32)> =
+            (0..16).flat_map(|y| (0..16).map(move |x| (x, y))).collect();
+        let full = dark_frame(16, 16, &all_dark);
+        let capped = detect_spots_heuristic(&full, 0.5, 2).unwrap();
+        assert_eq!(capped.len(), 2);
+        assert!(detect_spots_heuristic(&frame, 0.5, 0).is_err());
+        assert!(detect_spots_heuristic(&frame, f32::NAN, 4).is_err());
+    }
+    #[test]
+    fn distraction_policy_never_acts_silently() {
+        let dark: Vec<(u32, u32)> = (0..8).flat_map(|y| (0..8).map(move |x| (x, y))).collect();
+        let frame = dark_frame(16, 16, &dark);
+        // All off: everything empty Ready.
+        let off = DistractionSetting::default();
+        let res = distraction_candidates(&frame, off, 0.5, 8).unwrap();
+        for (_, status) in &res {
+            assert_eq!(*status, DistractionStatus::Ready(Vec::new()));
+        }
+        // Dust on: heuristic candidates, identical to detect.
+        let dust = DistractionSetting {
+            dust: true,
+            auto_mode: true,
+            ..Default::default()
+        };
+        let res = distraction_candidates(&frame, dust, 0.5, 8).unwrap();
+        let dust_status = res
+            .iter()
+            .find(|(k, _)| *k == DistractionKind::Dust)
+            .unwrap();
+        match &dust_status.1 {
+            DistractionStatus::Ready(spots) => assert_eq!(spots.len(), 1),
+            other => panic!("dust must be Ready, got {other:?}"),
+        }
+        // Reflections/people on without a model: loud NeedsModel, never a
+        // silent heuristic substitute.
+        let rp = DistractionSetting {
+            reflections: true,
+            people: true,
+            ..Default::default()
+        };
+        let res = distraction_candidates(&frame, rp, 0.5, 8).unwrap();
+        for (kind, status) in &res {
+            match kind {
+                DistractionKind::Reflections | DistractionKind::People => {
+                    assert!(
+                        matches!(status, DistractionStatus::NeedsModel { .. }),
+                        "{kind:?}"
+                    );
+                }
+                DistractionKind::Dust => {
+                    assert_eq!(*status, DistractionStatus::Ready(Vec::new()));
+                }
+            }
+        }
+    }
+    #[test]
+    fn variant_seed_zero_stable_others_distinct_and_deterministic() {
+        assert_eq!(generative_variant_seed(7, 0), 7);
+        let v1 = generative_variant_seed(7, 1);
+        let v1b = generative_variant_seed(7, 1);
+        assert_eq!(v1, v1b);
+        assert_ne!(v1, 7);
+        assert_ne!(generative_variant_seed(7, 2), v1);
+        assert_ne!(generative_variant_seed(8, 1), v1);
     }
 }

@@ -223,6 +223,15 @@ impl GenerativeArtifactRef {
 /// during validation rather than silently ignored.
 pub const SPOT_REMOVAL_VERSION: u8 = 1;
 
+/// LRPAR-G04-REMOVE: extras key of the optional visualize-spots threshold
+/// (`f32` in `0..=1`, absent = visualization off). Part of the recipe
+/// identity.
+pub const SPOT_VISUALIZE_KEY: &str = "spot_visualize_threshold";
+
+/// LRPAR-G04-REMOVE: extras key of the explicit distraction switches
+/// (see [`SpotDistraction`], all default off). Absent = all off.
+pub const SPOT_DISTRACTION_KEY: &str = "spot_distraction";
+
 /// SPOT-REMOVE-1: the mode of a persisted spot removal. `Heuristic` is the
 /// instant CPU heal (recipe parameters only, no model, no bundle record);
 /// `Generative` is the local ONNX inpaint whose replaced tile lives in the
@@ -261,6 +270,73 @@ pub struct SpotRemoval {
     pub mode: SpotRemovalMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<GenerativeArtifactRef>,
+}
+
+/// LRPAR-G04-REMOVE: explicit distraction-removal switches, persisted as
+/// recipe `extras["spot_distraction"]`. Every switch defaults to off;
+/// `auto_mode` alone lists candidates and never applies anything silently.
+/// Additive (absent key = all off, no migration, no schema bump).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SpotDistraction {
+    #[serde(default)]
+    pub reflections: bool,
+    #[serde(default)]
+    pub people: bool,
+    #[serde(default)]
+    pub dust: bool,
+    #[serde(default)]
+    pub auto_mode: bool,
+}
+
+impl EditRecipe {
+    /// Optional visualize threshold (`0..=1`), `None` when off/absent.
+    /// A present but unparsable value reads as `None` here and fails loudly
+    /// in validation instead (never a silent reinterpretation).
+    pub fn spot_visualize_threshold(&self) -> Option<f32> {
+        self.extras
+            .get(SPOT_VISUALIZE_KEY)?
+            .as_f64()
+            .map(|v| v as f32)
+    }
+
+    /// Sets (`Some`) or clears (`None`) the visualize threshold. Out-of-range
+    /// or non-finite values fail loudly; clearing removes the key.
+    pub fn set_spot_visualize_threshold(&mut self, value: Option<f32>) -> Result<(), SidecarError> {
+        match value {
+            None => {
+                self.extras.remove(SPOT_VISUALIZE_KEY);
+                Ok(())
+            }
+            Some(v) => {
+                if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                    return invalid(format!(
+                        "extras `{SPOT_VISUALIZE_KEY}` must be finite within 0..=1"
+                    ));
+                }
+                self.extras
+                    .insert(SPOT_VISUALIZE_KEY.into(), Value::from(f64::from(v)));
+                Ok(())
+            }
+        }
+    }
+
+    /// Explicit distraction switches; absent reads as all-off.
+    pub fn spot_distraction(&self) -> SpotDistraction {
+        self.extras
+            .get(SPOT_DISTRACTION_KEY)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// Persists the distraction switches (all-off removes the key so legacy
+    /// documents stay byte-stable).
+    pub fn set_spot_distraction(&mut self, setting: SpotDistraction) {
+        if setting == SpotDistraction::default() {
+            self.extras.remove(SPOT_DISTRACTION_KEY);
+        } else if let Ok(value) = serde_json::to_value(setting) {
+            self.extras.insert(SPOT_DISTRACTION_KEY.into(), value);
+        }
+    }
 }
 
 /// F-042-N1: a persisted source-action recipe operation. This is an additive
@@ -3171,6 +3247,23 @@ fn validate_spot_removal_extra_entry(entry: &Value) -> Result<(), SidecarError> 
                     validate_generative_ref(&link)?;
                 }
             }
+            // LRPAR-G04-REMOVE: optional deterministic variant controls.
+            // Present values are type-checked loudly; absent stays identity.
+            if let Some(seed) = object.get("seed") {
+                if seed.as_u64().is_none() {
+                    return invalid("generative spot_removal `seed` must be a u64");
+                }
+            }
+            if let Some(variant) = object.get("variant") {
+                if variant.as_u64().is_none() {
+                    return invalid("generative spot_removal `variant` must be a u64");
+                }
+            }
+            if let Some(prompt) = object.get("prompt") {
+                if prompt.as_str().is_none() {
+                    return invalid("generative spot_removal `prompt` must be a string");
+                }
+            }
         }
         _ => return invalid(format!("unsupported spot_removal mode `{mode}`")),
     }
@@ -3397,6 +3490,7 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         validate_spot_removal(spot)?;
     }
     validate_spot_removal_extras(a)?;
+    validate_spot_g04_extras(a)?;
     if let Some(g) = &a.generative_edit {
         if g.version != 1 {
             return invalid("unsupported generative_edit version");
@@ -3449,6 +3543,31 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     }
     Ok(())
 }
+/// LRPAR-G04-REMOVE: validates the additive G-04 recipe extras —
+/// `spot_visualize_threshold` (finite `0..=1` when present, absent = off) and
+/// `spot_distraction` (an object of bools when present, absent = all off).
+/// Every deviation fails loudly, never a silent reinterpretation.
+fn validate_spot_g04_extras(recipe: &EditRecipe) -> Result<(), SidecarError> {
+    if let Some(value) = recipe.extras.get(SPOT_VISUALIZE_KEY) {
+        let v = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
+            SidecarError::Invalid(format!("extras `{SPOT_VISUALIZE_KEY}` must be finite"))
+        })?;
+        if !(0.0..=1.0).contains(&v) {
+            return invalid(format!(
+                "extras `{SPOT_VISUALIZE_KEY}` must be within 0..=1"
+            ));
+        }
+    }
+    if let Some(value) = recipe.extras.get(SPOT_DISTRACTION_KEY) {
+        serde_json::from_value::<SpotDistraction>(value.clone()).map_err(|_| {
+            SidecarError::Invalid(format!(
+                "extras `{SPOT_DISTRACTION_KEY}` must be an object of bools"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
     if !(2..=32).contains(&c.len()) {
         return invalid("curve must contain 2..=32 points");
@@ -5395,6 +5514,116 @@ mod tests {
             serde_json::json!({"mode": "heuristic"}),
         );
         assert!(d.validate().is_err());
+    }
+
+    // ----- LRPAR-G04-REMOVE: visualize, distraction, variant controls -----
+    #[test]
+    fn g04_visualize_threshold_roundtrip_and_validation() {
+        let mut recipe = EditRecipe::default();
+        assert_eq!(recipe.spot_visualize_threshold(), None);
+        recipe.set_spot_visualize_threshold(Some(0.35)).unwrap();
+        assert_eq!(recipe.spot_visualize_threshold(), Some(0.35));
+        assert!(recipe.set_spot_visualize_threshold(Some(1.5)).is_err());
+        assert!(recipe.set_spot_visualize_threshold(Some(f32::NAN)).is_err());
+        assert_eq!(recipe.spot_visualize_threshold(), Some(0.35));
+        recipe.set_spot_visualize_threshold(None).unwrap();
+        assert_eq!(recipe.spot_visualize_threshold(), None);
+        assert!(!recipe.extras.contains_key(SPOT_VISUALIZE_KEY));
+        // Persisted value survives a document roundtrip and validates.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0]
+            .recipe
+            .set_spot_visualize_threshold(Some(0.2))
+            .unwrap();
+        assert!(d.validate().is_ok());
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.spot_visualize_threshold(),
+            Some(0.2)
+        );
+        assert!(decoded.validate().is_ok());
+        // A hand-edited out-of-range value fails loudly.
+        let mut bad = SidecarDocument::new(source(), "pipeline-1");
+        bad.virtual_copies[0]
+            .recipe
+            .extras
+            .insert(SPOT_VISUALIZE_KEY.into(), serde_json::json!(2.0));
+        assert!(bad.validate().is_err());
+        let mut bad_type = SidecarDocument::new(source(), "pipeline-1");
+        bad_type.virtual_copies[0]
+            .recipe
+            .extras
+            .insert(SPOT_VISUALIZE_KEY.into(), serde_json::json!("low"));
+        assert!(bad_type.validate().is_err());
+    }
+
+    #[test]
+    fn g04_distraction_switches_roundtrip_and_default_off() {
+        let recipe = EditRecipe::default();
+        assert_eq!(recipe.spot_distraction(), SpotDistraction::default());
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        assert!(d.validate().is_ok());
+        let setting = SpotDistraction {
+            dust: true,
+            auto_mode: true,
+            ..Default::default()
+        };
+        d.virtual_copies[0].recipe.set_spot_distraction(setting);
+        assert_eq!(d.virtual_copies[0].recipe.spot_distraction(), setting);
+        assert!(d.validate().is_ok());
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.virtual_copies[0].recipe.spot_distraction(), setting);
+        // Resetting to all-off removes the key (legacy byte-stability).
+        d.virtual_copies[0]
+            .recipe
+            .set_spot_distraction(SpotDistraction::default());
+        assert!(!d.virtual_copies[0]
+            .recipe
+            .extras
+            .contains_key(SPOT_DISTRACTION_KEY));
+        // A non-object value fails loudly.
+        let mut bad = SidecarDocument::new(source(), "pipeline-1");
+        bad.virtual_copies[0]
+            .recipe
+            .extras
+            .insert(SPOT_DISTRACTION_KEY.into(), serde_json::json!("dust"));
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn g04_generative_variant_controls_roundtrip_and_reject_loudly() {
+        // seed/variant/prompt ride the generative extras entry and validate.
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.extras.insert(
+            "spot_removals".into(),
+            serde_json::json!([{
+                "id": "g1", "version": 1, "mode": "generative",
+                "prompt": "remove dust", "seed": 7, "variant": 2
+            }]),
+        );
+        assert!(d.validate().is_ok());
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.virtual_copies[0].recipe.extras.get("spot_removals"),
+            d.virtual_copies[0].recipe.extras.get("spot_removals")
+        );
+        for (field, value) in [
+            ("seed", serde_json::json!("seven")),
+            ("variant", serde_json::json!(-1)),
+            ("prompt", serde_json::json!(42)),
+        ] {
+            let mut bad = SidecarDocument::new(source(), "pipeline-1");
+            let mut entry = serde_json::json!({"id": "g1", "version": 1, "mode": "generative"});
+            entry[field] = value;
+            bad.virtual_copies[0]
+                .recipe
+                .extras
+                .insert("spot_removals".into(), Value::Array(vec![entry]));
+            assert!(
+                bad.validate().is_err(),
+                "generative `{field}` must be rejected loudly"
+            );
+        }
     }
 
     #[test]
