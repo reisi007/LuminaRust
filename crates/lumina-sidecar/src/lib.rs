@@ -758,6 +758,11 @@ pub struct EditRecipe {
     /// root map (like `geometry`) so both effect objects flow into the
     /// `recipe_hash`/`RenderKey` and invalidate preview/export.
     pub effects: Option<Effects>,
+    /// Optional G-05 lens-blur depth bokeh. Additive in schema v2; absent or
+    /// disabled is identity and requires no migration. Serialized as a
+    /// top-level key (like `geometry`) so it flows into the core
+    /// `recipe_hash`/`RenderKey` and invalidates preview/export.
+    pub lens_blur: Option<LensBlur>,
     /// Optional F-042-N1 source-action recipe operations (dust removal, AI
     /// replacement). Additive in schema v2; absent is the empty list and
     /// requires no migration.
@@ -851,6 +856,12 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(effects).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(lens_blur) = &self.lens_blur {
+            root.insert(
+                "lens_blur".into(),
+                serde_json::to_value(lens_blur).map_err(serde::ser::Error::custom)?,
+            );
+        }
         // F-042-N1: `source_actions` is a top-level additive key (consistent
         // with `geometry`/`lens_correction`/`perspective`), skipped entirely
         // when empty so legacy documents without the key deserialize as empty.
@@ -932,6 +943,11 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .map_err(serde::de::Error::custom)?;
         let effects = root
             .remove("effects")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let lens_blur = root
+            .remove("lens_blur")
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
@@ -1026,6 +1042,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             lens_correction,
             perspective,
             effects,
+            lens_blur,
             source_actions,
             spot_removals,
             generative_edit,
@@ -1218,6 +1235,63 @@ pub struct Effects {
     pub grain: Option<Grain>,
 }
 
+/// G-05 Lens Blur: deterministic depth bokeh. See
+/// `feature/architecture/pipeline.md` § „G-05 Lens Blur". Additive schema-v2
+/// field on `EditRecipe` (`recipe.lens_blur`); absent is identity and
+/// requires no migration. Serialized as a top-level key (like `geometry`)
+/// so it flows into the core `recipe_hash`/`RenderKey`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FocusRect {
+    /// Normalized left edge `0..=1`.
+    pub x: f32,
+    /// Normalized top edge `0..=1`.
+    pub y: f32,
+    /// Normalized width (`> 0`, `x + width <= 1`).
+    pub width: f32,
+    /// Normalized height (`> 0`, `y + height <= 1`).
+    pub height: f32,
+}
+
+/// G-05 bokeh kernel shapes. Every variant is a deterministic integer kernel
+/// mask (no randomness); the variants render visibly different blurs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BokehShape {
+    Round,
+    Elliptical,
+    Hexagonal,
+}
+
+/// G-05 external depth-map reference. Portable: relative path only (absolute
+/// paths rejected), content-addressed via SHA-256. When present, the render
+/// caller MUST supply the depth plane; a missing/checksum-mismatched
+/// artifact aborts the render loudly (never a silent heuristic fallback).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DepthArtifactRef {
+    pub relative_path: String,
+    pub sha256: String,
+}
+
+/// G-05 Lens Blur recipe stage (per virtual copy).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensBlur {
+    pub version: u8,
+    /// Master switch. `false` (or absent `lens_blur`) is identity.
+    pub enabled: bool,
+    pub focus_rect: FocusRect,
+    /// Near edge of the sharp depth band `0..=1`.
+    pub focal_near: f32,
+    /// Far edge of the sharp depth band `0..=1` (`>= focal_near`).
+    pub focal_far: f32,
+    /// Blur strength `0..=1` (0 is identity, no blur pass).
+    pub blur_amount: f32,
+    pub bokeh: BokehShape,
+    /// Optional external depth map; `None` selects the deterministic
+    /// focus-rect heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_artifact: Option<DepthArtifactRef>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum Crop {
@@ -1275,6 +1349,7 @@ impl Default for EditRecipe {
             lens_correction: None,
             perspective: None,
             effects: None,
+            lens_blur: None,
             source_actions: Vec::new(),
             spot_removals: Vec::new(),
             generative_edit: None,
@@ -3541,6 +3616,47 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    if let Some(b) = &a.lens_blur {
+        if b.version != 1 {
+            return invalid("unsupported lens_blur version");
+        }
+        let r = &b.focus_rect;
+        for (name, v) in [
+            ("x", r.x),
+            ("y", r.y),
+            ("width", r.width),
+            ("height", r.height),
+        ] {
+            if !v.is_finite() {
+                return invalid(format!("invalid lens_blur focus_rect.{name}"));
+            }
+        }
+        if !(0.0..=1.0).contains(&r.x)
+            || !(0.0..=1.0).contains(&r.y)
+            || r.width <= 0.0
+            || r.height <= 0.0
+            || r.x + r.width > 1.0
+            || r.y + r.height > 1.0
+        {
+            return invalid("invalid lens_blur focus_rect (must be a positive area inside 0..=1)");
+        }
+        for (name, v, lo, hi) in [
+            ("focal_near", b.focal_near, 0.0, 1.0),
+            ("focal_far", b.focal_far, 0.0, 1.0),
+            ("blur_amount", b.blur_amount, 0.0, 1.0),
+        ] {
+            if !v.is_finite() || !(lo..=hi).contains(&v) {
+                return invalid(format!("invalid lens_blur {name}"));
+            }
+        }
+        if b.focal_near > b.focal_far {
+            return invalid("invalid lens_blur focal range (focal_near must be <= focal_far)");
+        }
+        if let Some(d) = &b.depth_artifact {
+            validate_relative_path("lens_blur depth_artifact relative_path", &d.relative_path)?;
+            validate_name("lens_blur depth_artifact sha256", &d.sha256)?;
+        }
+    }
     Ok(())
 }
 /// LRPAR-G04-REMOVE: validates the additive G-04 recipe extras —
@@ -3747,6 +3863,7 @@ mod tests {
                 lens_correction: None,
                 perspective: None,
                 effects: None,
+                lens_blur: None,
                 generative_edit: None,
                 source_actions: Vec::new(),
                 spot_removals: Vec::new(),
@@ -3784,6 +3901,7 @@ mod tests {
                     lens_correction: None,
                     perspective: None,
                     effects: None,
+                    lens_blur: None,
                     generative_edit: None,
                     source_actions: Vec::new(),
                     spot_removals: Vec::new(),
@@ -3819,6 +3937,7 @@ mod tests {
                 lens_correction: None,
                 perspective: None,
                 effects: None,
+                lens_blur: None,
                 generative_edit: None,
                 source_actions: Vec::new(),
                 spot_removals: Vec::new(),
@@ -5026,6 +5145,175 @@ mod tests {
             }),
         });
         assert!(d.validate().is_err());
+    }
+
+    /// G-05 Lens Blur: recipe JSON roundtrip (root-level `lens_blur` key with
+    /// all bokeh variants) plus per-virtual-copy independence.
+    #[test]
+    fn lens_blur_roundtrip_and_per_copy_independence() {
+        for bokeh in [
+            BokehShape::Round,
+            BokehShape::Elliptical,
+            BokehShape::Hexagonal,
+        ] {
+            let recipe = EditRecipe {
+                lens_blur: Some(LensBlur {
+                    version: 1,
+                    enabled: true,
+                    focus_rect: FocusRect {
+                        x: 0.2,
+                        y: 0.3,
+                        width: 0.4,
+                        height: 0.25,
+                    },
+                    focal_near: 0.1,
+                    focal_far: 0.6,
+                    blur_amount: 0.7,
+                    bokeh,
+                    depth_artifact: Some(DepthArtifactRef {
+                        relative_path: "depth/map.bin".into(),
+                        sha256: "sha256:abc".into(),
+                    }),
+                }),
+                ..Default::default()
+            };
+            let value = serde_json::to_value(&recipe).unwrap();
+            assert!(value["lens_blur"].is_object());
+            assert_eq!(
+                value["lens_blur"]["bokeh"],
+                serde_json::to_value(bokeh).unwrap()
+            );
+            assert!(!value["adjustments"]
+                .as_object()
+                .unwrap()
+                .contains_key("lens_blur"));
+            assert_eq!(recipe, serde_json::from_value(value).unwrap());
+        }
+
+        // Two virtual copies carry independent lens-blur recipes (stable IDs,
+        // no positional identification).
+        let mut d = SidecarDocument::new(source(), "pipeline-1");
+        d.virtual_copies[0].recipe.lens_blur = Some(LensBlur {
+            version: 1,
+            enabled: true,
+            focus_rect: FocusRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            focal_near: 0.0,
+            focal_far: 1.0,
+            blur_amount: 0.25,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
+        });
+        d.duplicate_virtual_copy("vc-original", "vc-blur-hex", "Blur Hex")
+            .unwrap();
+        let other = d
+            .virtual_copies
+            .iter_mut()
+            .find(|c| c.id == "vc-blur-hex")
+            .unwrap();
+        other.recipe.lens_blur = Some(LensBlur {
+            version: 1,
+            enabled: true,
+            focus_rect: FocusRect {
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.5,
+            },
+            focal_near: 0.2,
+            focal_far: 0.4,
+            blur_amount: 0.9,
+            bokeh: BokehShape::Hexagonal,
+            depth_artifact: None,
+        });
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.virtual_copies.len(), 2);
+        let first = decoded
+            .virtual_copies
+            .iter()
+            .find(|c| c.id == "vc-original")
+            .unwrap();
+        let second = decoded
+            .virtual_copies
+            .iter()
+            .find(|c| c.id == "vc-blur-hex")
+            .unwrap();
+        assert_ne!(first.recipe.lens_blur, second.recipe.lens_blur);
+        assert_eq!(first.recipe.lens_blur, d.virtual_copies[0].recipe.lens_blur);
+        assert!(decoded.validate().is_ok());
+    }
+
+    /// G-05 Lens Blur: every out-of-range value fails loudly (no silent
+    /// clipping), including absolute depth-artifact paths.
+    #[test]
+    fn lens_blur_validation_rejects_invalid_values() {
+        fn doc_with(mutate: impl FnOnce(&mut LensBlur)) -> SidecarDocument {
+            let mut d = SidecarDocument::new(source(), "pipeline-1");
+            let mut b = LensBlur {
+                version: 1,
+                enabled: true,
+                focus_rect: FocusRect {
+                    x: 0.2,
+                    y: 0.2,
+                    width: 0.4,
+                    height: 0.4,
+                },
+                focal_near: 0.1,
+                focal_far: 0.6,
+                blur_amount: 0.5,
+                bokeh: BokehShape::Round,
+                depth_artifact: None,
+            };
+            mutate(&mut b);
+            d.virtual_copies[0].recipe.lens_blur = Some(b);
+            d
+        }
+        // Bad version.
+        assert!(doc_with(|b| b.version = 2).validate().is_err());
+        // Out-of-range / non-finite scalars.
+        assert!(doc_with(|b| b.focal_near = -0.1).validate().is_err());
+        assert!(doc_with(|b| b.focal_far = 1.5).validate().is_err());
+        assert!(doc_with(|b| b.blur_amount = f32::NAN).validate().is_err());
+        // Inverted focal range.
+        assert!(doc_with(|b| {
+            b.focal_near = 0.7;
+            b.focal_far = 0.6;
+        })
+        .validate()
+        .is_err());
+        // Degenerate / out-of-bounds focus rectangles.
+        assert!(doc_with(|b| b.focus_rect.width = 0.0).validate().is_err());
+        assert!(doc_with(|b| b.focus_rect.x = -0.1).validate().is_err());
+        assert!(doc_with(|b| {
+            b.focus_rect.x = 0.8;
+            b.focus_rect.width = 0.3;
+        })
+        .validate()
+        .is_err());
+        // Absolute depth-artifact path (portable sidecars stay relative).
+        assert!(doc_with(|b| {
+            b.depth_artifact = Some(DepthArtifactRef {
+                relative_path: "/abs/depth.bin".into(),
+                sha256: "sha256:abc".into(),
+            });
+        })
+        .validate()
+        .is_err());
+        // Path traversal.
+        assert!(doc_with(|b| {
+            b.depth_artifact = Some(DepthArtifactRef {
+                relative_path: "../depth.bin".into(),
+                sha256: "sha256:abc".into(),
+            });
+        })
+        .validate()
+        .is_err());
+        // The valid base document passes.
+        assert!(doc_with(|_| {}).validate().is_ok());
     }
     #[test]
     fn lens_and_perspective_roundtrip_and_validation() {

@@ -142,6 +142,7 @@ fn worker_preview(job: PreviewJob) -> Result<PreviewResult, String> {
         source_actions: &[],
         masks: None,
         lensfun: None,
+        depth: None,
     };
     let rendered = render_frame(&frame, &context)
         .map(|o| o.frame)

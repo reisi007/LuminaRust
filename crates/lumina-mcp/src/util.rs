@@ -307,6 +307,7 @@ pub fn render_recipe(
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         },
     )
     .map_err(map_core_error)?;
@@ -377,6 +378,7 @@ fn render_best_effort(
                     source_actions: &[],
                     masks: None,
                     lensfun: None,
+                    depth: None,
                 },
             )
             .map_err(map_core_error)?;
@@ -599,6 +601,7 @@ mod routing_tests {
                 source_actions: &[],
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
         )
         .expect("CPU oracle render")

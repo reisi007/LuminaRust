@@ -237,6 +237,13 @@ pub fn unsupported_gpu_stages_with_context(
         (recipe.noise_reduction.is_some(), "noise_reduction"),
         (recipe.sharpening.is_some(), "sharpening"),
         (recipe.effects.is_some(), "effects"),
+        (
+            recipe
+                .lens_blur
+                .as_ref()
+                .is_some_and(|b| b.enabled && b.blur_amount != 0.0),
+            "lens_blur",
+        ),
         (recipe.geometry.is_some(), "geometry"),
         (recipe.lens_correction.is_some(), "lens_correction"),
         (recipe.perspective.is_some(), "perspective"),

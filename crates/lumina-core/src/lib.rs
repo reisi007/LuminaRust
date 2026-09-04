@@ -11,6 +11,7 @@ use thiserror::Error;
 pub mod cache;
 pub mod generative;
 pub mod histogram;
+pub mod lens_blur;
 pub mod mask_loader;
 pub mod mask_modulation;
 pub mod mask_tiles;
@@ -37,6 +38,7 @@ pub use generative::{
     materialize_canvas_for_crop_with_source, resolve_canvas_for_recipe,
 };
 pub use histogram::LuminanceHistogram;
+pub use lens_blur::{apply_lens_blur, lens_blur_status, validate_lens_blur, DepthPlane};
 pub use mask_loader::{
     resolve_mask_planes, MaskInference, MaskLoadContext, MaskLoadOutcome, MaskLoadResult,
     MaskResolvedFrom,
@@ -1755,6 +1757,9 @@ fn flip_vertical(f: &mut ImageFrame) {
 fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
     if let Some(l) = &recipe.lens_correction {
         validate_lens(l)?;
+    }
+    if let Some(b) = &recipe.lens_blur {
+        crate::lens_blur::validate_lens_blur(b)?;
     }
     if let Some(p) = &recipe.perspective {
         validate_perspective(p)?;

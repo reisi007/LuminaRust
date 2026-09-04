@@ -719,6 +719,69 @@ Decode oder AI-Artefakte. Abnahme: Identität, Eckpunktprojektion,
 Parametergrenzen, Zusammenspiel mit Objektivkorrektur/Crop und Cache.
 Abhängigkeiten: F-029, F-031, F-041, F-098.
 
+### G-05 Lens Blur (Tiefen-Bokeh, Release 1.0)
+
+**Ziel:** Ein deterministisches, rezept-persistiertes Tiefen-Bokeh nach
+Lightroom-Vorbild (Fokus-Rahmen, Focal Range, Blur Amount, Bokeh-Formen) als
+Produktfunktion — keine stille Vorstufe mehr. `recipe.lens_blur` (`LensBlur`,
+additives Schema-v2-Feld, absent = Identität, keine Migration) enthält
+`version` (1), `enabled` (bool), `focus_rect` (normiertes Rechteck
+`x`/`y`/`width`/`height` in `0..=1`, positive Fläche, im Einheitsquadrat),
+`focal_near`/`focal_far` (je `0..=1`, `near <= far`: scharfes Tiefenband),
+`blur_amount` (`0..=1`, 0 = Identität), `bokeh` (`round` | `elliptical` |
+`hexagonal`) und optional `depth_artifact` (Referenz auf eine externe
+Tiefenkarte: relativer Pfad + SHA-256-Prüfsumme; absolute Pfade verboten).
+
+**Tiefenquelle (Entscheid):** Ohne `depth_artifact` gilt die deterministische
+Heuristik: Tiefenwert 0 im Fokus-Rechteck, außerhalb die auf die
+Bilddiagonale normierte Distanz zur Rechteckkante (`0..=1`). Ist ein
+`depth_artifact` referenziert, MUSS der Aufrufer die Tiefenebene liefern;
+fehlt sie oder weicht die Prüfsumme ab, bricht der Render laut ab (kein
+stiller Fallback auf die Heuristik — Heuristik vs. fehlend ist eine bewusste
+Rezeptentscheidung, kein Laufzeit-Raten). Der Status (`off` / `heuristic
+active` / `missing depth artifact`) ist in CLI (`lens-blur --list`) und GUI
+(Optics-adjazente Sektion) sichtbar.
+
+**Render-Semantik:** Pro Pixel Tiefenwert `d`, Schärfegewicht 0 im Band
+`[focal_near, focal_far]`, linearer Ramp auf 1 an den Rändern; Ausgabe =
+`lerp(original, bokeh_blur(original, radius), gewicht)` mit
+`radius = round(blur_amount * 16)` px. `bokeh_blur` ist eine normierte
+Kernfaltung (Radius 0 = Identität): `round` = Scheibe, `elliptical` =
+2:1-Ellipse, `hexagonal` = Sechseck — alle deterministisch (ganzzahlige
+Kernmasken, keine Zufallsanteile), kanalunabhängig auf RGB, Alpha unberührt.
+Alle Parameter sind endlich; Verletzungen werden abgelehnt, nicht geclippt.
+
+**Platzierung:** Sub-Stufe von `Crop`, nach Crop/Rotation/Spiegelung, vor
+`Masks`/`Output` (`… → Crop(F-093) → LensBlur(G-05) → Masks → Output`). Das
+Top-Level-Format-Tupel bleibt unverändert; `recipe_hash` enthält das
+serialisierte `lens_blur` (volle Invalidierung von Preview/Export), der
+`mask_recipe_hash` schließt es wie `effects` ein (Pixelwirkung ohne
+Geometrieänderung). GPU-Routen melden `lens_blur` als nicht unterstützte
+Stufe (CPU-Route, laut sichtbar).
+
+**Abnahme:** JSON-Roundtrip, Wertebereichs-/Clipping-Tests (`blur_amount`
+0-Identität, RGB-Clipping), Determinismus (zwei Läufe byte-identisch),
+Bokeh-Differenz (drei Formen unterscheiden sich auf kontrastreichen
+Fixtures), Golden/PSNR-Gates mit dokumentierten Toleranzen, CLI-Roundtrip
+mit Exit-Codes, GUI-headless (Setter → Datei → Reload), Missing-Artefakt
+bricht laut ab.
+
+**Implementierungsstatus (G-05, LRPAR-G05-LENSBLUR):** Umgesetzt.
+`LensBlur`/`FocusRect`/`BokehShape`/`DepthArtifactRef` (additives
+Schema-v2-Feld `recipe.lens_blur`, absent = Identität, keine Migration) in
+`lumina-sidecar` (Serialisierung als Top-Level-Key, Validierung inkl.
+Focal-Order, Focus-Geometrie und portabler Relativpfade);
+`lumina-core::lens_blur` (Heuristik, drei Integer-Kerne, `radius =
+round(amount·16)`, RGB, Alpha unberührt, Missing-Artefakt = harter
+`InvalidAdjustment`) mit Hook in `render_frame_from_base` nach Crop und vor
+Masks (keine zweite Pipeline); `RenderContext::depth` für externe Ebenen;
+GPU routet aktives `lens_blur` laut auf CPU. CLI `lumina lens-blur`
+(setzen/lesen/listen/löschen, Exit 0/1/2 wie Bestand); GUI-Sektion in Optics
+(Enable/Amount/Focal/Bokeh/Fokus-Rechteck/Status) + Fokus-Overlay im Preview
++ headless E2E-Tests (Setter → Commit → Datei → Reload, Preview-Änderung,
+Missing-Artefakt-Fehler). Tests: Sidecar-Roundtrip/Validierung (2),
+Core-Unit/Integration/PSNR (9), CLI (3), GUI-headless (3).
+
 ## Reproduzierbarkeit
 
 Jeder Render-Key enthält mindestens:

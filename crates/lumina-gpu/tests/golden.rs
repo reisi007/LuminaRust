@@ -409,6 +409,7 @@ fn cpu_gpu_golden_equivalence() {
                     source_actions: &[],
                     masks: None,
                     lensfun: None,
+                    depth: None,
                 },
             )
             .expect("CPU render_frame must succeed")
@@ -500,6 +501,7 @@ fn unsupported_recipes_route_to_cpu_byte_identically() {
                 source_actions: &[],
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
         )
         .unwrap_or_else(|error| panic!("CPU oracle render failed for {name}: {error}"))
@@ -676,6 +678,7 @@ fn cpu_render_oracle_is_deterministic() {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         },
     )
     .expect("first CPU render")
@@ -688,6 +691,7 @@ fn cpu_render_oracle_is_deterministic() {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         },
     )
     .expect("second CPU render")

@@ -38,12 +38,12 @@ use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairReg
 use lumina_sidecar::{
     apply_batch_op, artifact_status, load_sidecar, save_sidecar, sidecar_path_for,
     validate_smart_collection_def, AiSelect, AiSelectKind, AnalysisFingerprint, ArtifactStatus,
-    BatchOp, CollectionMembership, CoordinateSystem, DecodeFingerprint, EditRecipe,
-    GeometryFingerprint, HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt,
-    MaskReference, MaskStatus, ModelIdentity, Preprocessing, Preset, PromptTransform, Resolution,
-    SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction, SMART_COLLECTION_VERSION,
-    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    BatchOp, BokehShape, CollectionMembership, CoordinateSystem, DecodeFingerprint,
+    DepthArtifactRef, EditRecipe, FocusRect, GeometryFingerprint, HistoryEntry, LensBlur,
+    MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus, ModelIdentity,
+    Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument, SmartCollectionDef,
+    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity,
+    SpotDistraction, SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -293,6 +293,15 @@ enum Command {
     /// the original image is never modified. See
     /// `feature/product/spot-removal.md` § „G-04 Remove-Parität“.
     Spot(SpotArgs),
+    /// G-05 Lens Blur (LRPAR-G05-LENSBLUR): inspect and edit the depth-bokeh
+    /// recipe stage of one virtual copy (focus rect, focal range, blur
+    /// amount, bokeh shape, optional external depth artifact). Reads and
+    /// writes are loud (unknown copies, bad ranges, inverted focal ranges
+    /// abort with exit 1); the original image is never modified. A
+    /// referenced-but-missing depth artifact aborts renders loudly (never a
+    /// silent heuristic render). See
+    /// `feature/architecture/pipeline.md` § „G-05 Lens Blur“.
+    LensBlur(LensBlurArgs),
     /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
     /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
     Keywords(KeywordsArgs),
@@ -667,6 +676,55 @@ struct SpotArgs {
     seed: Option<u64>,
 }
 
+/// G-05 Lens Blur: inspect and edit the depth-bokeh recipe stage of one
+/// image sidecar. Without mutation flags the command lists values + depth
+/// status (read-only). Field sets create an enabled stage with centered
+/// defaults when none exists (touching lens blur enables it, Lightroom-like).
+/// Every mutation validates loudly before anything is written.
+#[derive(Debug, Args)]
+struct LensBlurArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+    /// List values + depth status (default when no mutation flag is given).
+    #[arg(long)]
+    list: bool,
+    /// Enable the stage (keeps stored values).
+    #[arg(long)]
+    enable: bool,
+    /// Disable the stage (keeps stored values, renders identity).
+    #[arg(long)]
+    disable: bool,
+    /// Set the blur strength (`0..=1`, 0 is identity).
+    #[arg(long, value_name = "0..=1")]
+    set_amount: Option<f32>,
+    /// Set the near edge of the sharp depth band (`0..=1`).
+    #[arg(long, value_name = "0..=1")]
+    set_focal_near: Option<f32>,
+    /// Set the far edge of the sharp depth band (`0..=1`, `>= near`).
+    #[arg(long, value_name = "0..=1")]
+    set_focal_far: Option<f32>,
+    /// Set the bokeh shape (`round|elliptical|hexagonal`).
+    #[arg(long, value_name = "SHAPE")]
+    set_bokeh: Option<String>,
+    /// Set the focus rectangle as `x,y,w,h` (normalized `0..=1`).
+    #[arg(long, value_name = "X,Y,W,H")]
+    set_focus_rect: Option<String>,
+    /// Reference an external depth map as `RELATIVE_PATH:SHA256` (portable
+    /// relative path only; renders abort loudly until the artifact exists).
+    #[arg(long, value_name = "PATH:SHA256")]
+    set_depth_artifact: Option<String>,
+    /// Remove the external depth reference (back to the heuristic).
+    #[arg(long)]
+    clear_depth_artifact: bool,
+    /// Remove the whole lens-blur stage (identity).
+    #[arg(long)]
+    clear: bool,
+}
+
 /// Repair-region definition consumed by the `dust-removal` command.  The
 /// `region_values` are little-endian `u16` (0..=u16::MAX); pixels `>= 32768`
 /// are replaced by the corresponding `replacement_path` RGBA8 pixel.  Region
@@ -807,6 +865,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Validate(args) => validate(args),
         Command::DustRemoval(args) => dust_removal(args),
         Command::Spot(args) => spot(args),
+        Command::LensBlur(args) => lens_blur(args),
         Command::Keywords(args) => keywords(args),
         Command::Collections(args) => collections(args),
         Command::BatchMeta(args) => batch_meta(args),
@@ -2566,6 +2625,268 @@ fn spot_list(
     }
 }
 
+/// G-05 Lens Blur: inspect and edit the depth-bokeh recipe stage of one
+/// virtual copy. List-only mode is read-only (sidecar bytes unchanged).
+/// Mutations validate loudly (`document.validate()`) before `save_sidecar`;
+/// the original image is never modified.
+fn lens_blur(args: LensBlurArgs) -> Result<(), CliError> {
+    if args.enable && args.disable {
+        return Err(CliError::Message(
+            "--enable and --disable are mutually exclusive".into(),
+        ));
+    }
+    if args.set_depth_artifact.is_some() && args.clear_depth_artifact {
+        return Err(CliError::Message(
+            "--set-depth-artifact and --clear-depth-artifact are mutually exclusive".into(),
+        ));
+    }
+    let wants_mutation = args.enable
+        || args.disable
+        || args.set_amount.is_some()
+        || args.set_focal_near.is_some()
+        || args.set_focal_far.is_some()
+        || args.set_bokeh.is_some()
+        || args.set_focus_rect.is_some()
+        || args.set_depth_artifact.is_some()
+        || args.clear_depth_artifact
+        || args.clear;
+    let path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+    if args.clear {
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        copy.recipe.lens_blur = None;
+        info!("lens-blur: cleared stage on copy `{copy_id}`");
+        actions.push("clear".into());
+    } else {
+        if args.enable || args.disable {
+            lens_blur_mut(&mut document, &copy_id)?.enabled = args.enable;
+            info!(
+                "lens-blur: {} on copy `{copy_id}`",
+                if args.enable { "enabled" } else { "disabled" }
+            );
+            actions.push(if args.enable { "enable" } else { "disable" }.into());
+        }
+        if let Some(amount) = args.set_amount {
+            lens_blur_mut(&mut document, &copy_id)?.blur_amount = amount;
+            info!("lens-blur: amount {amount} on copy `{copy_id}`");
+            actions.push(format!("amount:{amount}"));
+        }
+        if let Some(near) = args.set_focal_near {
+            lens_blur_mut(&mut document, &copy_id)?.focal_near = near;
+            info!("lens-blur: focal_near {near} on copy `{copy_id}`");
+            actions.push(format!("focal-near:{near}"));
+        }
+        if let Some(far) = args.set_focal_far {
+            lens_blur_mut(&mut document, &copy_id)?.focal_far = far;
+            info!("lens-blur: focal_far {far} on copy `{copy_id}`");
+            actions.push(format!("focal-far:{far}"));
+        }
+        if let Some(shape) = args.set_bokeh.as_deref() {
+            lens_blur_mut(&mut document, &copy_id)?.bokeh = parse_bokeh_shape(shape)?;
+            info!("lens-blur: bokeh {shape} on copy `{copy_id}`");
+            actions.push(format!("bokeh:{shape}"));
+        }
+        if let Some(rect) = args.set_focus_rect.as_deref() {
+            lens_blur_mut(&mut document, &copy_id)?.focus_rect = parse_focus_rect(rect)?;
+            info!("lens-blur: focus_rect {rect} on copy `{copy_id}`");
+            actions.push(format!("focus-rect:{rect}"));
+        }
+        if let Some(spec) = args.set_depth_artifact.as_deref() {
+            lens_blur_mut(&mut document, &copy_id)?.depth_artifact =
+                Some(parse_depth_artifact(spec)?);
+            info!("lens-blur: depth_artifact {spec} on copy `{copy_id}`");
+            actions.push("depth-artifact:set".into());
+        }
+        if args.clear_depth_artifact {
+            lens_blur_mut(&mut document, &copy_id)?.depth_artifact = None;
+            info!("lens-blur: depth artifact cleared on copy `{copy_id}`");
+            actions.push("depth-artifact:clear".into());
+        }
+    }
+    if wants_mutation {
+        // Loud gate: ranges, focal order, focus-rect geometry and portable
+        // (relative) depth paths are rejected before anything is written.
+        document
+            .validate()
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        save_sidecar(&path, &document)?;
+    }
+    lens_blur_list(&args, &document, &copy_id, &actions)
+}
+
+/// Mutable access to one virtual copy's lens-blur stage, creating an enabled
+/// stage with centered defaults when none exists (loud on unknown ids).
+fn lens_blur_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut LensBlur, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.lens_blur.get_or_insert(LensBlur {
+        version: 1,
+        enabled: true,
+        focus_rect: FocusRect {
+            x: 0.25,
+            y: 0.25,
+            width: 0.5,
+            height: 0.5,
+        },
+        focal_near: 0.0,
+        focal_far: 0.2,
+        blur_amount: 0.5,
+        bokeh: BokehShape::Round,
+        depth_artifact: None,
+    }))
+}
+
+/// Parses a bokeh shape name (loud on unknown values — never a guess).
+fn parse_bokeh_shape(value: &str) -> Result<BokehShape, CliError> {
+    match value {
+        "round" => Ok(BokehShape::Round),
+        "elliptical" => Ok(BokehShape::Elliptical),
+        "hexagonal" => Ok(BokehShape::Hexagonal),
+        _ => Err(CliError::Message(format!(
+            "invalid bokeh shape `{value}`: expected round|elliptical|hexagonal"
+        ))),
+    }
+}
+
+/// Parses a focus rectangle as `x,y,w,h` (loud on malformed input; range
+/// geometry is validated on save, not guessed here).
+fn parse_focus_rect(value: &str) -> Result<FocusRect, CliError> {
+    let parts: Vec<&str> = value.split(',').collect();
+    let numbers: Option<Vec<f32>> = parts
+        .iter()
+        .map(|part| part.trim().parse::<f32>().ok())
+        .collect();
+    match numbers.as_deref() {
+        Some([x, y, width, height]) => Ok(FocusRect {
+            x: *x,
+            y: *y,
+            width: *width,
+            height: *height,
+        }),
+        _ => Err(CliError::Message(format!(
+            "invalid focus rect `{value}`: expected `x,y,w,h` with finite numbers"
+        ))),
+    }
+}
+
+/// Parses an external depth reference as `RELATIVE_PATH:SHA256` (loud on
+/// malformed input; portability is validated on save).
+fn parse_depth_artifact(value: &str) -> Result<DepthArtifactRef, CliError> {
+    match value.split_once(':') {
+        Some((path, sha)) if !path.trim().is_empty() && !sha.trim().is_empty() => {
+            Ok(DepthArtifactRef {
+                relative_path: path.trim().into(),
+                sha256: sha.trim().into(),
+            })
+        }
+        _ => Err(CliError::Message(format!(
+            "invalid depth artifact `{value}`: expected `RELATIVE_PATH:SHA256`"
+        ))),
+    }
+}
+
+fn lens_blur_list(
+    args: &LensBlurArgs,
+    document: &SidecarDocument,
+    copy_id: &str,
+    actions: &[String],
+) -> Result<(), CliError> {
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    let blur = copy.recipe.lens_blur.as_ref();
+    // The CLI never resolves external depth files (no depth format in v1):
+    // a referenced artifact reports `missing` until a loader exists.
+    let status = lumina_core::lens_blur_status(blur, false);
+    if args.json {
+        let payload = blur.map(|b| {
+            serde_json::json!({
+                "enabled": b.enabled,
+                "focus_rect": {"x": b.focus_rect.x, "y": b.focus_rect.y,
+                    "width": b.focus_rect.width, "height": b.focus_rect.height},
+                "focal_near": b.focal_near,
+                "focal_far": b.focal_far,
+                "blur_amount": b.blur_amount,
+                "bokeh": match b.bokeh {
+                    BokehShape::Round => "round",
+                    BokehShape::Elliptical => "elliptical",
+                    BokehShape::Hexagonal => "hexagonal",
+                },
+                "depth_artifact": b.depth_artifact.as_ref().map(|d| serde_json::json!({
+                    "relative_path": d.relative_path, "sha256": d.sha256,
+                })),
+            })
+        });
+        emit(
+            true,
+            serde_json::json!({
+                "command": "lens-blur",
+                "input": args.input,
+                "copy": copy_id,
+                "lens_blur": payload,
+                "status": status,
+                "actions": actions,
+            }),
+            "lens-blur status listed",
+        )
+    } else {
+        println!("copy: {} [{}]", copy.name, copy.id);
+        match blur {
+            Some(b) => {
+                println!("  enabled: {}", b.enabled);
+                println!(
+                    "  focus_rect: x={} y={} w={} h={}",
+                    b.focus_rect.x, b.focus_rect.y, b.focus_rect.width, b.focus_rect.height
+                );
+                println!("  focal: near={} far={}", b.focal_near, b.focal_far);
+                println!("  amount: {}", b.blur_amount);
+                println!(
+                    "  bokeh: {}",
+                    match b.bokeh {
+                        BokehShape::Round => "round",
+                        BokehShape::Elliptical => "elliptical",
+                        BokehShape::Hexagonal => "hexagonal",
+                    }
+                );
+                match &b.depth_artifact {
+                    Some(d) => println!("  depth_artifact: {} ({})", d.relative_path, d.sha256),
+                    None => println!("  depth_artifact: none (heuristic)"),
+                }
+            }
+            None => println!("  lens_blur: none"),
+        }
+        println!("  status: {status}");
+        if actions.is_empty() {
+            emit(
+                false,
+                serde_json::json!({"command":"lens-blur","status":"ok"}),
+                "lens-blur status listed",
+            )
+        } else {
+            emit(
+                false,
+                serde_json::json!({"command":"lens-blur","status":"ok"}),
+                &format!("lens-blur updated: {}", actions.join(", ")),
+            )
+        }
+    }
+}
+
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     // Never overwrite the original — or its Lumina bundle files — with the
     // optional render output (REVIEW-CLI-WRITE-1).
@@ -2693,6 +3014,7 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
                 // is a headless, source-resolution verification render without the
                 // EXIF scope the corrector requires — `None` keeps the manual model.
                 lensfun: None,
+                depth: None,
             },
         )?;
         let format = output_format(output)?;
@@ -3615,6 +3937,7 @@ fn process_selected(
         lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
         #[cfg(not(feature = "lensfun"))]
         lensfun: None,
+        depth: None,
     };
     // Prefer the GPU when an adapter is bound; otherwise the full CPU pipeline.
     // The chosen backend is logged once at startup (see `init_render_backend`).
@@ -3700,6 +4023,7 @@ fn process_selected(
                 lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
                 #[cfg(not(feature = "lensfun"))]
                 lensfun: None,
+                depth: None,
             },
             options,
         )?
@@ -4393,6 +4717,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let reasons = gpu_routing_reasons(&recipe, &with_wb);
         assert!(
@@ -6157,6 +6482,250 @@ mod tests {
         );
     }
 
+    // ---- G-05 Lens Blur CLI ----
+
+    fn lens_blur_base_args(input: PathBuf) -> LensBlurArgs {
+        LensBlurArgs {
+            input,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            enable: false,
+            disable: false,
+            set_amount: None,
+            set_focal_near: None,
+            set_focal_far: None,
+            set_bokeh: None,
+            set_focus_rect: None,
+            set_depth_artifact: None,
+            clear_depth_artifact: false,
+            clear: false,
+        }
+    }
+
+    /// G-05: set fields, list (read-only), clear — with sidecar roundtrip and
+    /// an untouched original.
+    #[test]
+    fn lens_blur_set_list_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        let original_bytes = fs::read(&input).unwrap();
+        import_sidecar_for(&input);
+        // Set every field in one run.
+        let mut set = lens_blur_base_args(input.clone());
+        set.set_amount = Some(0.75);
+        set.set_focal_near = Some(0.1);
+        set.set_focal_far = Some(0.5);
+        set.set_bokeh = Some("hexagonal".into());
+        set.set_focus_rect = Some("0.2,0.3,0.4,0.25".into());
+        lens_blur(set).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert!(blur.enabled);
+        assert_eq!(blur.blur_amount, 0.75);
+        assert_eq!((blur.focal_near, blur.focal_far), (0.1, 0.5));
+        assert_eq!(blur.bokeh, BokehShape::Hexagonal);
+        assert_eq!(
+            (
+                blur.focus_rect.x,
+                blur.focus_rect.y,
+                blur.focus_rect.width,
+                blur.focus_rect.height
+            ),
+            (0.2, 0.3, 0.4, 0.25)
+        );
+        // Sidecar JSON carries the stage at the recipe root.
+        let raw = fs::read_to_string(sidecar_path_for(&input)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            value["virtual_copies"][0]["recipe"]["lens_blur"]["bokeh"],
+            "hexagonal"
+        );
+        // List-only is read-only: sidecar bytes unchanged.
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+        lens_blur(lens_blur_base_args(input.clone())).unwrap();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+        // Disable keeps values but reports off.
+        let mut disable = lens_blur_base_args(input.clone());
+        disable.disable = true;
+        lens_blur(disable).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert!(!blur.enabled);
+        assert_eq!(blur.blur_amount, 0.75);
+        // B1: the --enable success path re-enables while keeping values.
+        let mut enable = lens_blur_base_args(input.clone());
+        enable.enable = true;
+        lens_blur(enable).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert!(blur.enabled);
+        assert_eq!(blur.blur_amount, 0.75);
+        assert_eq!(
+            lumina_core::lens_blur_status(Some(blur), false),
+            "heuristic active"
+        );
+        // B1: set a depth artifact, then clear it — the reference is gone
+        // and the status falls back to the heuristic.
+        let mut set_depth = lens_blur_base_args(input.clone());
+        set_depth.set_depth_artifact = Some("depth/map.bin:sha256:abc".into());
+        lens_blur(set_depth).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            blur.depth_artifact.as_ref().unwrap().relative_path,
+            "depth/map.bin"
+        );
+        assert_eq!(
+            lumina_core::lens_blur_status(Some(blur), false),
+            "missing depth artifact"
+        );
+        let mut clear_depth = lens_blur_base_args(input.clone());
+        clear_depth.clear_depth_artifact = true;
+        lens_blur(clear_depth).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert!(blur.depth_artifact.is_none());
+        assert_eq!(
+            lumina_core::lens_blur_status(Some(blur), false),
+            "heuristic active"
+        );
+        // Clear removes the stage.
+        let mut clear = lens_blur_base_args(input.clone());
+        clear.clear = true;
+        lens_blur(clear).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(document.virtual_copies[0].recipe.lens_blur.is_none());
+        // Original image untouched throughout.
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    /// G-05: every invalid lens-blur input fails loudly (exit 1) and never
+    /// mutates the sidecar — no silent clipping.
+    #[test]
+    fn lens_blur_rejects_invalid_values_without_touching_the_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 60);
+        import_sidecar_for(&input);
+        let sidecar_path = sidecar_path_for(&input);
+        let before = fs::read_to_string(&sidecar_path).unwrap();
+
+        // Out-of-range amount.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_amount = Some(2.0);
+        let error = lens_blur(bad).unwrap_err();
+        assert_eq!(error.exit_code(), 1);
+        // Unknown bokeh shape.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_bokeh = Some("swirly".into());
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // Malformed focus rect.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_focus_rect = Some("0.1,0.2,oops".into());
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // Out-of-bounds focus rect (rejected on save, not clipped).
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_focus_rect = Some("0.8,0.8,0.5,0.5".into());
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // Inverted focal range.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_focal_near = Some(0.8);
+        bad.set_focal_far = Some(0.2);
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // Malformed depth reference.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_depth_artifact = Some("no-separator-here".into());
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // Absolute depth path (portable sidecars stay relative).
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_depth_artifact = Some("/abs/depth.bin:sha256:abc".into());
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // Mutually exclusive flags.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.enable = true;
+        bad.disable = true;
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+        // B1: the --set-depth-artifact + --clear-depth-artifact conflict arm.
+        let mut bad = lens_blur_base_args(input.clone());
+        bad.set_depth_artifact = Some("depth/map.bin:sha256:abc".into());
+        bad.clear_depth_artifact = true;
+        assert_eq!(lens_blur(bad).unwrap_err().exit_code(), 1);
+
+        assert_eq!(fs::read_to_string(&sidecar_path).unwrap(), before);
+    }
+
+    /// G-05: a referenced-but-missing depth artifact fails the render loudly
+    /// (exit 1) instead of silently rendering the heuristic.
+    #[test]
+    fn lens_blur_missing_depth_artifact_fails_render_loudly() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        import_sidecar_for(&input);
+        let mut set = lens_blur_base_args(input.clone());
+        set.set_depth_artifact = Some("depth/map.bin:sha256:abc".into());
+        lens_blur(set).unwrap();
+        // The reference round-trips and reports `missing`.
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            blur.depth_artifact.as_ref().unwrap().relative_path,
+            "depth/map.bin"
+        );
+        assert_eq!(
+            lumina_core::lens_blur_status(Some(blur), false),
+            "missing depth artifact"
+        );
+        // Rendering aborts loudly (exit 1), no output file appears.
+        let output = directory.path().join("out.png");
+        let mut warnings = Vec::new();
+        let error = process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output: output.clone(),
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+            },
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut warnings,
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("lens_blur"));
+        assert!(!output.exists());
+    }
+
     /// R2-CLI-07: a partially failed batch exits with its own documented code
     /// (3) instead of the generic runtime-error code (1).
     #[test]
@@ -6606,6 +7175,7 @@ mod tests {
                 // metadata/EXIF, so no Lensfun corrector can be built — `None`
                 // (manual model) is the correct, expected state here.
                 lensfun: None,
+                depth: None,
             },
         )
         .unwrap();
@@ -6681,6 +7251,7 @@ mod tests {
                 // `no_layers_is_identical_to_no_mask_context`).
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
             options,
         )
@@ -6745,6 +7316,7 @@ mod tests {
                 source_actions: &[],
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
             options,
         )
@@ -7089,6 +7661,7 @@ mod tests {
                     source_actions: &[],
                     masks: None,
                     lensfun: None,
+                    depth: None,
                 },
             )
             .unwrap();
@@ -7103,6 +7676,7 @@ mod tests {
                     lensfun: Some(LensfunCorrectorRef(&corrector)),
                     #[cfg(not(feature = "lensfun"))]
                     lensfun: None,
+                    depth: None,
                 },
             )
             .unwrap();

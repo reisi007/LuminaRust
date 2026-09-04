@@ -165,6 +165,20 @@ pub enum Str {
     OpticsVignetteHint,
     OpticsCaGroup,
     OpticsCaHint,
+    // Lens Blur (G-05): depth-bokeh controls, optics-adjacent. The section
+    // lives inside Optics so the 8-section F-100 order stays intact.
+    LensBlur,
+    LensBlurEnable,
+    LensBlurAmount,
+    LensBlurFocalNear,
+    LensBlurFocalFar,
+    LensBlurBokeh,
+    LensBlurBokehRound,
+    LensBlurBokehElliptical,
+    LensBlurBokehHexagonal,
+    LensBlurFocusRect,
+    LensBlurStatusPattern,
+    LensBlurHint,
 
     // Geometry (F-093 / F-099)
     Crop,
@@ -576,6 +590,24 @@ impl Str {
                 "Lateral chromatic aberration: shifts the red/blue channels \
                  radially to cancel color fringes. Manual model — it applies \
                  on render even without a lens profile."
+            }
+            Str::LensBlur => "Lens Blur",
+            Str::LensBlurEnable => "Enable lens blur",
+            Str::LensBlurAmount => "Blur amount",
+            Str::LensBlurFocalNear => "Focal range near",
+            Str::LensBlurFocalFar => "Focal range far",
+            Str::LensBlurBokeh => "Bokeh shape",
+            Str::LensBlurBokehRound => "Round",
+            Str::LensBlurBokehElliptical => "Elliptical",
+            Str::LensBlurBokehHexagonal => "Hexagonal",
+            Str::LensBlurFocusRect => "Focus rectangle (x, y, w, h)",
+            Str::LensBlurStatusPattern => "Status: {}",
+            Str::LensBlurHint => {
+                "Depth bokeh: the focus rectangle stays sharp, the focal \
+                 range sets the sharp depth band, the amount sets the blur \
+                 strength. Without an external depth map a deterministic \
+                 focus-distance heuristic applies; a referenced but missing \
+                 depth map aborts the render loudly."
             }
 
             Str::Crop => "Crop",

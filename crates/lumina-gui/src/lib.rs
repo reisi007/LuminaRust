@@ -48,10 +48,10 @@ use lumina_sidecar::{
     SourceStatus,
 };
 use lumina_sidecar::{
-    AnalysisFingerprint, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves,
-    EditRecipe, Effects, Flag, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
-    HslChannel, LensCorrection, NoiseReduction, Perspective, Presence, Preset, Sharpening,
-    SpotDistraction, Vignette,
+    AnalysisFingerprint, BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint,
+    Curves, EditRecipe, Effects, Flag, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry,
+    Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective,
+    Presence, Preset, Sharpening, SpotDistraction, Vignette,
 };
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
@@ -848,6 +848,7 @@ fn decode_thumbnail_frame(source: &Path, name: &str) -> Result<ImageFrame, Strin
         source_actions: &[],
         masks: None,
         lensfun: None,
+        depth: None,
     };
     // Default-recipe render for display; a render failure falls back to the
     // plain downscaled frame (documented display-only preview path).
@@ -6017,6 +6018,179 @@ impl LuminaApp {
         self.mark_recipe_dirty(&format!("lens_correction.{field}"), value);
     }
 
+    /// Current lens-blur stage (G-05), if the active virtual copy carries one.
+    pub fn lens_blur(&self) -> Option<LensBlur> {
+        self.recipe.lens_blur.clone()
+    }
+
+    /// User-visible lens-blur depth status (G-05): `off`, `heuristic active`
+    /// or `missing depth artifact`. The GUI never resolves external depth
+    /// files (no depth format in v1), so a referenced artifact reports
+    /// `missing` until a loader exists — identical to the CLI contract.
+    pub fn lens_blur_status_text(&self) -> String {
+        lumina_core::lens_blur_status(self.recipe.lens_blur.as_ref(), false).into()
+    }
+
+    /// Focus-rectangle overlay rect (G-05) in preview-image coordinates:
+    /// the normalized recipe rect mapped into `img_rect`. `None` when no
+    /// enabled stage with a valid rect exists. Pure helper so the mapping is
+    /// unit-testable headless.
+    pub fn lens_blur_focus_overlay(
+        img_rect: egui::Rect,
+        blur: Option<&LensBlur>,
+    ) -> Option<egui::Rect> {
+        let b = blur.filter(|b| b.enabled)?;
+        let r = &b.focus_rect;
+        if !(0.0..=1.0).contains(&r.x)
+            || !(0.0..=1.0).contains(&r.y)
+            || r.width <= 0.0
+            || r.height <= 0.0
+            || r.x + r.width > 1.0
+            || r.y + r.height > 1.0
+        {
+            return None;
+        }
+        let min = img_rect.min + egui::vec2(r.x * img_rect.width(), r.y * img_rect.height());
+        let max = img_rect.min
+            + egui::vec2(
+                (r.x + r.width) * img_rect.width(),
+                (r.y + r.height) * img_rect.height(),
+            );
+        Some(egui::Rect::from_min_max(min, max))
+    }
+
+    /// Mutable access to the lens-blur stage (G-05), creating an enabled
+    /// stage with centered defaults when none exists (same defaults as the
+    /// CLI `lens-blur` command: touching lens blur enables it).
+    fn lens_blur_mut(&mut self) -> &mut LensBlur {
+        self.recipe.lens_blur.get_or_insert(LensBlur {
+            version: 1,
+            enabled: true,
+            focus_rect: FocusRect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            focal_near: 0.0,
+            focal_far: 0.2,
+            blur_amount: 0.5,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
+        })
+    }
+
+    /// Enable/disable the lens-blur stage (G-05). Values are kept, so
+    /// disabling renders identity and re-enabling restores the look.
+    /// Recipe-backed: persists through the debounced slider-save path
+    /// ([`Self::commit_pending_slider_save`], `info!`-logged).
+    pub fn set_lens_blur_enabled(&mut self, enabled: bool) {
+        self.lens_blur_mut().enabled = enabled;
+        self.mark_recipe_dirty("lens_blur.enabled", f64::from(enabled as u8));
+        info!("GUI interaction: set_lens_blur_enabled -> {enabled}");
+    }
+
+    /// Set the blur strength `0..=1` (G-05, 0 is identity). Loud on
+    /// out-of-range/non-finite values; the recipe is untouched then.
+    pub fn set_lens_blur_amount(&mut self, amount: f64) -> Result<(), GuiError> {
+        if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+            return Err(GuiError::Io(format!(
+                "Lens blur amount must be 0..=1, got {amount}"
+            )));
+        }
+        self.lens_blur_mut().blur_amount = amount as f32;
+        self.mark_recipe_dirty("lens_blur.blur_amount", amount);
+        info!("GUI interaction: set_lens_blur_amount -> {amount}");
+        Ok(())
+    }
+
+    /// Set the sharp depth band `[near, far]` in `0..=1` (G-05). Loud when
+    /// either edge is out of range or `near > far`; the recipe is untouched
+    /// then.
+    pub fn set_lens_blur_focal(&mut self, near: f64, far: f64) -> Result<(), GuiError> {
+        for (name, v) in [("focal_near", near), ("focal_far", far)] {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return Err(GuiError::Io(format!(
+                    "Lens blur {name} must be 0..=1, got {v}"
+                )));
+            }
+        }
+        if near > far {
+            return Err(GuiError::Io(format!(
+                "Lens blur focal range must satisfy near <= far, got {near} > {far}"
+            )));
+        }
+        let blur = self.lens_blur_mut();
+        blur.focal_near = near as f32;
+        blur.focal_far = far as f32;
+        self.mark_recipe_dirty("lens_blur.focal_near", near);
+        self.mark_recipe_dirty("lens_blur.focal_far", far);
+        info!("GUI interaction: set_lens_blur_focal -> {near}..={far}");
+        Ok(())
+    }
+
+    /// Set the bokeh kernel shape (G-05). All three shapes are deterministic
+    /// integer kernels (no randomness).
+    pub fn set_lens_blur_bokeh(&mut self, bokeh: BokehShape) {
+        self.lens_blur_mut().bokeh = bokeh;
+        self.mark_recipe_dirty(
+            "lens_blur.bokeh",
+            match bokeh {
+                BokehShape::Round => 0.0,
+                BokehShape::Elliptical => 1.0,
+                BokehShape::Hexagonal => 2.0,
+            },
+        );
+        info!("GUI interaction: set_lens_blur_bokeh -> {bokeh:?}");
+    }
+
+    /// Set the focus rectangle in normalized `0..=1` coordinates (G-05).
+    /// Loud on degenerate/out-of-bounds rectangles; the recipe is untouched
+    /// then (the save-time validator rejects them too — never a silent
+    /// reinterpretation).
+    pub fn set_lens_blur_focus_rect(
+        &mut self,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> Result<(), GuiError> {
+        for (name, v) in [("x", x), ("y", y), ("width", width), ("height", height)] {
+            if !v.is_finite() {
+                return Err(GuiError::Io(format!(
+                    "Lens blur focus rect {name} must be finite, got {v}"
+                )));
+            }
+        }
+        if !(0.0..=1.0).contains(&x)
+            || !(0.0..=1.0).contains(&y)
+            || width <= 0.0
+            || height <= 0.0
+            || x + width > 1.0
+            || y + height > 1.0
+        {
+            return Err(GuiError::Io(format!(
+                "Lens blur focus rect must be a positive area inside 0..=1, got {x},{y},{width},{height}"
+            )));
+        }
+        self.lens_blur_mut().focus_rect = FocusRect {
+            x: x as f32,
+            y: y as f32,
+            width: width as f32,
+            height: height as f32,
+        };
+        self.mark_recipe_dirty("lens_blur.focus_rect", x + y + width + height);
+        info!("GUI interaction: set_lens_blur_focus_rect -> {x},{y},{width},{height}");
+        Ok(())
+    }
+
+    /// Remove the whole lens-blur stage (G-05, back to identity).
+    pub fn clear_lens_blur(&mut self) {
+        self.recipe.lens_blur = None;
+        self.mark_recipe_dirty("lens_blur.clear", 0.0);
+        info!("GUI interaction: clear_lens_blur");
+    }
+
     /// Set the geometry rotation and record the save commit
     /// (GUI-SLIDER-SAVE-1). Public so headless/integration harnesses and
     /// future shortcuts drive the same path as the Geometry slider
@@ -6762,6 +6936,7 @@ impl LuminaApp {
                 source_actions: &[],
                 masks: masks_context,
                 lensfun: None,
+                depth: None,
             },
             &mut work,
         )?;
@@ -6905,6 +7080,7 @@ impl LuminaApp {
                         source_actions: &[],
                         masks: full_masks,
                         lensfun: None,
+                        depth: None,
                     },
                     &mut analysis_work,
                 )?;
@@ -8072,6 +8248,7 @@ impl LuminaApp {
             source_actions: &[],
             masks: masks_context,
             lensfun: None,
+            depth: None,
         };
         // GEN-PIPELINE-DECOUPLE: `export_image` renders via `render_frame`,
         // which already contains the `GenerativeEdit(expand)` stage
@@ -8511,6 +8688,7 @@ impl LuminaApp {
                 );
                 self.draw_mask_overlay(ui, full_rect);
                 self.draw_edit_pins(ui, full_rect);
+                self.draw_lens_blur_overlay(ui, full_rect);
             }
             ui.set_clip_rect(previous_clip);
         } else {
@@ -8831,6 +9009,23 @@ impl LuminaApp {
                 egui::Color32::WHITE,
             );
         }
+    }
+
+    /// Focus-rectangle overlay (G-05): paints the enabled lens-blur focus
+    /// rect as an accent stroke over the full-frame preview rect. Pure
+    /// display (never recipe/sidecar); the mapping is covered headless via
+    /// [`Self::lens_blur_focus_overlay`].
+    fn draw_lens_blur_overlay(&self, ui: &mut egui::Ui, full_rect: egui::Rect) {
+        let Some(rect) = Self::lens_blur_focus_overlay(full_rect, self.recipe.lens_blur.as_ref())
+        else {
+            return;
+        };
+        ui.painter().rect_stroke(
+            rect,
+            1.0_f32,
+            egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
+            egui::StrokeKind::Middle,
+        );
     }
 
     /// The prompt to display in the overlay: the live in-progress gesture while
@@ -9887,6 +10082,126 @@ impl LuminaApp {
                 ui.label(Str::OpticsRequiresLensfun.t());
                 ui.label(Str::NotAvailable.t());
             }
+            // G-05 Lens Blur: optics-adjacent subgroup (own collapsible group
+            // inside Optics so the 8-section F-100 order stays intact). All
+            // edits commit through the `set_lens_blur_*` setters (save at
+            // debounce); locals are only control binding buffers.
+            ui.collapsing(Str::LensBlur.t(), |ui| {
+                ui.label(Str::LensBlurHint.t());
+                let mut enabled = self.recipe.lens_blur.as_ref().is_some_and(|b| b.enabled);
+                if ui.checkbox(&mut enabled, Str::LensBlurEnable.t()).changed() {
+                    self.set_lens_blur_enabled(enabled);
+                }
+                let current = self.recipe.lens_blur.clone().unwrap_or(LensBlur {
+                    version: 1,
+                    enabled: false,
+                    focus_rect: FocusRect {
+                        x: 0.25,
+                        y: 0.25,
+                        width: 0.5,
+                        height: 0.5,
+                    },
+                    focal_near: 0.0,
+                    focal_far: 0.2,
+                    blur_amount: 0.5,
+                    bokeh: BokehShape::Round,
+                    depth_artifact: None,
+                });
+                let mut amount = current.blur_amount;
+                if matches!(
+                    lr_slider(
+                        ui,
+                        Str::LensBlurAmount.t(),
+                        &mut amount,
+                        percent_spec(0.0..=1.0, 0.5)
+                    ),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    if let Err(error) = self.set_lens_blur_amount(f64::from(amount)) {
+                        self.status = error.to_string();
+                    }
+                }
+                let mut near = current.focal_near;
+                if matches!(
+                    lr_slider(
+                        ui,
+                        Str::LensBlurFocalNear.t(),
+                        &mut near,
+                        percent_spec(0.0..=1.0, 0.0)
+                    ),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    if let Err(error) =
+                        self.set_lens_blur_focal(f64::from(near), f64::from(current.focal_far))
+                    {
+                        self.status = error.to_string();
+                    }
+                }
+                let mut far = current.focal_far;
+                if matches!(
+                    lr_slider(
+                        ui,
+                        Str::LensBlurFocalFar.t(),
+                        &mut far,
+                        percent_spec(0.0..=1.0, 0.2)
+                    ),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    if let Err(error) =
+                        self.set_lens_blur_focal(f64::from(current.focal_near), f64::from(far))
+                    {
+                        self.status = error.to_string();
+                    }
+                }
+                ui.label(Str::LensBlurBokeh.t());
+                for (shape, label) in [
+                    (BokehShape::Round, Str::LensBlurBokehRound),
+                    (BokehShape::Elliptical, Str::LensBlurBokehElliptical),
+                    (BokehShape::Hexagonal, Str::LensBlurBokehHexagonal),
+                ] {
+                    if ui.radio(current.bokeh == shape, label.t()).clicked() {
+                        self.set_lens_blur_bokeh(shape);
+                    }
+                }
+                // Focus rectangle: four normalized sliders (x, y, w, h).
+                ui.label(Str::LensBlurFocusRect.t());
+                let mut rect = [
+                    current.focus_rect.x,
+                    current.focus_rect.y,
+                    current.focus_rect.width,
+                    current.focus_rect.height,
+                ];
+                let mut rect_changed = false;
+                for (i, default) in [0.25, 0.25, 0.5, 0.5].into_iter().enumerate() {
+                    let mut v = rect[i];
+                    if matches!(
+                        lr_slider(
+                            ui,
+                            ["x", "y", "w", "h"][i],
+                            &mut v,
+                            percent_spec(0.0..=1.0, default)
+                        ),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        rect[i] = v;
+                        rect_changed = true;
+                    }
+                }
+                if rect_changed {
+                    if let Err(error) = self.set_lens_blur_focus_rect(
+                        f64::from(rect[0]),
+                        f64::from(rect[1]),
+                        f64::from(rect[2]),
+                        f64::from(rect[3]),
+                    ) {
+                        self.status = error.to_string();
+                    }
+                }
+                // Depth status is always visible (never implied): off,
+                // heuristic active, or missing depth artifact (loud).
+                let status = self.lens_blur_status_text();
+                ui.label(Str::LensBlurStatusPattern.format_arg(&status));
+            });
         });
         if section_response.header_response.clicked() {
             self.set_section_open(SECTION_OPTICS, !section_was_open);
@@ -11937,6 +12252,7 @@ impl LuminaApp {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let frame = render_frame(&small, &context).map(|o| o.frame).ok()?;
         self.navigator_overview = Some(frame.clone());
@@ -13105,10 +13421,10 @@ mod tests {
     use super::*;
     use lumina_core::ImageFileFormat;
     use lumina_sidecar::{
-        BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint, GenerativeCanvas,
-        GenerativeEdit, GeometryFingerprint, LensCorrection, MaskDefinition, MaskOperation,
-        MaskPrompt, MaskStatus, ModelIdentity, NormalizedRect, Point2, Preprocessing,
-        PromptTransform, Resolution, SourceFingerprint, SourceStatus,
+        BokehShape, BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint,
+        DepthArtifactRef, GenerativeCanvas, GenerativeEdit, GeometryFingerprint, LensCorrection,
+        MaskDefinition, MaskOperation, MaskPrompt, MaskStatus, ModelIdentity, NormalizedRect,
+        Point2, Preprocessing, PromptTransform, Resolution, SourceFingerprint, SourceStatus,
     };
     fn new_app() -> LuminaApp {
         LuminaApp::new(egui::Context::default())
@@ -16617,6 +16933,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let options = ExportOptions {
             format: ImageFileFormat::Png,
@@ -16663,6 +16980,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let options = ExportOptions {
             format: ImageFileFormat::Jpeg,
@@ -19837,6 +20155,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let direct = lumina_core::render_frame(&original, &ctx).unwrap().frame;
         assert_eq!(
@@ -20193,6 +20512,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -20224,6 +20544,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -20246,6 +20567,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -20365,6 +20687,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let expanded = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!(expanded.width, 12);
@@ -20413,6 +20736,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let out = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!(out.width, 8);
@@ -20610,6 +20934,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let expanded = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!((expanded.width, expanded.height), (6, 6));
@@ -20647,6 +20972,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         assert!(lumina_core::render_frame(&frame, &ctx).is_err());
     }
@@ -20697,6 +21023,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let direct = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
         assert_eq!(
@@ -20734,6 +21061,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let options = ExportOptions {
             format: ImageFileFormat::Png,
@@ -20983,6 +21311,163 @@ mod tests {
         assert_eq!(reopened2.spot_visualize_threshold(), None);
         // The original image is byte-identical throughout.
         assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+    }
+
+    /// 32x32 vertical-stripe fixture (G-05): even columns black, odd columns
+    /// white — high contrast so any bokeh blur visibly changes pixels.
+    fn lens_blur_striped_png() -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(32 * 32 * 4);
+        for _ in 0..32 {
+            for x in 0..32 {
+                let v = if x % 2 == 0 { 0 } else { 255 };
+                pixels.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        ImageFrame::new(32, 32, pixels)
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap()
+    }
+
+    #[test]
+    fn g05_lens_blur_setters_persist_file_to_reload() {
+        // DoD §1 E2E: setter edit → debounced commit → sidecar file → reload.
+        // DoD §2: the 150-ms debounce path is driven headless via
+        // `commit_pending_slider_save` (the same hook all sliders use).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, lens_blur_striped_png()).unwrap();
+        let original_bytes = std::fs::read(&source).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.lens_blur().is_none());
+        assert_eq!(app.lens_blur_status_text(), "off");
+        // Invalid values fail loudly and change nothing (no silent clip).
+        assert!(app.set_lens_blur_amount(1.5).is_err());
+        assert!(app.set_lens_blur_amount(f64::NAN).is_err());
+        assert!(app.set_lens_blur_focal(0.7, 0.2).is_err());
+        assert!(app.set_lens_blur_focal(-0.1, 0.5).is_err());
+        assert!(app.set_lens_blur_focus_rect(0.8, 0.8, 0.5, 0.5).is_err());
+        assert!(app.set_lens_blur_focus_rect(0.1, 0.1, 0.0, 0.5).is_err());
+        assert!(app.lens_blur().is_none());
+        // Set every field (DoD §3: all three bokeh shapes mapped).
+        for (shape, name) in [
+            (BokehShape::Round, "round"),
+            (BokehShape::Elliptical, "elliptical"),
+            (BokehShape::Hexagonal, "hexagonal"),
+        ] {
+            app.set_lens_blur_enabled(true);
+            app.set_lens_blur_amount(0.75).unwrap();
+            app.set_lens_blur_focal(0.1, 0.5).unwrap();
+            app.set_lens_blur_bokeh(shape);
+            app.set_lens_blur_focus_rect(0.2, 0.3, 0.4, 0.25).unwrap();
+            app.commit_pending_slider_save([0, 0]);
+            assert!(app.error().is_none(), "commit failed for {name}");
+            let sidecar = lumina_sidecar::sidecar_path_for(&source);
+            let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+            let blur = document.virtual_copies[0]
+                .recipe
+                .lens_blur
+                .as_ref()
+                .expect("stage persisted");
+            assert!(blur.enabled);
+            assert_eq!(blur.bokeh, shape, "bokeh {name} round-trips");
+            assert_eq!(blur.blur_amount, 0.75);
+            assert_eq!((blur.focal_near, blur.focal_far), (0.1, 0.5));
+            // Reload leg: a fresh app restores the stage from the file alone.
+            let mut reopened = new_app();
+            open_and_decode(&mut reopened, source.display().to_string());
+            assert_eq!(reopened.lens_blur(), Some(blur.clone()));
+            assert_eq!(reopened.lens_blur_status_text(), "heuristic active");
+        }
+        // Disable keeps values but reports off and renders identity.
+        app.set_lens_blur_enabled(false);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        let blur = document.virtual_copies[0]
+            .recipe
+            .lens_blur
+            .as_ref()
+            .unwrap();
+        assert!(!blur.enabled);
+        assert_eq!(app.lens_blur_status_text(), "off");
+        // Clear removes the stage; reload confirms identity.
+        app.clear_lens_blur();
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert!(document.virtual_copies[0].recipe.lens_blur.is_none());
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert!(reopened.lens_blur().is_none());
+        // The original image is byte-identical throughout.
+        assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn g05_lens_blur_preview_changes_and_missing_depth_fails_loudly() {
+        // Enabling the blur visibly changes the preview (same render entry
+        // point as CLI/export — no second pipeline); a referenced but
+        // missing depth artifact fails the commit loudly instead of
+        // silently rendering the heuristic.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("stripes.png");
+        std::fs::write(&source, lens_blur_striped_png()).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let before = app.preview().expect("preview after load").pixels.clone();
+        app.set_lens_blur_enabled(true);
+        app.set_lens_blur_amount(0.75).unwrap();
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        let after = app.preview().expect("preview after blur").pixels.clone();
+        assert_ne!(before, after, "enabled blur must change the preview");
+        // Missing depth artifact: the committed render aborts loudly and the
+        // error stays visible (never a silent heuristic render).
+        app.recipe.lens_blur.as_mut().unwrap().depth_artifact = Some(DepthArtifactRef {
+            relative_path: "depth/map.bin".into(),
+            sha256: "sha256:abc".into(),
+        });
+        assert_eq!(app.lens_blur_status_text(), "missing depth artifact");
+        app.mark_dirty();
+        app.commit_pending_slider_save([0, 0]);
+        assert!(
+            app.error().is_some(),
+            "missing depth artifact must surface a visible error"
+        );
+    }
+
+    #[test]
+    fn g05_lens_blur_focus_overlay_maps_normalized_rect() {
+        // Pure mapping: normalized recipe rect into preview-image rect.
+        let img = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
+        assert!(LuminaApp::lens_blur_focus_overlay(img, None).is_none());
+        let disabled = lumina_sidecar::LensBlur {
+            version: 1,
+            enabled: false,
+            focus_rect: lumina_sidecar::FocusRect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            focal_near: 0.0,
+            focal_far: 0.2,
+            blur_amount: 0.5,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
+        };
+        assert!(LuminaApp::lens_blur_focus_overlay(img, Some(&disabled)).is_none());
+        let enabled = lumina_sidecar::LensBlur {
+            enabled: true,
+            ..disabled
+        };
+        let rect = LuminaApp::lens_blur_focus_overlay(img, Some(&enabled)).unwrap();
+        assert_eq!(rect.min, egui::pos2(35.0, 32.5));
+        assert_eq!(rect.max, egui::pos2(85.0, 57.5));
     }
 
     #[test]
@@ -22152,6 +22637,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let thumb = render_frame(&small_frame, &thumb_ctx).unwrap().frame;
         let (_, preview_hist) = analyze_tone_with_histogram(&preview);
@@ -22277,6 +22763,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let direct = render_frame(&original, &restored_ctx).unwrap().frame;
         assert_eq!(
@@ -22289,6 +22776,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let default_frame = render_frame(&original, &default_ctx).unwrap().frame;
         assert_ne!(
@@ -23798,6 +24286,7 @@ mod tests {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         };
         let thumb = render_frame(&small_frame, &thumb_ctx).unwrap().frame;
         let (_, preview_hist) = analyze_tone_with_histogram(&preview);

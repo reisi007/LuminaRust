@@ -33,6 +33,7 @@ fn batch_benches(c: &mut Criterion) {
             source_actions: &[],
             masks: Some(mask_ctx),
             lensfun: None,
+            depth: None,
         };
 
         group.bench_function(format!("render_export_png__{size}"), |b| {

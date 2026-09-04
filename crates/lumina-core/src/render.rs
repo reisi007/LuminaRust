@@ -66,6 +66,10 @@ pub struct RenderContext<'a> {
     pub camera_white_balance: Option<[f32; 4]>,
     pub source_actions: &'a [SourceActionArtifact],
     pub masks: Option<MaskContext<'a>>,
+    /// Optional G-05 external depth map for `recipe.lens_blur.depth_artifact`.
+    /// `None` selects the deterministic focus-rect heuristic; a referenced
+    /// artifact without a plane aborts the render loudly (no silent fallback).
+    pub depth: Option<&'a crate::lens_blur::DepthPlane>,
     /// Optional Lensfun lens corrector (F-098-N1). Always present; under the
     /// `lensfun` feature it carries a borrowed [`LensfunCorrectorRef`] (which
     /// wraps `lensfun::Corrector`), otherwise it is always `None`. `None` falls
@@ -379,7 +383,7 @@ pub fn render_frame_from_base(
     work.adjustments_passes += 1;
 
     // GEN-PIPELINE-DECOUPLE: decoupled geometry order
-    // `Lens → Fill → Perspective → Expand → Crop`
+    // `Lens → Fill → Perspective → Expand → Crop → LensBlur(G-05)`
     // (see `crate::pipeline::GEOMETRY_STAGE_ORDER`). The legacy 5-in-1
     // `apply_geometry` is intentionally NOT used here: auto-fill must run
     // between lens and perspective (transparent wedges from undistortion are
@@ -415,6 +419,13 @@ pub fn render_frame_from_base(
     }
     base.apply_crop_stage(context.recipe.geometry.as_ref())?;
     work.geometry_passes += 1;
+
+    // G-05 Lens Blur: sub-stage of `Crop`, after crop/rotation/mirroring and
+    // before masks/output. A referenced depth artifact without a supplied
+    // plane aborts here (never a silent heuristic render).
+    if let Some(blur) = context.recipe.lens_blur.as_ref() {
+        crate::lens_blur::apply_lens_blur(&mut base, blur, context.depth)?;
+    }
 
     let (mask_layers, mask_warnings) =
         evaluate_mask_stage(context.masks.as_ref(), base.width, base.height, work)?;
@@ -814,6 +825,7 @@ mod tests {
             camera_white_balance: None,
             source_actions: &[],
             lensfun: None,
+            depth: None,
             masks,
         }
     }
@@ -835,6 +847,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[action],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -863,6 +876,7 @@ mod tests {
                 camera_white_balance: Some([1.0, 1.0, 1.0, 1.0]),
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -894,6 +908,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[action],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -920,6 +935,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[mismatched_dims],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -938,6 +954,7 @@ mod tests {
                     camera_white_balance: None,
                     source_actions: &[wrong_frame_dims],
                     lensfun: None,
+                    depth: None,
                     masks: None,
                 },
             ),
@@ -987,6 +1004,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
         )
@@ -1033,6 +1051,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
         )
@@ -1077,6 +1096,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
         )
@@ -1108,6 +1128,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1133,6 +1154,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1170,6 +1192,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1195,6 +1218,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1226,6 +1250,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1247,6 +1272,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1292,6 +1318,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1314,6 +1341,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
         )
@@ -1354,6 +1382,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
         );
@@ -1382,6 +1411,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", warn_planes, MaskPolicy::Warn)),
             },
         )
@@ -1427,6 +1457,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
             },
         )
@@ -1465,6 +1496,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Warn)),
             },
         )
@@ -1489,6 +1521,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: Some(mask_context(
                     &copies,
                     "vc",
@@ -1544,6 +1577,7 @@ mod tests {
             camera_white_balance: Some([1.1, 1.0, 0.95, 1.0]),
             source_actions: &[action],
             lensfun: None,
+            depth: None,
             masks: None,
         };
 
@@ -1585,6 +1619,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             }
         }
@@ -1658,6 +1693,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1726,6 +1762,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1738,6 +1775,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1792,6 +1830,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1831,6 +1870,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1849,6 +1889,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1885,6 +1926,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1945,6 +1987,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -1975,6 +2018,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2008,6 +2052,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2033,6 +2078,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &actions,
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2090,6 +2136,7 @@ mod tests {
             camera_white_balance: Some([1.2, 1.0, 0.9, 1.0]),
             source_actions: &actions,
             lensfun: None,
+            depth: None,
             masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Warn)),
         };
         let first = render_frame(&frame, &context).unwrap();
@@ -2142,6 +2189,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2160,6 +2208,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2205,6 +2254,7 @@ mod tests {
                 source_actions: &[],
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
         )
         .unwrap();
@@ -2251,6 +2301,7 @@ mod tests {
                 source_actions: &[],
                 masks: None,
                 lensfun: Some(LensfunCorrectorRef(&corrector)),
+                depth: None,
             },
         )
         .unwrap();
@@ -2262,6 +2313,7 @@ mod tests {
                 source_actions: &[],
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
         )
         .unwrap();
@@ -2326,6 +2378,7 @@ mod tests {
                 source_actions: &[],
                 masks: None,
                 lensfun: corrector.as_ref().map(LensfunCorrectorRef),
+                depth: None,
             },
         )
         .unwrap();
@@ -2378,6 +2431,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2410,6 +2464,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2433,6 +2488,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2470,6 +2526,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2517,6 +2574,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2529,6 +2587,7 @@ mod tests {
                 camera_white_balance: None,
                 source_actions: &[],
                 lensfun: None,
+                depth: None,
                 masks: None,
             },
         )
@@ -2652,6 +2711,7 @@ mod tests {
             camera_white_balance: None,
             source_actions: &[],
             lensfun: None,
+            depth: None,
             masks: None,
         };
         let reference = render_frame(&frame, &context).unwrap();

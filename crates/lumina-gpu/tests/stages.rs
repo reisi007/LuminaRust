@@ -147,6 +147,7 @@ fn source_action_stage_matches_cpu_reference() {
             source_actions: std::slice::from_ref(&artifact),
             masks: None,
             lensfun: None,
+            depth: None,
         },
     )
     .expect("CPU render")
@@ -183,6 +184,7 @@ fn source_action_stage_matches_cpu_reference() {
             source_actions: &[artifact],
             masks: None,
             lensfun: None,
+            depth: None,
         },
     )
     .expect("CPU render")
@@ -235,6 +237,7 @@ fn unbound_source_actions_still_route_to_cpu() {
             source_actions: &[],
             masks: None,
             lensfun: None,
+            depth: None,
         },
     )
     .expect("CPU render")

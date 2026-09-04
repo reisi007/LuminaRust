@@ -231,6 +231,7 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
                 source_actions: &source_actions,
                 masks: None,
                 lensfun: None,
+                depth: None,
             },
         )
         .map_err(crate::error::map_core_error)?;

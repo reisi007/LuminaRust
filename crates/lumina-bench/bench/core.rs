@@ -44,6 +44,7 @@ fn core_benches(c: &mut Criterion) {
             source_actions: &[],
             masks: Some(mask_ctx),
             lensfun: None,
+            depth: None,
         };
         group.bench_function(format!("render_frame__{size}"), |b| {
             b.iter(|| black_box(render_frame(black_box(&frame), &render_ctx).unwrap()))

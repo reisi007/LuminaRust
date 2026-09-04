@@ -603,6 +603,36 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
   laute Fehler (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller
   Fallback, keine absoluten Pfade).
 
+### Lens Blur G-05 (LRPAR-G05-LENSBLUR, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-05 (Feldsemantik,
+Tiefenquellen-Entscheid und Stufenregeln: `feature/architecture/pipeline.md`
+§ „G-05 Lens Blur“). Die Sektion liegt GUI-seitig adjazent zu Optics (eigene
+kollabierbare Untergruppe „Lens Blur“, kein zweiter Renderpfad):
+
+- **Fokus-Rahmen:** normiertes Rechteck (`x`/`y`/`width`/`height`), als
+  Overlay-Rechteck in der Vorschau sichtbar (reiner Session-Display-State
+  für das Malen, Werte rezept-persistiert, deterministisch); ungültige
+  Rechtecke werden laut verweigert.
+- **Focal Range:** Slider `Near`/`Far` (`0..=1`, `near <= far`);
+  **Blur Amount:** Slider `0..=1` (0 = Identität, kein Blur-Pass);
+  **Bokeh:** Auswahl `Round`/`Elliptical`/`Hexagonal` (deterministisch
+  renderbar, Golden/PSNR-Gates).
+- **Tiefenstatus:** sichtbar (`Off` / `Heuristic active` / `Missing depth
+  artifact`); fehlendes referenziertes Artefakt bricht Render/Export laut
+  ab (Exit 1), nie stilles Heuristik-Rendering.
+- **CLI:** `lumina lens-blur --list` (Werte + Status je Kopie),
+  `--enable/--disable`, `--set-amount`, `--set-focal-near/--far`,
+  `--set-bokeh round|elliptical|hexagonal`, `--set-focus-rect
+  x,y,w,h`, `--set-depth-artifact PATH:SHA256`, `--clear-depth-artifact`,
+  `--clear`; Roundtrip über `save_sidecar`/`load_sidecar`, laute Fehler
+  (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller Fallback,
+  keine absoluten Pfade).
+- **Status (LRPAR-G05-LENSBLUR):** umgesetzt — CLI-Befehl, Optics-Panel
+  (Lens-Blur-Untergruppe mit Statuszeile), Fokus-Overlay im Preview und
+  headless E2E-Tests (Setter → Datei → Reload); fehlendes Tiefenartefakt
+  bricht Render/Export mit Exit 1 bzw. sichtbarem GUI-Fehler ab.
+
 ### Tool-Overlays, Edit-Pins, Solo-Mode, Shift+Tab (G-11, LRPAR-G11-OVERLAYS)
 
 Overlay-/Panel-Comfort nach Lightroom-Vorbild, GUI-contained (kein CLI-Anteil).
