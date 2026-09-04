@@ -42,17 +42,19 @@ use lumina_sidecar::{
     sidecar_path_for, validate_metadata_field_value, validate_smart_collection_def, AiSelect,
     AiSelectKind, AnalysisFingerprint, ArtifactStatus, AspectPreset, BatchOp, BokehShape,
     CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem, Crop, CurveChannels,
-    CurvePoint, Curves, DecodeFingerprint, DepthArtifactRef, EditRecipe, FocusRect, Geometry,
-    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, LensCorrection,
-    MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
-    MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective, PointColor,
-    PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument,
-    SmartCollectionDef, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
-    SourceFingerprint, SourceIdentity, SpotDistraction, MAX_METADATA_HISTORY_ENTRIES,
-    METADATA_FIELD_IDS, SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    CurvePoint, Curves, DecodeFingerprint, DepthArtifactRef, EditRecipe, ExportRecord, FocusRect,
+    Geometry, GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur,
+    LensCorrection, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference,
+    MaskStatus, MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective,
+    PointColor, PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution,
+    SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction,
+    MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, SMART_COLLECTION_VERSION,
+    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 // LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `meta inspect`.
-use lumina_iptc::{extract_metadata, IptcMetadata};
+// LRPAR-G15-IPTC-S6: `embed_metadata` for the opt-in JPEG export bake-in.
+use lumina_iptc::{embed_metadata, extract_metadata, IptcMetadata};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -445,6 +447,11 @@ struct ExportArgs {
     /// aborts before anything is decoded or written.
     #[arg(long, value_enum, default_value = "warn")]
     mask_policy: CliMaskPolicy,
+    /// LRPAR-G15-IPTC-S6: opt-in IPTC bake-in (JPEG only, IIM+XMP from the
+    /// sidecar draft + keywords, SOLL §7). Without the flag the export stays
+    /// exactly as today (no metadata, no silent assumptions).
+    #[arg(long)]
+    write_metadata: bool,
 }
 
 #[derive(Debug, Args)]
@@ -476,6 +483,12 @@ struct BatchArgs {
     /// Same harmonized stale-mask behaviour as export/render (default warn).
     #[arg(long, value_enum, default_value = "warn")]
     mask_policy: CliMaskPolicy,
+    /// LRPAR-G15-IPTC-S6: opt-in IPTC bake-in (JPEG only, IIM+XMP from the
+    /// sidecar draft + keywords, SOLL §7). PNG/WebP items with the flag fail
+    /// loudly per file (item `failed` with reason). Without the flag the batch
+    /// stays exactly as today.
+    #[arg(long)]
+    write_metadata: bool,
 }
 
 /// G-03 Masking parity: inspect and edit the mask DAG of one image sidecar.
@@ -1171,6 +1184,12 @@ struct ProcessArgs {
     match_total_exposure: bool,
     #[arg(long, default_value_t = 0.5)]
     target_luminance: f64,
+    /// LRPAR-G15-IPTC-S6: opt-in IPTC bake-in into the exported file (JPEG
+    /// only, IIM+XMP from the sidecar draft + keywords, SOLL §7). Without the
+    /// flag the export stays exactly as today (no metadata, no silent
+    /// assumptions).
+    #[arg(long)]
+    write_metadata: bool,
 }
 
 /// R2-CLI-03: `inspect` accepts `--json` for a machine-readable report
@@ -1483,6 +1502,7 @@ fn render(args: FileArgs) -> Result<(), CliError> {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         },
         args.quality,
         args.virtual_copy.as_deref(),
@@ -1522,7 +1542,7 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
     }
     let output = args.output.with_extension(format_extension(&args.format));
     let mut mask_warnings = Vec::new();
-    process_selected(
+    let metadata_written = process_selected(
         ProcessArgs {
             input: args.input.clone(),
             output: output.clone(),
@@ -1534,17 +1554,20 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: args.write_metadata,
         },
         args.quality,
         args.virtual_copy.as_deref(),
         args.mask_policy.to_policy(),
         &mut mask_warnings,
     )?;
-    emit(
-        args.json,
-        serde_json::json!({"command":"export", "output":output, "quality":args.quality, "status":"ok", "mask_warnings":mask_warnings}),
-        "exported",
-    )
+    // LRPAR-G15-IPTC-S6: the bake-in outcome is additive in `--json` output —
+    // absent without the flag (exactly today's payload).
+    let mut payload = serde_json::json!({"command":"export", "output":output, "quality":args.quality, "status":"ok", "mask_warnings":mask_warnings});
+    if let Some(written) = metadata_written {
+        payload["metadata_written"] = written.json();
+    }
+    emit(args.json, payload, "exported")
 }
 
 fn preflight_masks(
@@ -6186,13 +6209,16 @@ fn batch_one(
                     auto_tone: false,
                     match_total_exposure: false,
                     target_luminance: 0.5,
+                    write_metadata: args.write_metadata,
                 },
                 args.quality,
                 args.virtual_copy.as_deref(),
                 args.mask_policy.to_policy(),
                 &mut mask_warnings,
             ) {
-                Ok(()) => {
+                // LRPAR-G15-IPTC-S6: a bake-in failure (non-JPEG item, IIM
+                // limit) fails THIS item loudly with its reason (`failed`).
+                Ok(_) => {
                     last = None;
                     // Keep the warnings of the SUCCESSFUL attempt only.
                     last_warnings = mask_warnings;
@@ -6331,7 +6357,10 @@ fn migrate_sidecar(path: &Path) -> Result<(), CliError> {
 fn process(args: ProcessArgs) -> Result<(), CliError> {
     // `process` has no explicit quality flag; it uses the shared default (90),
     // which is identical to the historical `frame.encode(format)` output.
-    process_selected(args, 90, None, MaskPolicy::Warn, &mut Vec::new())
+    // LRPAR-G15-IPTC-S6: `--write-metadata` rides on `args` into
+    // `process_selected` (bake-in outcome lands in the sidecar record).
+    process_selected(args, 90, None, MaskPolicy::Warn, &mut Vec::new())?;
+    Ok(())
 }
 
 /// Composite zdata record id for a persisted mask plane (REVIEW-CLI-N1).
@@ -6559,11 +6588,26 @@ fn process_selected(
     virtual_copy: Option<&str>,
     policy: MaskPolicy,
     mask_warnings_out: &mut Vec<String>,
-) -> Result<(), CliError> {
+) -> Result<Option<MetadataWritten>, CliError> {
     // REVIEW-CLI-WRITE-1: the guard covers the original itself (path and
     // hard-link identity) plus its `.lumina.json`/`.lumina.zdata` bundle.
     reject_protected_output(&args.input, &args.output)?;
     let format = output_format(&args.output)?;
+    // LRPAR-G15-IPTC-S6: `--write-metadata` is JPEG-only (SOLL §7). PNG/WebP
+    // fail loudly per file (single commands exit non-zero, batch marks the
+    // item `failed` with this reason); TIFF never reaches this gate because
+    // `output_format` already rejects it loudly (Post-MVP).
+    if args.write_metadata && format != ImageFileFormat::Jpeg {
+        let format_name = match format {
+            ImageFileFormat::Png => "png",
+            ImageFileFormat::Jpeg => "jpeg",
+            ImageFileFormat::WebP => "webp",
+        };
+        return Err(CliError::Message(format!(
+            "--write-metadata is only supported for JPEG exports; refusing {format_name} output `{}` (bake-in is JPEG-only, TIFF is Post-MVP)",
+            args.output.display()
+        )));
+    }
     let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
     let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
     // Parity with lumina-gui (R2-WB): an invalid As-Shot white balance (NaN,
@@ -6837,7 +6881,7 @@ fn process_selected(
     // produce the final pixels (the matching still measures `render_output.frame`
     // as the pre-match domain). Output stays byte-identical to the GUI export in
     // both branches (the encode step is unchanged).
-    let encoded = if args.match_total_exposure {
+    let mut encoded = if args.match_total_exposure {
         export_image(
             &frame,
             &RenderContext {
@@ -6861,6 +6905,19 @@ fn process_selected(
         )?
     } else {
         render_output.frame.encode_with_options(options)?
+    };
+    // LRPAR-G15-IPTC-S6: opt-in bake-in as a deterministic post-encode splice
+    // (SOLL §7: Encode → Temp-Datei → Splice → Rename). Without the flag the
+    // bytes above are untouched — exactly today's behavior, and the render
+    // cache / pixel goldens are unaffected (the splice never touches pixels).
+    let metadata_written = if args.write_metadata {
+        Some(bake_metadata_into_jpeg(
+            &document,
+            &mut encoded,
+            &args.output,
+        )?)
+    } else {
+        None
     };
     // REVIEW-CLI-N6 (two-artifact ordering, decided 2026-08-26): the encoded
     // export is STAGED first — a temporary file in the output directory,
@@ -6887,9 +6944,122 @@ fn process_selected(
         recorded_at: Some(timestamp()),
         extras: BTreeMap::new(),
     });
+    // LRPAR-G15-IPTC-S6: the additive, optional `metadata_written` record
+    // (`{iim, xmp, status}`) travels with the copy's export history — only
+    // with the flag; without it no record is written at all.
+    if let Some(written) = &metadata_written {
+        push_metadata_export_record(copy, &args.output, format, written);
+    }
     save_sidecar(&sidecar_path, &document)?;
     staged.commit()?;
-    Ok(())
+    Ok(metadata_written)
+}
+
+/// LRPAR-G15-IPTC-S6: outcome of the opt-in metadata bake-in (SOLL §7).
+/// `None` without the flag (no record at all); `Some` carries the additive,
+/// optional `ExportRecord.metadata_written` payload (`{iim, xmp, status}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MetadataWritten {
+    iim: bool,
+    xmp: bool,
+    /// `"written"` (IIM+XMP spliced) or `"empty"` (empty draft, plain export).
+    status: &'static str,
+}
+
+impl MetadataWritten {
+    fn json(self) -> serde_json::Value {
+        serde_json::json!({"iim": self.iim, "xmp": self.xmp, "status": self.status})
+    }
+}
+
+/// LRPAR-G15-IPTC-S6: merge the source-level draft (+ the routed `keywords`,
+/// SOLL §4) into `lumina-iptc` values. Empty/whitespace-only fields stay
+/// absent: the tag is omitted on write, never written empty.
+fn draft_to_iptc(document: &SidecarDocument) -> IptcMetadata {
+    let get = |id: &str| document.metadata.get(id).map(|value| value.to_string());
+    IptcMetadata {
+        title: get("title"),
+        headline: get("headline"),
+        description: get("description"),
+        copyright_notice: get("copyright_notice"),
+        creator: get("creator"),
+        credit: get("credit"),
+        source: get("source"),
+        city: get("city"),
+        state_province: get("state_province"),
+        country: get("country"),
+        date_created: get("date_created"),
+        keywords: document.keywords.clone(),
+    }
+}
+
+/// LRPAR-G15-IPTC-S6: splice draft+keywords (IIM+XMP) into already-encoded
+/// JPEG bytes (SOLL §7: post-encode, pixel bytes verbatim). An empty draft
+/// keeps the export plain with a loud warning (`"empty"`, never a silent
+/// no-op); a Sidecar-valid value over its IIM octet limit fails loudly
+/// (field + limit named, no silent truncation). No EXIF write, no adoption
+/// of embedded source metadata — only Lumina drafts.
+fn bake_metadata_into_jpeg(
+    document: &SidecarDocument,
+    encoded: &mut Vec<u8>,
+    output: &Path,
+) -> Result<MetadataWritten, CliError> {
+    let meta = draft_to_iptc(document);
+    if meta.is_empty() {
+        eprintln!(
+            "warning: no IPTC draft or keywords for `{}`; exporting without embedded metadata (metadata_written: empty)",
+            output.display()
+        );
+        info!(
+            "export without metadata for `{}` (empty draft, metadata_written: empty)",
+            output.display()
+        );
+        return Ok(MetadataWritten {
+            iim: false,
+            xmp: false,
+            status: "empty",
+        });
+    }
+    let spliced = embed_metadata(encoded, &meta).map_err(|error| {
+        CliError::Message(format!(
+            "metadata bake-in for `{}` failed: {error}",
+            output.display()
+        ))
+    })?;
+    *encoded = spliced;
+    info!(
+        "export with IPTC metadata for `{}` (metadata_written: written)",
+        output.display()
+    );
+    Ok(MetadataWritten {
+        iim: true,
+        xmp: true,
+        status: "written",
+    })
+}
+
+/// LRPAR-G15-IPTC-S6: append the additive, optional `metadata_written` record
+/// (`{iim, xmp, status}` under `extras`) to the copy's export history. Only
+/// called with the flag — without it no record is written at all.
+fn push_metadata_export_record(
+    copy: &mut lumina_sidecar::VirtualCopy,
+    output: &Path,
+    format: ImageFileFormat,
+    written: &MetadataWritten,
+) {
+    let relative_path = output
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| output.display().to_string());
+    let mut extras = BTreeMap::new();
+    extras.insert("metadata_written".to_string(), written.json());
+    copy.export_records.push(ExportRecord {
+        id: format!("export-{}", timestamp()),
+        relative_path,
+        format: format.default_extension().to_string(),
+        exported_at: Some(now_rfc3339_utc()),
+        extras,
+    });
 }
 
 /// One virtual copy as reported by `inspect` (R2-CLI-03): rendered either as
@@ -7778,6 +7948,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap();
         let changed = ImageFrame::new(1, 1, vec![21, 30, 40, 255]).unwrap();
@@ -7794,6 +7965,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap_err();
         assert!(error.to_string().contains("source changed"));
@@ -7818,6 +7990,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap_err();
         assert!(invalid.to_string().contains("invalid exposure"));
@@ -7845,6 +8018,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap_err();
         assert!(unknown
@@ -7890,6 +8064,7 @@ mod tests {
                     auto_tone: false,
                     match_total_exposure: false,
                     target_luminance: 0.5,
+                    write_metadata: false,
                 })
                 .unwrap_err();
                 assert!(error.to_string().contains(&format!("invalid {name}")));
@@ -7922,6 +8097,7 @@ mod tests {
                     auto_tone: false,
                     match_total_exposure: false,
                     target_luminance: 0.5,
+                    write_metadata: false,
                 })
                 .unwrap();
             }
@@ -7957,6 +8133,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap();
         assert!(output.exists());
@@ -8036,6 +8213,7 @@ mod tests {
             quality: 90,
             virtual_copy: None,
             mask_policy: CliMaskPolicy::Warn,
+            write_metadata: false,
         })
         .expect("dry-run batch over synthetic RAW fixtures must succeed");
 
@@ -8614,6 +8792,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: false,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
@@ -8651,6 +8830,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: false,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
@@ -8721,6 +8901,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: false,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
@@ -8849,6 +9030,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: false,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
@@ -8882,6 +9064,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: false,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
@@ -8920,6 +9103,7 @@ mod tests {
             migrate: false,
             json: false,
             mask_policy: CliMaskPolicy::Warn,
+            write_metadata: false,
         })
         .unwrap();
         assert!(output.is_file());
@@ -8937,6 +9121,7 @@ mod tests {
             migrate: false,
             json: false,
             mask_policy: CliMaskPolicy::Strict,
+            write_metadata: false,
         })
         .unwrap_err();
         assert!(error.to_string().contains("strict mask policy"));
@@ -8988,6 +9173,107 @@ mod tests {
         .is_err());
     }
 
+    /// LRPAR-G15-IPTC-S6: `--write-metadata` exists on `export`/`process`/
+    /// `batch` (and only there — `render` has no such flag), defaults to off
+    /// everywhere, and parses on all three paths.
+    #[test]
+    fn write_metadata_flag_defaults_off_and_parses_on_export_process_batch() {
+        // Default: off (no metadata, exactly today's behavior).
+        let cli =
+            Cli::try_parse_from(["lumina", "export", "--input", "a.png", "--output", "b.jpg"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Export(ExportArgs {
+                write_metadata: false,
+                ..
+            })
+        ));
+        let cli =
+            Cli::try_parse_from(["lumina", "process", "--input", "a.png", "--output", "b.jpg"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Process(ProcessArgs {
+                write_metadata: false,
+                ..
+            })
+        ));
+        let cli =
+            Cli::try_parse_from(["lumina", "batch", "--input", "src", "--output", "out"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Batch(BatchArgs {
+                write_metadata: false,
+                ..
+            })
+        ));
+        // Opt-in: on, on every path.
+        let cli = Cli::try_parse_from([
+            "lumina",
+            "export",
+            "--input",
+            "a.png",
+            "--output",
+            "b.jpg",
+            "--write-metadata",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Export(ExportArgs {
+                write_metadata: true,
+                ..
+            })
+        ));
+        let cli = Cli::try_parse_from([
+            "lumina",
+            "process",
+            "--input",
+            "a.png",
+            "--output",
+            "b.jpg",
+            "--write-metadata",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Process(ProcessArgs {
+                write_metadata: true,
+                ..
+            })
+        ));
+        let cli = Cli::try_parse_from([
+            "lumina",
+            "batch",
+            "--input",
+            "src",
+            "--output",
+            "out",
+            "--write-metadata",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Batch(BatchArgs {
+                write_metadata: true,
+                ..
+            })
+        ));
+        // `render` deliberately offers no bake-in flag (SOLL §7: only
+        // export/process/batch).
+        assert!(Cli::try_parse_from([
+            "lumina",
+            "render",
+            "--input",
+            "a.png",
+            "--output",
+            "b.jpg",
+            "--write-metadata",
+        ])
+        .is_err());
+    }
+
     #[test]
     fn batch_rejects_colliding_output_names_before_writing() {
         let directory = tempfile::tempdir().unwrap();
@@ -9014,6 +9300,7 @@ mod tests {
             quality: 90,
             virtual_copy: None,
             mask_policy: CliMaskPolicy::Warn,
+            write_metadata: false,
         })
         .unwrap_err();
         assert!(error.to_string().contains("collision"));
@@ -9044,6 +9331,7 @@ mod tests {
             quality: 90,
             virtual_copy: None,
             mask_policy: CliMaskPolicy::Warn,
+            write_metadata: false,
         };
 
         // A spaced `"status": "ok"` parses as done (the old substring match
@@ -9952,6 +10240,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: false,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
@@ -10472,6 +10761,7 @@ mod tests {
             quality: 90,
             virtual_copy: None,
             mask_policy: CliMaskPolicy::Warn,
+            write_metadata: false,
         })
         .unwrap_err();
         match &error {
@@ -10949,6 +11239,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap();
         assert!(output.is_file());
@@ -11032,6 +11323,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: false,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap();
 
@@ -11100,6 +11392,7 @@ mod tests {
             auto_tone: false,
             match_total_exposure: true,
             target_luminance: 0.5,
+            write_metadata: false,
         })
         .unwrap();
         let matched = fs::read(&output).unwrap();
@@ -11182,6 +11475,7 @@ mod tests {
                 auto_tone: false,
                 match_total_exposure: true,
                 target_luminance: 0.5,
+                write_metadata: false,
             },
             90,
             None,
