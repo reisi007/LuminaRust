@@ -262,4 +262,8 @@ Session, keine Session-Mutation). Normative Details zusätzlich in
   für `meta inspect`/GUI-Anzeige aus JPEG IIM/XMP).
 - Kein IPTC-Extension-Set; Zusatzfelder (`2:85`, `2:92`, `2:100`,
   `UsageTerms`) folgen als Registry-Erweiterung mit Tests.
+- Der XMP-Read-Scanner erkennt die konventionellen Präfixe
+  (`dc:`/`photoshop:`/`xmpRights:` eigener Ausgabe + gängiger Tools);
+  exotische Präfix-Aliase werden als absent gelesen (Toleranz, kein
+  stiller Fehler bei vorhandenem XMP-Root).
 - Historie ist kein Undo; löschen nur ausdrücklich.

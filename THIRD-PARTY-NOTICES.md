@@ -164,6 +164,18 @@ obligations that MUST be honored in any distributed build:
      (`MODEL-SOURCE-OFFER.md`). SAM 2 ships no separate `NOTICE` file (checked
      2026-08-25), so nothing additional has to be forwarded under Apache-2.0
      §4(d).
+7. **XMP writer (`xmp-writer` 0.3.3, compile-time dependency of `lumina-iptc`,
+    LRPAR-G15-IPTC-S2)**
+    - License: **MIT OR Apache-2.0** (verified 2026-09-04 via
+      `cargo info xmp-writer` against the Cargo registry; upstream
+      `https://github.com/typst/xmp-writer`). Pure Rust, **no transitive
+      dependencies** — no further license payload.
+    - Used only to serialize the XMP APP1 packet for JPEG export bake-in
+      (no network, no subprocess, no runtime component).
+    - **Obligation:** keep this notice; no license-text bundling beyond the
+      standard MIT/Apache-2.0 crate attribution (covered by item 4 above).
+      If `xmp-writer` is ever replaced or upgraded, re-verify the `license`
+      field before integration (F-073).
 
 ## Release bundle: license texts & source offers (F-078-R3/R4)
 

@@ -1,0 +1,15 @@
+[package]
+name = "lumina-iptc"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust IPTC IIM + XMP embedding for JPEG exports (LRPAR-G15-IPTC)"
+
+[dependencies]
+thiserror = "2"
+# Compile-time dependency only (pure Rust, no transitive deps).
+# License: MIT OR Apache-2.0 (verified 2026-09-04 via `cargo info xmp-writer`,
+# upstream https://github.com/typst/xmp-writer); see THIRD-PARTY-NOTICES.md.
+xmp-writer = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+proptest = "1"

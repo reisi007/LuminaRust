@@ -2210,6 +2210,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-iptc"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "thiserror 2.0.20",
+ "xmp-writer",
+]
+
+[[package]]
 name = "lumina-lensfun"
 version = "0.1.0"
 
@@ -5125,6 +5134,12 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xmp-writer"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "zbus"
