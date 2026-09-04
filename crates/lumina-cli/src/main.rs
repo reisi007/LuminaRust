@@ -648,8 +648,11 @@ struct SpotArgs {
     /// Clear the visualize threshold (visualization off).
     #[arg(long)]
     clear_visualize: bool,
-    /// Set distraction switches as `k=v,...` with keys
-    /// `reflections|people|dust|auto` and values `true|false`.
+    /// Merge distraction switches as `k=v,...` with keys
+    /// `reflections|people|dust|auto` and values `true|false` into the
+    /// stored switches (unnamed keys keep their value; `k=false` switches
+    /// off) — G04-FOLLOWUP-1 merge decision, consistent with the GUI
+    /// single-checkbox toggles.
     #[arg(long, value_name = "K=V,...")]
     set_distraction: Option<String>,
     /// List heuristic spot candidates (stage 1, no model).
@@ -658,7 +661,8 @@ struct SpotArgs {
     /// Persist the detected candidates as heuristic spots (explicit only).
     #[arg(long)]
     detect_apply: bool,
-    /// Detection threshold (`0..=1`, default 0.5).
+    /// Detection threshold (`0..=1`; default is the recipe visualize
+    /// threshold when set, else 0.5).
     #[arg(long, value_name = "0..=1")]
     detect_threshold: Option<f32>,
     /// Detection cap (`1..=4096`, default 32).
@@ -2259,7 +2263,15 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
     let mut detected: Vec<lumina_core::DetectedSpot> = Vec::new();
     if args.detect_objects {
         let frame = frame.as_ref().expect("decoded for detection");
-        let threshold = args.detect_threshold.unwrap_or(0.5);
+        // G04-FOLLOWUP-1: without an explicit flag the recipe visualize
+        // threshold is the default (else 0.5); an out-of-range recipe value
+        // fails loudly in the detector below, never silently.
+        let recipe_threshold = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == copy_id)
+            .and_then(|copy| copy.recipe.spot_visualize_threshold());
+        let threshold = args.detect_threshold.or(recipe_threshold).unwrap_or(0.5);
         let max = args.detect_max.unwrap_or(32);
         detected = detect_spots_heuristic(frame, threshold, max)
             .map_err(|error| CliError::Message(format!("spot detection rejected: {error}")))?;
@@ -2327,7 +2339,16 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
         actions.push("visualize:off".into());
     }
     if let Some(spec) = args.set_distraction.as_deref() {
-        let setting = parse_distraction_spec(spec)?;
+        // G04-FOLLOWUP-1 merge decision: deltas apply on top of the stored
+        // switches (consistent with the GUI single-checkbox toggles), so an
+        // unnamed key is never silently reset.
+        let current = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == copy_id)
+            .map(|copy| copy.recipe.spot_distraction())
+            .unwrap_or_default();
+        let setting = parse_distraction_spec(spec, current)?;
         spot_copy_mut(&mut document, &copy_id)?
             .recipe
             .set_spot_distraction(setting);
@@ -2433,9 +2454,12 @@ fn spot_add_heuristic(
 }
 
 /// Parses `--set-distraction k=v,...` (keys `reflections|people|dust|auto`,
-/// values `true|false`). Unknown keys or values fail loudly.
-fn parse_distraction_spec(spec: &str) -> Result<SpotDistraction, CliError> {
-    let mut setting = SpotDistraction::default();
+/// values `true|false`) as deltas merged into `current` (G04-FOLLOWUP-1
+/// merge decision). Unknown keys or values fail loudly.
+fn parse_distraction_spec(
+    spec: &str,
+    mut setting: SpotDistraction,
+) -> Result<SpotDistraction, CliError> {
     if spec.trim().is_empty() {
         return Err(CliError::Message(
             "invalid distraction spec: expected `k=v,...` with keys reflections|people|dust|auto"
@@ -7073,6 +7097,94 @@ mod tests {
     }
 
     #[test]
+    fn spot_detect_defaults_to_recipe_visualize_threshold() {
+        // G04-FOLLOWUP-1: without `--detect-threshold` the recipe visualize
+        // threshold is the default (else 0.5); an explicit flag wins.
+        let directory = tempfile::tempdir().unwrap();
+        let mut pixels = vec![255u8; 16 * 16 * 4];
+        for y in 0..8 {
+            for x in 0..8 {
+                let idx = (y * 16 + x) as usize * 4;
+                pixels[idx] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+            }
+        }
+        let frame = ImageFrame::new(16, 16, pixels).unwrap();
+        let input = directory.path().join("dark.png");
+        fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        import_sidecar_for(&input);
+        // Recipe default 1.0: every 8x8 cell is dark -> 4 candidates.
+        let mut vis = spot_base_args(input.clone());
+        vis.set_visualize_threshold = Some(1.0);
+        spot(vis).unwrap();
+        let mut apply = spot_base_args(input.clone());
+        apply.detect_objects = true;
+        apply.detect_apply = true;
+        spot(apply).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let spots: Vec<serde_json::Value> = serde_json::from_value(
+            document.virtual_copies[0].recipe.extras["spot_removals"].clone(),
+        )
+        .unwrap();
+        assert_eq!(spots.len(), 4, "recipe threshold 1.0 must drive detection");
+        // Explicit flag wins over the recipe default: 0.5 sees one cell.
+        let mut clear = spot_base_args(input.clone());
+        clear.clear = true;
+        spot(clear).unwrap();
+        let mut apply = spot_base_args(input.clone());
+        apply.detect_objects = true;
+        apply.detect_apply = true;
+        apply.detect_threshold = Some(0.5);
+        spot(apply).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let spots: Vec<serde_json::Value> = serde_json::from_value(
+            document.virtual_copies[0].recipe.extras["spot_removals"].clone(),
+        )
+        .unwrap();
+        assert_eq!(spots.len(), 1, "explicit threshold must win");
+        // Original image untouched throughout.
+        let _ = fs::read(&input).unwrap();
+    }
+
+    #[test]
+    fn spot_set_distraction_merges_into_stored_switches() {
+        // G04-FOLLOWUP-1 merge decision: unnamed keys keep their stored
+        // value (consistent with the GUI single-checkbox toggles).
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        import_sidecar_for(&input);
+        let mut first = spot_base_args(input.clone());
+        first.set_distraction = Some("reflections=true".into());
+        spot(first).unwrap();
+        let mut second = spot_base_args(input.clone());
+        second.set_distraction = Some("dust=true".into());
+        spot(second).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_distraction(),
+            lumina_sidecar::SpotDistraction {
+                reflections: true,
+                dust: true,
+                ..Default::default()
+            },
+            "unnamed `reflections` must survive a later partial set"
+        );
+        // Explicit `k=false` switches a single key off, keeping the rest.
+        let mut off = spot_base_args(input.clone());
+        off.set_distraction = Some("dust=false".into());
+        spot(off).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0].recipe.spot_distraction(),
+            lumina_sidecar::SpotDistraction {
+                reflections: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
     fn spot_regenerate_variant_sets_derived_seed_deterministically() {
         let directory = tempfile::tempdir().unwrap();
         let (input, _) = png_input(directory.path(), "input.png", 120);
@@ -7099,6 +7211,7 @@ mod tests {
         let expected = lumina_core::generative_variant_seed(7, 2);
         assert_eq!(spots[0]["seed"], expected);
         assert_eq!(spots[0]["variant"], 2);
+        assert_eq!(spots[0]["base_seed"], 7);
         // Deterministic: re-running the same variant is a stable no-op.
         let before = fs::read(&path).unwrap();
         let mut regen = spot_base_args(input.clone());

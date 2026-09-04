@@ -581,18 +581,28 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
 
 - **Visualize-Slider:** Schwellwert-Slider im Spot-Panel
   (`spot_visualize_threshold`, `0..=1`), rezept-persistiert (Reload stellt
-  ihn wieder her); deterministische Kandidaten-Tönung, kein Modell.
+  ihn wieder her); deterministische Kandidaten-Tönung, kein Modell. Das
+  Overlay malt ausschließlich die GUI-Vorschau (`render_from`-Post-Prozess,
+  UND-verknüpft mit dem G-11-`OverlayMode`); Render/Export/CLI bleiben
+  ungetönt.
 - **Tool-Overlay-Modi:** derselbe G-11-`OverlayMode`-Umschalter
-  (`Always`/`Auto`/`Never`) gilt für das Spot-Werkzeug (`Q`) — reiner
-  Session-Display-State (nie Sidecar, Reload → `Always`), `info!`-Log. Die
-  CLI kennt kein Overlay-Flag und rendert immer ohne Overlay.
+  (`Always`/`Auto`/`Never`) gilt für das Spot-Werkzeug (`Q`) **und** das
+  Visualize-Overlay — reiner Session-Display-State (nie Sidecar, Reload →
+  `Always`), `info!`-Log. Die CLI kennt kein Overlay-Flag und rendert
+  immer ohne Overlay.
 - **Detect-Objects:** Button im Spot-Panel + CLI `lumina spot
   --detect-objects` (Heuristik Stufe 1, ohne Modell, ONNX nur hinter
-  F-078-Gate, Status laut); `--detect-apply` übernimmt explizit.
+  F-078-Gate, Status laut); `--detect-apply` übernimmt explizit. Ohne
+  `--detect-threshold` gilt der Rezept-Schwellwert
+  (`spot_visualize_threshold` wenn gesetzt, sonst `0.5`); die GUI nutzt
+  denselben Default (`spot_detect_effective_threshold()`).
 - **Distraction Removal:** Schalter `Reflections`/`People`/`Dust` + `Auto`
   (alle Default aus, Rezept-persistiert); `Auto` listet nur, wendet nie
   still an. `Reflections`/`People` ohne Modell → sichtbarer
-  `NeedsModel`-Status.
+  `NeedsModel`-Status. `--set-distraction k=v,...` **mergiert** in die
+  gespeicherten Schalter (ungenannte bleiben, Abschalten per `k=false`;
+  Entscheid: Merge, konsistent zum GUI-Einzeltoggle — siehe
+  `feature/product/spot-removal.md` § „G-04 Remove-Parität“).
 - **Generativ-Varianten:** Prompt-/Seed-/Varianten-Steuerung im Spot-Panel +
   CLI `lumina spot --regenerate-variant --spot-id <id> --variant <n>`;
   deterministisch (`variant_seed`), persistiert, `info!`-Log.

@@ -3334,6 +3334,11 @@ fn validate_spot_removal_extra_entry(entry: &Value) -> Result<(), SidecarError> 
                     return invalid("generative spot_removal `variant` must be a u64");
                 }
             }
+            if let Some(base_seed) = object.get("base_seed") {
+                if base_seed.as_u64().is_none() {
+                    return invalid("generative spot_removal `base_seed` must be a u64");
+                }
+            }
             if let Some(prompt) = object.get("prompt") {
                 if prompt.as_str().is_none() {
                     return invalid("generative spot_removal `prompt` must be a string");
@@ -5880,13 +5885,14 @@ mod tests {
 
     #[test]
     fn g04_generative_variant_controls_roundtrip_and_reject_loudly() {
-        // seed/variant/prompt ride the generative extras entry and validate.
+        // seed/variant/base_seed/prompt ride the generative extras entry and
+        // validate (G04-FOLLOWUP-1: `base_seed` is the regenerate provenance).
         let mut d = SidecarDocument::new(source(), "pipeline-1");
         d.virtual_copies[0].recipe.extras.insert(
             "spot_removals".into(),
             serde_json::json!([{
                 "id": "g1", "version": 1, "mode": "generative",
-                "prompt": "remove dust", "seed": 7, "variant": 2
+                "prompt": "remove dust", "seed": 7, "variant": 2, "base_seed": 7
             }]),
         );
         assert!(d.validate().is_ok());
@@ -5898,6 +5904,8 @@ mod tests {
         for (field, value) in [
             ("seed", serde_json::json!("seven")),
             ("variant", serde_json::json!(-1)),
+            ("base_seed", serde_json::json!("seven")),
+            ("base_seed", serde_json::json!(-1)),
             ("prompt", serde_json::json!(42)),
         ] {
             let mut bad = SidecarDocument::new(source(), "pipeline-1");

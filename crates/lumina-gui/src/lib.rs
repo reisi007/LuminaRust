@@ -29,12 +29,12 @@ use lumina_core::cache::PreviewKind;
 use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
-    analyze_tone, analyze_tone_with_histogram, detect_spots_heuristic, distraction_candidates,
-    generative_variant_seed, match_total_exposure_masked, prepare_source_base,
-    render_frame_from_base, suggest_auto_tone, tone_fingerprint, AutoToneConfig, AutoToneResult,
-    CacheStage, DetectedSpot, DistractionKind, DistractionSetting, DistractionStatus,
-    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
-    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
+    analyze_tone, analyze_tone_with_histogram, apply_visualize_overlay, detect_spots_heuristic,
+    distraction_candidates, generative_variant_seed, match_total_exposure_masked,
+    prepare_source_base, render_frame_from_base, suggest_auto_tone, tone_fingerprint,
+    AutoToneConfig, AutoToneResult, CacheStage, DetectedSpot, DistractionKind, DistractionSetting,
+    DistractionStatus, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext,
+    MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
@@ -3541,6 +3541,9 @@ impl LuminaApp {
         let previous_id = self.virtual_copy_id.clone();
         self.virtual_copy_id = copy.id.clone();
         self.recipe = copy.recipe.clone();
+        // G04-FOLLOWUP-1: per-copy session default — the detect input tracks
+        // the newly adopted recipe's visualize threshold (else 0.5).
+        self.spot_detect_threshold = self.recipe.spot_visualize_threshold().unwrap_or(0.5);
         self.selected_mask_id = copy
             .mask_layers
             .first()
@@ -4508,6 +4511,32 @@ impl LuminaApp {
         Ok(())
     }
 
+    /// Active visualize threshold for the preview gate (G04-FOLLOWUP-1):
+    /// the recipe threshold ANDed with the G-11 overlay mode (`Always` = on
+    /// as soon as the threshold is set, `Never` = off, `Auto` = only while a
+    /// mask/spot tool is armed or a drag runs). Single gate for `render_from`
+    /// (preview only — render/export/CLI stay untinted); headless-testable
+    /// without pixels.
+    pub fn spot_visualize_overlay_threshold(&self) -> Option<f32> {
+        let threshold = self.recipe.spot_visualize_threshold()?;
+        if self.overlay_visible() {
+            Some(threshold)
+        } else {
+            None
+        }
+    }
+
+    /// Effective heuristic detect threshold (G04-FOLLOWUP-1): the recipe
+    /// visualize threshold when set, else the session input (default 0.5).
+    /// The recipe value wins while set (it is persisted user intent); the
+    /// session slider — synced from the recipe on load — applies after
+    /// Clear or when no recipe value was ever set.
+    pub fn spot_detect_effective_threshold(&self) -> f32 {
+        self.recipe
+            .spot_visualize_threshold()
+            .unwrap_or(self.spot_detect_threshold)
+    }
+
     /// Detection threshold input for heuristic Detect-Objects (`0..=1`).
     /// Session display state (never recipe); loud on bad values.
     pub fn set_spot_detect_threshold(&mut self, threshold: f32) -> Result<(), GuiError> {
@@ -4529,16 +4558,20 @@ impl LuminaApp {
             .as_ref()
             .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?
             .clone();
-        let candidates = detect_spots_heuristic(&frame, self.spot_detect_threshold, 32)?;
+        // G04-FOLLOWUP-1: the recipe visualize threshold is the default
+        // when set (else the session input); the used value lands in the
+        // status line so it is never silent.
+        let threshold = self.spot_detect_effective_threshold();
+        let candidates = detect_spots_heuristic(&frame, threshold, 32)?;
         info!(
             "GUI interaction: detect_spot_candidates -> {} candidate(s) at threshold {}",
             candidates.len(),
-            self.spot_detect_threshold
+            threshold
         );
         self.spot_detect_status = format!(
             "Detected {} candidate(s) at threshold {:.2} (not applied — use Apply)",
             candidates.len(),
-            self.spot_detect_threshold
+            threshold
         );
         Ok(candidates)
     }
@@ -4633,7 +4666,7 @@ impl LuminaApp {
             dust: setting.dust,
             auto_mode: setting.auto_mode,
         };
-        let threshold = self.spot_detect_threshold;
+        let threshold = self.spot_detect_effective_threshold();
         let Ok(outcomes) = distraction_candidates(frame, core_setting, threshold, 32) else {
             return vec![("error".into(), "invalid threshold".into())];
         };
@@ -6949,7 +6982,7 @@ impl LuminaApp {
         // second checker-fill implementation beside the core heuristic
         // (Agents.md: keine GUI-spezifische Bildlogik außerhalb der Pipeline).
         let mask_warnings = output.mask_warnings;
-        let preview = output.frame;
+        let mut preview = output.frame;
         // GUI-HISTOGRAM-FULL-1: identity of the un-cropped full-frame base for
         // the histogram analysis render below. Computed here while
         // `source_hash`/`decode_version`/`copy_id` are still owned — the
@@ -7091,6 +7124,18 @@ impl LuminaApp {
         self.last_analysis_ms = ana_t0.elapsed().as_secs_f64() * 1000.0;
         self.tone_analysis = Some(analysis);
         self.preview_histogram = Some(histogram);
+        // G04-FOLLOWUP-1 Visualize-Spots: the recipe threshold tints
+        // candidate pixels red as a pure display post-process on the preview
+        // frame. Render, export and CLI stay untinted (their paths never pass
+        // here); the histogram above analyzed the clean frame. Gated by the
+        // G-11 overlay mode via `spot_visualize_overlay_threshold`; an
+        // invalid recipe value fails loudly instead of rendering untinted
+        // silently. The `render_key` above still describes the pipeline
+        // output — the tint is a deterministic view transform of it.
+        if let Some(threshold) = self.spot_visualize_overlay_threshold() {
+            let tinted = apply_visualize_overlay(&mut preview, threshold)?;
+            trace!("GUI render: spot visualize overlay t={threshold} tinted {tinted}px");
+        }
         self.preview = Some(preview);
         // R2-GUIMOD-02: new preview content — any CPU-present identity cached
         // in `texture_identity` is now stale and will re-upload once.
@@ -7703,6 +7748,11 @@ impl LuminaApp {
                             .as_ref()
                             .is_some_and(|stored| is_current_tone_analysis(stored, &fingerprint));
                         self.recipe = candidate;
+                        // G04-FOLLOWUP-1: the session detect input defaults
+                        // to the recipe visualize threshold (else 0.5) so the
+                        // panel slider shows the restored default after reload.
+                        self.spot_detect_threshold =
+                            self.recipe.spot_visualize_threshold().unwrap_or(0.5);
                         let stale_auto_tone = self.recipe.auto_features.enable_auto_tone && !valid;
                         if stale_auto_tone {
                             clear_stale_auto_tone(&mut self.recipe);
@@ -21311,6 +21361,103 @@ mod tests {
         assert_eq!(reopened2.spot_visualize_threshold(), None);
         // The original image is byte-identical throughout.
         assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn g04_spot_visualize_overlay_visible_in_preview_after_reload() {
+        // G04-FOLLOWUP-1 B1: the persisted threshold has a functional
+        // consumer — the preview gate tints candidate pixels red
+        // (DoD §1 E2E: Datei -> Reload -> Render; PSNR-Gate wo visuell).
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        std::fs::write(&source, dark_block_png()).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.error().is_none());
+        // No threshold: gate off, preview is the clean render; the session
+        // detect default is 0.5 without a recipe value.
+        assert_eq!(app.spot_visualize_overlay_threshold(), None);
+        assert_eq!(app.spot_detect_effective_threshold(), 0.5);
+        let clean = app.preview().expect("preview rendered on load").clone();
+        // Set + drive the debounced commit hook (render + save + info! log).
+        app.set_spot_visualize(Some(0.3)).unwrap();
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        assert_eq!(app.spot_visualize_overlay_threshold(), Some(0.3));
+        assert_eq!(app.spot_detect_effective_threshold(), 0.3);
+        let tinted = app.preview().expect("preview after commit").clone();
+        assert_eq!((tinted.width, tinted.height), (clean.width, clean.height));
+        assert_ne!(
+            tinted.pixels, clean.pixels,
+            "the overlay must visibly change the preview"
+        );
+        // Only candidate pixels (the dark 8x8 block) follow the deterministic
+        // red-tint formula; everything else (incl. alpha) is byte-identical.
+        for y in 0..16 {
+            for x in 0..16 {
+                let i = (y * 16 + x) as usize * 4;
+                if x < 8 && y < 8 {
+                    let (r, g, b) = (clean.pixels[i], clean.pixels[i + 1], clean.pixels[i + 2]);
+                    assert_eq!(
+                        tinted.pixels[i],
+                        ((u16::from(r) + 255) / 2).min(255) as u8,
+                        "candidate red at {x},{y}"
+                    );
+                    assert_eq!(tinted.pixels[i + 1], (u16::from(g) / 2) as u8);
+                    assert_eq!(tinted.pixels[i + 2], (u16::from(b) / 2) as u8);
+                    assert_ne!(
+                        &tinted.pixels[i..i + 3],
+                        &clean.pixels[i..i + 3],
+                        "candidate must change at {x},{y}"
+                    );
+                } else {
+                    assert_eq!(
+                        &tinted.pixels[i..i + 4],
+                        &clean.pixels[i..i + 4],
+                        "non-candidate byte-identical at {x},{y}"
+                    );
+                }
+                assert_eq!(
+                    tinted.pixels[i + 3],
+                    clean.pixels[i + 3],
+                    "alpha untouched at {x},{y}"
+                );
+            }
+        }
+        let psnr = lumina_core::psnr(&clean, &tinted);
+        assert!(
+            psnr.is_finite() && psnr > 5.0,
+            "overlay PSNR gate (only candidates change): {psnr}"
+        );
+        // Reload leg: a fresh app restores the threshold from the file alone
+        // and the preview is tinted deterministically (byte-identical).
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert!(reopened.error().is_none());
+        assert_eq!(reopened.spot_visualize_threshold(), Some(0.3));
+        // The session detect slider synced from the recipe on load.
+        assert_eq!(reopened.spot_detect_effective_threshold(), 0.3);
+        let reloaded = reopened.preview().expect("preview after reload").clone();
+        assert_eq!(
+            reloaded.pixels, tinted.pixels,
+            "overlay deterministic across reload"
+        );
+        // `Never` hides the overlay without touching the recipe (no silent
+        // fallback: the threshold persists, untinted render is explicit).
+        reopened.set_overlay_mode(OverlayMode::Never);
+        assert_eq!(reopened.spot_visualize_overlay_threshold(), None);
+        reopened.render().unwrap();
+        let hidden = reopened.preview().expect("preview in Never mode").clone();
+        assert_eq!(hidden.pixels, clean.pixels);
+        assert_eq!(reopened.spot_visualize_threshold(), Some(0.3));
+        // `Auto` hides while no tool is armed and shows once the spot tool
+        // (Q) is armed — the G-11 rule, headless-pinned.
+        reopened.set_overlay_mode(OverlayMode::Auto);
+        assert_eq!(reopened.spot_visualize_overlay_threshold(), None);
+        reopened.set_spot_tool(SpotTool::Heal);
+        assert_eq!(reopened.spot_visualize_overlay_threshold(), Some(0.3));
+        reopened.set_spot_tool(SpotTool::None);
+        assert_eq!(reopened.spot_visualize_overlay_threshold(), None);
     }
 
     /// 32x32 vertical-stripe fixture (G-05): even columns black, odd columns

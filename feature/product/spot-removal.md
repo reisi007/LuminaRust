@@ -258,6 +258,24 @@ laut — kein stiller Fallback, keine Original-Mutation, keine absoluten Pfade.
   Kandidaten-Pixel ändern sich (PSNR-Gate), alles andere ist byte-identisch.
 - Der Schwellwert ist Teil der Rezept-Identität (Roundtrip, Validierung laut:
   nicht-finite oder Out-of-range-Werte werden abgelehnt).
+- **Verdrahtung (G04-FOLLOWUP-1):** Das Overlay ist eine reine
+  **Preview-Anzeige** und wird ausschließlich im GUI-Preview-Gate
+  (`LuminaApp::render_from`, Post-Prozess nach Render + Histogramm-Analyse)
+  auf den Preview-Frame angewendet — Render, Export und CLI rendern immer
+  ohne Overlay (kein Rotstich in exportierten Dateien). Das Histogramm wird
+  aus dem ungetönten Frame analysiert. Der Overlay-Gate ist UND-verknüpft
+  mit dem G-11-`OverlayMode` (`Always` = an sobald der Schwellwert gesetzt
+  ist, `Never` = nie, `Auto` = nur bei armiertem Masken-/Spot-Werkzeug oder
+  Drag); `spot_visualize_overlay_threshold()` ist der einzige Gate-Einstieg
+  (headless-testbar ohne Pixel).
+- **Detect-Default (G04-FOLLOWUP-1):** Ohne expliziten Schwellwert lesen
+  CLI (`spot --detect-objects` ohne `--detect-threshold`) und GUI
+  (`spot_detect_effective_threshold()`) den Default aus dem Rezept
+  (`spot_visualize_threshold` wenn gesetzt, sonst `0.5`). Die GUI
+  synchronisiert den Session-Regler beim Laden zusätzlich auf den
+  Rezeptwert; ein explizites CLI-Flag (`--detect-threshold`) gewinnt immer.
+  GUI-seitig gilt der Rezeptwert, solange gesetzt — die tatsächlich
+  verwendete Schwelle steht in der Detect-Statuszeile bzw. im CLI-`info!`-Log.
 
 ### Tool-Overlay-Modi (Session-Entscheid)
 
@@ -291,6 +309,14 @@ laut — kein stiller Fallback, keine Original-Mutation, keine absoluten Pfade.
   `reflections`/`people` melden ohne F-078-freigegebenes Modell laut
   `NeedsModel` (Status sichtbar, kein stiller Fallback, keine stille
   Heuristik als Ersatz).
+- **Set-Semantik (G04-FOLLOWUP-1, Entscheid: Merge):**
+  `--set-distraction k=v,...` wird in die gespeicherten Schalter
+  **hinein-mergiert** (nicht-genannte Schlüssel behalten ihren Wert);
+  Abschalten per explizitem `k=false`. Begründung: Die GUI toggelt einzelne
+  Checkboxen (Merge), ein ersetzendes CLI-Flag würde ungenannte Schalter
+  still auf `false` zurücksetzen — das wäre ein stiller Datenverlust im
+  Rezept. Merge ist daher die einzige mit der GUI konsistente Semantik;
+  CLI-Hilfe und beide Feature-Dokumente halten sie fest.
 
 ### Generativ-Varianten neu generieren
 
@@ -302,6 +328,21 @@ laut — kein stiller Fallback, keine Original-Mutation, keine absoluten Pfade.
   tragen (validiert, roundtrip-stabil); `spot --regenerate-variant` und der
   GUI-Regenerate-Button setzen `seed = variant_seed(base, variant)` explizit
   — nie still, immer mit `info!`-Log und Sidecar-Save.
+- **Varianten-Felder (G04-FOLLOWUP-1, normativ):** Ein regenerierter
+  generativer Eintrag trägt alle drei Seed-Felder (je `u64`, laut validiert;
+  abwesend = Identität, nie Default-Annahme):
+  - `base_seed` — der vom Nutzer übergebene Ausgangs-Seed (`--seed` bzw.
+    Seed-Eingabe); Provenienz, geht nicht in den Render ein.
+  - `variant` — der Varianten-Index (`--variant` bzw. Varianten-Eingabe);
+    `0` hält den Basis-Seed (rückkompatibel zu Pre-Varianten-Rezepten).
+  - `seed` — der tatsächlich verwendete Seed,
+    `seed = generative_variant_seed(base_seed, variant)`; identische
+    Eingaben → byte-identisches Ergebnis, andere Variante → anderes
+    Ergebnis (deterministisch, getestet).
+  - `prompt` — Freitext (string, roundtrip-stabil); vorhandener Prompt bleibt
+    erhalten, GUI-Eingabe überschreibt explizit.
+  Ein nicht-`u64`-Wert in `seed`/`variant`/`base_seed` oder ein
+  nicht-string-`prompt` wird laut abgelehnt (keine stille Normalisierung).
 - Echte ONNX-Inpaint-Artefakte bleiben `kind = "spot_heal_generative"`
   (unverändert); der Stub (`lumina-onnx::heal_variant`) nutzt denselben
   Seed-Pfad.

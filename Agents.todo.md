@@ -98,7 +98,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 
 | Version | Task-ID | Goal | Stichwort |
 | --- | --- | --- | --- |
-| 1.0 | G04-FOLLOWUP-1 | G-04 | Visualize-Verdrahtung |
 | 1.0 | GUI-STARTUP-FOLLOWUP-1 | G-10/G-11 | Startup-Followups |
 | 1.0 | AGENT-HARNESS-2 | alle G | AccessKit-Semantik |
 | 1.0 | AGENT-HARNESS-3 | G-01/G-07/G-08/G-10 | Green-Path-Matrix |
@@ -163,7 +162,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G15-META-MVP (Release: 1.0)** Metadaten-MVP (G-15-Kern, MVP = 1.0, User-Entscheid 2026-09-03): Keywords, Filterungen (u. a. Brennweite/Kamera/ISO über `\`-Leiste hinaus), Sammlungen + Smart-Sammlungen, Stapel-Vollfunktion. Abnahme: CLI (Roundtrip, kein Datenverlust, Sidecar-first) + GUI-headless. (Slice 1 sidecar BESTANDEN `ed2e054`; Slice 2 CLI BESTANDEN; offen: Slice 3 GUI.)
 - [ ] **[PRIO: mittel] LRPAR-G15-META-15 (Release: 1.5)** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
-- [ ] **[PRIO: mittel] G04-FOLLOWUP-1 (Release: 1.0)** G-04-Nacharbeit aus Verifizierung (B1 mittel + B3/B4 Doku): `apply_visualize_overlay` in Preview-Gate verdrahten (Visualize-Schwellwert bekommt funktionalen Konsumenten), Detect-Default aus Rezept lesen (statt Session-/CLI-Default), `base_seed`-Feld in `spot-removal.md` dokumentieren, `--set-distraction`-Ersetzen-vs-Mergen dokumentieren/angleichen. Abnahme: Headless-Test Overlay-sichtbar + CLI/GUI-Doku konsistent.
 
 ### PRIO: niedrig
 
