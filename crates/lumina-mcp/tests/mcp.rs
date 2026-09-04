@@ -29,6 +29,12 @@ const TOOL_NAMES: &[&str] = &[
     "lumina_batch",
     "lumina_reindex",
     "lumina_dust_removal",
+    // LRPAR-G15-IPTC-S7: path-based metadata tools.
+    "lumina_get_metadata_draft",
+    "lumina_update_metadata_draft",
+    "lumina_apply_meta_preset",
+    "lumina_batch_sync_metadata",
+    "lumina_trigger_export",
 ];
 
 fn new_server(preview_dir: &Path) -> Server {
@@ -203,7 +209,7 @@ fn initialize_reports_capabilities_and_protocol() {
 }
 
 #[test]
-fn tools_list_returns_all_twelve_tools_with_valid_schemas() {
+fn tools_list_returns_all_seventeen_tools_with_valid_schemas() {
     let dir = tempfile::tempdir().unwrap();
     let mut server = new_server(dir.path());
     let response = call(&mut server, "tools/list", json!({}));

@@ -117,8 +117,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | KITTEST-EXPANDED-VIEWPORT-1 | G-01 | Expanded-Snapshot |
-| 1.0 | LRPAR-G15-IPTC-S7 | G-15 | MCP Metadaten |
-| 1.0 | LRPAR-G15-IPTC-S8 | G-15 | GUI Metadaten-Panel |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -159,12 +157,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-EXPANDED-VIEWPORT-1 (Release: 1.0)** `develop_sections_expanded` zeigt Color/Masking nie pixel-sichtbar (1024×720-Viewport-Clipping, schon vor G-01 so): im Test zu Color/Masking scrollen und/oder Sektionen einzeln snapshotten. Abnahme: Color-/Masking-Widgets pixel-sichtbar im Golden + Vision-Check per DoD §6. (Gefunden 2026-09-04 im G01-Vision-Loop.)
-- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S7 (Release: 1.0)** MCP Metadaten: pfadbasierte Tools `lumina_get_metadata_draft`, `lumina_update_metadata_draft`, `lumina_apply_meta_preset`, `lumina_batch_sync_metadata`, `lumina_trigger_export` + `resources`-Capability `metadata://draft/<urlencoded-pfad>` (Read-only; pfadbasiert statt `image_id`, weil die bei Server-Neustart neu nummeriert wird; `prompts` bleiben aus). Abnahme: Tool-Schema-, Fehlerpfad- (`SidecarConflict` `-32010` bei CAS, `InvalidParams` bei Nicht-JPEG + `write_metadata`) und initialize-Capability-Tests; `cargo test -p lumina-mcp` grün; SOLL-Abschnitt „Metadaten-Schnittstelle" in `mcp-server.md` ist bereits dokumentiert. Crate: `lumina-mcp`.
-- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S8 (Release: 1.0)** GUI Metadaten-Panel (Library-Modul, egui): Draft-Feld-Editor (alle Registry-Felder; `description` mehrzeilig) + Keywords-Chips, Embedded-Werte nur lesend (JPEG), Historie-Ansicht, Preset-Auswahl + „Anwenden", Prompt-Dialog für dynamische Preset-Variablen (Pflichtfelder, Abbrechen ohne Änderung), „Auf Auswahl synchronisieren" mit Feld-Checkboxen + Report; jede Mutation über denselben Sidecar-Pfad wie CLI (CAS, atomar, laute Fehler). Abnahme: headless GUI-Tests (egui Context + LuminaApp, tempdir) je Aktion mit Kette Edit→Commit→Datei→Reload + kittest-Golden des Panels; `cargo test -p lumina-gui` grün ohne GPU. Crate: `lumina-gui`.
-  Ausführungsreihenfolge: S1 ∥ S2 (verschiedene Crates, keine gemeinsamen
-  APIs), dann S3–S6 seriell auf `lumina-cli` (ein Crate = ein schreibender
-  Agent), dann S7 (MCP) und S8 (GUI); S8 braucht S1 + S4. Veröffentlichungs-
-  dienste bleiben explizit nie Ziel (kein Task).
+- Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig
 

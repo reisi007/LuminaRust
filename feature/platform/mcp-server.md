@@ -719,7 +719,7 @@ Das Original bleibt unverändert.
   `SidecarError` (fehlender Sidecar → „run lumina_import first“),
   `EncodeError`.
 
-### Metadaten-Schnittstelle (LRPAR-G15-IPTC — SOLL, nicht umgesetzt, 2026-09-04)
+### Metadaten-Schnittstelle (LRPAR-G15-IPTC — umgesetzt, S7 BESTANDEN)
 
 Der MCP-Server erhält fünf **pfadbasierte** Metadaten-Tools (Muster der
 F-101-F1-Bulk-Tools: laufen neben der Single-Image-Session, mutieren sie

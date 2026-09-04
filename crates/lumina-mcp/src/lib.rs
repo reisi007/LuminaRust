@@ -228,6 +228,26 @@ impl Server {
             "initialize" => Some(ok_response(id, initialize_result())),
             "ping" => Some(ok_response(id, json!({}))),
             "tools/list" => Some(ok_response(id, tools_list_result())),
+            // LRPAR-G15-IPTC-S7: read-only draft resource
+            // (`metadata://draft/<urlencoded-path>`, path-based so the address
+            // survives server restarts; `prompts` stay unimplemented).
+            "resources/list" => Some(ok_response(id, json!({ "resources": [] }))),
+            "resources/read" => {
+                let params = request.params.clone().unwrap_or(Value::Null);
+                let uri = params
+                    .get("uri")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                match tools::meta_get::resource_read(uri) {
+                    Ok(payload) => Some(ok_response(id, payload)),
+                    Err(error) => Some(error_response(
+                        Some(id),
+                        error.code(),
+                        error.message(),
+                        Some(error.data()),
+                    )),
+                }
+            }
             "tools/call" => {
                 let params = request.params.clone().unwrap_or(Value::Null);
                 let name = params
@@ -273,7 +293,12 @@ impl Server {
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
+        "capabilities": {
+            "tools": {},
+            // LRPAR-G15-IPTC-S7: read-only `metadata://draft/` resource;
+            // no subscriptions, no live list updates (`prompts` stay out).
+            "resources": { "subscribe": false, "listChanged": false },
+        },
         "serverInfo": {
             "name": "lumina-mcp",
             "version": env!("CARGO_PKG_VERSION"),

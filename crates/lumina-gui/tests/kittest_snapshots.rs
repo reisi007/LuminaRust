@@ -348,7 +348,54 @@ fn navigator_viewport() {
     harness.snapshot("navigator_viewport");
 }
 
-/// Fixture directory for the subfolder-badge snapshot below.
+/// LRPAR-G15-IPTC-S8: the Library right-column Metadata panel (draft
+/// editor expanded). The presets directory is overridden with an empty
+/// tempdir so no machine-global preset names leak into the golden (the path
+/// itself is never rendered, only preset names — determinism holds).
+/// `load_sample` is path-less, so embedded reads stay on the deterministic
+/// "unavailable" note.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_metadata() {
+    let presets = tempfile::tempdir().expect("temp dir");
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    harness
+        .state_mut()
+        .set_meta_presets_dir(Some(presets.path().to_path_buf()));
+    load_sample(&mut harness);
+    harness.run();
+    // Second layout frame before querying: the first frame after
+    // `load_bytes` settles the image load, only the second lays out the
+    // right-column panel headers, so the `collapsing` toggle exists when
+    // clicked (same reason `collapse_except` runs before its first query).
+    harness.run();
+    // Expand the draft editor so the golden pins the field rows, not just
+    // the collapsed headers. The label is unique to this section (the
+    // preview "Draft" badge uses a different string).
+    let clicked = harness
+        .query_all_by_label("Metadata draft")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        clicked,
+        "Metadata draft section not found in headed harness"
+    );
+    harness.run();
+    // Non-vacuous guard: the expanded editor must expose its field rows
+    // ("Date created" is unique to the draft editor); otherwise the golden
+    // below could pass on a collapsed panel without any editor pixels.
+    assert!(
+        harness.query_all_by_label("Date created").next().is_some(),
+        "draft editor did not expand: field row 'Date created' missing"
+    );
+    harness.snapshot("library_metadata");
+}
 ///
 /// Committed layout (`top.arw` + `sub/mid.arw` + `sub/nested/deep.arw`);
 /// the files are (re-)written deterministically on every run so a fresh

@@ -42,12 +42,19 @@ use lumina_core::{export_image, masks::rasterize_prompt, range_masks, ExportOpti
 use lumina_raw::RawError;
 use lumina_sidecar::{apply_batch_op, validate_smart_collection_def, SMART_COLLECTION_VERSION};
 use lumina_sidecar::{
+    default_meta_presets_dir, document_revision, is_metadata_field, load_meta_preset_file,
+    load_sidecar, now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path,
+    save_sidecar_if_unchanged, scan_meta_presets_dir, sidecar_path_for,
+    validate_metadata_field_value, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
+};
+use lumina_sidecar::{
     load_zdata, zdata_path_for, AiSelect, AiSelectKind, ArtifactStatus, BatchOp, BrushMark,
     BrushMarkSign, CollectionMembership, CoordinateSystem, DecodeFingerprint, GeometryFingerprint,
     HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
-    ModelIdentity, Point2, Preprocessing, PromptTransform, Resolution, SidecarDocument,
-    SmartCollectionDef, SmartRule, SourceFingerprint, SourceIdentity, SourceStatus, BW_STASH_KEY,
-    DEVELOP_PROFILES, DEVELOP_PROFILE_KEY, TREATMENT_BW, TREATMENT_COLOR, TREATMENT_KEY,
+    MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Point2, Preprocessing,
+    PromptTransform, Resolution, SidecarDocument, SmartCollectionDef, SmartRule, SourceFingerprint,
+    SourceIdentity, SourceStatus, BW_STASH_KEY, DEVELOP_PROFILES, DEVELOP_PROFILE_KEY,
+    TREATMENT_BW, TREATMENT_COLOR, TREATMENT_KEY,
 };
 use lumina_sidecar::{
     AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
@@ -56,6 +63,10 @@ use lumina_sidecar::{
     NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset, Sharpening,
     SpotDistraction, Vignette,
 };
+// LRPAR-G15-IPTC-S8: read-only embedded IPTC display (JPEG IIM/XMP) in the
+// Library Metadata panel. Display only — mutations always go through the
+// sidecar draft helpers above (same path as the CLI).
+use lumina_iptc::{extract_metadata, IptcMetadata};
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
 use std::collections::BTreeMap;
@@ -1014,6 +1025,59 @@ fn default_copy_id(document: &SidecarDocument) -> Option<String> {
         .map(|copy| copy.id.clone())
 }
 
+/// LRPAR-G15-IPTC-S8: default field selection for
+/// [`LuminaApp::sync_metadata_to_selection`]: every registry draft field plus
+/// `keywords` (SOLL §10: Default alle Draft-Felder + Keywords). Unchecked
+/// fields are left untouched on the targets (no mirror for them).
+fn default_meta_sync_fields() -> BTreeMap<String, bool> {
+    let mut fields = BTreeMap::new();
+    for id in METADATA_FIELD_IDS {
+        fields.insert((*id).to_string(), true);
+    }
+    fields.insert("keywords".to_string(), true);
+    fields
+}
+
+/// LRPAR-G15-IPTC-S8: user-visible label of a registry draft field ID,
+/// routed through [`Str`] so no panel carries a free-form literal. `None`
+/// for unknown IDs (callers reject those loudly before painting).
+fn metadata_field_label(field: &str) -> Option<&'static str> {
+    match field {
+        "title" => Some(Str::MetadataFieldTitle.t()),
+        "headline" => Some(Str::MetadataFieldHeadline.t()),
+        "description" => Some(Str::MetadataFieldDescription.t()),
+        "copyright_notice" => Some(Str::MetadataFieldCopyrightNotice.t()),
+        "creator" => Some(Str::MetadataFieldCreator.t()),
+        "credit" => Some(Str::MetadataFieldCredit.t()),
+        "source" => Some(Str::MetadataFieldSource.t()),
+        "city" => Some(Str::MetadataFieldCity.t()),
+        "state_province" => Some(Str::MetadataFieldStateProvince.t()),
+        "country" => Some(Str::MetadataFieldCountry.t()),
+        "date_created" => Some(Str::MetadataFieldDateCreated.t()),
+        _ => None,
+    }
+}
+
+/// LRPAR-G15-IPTC-S8: maps a registry field ID onto the embedded value of a
+/// JPEG (display-only, same mapping as the CLI `meta inspect`; IDs come from
+/// `METADATA_FIELD_IDS`, no second registry).
+fn embedded_field_value<'a>(meta: &'a IptcMetadata, id: &str) -> Option<&'a str> {
+    match id {
+        "title" => meta.title.as_deref(),
+        "headline" => meta.headline.as_deref(),
+        "description" => meta.description.as_deref(),
+        "copyright_notice" => meta.copyright_notice.as_deref(),
+        "creator" => meta.creator.as_deref(),
+        "credit" => meta.credit.as_deref(),
+        "source" => meta.source.as_deref(),
+        "city" => meta.city.as_deref(),
+        "state_province" => meta.state_province.as_deref(),
+        "country" => meta.country.as_deref(),
+        "date_created" => meta.date_created.as_deref(),
+        _ => None,
+    }
+}
+
 /// Shadow/highlight clipping fractions (`0..=1`) of a frame: a pixel counts
 /// as shadow-clipped when all channels are `0`, as highlight-clipped when
 /// all are `255`. Pure display diagnostic for the `J` overlay badge — it
@@ -1721,6 +1785,41 @@ pub struct LuminaApp {
     smart_rule_stack: Vec<SmartRule>,
     batch_kind: String,
     batch_value: String,
+    /// LRPAR-G15-IPTC-S8: Library Metadata panel (right column) session
+    /// state. The persisted truth stays Sidecar-first
+    /// (`SidecarDocument.metadata` draft + history, `keywords`); these
+    /// fields are panel inputs + dialog state only:
+    /// * `meta_buffers`/`meta_buffers_key`: per-field draft text inputs,
+    ///   synced from the loaded document (`(path, latest_rev)` key); an
+    ///   empty buffer on commit removes the field (S1 draft semantics).
+    /// * `meta_presets_dir_override`: explicit presets directory for
+    ///   headless tests (production uses the user-global directory).
+    /// * `meta_preset_entries`: last scanned meta-presets (failed files
+    ///   stay visible, never skipped silently).
+    /// * `selected_meta_preset`: preset spec for Apply (display name or
+    ///   path, same resolution as the CLI).
+    /// * `meta_preset_dialog`: open prompt dialog for dynamic presets
+    ///   (one required input per placeholder; Cancel discards it).
+    /// * `meta_sync_fields`: field checkbox selection for
+    ///   [`Self::sync_metadata_to_selection`] (default: all on).
+    meta_buffers: BTreeMap<String, String>,
+    meta_buffers_key: Option<(String, u64)>,
+    /// LRPAR-G15-IPTC-S8: true once the user edited a draft buffer since
+    /// the last sync — [`Self::ensure_meta_buffers`] then keeps the
+    /// keystrokes and only fills missing fields, instead of resyncing from
+    /// the document (which would wipe the edit, e.g. when the document is
+    /// first created by the commit itself).
+    meta_buffers_dirty: bool,
+    meta_presets_dir_override: Option<PathBuf>,
+    meta_preset_entries: Vec<MetaPresetEntry>,
+    selected_meta_preset: String,
+    meta_preset_dialog: Option<MetaPresetDialog>,
+    meta_sync_fields: BTreeMap<String, bool>,
+    /// LRPAR-G15-IPTC-S8: cached embedded IPTC of the loaded image
+    /// (read-only display). Keyed by `(path, length, mtime)` so the panel
+    /// never re-reads the file per frame; `Err` text is the loud
+    /// unreadable-JPEG error (never a silent skip).
+    meta_embedded_cache: Option<EmbeddedCache>,
     /// Develop history section: currently selected (last restored) history
     /// entry id of the active virtual copy.
     history_selected: Option<String>,
@@ -1972,6 +2071,28 @@ fn thumbnail_key(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .into_owned()
+}
+
+/// LRPAR-G15-IPTC-S8: open prompt dialog for a dynamic meta preset — one
+/// required input per declared placeholder. Session-only; Cancel discards
+/// the whole dialog without touching any sidecar.
+#[derive(Debug, Clone)]
+pub struct MetaPresetDialog {
+    pub spec: String,
+    pub name: String,
+    pub placeholders: Vec<(String, String)>,
+    pub vars: BTreeMap<String, String>,
+    pub error: Option<String>,
+}
+
+/// LRPAR-G15-IPTC-S8: cached embedded IPTC read for the Metadata panel
+/// (see `LuminaApp::meta_embedded_cache`). Session-only, never persisted.
+#[derive(Debug, Clone)]
+struct EmbeddedCache {
+    path: String,
+    len: u64,
+    mtime: Option<std::time::SystemTime>,
+    result: Result<Option<IptcMetadata>, String>,
 }
 
 /// GUI-FILMSTRIP-SYNC-1: per-image outcome of a selection sync/match run.
@@ -2422,6 +2543,15 @@ impl LuminaApp {
             smart_rule_stack: Vec::new(),
             batch_kind: "add_keyword".to_string(),
             batch_value: String::new(),
+            meta_buffers: BTreeMap::new(),
+            meta_buffers_key: None,
+            meta_buffers_dirty: false,
+            meta_presets_dir_override: None,
+            meta_preset_entries: Vec::new(),
+            selected_meta_preset: String::new(),
+            meta_preset_dialog: None,
+            meta_sync_fields: default_meta_sync_fields(),
+            meta_embedded_cache: None,
             history_selected: None,
             decode_rx: None,
             sidecar_revision: None,
@@ -5087,6 +5217,735 @@ impl LuminaApp {
         Ok(())
     }
 
+    // ---- LRPAR-G15-IPTC-S8: Library Metadata panel -----------------------
+    //
+    // Every mutation below travels the same sidecar path as the CLI (`meta
+    // draft`, `meta preset apply`, `meta sync`): load → mutate a clone with
+    // the S1 helpers (`apply_metadata_draft`, history handling) → validate →
+    // CAS + atomic `save_sidecar_if_unchanged`. Conflicts are loud errors,
+    // never silent last-write-wins. `keywords` in preset `fields` stays
+    // loudly rejected (S4 semantics); an empty draft value removes the field
+    // (S1 draft semantics). No second metadata logic lives in the GUI.
+
+    /// Origin marker for history entries written through this panel.
+    const META_ORIGIN_GUI: &'static str = "gui";
+
+    /// Current draft values of the loaded document (empty without one).
+    /// Read-only accessor for the panel and headless tests.
+    pub fn metadata_draft(&self) -> BTreeMap<String, String> {
+        self.document
+            .as_ref()
+            .map(|document| document.metadata.draft.clone())
+            .unwrap_or_default()
+    }
+
+    /// Current metadata history of the loaded document, newest first (empty
+    /// without one). Read-only accessor for the panel and headless tests.
+    pub fn metadata_history(&self) -> Vec<MetadataHistoryEntry> {
+        self.document
+            .as_ref()
+            .map(|document| document.metadata.history.clone())
+            .unwrap_or_default()
+    }
+
+    /// Re-sync the draft text buffers from the loaded document when the
+    /// lineage changed (other image, or a new `rev` after commit/batch).
+    /// Buffers the user edited since the last sync (`meta_buffers_dirty`)
+    /// keep their keystrokes — only missing fields are filled — so the
+    /// commit (which creates the document first) never wipes the edit it
+    /// is about to save. Call [`Self::resync_meta_buffers`] after
+    /// operations that intentionally replace the document content.
+    fn ensure_meta_buffers(&mut self) {
+        let key = self
+            .document
+            .as_ref()
+            .map(|document| (self.path.trim().to_string(), document.metadata.latest_rev()));
+        if self.meta_buffers_key == key {
+            return;
+        }
+        if self.meta_buffers_dirty {
+            let draft = self.metadata_draft();
+            for id in METADATA_FIELD_IDS {
+                self.meta_buffers
+                    .entry((*id).to_string())
+                    .or_insert_with(|| draft.get(*id).cloned().unwrap_or_default());
+            }
+            self.meta_buffers_key = key;
+            return;
+        }
+        self.resync_meta_buffers();
+    }
+
+    /// Rebuild every draft buffer from the loaded document, discarding
+    /// unsaved keystrokes. Used after operations that replace the document
+    /// content (clear, preset apply, batch/sync reload of the open image).
+    fn resync_meta_buffers(&mut self) {
+        let draft = self.metadata_draft();
+        self.meta_buffers.clear();
+        for id in METADATA_FIELD_IDS {
+            self.meta_buffers.insert(
+                (*id).to_string(),
+                draft.get(*id).cloned().unwrap_or_default(),
+            );
+        }
+        self.meta_buffers_key = self
+            .document
+            .as_ref()
+            .map(|document| (self.path.trim().to_string(), document.metadata.latest_rev()));
+        self.meta_buffers_dirty = false;
+    }
+
+    /// Set one draft text buffer (panel input + headless tests). Unknown
+    /// IDs — including `keywords`, which stays the document `keywords`
+    /// field — fail loudly before anything is stored.
+    pub fn set_metadata_buffer(&mut self, field: &str, value: String) -> Result<(), GuiError> {
+        validate_metadata_field_value(field, "").map_err(GuiError::from)?;
+        self.ensure_meta_buffers();
+        self.meta_buffers.insert(field.to_string(), value);
+        self.meta_buffers_dirty = true;
+        Ok(())
+    }
+
+    /// Commit the draft buffers of the loaded image (diffed against the
+    /// document: changed values are set, emptied buffers remove their
+    /// field). All-or-nothing with `origin = "gui"` through
+    /// [`SidecarDocument::apply_metadata_draft`] + [`Self::save_sidecar`]
+    /// (CAS, atomar). Returns `Ok(true)` on update, `Ok(false)` for
+    /// idempotent no-ops. Loud on invalid values — nothing is written then.
+    pub fn commit_metadata_draft(&mut self) -> Result<bool, GuiError> {
+        self.ensure_document_loaded()?;
+        self.ensure_meta_buffers();
+        let current = self.metadata_draft();
+        let mut fields = BTreeMap::new();
+        for id in METADATA_FIELD_IDS {
+            let buffered = self.meta_buffers.get(*id).cloned().unwrap_or_default();
+            let stored = current.get(*id);
+            if buffered.is_empty() {
+                if stored.is_some() {
+                    fields.insert((*id).to_string(), String::new());
+                }
+            } else if stored.is_none_or(|value| value != &buffered) {
+                fields.insert((*id).to_string(), buffered);
+            }
+        }
+        for (field, value) in &fields {
+            validate_metadata_field_value(field, value)?;
+        }
+        if fields.is_empty() {
+            info!("metadata draft for {} unchanged", self.path.trim());
+            self.status = Str::MetadataDraftUnchanged.t().into();
+            return Ok(false);
+        }
+        let timestamp = now_rfc3339_utc();
+        let changed = {
+            let document = self.document.as_mut().expect("document was ensured");
+            document.apply_metadata_draft(&fields, Self::META_ORIGIN_GUI, &timestamp)?
+        };
+        if !changed {
+            info!("metadata draft for {} unchanged", self.path.trim());
+            self.status = Str::MetadataDraftUnchanged.t().into();
+            return Ok(false);
+        }
+        let rev = self
+            .document
+            .as_ref()
+            .map(|document| document.metadata.latest_rev())
+            .unwrap_or(0);
+        self.meta_buffers_key = Some((self.path.trim().to_string(), rev));
+        self.meta_buffers_dirty = false;
+        self.save_sidecar();
+        self.refresh_entry(&PathBuf::from(self.path.trim()));
+        if self.error().is_none() {
+            info!(
+                "metadata draft for {} updated (rev {rev})",
+                self.path.trim()
+            );
+            self.status = Str::MetadataDraftSavedPattern.format_arg(&rev.to_string());
+        }
+        Ok(true)
+    }
+
+    /// Clear draft fields (and/or `keywords`) on the loaded image, mirroring
+    /// the CLI `meta draft clear --field` (one history entry with
+    /// `origin = "gui"`, CAS + atomar). Unknown IDs fail loudly with
+    /// all-or-nothing semantics; already-absent fields are an idempotent
+    /// no-op. Returns `Ok(true)` on update.
+    pub fn clear_metadata_fields(&mut self, fields: &[String]) -> Result<bool, GuiError> {
+        for id in fields {
+            if id != "keywords" && !is_metadata_field(id) {
+                return Err(GuiError::Io(
+                    Str::MetadataUnknownFieldPattern.format_arg(id),
+                ));
+            }
+        }
+        self.ensure_document_loaded()?;
+        let timestamp = now_rfc3339_utc();
+        let removed = {
+            let document = self.document.as_mut().expect("document was ensured");
+            let mut removed = BTreeSet::new();
+            for id in fields {
+                if id == "keywords" {
+                    if !document.keywords.is_empty() {
+                        document.keywords.clear();
+                        removed.insert("keywords".to_string());
+                    }
+                } else if document.metadata.draft.remove(id).is_some() {
+                    removed.insert(id.clone());
+                }
+            }
+            if removed.is_empty() {
+                info!("metadata clear for {} unchanged", self.path.trim());
+                self.status = Str::MetadataDraftUnchanged.t().into();
+                return Ok(false);
+            }
+            let removed_list: Vec<String> = removed.into_iter().collect();
+            let rev = document.metadata.latest_rev() + 1;
+            document.metadata.history.insert(
+                0,
+                MetadataHistoryEntry {
+                    rev,
+                    timestamp,
+                    origin: Self::META_ORIGIN_GUI.to_string(),
+                    changed: removed_list,
+                },
+            );
+            document
+                .metadata
+                .history
+                .truncate(MAX_METADATA_HISTORY_ENTRIES);
+            document.validate()?;
+            document
+                .metadata
+                .history
+                .first()
+                .map(|entry| entry.changed.join(", "))
+                .unwrap_or_default()
+        };
+        self.resync_meta_buffers();
+        self.save_sidecar();
+        self.refresh_entry(&PathBuf::from(self.path.trim()));
+        if self.error().is_none() {
+            info!("metadata clear for {} removed {removed}", self.path.trim());
+            self.status = Str::MetadataDraftClearedPattern.format_arg(&removed);
+        }
+        Ok(true)
+    }
+
+    /// Clear the whole draft (`--all`, history is kept and gains one entry),
+    /// mirroring the CLI. Idempotent no-op on an already-empty draft.
+    pub fn clear_metadata_draft_all(&mut self) -> Result<bool, GuiError> {
+        self.ensure_document_loaded()?;
+        let timestamp = now_rfc3339_utc();
+        let removed = {
+            let document = self.document.as_mut().expect("document was ensured");
+            if !document.clear_metadata_draft(Self::META_ORIGIN_GUI, &timestamp)? {
+                info!("metadata clear for {} unchanged", self.path.trim());
+                self.status = Str::MetadataDraftUnchanged.t().into();
+                return Ok(false);
+            }
+            document
+                .metadata
+                .history
+                .first()
+                .map(|entry| entry.changed.join(", "))
+                .unwrap_or_default()
+        };
+        self.resync_meta_buffers();
+        self.save_sidecar();
+        self.refresh_entry(&PathBuf::from(self.path.trim()));
+        if self.error().is_none() {
+            info!("metadata clear for {} removed {removed}", self.path.trim());
+            self.status = Str::MetadataDraftClearedPattern.format_arg(&removed);
+        }
+        Ok(true)
+    }
+
+    /// Explicitly clear the whole metadata history (the only way to empty
+    /// it; draft values are kept). Returns the number of removed entries.
+    pub fn clear_metadata_history_gui(&mut self) -> Result<usize, GuiError> {
+        self.ensure_document_loaded()?;
+        let removed = {
+            let document = self.document.as_mut().expect("document was ensured");
+            let removed = document.metadata.history.len();
+            document.clear_metadata_history();
+            document.validate()?;
+            removed
+        };
+        if removed == 0 {
+            self.status = Str::MetadataDraftUnchanged.t().into();
+            return Ok(0);
+        }
+        self.save_sidecar();
+        if self.error().is_none() {
+            info!("metadata history for {} cleared", self.path.trim());
+            self.status = Str::MetadataHistoryClearedPattern.format_arg(&removed.to_string());
+        }
+        Ok(removed)
+    }
+
+    /// Embedded IPTC of the loaded image (JPEG IIM/XMP, read-only).
+    /// Non-JPEG sources yield `Ok(None)` ("nicht verfügbar"); present-but-
+    /// broken JPEG segments are a loud error, never a silent skip.
+    pub fn embedded_metadata(&self) -> Result<Option<IptcMetadata>, GuiError> {
+        let path = self.path.trim().to_string();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|error| GuiError::Io(format!("cannot read `{path}`: {error}")))?;
+        if bytes.len() < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+            return Ok(None);
+        }
+        extract_metadata(&bytes).map(Some).map_err(|error| {
+            GuiError::Io(Str::MetadataEmbeddedUnreadablePattern.format_arg(&error.to_string()))
+        })
+    }
+
+    /// Cached [`Self::embedded_metadata`] for the panel: the file is only
+    /// re-read when `(path, length, mtime)` changed, so hovering the panel
+    /// never pays per-frame file IO. Failures stay visible as `Err` text.
+    fn embedded_cached(&mut self) -> Result<Option<IptcMetadata>, String> {
+        let path = self.path.trim().to_string();
+        let fingerprint = std::fs::metadata(&path)
+            .ok()
+            .map(|meta| (meta.len(), meta.modified().ok()));
+        let fresh = match (&self.meta_embedded_cache, &fingerprint) {
+            (
+                Some(EmbeddedCache {
+                    path: cached_path,
+                    len,
+                    mtime,
+                    ..
+                }),
+                Some((current_len, current_mtime)),
+            ) if cached_path == &path && len == current_len && mtime == current_mtime => true,
+            (None, None) if path.is_empty() => true,
+            _ => false,
+        };
+        if !fresh {
+            let result = self.embedded_metadata().map_err(|error| error.to_string());
+            let (len, mtime) = fingerprint.unwrap_or((0, None));
+            self.meta_embedded_cache = Some(EmbeddedCache {
+                path,
+                len,
+                mtime,
+                result: result.clone(),
+            });
+            return result;
+        }
+        self.meta_embedded_cache
+            .as_ref()
+            .map(|cache| cache.result.clone())
+            .unwrap_or(Ok(None))
+    }
+
+    /// Override the user-global meta-presets directory (headless tests).
+    /// `None` restores the production default.
+    pub fn set_meta_presets_dir(&mut self, dir: Option<PathBuf>) {
+        self.meta_presets_dir_override = dir;
+    }
+
+    /// Effective meta-presets directory: the test override or the
+    /// user-global directory shared with edit presets (SOLL §5). `None`
+    /// means the platform config base is unavailable (loud, no fallback).
+    fn meta_presets_dir(&self) -> Option<PathBuf> {
+        self.meta_presets_dir_override
+            .clone()
+            .or_else(default_meta_presets_dir)
+    }
+
+    /// Re-scan the meta-presets directory. A missing directory means "no
+    /// presets saved yet" (not an error); broken files stay visible as
+    /// failed entries — never skipped silently.
+    pub fn refresh_meta_presets(&mut self) {
+        match self.meta_presets_dir() {
+            Some(dir) => {
+                self.meta_preset_entries = scan_meta_presets_dir(&dir);
+            }
+            None => {
+                self.meta_preset_entries.clear();
+                self.status = Str::MetadataNoPresetDir.t().into();
+            }
+        }
+    }
+
+    /// Display names of the available (valid) meta presets, sorted.
+    pub fn meta_preset_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for entry in &self.meta_preset_entries {
+            if let MetaPresetEntry::Available { preset, .. } = entry {
+                names.push(preset.name.clone());
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// Declared placeholders `(name, description)` of one preset.
+    pub fn meta_preset_placeholders(&self, spec: &str) -> Result<Vec<(String, String)>, GuiError> {
+        let (_, preset) = self.load_gui_meta_preset(spec)?;
+        Ok(preset
+            .placeholders
+            .iter()
+            .map(|placeholder| (placeholder.name.clone(), placeholder.description.clone()))
+            .collect())
+    }
+
+    /// Resolve a preset spec (display name against the effective directory,
+    /// or an explicit file path — same resolution as the CLI) and load it.
+    /// `keywords` in `fields` and every other deviation fail loudly here,
+    /// before any target is touched.
+    fn load_gui_meta_preset(&self, spec: &str) -> Result<(PathBuf, MetaPresetFile), GuiError> {
+        let explicit = self.meta_presets_dir_override.clone();
+        let path = resolve_meta_preset_path(spec, explicit.as_deref()).map_err(|error| {
+            GuiError::Io(format!("meta preset `{spec}` cannot be resolved: {error}"))
+        })?;
+        load_meta_preset_file(&path)
+            .map(|preset| (path.clone(), preset))
+            .map_err(|error| {
+                GuiError::Io(format!(
+                    "meta preset `{}` rejected: {error}",
+                    path.display()
+                ))
+            })
+    }
+
+    /// Apply a meta preset to the loaded image: render upfront (every
+    /// placeholder variable required; missing/unknown variables and limit
+    /// violations abort with nothing written), then mutate via
+    /// [`SidecarDocument::apply_metadata_draft`] (`origin =
+    /// "preset:<name>"`) + [`Self::save_sidecar`]. Idempotent
+    /// re-application reports `Ok(false)` without a history entry.
+    pub fn apply_meta_preset_loaded(
+        &mut self,
+        spec: &str,
+        vars: &BTreeMap<String, String>,
+    ) -> Result<bool, GuiError> {
+        let (path, preset) = self.load_gui_meta_preset(spec)?;
+        let resolved = render_meta_preset(&preset, vars, &path.display().to_string())
+            .map_err(|error| GuiError::Io(format!("meta preset apply rejected: {error}")))?;
+        self.ensure_document_loaded()?;
+        let origin = format!("preset:{}", preset.name);
+        let timestamp = now_rfc3339_utc();
+        let changed = {
+            let document = self.document.as_mut().expect("document was ensured");
+            document.apply_metadata_draft(&resolved, &origin, &timestamp)?
+        };
+        if !changed {
+            info!(
+                "meta preset `{}` unchanged for {}",
+                preset.name,
+                self.path.trim()
+            );
+            self.status = Str::MetadataPresetUnchangedPattern.format_arg(&preset.name);
+            return Ok(false);
+        }
+        self.resync_meta_buffers();
+        self.save_sidecar();
+        self.refresh_entry(&PathBuf::from(self.path.trim()));
+        if self.error().is_none() {
+            info!(
+                "meta preset `{}` applied to {}",
+                preset.name,
+                self.path.trim()
+            );
+            self.status = Str::MetadataPresetAppliedPattern.format_arg(&preset.name);
+        }
+        Ok(true)
+    }
+
+    /// Apply a meta preset to every image of the filmstrip selection (empty
+    /// selection falls back to the loaded image). The preset renders once
+    /// upfront — a render failure aborts everything with nothing written
+    /// (loud). Per target: CAS + atomic save; failures are loud per image
+    /// (`error!` + report entry) and never abort the rest (Stapel-Muster,
+    /// `metadata.md` §4).
+    pub fn apply_meta_preset_to_selection(
+        &mut self,
+        spec: &str,
+        vars: &BTreeMap<String, String>,
+    ) -> SelectionSyncReport {
+        let report = SelectionSyncReport::default();
+        let (path, preset) = match self.load_gui_meta_preset(spec) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                self.show_error(error);
+                return report;
+            }
+        };
+        let resolved = match render_meta_preset(&preset, vars, &path.display().to_string()) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                self.show_error(format!("meta preset apply rejected: {error}"));
+                return report;
+            }
+        };
+        let origin = format!("preset:{}", preset.name);
+        self.apply_resolved_to_selection(&resolved, &origin, "preset", &preset.name)
+    }
+
+    /// Field-selective metadata sync from the loaded image onto the
+    /// filmstrip selection (empty selection falls back to the loaded image
+    /// itself, like [`Self::apply_metadata_batch`]). Mirror semantics per
+    /// target (SOLL §6): a source-absent field is removed on the target,
+    /// `keywords` are replaced wholesale; non-selected fields stay
+    /// untouched. `fields` must be non-empty (registry IDs, `keywords`
+    /// allowed) — no silent transfer-all. A missing sidecar (source or
+    /// target) is a loud error ("first open/import the image"), never a
+    /// silent creation. Recipes, masks and edit history are never touched.
+    pub fn sync_metadata_to_selection(&mut self, fields: &BTreeSet<String>) -> SelectionSyncReport {
+        let report = SelectionSyncReport::default();
+        if fields.is_empty() {
+            self.show_error(Str::MetadataSyncNeedsFields.t());
+            return report;
+        }
+        for id in fields {
+            if id != "keywords" && !is_metadata_field(id) {
+                self.show_error(Str::MetadataUnknownFieldPattern.format_arg(id));
+                return report;
+            }
+        }
+        let source = self.path.trim().to_string();
+        if source.is_empty() {
+            self.show_error(Str::NoImageLoaded.t());
+            return report;
+        }
+        let source_sidecar = sidecar_path_for(Path::new(&source));
+        let source_document = match load_sidecar(&source_sidecar) {
+            Ok(document) => document,
+            Err(_) => {
+                self.show_error(Str::MetadataNoSidecarPattern.format_arg(&source));
+                return report;
+            }
+        };
+        let source_name = Path::new(&source)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty());
+        let Some(source_name) = source_name else {
+            self.show_error(Str::NoImageLoaded.t());
+            return report;
+        };
+        let origin = format!("sync:{source_name}");
+        let source_draft = source_document.metadata.draft.clone();
+        let source_keywords = source_document.keywords.clone();
+        let mut targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
+        if targets.is_empty() {
+            targets.push(source.clone());
+        }
+        let mut report = SelectionSyncReport::default();
+        for target in &targets {
+            match Self::apply_meta_sync_to_target(
+                Path::new(target),
+                &source_draft,
+                &source_keywords,
+                fields,
+                &origin,
+            ) {
+                Ok(true) => {
+                    info!("metadata sync: `{target}` updated (from `{source_name}`)");
+                    self.refresh_entry(Path::new(target));
+                    if self.path.trim() == target.as_str() {
+                        self.sidecar_revision = None;
+                        self.reload_document_for_batch_target(Path::new(target));
+                        self.resync_meta_buffers();
+                    }
+                    report.applied.push(target.clone());
+                }
+                Ok(false) => {
+                    info!("metadata sync: `{target}` unchanged");
+                    report.applied.push(target.clone());
+                }
+                Err(message) => {
+                    error!("metadata sync failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if report.failed.is_empty() {
+            self.status =
+                Str::MetadataSyncAppliedPattern.format_arg(&report.applied.len().to_string());
+        } else {
+            let joined = report
+                .failed
+                .iter()
+                .map(|(path, message)| format!("{path}: {message}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.show_error(
+                Str::MetadataSyncFailedPattern
+                    .t()
+                    .replacen("{}", &report.failed.len().to_string(), 1)
+                    .replacen("{}", &joined, 1),
+            );
+        }
+        report
+    }
+
+    /// Shared per-target loop for a pre-rendered draft (`preset:<name>`
+    /// origin): CAS + atomic save per file, failures never abort the rest.
+    /// `kind`/`name` only feed the status line and `info!` logs.
+    fn apply_resolved_to_selection(
+        &mut self,
+        resolved: &BTreeMap<String, String>,
+        origin: &str,
+        kind: &str,
+        name: &str,
+    ) -> SelectionSyncReport {
+        let mut targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
+        if targets.is_empty() && !self.path.trim().is_empty() {
+            targets.push(self.path.trim().to_string());
+        }
+        let mut report = SelectionSyncReport::default();
+        if targets.is_empty() {
+            self.status = Str::NoImagesSelected.t().into();
+            return report;
+        }
+        for target in &targets {
+            match Self::apply_preset_to_target(Path::new(target), resolved, origin) {
+                Ok(true) => {
+                    info!("metadata {kind} `{name}`: `{target}` updated");
+                    self.refresh_entry(Path::new(target));
+                    if self.path.trim() == target.as_str() {
+                        self.sidecar_revision = None;
+                        self.reload_document_for_batch_target(Path::new(target));
+                        self.resync_meta_buffers();
+                    }
+                    report.applied.push(target.clone());
+                }
+                Ok(false) => {
+                    info!("metadata {kind} `{name}`: `{target}` unchanged");
+                    report.applied.push(target.clone());
+                }
+                Err(message) => {
+                    error!("metadata {kind} `{name}` failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if report.failed.is_empty() {
+            self.status = Str::MetadataPresetBatchPattern
+                .t()
+                .replacen("{}", name, 1)
+                .replacen("{}", &report.applied.len().to_string(), 1);
+        } else {
+            let joined = report
+                .failed
+                .iter()
+                .map(|(path, message)| format!("{path}: {message}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.show_error(
+                Str::MetadataSyncFailedPattern
+                    .t()
+                    .replacen("{}", &report.failed.len().to_string(), 1)
+                    .replacen("{}", &joined, 1),
+            );
+        }
+        report
+    }
+
+    /// One atomic preset step for `target` (mirrors the CLI
+    /// `apply_meta_preset_to_target`): load, mutate a clone via
+    /// `apply_metadata_draft`, validate, CAS + atomic save. A missing
+    /// sidecar is a loud per-target error, never a silent creation.
+    fn apply_preset_to_target(
+        target: &Path,
+        resolved: &BTreeMap<String, String>,
+        origin: &str,
+    ) -> Result<bool, String> {
+        let sidecar = sidecar_path_for(target);
+        let document = match load_sidecar(&sidecar) {
+            Ok(document) => document,
+            Err(lumina_sidecar::SidecarError::Missing(_)) => {
+                return Err(format!(
+                    "no sidecar for `{}`; run `import` first",
+                    target.display()
+                ));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let expected = document_revision(&document).map_err(|error| error.to_string())?;
+        let timestamp = now_rfc3339_utc();
+        let mut candidate = document.clone();
+        if !candidate
+            .apply_metadata_draft(resolved, origin, &timestamp)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(false);
+        }
+        save_sidecar_if_unchanged(&sidecar, &candidate, Some(&expected))
+            .map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
+    /// One atomic sync step for `target` (mirrors the CLI
+    /// `apply_meta_sync_to_target`): mirror the selected source fields onto
+    /// a clone (source-absent fields removed, `keywords` replaced
+    /// wholesale), exactly one history entry (`origin`), validate, CAS +
+    /// atomic save. Idempotent no-ops report `Ok(false)` without a history
+    /// entry or write.
+    fn apply_meta_sync_to_target(
+        target: &Path,
+        source_draft: &BTreeMap<String, String>,
+        source_keywords: &[String],
+        fields: &BTreeSet<String>,
+        origin: &str,
+    ) -> Result<bool, String> {
+        let sidecar = sidecar_path_for(target);
+        let document = match load_sidecar(&sidecar) {
+            Ok(document) => document,
+            Err(lumina_sidecar::SidecarError::Missing(_)) => {
+                return Err(format!(
+                    "no sidecar for `{}`; run `import` first",
+                    target.display()
+                ));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let expected = document_revision(&document).map_err(|error| error.to_string())?;
+        let timestamp = now_rfc3339_utc();
+        let mut candidate = document.clone();
+        let mut changed = BTreeSet::new();
+        for id in fields {
+            if id == "keywords" {
+                if candidate.keywords != source_keywords {
+                    candidate.keywords = source_keywords.to_vec();
+                    changed.insert(id.clone());
+                }
+            } else if let Some(value) = source_draft.get(id) {
+                if candidate.metadata.draft.get(id).map(String::as_str) != Some(value.as_str()) {
+                    candidate.metadata.draft.insert(id.clone(), value.clone());
+                    changed.insert(id.clone());
+                }
+            } else if candidate.metadata.draft.remove(id).is_some() {
+                changed.insert(id.clone());
+            }
+        }
+        if changed.is_empty() {
+            return Ok(false);
+        }
+        let changed_list: Vec<String> = changed.into_iter().collect();
+        let rev = candidate.metadata.latest_rev() + 1;
+        candidate.metadata.history.insert(
+            0,
+            MetadataHistoryEntry {
+                rev,
+                timestamp,
+                origin: origin.to_string(),
+                changed: changed_list,
+            },
+        );
+        candidate
+            .metadata
+            .history
+            .truncate(MAX_METADATA_HISTORY_ENTRIES);
+        candidate.validate().map_err(|error| error.to_string())?;
+        save_sidecar_if_unchanged(&sidecar, &candidate, Some(&expected))
+            .map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     /// Named snapshot list of the active virtual copy (Welle 3, LR-12
     /// light): `(entry id, snapshot name)` for history entries carrying the
     /// `extras["snapshot"] = true` marker — or, tolerantly, the
@@ -7591,6 +8450,12 @@ impl LuminaApp {
             // REVIEW-GUI-N3: per-image session state must never leak from the
             // previous file into this one.
             self.history_selected = None;
+            // LRPAR-G15-IPTC-S8: draft buffers + embedded cache belong to the
+            // previous file too — unsaved keystrokes never carry over.
+            self.meta_buffers.clear();
+            self.meta_buffers_key = None;
+            self.meta_buffers_dirty = false;
+            self.meta_embedded_cache = None;
             self.pending_brush_marks.clear();
             self.drag_start = None;
             self.drag_current = None;
@@ -14362,43 +15227,345 @@ impl LuminaApp {
     /// through the `BatchOp` + `save_sidecar` paths (Sidecar-first, loud
     /// errors via `show_error`, `info!` in the mutators); display state
     /// (inputs, active filter, catalog) is session-only.
-    fn draw_library_metadata(&mut self, ui: &mut egui::Ui) {
+    /// Keyword chips of the loaded image (G-15 META-MVP, Slice 3 component,
+    /// reused by the `\` drawer and the LRPAR-G15-IPTC-S8 right-column
+    /// Metadata panel): add/remove run through `add_keyword`/`remove_keyword`
+    /// (Slice-1 validation + CAS save, loud errors, `info!` logs).
+    fn draw_keyword_chips(&mut self, ui: &mut egui::Ui) {
+        let keywords = self.keywords();
+        let mut remove: Option<String> = None;
+        for keyword in &keywords {
+            ui.horizontal(|ui| {
+                ui.label(keyword);
+                if ui.button("✕").clicked() {
+                    remove = Some(keyword.clone());
+                }
+            });
+        }
+        if let Some(keyword) = remove {
+            if let Err(error) = self.remove_keyword(&keyword) {
+                self.show_error(error);
+            }
+        }
+        ui.horizontal(|ui| {
+            let mut input = self.keyword_input.clone();
+            if ui
+                .add(egui::TextEdit::singleline(&mut input).hint_text(Str::KeywordInputHint.t()))
+                .changed()
+            {
+                self.keyword_input = input.clone();
+            }
+            if ui.button(Str::AddKeyword.t()).clicked() {
+                let value = input.trim().to_string();
+                if !value.is_empty() {
+                    match self.add_keyword(&value) {
+                        Ok(_) => self.keyword_input.clear(),
+                        Err(error) => self.show_error(error),
+                    }
+                }
+            }
+        });
+    }
+
+    /// LRPAR-G15-IPTC-S8: right-column Metadata panel of the Library module
+    /// (SOLL §10). Draft field editor (all registry fields, `description`
+    /// multiline, `date_created` with format validation), keyword chips
+    /// ([`Self::draw_keyword_chips`]), read-only embedded values (JPEG),
+    /// metadata history, meta presets (with prompt dialog for dynamic
+    /// presets) and field-selective "sync to selection". Every mutation
+    /// travels the same sidecar path as the CLI (CAS, atomar, loud).
+    fn draw_library_metadata_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading(Str::MetadataSection.t());
+        self.ensure_meta_buffers();
+        self.draw_metadata_draft_editor(ui);
         ui.collapsing(Str::KeywordsSection.t(), |ui| {
-            let keywords = self.keywords();
-            let mut remove: Option<String> = None;
-            for keyword in &keywords {
+            self.draw_keyword_chips(ui);
+        });
+        self.draw_metadata_embedded(ui);
+        self.draw_metadata_history(ui);
+        self.draw_metadata_preset(ui);
+        self.draw_metadata_sync(ui);
+    }
+
+    /// Draft field editor: one row per registry field (label + input +
+    /// read-only embedded value when available), Save/Clear below. `date_created`
+    /// carries its format hint; invalid values fail loudly on Save (nothing
+    /// written, S1 validation).
+    fn draw_metadata_draft_editor(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::MetadataDraftSection.t(), |ui| {
+            let embedded = self.embedded_cached();
+            let embedded_meta = embedded.as_ref().ok().and_then(|meta| meta.clone());
+            for id in METADATA_FIELD_IDS {
+                let Some(label) = metadata_field_label(id) else {
+                    continue;
+                };
                 ui.horizontal(|ui| {
-                    ui.label(keyword);
-                    if ui.button("✕").clicked() {
-                        remove = Some(keyword.clone());
+                    ui.label(label);
+                    if let Some(value) = embedded_meta
+                        .as_ref()
+                        .and_then(|meta| embedded_field_value(meta, id))
+                    {
+                        ui.label(Str::MetadataEmbeddedValuePattern.format_arg(value));
                     }
                 });
-            }
-            if let Some(keyword) = remove {
-                if let Err(error) = self.remove_keyword(&keyword) {
-                    self.show_error(error);
+                let mut buffered = self.meta_buffers.get(*id).cloned().unwrap_or_default();
+                let changed = if *id == "description" {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut buffered)
+                            .desired_rows(3)
+                            .hint_text(label),
+                    )
+                    .changed()
+                } else if *id == "date_created" {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut buffered)
+                            .hint_text(Str::MetadataDateHint.t()),
+                    )
+                    .changed()
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut buffered).hint_text(label))
+                        .changed()
+                };
+                if changed {
+                    self.meta_buffers.insert((*id).to_string(), buffered);
+                    self.meta_buffers_dirty = true;
                 }
             }
             ui.horizontal(|ui| {
-                let mut input = self.keyword_input.clone();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut input).hint_text(Str::KeywordInputHint.t()),
-                    )
-                    .changed()
-                {
-                    self.keyword_input = input.clone();
+                if ui.button(Str::MetadataSaveDraft.t()).clicked() {
+                    if let Err(error) = self.commit_metadata_draft() {
+                        self.show_error(error);
+                    }
                 }
-                if ui.button(Str::AddKeyword.t()).clicked() {
-                    let value = input.trim().to_string();
-                    if !value.is_empty() {
-                        match self.add_keyword(&value) {
-                            Ok(_) => self.keyword_input.clear(),
-                            Err(error) => self.show_error(error),
-                        }
+                if ui.button(Str::MetadataClearDraft.t()).clicked() {
+                    let all: Vec<String> = METADATA_FIELD_IDS
+                        .iter()
+                        .map(|id| (*id).to_string())
+                        .collect();
+                    if let Err(error) = self.clear_metadata_fields(&all) {
+                        self.show_error(error);
                     }
                 }
             });
+        });
+    }
+
+    /// Read-only embedded values (JPEG IIM/XMP): per-field draft-vs-embedded
+    /// overlay is painted inline in the draft editor; this section shows the
+    /// embedded keywords plus the unavailable note for non-JPEG sources.
+    /// Broken JPEG segments stay loud (error text, never a silent skip).
+    fn draw_metadata_embedded(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::MetadataEmbeddedSection.t(), |ui| {
+            match self.embedded_cached() {
+                Ok(None) => {
+                    ui.label(Str::MetadataEmbeddedUnavailable.t());
+                }
+                Ok(Some(meta)) => {
+                    if meta.keywords.is_empty() {
+                        ui.label(Str::MetadataEmbeddedNoKeywords.t());
+                    } else {
+                        ui.label(
+                            Str::MetadataEmbeddedKeywordsPattern
+                                .format_arg(&meta.keywords.join(", ")),
+                        );
+                    }
+                }
+                Err(message) => {
+                    ui.label(Str::MetadataEmbeddedUnreadablePattern.format_arg(&message));
+                }
+            }
+        });
+    }
+
+    /// Metadata history (newest first, last entries) + explicit clear.
+    /// Provenance context, not undo (SOLL §3).
+    fn draw_metadata_history(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::History.t(), |ui| {
+            let history = self.metadata_history();
+            if history.is_empty() {
+                ui.label(Str::NoHistory.t());
+            } else {
+                for entry in history.iter().take(10) {
+                    let line = Str::MetadataHistoryEntryPattern
+                        .t()
+                        .replacen("{}", &entry.rev.to_string(), 1)
+                        .replacen("{}", &entry.timestamp, 1)
+                        .replacen("{}", &entry.origin, 1)
+                        .replacen("{}", &entry.changed.join(", "), 1);
+                    ui.label(line);
+                }
+            }
+            if ui.button(Str::MetadataHistoryClear.t()).clicked() {
+                if let Err(error) = self.clear_metadata_history_gui() {
+                    self.show_error(error);
+                }
+            }
+        });
+    }
+
+    /// Meta preset selector + Apply. Dynamic presets open the prompt dialog
+    /// (one required input per placeholder); Cancel discards it. Failed
+    /// preset files stay visible with their error text.
+    fn draw_metadata_preset(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::MetadataPresetSection.t(), |ui| {
+            if self.meta_preset_entries.is_empty() {
+                self.refresh_meta_presets();
+            }
+            let names = self.meta_preset_names();
+            let mut selected = self.selected_meta_preset.clone();
+            egui::ComboBox::from_id_salt("meta_preset")
+                .selected_text(if selected.is_empty() {
+                    Str::MetadataPresetChooseHint.t().to_string()
+                } else {
+                    selected.clone()
+                })
+                .show_ui(ui, |ui| {
+                    for name in &names {
+                        ui.selectable_value(&mut selected, name.clone(), name);
+                    }
+                });
+            self.selected_meta_preset = selected.clone();
+            if ui.button(Str::MetadataPresetApply.t()).clicked() {
+                if selected.trim().is_empty() {
+                    self.show_error(Str::MetadataPresetChooseHint.t());
+                    return;
+                }
+                match self.meta_preset_placeholders(&selected) {
+                    Ok(placeholders) if placeholders.is_empty() => {
+                        if let Err(error) =
+                            self.apply_meta_preset_loaded(&selected, &BTreeMap::new())
+                        {
+                            self.show_error(error);
+                        }
+                    }
+                    Ok(placeholders) => {
+                        self.meta_preset_dialog = Some(MetaPresetDialog {
+                            spec: selected.clone(),
+                            name: selected.clone(),
+                            placeholders,
+                            vars: BTreeMap::new(),
+                            error: None,
+                        });
+                    }
+                    Err(error) => self.show_error(error),
+                }
+            }
+            for entry in &self.meta_preset_entries {
+                if let MetaPresetEntry::Failed { path, error } = entry {
+                    ui.label(
+                        Str::NeighborFailedPattern
+                            .format_arg(&format!("{}: {error}", path.display())),
+                    );
+                }
+            }
+        });
+    }
+
+    /// Field checkboxes (default: all draft fields + keywords) + "sync to
+    /// selection". The report surfaces via the status line (`applied` count)
+    /// and `show_error` on failures, plus `info!`/`error!` per file (Stapel
+    /// §4 pattern).
+    fn draw_metadata_sync(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::MetadataSyncSection.t(), |ui| {
+            let mut order: Vec<String> = METADATA_FIELD_IDS
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect();
+            order.push("keywords".to_string());
+            for id in &order {
+                let label = metadata_field_label(id)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| Str::KeywordsSection.t().to_string());
+                let mut checked = self.meta_sync_fields.get(id).copied().unwrap_or(false);
+                if ui.checkbox(&mut checked, label).changed() {
+                    self.meta_sync_fields.insert(id.clone(), checked);
+                }
+            }
+            if ui.button(Str::MetadataSyncButton.t()).clicked() {
+                let mut fields: BTreeSet<String> = BTreeSet::new();
+                for (id, checked) in &self.meta_sync_fields {
+                    if *checked {
+                        fields.insert(id.clone());
+                    }
+                }
+                self.sync_metadata_to_selection(&fields);
+            }
+        });
+    }
+
+    /// Prompt dialog for dynamic meta presets (drawn as a floating window
+    /// from `update`, like the toast): one required input per placeholder.
+    /// Confirm applies (loud errors stay in the dialog); Cancel discards the
+    /// dialog without touching any sidecar.
+    fn draw_meta_preset_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.meta_preset_dialog.clone() else {
+            return;
+        };
+        let mut close = false;
+        let mut confirm = false;
+        egui::Window::new(Str::MetadataPresetDialog.t()).show(ctx, |ui| {
+            ui.label(&dialog.name);
+            for (name, description) in &dialog.placeholders {
+                ui.label(name);
+                ui.label(description);
+                let mut value = dialog.vars.get(name).cloned().unwrap_or_default();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut value)
+                            .hint_text(Str::MetadataPresetVarHint.t()),
+                    )
+                    .changed()
+                {
+                    dialog.vars.insert(name.clone(), value);
+                }
+            }
+            if let Some(error) = &dialog.error {
+                ui.label(Str::NeighborFailedPattern.format_arg(error));
+            }
+            ui.horizontal(|ui| {
+                if ui.button(Str::MetadataPresetConfirm.t()).clicked() {
+                    confirm = true;
+                }
+                if ui.button(Str::Cancel.t()).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            self.meta_preset_dialog = None;
+            return;
+        }
+        if confirm {
+            let missing = dialog
+                .placeholders
+                .iter()
+                .find(|(name, _)| dialog.vars.get(name).is_none_or(|v| v.trim().is_empty()));
+            if let Some((name, _)) = missing {
+                dialog.error = Some(Str::MetadataPresetVarRequiredPattern.format_arg(name));
+                self.meta_preset_dialog = Some(dialog);
+                return;
+            }
+            match self.apply_meta_preset_loaded(&dialog.spec, &dialog.vars) {
+                Ok(_) if self.error().is_none() => {
+                    self.meta_preset_dialog = None;
+                }
+                Ok(_) => {
+                    dialog.error = Some(self.error().unwrap_or_default().to_string());
+                    self.meta_preset_dialog = Some(dialog);
+                }
+                Err(error) => {
+                    dialog.error = Some(error.to_string());
+                    self.meta_preset_dialog = Some(dialog);
+                }
+            }
+        } else {
+            self.meta_preset_dialog = Some(dialog);
+        }
+    }
+
+    fn draw_library_metadata(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::KeywordsSection.t(), |ui| {
+            self.draw_keyword_chips(ui);
         });
         ui.collapsing(Str::CollectionsSection.t(), |ui| {
             let memberships = self.collections();
@@ -17138,13 +18305,10 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| self.draw_navigator(&ctx, ui));
         }
 
-        // Right: Develop controls (eight sections), or nothing extra for
-        // Export (placeholder shown centrally). The Library module is a
-        // two-pane layout (folder tree left, thumbnail grid center) with no
-        // right-hand Source panel — that source/sidecar/copy info belongs to
-        // the Develop/Export context (Lightroom-parity: the Source panel was
-        // removed from Library). Hidden under `Tab`/`Shift+Tab`/`L`/`F` like the
-        // left panels.
+        // Right: Develop controls (eight sections), the Library Metadata
+        // panel (LRPAR-G15-IPTC-S8, SOLL §10), or nothing extra for
+        // Export (placeholder shown centrally). Hidden under
+        // `Tab`/`Shift+Tab`/`L`/`F` like the left panels.
         if !self.side_chrome_hidden() {
             egui::Panel::right("controls")
                 .resizable(true)
@@ -17152,7 +18316,9 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| match self.active_module {
                     Module::Develop => self.draw_develop_panel(ui),
                     Module::Library => {
-                        // No right Source panel in Library — intentional.
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            self.draw_library_metadata_panel(ui);
+                        });
                     }
                     Module::Export => {
                         self.draw_export_panel(ui);
@@ -17188,6 +18354,9 @@ impl eframe::App for LuminaApp {
         // taking layout width.
         self.update_toast(&ctx);
         self.draw_toast(&ctx);
+        // LRPAR-G15-IPTC-S8: dynamic-preset prompt dialog (floating window,
+        // Cancel discards without touching any sidecar).
+        self.draw_meta_preset_dialog(&ctx);
         if let Some(t0) = perf_t0 {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             // GUI-SCROLL-200-1: `slow_frame` flags every frame over the 16.7 ms
@@ -29797,6 +30966,440 @@ mod tests {
         let document =
             lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&good)).unwrap();
         assert!(document.keywords.contains(&"batch".to_string()));
+    }
+
+    // ---- LRPAR-G15-IPTC-S8: Library Metadata panel -----------------------
+    //
+    // Jede Aktion folgt der Kette Edit → Commit → Datei → Reload (DoD §7);
+    // das Original bleibt dabei byte-identisch.
+
+    fn save_jpeg(path: &Path) {
+        std::fs::write(path, jpeg()).unwrap();
+    }
+
+    fn write_meta_preset(
+        dir: &Path,
+        file: &str,
+        name: &str,
+        fields: &[(&str, &str)],
+        placeholders: &[(&str, &str)],
+    ) -> PathBuf {
+        let preset = serde_json::json!({
+            "format": "lumina-meta-preset",
+            "version": 1,
+            "name": name,
+            "fields": fields.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect::<std::collections::BTreeMap<String, String>>(),
+            "placeholders": placeholders.iter().map(|(n, d)| serde_json::json!({"name": n, "description": d})).collect::<Vec<_>>(),
+        });
+        let path = dir.join(file);
+        std::fs::write(&path, serde_json::to_vec_pretty(&preset).unwrap()).unwrap();
+        path
+    }
+
+    fn seed_sidecar(source: &Path) {
+        let mut setup = new_app();
+        open_and_decode(&mut setup, source.display().to_string());
+        setup.add_keyword("seed").unwrap();
+    }
+
+    #[test]
+    fn iptc_gui_draft_edit_commit_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let original_bytes = std::fs::read(&source).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_metadata_buffer("title", "Startschuss".into())
+            .unwrap();
+        app.set_metadata_buffer("city", "Berlin".into()).unwrap();
+        app.set_metadata_buffer("description", "Erste Zeile, zweite folgt".into())
+            .unwrap();
+        app.set_metadata_buffer("date_created", "2026-09-04".into())
+            .unwrap();
+        assert!(app.commit_metadata_draft().unwrap());
+        // Datei: Werte + Historie (origin gui, rev 1, changed sortiert).
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.get("title"), Some("Startschuss"));
+        assert_eq!(document.metadata.get("city"), Some("Berlin"));
+        assert_eq!(document.metadata.get("date_created"), Some("2026-09-04"));
+        assert_eq!(document.metadata.history.len(), 1);
+        let entry = &document.metadata.history[0];
+        assert_eq!(entry.rev, 1);
+        assert_eq!(entry.origin, "gui");
+        assert_eq!(
+            entry.changed,
+            vec![
+                "city".to_string(),
+                "date_created".to_string(),
+                "description".to_string(),
+                "title".to_string()
+            ]
+        );
+        // Original byte-identisch.
+        assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+        // Reload: Entwurf + idempotenter No-Op ohne Historie-Eintrag.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(
+            reopened.metadata_draft().get("title").map(String::as_str),
+            Some("Startschuss")
+        );
+        assert!(!reopened.commit_metadata_draft().unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.history.len(), 1);
+    }
+
+    #[test]
+    fn iptc_gui_draft_validation_is_loud() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // Ungültiges Datum: Commit scheitert laut, nichts geschrieben.
+        app.set_metadata_buffer("date_created", "2026/09/04".into())
+            .unwrap();
+        assert!(app.commit_metadata_draft().is_err());
+        assert!(!lumina_sidecar::sidecar_path_for(&source).is_file());
+        // Unbekannte ID und keywords als Draft-Feld: schon der Puffer laut.
+        assert!(app.set_metadata_buffer("nope", "x".into()).is_err());
+        let keywords_error = app.set_metadata_buffer("keywords", "x".into()).unwrap_err();
+        assert!(keywords_error.to_string().contains("keywords"));
+        // Überlanges Feld: Commit scheitert, gültige Felder landen nicht partiell.
+        app.set_metadata_buffer("date_created", "2026-09-04".into())
+            .unwrap();
+        app.set_metadata_buffer("title", "x".repeat(257)).unwrap();
+        assert!(app.commit_metadata_draft().is_err());
+        assert!(!lumina_sidecar::sidecar_path_for(&source).is_file());
+    }
+
+    #[test]
+    fn iptc_gui_empty_buffer_removes_field() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_metadata_buffer("title", "Startschuss".into())
+            .unwrap();
+        app.set_metadata_buffer("city", "Berlin".into()).unwrap();
+        assert!(app.commit_metadata_draft().unwrap());
+        // Leerer Puffer entfernt das Feld (S1-Draft-Semantik), Historie +1.
+        app.set_metadata_buffer("title", String::new()).unwrap();
+        assert!(app.commit_metadata_draft().unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.get("title"), None);
+        assert_eq!(document.metadata.get("city"), Some("Berlin"));
+        assert_eq!(document.metadata.history.len(), 2);
+        assert_eq!(
+            document.metadata.history[0].changed,
+            vec!["title".to_string()]
+        );
+    }
+
+    #[test]
+    fn iptc_gui_clear_fields_and_all() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_metadata_buffer("title", "Startschuss".into())
+            .unwrap();
+        app.set_metadata_buffer("city", "Berlin".into()).unwrap();
+        app.commit_metadata_draft().unwrap();
+        // Gezieltes Leeren (inkl. keywords-Routing).
+        app.add_keyword("temp").unwrap();
+        assert!(app
+            .clear_metadata_fields(&["title".to_string(), "keywords".to_string()])
+            .unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.get("title"), None);
+        assert!(document.keywords.is_empty());
+        // --all leert den Entwurf, Historie bleibt.
+        let history_before = document.metadata.history.len();
+        assert!(app.clear_metadata_draft_all().unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert!(document.metadata.draft.is_empty());
+        assert_eq!(document.metadata.history.len(), history_before + 1);
+        assert!(!app.clear_metadata_draft_all().unwrap());
+        // Unbekannte ID scheitert laut ohne Mutation.
+        assert!(app.clear_metadata_fields(&["nope".to_string()]).is_err());
+    }
+
+    #[test]
+    fn iptc_gui_static_preset_apply() {
+        let directory = tempfile::tempdir().unwrap();
+        let presets = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        write_meta_preset(
+            presets.path(),
+            "Fest.lumina-meta-preset.json",
+            "Fest",
+            &[("title", "Startschuss"), ("city", "Berlin")],
+            &[],
+        );
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_meta_presets_dir(Some(presets.path().to_path_buf()));
+        app.refresh_meta_presets();
+        assert_eq!(app.meta_preset_names(), vec!["Fest".to_string()]);
+        assert!(app.meta_preset_placeholders("Fest").unwrap().is_empty());
+        assert!(app
+            .apply_meta_preset_loaded("Fest", &BTreeMap::new())
+            .unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.get("title"), Some("Startschuss"));
+        assert_eq!(document.metadata.history[0].origin, "preset:Fest");
+        // Idempotente Wiederanwendung: kein Fehler, kein Historie-Eintrag.
+        assert!(!app
+            .apply_meta_preset_loaded("Fest", &BTreeMap::new())
+            .unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.history.len(), 1);
+    }
+
+    #[test]
+    fn iptc_gui_dynamic_preset_requires_vars() {
+        let directory = tempfile::tempdir().unwrap();
+        let presets = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        write_meta_preset(
+            presets.path(),
+            "Dyn.lumina-meta-preset.json",
+            "Dyn",
+            &[("title", "{event_name} in {ort}"), ("city", "{ort}")],
+            &[("event_name", "Name"), ("ort", "Stadt")],
+        );
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_meta_presets_dir(Some(presets.path().to_path_buf()));
+        app.refresh_meta_presets();
+        let placeholders = app.meta_preset_placeholders("Dyn").unwrap();
+        assert_eq!(placeholders.len(), 2);
+        // Fehlende Variablen: laut, nichts geschrieben (Prompt-Abbruch-Semantik).
+        assert!(app
+            .apply_meta_preset_loaded("Dyn", &BTreeMap::new())
+            .is_err());
+        assert!(!lumina_sidecar::sidecar_path_for(&source).is_file());
+        // Unbekannte Variable: laut, nichts geschrieben.
+        let mut vars = BTreeMap::new();
+        vars.insert("event_name".to_string(), "Fest".to_string());
+        vars.insert("ort".to_string(), "Berlin".to_string());
+        vars.insert("extra".to_string(), "x".to_string());
+        assert!(app.apply_meta_preset_loaded("Dyn", &vars).is_err());
+        assert!(!lumina_sidecar::sidecar_path_for(&source).is_file());
+        // Vollständige Variablen: aufgelöst geschrieben.
+        vars.remove("extra");
+        assert!(app.apply_meta_preset_loaded("Dyn", &vars).unwrap());
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.get("title"), Some("Fest in Berlin"));
+        assert_eq!(document.metadata.get("city"), Some("Berlin"));
+        // Dialog-Abbruch ändert nichts: verworfener Dialog ohne Apply.
+        app.meta_preset_dialog = Some(MetaPresetDialog {
+            spec: "Dyn".to_string(),
+            name: "Dyn".to_string(),
+            placeholders: vec![("event_name".to_string(), "Name".to_string())],
+            vars: BTreeMap::new(),
+            error: None,
+        });
+        app.meta_preset_dialog = None;
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
+        assert_eq!(document.metadata.history.len(), 1);
+    }
+
+    #[test]
+    fn iptc_gui_preset_keywords_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let presets = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        write_meta_preset(
+            presets.path(),
+            "Bad.lumina-meta-preset.json",
+            "Bad",
+            &[("keywords", "x")],
+            &[],
+        );
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_meta_presets_dir(Some(presets.path().to_path_buf()));
+        app.refresh_meta_presets();
+        // Kaputte Datei bleibt als Failed-Eintrag sichtbar (S4-Semantik).
+        assert!(app.meta_preset_names().is_empty());
+        assert_eq!(app.meta_preset_entries.len(), 1);
+        assert!(app
+            .apply_meta_preset_loaded("Bad", &BTreeMap::new())
+            .is_err());
+        assert!(!lumina_sidecar::sidecar_path_for(&source).is_file());
+    }
+
+    #[test]
+    fn iptc_gui_sync_mirror() {
+        let directory = tempfile::tempdir().unwrap();
+        let a = directory.path().join("a.png");
+        let b = directory.path().join("b.png");
+        save_png(&a);
+        save_png(&b);
+        seed_sidecar(&a);
+        seed_sidecar(&b);
+        // Quelle A: title + city + Keywords.
+        let mut setup = new_app();
+        open_and_decode(&mut setup, a.display().to_string());
+        setup.set_metadata_buffer("title", "Fest".into()).unwrap();
+        setup.set_metadata_buffer("city", "Berlin".into()).unwrap();
+        setup.commit_metadata_draft().unwrap();
+        setup.add_keyword("quelle").unwrap();
+        // Ziel B: abweichender title, eigenes headline, eigene Keywords.
+        let mut setup = new_app();
+        open_and_decode(&mut setup, b.display().to_string());
+        setup.set_metadata_buffer("title", "Alt".into()).unwrap();
+        setup
+            .set_metadata_buffer("headline", "Bleibt".into())
+            .unwrap();
+        setup.commit_metadata_draft().unwrap();
+        setup.add_keyword("ziel").unwrap();
+        // Sync {title, keywords} von A auf beide (A selbst: No-Op).
+        let mut app = new_app();
+        open_and_decode(&mut app, a.display().to_string());
+        app.filmstrip_selection.insert(a.display().to_string());
+        app.filmstrip_selection.insert(b.display().to_string());
+        let fields: BTreeSet<String> = ["title".to_string(), "keywords".to_string()]
+            .into_iter()
+            .collect();
+        let report = app.sync_metadata_to_selection(&fields);
+        assert_eq!(report.applied_count(), 2);
+        assert_eq!(report.failed_count(), 0);
+        let document = lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&b)).unwrap();
+        assert_eq!(document.metadata.get("title"), Some("Fest"));
+        assert_eq!(document.metadata.get("headline"), Some("Bleibt"));
+        assert!(document.keywords.contains(&"quelle".to_string()));
+        assert!(!document.keywords.contains(&"ziel".to_string()));
+        let entry = &document.metadata.history[0];
+        assert_eq!(entry.origin, "sync:a.png");
+        assert_eq!(
+            entry.changed,
+            vec!["keywords".to_string(), "title".to_string()]
+        );
+        // Mirror-Entfernung: city auf A leeren, {city} syncen → B verliert city.
+        let mut setup = new_app();
+        open_and_decode(&mut setup, b.display().to_string());
+        setup.set_metadata_buffer("city", "Hamburg".into()).unwrap();
+        setup.commit_metadata_draft().unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, a.display().to_string());
+        app.set_metadata_buffer("city", String::new()).unwrap();
+        app.commit_metadata_draft().unwrap();
+        app.filmstrip_selection.insert(a.display().to_string());
+        app.filmstrip_selection.insert(b.display().to_string());
+        let fields: BTreeSet<String> = ["city".to_string()].into_iter().collect();
+        let report = app.sync_metadata_to_selection(&fields);
+        assert_eq!(report.failed_count(), 0);
+        let document = lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&b)).unwrap();
+        assert_eq!(document.metadata.get("city"), None);
+        // Nicht-selektierte Felder bleiben unberührt.
+        assert_eq!(document.metadata.get("title"), Some("Fest"));
+    }
+
+    #[test]
+    fn iptc_gui_sync_failure_isolation() {
+        let directory = tempfile::tempdir().unwrap();
+        let good = directory.path().join("good.png");
+        let bad = directory.path().join("bad.png");
+        save_png(&good);
+        save_png(&bad);
+        seed_sidecar(&good);
+        seed_sidecar(&bad);
+        let mut setup = new_app();
+        open_and_decode(&mut setup, good.display().to_string());
+        setup.set_metadata_buffer("title", "Fest".into()).unwrap();
+        setup.commit_metadata_draft().unwrap();
+        // Ziel-Sidecar korrumpieren (Original bleibt unberührt).
+        std::fs::write(lumina_sidecar::sidecar_path_for(&bad), b"{broken").unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, good.display().to_string());
+        app.filmstrip_selection.insert(good.display().to_string());
+        app.filmstrip_selection.insert(bad.display().to_string());
+        let fields: BTreeSet<String> = ["title".to_string()].into_iter().collect();
+        let report = app.sync_metadata_to_selection(&fields);
+        assert_eq!(report.applied_count(), 1);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.failed[0].0, bad.display().to_string());
+        assert!(app.error().is_some(), "failure must stay loud");
+        // Ziel ohne Sidecar: lauter Pro-Bild-Fehler, kein stilles Anlegen.
+        let noside = directory.path().join("noside.png");
+        save_png(&noside);
+        app.filmstrip_selection.clear();
+        app.filmstrip_selection.insert(noside.display().to_string());
+        let report = app.sync_metadata_to_selection(&fields);
+        assert_eq!(report.applied_count(), 0);
+        assert_eq!(report.failed_count(), 1);
+        assert!(!lumina_sidecar::sidecar_path_for(&noside).is_file());
+        // Leere Feldwahl: kein Still-All.
+        let report = app.sync_metadata_to_selection(&BTreeSet::new());
+        assert_eq!(report.applied_count(), 0);
+        assert!(app.error().is_some());
+        // Default-Auswahl: alle Draft-Felder + Keywords, alle an.
+        let defaults = default_meta_sync_fields();
+        assert_eq!(defaults.len(), METADATA_FIELD_IDS.len() + 1);
+        assert!(defaults.values().all(|checked| *checked));
+    }
+
+    #[test]
+    fn iptc_gui_history_clear_and_embedded() {
+        let directory = tempfile::tempdir().unwrap();
+        let png = directory.path().join("photo.png");
+        save_png(&png);
+        let mut app = new_app();
+        open_and_decode(&mut app, png.display().to_string());
+        // PNG: kein Embedded ("nicht verfügbar").
+        assert!(app.embedded_metadata().unwrap().is_none());
+        app.set_metadata_buffer("title", "Fest".into()).unwrap();
+        app.commit_metadata_draft().unwrap();
+        assert_eq!(app.metadata_history().len(), 1);
+        // Explizites Leeren: Historie weg, Entwurf bleibt.
+        assert_eq!(app.clear_metadata_history_gui().unwrap(), 1);
+        assert_eq!(app.metadata_history().len(), 0);
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&png)).unwrap();
+        assert!(document.metadata.history.is_empty());
+        assert_eq!(document.metadata.get("title"), Some("Fest"));
+        assert_eq!(app.clear_metadata_history_gui().unwrap(), 0);
+        // JPEG mit eingebranntem IPTC: lesend verfügbar (read-only).
+        let plain_jpeg = directory.path().join("plain.jpg");
+        save_jpeg(&plain_jpeg);
+        let mut app = new_app();
+        open_and_decode(&mut app, plain_jpeg.display().to_string());
+        let read = app.embedded_metadata().unwrap();
+        assert!(
+            read.is_none_or(|meta| meta.title.is_none()),
+            "fresh JPEG without IPTC carries no title"
+        );
+        let jpeg_path = directory.path().join("photo.jpg");
+        let meta = lumina_iptc::IptcMetadata {
+            title: Some("Eingebettet".to_string()),
+            keywords: vec!["k1".to_string()],
+            ..lumina_iptc::IptcMetadata::default()
+        };
+        let embedded = lumina_iptc::embed_metadata(&jpeg(), &meta).unwrap();
+        std::fs::write(&jpeg_path, embedded).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, jpeg_path.display().to_string());
+        let read = app.embedded_metadata().unwrap().expect("JPEG carries IPTC");
+        assert_eq!(read.title.as_deref(), Some("Eingebettet"));
+        assert_eq!(read.keywords, vec!["k1".to_string()]);
     }
 
     /// G-15 leere Auswahl: Fallback auf das geladene Bild (nie stilles

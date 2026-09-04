@@ -25,6 +25,9 @@ lumina-raw = { path = "../lumina-raw" }
 # missing capability in the Geometry status line.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# LRPAR-G15-IPTC-S8: read-only embedded IPTC display (JPEG IIM/XMP) in the
+# Library Metadata panel. Pure-Rust compile-time dependency, no runtime tools.
+lumina-iptc = { path = "../lumina-iptc" }
 thiserror = "2"
 log = "0.4"
 # GPU-first render path. Optional so lean builds can omit the wgpu/Metal
