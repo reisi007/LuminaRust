@@ -68,7 +68,7 @@ Migrationszwang pre-MVP):
   Draft-UI/Sync/Export nur mitgeführt (Routing).
 - **Historie:** `rev` startet bei 1 und ist streng monoton; je Mutation ein
   Eintrag mit `timestamp` (RFC 3339, UTC), `origin`
-  (`manual` | `preset:<name>` | `sync:<quell-sidecar-id>` | `cli` | `gui` |
+  (`manual` | `preset:<name>` | `sync:<quell-dateiname>` | `cli` | `gui` |
   `mcp`) und `changed` (Liste betroffener Feld-IDs). Speicherordnung
   neueste-zuerst (der erste Eintrag trägt die höchste `rev`); neue Einträge
   werden vorangestellt. Cap **100 Einträge**, FIFO (älteste fallen
@@ -144,6 +144,13 @@ viele Ziele:
 - Report: `updated` / `unchanged` / `failed` (pro Datei mit Grund).
 - Es werden **nur** Draft-Felder (+ Keywords) übertragen — nie Rezepte,
   Masken, Bearbeitungshistorie oder Originale.
+- **Mirror-Semantik (S5):** Für jedes selektierte Feld gilt der Quellwert —
+  ein im Quellentwurf fehlendes Feld wird auf den Zielen **entfernt**,
+  `keywords` ersetzt die Zielliste als Ganzes (auch leere Quellliste leert).
+  Nicht-selektierte Felder bleiben unberührt. `changed` listet nur tatsächlich
+  betroffene IDs (sortiert); ohne Änderung kein Historie-Eintrag
+  (`unchanged`). `origin` trägt den Quell-**Dateinamen**
+  (`sync:<dateiname>`, nie einen Pfad).
 
 ## 7. Export-Bake-In (JPEG, Opt-in)
 

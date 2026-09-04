@@ -651,6 +651,9 @@ enum MetaCommand {
     /// Apply file-backed IPTC metadata presets (`<name>.lumina-meta-preset.json`,
     /// static + dynamic with `{placeholder}` variables).
     Preset(MetaPresetArgs),
+    /// Copy selected draft fields (+ keywords) from one source image onto N
+    /// targets (field-selective, mirror semantics). See [`MetaSyncArgs`].
+    Sync(MetaSyncArgs),
 }
 
 #[derive(Debug, Args)]
@@ -796,6 +799,27 @@ struct MetaPresetApplyArgs {
     /// `=`; duplicate names are rejected loudly).
     #[arg(long = "var", value_name = "NAME=VALUE")]
     var: Vec<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// LRPAR-G15-IPTC-S5: field-selective draft/keyword transfer (`meta sync`).
+/// `--fields` is deliberately NOT clap-`required`: a missing list must fail
+/// loudly with exit 1 (like `meta draft clear`'s manual arity check), not
+/// with clap's usage exit 2 and never with a silent transfer-all.
+#[derive(Debug, Args)]
+struct MetaSyncArgs {
+    /// Source image whose draft (+ keywords) is the sync source.
+    #[arg(long, value_name = "SOURCE")]
+    source: PathBuf,
+    /// Target image(s) receiving the selected fields (repeatable, min 1).
+    #[arg(long, required = true, value_name = "TARGET")]
+    target: Vec<PathBuf>,
+    /// Draft field IDs to transfer (comma-separated, repeatable; registry IDs
+    /// from SOLL §4, `keywords` allowed). Required — an empty list is a loud
+    /// error (exit 1), never a silent transfer-all.
+    #[arg(long, value_delimiter = ',', value_name = "ID,...")]
+    fields: Vec<String>,
     #[arg(long)]
     json: bool,
 }
@@ -2433,6 +2457,7 @@ fn meta(args: MetaArgs) -> Result<(), CliError> {
             MetaPresetCommand::Show(show) => meta_preset_show(show),
             MetaPresetCommand::Apply(apply) => meta_preset_apply(apply),
         },
+        MetaCommand::Sync(sync) => meta_sync(sync),
     }
 }
 
@@ -3203,6 +3228,190 @@ fn meta_preset_apply(args: MetaPresetApplyArgs) -> Result<(), CliError> {
             "command": "meta-preset-apply",
             "preset": path,
             "name": preset.name,
+            "updated": updated_count,
+            "unchanged": unchanged_count,
+            "failed": failed,
+            "errors": failures,
+            "items": items,
+            "status": if failed == 0 { "ok" } else { "partial" },
+        }),
+        &text,
+    )?;
+    info!("{text}");
+    if failed != 0 {
+        return Err(CliError::BatchPartial { failed });
+    }
+    Ok(())
+}
+
+/// LRPAR-G15-IPTC-S5: mirrors the selected source fields onto one target:
+/// load, mutate a clone (draft values copied, source-absent fields removed,
+/// `keywords` replaced wholesale), exactly one history entry
+/// (`origin = "sync:<source-file-name>"`), validate, CAS + atomic save.
+/// Returns `Ok(true)` on update and `Ok(false)` for idempotent no-ops (no
+/// history entry, no write). A missing sidecar is a loud per-target error
+/// ("zuerst importieren" — "run `import` first"), never a silent creation.
+/// Recipes, masks and per-copy edit history are never touched.
+fn apply_meta_sync_to_target(
+    target: &Path,
+    source_draft: &BTreeMap<String, String>,
+    source_keywords: &[String],
+    fields: &BTreeSet<String>,
+    origin: &str,
+) -> Result<bool, CliError> {
+    let sidecar = sidecar_path_for(target);
+    let document = match load_sidecar(&sidecar) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                target.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let original_bytes = fs::read(target).map_err(|error| io_error(target, error))?;
+    let expected = document_revision(&document)?;
+    let timestamp = now_rfc3339_utc();
+    let mut candidate = document.clone();
+    let mut changed = BTreeSet::new();
+    for id in fields {
+        if id == "keywords" {
+            if candidate.keywords != source_keywords {
+                candidate.keywords = source_keywords.to_vec();
+                changed.insert(id.clone());
+            }
+        } else if let Some(value) = source_draft.get(id) {
+            if candidate.metadata.draft.get(id).map(String::as_str) != Some(value.as_str()) {
+                candidate.metadata.draft.insert(id.clone(), value.clone());
+                changed.insert(id.clone());
+            }
+        } else if candidate.metadata.draft.remove(id).is_some() {
+            changed.insert(id.clone());
+        }
+    }
+    if changed.is_empty() {
+        debug_assert_eq!(
+            fs::read(target).map_err(|error| io_error(target, error))?,
+            original_bytes
+        );
+        return Ok(false);
+    }
+    let changed_list: Vec<String> = changed.into_iter().collect();
+    let rev = candidate.metadata.latest_rev() + 1;
+    candidate.metadata.history.insert(
+        0,
+        MetadataHistoryEntry {
+            rev,
+            timestamp,
+            origin: origin.to_string(),
+            changed: changed_list.clone(),
+        },
+    );
+    candidate
+        .metadata
+        .history
+        .truncate(MAX_METADATA_HISTORY_ENTRIES);
+    candidate.validate()?;
+    save_sidecar_if_unchanged(&sidecar, &candidate, Some(&expected))?;
+    // The original image is never modified by a metadata command.
+    debug_assert_eq!(
+        fs::read(target).map_err(|error| io_error(target, error))?,
+        original_bytes
+    );
+    Ok(true)
+}
+
+/// LRPAR-G15-IPTC-S5: `meta sync` — validates `--fields` upfront (empty list
+/// and unknown IDs abort everything with exit 1, nothing written), snapshots
+/// the source draft + keywords once, then mirrors the selection per target in
+/// isolation (updated / unchanged / failed; exit 3 on partial failure).
+/// A missing source sidecar aborts everything with exit 1; a missing target
+/// sidecar fails only its own item. Idempotent re-application reports
+/// `unchanged` without a history entry.
+fn meta_sync(args: MetaSyncArgs) -> Result<(), CliError> {
+    if args.fields.iter().all(|field| field.is_empty()) {
+        return Err(CliError::Message(
+            "`meta sync` requires `--fields <id,…>` (registry field IDs, `keywords` allowed); refusing a silent transfer-all".into(),
+        ));
+    }
+    let mut fields = BTreeSet::new();
+    for id in &args.fields {
+        if id != "keywords" && !is_metadata_field(id) {
+            return Err(CliError::Message(format!(
+                "meta sync for `{}` rejected: unknown metadata field `{id}`",
+                args.source.display()
+            )));
+        }
+        fields.insert(id.clone());
+    }
+    let (_, source_document) = require_sidecar(&args.source)?;
+    let source_draft = source_document.metadata.draft.clone();
+    let source_keywords = source_document.keywords.clone();
+    let source_name = args
+        .source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            CliError::Message(format!(
+                "meta sync for `{}` rejected: source has no file name",
+                args.source.display()
+            ))
+        })?;
+    let origin = format!("sync:{source_name}");
+    let field_list: Vec<String> = fields.iter().cloned().collect();
+    info!(
+        "meta sync from `{source_name}` to {} target(s) ({} field(s): {})",
+        args.target.len(),
+        field_list.len(),
+        field_list.join(", ")
+    );
+    let mut updated_count = 0usize;
+    let mut unchanged_count = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+    let mut items = Vec::with_capacity(args.target.len());
+    for target in &args.target {
+        match apply_meta_sync_to_target(target, &source_draft, &source_keywords, &fields, &origin) {
+            Ok(true) => {
+                info!(
+                    "meta sync: `{}` updated (from `{source_name}`)",
+                    target.display()
+                );
+                updated_count += 1;
+                items.push(serde_json::json!({"target": target, "status": "updated"}));
+            }
+            Ok(false) => {
+                info!(
+                    "meta sync: `{}` unchanged (already in sync with `{source_name}`)",
+                    target.display()
+                );
+                unchanged_count += 1;
+                items.push(serde_json::json!({"target": target, "status": "unchanged"}));
+            }
+            Err(error) => {
+                let message = format!("{}: {error}", target.display());
+                eprintln!("error: meta sync: {message}");
+                info!("meta sync: `{}` failed", target.display());
+                failures.push(message.clone());
+                items.push(
+                    serde_json::json!({"target": target, "status": "failed", "error": message}),
+                );
+            }
+        }
+    }
+    let failed = failures.len();
+    let text = format!(
+        "meta sync: {updated_count} updated, {unchanged_count} unchanged, {failed} failed (from `{source_name}`)"
+    );
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "meta-sync",
+            "source": args.source,
+            "source_name": source_name,
+            "fields": field_list,
+            "origin": origin,
             "updated": updated_count,
             "unchanged": unchanged_count,
             "failed": failed,
