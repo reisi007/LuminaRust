@@ -109,7 +109,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | LRPAR-G09-LIB | G-09 | Library-Kern |
 | 1.0 | LRPAR-G10-VIEWER | G-10 | Viewer/Softproof |
 | 1.0 | LRPAR-G11-OVERLAYS | G-11 | Overlays/Pins |
-| 1.0 | LRPAR-G15-META-MVP | G-15 | Keywords/Sammlungen |
 | 1.0 | LRPAR-G16-POWER | G-16 | Power-Shortcuts |
 | 1.0 | NAMING-F1 | kein Goal | Produktname |
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
@@ -160,7 +159,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G08-PREVIOUS (Release: 1.0)** Previous-Übernahme (G-08, ~55 %): Ein-Klick-Übernahme vom Vorbild (Previous) zusätzlich zu Sync/Match. Abnahme: CLI + GUI-headless, History-Schritt je Zielbild.
 - [ ] **[PRIO: mittel] LRPAR-G09-LIB (Release: 1.0)** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] LRPAR-G15-META-MVP (Release: 1.0)** Metadaten-MVP (G-15-Kern, MVP = 1.0, User-Entscheid 2026-09-03): Keywords, Filterungen (u. a. Brennweite/Kamera/ISO über `\`-Leiste hinaus), Sammlungen + Smart-Sammlungen, Stapel-Vollfunktion. Abnahme: CLI (Roundtrip, kein Datenverlust, Sidecar-first) + GUI-headless. (Slice 1 sidecar BESTANDEN `ed2e054`; Slice 2 CLI BESTANDEN; offen: Slice 3 GUI.)
 - [ ] **[PRIO: mittel] LRPAR-G15-META-15 (Release: 1.5)** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig

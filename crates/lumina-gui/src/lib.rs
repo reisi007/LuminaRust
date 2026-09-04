@@ -40,12 +40,13 @@ use lumina_core::{
 use lumina_core::render_frame;
 use lumina_core::{export_image, masks::rasterize_prompt, range_masks, ExportOptions};
 use lumina_raw::RawError;
+use lumina_sidecar::{apply_batch_op, validate_smart_collection_def, SMART_COLLECTION_VERSION};
 use lumina_sidecar::{
-    load_zdata, zdata_path_for, AiSelect, AiSelectKind, ArtifactStatus, BrushMark, BrushMarkSign,
-    CoordinateSystem, DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskDefinition,
-    MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus, ModelIdentity, Point2,
-    Preprocessing, PromptTransform, Resolution, SidecarDocument, SourceFingerprint, SourceIdentity,
-    SourceStatus,
+    load_zdata, zdata_path_for, AiSelect, AiSelectKind, ArtifactStatus, BatchOp, BrushMark,
+    BrushMarkSign, CollectionMembership, CoordinateSystem, DecodeFingerprint, GeometryFingerprint,
+    HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
+    ModelIdentity, Point2, Preprocessing, PromptTransform, Resolution, SidecarDocument,
+    SmartCollectionDef, SmartRule, SourceFingerprint, SourceIdentity, SourceStatus,
 };
 use lumina_sidecar::{
     AnalysisFingerprint, BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint,
@@ -536,12 +537,19 @@ pub fn softproof_for_key(key: egui::Key, ctrl_or_command: bool, alt: bool, shift
 
 /// Simple Library filter match (Welle 3, LR-13 light) over metadata the
 /// directory scan already holds — no index, no extra IO. An empty query
-/// matches everything. A `rating:<0-5>`, `flag:pick|reject|unflagged` or
-/// `label:red|yellow|green|blue|none` prefix filters on that field;
-/// anything else is a case-insensitive substring match on the file name. A
-/// recognised prefix with an unparseable value matches nothing (visible
-/// empty grid, never a silent pass-through). Pure function, unit-tested
-/// headless.
+/// matches everything. Tokens (whitespace-separated) combine with AND; each
+/// token is one of `rating:<0-5>`, `flag:pick|reject|unflagged`,
+/// `label:red|yellow|green|blue|none`, `keyword:<exact>` (case-sensitive,
+/// needs entry data — see [`library_entry_matches`]), `collection:<id|name>`,
+/// `camera:<substring>`, `iso:<number>`, `focal:|focal_length:<mm>`, or a
+/// case-insensitive substring match on the file name. A recognised prefix
+/// with an unparseable value matches nothing (visible empty grid, never a
+/// silent pass-through). Pure function, unit-tested headless.
+///
+/// This overload carries no per-entry keyword/collection/EXIF data, so the
+/// `keyword:`/`collection:`/`camera:`/`iso:`/`focal:` predicates match
+/// nothing here (missing data is never a silent pass-through); use
+/// [`library_entry_matches`] for the full entry-aware evaluation.
 pub fn library_filter_matches(
     name: &str,
     rating: u8,
@@ -553,7 +561,21 @@ pub fn library_filter_matches(
     if query.is_empty() {
         return true;
     }
-    let lowered = query.to_lowercase();
+    query
+        .split_whitespace()
+        .all(|token| library_filter_token_matches(token, name, rating, flag, color_label))
+}
+
+/// One whitespace-separated token of [`library_filter_matches`]. Pure
+/// function shared by both filter overloads.
+fn library_filter_token_matches(
+    token: &str,
+    name: &str,
+    rating: u8,
+    flag: Flag,
+    color_label: u8,
+) -> bool {
+    let lowered = token.to_lowercase();
     if let Some(rest) = lowered.strip_prefix("rating:") {
         return rest.trim().parse::<u8>().is_ok_and(|want| want == rating);
     }
@@ -577,7 +599,318 @@ pub fn library_filter_matches(
         };
         return want == color_label;
     }
+    // Extended G-15 predicates need per-entry data (keywords, collections,
+    // EXIF) that this overload does not carry: without data they match
+    // nothing rather than passing silently. The prefix itself must still be
+    // recognised here so `keyword:x` is not misread as a file-name search.
+    // `keyword:` compares case-sensitively on the original token.
+    if token.len() >= 8 && token[..8].eq_ignore_ascii_case("keyword:") {
+        return false;
+    }
+    for prefix in ["collection:", "camera:", "iso:", "focal:", "focal_length:"] {
+        if lowered.starts_with(prefix) {
+            return false;
+        }
+    }
     name.to_lowercase().contains(&lowered)
+}
+
+/// Full G-15 META-MVP (Slice 3) Library filter over a scanned
+/// [`FileBrowserEntry`]: the `\`-query tokens (see
+/// [`library_filter_matches`]) AND-combined, where the extended predicates
+/// evaluate against cached entry data — `keyword:` exact case-sensitive
+/// (Slice-1 semantics), `collection:` exact `id` or exact `name`
+/// (case-insensitive), `camera:` case-insensitive substring of
+/// `make + model`, `iso:` exact-vs-epsilon numeric match,
+/// `focal:`/`focal_length:` exact-vs-epsilon match in mm. Missing entry
+/// data matches nothing for that predicate. `collection:` and `camera:`
+/// values may contain spaces: following tokens without a `:` belong to the
+/// value (`collection:best of` matches the collection named `Best Of`).
+/// Pure function, unit-tested headless.
+pub fn library_entry_matches(entry: &FileBrowserEntry, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let tokens: Vec<&str> = query.split_whitespace().collect();
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        let lowered = token.to_lowercase();
+        // Multi-word values: `collection:`/`camera:` consume following
+        // tokens that carry no `:` of their own.
+        let multi = ["collection:", "camera:"]
+            .into_iter()
+            .find(|prefix| lowered.starts_with(prefix));
+        if let Some(prefix) = multi {
+            let mut value = token[prefix.len()..].to_string();
+            let mut next = index + 1;
+            while next < tokens.len() && !tokens[next].contains(':') {
+                value.push(' ');
+                value.push_str(tokens[next]);
+                next += 1;
+            }
+            if !entry_multi_token_matches(entry, prefix, &value) {
+                return false;
+            }
+            index = next;
+            continue;
+        }
+        if !entry_single_token_matches(entry, token) {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// `collection:`/`camera:` value match (see [`library_entry_matches`]).
+/// Empty values match nothing — never a silent pass-through.
+fn entry_multi_token_matches(entry: &FileBrowserEntry, prefix: &str, value: &str) -> bool {
+    let want = value.trim();
+    if want.is_empty() {
+        return false;
+    }
+    match prefix {
+        "collection:" => {
+            let want = want.to_lowercase();
+            entry
+                .collections
+                .iter()
+                .any(|m| m.id.to_lowercase() == want || m.name.to_lowercase() == want)
+        }
+        "camera:" => entry
+            .camera
+            .as_deref()
+            .is_some_and(|camera| camera.to_lowercase().contains(&want.to_lowercase())),
+        _ => false,
+    }
+}
+
+/// One `\` token against a scanned entry (see [`library_entry_matches`]):
+/// `keyword:` (exact, case-sensitive), `iso:`/`focal:`/`focal_length:`
+/// (numeric, unparseable matches nothing), then the shared
+/// rating/flag/label/name matcher.
+fn entry_single_token_matches(entry: &FileBrowserEntry, token: &str) -> bool {
+    // `keyword:` compares case-sensitively on the original token.
+    if token.len() >= 8 && token[..8].eq_ignore_ascii_case("keyword:") {
+        let want = &token[8..];
+        return entry.keywords.iter().any(|k| k == want);
+    }
+    let lowered = token.to_lowercase();
+    if let Some(rest) = lowered.strip_prefix("iso:") {
+        let parsed: Option<f32> = rest.trim().parse().ok();
+        let Some(want) = parsed.filter(|v| v.is_finite()) else {
+            return false;
+        };
+        return entry
+            .iso
+            .is_some_and(|iso| (iso - want).abs() <= (want.abs() * 1e-3 + 1e-6));
+    }
+    if let Some(rest) = lowered
+        .strip_prefix("focal_length:")
+        .or_else(|| lowered.strip_prefix("focal:"))
+    {
+        let parsed: Option<f32> = rest.trim().parse().ok();
+        let Some(want) = parsed.filter(|v| v.is_finite()) else {
+            return false;
+        };
+        return entry
+            .focal_length
+            .is_some_and(|focal| (focal - want).abs() <= (want.abs() * 1e-3 + 1e-6));
+    }
+    library_filter_token_matches(
+        token,
+        &entry.name,
+        entry.rating,
+        entry.flag,
+        entry.color_label,
+    )
+}
+
+/// Which collection view filters the Library grid (G-15 META-MVP, Slice 3):
+/// none (all images), one static collection (by stable `id`), or one smart
+/// collection (by stable `id`, resolved against the loaded catalog).
+/// Pure data, unit-tested headless via [`collection_filter_matches_entry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectionFilter {
+    Static { id: String },
+    Smart { id: String },
+}
+
+/// Whether `entry` passes `filter`. A static filter matches membership `id`
+/// (exact); a smart filter evaluates the catalog rule with
+/// `matches_any_copy` over a synthetic single-copy view of the entry
+/// (entry keywords + default-copy rating/flag — the same state the grid
+/// badge shows). Unknown smart `id` or evaluation error matches nothing
+/// loudly at the call site (this pure helper returns `false`; the panel
+/// surfaces the error text). Pure function, unit-tested headless.
+pub fn collection_filter_matches_entry(
+    entry: &FileBrowserEntry,
+    filter: &CollectionFilter,
+    smart_catalog: &[SmartCollectionDef],
+) -> bool {
+    match filter {
+        CollectionFilter::Static { id } => entry.collections.iter().any(|m| m.id == *id),
+        CollectionFilter::Smart { id } => {
+            let Some(def) = smart_catalog.iter().find(|def| def.id == *id) else {
+                return false;
+            };
+            // Entry-level view: keywords plus the default copy's rating/flag.
+            let rule_result = def.rule.matches(&entry.keywords, entry.rating, entry.flag);
+            // A stale `version` must not silently match: only evaluate when
+            // the definition validates.
+            if lumina_sidecar::validate_smart_collection_def(def).is_err() {
+                return false;
+            }
+            rule_result
+        }
+    }
+}
+
+/// Parse a batch-operation selector of the Library batch bar into the
+/// Slice-1 [`BatchOp`] language (G-15 META-MVP, Slice 3). `kind` is one of
+/// `add_keyword`, `remove_keyword`, `add_to_collection` (`value` =
+/// `id=name`), `remove_from_collection` (`value` = `id`), `set_rating`
+/// (`value` = `0..=5`), `set_flag` (`value` =
+/// `pick|reject|unflagged`). Anything else — unknown kind, malformed value,
+/// out-of-range rating — is a loud `Err`, never a silent no-op. Pure
+/// function, unit-tested headless.
+pub fn parse_metadata_batch_op(kind: &str, value: &str) -> Result<BatchOp, String> {
+    match kind {
+        "add_keyword" => Ok(BatchOp::AddKeyword {
+            keyword: value.to_string(),
+        }),
+        "remove_keyword" => Ok(BatchOp::RemoveKeyword {
+            keyword: value.to_string(),
+        }),
+        "add_to_collection" => {
+            let (id, name) = value.split_once('=').ok_or_else(|| {
+                format!("invalid collection assignment `{value}`: expected `id=name`")
+            })?;
+            Ok(BatchOp::AddToCollection {
+                id: id.to_string(),
+                name: name.to_string(),
+            })
+        }
+        "remove_from_collection" => Ok(BatchOp::RemoveFromCollection {
+            id: value.to_string(),
+        }),
+        "set_rating" => {
+            // Loud validation here mirrors `set_rating` (never clamp); the
+            // sidecar validates again on apply.
+            let rating: u8 = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("invalid rating `{value}`: expected 0..=5"))?;
+            if rating > 5 {
+                return Err(format!("invalid rating `{value}`: expected 0..=5"));
+            }
+            Ok(BatchOp::SetRating {
+                copy_id: String::new(),
+                rating,
+            })
+        }
+        "set_flag" => {
+            let flag = match value.trim().to_lowercase().as_str() {
+                "pick" => Flag::Pick,
+                "reject" => Flag::Reject,
+                "unflagged" => Flag::Unflagged,
+                _ => {
+                    return Err(format!(
+                        "invalid flag `{value}`: expected pick|reject|unflagged"
+                    ));
+                }
+            };
+            Ok(BatchOp::SetFlag {
+                copy_id: String::new(),
+                flag,
+            })
+        }
+        _ => Err(format!("unknown batch operation `{kind}`")),
+    }
+}
+
+/// Build one [`SmartRule`] from the Library smart-editor inputs (G-15
+/// META-MVP, Slice 3). `kind` is one of `all`, `none`, `keyword`
+/// (`value` = exact case-sensitive keyword), `rating_at_least`,
+/// `rating_equals` (`value` = `0..=5`), `flag` (`value` =
+/// `pick|reject|unflagged`). Anything else is a loud `Err`. Pure function,
+/// unit-tested headless; `And`/`Or`/`Not` composition happens on the
+/// caller-held rule stack ([`combine_smart_rules`]).
+pub fn build_smart_rule(kind: &str, value: &str) -> Result<SmartRule, String> {
+    match kind {
+        "all" => Ok(SmartRule::All),
+        "none" => Ok(SmartRule::None),
+        "keyword" => Ok(SmartRule::Keyword {
+            keyword: value.to_string(),
+        }),
+        "rating_at_least" => {
+            let rating: u8 = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("invalid rating `{value}`: expected 0..=5"))?;
+            if rating > 5 {
+                return Err(format!("invalid rating `{value}`: expected 0..=5"));
+            }
+            Ok(SmartRule::RatingAtLeast { rating })
+        }
+        "rating_equals" => {
+            let rating: u8 = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("invalid rating `{value}`: expected 0..=5"))?;
+            if rating > 5 {
+                return Err(format!("invalid rating `{value}`: expected 0..=5"));
+            }
+            Ok(SmartRule::RatingEquals { rating })
+        }
+        "flag" => {
+            let flag = match value.trim().to_lowercase().as_str() {
+                "pick" => Flag::Pick,
+                "reject" => Flag::Reject,
+                "unflagged" => Flag::Unflagged,
+                _ => {
+                    return Err(format!(
+                        "invalid flag `{value}`: expected pick|reject|unflagged"
+                    ));
+                }
+            };
+            Ok(SmartRule::Flag { flag })
+        }
+        _ => Err(format!("unknown smart-rule kind `{kind}`")),
+    }
+}
+
+/// Combine caller-held [`SmartRule`] stack entries (G-15 META-MVP, Slice 3):
+/// `and`/`or` need ≥2 entries, `not` needs ≥1 (pops it, pushes the
+/// negation). Underflow is a loud `Err`. Pure function, unit-tested
+/// headless.
+pub fn combine_smart_rules(stack: &mut Vec<SmartRule>, op: &str) -> Result<(), String> {
+    match op {
+        "and" | "or" => {
+            if stack.len() < 2 {
+                return Err(format!("cannot combine `{op}`: need at least 2 rules"));
+            }
+            let rules = std::mem::take(stack);
+            stack.push(if op == "and" {
+                SmartRule::And { rules }
+            } else {
+                SmartRule::Or { rules }
+            });
+            Ok(())
+        }
+        "not" => {
+            let rule = stack
+                .pop()
+                .ok_or_else(|| "cannot negate: no rule on the stack".to_string())?;
+            stack.push(SmartRule::Not {
+                rule: Box::new(rule),
+            });
+            Ok(())
+        }
+        _ => Err(format!("unknown smart-rule combinator `{op}`")),
+    }
 }
 
 /// Read the stack-group proxy id (Welle 3, LR-17 light) from a virtual
@@ -592,6 +925,36 @@ pub fn stack_id_of(extras: &BTreeMap<String, serde_json::Value>) -> Option<Strin
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// Format marker of the portable smart-collection catalog file (G-15
+/// META-MVP, Slice 3) — identical to the CLI (`SmartCatalogFile` there), so
+/// both sides read and write the same bytes. The file carries versioned
+/// rule data only, never absolute paths.
+pub const SMART_CATALOG_FORMAT: &str = "lumina-smart-catalog";
+
+/// Portable smart-collection catalog file (G-15 META-MVP, Slice 3),
+/// CLI-identical envelope. Serialized with `version =
+/// SMART_COLLECTION_VERSION` and validated per definition with
+/// `validate_smart_collection_def` on load and before save.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SmartCatalogFile {
+    format: String,
+    version: u8,
+    collections: Vec<SmartCollectionDef>,
+}
+
+/// The default virtual copy id of `document` (first copy when no default is
+/// flagged); `None` only when the document carries no copies. Used to
+/// resolve selector batch ops (`SetRating`/`SetFlag` with empty `copy_id`)
+/// per target file.
+fn default_copy_id(document: &SidecarDocument) -> Option<String> {
+    document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.is_default)
+        .or_else(|| document.virtual_copies.first())
+        .map(|copy| copy.id.clone())
 }
 
 /// Shadow/highlight clipping fractions (`0..=1`) of a frame: a pixel counts
@@ -1210,6 +1573,37 @@ pub struct LuminaApp {
     /// Library module: current thumbnail cell size (px) for the center grid,
     /// driven by a toolbar slider (Lightroom-like resizable library thumbs).
     library_thumb_size: f32,
+    /// G-15 META-MVP (Slice 3) Library metadata session state. The persisted
+    /// truth stays Sidecar-first (`SidecarDocument.keywords` /
+    /// `.collections` via `apply_batch_op` + `save_sidecar`); these fields
+    /// are panel inputs + catalog session state only:
+    /// * `keyword_input`: text field for adding a keyword to the loaded image.
+    /// * `collection_id_input`/`collection_name_input`: `id` + display `name`
+    ///   for adding the loaded image to a static collection (`id=name` also
+    ///   accepted in the id field — split at the first `=`).
+    /// * `active_collection`: grid filter selection (`None` = all images).
+    /// * `smart_catalog`/`smart_catalog_path`: portable smart-collection
+    ///   catalog in the CLI-identical `lumina-smart-catalog` v1 format;
+    ///   persisted only via explicit Load/Save (never implicitly).
+    /// * `smart_id_input`/`smart_name_input`/`smart_rule_kind`/
+    ///   `smart_rule_value`: smart-definition editor inputs.
+    /// * `smart_rule_stack`: pushed rules awaiting `And`/`Or`/`Not`
+    ///   composition before Create.
+    /// * `batch_kind`/`batch_value`: batch-bar inputs selecting exactly one
+    ///   `BatchOp` for [`Self::apply_metadata_batch`].
+    keyword_input: String,
+    collection_id_input: String,
+    collection_name_input: String,
+    active_collection: Option<CollectionFilter>,
+    smart_catalog: Vec<SmartCollectionDef>,
+    smart_catalog_path: String,
+    smart_id_input: String,
+    smart_name_input: String,
+    smart_rule_kind: String,
+    smart_rule_value: String,
+    smart_rule_stack: Vec<SmartRule>,
+    batch_kind: String,
+    batch_value: String,
     /// Develop history section: currently selected (last restored) history
     /// entry id of the active virtual copy.
     history_selected: Option<String>,
@@ -1429,6 +1823,22 @@ pub struct FileBrowserEntry {
     /// Color label (`0..=4`, `0` = none) of the default virtual copy (Welle 2),
     /// read from the copy's `extras["color_label"]`; `0` without a sidecar.
     color_label: u8,
+    /// Source-level keywords of the sidecar (`SidecarDocument.keywords`,
+    /// G-15 META-MVP Slice 3); empty without a sidecar. Powers the
+    /// `keyword:` Library filter and the smart-collection evaluation.
+    keywords: Vec<String>,
+    /// Source-level static collection memberships
+    /// (`SidecarDocument.collections`, G-15 META-MVP Slice 3); empty without
+    /// a sidecar. Powers the `collection:` filter and the collection picker.
+    collections: Vec<CollectionMembership>,
+    /// `camera_make + camera_model` from `lumina_raw::read_metadata`
+    /// (best effort; `None` when unreadable). Powers the `camera:` filter.
+    camera: Option<String>,
+    /// ISO from `lumina_raw::read_metadata` (best effort). Powers `iso:`.
+    iso: Option<f32>,
+    /// Focal length in mm from `lumina_raw::read_metadata` (best effort).
+    /// Powers `focal:`/`focal_length:`.
+    focal_length: Option<f32>,
     /// Relative subfolder of the entry vs. the listed directory (`""` for
     /// top-level files). Powers the Library grid path badge (F-100): the
     /// recursive aggregation shows subfolder images with their relative
@@ -1781,6 +2191,19 @@ impl LuminaApp {
             folder_children: BTreeMap::new(),
             folder_raw_counts: BTreeMap::new(),
             library_thumb_size: 132.0,
+            keyword_input: String::new(),
+            collection_id_input: String::new(),
+            collection_name_input: String::new(),
+            active_collection: None,
+            smart_catalog: Vec::new(),
+            smart_catalog_path: String::new(),
+            smart_id_input: String::new(),
+            smart_name_input: String::new(),
+            smart_rule_kind: "keyword".to_string(),
+            smart_rule_value: String::new(),
+            smart_rule_stack: Vec::new(),
+            batch_kind: "add_keyword".to_string(),
+            batch_value: String::new(),
             history_selected: None,
             decode_rx: None,
             sidecar_revision: None,
@@ -2204,9 +2627,15 @@ impl LuminaApp {
         let mut rating = 0u8;
         let mut flag = lumina_sidecar::Flag::Unflagged;
         let mut color_label = 0u8;
+        // G-15 META-MVP (Slice 3): source-level keywords + static collection
+        // memberships for the extended Library filter / smart evaluation.
+        let mut keywords = Vec::new();
+        let mut collections = Vec::new();
         let source_status = if path.is_file() {
             match lumina_sidecar::load_sidecar(&sidecar_path) {
                 Ok(document) => {
+                    keywords = document.keywords.clone();
+                    collections = document.collections.clone();
                     virtual_copies = document.virtual_copies.len();
                     if let Some(default) = document
                         .virtual_copies
@@ -2251,6 +2680,22 @@ impl LuminaApp {
             .and_then(|name| name.to_str())
             .unwrap_or("")
             .to_string();
+        // G-15 META-MVP (Slice 3): EXIF snapshot for the extended Library
+        // filter — best effort, never a scan failure. `read_metadata` is a
+        // metadata-only probe (no full decode); unreadable sources simply
+        // carry `None` (the corresponding predicates then match nothing).
+        let (camera, iso, focal_length) = match lumina_raw::read_metadata(path) {
+            Ok(metadata) => {
+                let camera = match (&metadata.camera_make, &metadata.camera_model) {
+                    (Some(make), Some(model)) => Some(format!("{make} {model}")),
+                    (Some(make), None) => Some(make.clone()),
+                    (None, Some(model)) => Some(model.clone()),
+                    (None, None) => None,
+                };
+                (camera, metadata.iso, metadata.focal_length)
+            }
+            Err(_) => (None, None, None),
+        };
         Some(FileBrowserEntry {
             path: path.to_path_buf(),
             name,
@@ -2263,6 +2708,11 @@ impl LuminaApp {
             rating,
             flag,
             color_label,
+            keywords,
+            collections,
+            camera,
+            iso,
+            focal_length,
             folder: String::new(),
         })
     }
@@ -3308,6 +3758,423 @@ impl LuminaApp {
         self.save_sidecar();
         self.status = Str::StackGroupedPattern.format_arg(&new_id);
         Ok(Some(new_id))
+    }
+
+    /// Source-level keywords of the loaded document (G-15 META-MVP, Slice 3).
+    /// Empty without a loaded document. Read-only accessor for the Library
+    /// panel and headless tests.
+    pub fn keywords(&self) -> Vec<String> {
+        self.document
+            .as_ref()
+            .map(|document| document.keywords.clone())
+            .unwrap_or_default()
+    }
+
+    /// Add a keyword to the loaded image (G-15 META-MVP, Slice 3) via the
+    /// Slice-1 `BatchOp::AddKeyword` language + [`Self::save_sidecar`]
+    /// (CAS, atomar). Idempotent: an existing keyword succeeds unchanged.
+    /// Invalid keywords fail loudly, never silently normalised.
+    pub fn add_keyword(&mut self, keyword: &str) -> Result<bool, GuiError> {
+        self.ensure_document_loaded()?;
+        let Some(document) = &mut self.document else {
+            return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
+        };
+        let changed = apply_batch_op(
+            document,
+            &BatchOp::AddKeyword {
+                keyword: keyword.to_string(),
+            },
+        )?;
+        if changed {
+            self.save_sidecar();
+            self.refresh_entry(&PathBuf::from(self.path.trim()));
+            info!("keyword `{keyword}` added to {}", self.path.trim());
+            self.status = Str::KeywordAddedPattern.format_arg(keyword);
+        } else {
+            info!(
+                "keyword `{keyword}` already present on {}",
+                self.path.trim()
+            );
+            self.status = Str::KeywordUnchangedPattern.format_arg(keyword);
+        }
+        Ok(changed)
+    }
+
+    /// Remove a keyword from the loaded image (G-15 META-MVP, Slice 3),
+    /// mirroring [`Self::add_keyword`]. Absent keywords succeed unchanged.
+    pub fn remove_keyword(&mut self, keyword: &str) -> Result<bool, GuiError> {
+        self.ensure_document_loaded()?;
+        let Some(document) = &mut self.document else {
+            return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
+        };
+        let changed = apply_batch_op(
+            document,
+            &BatchOp::RemoveKeyword {
+                keyword: keyword.to_string(),
+            },
+        )?;
+        if changed {
+            self.save_sidecar();
+            self.refresh_entry(&PathBuf::from(self.path.trim()));
+            info!("keyword `{keyword}` removed from {}", self.path.trim());
+            self.status = Str::KeywordRemovedPattern.format_arg(keyword);
+        } else {
+            info!("keyword `{keyword}` absent on {}", self.path.trim());
+            self.status = Str::KeywordUnchangedPattern.format_arg(keyword);
+        }
+        Ok(changed)
+    }
+
+    /// Source-level static collection memberships of the loaded document
+    /// (G-15 META-MVP, Slice 3). Empty without a loaded document.
+    pub fn collections(&self) -> Vec<CollectionMembership> {
+        self.document
+            .as_ref()
+            .map(|document| document.collections.clone())
+            .unwrap_or_default()
+    }
+
+    /// Split a collection assignment `id=name` at the first `=` (CLI-compat,
+    /// G-15 META-MVP Slice 2 `split_collection_assignment`). A missing `=`
+    /// is a loud error, never a silent `id == name`. Pure helper shared by
+    /// the panel and headless tests.
+    pub fn split_collection_assignment(value: &str) -> Result<(String, String), GuiError> {
+        value.split_once('=').map_or_else(
+            || {
+                Err(GuiError::Io(
+                    Str::InvalidCollectionAssignment.format_arg(value),
+                ))
+            },
+            |(id, name)| Ok((id.to_string(), name.to_string())),
+        )
+    }
+
+    /// Add the loaded image to a static collection (G-15 META-MVP, Slice 3)
+    /// via `BatchOp::AddToCollection` + [`Self::save_sidecar`]. An existing
+    /// `id` refreshes the display `name` (rename, like the CLI). Loud
+    /// validation, `info!` logging, entry refresh — like [`Self::add_keyword`].
+    pub fn add_to_collection(&mut self, id: &str, name: &str) -> Result<bool, GuiError> {
+        self.ensure_document_loaded()?;
+        let Some(document) = &mut self.document else {
+            return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
+        };
+        let changed = apply_batch_op(
+            document,
+            &BatchOp::AddToCollection {
+                id: id.to_string(),
+                name: name.to_string(),
+            },
+        )?;
+        if changed {
+            self.save_sidecar();
+            self.refresh_entry(&PathBuf::from(self.path.trim()));
+            info!("collection `{id}` ({name}) joined by {}", self.path.trim());
+            self.status = Str::CollectionJoinedPattern.format_arg(name);
+        } else {
+            info!("collection `{id}` unchanged for {}", self.path.trim());
+            self.status = Str::CollectionUnchangedPattern.format_arg(name);
+        }
+        Ok(changed)
+    }
+
+    /// Remove the loaded image from a static collection (G-15 META-MVP,
+    /// Slice 3), mirroring [`Self::add_to_collection`].
+    pub fn remove_from_collection(&mut self, id: &str) -> Result<bool, GuiError> {
+        self.ensure_document_loaded()?;
+        let Some(document) = &mut self.document else {
+            return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
+        };
+        let changed = apply_batch_op(
+            document,
+            &BatchOp::RemoveFromCollection { id: id.to_string() },
+        )?;
+        if changed {
+            self.save_sidecar();
+            self.refresh_entry(&PathBuf::from(self.path.trim()));
+            info!("collection `{id}` left by {}", self.path.trim());
+            self.status = Str::CollectionLeftPattern.format_arg(id);
+        } else {
+            info!("collection `{id}` absent on {}", self.path.trim());
+            self.status = Str::CollectionUnchangedPattern.format_arg(id);
+        }
+        Ok(changed)
+    }
+
+    /// Static collections aggregated from the scanned entries (G-15 META-MVP,
+    /// Slice 3): `(id, name, member_count)`, sorted by name. Sidecar-first —
+    /// rebuilt from the scan on every call, never a second store. A
+    /// divergent `id → name` (renamed in some sidecars only) keeps the
+    /// first-seen name; renaming across all sidecars is a batch operation
+    /// (see [`Self::apply_metadata_batch`]).
+    pub fn static_collections(&self) -> Vec<(String, String, usize)> {
+        let mut aggregated: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        for entry in &self.entries {
+            for membership in &entry.collections {
+                aggregated
+                    .entry(membership.id.clone())
+                    .and_modify(|(_, count)| *count += 1)
+                    .or_insert_with(|| (membership.name.clone(), 1));
+            }
+        }
+        let mut out: Vec<(String, String, usize)> = aggregated
+            .into_iter()
+            .map(|(id, (name, count))| (id, name, count))
+            .collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        out
+    }
+
+    /// Select the Library collection filter (G-15 META-MVP, Slice 3):
+    /// display-only, never persisted. `None` shows all images.
+    pub fn set_active_collection(&mut self, filter: Option<CollectionFilter>) {
+        trace!("GUI interaction: set_active_collection {filter:?}");
+        self.active_collection = filter;
+    }
+
+    /// Apply one [`BatchOp`] to every image of the filmstrip selection
+    /// (G-15 META-MVP, Slice 3 — Stapel-Vollfunktion). An empty selection
+    /// falls back to the loaded image so the action is never a silent
+    /// no-op. Per file: `load_sidecar` → `apply_batch_op` → `validate` →
+    /// atomic `save_sidecar`. `SetRating`/`SetFlag` with an empty `copy_id`
+    /// (see [`parse_metadata_batch_op`]) resolve against the target's
+    /// default copy. Failures are loud per image (`error!` + report entry)
+    /// and never abort the rest — same pattern as
+    /// [`Self::sync_settings_to_selection`]. Recipes, masks and history are
+    /// never touched; the original bytes are never read, let alone written.
+    pub fn apply_metadata_batch(&mut self, op: &BatchOp) -> SelectionSyncReport {
+        let mut targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
+        if targets.is_empty() && !self.path.trim().is_empty() {
+            targets.push(self.path.trim().to_string());
+        }
+        let mut report = SelectionSyncReport::default();
+        if targets.is_empty() {
+            self.status = Str::NoImagesSelected.t().into();
+            return report;
+        }
+        for target in &targets {
+            match Self::apply_metadata_op_to_path(Path::new(target), op) {
+                Ok(true) => {
+                    info!("batch-meta: `{target}` updated");
+                    self.refresh_entry(Path::new(target));
+                    // Keep the loaded document in sync when the batch touched
+                    // the open image (otherwise the panel shows stale data).
+                    if self.path.trim() == target.as_str() {
+                        self.sidecar_revision = None;
+                        self.reload_document_for_batch_target(Path::new(target));
+                    }
+                    report.applied.push(target.clone());
+                }
+                Ok(false) => {
+                    info!("batch-meta: `{target}` unchanged");
+                    report.applied.push(target.clone());
+                }
+                Err(message) => {
+                    error!("batch-meta failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if report.failed.is_empty() {
+            self.status = Str::BatchAppliedPattern.format_arg(&report.applied.len().to_string());
+        } else {
+            let joined = report
+                .failed
+                .iter()
+                .map(|(path, message)| format!("{path}: {message}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.show_error(format!(
+                "Batch failed for {} image(s): {joined}",
+                report.failed.len()
+            ));
+        }
+        report
+    }
+
+    /// One atomic batch step for `path` (G-15 META-MVP, Slice 3). Returns
+    /// `Ok(changed)`. A missing sidecar is always a loud error — the batch
+    /// never invents source identities from bytes it did not decode.
+    fn apply_metadata_op_to_path(path: &Path, op: &BatchOp) -> Result<bool, String> {
+        let sidecar_path = lumina_sidecar::sidecar_path_for(path);
+        let mut document = lumina_sidecar::load_sidecar(&sidecar_path)
+            .map_err(|error| format!("{}: {error}", sidecar_path.display()))?;
+        // Resolve selector ops (empty `copy_id` from the batch bar) against
+        // the target's default copy — loudly when the document is empty.
+        let resolved = match op {
+            BatchOp::SetRating { copy_id, rating } if copy_id.is_empty() => {
+                let id = default_copy_id(&document).ok_or_else(|| {
+                    format!("{}: no virtual copy for set_rating", sidecar_path.display())
+                })?;
+                BatchOp::SetRating {
+                    copy_id: id,
+                    rating: *rating,
+                }
+            }
+            BatchOp::SetFlag { copy_id, flag } if copy_id.is_empty() => {
+                let id = default_copy_id(&document).ok_or_else(|| {
+                    format!("{}: no virtual copy for set_flag", sidecar_path.display())
+                })?;
+                BatchOp::SetFlag {
+                    copy_id: id,
+                    flag: *flag,
+                }
+            }
+            _ => op.clone(),
+        };
+        let changed =
+            apply_batch_op(&mut document, &resolved).map_err(|error| error.to_string())?;
+        if changed {
+            document.validate().map_err(|error| error.to_string())?;
+            lumina_sidecar::save_sidecar(&sidecar_path, &document)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(changed)
+    }
+
+    /// Re-read the loaded document after a batch touched the open image, so
+    /// the panel never shows stale keywords/collections/rating. The session
+    /// recipe follows the reloaded active copy; failures stay visible via
+    /// `show_error` (the in-memory lineage is kept).
+    fn reload_document_for_batch_target(&mut self, path: &Path) {
+        let sidecar_path = lumina_sidecar::sidecar_path_for(path);
+        match lumina_sidecar::load_sidecar(&sidecar_path) {
+            Ok(document) => {
+                if let Some(copy) = document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == self.virtual_copy_id)
+                {
+                    self.recipe = copy.recipe.clone();
+                }
+                // REVIEW-GUI-N1: re-anchor the CAS revision to the reloaded
+                // lineage so the next `save_sidecar` compares against the
+                // batch-written file instead of conflicting with it.
+                self.sidecar_revision = lumina_sidecar::document_revision(&document).ok();
+                self.document = Some(document);
+            }
+            Err(error) => self.show_error(error),
+        }
+    }
+
+    /// Load a portable smart-collection catalog (G-15 META-MVP, Slice 3) in
+    /// the CLI-identical format
+    /// (`{"format":"lumina-smart-catalog","version":1,"collections":[...]}`).
+    /// Every deviation (unreadable file, invalid JSON, wrong format/version,
+    /// invalid definition) is a loud error — never a silent empty catalog.
+    pub fn load_smart_catalog(&mut self, path: &str) -> Result<usize, GuiError> {
+        let text = std::fs::read_to_string(path).map_err(|error| {
+            GuiError::Io(format!("cannot read smart catalog `{path}`: {error}"))
+        })?;
+        let catalog: SmartCatalogFile = serde_json::from_str(&text)
+            .map_err(|error| GuiError::Io(format!("invalid smart catalog `{path}`: {error}")))?;
+        if catalog.format != SMART_CATALOG_FORMAT {
+            return Err(GuiError::Io(
+                Str::InvalidSmartCatalogFormat.format_arg(&catalog.format),
+            ));
+        }
+        if catalog.version != SMART_COLLECTION_VERSION {
+            return Err(GuiError::Io(
+                Str::InvalidSmartCatalogVersion.format_arg(&catalog.version.to_string()),
+            ));
+        }
+        for def in &catalog.collections {
+            validate_smart_collection_def(def).map_err(GuiError::from)?;
+        }
+        let count = catalog.collections.len();
+        self.smart_catalog = catalog.collections;
+        self.smart_catalog_path = path.to_string();
+        info!("smart catalog `{path}` loaded ({count} collection(s))");
+        self.status = Str::SmartCatalogLoadedPattern.format_arg(&count.to_string());
+        Ok(count)
+    }
+
+    /// Save the session smart catalog to `path` (explicit user action only,
+    /// G-15 META-MVP Slice 3). The file carries versioned rule data only —
+    /// never absolute paths. Atomic write via `write_atomically`.
+    pub fn save_smart_catalog(&mut self, path: &str) -> Result<(), GuiError> {
+        for def in &self.smart_catalog {
+            validate_smart_collection_def(def).map_err(GuiError::from)?;
+        }
+        let catalog = SmartCatalogFile {
+            format: SMART_CATALOG_FORMAT.to_string(),
+            version: SMART_COLLECTION_VERSION,
+            collections: self.smart_catalog.clone(),
+        };
+        let text = serde_json::to_string_pretty(&catalog)
+            .map_err(|error| GuiError::Io(format!("cannot encode smart catalog: {error}")))?;
+        lumina_sidecar::write_atomically(Path::new(path), text.as_bytes())?;
+        self.smart_catalog_path = path.to_string();
+        info!(
+            "smart catalog `{path}` saved ({} collection(s))",
+            self.smart_catalog.len()
+        );
+        self.status =
+            Str::SmartCatalogSavedPattern.format_arg(&self.smart_catalog.len().to_string());
+        Ok(())
+    }
+
+    /// Create a smart collection from the caller-held rule stack (G-15
+    /// META-MVP, Slice 3). Requires exactly one combined rule on the stack
+    /// (see [`combine_smart_rules`]); `id`/`name` validate like static
+    /// collections (non-empty, no surrounding whitespace, `id` without
+    /// `/`, `\`, `:`). Duplicate `id`s and invalid rules fail loudly.
+    pub fn create_smart_collection(&mut self, id: &str, name: &str) -> Result<(), GuiError> {
+        if self.smart_rule_stack.len() != 1 {
+            return Err(GuiError::Io(Str::SmartNeedsSingleRule.t().to_string()));
+        }
+        if self.smart_catalog.iter().any(|def| def.id == id) {
+            return Err(GuiError::Io(Str::SmartDuplicateId.format_arg(id)));
+        }
+        let def = SmartCollectionDef {
+            version: SMART_COLLECTION_VERSION,
+            id: id.to_string(),
+            name: name.to_string(),
+            rule: self
+                .smart_rule_stack
+                .pop()
+                .expect("stack length was checked"),
+        };
+        validate_smart_collection_def(&def).map_err(GuiError::from)?;
+        self.smart_catalog.push(def);
+        info!("smart collection `{id}` created");
+        self.status = Str::SmartCreatedPattern.format_arg(id);
+        Ok(())
+    }
+
+    /// Delete a smart collection by `id` (G-15 META-MVP, Slice 3). Unknown
+    /// ids fail loudly; an active filter on the deleted id is cleared so the
+    /// grid never filters on a ghost.
+    pub fn delete_smart_collection(&mut self, id: &str) -> Result<(), GuiError> {
+        let before = self.smart_catalog.len();
+        self.smart_catalog.retain(|def| def.id != id);
+        if self.smart_catalog.len() == before {
+            return Err(GuiError::Io(Str::SmartUnknownId.format_arg(id)));
+        }
+        if self.active_collection == Some(CollectionFilter::Smart { id: id.to_string() }) {
+            self.active_collection = None;
+        }
+        info!("smart collection `{id}` deleted");
+        self.status = Str::SmartDeletedPattern.format_arg(id);
+        Ok(())
+    }
+
+    /// Push one [`build_smart_rule`] rule onto the composition stack (G-15
+    /// META-MVP, Slice 3). Loud on unknown kind / bad value.
+    pub fn push_smart_rule(&mut self, kind: &str, value: &str) -> Result<(), GuiError> {
+        let rule = build_smart_rule(kind, value)
+            .map_err(|message| GuiError::Io(format!("invalid smart rule: {message}")))?;
+        self.smart_rule_stack.push(rule);
+        trace!("GUI interaction: push_smart_rule {kind}");
+        Ok(())
+    }
+
+    /// Combine the rule stack with `and`/`or`/`not` (see
+    /// [`combine_smart_rules`]). Loud on underflow / unknown op.
+    pub fn combine_smart_stack(&mut self, op: &str) -> Result<(), GuiError> {
+        combine_smart_rules(&mut self.smart_rule_stack, op)
+            .map_err(|message| GuiError::Io(format!("invalid smart-rule combine: {message}")))?;
+        trace!("GUI interaction: combine_smart_stack {op}");
+        Ok(())
     }
 
     /// Named snapshot list of the active virtual copy (Welle 3, LR-12
@@ -11218,6 +12085,286 @@ impl LuminaApp {
         }
     }
 
+    /// G-15 META-MVP (Slice 3) Library metadata drawer: keywords,
+    /// collections, smart collections and the batch bar. Rendered inside the
+    /// `\` drawer only, so the default grid (and its kittest goldens) stays
+    /// pixel-identical when the drawer is closed. Every mutation goes
+    /// through the `BatchOp` + `save_sidecar` paths (Sidecar-first, loud
+    /// errors via `show_error`, `info!` in the mutators); display state
+    /// (inputs, active filter, catalog) is session-only.
+    fn draw_library_metadata(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing(Str::KeywordsSection.t(), |ui| {
+            let keywords = self.keywords();
+            let mut remove: Option<String> = None;
+            for keyword in &keywords {
+                ui.horizontal(|ui| {
+                    ui.label(keyword);
+                    if ui.button("✕").clicked() {
+                        remove = Some(keyword.clone());
+                    }
+                });
+            }
+            if let Some(keyword) = remove {
+                if let Err(error) = self.remove_keyword(&keyword) {
+                    self.show_error(error);
+                }
+            }
+            ui.horizontal(|ui| {
+                let mut input = self.keyword_input.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut input).hint_text(Str::KeywordInputHint.t()),
+                    )
+                    .changed()
+                {
+                    self.keyword_input = input.clone();
+                }
+                if ui.button(Str::AddKeyword.t()).clicked() {
+                    let value = input.trim().to_string();
+                    if !value.is_empty() {
+                        match self.add_keyword(&value) {
+                            Ok(_) => self.keyword_input.clear(),
+                            Err(error) => self.show_error(error),
+                        }
+                    }
+                }
+            });
+        });
+        ui.collapsing(Str::CollectionsSection.t(), |ui| {
+            let memberships = self.collections();
+            let mut leave: Option<String> = None;
+            for membership in &memberships {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{} ({})", membership.name, membership.id));
+                    if ui.button("✕").clicked() {
+                        leave = Some(membership.id.clone());
+                    }
+                });
+            }
+            if let Some(id) = leave {
+                if let Err(error) = self.remove_from_collection(&id) {
+                    self.show_error(error);
+                }
+            }
+            ui.horizontal(|ui| {
+                let mut id = self.collection_id_input.clone();
+                let mut name = self.collection_name_input.clone();
+                let mut changed = false;
+                changed |= ui
+                    .add(egui::TextEdit::singleline(&mut id).hint_text(Str::CollectionIdHint.t()))
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut name)
+                            .hint_text(Str::CollectionNameHint.t()),
+                    )
+                    .changed();
+                if changed {
+                    self.collection_id_input = id.clone();
+                    self.collection_name_input = name.clone();
+                }
+                if ui.button(Str::AddToCollection.t()).clicked() {
+                    // `id=name` shorthand in the id field (CLI-compat).
+                    let assignment = if name.trim().is_empty() && id.contains('=') {
+                        Self::split_collection_assignment(id.trim())
+                    } else {
+                        Ok((id.trim().to_string(), name.trim().to_string()))
+                    };
+                    match assignment {
+                        Ok((final_id, final_name)) => {
+                            match self.add_to_collection(&final_id, &final_name) {
+                                Ok(_) => {
+                                    self.collection_id_input.clear();
+                                    self.collection_name_input.clear();
+                                }
+                                Err(error) => self.show_error(error),
+                            }
+                        }
+                        Err(error) => self.show_error(error),
+                    }
+                }
+            });
+            ui.label(Str::StaticCollections.t());
+            if ui
+                .selectable_label(self.active_collection.is_none(), Str::AllImages.t())
+                .clicked()
+            {
+                self.set_active_collection(None);
+            }
+            for (id, name, count) in self.static_collections() {
+                let selected =
+                    self.active_collection == Some(CollectionFilter::Static { id: id.clone() });
+                if ui
+                    .selectable_label(selected, format!("{name} ({count})"))
+                    .clicked()
+                {
+                    self.set_active_collection(Some(CollectionFilter::Static { id }));
+                }
+            }
+        });
+        ui.collapsing(Str::SmartSection.t(), |ui| {
+            ui.horizontal(|ui| {
+                let mut path = self.smart_catalog_path.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut path).hint_text(Str::CatalogPathHint.t()))
+                    .changed()
+                {
+                    self.smart_catalog_path = path.clone();
+                }
+                if ui.button(Str::LoadCatalog.t()).clicked() {
+                    if let Err(error) = self.load_smart_catalog(&path.clone()) {
+                        self.show_error(error);
+                    }
+                }
+                if ui.button(Str::SaveCatalog.t()).clicked() {
+                    if let Err(error) = self.save_smart_catalog(&path.clone()) {
+                        self.show_error(error);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                let mut kind = self.smart_rule_kind.clone();
+                egui::ComboBox::from_id_salt("smart_rule_kind")
+                    .selected_text(kind.clone())
+                    .show_ui(ui, |ui| {
+                        for option in [
+                            "all",
+                            "none",
+                            "keyword",
+                            "rating_at_least",
+                            "rating_equals",
+                            "flag",
+                        ] {
+                            ui.selectable_value(&mut kind, option.to_string(), option);
+                        }
+                    });
+                self.smart_rule_kind = kind.clone();
+                let mut value = self.smart_rule_value.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut value)
+                            .hint_text(Str::SmartRuleValueHint.t()),
+                    )
+                    .changed()
+                {
+                    self.smart_rule_value = value.clone();
+                }
+                if ui.button(Str::PushRule.t()).clicked() {
+                    if let Err(error) = self.push_smart_rule(&kind, &value) {
+                        self.show_error(error);
+                    } else {
+                        self.smart_rule_value.clear();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                for (op, label) in [
+                    ("and", Str::CombineAnd.t()),
+                    ("or", Str::CombineOr.t()),
+                    ("not", Str::CombineNot.t()),
+                ] {
+                    if ui.button(label).clicked() {
+                        if let Err(error) = self.combine_smart_stack(op) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+                if ui.button(Str::ClearStack.t()).clicked() {
+                    self.smart_rule_stack.clear();
+                }
+                ui.label(
+                    Str::RuleStackPattern.format_arg(&self.smart_rule_stack.len().to_string()),
+                );
+            });
+            ui.horizontal(|ui| {
+                let mut id = self.smart_id_input.clone();
+                let mut name = self.smart_name_input.clone();
+                let mut changed = false;
+                changed |= ui
+                    .add(egui::TextEdit::singleline(&mut id).hint_text(Str::SmartIdHint.t()))
+                    .changed();
+                changed |= ui
+                    .add(egui::TextEdit::singleline(&mut name).hint_text(Str::SmartNameHint.t()))
+                    .changed();
+                if changed {
+                    self.smart_id_input = id.clone();
+                    self.smart_name_input = name.clone();
+                }
+                if ui.button(Str::CreateSmart.t()).clicked() {
+                    if let Err(error) = self.create_smart_collection(id.trim(), name.trim()) {
+                        self.show_error(error);
+                    } else {
+                        self.smart_id_input.clear();
+                        self.smart_name_input.clear();
+                    }
+                }
+            });
+            let defs: Vec<(String, String)> = self
+                .smart_catalog
+                .iter()
+                .map(|def| (def.id.clone(), def.name.clone()))
+                .collect();
+            for (id, name) in &defs {
+                ui.horizontal(|ui| {
+                    let selected =
+                        self.active_collection == Some(CollectionFilter::Smart { id: id.clone() });
+                    if ui.selectable_label(selected, name).clicked() {
+                        if selected {
+                            self.set_active_collection(None);
+                        } else {
+                            self.set_active_collection(Some(CollectionFilter::Smart {
+                                id: id.clone(),
+                            }));
+                        }
+                    }
+                    if ui.button("✕").clicked() {
+                        if let Err(error) = self.delete_smart_collection(id) {
+                            self.show_error(error);
+                        }
+                    }
+                });
+            }
+        });
+        ui.collapsing(Str::BatchSection.t(), |ui| {
+            ui.horizontal(|ui| {
+                let mut kind = self.batch_kind.clone();
+                egui::ComboBox::from_id_salt("batch_kind")
+                    .selected_text(kind.clone())
+                    .show_ui(ui, |ui| {
+                        for option in [
+                            "add_keyword",
+                            "remove_keyword",
+                            "add_to_collection",
+                            "remove_from_collection",
+                            "set_rating",
+                            "set_flag",
+                        ] {
+                            ui.selectable_value(&mut kind, option.to_string(), option);
+                        }
+                    });
+                self.batch_kind = kind.clone();
+                let mut value = self.batch_value.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut value).hint_text(Str::BatchValueHint.t()))
+                    .changed()
+                {
+                    self.batch_value = value.clone();
+                }
+                if ui.button(Str::BatchApply.t()).clicked() {
+                    match parse_metadata_batch_op(&kind, value.trim()) {
+                        Ok(op) => {
+                            self.apply_metadata_batch(&op);
+                        }
+                        Err(message) => {
+                            self.show_error(format!("invalid batch operation: {message}"));
+                        }
+                    }
+                }
+            });
+            ui.label(format!("{} selected", self.filmstrip_selection.len()));
+        });
+    }
+
     /// Lightroom-like Library grid view (center): RAW files of the current
     /// directory rendered through the shared ThumbnailManager pipeline (no
     /// duplicate generation). Double-click opens a file and switches to
@@ -11277,6 +12424,7 @@ impl LuminaApp {
                     }
                 }
             });
+            self.draw_library_metadata(ui);
             ui.separator();
         }
         // GUI-SCROLL-200-1: index-based view over the RAW entries. Only the
@@ -11284,18 +12432,22 @@ impl LuminaApp {
         // thumbnails are ensured per frame — never an O(n) loop over all
         // entries. GUI-FILMSTRIP-DUP-1: one shared index source.
         let query = self.library_filter.clone();
+        // G-15 META-MVP (Slice 3): full entry-aware filter (extended `\`
+        // predicates over cached keywords/collections/EXIF) plus the active
+        // collection view. Cloned so the predicate loop holds no `&mut self`.
+        let active_collection = self.active_collection.clone();
+        let smart_catalog = self.smart_catalog.clone();
         let all_raw = self.raw_entry_indices();
         let raw_indices: Vec<usize> = all_raw
             .into_iter()
             .filter(|&entry_idx| {
                 let entry = &self.entries[entry_idx];
-                library_filter_matches(
-                    &entry.name,
-                    entry.rating,
-                    entry.flag,
-                    entry.color_label,
-                    &query,
-                )
+                if let Some(filter) = &active_collection {
+                    if !collection_filter_matches_entry(entry, filter, &smart_catalog) {
+                        return false;
+                    }
+                }
+                library_entry_matches(entry, &query)
             })
             .collect();
         if raw_indices.is_empty() {
@@ -23277,6 +24429,11 @@ mod tests {
             rating: 0,
             flag: lumina_sidecar::Flag::Unflagged,
             color_label: 0,
+            keywords: Vec::new(),
+            collections: Vec::new(),
+            camera: None,
+            iso: None,
+            focal_length: None,
             folder: String::new(),
         }
     }
@@ -24554,5 +25711,578 @@ mod tests {
             ratio >= 4.5,
             "white badge text on the chip must meet AA (ratio {ratio:.2} < 4.5)"
         );
+    }
+
+    // ---- G-15 META-MVP Slice 3 (GUI): keywords, extended filter,
+    // collections, smart catalog, batch (DoD §1: Edit→Commit→Datei→Reload) ----
+
+    /// G-15 E2E-Anker (DoD §1): keyword vergeben → Sidecar-Datei →
+    /// Reload → wiederhergestellt; entfernen dito; ungültige Keywords
+    /// scheitern laut ohne Dateiänderung.
+    #[test]
+    fn g15_keyword_add_remove_roundtrip_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.keywords().is_empty());
+
+        assert!(app.add_keyword("portrait").unwrap());
+        // Idempotent: zweites Hinzufügen ändert nichts, bleibt Ok.
+        assert!(!app.add_keyword("portrait").unwrap());
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(document.keywords, vec!["portrait".to_string()]);
+
+        // Ungültig (leer / führende Whitespaces) scheitert laut; die Datei
+        // bleibt unberührt.
+        assert!(app.add_keyword("").is_err());
+        assert!(app.add_keyword(" leading").is_err());
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(document.keywords, vec!["portrait".to_string()]);
+
+        // Reload-Anker: ein neuer App-Lauf sieht das Keyword.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.keywords(), vec!["portrait".to_string()]);
+        assert!(reopened.remove_keyword("portrait").unwrap());
+        assert!(!reopened.remove_keyword("portrait").unwrap());
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert!(document.keywords.is_empty());
+
+        let mut reread = new_app();
+        open_and_decode(&mut reread, source.display().to_string());
+        assert!(reread.keywords().is_empty());
+    }
+
+    /// G-15 E2E-Anker (DoD §1): Sammlung beitreten/verlassen →
+    /// Sidecar-Datei → Reload; `id=name`-Kurzform; ungültige Ids laut.
+    #[test]
+    fn g15_collection_join_leave_roundtrip_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.collections().is_empty());
+
+        assert!(app.add_to_collection("best", "Best Of").unwrap());
+        // Gleiche Id mit neuem Namen = Umbenennung (changed).
+        assert!(app.add_to_collection("best", "Best Of 2026").unwrap());
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert_eq!(
+            document.collections,
+            vec![CollectionMembership {
+                id: "best".to_string(),
+                name: "Best Of 2026".to_string(),
+            }]
+        );
+        // Ungültige Id (pfadartig) scheitert laut.
+        assert!(app.add_to_collection("a/b", "Bad").is_err());
+
+        // `id=name`-Kurzform des Panels.
+        let (id, name) = LuminaApp::split_collection_assignment("sel=Selection").unwrap();
+        assert_eq!((id.as_str(), name.as_str()), ("sel", "Selection"));
+        assert!(LuminaApp::split_collection_assignment("no-equals").is_err());
+
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(
+            reopened.collections(),
+            vec![CollectionMembership {
+                id: "best".to_string(),
+                name: "Best Of 2026".to_string(),
+            }]
+        );
+        assert!(reopened.remove_from_collection("best").unwrap());
+        assert!(!reopened.remove_from_collection("best").unwrap());
+        let mut reread = new_app();
+        open_and_decode(&mut reread, source.display().to_string());
+        assert!(reread.collections().is_empty());
+    }
+
+    /// Test-Eintrag mit allen erweiterten Filterdaten (Keywords,
+    /// Sammlungen, EXIF). Felder sind privat, aber die Tests leben im
+    /// selben Modul.
+    fn filter_entry() -> FileBrowserEntry {
+        FileBrowserEntry {
+            path: PathBuf::from("/tmp/a.png"),
+            name: "a.png".to_string(),
+            thumb_key: "a".to_string(),
+            has_sidecar: true,
+            source_status: SourceStatus::Unchanged,
+            conflict: false,
+            virtual_copies: 1,
+            missing_models: 0,
+            rating: 4,
+            flag: Flag::Pick,
+            color_label: 1,
+            keywords: vec!["portrait".to_string(), "Studio".to_string()],
+            collections: vec![CollectionMembership {
+                id: "best".to_string(),
+                name: "Best Of".to_string(),
+            }],
+            camera: Some("Canon EOS R5".to_string()),
+            iso: Some(400.0),
+            focal_length: Some(50.0),
+            folder: String::new(),
+        }
+    }
+
+    /// G-15 Filter-Klasse (DoD §3, vollständig): alle Präfixe plus
+    /// UND-Verknüpfung, unparsebar→leer, Keyword-Case-Sensitivität.
+    #[test]
+    fn g15_extended_filter_predicates_all_prefixes() {
+        let entry = filter_entry();
+        // Leere Query matcht alles.
+        assert!(library_entry_matches(&entry, ""));
+        assert!(library_entry_matches(&entry, "   "));
+        // Name (alt) + UND-Verknüpfung.
+        assert!(library_entry_matches(&entry, "a.png rating:4"));
+        assert!(!library_entry_matches(&entry, "a.png rating:5"));
+        assert!(!library_entry_matches(&entry, "zzz"));
+        // keyword: exakt + case-sensitiv (Slice-1-Semantik).
+        assert!(library_entry_matches(&entry, "keyword:portrait"));
+        assert!(!library_entry_matches(&entry, "keyword:Portrait"));
+        assert!(library_entry_matches(&entry, "keyword:Studio"));
+        assert!(!library_entry_matches(&entry, "keyword:landscape"));
+        // collection: Id oder Name (case-insensitiv).
+        assert!(library_entry_matches(&entry, "collection:best"));
+        assert!(library_entry_matches(&entry, "collection:BEST"));
+        assert!(library_entry_matches(&entry, "collection:best of"));
+        assert!(!library_entry_matches(&entry, "collection:other"));
+        assert!(!library_entry_matches(&entry, "collection:"));
+        // camera: Teilvergleich, case-insensitiv.
+        assert!(library_entry_matches(&entry, "camera:canon"));
+        assert!(library_entry_matches(&entry, "camera:EOS R5"));
+        assert!(!library_entry_matches(&entry, "camera:nikon"));
+        assert!(!library_entry_matches(&entry, "camera:"));
+        // iso:/focal: numerisch exakt; unparsebar matcht nichts.
+        assert!(library_entry_matches(&entry, "iso:400"));
+        assert!(!library_entry_matches(&entry, "iso:800"));
+        assert!(!library_entry_matches(&entry, "iso:fast"));
+        assert!(library_entry_matches(&entry, "focal:50"));
+        assert!(library_entry_matches(&entry, "focal_length:50"));
+        assert!(!library_entry_matches(&entry, "focal:85"));
+        assert!(!library_entry_matches(&entry, "focal:wide"));
+        // UND über erweiterte Prädikate.
+        assert!(library_entry_matches(
+            &entry,
+            "keyword:portrait camera:canon iso:400 focal:50 rating:4 flag:pick label:red collection:best"
+        ));
+        assert!(!library_entry_matches(
+            &entry,
+            "keyword:portrait camera:nikon"
+        ));
+        // Fehlende EXIF-Daten matchen nichts (kein stilles Pass-Through).
+        let mut no_exif = filter_entry();
+        no_exif.camera = None;
+        no_exif.iso = None;
+        no_exif.focal_length = None;
+        assert!(!library_entry_matches(&no_exif, "camera:canon"));
+        assert!(!library_entry_matches(&no_exif, "iso:400"));
+        assert!(!library_entry_matches(&no_exif, "focal:50"));
+        assert!(library_entry_matches(&no_exif, "keyword:portrait"));
+        // Die alte Overload bleibt kompatibel: erweiterte Präfixe ohne
+        // Eintragsdaten matchen nichts (statt Datei zu suchen).
+        assert!(!library_filter_matches(
+            "a.png",
+            4,
+            Flag::Pick,
+            1,
+            "keyword:portrait"
+        ));
+        assert!(library_filter_matches(
+            "a.png",
+            4,
+            Flag::Pick,
+            1,
+            "a.png rating:4"
+        ));
+    }
+
+    /// G-15 Sammlungsfilter-Klasse: statisch per Mitglieds-`id`, smart per
+    /// Regel über Keywords + Default-Copy-Rating/Flag; unbekannte Ids und
+    /// invalide Definitionen matchen nichts.
+    #[test]
+    fn g15_collection_filter_static_and_smart() {
+        let entry = filter_entry();
+        assert!(collection_filter_matches_entry(
+            &entry,
+            &CollectionFilter::Static {
+                id: "best".to_string()
+            },
+            &[]
+        ));
+        assert!(!collection_filter_matches_entry(
+            &entry,
+            &CollectionFilter::Static {
+                id: "other".to_string()
+            },
+            &[]
+        ));
+        // Name filtert nicht — nur die stabile Id.
+        assert!(!collection_filter_matches_entry(
+            &entry,
+            &CollectionFilter::Static {
+                id: "Best Of".to_string()
+            },
+            &[]
+        ));
+        let catalog = vec![SmartCollectionDef {
+            version: SMART_COLLECTION_VERSION,
+            id: "smart-best".to_string(),
+            name: "Best portraits".to_string(),
+            rule: SmartRule::And {
+                rules: vec![
+                    SmartRule::Keyword {
+                        keyword: "portrait".to_string(),
+                    },
+                    SmartRule::RatingAtLeast { rating: 4 },
+                ],
+            },
+        }];
+        assert!(collection_filter_matches_entry(
+            &entry,
+            &CollectionFilter::Smart {
+                id: "smart-best".to_string()
+            },
+            &catalog
+        ));
+        // Unbekannte Smart-Id matcht nichts.
+        assert!(!collection_filter_matches_entry(
+            &entry,
+            &CollectionFilter::Smart {
+                id: "ghost".to_string()
+            },
+            &catalog
+        ));
+        // Invalide Definition (falsche Version) matcht nichts.
+        let mut bad = catalog.clone();
+        bad[0].version = 99;
+        assert!(!collection_filter_matches_entry(
+            &entry,
+            &CollectionFilter::Smart {
+                id: "smart-best".to_string()
+            },
+            &bad
+        ));
+        // Aggregation: statische Liste aus dem Scan (Seitenname + Zähler).
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["a.png", "b.png"] {
+            let source = directory.path().join(name);
+            save_png(&source);
+        }
+        let mut app = new_app();
+        open_and_decode(
+            &mut app,
+            directory.path().join("a.png").display().to_string(),
+        );
+        app.add_to_collection("best", "Best Of").unwrap();
+        app.set_directory(directory.path().display().to_string());
+        let aggregated = app.static_collections();
+        assert_eq!(aggregated.len(), 1);
+        assert_eq!(aggregated[0].0, "best");
+        assert_eq!(aggregated[0].2, 1);
+    }
+
+    /// G-15 reine Builder (DoD §3): alle Op-Varianten + alle Regelarten +
+    /// Kombinatoren, Fehlerfälle laut.
+    #[test]
+    fn g15_batch_op_and_rule_builders_cover_all_variants() {
+        // Alle sechs BatchOp-Varianten parsen.
+        assert_eq!(
+            parse_metadata_batch_op("add_keyword", "portrait").unwrap(),
+            BatchOp::AddKeyword {
+                keyword: "portrait".to_string()
+            }
+        );
+        assert_eq!(
+            parse_metadata_batch_op("remove_keyword", "portrait").unwrap(),
+            BatchOp::RemoveKeyword {
+                keyword: "portrait".to_string()
+            }
+        );
+        assert_eq!(
+            parse_metadata_batch_op("add_to_collection", "best=Best Of").unwrap(),
+            BatchOp::AddToCollection {
+                id: "best".to_string(),
+                name: "Best Of".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_metadata_batch_op("remove_from_collection", "best").unwrap(),
+            BatchOp::RemoveFromCollection {
+                id: "best".to_string()
+            }
+        );
+        // set_rating/set_flag tragen leere copy_id (Auflösung pro Zieldatei
+        // in `apply_metadata_batch`).
+        assert!(matches!(
+            parse_metadata_batch_op("set_rating", "4").unwrap(),
+            BatchOp::SetRating { rating: 4, .. }
+        ));
+        assert!(matches!(
+            parse_metadata_batch_op("set_flag", "pick").unwrap(),
+            BatchOp::SetFlag {
+                flag: Flag::Pick,
+                ..
+            }
+        ));
+        // Fehlerfälle: laut, nie still.
+        assert!(parse_metadata_batch_op("bogus", "x").is_err());
+        assert!(parse_metadata_batch_op("add_to_collection", "no-equals").is_err());
+        assert!(parse_metadata_batch_op("set_rating", "6").is_err());
+        assert!(parse_metadata_batch_op("set_rating", "high").is_err());
+        assert!(parse_metadata_batch_op("set_flag", "maybe").is_err());
+        // Alle Regelarten bauen.
+        assert_eq!(build_smart_rule("all", "").unwrap(), SmartRule::All);
+        assert_eq!(build_smart_rule("none", "").unwrap(), SmartRule::None);
+        assert_eq!(
+            build_smart_rule("keyword", "portrait").unwrap(),
+            SmartRule::Keyword {
+                keyword: "portrait".to_string()
+            }
+        );
+        assert_eq!(
+            build_smart_rule("rating_at_least", "3").unwrap(),
+            SmartRule::RatingAtLeast { rating: 3 }
+        );
+        assert_eq!(
+            build_smart_rule("rating_equals", "5").unwrap(),
+            SmartRule::RatingEquals { rating: 5 }
+        );
+        assert_eq!(
+            build_smart_rule("flag", "reject").unwrap(),
+            SmartRule::Flag { flag: Flag::Reject }
+        );
+        assert!(build_smart_rule("bogus", "x").is_err());
+        assert!(build_smart_rule("rating_at_least", "9").is_err());
+        assert!(build_smart_rule("flag", "maybe").is_err());
+        // Kombinatoren: and/or brauchen ≥2, not ≥1.
+        let mut stack = vec![SmartRule::All, SmartRule::None];
+        combine_smart_rules(&mut stack, "and").unwrap();
+        assert_eq!(
+            stack,
+            vec![SmartRule::And {
+                rules: vec![SmartRule::All, SmartRule::None]
+            }]
+        );
+        combine_smart_rules(&mut stack, "not").unwrap();
+        assert!(matches!(stack.as_slice(), [SmartRule::Not { .. }]));
+        let mut short = vec![SmartRule::All];
+        assert!(combine_smart_rules(&mut short, "or").is_err());
+        let mut empty: Vec<SmartRule> = Vec::new();
+        assert!(combine_smart_rules(&mut empty, "not").is_err());
+        assert!(combine_smart_rules(&mut empty, "xor").is_err());
+    }
+
+    /// G-15 Smart-Katalog E2E (DoD §1): Regel-Stack → Create → Datei →
+    /// Reload in neuer App → Match; ungültige Dateien/Definitionen laut.
+    #[test]
+    fn g15_smart_catalog_create_save_load_match() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let catalog_path = directory.path().join("catalog.json");
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.add_keyword("portrait").unwrap();
+        app.set_rating(4).unwrap();
+
+        // Create braucht genau eine kombinierte Regel.
+        assert!(app.create_smart_collection("s1", "S1").is_err());
+        app.push_smart_rule("keyword", "portrait").unwrap();
+        app.push_smart_rule("rating_at_least", "4").unwrap();
+        app.combine_smart_stack("and").unwrap();
+        assert!(app.push_smart_rule("bogus", "x").is_err());
+        app.create_smart_collection("s1", "Portraits 4+").unwrap();
+        // Doppelte Id scheitert laut.
+        app.push_smart_rule("all", "").unwrap();
+        assert!(app.create_smart_collection("s1", "Dup").is_err());
+        app.smart_rule_stack.clear();
+        // Unbekanntes Löschen scheitert laut.
+        assert!(app.delete_smart_collection("ghost").is_err());
+
+        app.save_smart_catalog(&catalog_path.display().to_string())
+            .unwrap();
+        // CLI-kompatibles Format: gleiche Envelope.
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&catalog_path).unwrap()).unwrap();
+        assert_eq!(raw["format"], "lumina-smart-catalog");
+        assert_eq!(raw["version"], 1);
+
+        // Reload in neuer App: Katalog + Match über den neu gescannten Eintrag.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        let count = reopened
+            .load_smart_catalog(&catalog_path.display().to_string())
+            .unwrap();
+        assert_eq!(count, 1);
+        reopened.set_directory(directory.path().display().to_string());
+        let entry = reopened
+            .entries
+            .iter()
+            .find(|entry| entry.name == "photo.png")
+            .unwrap();
+        assert!(collection_filter_matches_entry(
+            entry,
+            &CollectionFilter::Smart {
+                id: "s1".to_string()
+            },
+            &reopened.smart_catalog
+        ));
+        // Ungültiger Katalog (falsches Format) scheitert laut.
+        let bad_path = directory.path().join("bad.json");
+        std::fs::write(
+            &bad_path,
+            r#"{"format":"nope","version":1,"collections":[]}"#,
+        )
+        .unwrap();
+        assert!(reopened
+            .load_smart_catalog(&bad_path.display().to_string())
+            .is_err());
+        // Ungültige Definition (leeres And) scheitert laut beim Laden.
+        let bad_rule = directory.path().join("bad-rule.json");
+        std::fs::write(
+            &bad_rule,
+            r#"{"format":"lumina-smart-catalog","version":1,"collections":[{"version":1,"id":"x","name":"X","rule":{"op":"and","rules":[]}}]}"#,
+        )
+        .unwrap();
+        assert!(reopened
+            .load_smart_catalog(&bad_rule.display().to_string())
+            .is_err());
+    }
+
+    /// G-15 Stapel E2E (DoD §1): ein BatchOp über die Auswahl → beide
+    /// Sidecar-Dateien → Reload beider; danach Umbenennung per
+    /// Remove+Add über die Auswahl.
+    #[test]
+    fn g15_batch_applies_to_selection_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let sources: Vec<PathBuf> = ["a.png", "b.png"]
+            .iter()
+            .map(|name| directory.path().join(name))
+            .collect();
+        for source in &sources {
+            save_png(source);
+        }
+        // Sidecars entstehen über normale Edits in je eigener App-Instanz
+        // (frisches `open_and_decode` wartet die Hintergrund-Decodierung
+        // verlässlich ab — bei wiederverwendeter App wäre `original` schon
+        // gesetzt und der zweite Open ein Race).
+        for source in &sources {
+            let mut setup = new_app();
+            open_and_decode(&mut setup, source.display().to_string());
+            setup.add_keyword("seed").unwrap();
+        }
+        let mut app = new_app();
+        open_and_decode(&mut app, sources[0].display().to_string());
+        for source in &sources {
+            app.filmstrip_selection.insert(source.display().to_string());
+        }
+        let op = parse_metadata_batch_op("add_keyword", "batch").unwrap();
+        let report = app.apply_metadata_batch(&op);
+        assert_eq!(report.applied_count(), 2);
+        assert_eq!(report.failed_count(), 0);
+        for source in &sources {
+            let document =
+                lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(source)).unwrap();
+            assert!(document.keywords.contains(&"batch".to_string()));
+            assert!(document.keywords.contains(&"seed".to_string()));
+        }
+        // Rating-Stapel löst die Default-Copy pro Zieldatei auf.
+        let rating_op = parse_metadata_batch_op("set_rating", "5").unwrap();
+        let report = app.apply_metadata_batch(&rating_op);
+        assert_eq!(report.failed_count(), 0);
+        // Reload-Anker beider Dateien.
+        for source in &sources {
+            let mut reopened = new_app();
+            open_and_decode(&mut reopened, source.display().to_string());
+            assert!(reopened.keywords().contains(&"batch".to_string()));
+            assert_eq!(reopened.active_rating_flag().unwrap().0, 5);
+        }
+        // Sammlungs-Umbenennung als Stapel: alt entfernen + neu setzen.
+        let mut app = new_app();
+        open_and_decode(&mut app, sources[0].display().to_string());
+        for source in &sources {
+            app.filmstrip_selection.insert(source.display().to_string());
+        }
+        let join = parse_metadata_batch_op("add_to_collection", "old=Old").unwrap();
+        app.apply_metadata_batch(&join);
+        let leave = parse_metadata_batch_op("remove_from_collection", "old").unwrap();
+        let report = app.apply_metadata_batch(&leave);
+        assert_eq!(report.failed_count(), 0);
+        let join_new = parse_metadata_batch_op("add_to_collection", "new=New").unwrap();
+        app.apply_metadata_batch(&join_new);
+        for source in &sources {
+            let document =
+                lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(source)).unwrap();
+            assert_eq!(
+                document.collections,
+                vec![CollectionMembership {
+                    id: "new".to_string(),
+                    name: "New".to_string(),
+                }]
+            );
+        }
+    }
+
+    /// G-15 Stapel-Fehlerisolation: ein korruptes Sidecar ist ein lauter
+    /// Pro-Bild-Eintrag und bricht die übrigen Ziele nie ab.
+    #[test]
+    fn g15_batch_reports_per_image_failure_without_aborting_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let good = directory.path().join("good.png");
+        let bad = directory.path().join("bad.png");
+        save_png(&good);
+        save_png(&bad);
+        for target in [&good, &bad] {
+            let mut setup = new_app();
+            open_and_decode(&mut setup, target.display().to_string());
+            setup.add_keyword("seed").unwrap();
+        }
+        let mut app = new_app();
+        open_and_decode(&mut app, good.display().to_string());
+        // Sidecar korrumpieren (Original bleibt unberührt).
+        std::fs::write(lumina_sidecar::sidecar_path_for(&bad), b"{broken").unwrap();
+        app.filmstrip_selection.insert(good.display().to_string());
+        app.filmstrip_selection.insert(bad.display().to_string());
+        let op = parse_metadata_batch_op("add_keyword", "batch").unwrap();
+        let report = app.apply_metadata_batch(&op);
+        assert_eq!(report.applied_count(), 1);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.failed[0].0, bad.display().to_string());
+        assert!(app.error().is_some(), "failure must stay loud");
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&good)).unwrap();
+        assert!(document.keywords.contains(&"batch".to_string()));
+    }
+
+    /// G-15 leere Auswahl: Fallback auf das geladene Bild (nie stilles
+    /// No-Op); ohne jedes Bild lauter Hinweis, kein Report, kein Write.
+    #[test]
+    fn g15_batch_empty_selection_falls_back_or_stays_loud() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.add_keyword("seed").unwrap();
+        app.filmstrip_selection.clear();
+        let op = parse_metadata_batch_op("add_keyword", "solo").unwrap();
+        let report = app.apply_metadata_batch(&op);
+        assert_eq!(report.applied_count(), 1);
+        assert_eq!(report.failed_count(), 0);
+        assert!(app.keywords().contains(&"solo".to_string()));
+
+        let mut empty = new_app();
+        empty.filmstrip_selection.clear();
+        let report = empty.apply_metadata_batch(&op);
+        assert_eq!(report.applied_count(), 0);
+        assert_eq!(report.failed_count(), 0);
+        assert_eq!(empty.status(), "No images selected");
     }
 }

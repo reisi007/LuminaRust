@@ -76,6 +76,7 @@ Sidecars vollständig wiederherstellbar sein.
   generativer Modus „Entfernen + Erweitern“ — `GenerativeEdit`-Rezept-Stufe,
   Modell/Prompt/Seed/Prüfsumme, Auto-Fill Transparent nach Lens (GEN-EXPAND-1, erweitert), manueller Expand mit Checkbox `expand_beyond_image` und Crop-Entscheidung `keep_generative_content`
 - [`product/spot-removal.md`](product/spot-removal.md): Staub entfernen schnell (heuristisch, kein Modell, instant) vs. generativ lokal (ONNX Inpaint, `kind = "spot_heal_generative"`) — `SpotRemoval`-Rezept-Stufe, Identität wie AI-Masken, kein stiller Fallback (SPOT-REMOVE-1)
+- [`product/metadata.md`](product/metadata.md): Metadaten-MVP (G-15): Keywords, erweiterte Library-Filter (Kamera/ISO/Brennweite/Keyword/Sammlung), statische + Smart-Sammlungen (Sidecar-first, portabler `lumina-smart-catalog`), Stapel-`BatchOp` über die Auswahl (LRPAR-G15-META-MVP)
 
 ### Plattformen
 
