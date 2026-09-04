@@ -21,6 +21,15 @@ pub use zdata::{
     RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer, ZDataError,
 };
 
+// LRPAR-G15-IPTC-S4: file-backed IPTC metadata presets (static + dynamic).
+mod meta_preset;
+pub use meta_preset::{
+    default_meta_presets_dir, is_meta_preset_placeholder_name, load_meta_preset_file,
+    meta_preset_filename, render_meta_preset, resolve_meta_preset_path, scan_meta_presets_dir,
+    MetaPresetEntry, MetaPresetError, MetaPresetFile, MetaPresetPlaceholder,
+    META_PRESET_FILE_SUFFIX, META_PRESET_FORMAT, META_PRESET_VERSION,
+};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
 

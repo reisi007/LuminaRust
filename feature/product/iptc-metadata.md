@@ -115,8 +115,8 @@ Verzeichnis wie Edit-Presets (`<name>.lumina-preset.json`-Logik):
 
 ```json
 { "format": "lumina-meta-preset", "version": 1, "name": "Veranstaltung",
-  "fields": { "title": "{Event_Name} — Beispiel", "city": "{Ort}" },
-  "placeholders": [ { "name": "Event_Name", "description": "…" } ] }
+  "fields": { "title": "{event_name} — Beispiel", "city": "{ort}" },
+  "placeholders": [ { "name": "event_name", "description": "…" } ] }
 ```
 
 - **Statisch:** `placeholders` leer; Werte sind feste Registry-Werte.
