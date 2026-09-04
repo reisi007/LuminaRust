@@ -534,7 +534,54 @@ bleiben daneben unverändert bestehen).
 - **Test-Hinweis:** Shift-Doppelklick-/Alt-Drag-Verdrahtung ist dünn und
   review-geprüft; Fein-Verhalten fährt im manuellen F-103-N6 nach.
 
-### Maskierung
+### Previous-Übernahme (G-08, LRPAR-G08-PREVIOUS)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-08 (Ein-Klick-Vorbild-
+Übernahme, zusätzlich zu Sync/Match, klar davon abgegrenzt):
+
+- **Semantik:** Voll-Rezept-Copy vom Vorbild auf Zielbild(er) — exakt der
+  Sync-Mechanismus (`copy.recipe = Rezept-Clone`, keine Subset-Auswahl, kein
+  Zweit-Mechanismus): je Zielbild eigenes Sidecar (CAS), genau ein sichtbarer
+  History-Eintrag (`previous`, GUI zusätzlich `previous-{n}`-Zähler bei
+  Mehrfachzielen) je Zielbild, Fehler pro Zielbild isoliert laut
+  (`error!` + Report-Eintrag, Rest läuft weiter), `info!`-Log je Bild,
+  `preview_generation`-Bump je angewandtem Bild, kein stiller Fallback,
+  keine Original-Mutation, keine absoluten Pfade in persistenten Daten
+  (History-`extras` tragen höchstens den Dateinamen, nie Pfade).
+- **Vorbild-Quelle:** Das zuletzt bearbeitete Bild. GUI: Sitzungs-Referenz
+  (`previous_reference`, session-only, nie persistiert) — beim erfolgreichen
+  Bildwechsel wird das abgelöste Bild (Pfad + Rezept-Snapshot) als Referenz
+  festgehalten; ein explizites Vorbild wird durch Öffnen gewählt (Vorbild
+  öffnen, dann Ziel öffnen). CLI: explizit per `--from` (keine Sitzung).
+  Ohne Referenz scheitert die Aktion laut (kein No-op, keine Defaults).
+- **Ziele:** GUI wendet auf die Filmstreifen-Auswahl an (wie Sync); bei
+  leerer Auswahl auf das aktuell geladene Bild (Lightroom-„Previous auf
+  aktives Foto“); ohne geladenes Bild lauter No-op. Das aktuell geladene
+  Zielbild übernimmt die Referenz zusätzlich In-Memory (Rezept + Dokument +
+  Baseline + Re-Render), damit Vorschau und Sidecar konsistent bleiben —
+  Sync lädt die aktive Vorschau bewusst nicht neu (Massenoperation), Previous
+  schon (Ein-Klick auf das sichtbare Bild). CLI wendet auf jedes `--to`-Ziel
+  an (existierende Sidecars; fehlende scheitern laut pro Ziel).
+- **GUI:** `Previous`-Button in der Filmstreifen-Aktionszeile neben
+  Sync/Match (gleiche Sichtbarkeits-Garantie, headless getestet). Label
+  `Previous Image` (eigener i18n-Key `PreviousImage`, bewusst nicht
+  `Previous` wie das bildlokale G-01-Panel-Undo).
+- **CLI:** `lumina previous --from <bild> --to <bild...> [--from-copy ID]
+  [--to-copy ID] [--json]`: lädt das Referenz-Rezept aus dem From-Sidecar
+  (hart laut bei fehlendem/ungültigem Sidecar oder unbekannter Kopie, Exit
+  1, kein Ziel wird angerührt), Roundtrip über
+  `load_sidecar`/`save_sidecar` (validiert, atomar). Exit `0` bei vollem
+  Erfolg, `3` bei Teilfehlern (analog `batch`/`batch-meta`), `1` bei hartem
+  Fehler (keine Referenz, keine Ziele).
+- **Abgrenzung:** G-01-Panel-Previous (LRPAR-G01-BASIC) ist bildlokal
+  (Sektions-Undo auf den letzten gespeicherten Stand desselben Bildes) —
+  G-08-Previous ist bildübergreifend (Vorbild-Rezept → Zielbild(er)).
+  G-04-Follow-up (Spot/Remove-Varianten, Visualize, Distraction) besitzt
+  eigene Tool-Semantik; Previous kopiert deren Rezept-Anteile wie jeden
+  anderen Rezept-Anteil mit (kein separates Previous pro Tool).
+- **Status (LRPAR-G08-PREVIOUS):** umgesetzt — SOLL (dieser Abschnitt),
+  CLI-Befehl, GUI-Referenz + Button + In-Memory-Übernahme + headless
+  E2E-Tests (Vorbild → Ziel-Datei → Reload, History-Schritt je Zielbild).
 
 Die Sektion **Maskierung** (Masking) enthält eine Liste der Masken und einen
 Button **Neu**. Nach dem Anlegen stehen die Werkzeuge **Pinsel**, **Verlauf**

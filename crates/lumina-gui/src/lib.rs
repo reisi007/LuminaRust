@@ -1434,6 +1434,12 @@ pub struct LuminaApp {
     /// active copy through the normal save/render path. Native-only: clipboard
     /// and sidecar persistence are file-system capabilities.
     settings_clipboard: Option<EditRecipe>,
+    /// LRPAR-G08-PREVIOUS: cross-image Previous reference (the image edited
+    /// immediately before the current one). Captured on every successful
+    /// image switch in [`Self::finish_decode`]; applied by
+    /// [`Self::apply_previous_to_selection`]. Session-only, never persisted
+    /// (like `settings_clipboard` above).
+    previous_reference: Option<PreviousReference>,
     /// Welle 2 display-only view flags (`J` clipping overlay, `L` lights-out,
     /// `Tab` panel hide, `R` crop mode). None of them mutates the recipe; the
     /// B&W `V` treatment is recipe-backed instead (see `toggle_black_white`).
@@ -1940,6 +1946,33 @@ impl SelectionSyncReport {
     }
 }
 
+/// LRPAR-G08-PREVIOUS: cross-image Previous reference — the image edited
+/// immediately before the current one (path + recipe snapshot taken when the
+/// image was displaced by a successful load). Session-only, never persisted
+/// (like the copy/paste `settings_clipboard`); an explicit Vorbild is chosen
+/// by opening it (open Vorbild, then open the target).
+#[derive(Debug, Clone)]
+pub struct PreviousReference {
+    pub path: String,
+    pub recipe: EditRecipe,
+}
+
+/// LRPAR-G08-PREVIOUS: portable history extras for a Previous step —
+/// `step = "previous"` plus the reference *file name* (`source`). Only the
+/// file name is stored, never a path (absolute paths are forbidden in
+/// persistent recipe data) — same contract as the CLI `previous` command.
+fn previous_history_extras(source_path: &str) -> BTreeMap<String, Value> {
+    let source = Path::new(source_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("reference")
+        .to_string();
+    let mut extras = BTreeMap::new();
+    extras.insert("step".into(), Value::String("previous".into()));
+    extras.insert("source".into(), Value::String(source));
+    extras
+}
+
 /// The default virtual copy of `document` (first copy when no default is
 /// flagged). `None` only when the document carries no copies at all.
 fn default_copy_mut(document: &mut SidecarDocument) -> Option<&mut lumina_sidecar::VirtualCopy> {
@@ -2248,6 +2281,7 @@ impl LuminaApp {
             export_quality: 90,
             before_after: false,
             settings_clipboard: None,
+            previous_reference: None,
             clipping_overlay: false,
             lights_out: false,
             panels_hidden: false,
@@ -6706,7 +6740,12 @@ impl LuminaApp {
         }
         let recipe = self.recipe.clone();
         for (index, target) in targets.iter().enumerate() {
-            match self.apply_recipe_to_path(target, &recipe, &format!("sync-{index}")) {
+            match self.apply_recipe_to_path(
+                target,
+                &recipe,
+                &format!("sync-{index}"),
+                BTreeMap::new(),
+            ) {
                 Ok(()) => {
                     info!("sync settings: {target} updated");
                     self.preview_generation += 1;
@@ -6825,6 +6864,154 @@ impl LuminaApp {
         report
     }
 
+    /// Previous reference path (read-only accessor for headless tests).
+    pub fn previous_source_path(&self) -> Option<&str> {
+        self.previous_reference
+            .as_ref()
+            .map(|reference| reference.path.as_str())
+    }
+
+    /// LRPAR-G08-PREVIOUS: apply the Previous reference (the image edited
+    /// immediately before the current one, Lightroom "Previous") to the
+    /// filmstrip selection — the same full-recipe Sync mechanism as
+    /// [`Self::sync_settings_to_selection`] (each target keeps its own
+    /// sidecar written via CAS, one `previous-{index}` history step each,
+    /// per-image failures loud via `error!` + report entry, never aborting
+    /// the rest). With an empty selection the currently loaded image is the
+    /// single target (Previous on the active photo); with neither selection
+    /// nor loaded image — or without any reference — the call is a loud
+    /// no-op (empty report + visible error, no sidecar write). Every applied
+    /// image logs `info!` and bumps `preview_generation`. Unlike Sync, the
+    /// currently loaded target additionally adopts the reference in memory
+    /// (recipe + document + baseline + re-render) so preview and sidecar
+    /// stay consistent.
+    pub fn apply_previous_to_selection(&mut self) -> SelectionSyncReport {
+        let mut report = SelectionSyncReport::default();
+        let Some(reference) = self.previous_reference.clone() else {
+            self.show_error("Previous unavailable: no previously edited image in this session");
+            return report;
+        };
+        let mut targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
+        if targets.is_empty() {
+            if self.original.is_none() || self.path.trim().is_empty() {
+                self.show_error("Previous unavailable: no image loaded");
+                return report;
+            }
+            targets.push(self.path.clone());
+        }
+        let reference_name = Path::new(&reference.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&reference.path)
+            .to_string();
+        for (index, target) in targets.iter().enumerate() {
+            let history_id = format!("previous-{index}");
+            let history_extras = previous_history_extras(&reference.path);
+            let generation_before = self.preview_generation;
+            let applied = if *target == self.path && self.original.is_some() {
+                self.apply_previous_to_current(&reference.recipe, &history_id, history_extras)
+            } else {
+                self.apply_recipe_to_path(target, &reference.recipe, &history_id, history_extras)
+            };
+            match applied {
+                Ok(()) => {
+                    info!(
+                        "previous settings: {target} updated from {}",
+                        reference.path
+                    );
+                    // Exactly one generation step per applied image: the
+                    // current-image path re-rendered above (which bumps
+                    // itself), the file-only path did not.
+                    if self.preview_generation == generation_before {
+                        self.preview_generation += 1;
+                    }
+                    self.refresh_entry(Path::new(target));
+                    report.applied.push(target.clone());
+                }
+                Err(message) => {
+                    error!("previous settings failed for {target}: {message}");
+                    report.failed.push((target.clone(), message));
+                }
+            }
+        }
+        if report.failed.is_empty() {
+            self.status = format!(
+                "Applied previous settings from {reference_name} to {} image(s)",
+                report.applied.len()
+            );
+        } else {
+            let joined = report
+                .failed
+                .iter()
+                .map(|(path, message)| format!("{path}: {message}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.show_error(format!(
+                "Previous failed for {} image(s): {joined}",
+                report.failed.len()
+            ));
+        }
+        report
+    }
+
+    /// Write the Previous `reference` recipe into the currently loaded image:
+    /// same disk write as [`Self::apply_recipe_to_path`] (CAS sidecar +
+    /// history step), then adopt the persisted state in memory (recipe +
+    /// document + revision + Previous baseline) and re-render, so the visible
+    /// preview matches the sidecar. A save that did not land is a loud
+    /// per-target failure, never a silent divergence.
+    fn apply_previous_to_current(
+        &mut self,
+        recipe: &EditRecipe,
+        history_id: &str,
+        history_extras: BTreeMap<String, Value>,
+    ) -> Result<(), String> {
+        self.ensure_document_loaded()
+            .map_err(|error| error.to_string())?;
+        self.recipe = recipe.clone();
+        let id = self.virtual_copy_id.clone();
+        let document = self
+            .document
+            .as_mut()
+            .ok_or_else(|| "no sidecar document loaded".to_string())?;
+        let copy = document
+            .virtual_copies
+            .iter_mut()
+            .find(|copy| copy.id == id)
+            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        copy.recipe = recipe.clone();
+        copy.history.push(HistoryEntry {
+            id: history_id.into(),
+            recipe: recipe.clone(),
+            recorded_at: None,
+            extras: history_extras,
+        });
+        self.mark_dirty();
+        self.save_sidecar();
+        self.render().map_err(|error| error.to_string())?;
+        // Reload anchor: the sidecar on disk is the truth — confirm the write
+        // landed and adopt it, so a failed save can never leave preview and
+        // sidecar silently diverged.
+        let sidecar_path = lumina_sidecar::sidecar_path_for(Path::new(&self.path));
+        let document =
+            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?;
+        let revision =
+            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
+        let persisted = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == self.virtual_copy_id)
+            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        if persisted.recipe != *recipe {
+            return Err("sidecar save did not persist the previous recipe".to_string());
+        }
+        self.recipe = persisted.recipe.clone();
+        self.sidecar_revision = Some(revision);
+        self.document = Some(document);
+        self.capture_section_baselines();
+        Ok(())
+    }
+
     /// Write `recipe` into the default copy of `target`'s sidecar (creating
     /// the sidecar when missing) through the CAS API. The source is decoded
     /// first so a missing/unreadable image fails loudly before any write.
@@ -6833,6 +7020,7 @@ impl LuminaApp {
         target: &str,
         recipe: &EditRecipe,
         history_id: &str,
+        history_extras: BTreeMap<String, Value>,
     ) -> Result<(), String> {
         let path = PathBuf::from(target);
         let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
@@ -6866,7 +7054,7 @@ impl LuminaApp {
             id: history_id.into(),
             recipe: recipe.clone(),
             recorded_at: None,
-            extras: BTreeMap::new(),
+            extras: history_extras,
         });
         lumina_sidecar::save_sidecar_if_unchanged(
             &sidecar_path,
@@ -9751,7 +9939,28 @@ impl LuminaApp {
                 // path now, before the new path is adopted below (a flush
                 // afterwards would write the old recipe under the new path).
                 self.flush_pending_edit();
+                // LRPAR-G08-PREVIOUS: a successful switch to a different
+                // image displaces the current one — stash it (path + recipe
+                // snapshot) as the cross-image Previous reference before the
+                // new path is adopted below. Same-path reloads and switches
+                // with nothing loaded leave the reference untouched, so
+                // "no previously edited image" stays a loud error instead of
+                // silently applying defaults.
+                let displaced = (!self.path.trim().is_empty()
+                    && self.path != frame.path
+                    && self.original.is_some())
+                .then(|| PreviousReference {
+                    path: self.path.clone(),
+                    recipe: self.recipe.clone(),
+                });
                 self.path = frame.path.clone();
+                if let Some(reference) = displaced {
+                    info!(
+                        "previous reference: {} (displaced by {})",
+                        reference.path, self.path
+                    );
+                    self.previous_reference = Some(reference);
+                }
                 // PREVIEW-CACHE-FEATURE: the active image just changed — plan
                 // the +4/−2 neighbor window around it (lazy, on workers).
                 let active_path = self.path.clone();
@@ -14698,6 +14907,13 @@ impl LuminaApp {
             if ui.button(Str::MatchSelection.t()).clicked() {
                 self.match_exposures_of_selection();
             }
+            // LRPAR-G08-PREVIOUS: one-click takeover from the previously
+            // edited image (cross-image Previous, unlike the panel-local
+            // G-01 Previous/Reset rows). Same headless visibility guarantee
+            // as Sync/Match (see `filmstrip_selection_actions_are_visible`).
+            if ui.button(Str::PreviousImage.t()).clicked() {
+                self.apply_previous_to_selection();
+            }
         });
         // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
         // filmstrip never shows jpg/png/webp/raster entries (those remain
@@ -19024,6 +19240,173 @@ mod tests {
         );
     }
 
+    /// LRPAR-G08-PREVIOUS: like [`open_and_decode`], but waits for an image
+    /// *switch* — `open_and_decode` returns immediately when any frame is
+    /// loaded, so a second open would assert against the still-loaded first
+    /// image. Pumps until the new path is adopted (or a loud error lands).
+    fn open_and_decode_switch(app: &mut LuminaApp, path: &str) {
+        app.open_file(path.to_string());
+        for _ in 0..2000 {
+            app.poll_decode();
+            if app.path == path || app.error().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// LRPAR-G08-PREVIOUS: edit → save A, open B — A becomes the Previous
+    /// reference; applying it writes B's sidecar (one `previous-0` history
+    /// step), adopts it in memory, and a reload restores it (DoD
+    /// End-to-End-Kette Edit → Commit → Datei → Reload).
+    #[test]
+    fn previous_applies_last_edited_recipe_to_current_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        let third = directory.path().join("third.png");
+        save_png(&first);
+        save_png(&second);
+        save_png(&third);
+        let mut app = new_app();
+        open_and_decode(&mut app, first.display().to_string());
+        app.set_adjustment("exposure", 1.5);
+        app.save_sidecar();
+        open_and_decode_switch(&mut app, &second.display().to_string());
+        assert_eq!(
+            app.previous_source_path(),
+            Some(first.to_str().unwrap()),
+            "the displaced image is the Previous reference"
+        );
+        // Focus the selection on the loaded target plus one file-only target
+        // (no sidecar yet — covers both the in-memory and the file path).
+        app.filmstrip_selection.clear();
+        app.filmstrip_selection.insert(second.display().to_string());
+        app.filmstrip_selection.insert(third.display().to_string());
+        let generation = app.preview_generation();
+        let report = app.apply_previous_to_selection();
+        assert_eq!(report.applied_count(), 2);
+        assert_eq!(report.failed_count(), 0);
+        assert_eq!(app.preview_generation(), generation + 2);
+        // In-memory adopt: the visible recipe matches immediately.
+        assert_eq!(app.recipe().adjustments["exposure"], 1.5);
+        // File anchor: sidecars written with exactly one history step each,
+        // carrying the portable reference file name (never a path).
+        for (target, expected_id) in [(&second, "previous-0"), (&third, "previous-1")] {
+            let document =
+                lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(target)).unwrap();
+            let copy = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.is_default)
+                .unwrap();
+            assert_eq!(copy.recipe.adjustments["exposure"], 1.5);
+            let last = copy.history.last().unwrap();
+            assert_eq!(last.id, expected_id);
+            assert_eq!(
+                last.extras["step"],
+                serde_json::Value::String("previous".into())
+            );
+            let source = last.extras["source"].as_str().unwrap();
+            assert_eq!(source, "first.png");
+            assert!(!source.contains('/'));
+        }
+        // Reload anchor: reopening the target restores the recipe.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, second.display().to_string());
+        assert_eq!(reopened.recipe().adjustments["exposure"], 1.5);
+    }
+
+    /// LRPAR-G08-PREVIOUS: the reference tracks the last displaced image —
+    /// A → B → C leaves B as reference, and a same-path reload never
+    /// clobbers it.
+    #[test]
+    fn previous_reference_tracks_the_last_displaced_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a.png");
+        let second = directory.path().join("b.png");
+        let third = directory.path().join("c.png");
+        for source in [&first, &second, &third] {
+            save_png(source);
+        }
+        let mut app = new_app();
+        open_and_decode(&mut app, first.display().to_string());
+        app.set_adjustment("exposure", 0.5);
+        app.save_sidecar();
+        open_and_decode_switch(&mut app, &second.display().to_string());
+        assert_eq!(app.previous_source_path(), Some(first.to_str().unwrap()));
+        app.set_adjustment("exposure", 2.0);
+        app.save_sidecar();
+        open_and_decode_switch(&mut app, &third.display().to_string());
+        assert_eq!(app.previous_source_path(), Some(second.to_str().unwrap()));
+        // Same-path reload keeps the reference.
+        open_and_decode_switch(&mut app, &third.display().to_string());
+        assert_eq!(app.previous_source_path(), Some(second.to_str().unwrap()));
+    }
+
+    /// LRPAR-G08-PREVIOUS: without a previously edited image the action is
+    /// a loud no-op (empty report + visible error, no sidecar write) — never
+    /// a silent default-apply.
+    #[test]
+    fn previous_without_reference_is_loud_noop() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        assert!(app.previous_source_path().is_none());
+        let generation = app.preview_generation();
+        let report = app.apply_previous_to_selection();
+        assert_eq!(report.applied_count(), 0);
+        assert_eq!(report.failed_count(), 0);
+        assert!(app.error().is_some(), "missing reference must stay loud");
+        assert_eq!(app.preview_generation(), generation);
+        assert!(
+            !lumina_sidecar::sidecar_path_for(&source).exists(),
+            "the no-op must not write a sidecar"
+        );
+    }
+
+    /// LRPAR-G08-PREVIOUS: one unreadable target is a loud per-image entry
+    /// and never aborts the remaining targets.
+    #[test]
+    fn previous_reports_per_image_failure_without_aborting_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let good = directory.path().join("good.png");
+        save_png(&first);
+        save_png(&good);
+        let missing = directory.path().join("gone.png");
+        let mut app = new_app();
+        open_and_decode(&mut app, first.display().to_string());
+        app.set_adjustment("contrast", 0.3);
+        app.save_sidecar();
+        open_and_decode_switch(&mut app, &good.display().to_string());
+        app.filmstrip_selection.clear();
+        app.filmstrip_selection.insert(good.display().to_string());
+        app.filmstrip_selection
+            .insert(missing.display().to_string());
+        let report = app.apply_previous_to_selection();
+        assert_eq!(report.applied_count(), 1);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.failed[0].0, missing.display().to_string());
+        assert!(app.error().is_some(), "failure must stay loud");
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&good)).unwrap();
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.is_default)
+            .unwrap();
+        assert_eq!(copy.recipe.adjustments["contrast"], 0.3);
+        // History id carries the per-target counter (`gone` sorts before
+        // `good`, so the healthy target is index 1 here).
+        assert!(
+            copy.history.last().unwrap().id.starts_with("previous-"),
+            "expected a previous history step, got {:?}",
+            copy.history.last().unwrap().id
+        );
+    }
+
     /// GUI-FILMSTRIP-SYNC-1: the selection actions paint headless (no GPU) so
     /// a missing button fails `cargo test -p lumina-gui --lib` instead of
     /// only a visual review.
@@ -19044,6 +19427,7 @@ mod tests {
         output.textures_delta.clear();
         assert_fully_visible(&output.shapes, Str::SyncSettings.t());
         assert_fully_visible(&output.shapes, Str::MatchSelection.t());
+        assert_fully_visible(&output.shapes, Str::PreviousImage.t());
     }
 
     #[test]

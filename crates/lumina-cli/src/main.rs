@@ -324,6 +324,14 @@ enum Command {
     /// G-15 META-MVP (Slice 2): evaluate a portable smart-collection catalog
     /// against N sidecars (read-only filter/list).
     SmartCollections(SmartCollectionsArgs),
+    /// G-08 Previous-Übernahme (LRPAR-G08-PREVIOUS): copy the full recipe of
+    /// one reference image (`--from`) onto N target images (`--to`, each its
+    /// own sidecar, one `previous` history step each). Reads and writes are
+    /// loud (unknown copies/sidecars abort per target with exit 3, a missing
+    /// reference aborts everything with exit 1); the original image is never
+    /// modified. See `feature/platform/cli-gui-wasm.md` § „Previous-
+    /// Übernahme (G-08, LRPAR-G08-PREVIOUS)“.
+    Previous(PreviousArgs),
     /// F-101-F1: run the Lumina MCP server over stdio (JSON-RPC on
     /// stdin/stdout). Takes no arguments; see `feature/platform/mcp-server.md`.
     #[cfg(feature = "mcp")]
@@ -600,6 +608,29 @@ struct SmartCollectionsArgs {
     /// A plain CLI argument, never persisted into recipe data.
     #[arg(long)]
     catalog: PathBuf,
+    #[arg(long)]
+    json: bool,
+}
+
+/// G-08 Previous-Übernahme (LRPAR-G08-PREVIOUS): copy the reference recipe
+/// of `--from` onto every `--to` target sidecar (same full-recipe Sync
+/// mechanism, one `previous` history step per target, per-target failures
+/// isolated and loud). No schema change — only recipe assignment.
+#[derive(Debug, Args)]
+struct PreviousArgs {
+    /// Reference image whose virtual-copy recipe is the Previous source.
+    #[arg(long)]
+    from: PathBuf,
+    /// Target image(s) receiving the reference recipe (repeatable, min 1).
+    #[arg(long, required = true)]
+    to: Vec<PathBuf>,
+    /// Virtual copy id of the reference recipe (default `vc-original`).
+    #[arg(long)]
+    from_copy: Option<String>,
+    /// Virtual copy id receiving the recipe on each target (default
+    /// `vc-original`).
+    #[arg(long)]
+    to_copy: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -1059,6 +1090,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Collections(args) => collections(args),
         Command::BatchMeta(args) => batch_meta(args),
         Command::SmartCollections(args) => smart_collections(args),
+        Command::Previous(args) => previous(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -2421,6 +2453,122 @@ fn smart_collections(args: SmartCollectionsArgs) -> Result<(), CliError> {
     if failed != 0 {
         return Err(CliError::BatchPartial { failed });
     }
+    Ok(())
+}
+
+/// G-08 Previous-Übernahme (LRPAR-G08-PREVIOUS): copy the full recipe of one
+/// reference image onto N target sidecars — the same full-recipe Sync
+/// mechanism the GUI uses (no second mechanism, no subset selection). The
+/// reference is loaded first and loudly aborts everything (exit 1) when its
+/// sidecar is missing/invalid or the copy id is unknown, so no target is
+/// touched without a valid source. Each target is then handled in isolation:
+/// load, assign recipe, one `previous` history step, validate, atomic save.
+/// A missing/invalid target sidecar or unknown target copy marks only its
+/// item as `failed` (stderr line + `info!` log); the remaining targets still
+/// run. Exit `0` on full success, `3` on partial failure (analog `batch` /
+/// `batch-meta`), `1` on hard errors. The original images are never modified;
+/// history `extras` carry only the reference file name, never paths.
+fn previous(args: PreviousArgs) -> Result<(), CliError> {
+    if args.to.is_empty() {
+        return Err(CliError::Message(
+            "`previous` requires at least one `--to` target".into(),
+        ));
+    }
+    let from_sidecar = sidecar_path_for(&args.from);
+    let from_document = load_sidecar(&from_sidecar).map_err(CliError::from)?;
+    let from_id = args.from_copy.as_deref().unwrap_or("vc-original");
+    let reference = from_document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == from_id)
+        .ok_or_else(|| {
+            CliError::Message(format!(
+                "unknown virtual copy `{from_id}` in `{}`",
+                from_sidecar.display()
+            ))
+        })?
+        .recipe
+        .clone();
+    info!(
+        "previous: reference `{}` copy `{from_id}`",
+        args.from.display()
+    );
+    let to_id = args.to_copy.as_deref().unwrap_or("vc-original");
+    let mut applied_count = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+    let mut items = Vec::with_capacity(args.to.len());
+    for target in &args.to {
+        match apply_previous_to_target(target, to_id, &reference, &args.from) {
+            Ok(()) => {
+                info!(
+                    "previous: `{}` updated from `{}`",
+                    target.display(),
+                    args.from.display()
+                );
+                applied_count += 1;
+                items.push(serde_json::json!({"target":target, "status":"ok"}));
+            }
+            Err(error) => {
+                let message = format!("{}: {error}", target.display());
+                eprintln!("error: previous: {message}");
+                info!("previous: `{}` failed", target.display());
+                failures.push(message);
+                items.push(serde_json::json!({"target":target, "status":"failed"}));
+            }
+        }
+    }
+    let failed = failures.len();
+    let text = format!(
+        "previous: {applied_count} applied, {failed} failed (reference `{}`)",
+        args.from.display()
+    );
+    emit(
+        args.json,
+        serde_json::json!({"command":"previous", "from":args.from, "from_copy":from_id, "to_copy":to_id, "applied":applied_count, "failed":failed, "errors":failures, "items":items, "status": if failed == 0 { "ok" } else { "partial" }}),
+        &text,
+    )?;
+    info!("{text}");
+    if failed != 0 {
+        return Err(CliError::BatchPartial { failed });
+    }
+    Ok(())
+}
+
+/// Write the Previous `reference` recipe into the `copy_id` copy of
+/// `target`'s sidecar (which must already exist — like `develop`, no silent
+/// sidecar creation), tag one `previous` history step and save atomically.
+fn apply_previous_to_target(
+    target: &Path,
+    copy_id: &str,
+    reference: &EditRecipe,
+    from: &Path,
+) -> Result<(), CliError> {
+    let sidecar = sidecar_path_for(target);
+    let mut document = load_sidecar(&sidecar)?;
+    let copy = document
+        .virtual_copies
+        .iter_mut()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    copy.recipe = reference.clone();
+    // Portable by construction: only the reference file name (no paths —
+    // absolute paths are forbidden in persistent recipe data).
+    let source_name = from
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("reference")
+        .to_string();
+    let mut extras = BTreeMap::new();
+    extras.insert("step".into(), serde_json::Value::String("previous".into()));
+    extras.insert("source".into(), serde_json::Value::String(source_name));
+    copy.history.push(HistoryEntry {
+        id: "previous".into(),
+        recipe: reference.clone(),
+        recorded_at: None,
+        extras,
+    });
+    document.validate()?;
+    save_sidecar(&sidecar, &document)?;
     Ok(())
 }
 
@@ -7752,6 +7900,154 @@ mod tests {
         fs::write(&input, changed.encode(ImageFileFormat::Png).unwrap()).unwrap();
         let error = import_file(args).unwrap_err();
         assert!(error.to_string().contains("source changed"));
+    }
+
+    /// LRPAR-G08-PREVIOUS: `previous` copies the reference recipe onto every
+    /// target (file → reload), tags one `previous` history step per target
+    /// and leaves the reference sidecar untouched.
+    #[test]
+    fn previous_copies_reference_recipe_to_targets_with_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let (reference, _) = png_input(directory.path(), "reference.png", 100);
+        let (target_a, _) = png_input(directory.path(), "target-a.png", 120);
+        let (target_b, _) = png_input(directory.path(), "target-b.png", 140);
+        for input in [&reference, &target_a, &target_b] {
+            import_file(ImportArgs {
+                input: input.clone(),
+                json: false,
+                migrate: false,
+            })
+            .unwrap();
+        }
+        develop(DevelopArgs {
+            input: reference.clone(),
+            virtual_copy: None,
+            exposure: Some(1.5),
+            contrast: None,
+            treatment: None,
+            profile: None,
+            update_masks: false,
+            migrate: false,
+            json: false,
+        })
+        .unwrap();
+
+        previous(PreviousArgs {
+            from: reference.clone(),
+            to: vec![target_a.clone(), target_b.clone()],
+            from_copy: None,
+            to_copy: None,
+            json: false,
+        })
+        .unwrap();
+
+        for target in [&target_a, &target_b] {
+            let document = load_sidecar(&sidecar_path_for(target)).unwrap();
+            assert!(document.validate().is_ok());
+            let copy = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == "vc-original")
+                .unwrap();
+            assert_eq!(copy.recipe.adjustments["exposure"], 1.5);
+            let last = copy.history.last().unwrap();
+            assert_eq!(last.id, "previous");
+            assert_eq!(last.recipe.adjustments["exposure"], 1.5);
+            // Portable by construction: the history extra carries the file
+            // name, never a path.
+            let source = last.extras["source"].as_str().unwrap();
+            assert_eq!(source, "reference.png");
+            assert!(!source.contains('/'));
+        }
+        // The reference sidecar is untouched (no history step added there).
+        let reference_document = load_sidecar(&sidecar_path_for(&reference)).unwrap();
+        assert!(reference_document.virtual_copies[0].history.is_empty());
+    }
+
+    /// LRPAR-G08-PREVIOUS: one missing target sidecar is a loud per-target
+    /// failure (exit 3) — the healthy target is still updated.
+    #[test]
+    fn previous_reports_per_target_failure_without_aborting_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let (reference, _) = png_input(directory.path(), "reference.png", 100);
+        let (good, _) = png_input(directory.path(), "good.png", 120);
+        for input in [&reference, &good] {
+            import_file(ImportArgs {
+                input: input.clone(),
+                json: false,
+                migrate: false,
+            })
+            .unwrap();
+        }
+        develop(DevelopArgs {
+            input: reference.clone(),
+            virtual_copy: None,
+            exposure: Some(2.0),
+            contrast: None,
+            treatment: None,
+            profile: None,
+            update_masks: false,
+            migrate: false,
+            json: false,
+        })
+        .unwrap();
+        let missing = directory.path().join("gone.png");
+
+        let error = previous(PreviousArgs {
+            from: reference.clone(),
+            to: vec![good.clone(), missing],
+            from_copy: None,
+            to_copy: None,
+            json: false,
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, CliError::BatchPartial { failed: 1 }),
+            "partial failure must map to exit 3, got {error}"
+        );
+        assert_eq!(error.exit_code(), 3);
+        let document = load_sidecar(&sidecar_path_for(&good)).unwrap();
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == "vc-original")
+            .unwrap();
+        assert_eq!(copy.recipe.adjustments["exposure"], 2.0);
+        assert_eq!(copy.history.last().unwrap().id, "previous");
+    }
+
+    /// LRPAR-G08-PREVIOUS: a missing reference sidecar is a hard error
+    /// (exit 1) and no target is touched.
+    #[test]
+    fn previous_missing_reference_fails_before_touching_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let (target, _) = png_input(directory.path(), "target.png", 120);
+        import_file(ImportArgs {
+            input: target.clone(),
+            json: false,
+            migrate: false,
+        })
+        .unwrap();
+        let before = fs::read_to_string(sidecar_path_for(&target)).unwrap();
+
+        let error = previous(PreviousArgs {
+            from: directory.path().join("gone.png"),
+            to: vec![target.clone()],
+            from_copy: None,
+            to_copy: None,
+            json: false,
+        })
+        .unwrap_err();
+        assert!(
+            !matches!(error, CliError::BatchPartial { .. }),
+            "a missing reference is a hard error, got {error}"
+        );
+        assert_eq!(error.exit_code(), 1);
+        assert_eq!(
+            fs::read_to_string(sidecar_path_for(&target)).unwrap(),
+            before,
+            "no target may be touched without a valid reference"
+        );
     }
 
     /// R2-CLI-10: `import` no longer accepts render-only flags that were

@@ -102,7 +102,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | AGENT-HARNESS-2 | alle G | AccessKit-Semantik |
 | 1.0 | AGENT-HARNESS-3 | G-01/G-07/G-08/G-10 | Green-Path-Matrix |
 | 1.0 | AGENT-HARNESS-4 | G-10 | Bildkorrektheit |
-| 1.0 | LRPAR-G08-PREVIOUS | G-08 | Previous |
 | 1.0 | LRPAR-G09-LIB | G-09 | Library-Kern |
 | 1.0 | LRPAR-G10-VIEWER | G-10 | Viewer/Softproof |
 | 1.0 | LRPAR-G11-OVERLAYS | G-11 | Overlays/Pins |
@@ -152,7 +151,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 ### PRIO: mittel
 
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] LRPAR-G08-PREVIOUS (Release: 1.0)** Previous-Übernahme (G-08, ~55 %): Ein-Klick-Übernahme vom Vorbild (Previous) zusätzlich zu Sync/Match. Abnahme: CLI + GUI-headless, History-Schritt je Zielbild.
 - [ ] **[PRIO: mittel] LRPAR-G09-LIB (Release: 1.0)** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-EXPANDED-VIEWPORT-1 (Release: 1.0)** `develop_sections_expanded` zeigt Color/Masking nie pixel-sichtbar (1024×720-Viewport-Clipping, schon vor G-01 so): im Test zu Color/Masking scrollen und/oder Sektionen einzeln snapshotten. Abnahme: Color-/Masking-Widgets pixel-sichtbar im Golden + Vision-Check per DoD §6. (Gefunden 2026-09-04 im G01-Vision-Loop.)

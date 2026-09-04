@@ -251,6 +251,11 @@ pub enum Str {
     MatchExposure,
     SyncSettings,
     MatchSelection,
+    /// LRPAR-G08-PREVIOUS: cross-image Previous button in the filmstrip
+    /// action row. Deliberately NOT [`Str::Previous`] (the G-01 panel-local
+    /// section undo) — the two actions differ (Vorbild-Übernahme vs.
+    /// Sektions-Undo) and must never share a label.
+    PreviousImage,
     ExposureRelative,
     ApplyPreset,
     RenderApply,
@@ -771,6 +776,7 @@ impl Str {
             Str::MatchExposure => "Match Total Exposure",
             Str::SyncSettings => "Sync Settings",
             Str::MatchSelection => "Match Total Exposures",
+            Str::PreviousImage => "Previous Image",
             Str::ExposureRelative => "Exposure relative",
             Str::ApplyPreset => "Create & Apply Preset",
             Str::RenderApply => "Render / Apply",

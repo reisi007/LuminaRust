@@ -682,3 +682,161 @@ fn dust_removal_rejects_dimension_mismatch() {
     let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
     assert!(document.virtual_copies[0].recipe.source_actions.is_empty());
 }
+
+/// LRPAR-G08-PREVIOUS (M1): `previous` between named copies with a `--json`
+/// summary — real binary, real exit code, parsed stdout structure.
+#[test]
+fn previous_copies_between_named_copies_with_json_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let reference = write_png(&directory, "reference.png");
+    let target = write_png(&directory, "target.png");
+    for input in [&reference, &target] {
+        assert!(cli()
+            .args(["import", "--input", input.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+    // Named copies on both sides (created via `develop --virtual-copy`).
+    for (input, exposure) in [(&reference, "--exposure=1.5"), (&target, "--exposure=0")] {
+        let result = cli()
+            .args([
+                "develop",
+                "--input",
+                input.to_str().unwrap(),
+                "--virtual-copy",
+                "vc-warm",
+                exposure,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let result = cli()
+        .args([
+            "previous",
+            "--from",
+            reference.to_str().unwrap(),
+            "--to",
+            target.to_str().unwrap(),
+            "--from-copy",
+            "vc-warm",
+            "--to-copy",
+            "vc-warm",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("stdout must be JSON with --json");
+    assert_eq!(summary["command"], "previous");
+    assert_eq!(summary["from_copy"], "vc-warm");
+    assert_eq!(summary["to_copy"], "vc-warm");
+    assert_eq!(summary["applied"], 1);
+    assert_eq!(summary["failed"], 0);
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["items"][0]["status"], "ok");
+    // The named target copy carries the reference recipe + history step …
+    let document = load_sidecar(&sidecar_path_for(&target)).unwrap();
+    let warm = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == "vc-warm")
+        .unwrap();
+    assert_eq!(warm.recipe.adjustments["exposure"], 1.5);
+    assert_eq!(warm.history.last().unwrap().id, "previous");
+    // … while the default copy is untouched.
+    let default = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == "vc-original")
+        .unwrap();
+    assert!(default.history.is_empty());
+}
+
+/// LRPAR-G08-PREVIOUS (M1): an unknown reference copy is a hard error
+/// (exit 1) and no target is touched.
+#[test]
+fn previous_unknown_reference_copy_exits_one_without_touching_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let reference = write_png(&directory, "reference.png");
+    let target = write_png(&directory, "target.png");
+    for input in [&reference, &target] {
+        assert!(cli()
+            .args(["import", "--input", input.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+    let before = fs::read(sidecar_path_for(&target)).unwrap();
+    let result = cli()
+        .args([
+            "previous",
+            "--from",
+            reference.to_str().unwrap(),
+            "--to",
+            target.to_str().unwrap(),
+            "--from-copy",
+            "vc-nope",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("unknown virtual copy"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read(sidecar_path_for(&target)).unwrap(),
+        before,
+        "no target may be touched without a valid reference"
+    );
+}
+
+/// LRPAR-G08-PREVIOUS (M1): a missing target sidecar is a partial failure
+/// (exit 3) while the healthy target is still updated.
+#[test]
+fn previous_missing_target_sidecar_exits_three() {
+    let directory = tempfile::tempdir().unwrap();
+    let reference = write_png(&directory, "reference.png");
+    let good = write_png(&directory, "good.png");
+    for input in [&reference, &good] {
+        assert!(cli()
+            .args(["import", "--input", input.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+    let missing = directory.path().join("gone.png");
+    let result = cli()
+        .args([
+            "previous",
+            "--from",
+            reference.to_str().unwrap(),
+            "--to",
+            good.to_str().unwrap(),
+            "--to",
+            missing.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(3));
+    let document = load_sidecar(&sidecar_path_for(&good)).unwrap();
+    assert_eq!(
+        document.virtual_copies[0].history.last().unwrap().id,
+        "previous"
+    );
+}
