@@ -146,6 +146,7 @@ fn mask_definition(
         references,
         prompt: None,
         extras: default_extras(),
+        ai_select: None,
     }
 }
 
@@ -195,6 +196,7 @@ pub fn make_mask_fixture(size: u32) -> MaskFixture {
             blur: 0.0,
             density: 1.0,
             extras: default_extras(),
+            visible: true,
         }],
         history: vec![],
         export_records: vec![],

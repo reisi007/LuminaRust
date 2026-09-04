@@ -546,6 +546,34 @@ im Panel sichtbar bleiben. Masken-Layer, Invertierung, Feathering, Blur und
 lokale Anpassungen werden entsprechend der virtuellen Kopie im deklarativen
 Rezept gespeichert.
 
+### Maskierungs-Parität G-03 (LRPAR-G03-MASK, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-03 (Details und
+Auswertungsregeln: `feature/product/ai-masks.md` § „G-03
+Maskierungs-Parität“):
+
+- **Maskenliste mit Auge:** Jede Maske der aktiven Kopie erscheint mit
+  Sichtbarkeits-Auge (`MaskLayer.visible`, persistiert pro virtueller
+  Kopie); der selektierte Eintrag zeigt Status (`valid`/`stale`/`missing`/
+  `corrupt`/`pending`) und Fehlertext. Unsichtbare Layer wirken nicht auf
+  den Render (explizite Nutzerwahl, keine Warnung).
+- **Neu-Menü:** `Subject`/`Sky`/`Background`/`Objects`/`People` (+ optionale
+  Teile `face`/`hair`/`eyes`/`pupil`/`sclera`/`lips`/`teeth`/`skin`/`body`)
+  als AI-Auswahl (`AiSelect`, Status `pending` bis inferiert, fehlendes
+  Modell laut sichtbar); `Color Range` / `Luminance Range` als
+  deterministische Rezept-Stufen (sofort `valid`, kein Modell nötig).
+- **Kombinatorik:** `Add` (`union`), `Subtract` (`subtract`, Basis zuerst),
+  `Invert` (`invert`, genau eine Referenz), `Duplicate` (neue stabile ID).
+  Zyklen/falsche Stelligkeit werden laut verweigert (kein stiller Fallback).
+- **Show + Color Overlay:** `Show`-Checkbox (Default an) plus Farbwahl
+  (Default Rot) als Session-Display-State (nie Rezept/Sidecar, `info!`-Log),
+  UND-verknüpft mit dem G-11-`OverlayMode`.
+- **CLI:** `lumina mask --list` (Status je Kopie), `--add-ai-select`,
+  `--add-color-range`, `--add-luminance-range`, `--combine`,
+  `--duplicate`, `--show-layer`/`--hide-layer`, `--attach-layer`; Roundtrip über
+  `save_sidecar`/`load_sidecar`, laute Fehler (Exit 1 Benutzungs-/Laufzeit-
+  fehler wie Bestand, kein stiller Fallback, keine absoluten Pfade).
+
 ### Tool-Overlays, Edit-Pins, Solo-Mode, Shift+Tab (G-11, LRPAR-G11-OVERLAYS)
 
 Overlay-/Panel-Comfort nach Lightroom-Vorbild, GUI-contained (kein CLI-Anteil).

@@ -439,6 +439,12 @@ fn evaluate_mask_stage(
     if let Some(masks) = masks {
         if let Some(copy) = masks.copies.iter().find(|c| c.id == masks.active_copy_id) {
             for layer in &copy.mask_layers {
+                // G-03 visibility eye: an invisible layer is an explicit user
+                // choice and is skipped without a warning (unlike missing or
+                // corrupt mattes, which stay loud).
+                if !layer.visible {
+                    continue;
+                }
                 work.mask_layers_evaluated += 1;
                 match evaluate_layer(masks, layer, frame_width, frame_height) {
                     Ok(plane) => {
@@ -750,6 +756,7 @@ mod tests {
             references,
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         }
     }
 
@@ -790,6 +797,7 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: Extras::new(),
+            visible: true,
         }
     }
 
@@ -988,6 +996,93 @@ mod tests {
         assert_eq!(result.layer_id, "layer-1");
         assert_eq!((result.plane.width, result.plane.height), (2, 2));
         assert_eq!(result.plane.values, vec![32768; 4]);
+        assert!(output.mask_warnings.is_empty());
+    }
+
+    // ----- G-03: visibility eye + range planes in the render stage -----
+
+    #[test]
+    fn invisible_layer_is_skipped_silently() {
+        let definitions = vec![
+            mask_definition("shown", MaskStatus::Valid, MaskOperation::Source, vec![]),
+            mask_definition("hidden", MaskStatus::Valid, MaskOperation::Source, vec![]),
+        ];
+        let mut hidden_layer = layer("layer-hidden", reference("vc", "hidden"));
+        hidden_layer.visible = false;
+        let copies = vec![copy_with(
+            "vc",
+            definitions,
+            vec![layer("layer-shown", reference("vc", "shown")), hidden_layer],
+        )];
+        let planes = BTreeMap::from([
+            (
+                ("vc".into(), "shown".into()),
+                MaskPlane::new(1, 1, vec![u16::MAX]).unwrap(),
+            ),
+            (
+                ("vc".into(), "hidden".into()),
+                MaskPlane::new(1, 1, vec![u16::MAX]).unwrap(),
+            ),
+        ]);
+        let recipe = EditRecipe::default();
+        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
+        let output = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
+            },
+        )
+        .unwrap();
+        // The eye is an explicit user choice: the hidden layer vanishes
+        // without warnings (Strict still passes) and only the shown plane
+        // reaches the output.
+        assert_eq!(output.mask_layers.len(), 1);
+        assert_eq!(output.mask_layers[0].layer_id, "layer-shown");
+        assert!(output.mask_warnings.is_empty());
+    }
+
+    #[test]
+    fn range_mask_plane_matches_deterministic_reference() {
+        use lumina_sidecar::{MaskPrompt, PromptTransform};
+        let mut definition =
+            mask_definition("lum", MaskStatus::Valid, MaskOperation::Source, vec![]);
+        let prompt = MaskPrompt::LuminanceRange {
+            min: 0.5,
+            max: 1.0,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        };
+        definition.prompt = Some(prompt.clone());
+        let copies = vec![copy_with(
+            "vc",
+            vec![definition],
+            vec![layer("layer-lum", reference("vc", "lum"))],
+        )];
+        // Black/white checker frame: the loader-computed plane is the input
+        // here; the render stage must pass it through byte-identical
+        // (PSNR-equivalent: zero deviation, no silent resample artefacts).
+        let frame = ImageFrame::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]).unwrap();
+        let expected = crate::range_masks::evaluate_range_prompt(&frame, &prompt).unwrap();
+        assert_eq!(expected.values, vec![0, u16::MAX]);
+        let planes = BTreeMap::from([(("vc".into(), "lum".into()), expected.clone())]);
+        let recipe = EditRecipe::default();
+        let output = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                lensfun: None,
+                masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Strict)),
+            },
+        )
+        .unwrap();
+        assert_eq!(output.mask_layers.len(), 1);
+        assert_eq!(output.mask_layers[0].plane.values, expected.values);
         assert!(output.mask_warnings.is_empty());
     }
 

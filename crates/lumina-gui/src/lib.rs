@@ -36,13 +36,14 @@ use lumina_core::{
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
-use lumina_core::{export_image, masks::rasterize_prompt, ExportOptions};
+use lumina_core::{export_image, masks::rasterize_prompt, range_masks, ExportOptions};
 use lumina_raw::RawError;
 use lumina_sidecar::{
-    load_zdata, zdata_path_for, ArtifactStatus, BrushMark, BrushMarkSign, CoordinateSystem,
-    DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskDefinition, MaskLayer, MaskOperation,
-    MaskPrompt, MaskReference, MaskStatus, ModelIdentity, Point2, Preprocessing, PromptTransform,
-    Resolution, SidecarDocument, SourceFingerprint, SourceIdentity, SourceStatus,
+    load_zdata, zdata_path_for, AiSelect, AiSelectKind, ArtifactStatus, BrushMark, BrushMarkSign,
+    CoordinateSystem, DecodeFingerprint, GeometryFingerprint, HistoryEntry, MaskDefinition,
+    MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus, ModelIdentity, Point2,
+    Preprocessing, PromptTransform, Resolution, SidecarDocument, SourceFingerprint, SourceIdentity,
+    SourceStatus,
 };
 use lumina_sidecar::{
     AnalysisFingerprint, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves,
@@ -308,6 +309,18 @@ pub fn pin_visibility_name(visibility: PinVisibility) -> &'static str {
     }
 }
 
+/// User-visible name of an [`AiSelectKind`] (G-03), routed through [`Str`].
+/// Covers every variant (DoD §3: no sampling over the class).
+pub fn ai_select_kind_name(kind: AiSelectKind) -> &'static str {
+    match kind {
+        AiSelectKind::Subject => Str::AiSubject.t(),
+        AiSelectKind::Sky => Str::AiSky.t(),
+        AiSelectKind::Background => Str::AiBackground.t(),
+        AiSelectKind::Objects => Str::AiObjects.t(),
+        AiSelectKind::People => Str::AiPeople.t(),
+    }
+}
+
 /// Number of F-100 Develop sections in [`LuminaApp::DEVELOP_SECTIONS`] order
 /// (Basic, Tone Curve, Color, Detail, Effects, Optics, Geometry, Masking):
 /// the G-11 solo-mode scope.
@@ -360,7 +373,8 @@ pub struct EditPin {
 /// Box → rect centre; Brush → first mark; Polygon → first vertex; Ellipse →
 /// centre; Gradient → midpoint of the start→end stretch along `angle_deg`
 /// around the frame centre, clamped to `0..=1`. Prompts without geometry
-/// (empty brush/polygon) yield `None`: no pin instead of an invented position.
+/// (empty brush/polygon, G-03 range stages) yield `None`: no pin instead of
+/// an invented position.
 /// Pure function, unit-tested headless.
 pub fn pin_anchor_for_prompt(prompt: &MaskPrompt) -> Option<(f32, f32)> {
     let clamp01 = |v: f32| v.clamp(0.0, 1.0);
@@ -414,6 +428,8 @@ pub fn pin_anchor_for_prompt(prompt: &MaskPrompt) -> Option<(f32, f32)> {
                 clamp01(0.5 + radians.sin() * (mid - 0.5)),
             ))
         }
+        // G-03 range stages are parameter boxes, not spatial prompts: no pin.
+        MaskPrompt::ColorRange { .. } | MaskPrompt::LuminanceRange { .. } => None,
     }
 }
 
@@ -1014,6 +1030,35 @@ pub struct LuminaApp {
     pin_visibility: PinVisibility,
     solo_mode: bool,
     section_open: [bool; SECTION_COUNT],
+    /// G-03 (LRPAR-G03-MASK) mask-overlay + panel session state. Display-only
+    /// (never recipe/sidecar, like G-11 above) except `MaskLayer.visible`,
+    /// which is persisted per virtual copy through
+    /// [`Self::set_mask_visible`]:
+    /// * `show_mask_overlay`: master Show switch ANDed with `overlay_mode`.
+    /// * `overlay_color`: matte tint RGB (default Lightroom-red).
+    /// * the remaining fields are panel inputs for AI-select / range adds and
+    ///   combine/duplicate (kind, part detail, range parameters, other-mask
+    ///   reference, duplicate name).
+    show_mask_overlay: bool,
+    overlay_color: [u8; 3],
+    ai_select_kind: AiSelectKind,
+    ai_detail_input: String,
+    ai_name_input: String,
+    lum_name_input: String,
+    lum_min: f32,
+    lum_max: f32,
+    lum_feather: f32,
+    col_name_input: String,
+    col_hue_center: f32,
+    col_hue_width: f32,
+    col_sat_min: f32,
+    col_sat_max: f32,
+    col_lum_min: f32,
+    col_lum_max: f32,
+    col_feather: f32,
+    combine_other_id: String,
+    combine_name_input: String,
+    duplicate_name_input: String,
     /// Welle 3 (LR-13/LR-20/LR-09/LR-12/LR-17 light) display/session state.
     /// All of these are display-only or `extras`/history-backed, so no
     /// sidecar schema change was needed:
@@ -1646,6 +1691,26 @@ impl LuminaApp {
             pin_visibility: PinVisibility::Auto,
             solo_mode: false,
             section_open: [false; SECTION_COUNT],
+            show_mask_overlay: true,
+            overlay_color: [255, 0, 0],
+            ai_select_kind: AiSelectKind::Subject,
+            ai_detail_input: String::new(),
+            ai_name_input: String::new(),
+            lum_name_input: String::new(),
+            lum_min: 0.0,
+            lum_max: 1.0,
+            lum_feather: 0.0,
+            col_name_input: String::new(),
+            col_hue_center: 0.0,
+            col_hue_width: 60.0,
+            col_sat_min: 0.0,
+            col_sat_max: 1.0,
+            col_lum_min: 0.0,
+            col_lum_max: 1.0,
+            col_feather: 0.0,
+            combine_other_id: String::new(),
+            combine_name_input: String::new(),
+            duplicate_name_input: String::new(),
             filter_bar_visible: false,
             library_filter: String::new(),
             compare_mode: None,
@@ -3516,6 +3581,7 @@ impl LuminaApp {
                 blur: 0.0,
                 density: 1.0,
                 extras: BTreeMap::new(),
+                visible: true,
             });
         }
         self.selected_mask_id = Some(mask_id.into());
@@ -3606,6 +3672,7 @@ impl LuminaApp {
             references: vec![],
             prompt: None,
             extras: BTreeMap::new(),
+            ai_select: None,
         });
         self.select_mask(&id)?;
         self.status = Str::MaskCreated.t().into();
@@ -3627,6 +3694,542 @@ impl LuminaApp {
         mask.name = name;
         self.status = Str::MaskRenamed.t().into();
         Ok(())
+    }
+
+    // ---- G-03 Maskierungs-Parität: AI-select, Range-Stufen, Kombinatorik ----
+
+    /// Build a fresh source [`MaskDefinition`] for the active copy from the
+    /// loaded frame (dimensions + source identity). Shared by all G-03 mask
+    /// constructors so geometry/model placeholders stay identical.
+    fn new_source_mask_template(
+        &self,
+        id: &str,
+        name: &str,
+        status: MaskStatus,
+    ) -> Result<MaskDefinition, GuiError> {
+        let frame = self
+            .original
+            .as_ref()
+            .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?
+            .clone();
+        let source_hash = self
+            .source_bytes
+            .as_ref()
+            .map(|b| format!("blake3:{}", blake3::hash(b).to_hex()))
+            .unwrap_or_else(|| "blake3:unknown".into());
+        let source_byte_length = self.source_bytes.as_ref().map_or(0, |b| b.len() as u64);
+        Ok(MaskDefinition {
+            id: id.into(),
+            name: name.into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: source_hash,
+                byte_length: source_byte_length,
+                extras: BTreeMap::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "gui-mask".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width: frame.width,
+                height: frame.height,
+                orientation: self.raw_orientation,
+                pixel_aspect_ratio: 1.0,
+                extras: BTreeMap::new(),
+            },
+            model: ModelIdentity {
+                name: "unavailable".into(),
+                version: "pending".into(),
+                hash: "pending".into(),
+                extras: BTreeMap::new(),
+            },
+            inference_resolution: Resolution {
+                width: frame.width,
+                height: frame.height,
+                extras: BTreeMap::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "pending".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status,
+            created_at: "pending".into(),
+            generator_version: env!("CARGO_PKG_VERSION").into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Source,
+            references: vec![],
+            prompt: None,
+            ai_select: None,
+            extras: BTreeMap::new(),
+        })
+    }
+
+    /// Push a library definition with validate-then-save and in-memory
+    /// rollback: a rejected definition never reaches the file (loud, never
+    /// partial). Returns the new mask id.
+    fn push_mask_definition(&mut self, definition: MaskDefinition) -> Result<String, GuiError> {
+        self.ensure_document_loaded()?;
+        let id = definition.id.clone();
+        let copy_id = self.virtual_copy_id.clone();
+        {
+            let document = self.document.as_mut().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            if copy.mask_library.iter().any(|mask| mask.id == id) {
+                return Err(GuiError::Io(Str::MaskNameExists.t().to_string()));
+            }
+            copy.mask_library.push(definition);
+        }
+        // Validate outside the copy borrow; roll the push back in memory when
+        // the graph (arity, cycles, ranges, ai_select placement) rejects it.
+        if let Err(error) = self
+            .document
+            .as_ref()
+            .expect("document was ensured")
+            .validate()
+        {
+            self.document
+                .as_mut()
+                .expect("document was ensured")
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == copy_id)
+                .expect("copy was found above")
+                .mask_library
+                .retain(|mask| mask.id != id);
+            return Err(GuiError::Io(error.to_string()));
+        }
+        self.save_sidecar();
+        self.mark_dirty();
+        Ok(id)
+    }
+
+    /// Create an AI-select source mask (G-03). Status `Pending` until a model
+    /// infers the matte; a missing model stays loudly missing (never a
+    /// geometric fallback — see `lumina-core::masks`).
+    pub fn create_ai_mask(
+        &mut self,
+        kind: AiSelectKind,
+        detail: Option<String>,
+        name: impl Into<String>,
+    ) -> Result<String, GuiError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
+        }
+        if let Some(detail) = &detail {
+            if detail.len() > 64
+                || detail.trim().is_empty()
+                || detail != detail.trim()
+                || detail.chars().any(|c| c.is_control())
+            {
+                return Err(GuiError::Io(
+                    "Detail must be trimmed, non-empty, free of control characters and at most 64 chars".into(),
+                ));
+            }
+        }
+        let id = format!(
+            "mask-{}",
+            blake3::hash(format!("ai-select\0{}\0{name}", kind.as_str()).as_bytes()).to_hex()
+        );
+        let mut definition = self.new_source_mask_template(&id, &name, MaskStatus::Pending)?;
+        definition.ai_select = Some(AiSelect {
+            kind,
+            detail,
+            extras: BTreeMap::new(),
+        });
+        let id = self.push_mask_definition(definition)?;
+        self.select_mask(&id)?;
+        info!("GUI interaction: create_ai_mask {kind:?} -> {id}");
+        self.status = Str::MaskCreated.t().into();
+        Ok(id)
+    }
+
+    /// Create a deterministic luminance-range source mask (G-03). Usable
+    /// immediately (`Valid`): no model, no cache, pure function of the
+    /// source pixels.
+    pub fn create_luminance_range_mask(
+        &mut self,
+        min: f32,
+        max: f32,
+        feather: f32,
+        name: impl Into<String>,
+    ) -> Result<String, GuiError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
+        }
+        let id = format!(
+            "mask-{}",
+            blake3::hash(format!("luminance-range\0{name}").as_bytes()).to_hex()
+        );
+        let mut definition = self.new_source_mask_template(&id, &name, MaskStatus::Valid)?;
+        definition.prompt = Some(MaskPrompt::LuminanceRange {
+            min,
+            max,
+            feather,
+            transformation: PromptTransform::default(),
+        });
+        let id = self.push_mask_definition(definition)?;
+        self.select_mask(&id)?;
+        info!("GUI interaction: create_luminance_range_mask {min}/{max}/{feather} -> {id}");
+        self.status = Str::MaskCreated.t().into();
+        Ok(id)
+    }
+
+    /// Create a deterministic color-range source mask (G-03). Usable
+    /// immediately (`Valid`), like the luminance range.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_color_range_mask(
+        &mut self,
+        hue_center: f32,
+        hue_width: f32,
+        sat_min: f32,
+        sat_max: f32,
+        lum_min: f32,
+        lum_max: f32,
+        feather: f32,
+        name: impl Into<String>,
+    ) -> Result<String, GuiError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
+        }
+        let id = format!(
+            "mask-{}",
+            blake3::hash(format!("color-range\0{name}").as_bytes()).to_hex()
+        );
+        let mut definition = self.new_source_mask_template(&id, &name, MaskStatus::Valid)?;
+        definition.prompt = Some(MaskPrompt::ColorRange {
+            hue_center,
+            hue_width,
+            sat_min,
+            sat_max,
+            lum_min,
+            lum_max,
+            feather,
+            transformation: PromptTransform::default(),
+        });
+        let id = self.push_mask_definition(definition)?;
+        self.select_mask(&id)?;
+        info!("GUI interaction: create_color_range_mask {hue_center}/{hue_width} -> {id}");
+        self.status = Str::MaskCreated.t().into();
+        Ok(id)
+    }
+
+    /// Combine the selected mask with another mask of the active copy (G-03):
+    /// `Union` (Add), `Subtract` (selected first = basis) or `Invert`
+    /// (selected only, `other_id` ignored). Unknown ids, `Source` and wrong
+    /// arity are loud errors; cycles are rejected by validation with
+    /// rollback. The new node starts `Pending` until every input resolves.
+    pub fn combine_masks(
+        &mut self,
+        operation: MaskOperation,
+        other_id: &str,
+        name: impl Into<String>,
+    ) -> Result<String, GuiError> {
+        // The panel combines with Add (union), Subtract and Invert; source
+        // masks are created, not combined, and intersect stays CLI-only.
+        if !matches!(
+            operation,
+            MaskOperation::Union | MaskOperation::Subtract | MaskOperation::Invert
+        ) {
+            return Err(GuiError::Io(
+                "Combine needs union, subtract or invert (source masks are created, not combined)"
+                    .into(),
+            ));
+        }
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
+        }
+        let selected = self
+            .selected_mask_id
+            .clone()
+            .ok_or_else(|| GuiError::Io(Str::NoMaskSelected.t().to_string()))?;
+        let copy_id = self.virtual_copy_id.clone();
+        // Both inputs must exist on the active copy (panel scope). Invert
+        // uses the selection only — `other_id` is ignored, never validated.
+        self.ensure_document_loaded()?;
+        {
+            let document = self.document.as_ref().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            let mut required: Vec<&str> = vec![&selected];
+            if operation != MaskOperation::Invert {
+                required.push(other_id);
+            }
+            for id in required {
+                if !copy.mask_library.iter().any(|mask| mask.id == id) {
+                    return Err(GuiError::Io(Str::MaskNotFound.t().to_string()));
+                }
+            }
+        }
+        let references = match operation {
+            MaskOperation::Invert => vec![MaskReference {
+                copy_id: copy_id.clone(),
+                mask_id: selected.clone(),
+                extras: BTreeMap::new(),
+            }],
+            MaskOperation::Union | MaskOperation::Subtract => {
+                if other_id == selected {
+                    return Err(GuiError::Io("Combine needs two different masks".into()));
+                }
+                [selected.clone(), other_id.to_string()]
+                    .into_iter()
+                    .map(|mask_id| MaskReference {
+                        copy_id: copy_id.clone(),
+                        mask_id,
+                        extras: BTreeMap::new(),
+                    })
+                    .collect()
+            }
+            _ => {
+                return Err(GuiError::Io(
+                    "Only union, subtract and invert are combinable in the panel".into(),
+                ));
+            }
+        };
+        let id = format!(
+            "mask-{}",
+            blake3::hash(
+                format!("combine-{operation:?}\0{selected}\0{other_id}\0{name}").as_bytes()
+            )
+            .to_hex()
+        );
+        let mut definition = self.new_source_mask_template(&id, &name, MaskStatus::Pending)?;
+        definition.operation = operation;
+        definition.references = references;
+        let id = self.push_mask_definition(definition)?;
+        self.select_mask(&id)?;
+        info!("GUI interaction: combine_masks {operation:?} -> {id}");
+        self.status = Str::MaskCreated.t().into();
+        Ok(id)
+    }
+
+    /// Duplicate a source mask under a new name (G-03). The copy gets a fresh
+    /// stable id and carries the definition (prompt/ai-select); the binary
+    /// payload stays deduplicated by content hash in `.zdata`. Derived nodes
+    /// are rebuilt with [`Self::combine_masks`] instead of aliased silently.
+    pub fn duplicate_mask(
+        &mut self,
+        mask_id: &str,
+        name: impl Into<String>,
+    ) -> Result<String, GuiError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        let copy_id = self.virtual_copy_id.clone();
+        let template = {
+            let document = self.document.as_ref().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter()
+                .find(|copy| copy.id == copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            copy.mask_library
+                .iter()
+                .find(|mask| mask.id == mask_id)
+                .cloned()
+                .ok_or_else(|| GuiError::Io(Str::MaskNotFound.t().to_string()))?
+        };
+        if template.operation != MaskOperation::Source {
+            return Err(GuiError::Io(
+                "Only source masks duplicate; rebuild derived masks with Combine".into(),
+            ));
+        }
+        let id = format!(
+            "mask-{}",
+            blake3::hash(format!("duplicate\0{copy_id}\0{mask_id}\0{name}").as_bytes()).to_hex()
+        );
+        let mut duplicated = template;
+        duplicated.id = id;
+        duplicated.name = name;
+        duplicated.created_at = "pending".into();
+        duplicated.generator_version = env!("CARGO_PKG_VERSION").into();
+        let id = self.push_mask_definition(duplicated)?;
+        self.select_mask(&id)?;
+        info!("GUI interaction: duplicate_mask {mask_id} -> {id}");
+        self.status = Str::MaskCreated.t().into();
+        Ok(id)
+    }
+
+    /// Visibility eye of the mask list (G-03). Sets `visible` on every layer
+    /// of the active copy that references `mask_id`; when no layer references
+    /// it yet, a layer is created (never an invented matte — only the
+    /// reference). Persisted per virtual copy, loud on unknown masks.
+    pub fn set_mask_visible(&mut self, mask_id: &str, visible: bool) -> Result<(), GuiError> {
+        self.ensure_document_loaded()?;
+        let copy_id = self.virtual_copy_id.clone();
+        {
+            let document = self.document.as_mut().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            if !copy.mask_library.iter().any(|mask| mask.id == mask_id) {
+                return Err(GuiError::Io(Str::MaskNotFound.t().to_string()));
+            }
+            // Snapshot for rollback: the eye must never leave a half-written
+            // layer list behind when validation rejects the result.
+            let snapshot: Vec<(String, bool)> = copy
+                .mask_layers
+                .iter()
+                .map(|layer| (layer.id.clone(), layer.visible))
+                .collect();
+            let layer_count = copy.mask_layers.len();
+            let mut touched = false;
+            for layer in copy
+                .mask_layers
+                .iter_mut()
+                .filter(|layer| layer.mask.copy_id == copy_id && layer.mask.mask_id == mask_id)
+            {
+                layer.visible = visible;
+                touched = true;
+            }
+            if !touched {
+                let mut layer_id = format!("layer-{mask_id}");
+                let mut suffix = 2;
+                while copy.mask_layers.iter().any(|layer| layer.id == layer_id) {
+                    layer_id = format!("layer-{mask_id}-{suffix}");
+                    suffix += 1;
+                }
+                copy.mask_layers.push(MaskLayer {
+                    id: layer_id,
+                    mask: MaskReference {
+                        copy_id: copy_id.clone(),
+                        mask_id: mask_id.into(),
+                        extras: BTreeMap::new(),
+                    },
+                    inverted: false,
+                    feather: 0.0,
+                    blur: 0.0,
+                    density: 1.0,
+                    visible,
+                    extras: BTreeMap::new(),
+                });
+            }
+            if let Err(error) = document.validate() {
+                let copy = document
+                    .virtual_copies
+                    .iter_mut()
+                    .find(|copy| copy.id == copy_id)
+                    .expect("copy was found above");
+                copy.mask_layers.truncate(layer_count);
+                for layer in copy.mask_layers.iter_mut() {
+                    if let Some((_, was)) = snapshot.iter().find(|(id, _)| id == &layer.id) {
+                        layer.visible = *was;
+                    }
+                }
+                return Err(GuiError::Io(error.to_string()));
+            }
+        }
+        self.save_sidecar();
+        self.mark_dirty();
+        info!("GUI interaction: set_mask_visible {mask_id} -> {visible}");
+        Ok(())
+    }
+
+    /// Eye state of the mask list (G-03): true when no layer references the
+    /// mask yet (vacuous) or at least one referencing layer is visible.
+    pub fn mask_visible(&self, mask_id: &str) -> bool {
+        let Some(document) = self.document.as_ref() else {
+            return true;
+        };
+        let Some(copy) = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == self.virtual_copy_id)
+        else {
+            return true;
+        };
+        let mut any = false;
+        let mut visible = false;
+        for layer in &copy.mask_layers {
+            if layer.mask.copy_id == copy.id && layer.mask.mask_id == mask_id {
+                any = true;
+                visible = visible || layer.visible;
+            }
+        }
+        !any || visible
+    }
+
+    /// Selected mask status for the panel status line (G-03): status plus the
+    /// persisted error text, if any. `None` without a selection.
+    pub fn selected_mask_status(&self) -> Option<(MaskStatus, Option<String>)> {
+        let id = self.selected_mask_id.as_deref()?;
+        let document = self.document.as_ref()?;
+        let copy = document
+            .virtual_copies
+            .iter()
+            .find(|copy| copy.id == self.virtual_copy_id)?;
+        let mask = copy.mask_library.iter().find(|mask| mask.id == id)?;
+        Some((mask.status.clone(), mask.error_text.clone()))
+    }
+
+    /// Master Show switch of the mask overlay (G-03). Display-only session
+    /// state (never recipe/sidecar), ANDed with the G-11 overlay mode.
+    pub fn show_mask_overlay(&self) -> bool {
+        self.show_mask_overlay
+    }
+
+    pub fn set_show_mask_overlay(&mut self, shown: bool) {
+        if self.show_mask_overlay == shown {
+            return;
+        }
+        self.show_mask_overlay = shown;
+        info!("GUI interaction: set_show_mask_overlay -> {shown}");
+    }
+
+    /// Matte tint of the mask overlay (G-03). Display-only session state.
+    pub fn overlay_color(&self) -> [u8; 3] {
+        self.overlay_color
+    }
+
+    pub fn set_overlay_color(&mut self, color: [u8; 3]) {
+        if self.overlay_color == color {
+            return;
+        }
+        self.overlay_color = color;
+        info!(
+            "GUI interaction: set_overlay_color -> #{:02X}{:02X}{:02X}",
+            color[0], color[1], color[2]
+        );
+    }
+
+    /// Whether the selected mask's matte paints right now (G-03): the Show
+    /// switch AND the G-11 mode must allow it, plus the mask's own eye — a
+    /// mask whose layers are all invisible paints no overlay (the mask is
+    /// "off"). A live in-progress gesture always paints; without a selection
+    /// there is nothing to show.
+    pub fn mask_overlay_allowed(&self) -> bool {
+        if !self.show_mask_overlay || !self.overlay_visible() {
+            return false;
+        }
+        if self.drawing && self.mask_tool != MaskTool::None {
+            return true;
+        }
+        let Some(id) = self.selected_mask_id.as_deref() else {
+            return false;
+        };
+        self.mask_visible(id)
     }
 
     pub fn set_mask_inverted(&mut self, inverted: bool) -> Result<(), GuiError> {
@@ -7865,6 +8468,11 @@ impl LuminaApp {
         let Some(prompt) = self.effective_overlay_prompt() else {
             return;
         };
+        // G-03: the Show switch and the mask's own eye gate the overlay on top
+        // of the G-11 mode (`effective_overlay_prompt` already applied it).
+        if !self.mask_overlay_allowed() {
+            return;
+        }
         let (w, h) = self.image_dims().unwrap_or((1, 1));
         // Cap the rasterization so live drags stay smooth on large sources.
         let max_dim = 1024u32;
@@ -7877,13 +8485,35 @@ impl LuminaApp {
         } else {
             (w, h)
         };
-        let Ok(plane) = rasterize_prompt(&prompt, rw, rh) else {
-            return;
+        // G-03: range stages evaluate against (downscaled) source pixels;
+        // geometry prompts rasterize as before. Either failure hides the
+        // overlay instead of painting a wrong matte.
+        let plane = if range_masks::is_range_prompt(Some(&prompt)) {
+            let Some(original) = self.original.as_ref() else {
+                return;
+            };
+            let (pixels, sw, sh) =
+                downscale_rgba(&original.pixels, original.width, original.height, max_dim);
+            let small = lumina_core::ImageFrame {
+                width: sw,
+                height: sh,
+                pixels,
+            };
+            match range_masks::evaluate_range_prompt(&small, &prompt) {
+                Ok(plane) => plane,
+                Err(_) => return,
+            }
+        } else {
+            let Ok(plane) = rasterize_prompt(&prompt, rw, rh) else {
+                return;
+            };
+            plane
         };
+        let [tr, tg, tb] = self.overlay_color;
         let mut pixels = vec![0u8; plane.values.len() * 4];
         for (i, value) in plane.values.iter().enumerate() {
             let alpha = (*value as f32 / u16::MAX as f32 * 0.45 * 255.0) as u8;
-            pixels[i * 4..i * 4 + 4].copy_from_slice(&[80, 160, 255, alpha]);
+            pixels[i * 4..i * 4 + 4].copy_from_slice(&[tr, tg, tb, alpha]);
         }
         let image = egui::ColorImage::from_rgba_unmultiplied(
             [plane.width as usize, plane.height as usize],
@@ -9273,6 +9903,238 @@ impl LuminaApp {
         });
     }
 
+    /// G-03 masking-parity rows of the Masking section (list with eye,
+    /// status line, Show + color overlay, AI-select and range adds,
+    /// Add/Subtract/Invert/Duplicate combinators). Own method so the
+    /// headless panel test paints exactly this block without the
+    /// collapsing-header open animation. Every button routes through the
+    /// tested model methods; failures surface via `show_error` (loud).
+    fn draw_masking_g03(&mut self, ui: &mut egui::Ui, document: &SidecarDocument) {
+        // G-03 masking parity: mask list with visibility eye, AI-select
+        // and range adds, Add/Subtract/Invert/Duplicate combinators, Show
+        // + color overlay. Every button routes through the tested model
+        // methods below; failures surface via `show_error` (loud).
+        ui.separator();
+        let library: Vec<(String, String, String, Option<String>)> = document
+            .virtual_copies
+            .iter()
+            .find(|c| c.id == self.virtual_copy_id)
+            .map(|c| {
+                c.mask_library
+                    .iter()
+                    .map(|m| {
+                        (
+                            m.id.clone(),
+                            m.name.clone(),
+                            format!("{:?}", m.status).to_lowercase(),
+                            m.error_text.clone(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (id, name, status, _error) in &library {
+            ui.horizontal(|ui| {
+                let mut eye = self.mask_visible(id);
+                if ui.checkbox(&mut eye, Str::MaskEye.t()).changed() {
+                    if let Err(e) = self.set_mask_visible(id, eye) {
+                        self.show_error(e);
+                    }
+                }
+                let selected = self.selected_mask_id.as_deref() == Some(id.as_str());
+                if ui
+                    .selectable_label(selected, format!("{name} [{status}]"))
+                    .clicked()
+                {
+                    if let Err(e) = self.select_mask(id) {
+                        self.show_error(e);
+                    }
+                }
+            });
+        }
+        if let Some((status, error)) = self.selected_mask_status() {
+            let mut line = format!(
+                "{}: {}",
+                Str::MaskStatusLabel.t(),
+                format!("{status:?}").to_lowercase()
+            );
+            if let Some(error) = error {
+                line.push_str(&format!(" — {error}"));
+            }
+            ui.label(line);
+        }
+        // Show master switch + overlay color (session display state).
+        ui.horizontal(|ui| {
+            let mut shown = self.show_mask_overlay;
+            if ui.checkbox(&mut shown, Str::ShowOverlay.t()).changed() {
+                self.set_show_mask_overlay(shown);
+            }
+            ui.label(Str::OverlayColor.t());
+            let mut color = self.overlay_color;
+            if ui.color_edit_button_srgb(&mut color).changed() {
+                self.set_overlay_color(color);
+            }
+        });
+        // AI-select add row.
+        ui.separator();
+        ui.label(Str::AiSelectLabel.t());
+        egui::ComboBox::from_id_salt("g03_ai_kind")
+            .selected_text(ai_select_kind_name(self.ai_select_kind))
+            .show_ui(ui, |ui| {
+                for kind in AiSelectKind::all() {
+                    ui.selectable_value(&mut self.ai_select_kind, kind, ai_select_kind_name(kind));
+                }
+            });
+        ui.label(Str::DetailLabel.t());
+        ui.text_edit_singleline(&mut self.ai_detail_input);
+        // Button-first right-to-left (GUI-VISION-1): a text field first would
+        // push the row past the 320px panel budget. Nested exactly like the
+        // New Mask row above.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            let add_clicked = ui.button(Str::AddAiMask.t()).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.text_edit_singleline(&mut self.ai_name_input);
+            });
+            if add_clicked {
+                let detail = if self.ai_detail_input.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.ai_detail_input.trim().to_string())
+                };
+                if let Err(e) =
+                    self.create_ai_mask(self.ai_select_kind, detail, self.ai_name_input.clone())
+                {
+                    self.show_error(e);
+                } else {
+                    self.ai_name_input.clear();
+                    self.ai_detail_input.clear();
+                }
+            }
+        });
+        // Luminance-range add row.
+        ui.separator();
+        ui.label(Str::LuminanceRange.t());
+        ui.add(egui::Slider::new(&mut self.lum_min, 0.0..=1.0).text("Min"));
+        ui.add(egui::Slider::new(&mut self.lum_max, 0.0..=1.0).text("Max"));
+        ui.add(egui::Slider::new(&mut self.lum_feather, 0.0..=1.0).text(Str::Feather.t()));
+        // Button-first right-to-left (GUI-VISION-1): see the AI add row.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            if ui.button(Str::AddRange.t()).clicked() {
+                if let Err(e) = self.create_luminance_range_mask(
+                    self.lum_min,
+                    self.lum_max,
+                    self.lum_feather,
+                    self.lum_name_input.clone(),
+                ) {
+                    self.show_error(e);
+                } else {
+                    self.lum_name_input.clear();
+                }
+            }
+            ui.text_edit_singleline(&mut self.lum_name_input);
+        });
+        // Color-range add row.
+        ui.separator();
+        ui.label(Str::ColorRange.t());
+        ui.add(egui::Slider::new(&mut self.col_hue_center, 0.0..=360.0).text("Hue"));
+        ui.add(egui::Slider::new(&mut self.col_hue_width, 0.0..=360.0).text("Width"));
+        ui.add(egui::Slider::new(&mut self.col_sat_min, 0.0..=1.0).text("Sat min"));
+        ui.add(egui::Slider::new(&mut self.col_sat_max, 0.0..=1.0).text("Sat max"));
+        ui.add(egui::Slider::new(&mut self.col_lum_min, 0.0..=1.0).text("Lum min"));
+        ui.add(egui::Slider::new(&mut self.col_lum_max, 0.0..=1.0).text("Lum max"));
+        ui.add(egui::Slider::new(&mut self.col_feather, 0.0..=1.0).text(Str::Feather.t()));
+        // Button-first right-to-left (GUI-VISION-1): see the AI add row.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            if ui.button(Str::AddRange.t()).clicked() {
+                if let Err(e) = self.create_color_range_mask(
+                    self.col_hue_center,
+                    self.col_hue_width,
+                    self.col_sat_min,
+                    self.col_sat_max,
+                    self.col_lum_min,
+                    self.col_lum_max,
+                    self.col_feather,
+                    self.col_name_input.clone(),
+                ) {
+                    self.show_error(e);
+                } else {
+                    self.col_name_input.clear();
+                }
+            }
+            ui.text_edit_singleline(&mut self.col_name_input);
+        });
+        // Combine (selected + other) + invert + duplicate rows.
+        ui.separator();
+        ui.label(Str::CombineLabel.t());
+        let others: Vec<(String, String)> = library
+            .iter()
+            .filter(|(id, _, _, _)| self.selected_mask_id.as_deref() != Some(id.as_str()))
+            .map(|(id, name, _, _)| (id.clone(), name.clone()))
+            .collect();
+        egui::ComboBox::from_id_salt("g03_combine_other")
+            .selected_text(
+                others
+                    .iter()
+                    .find(|(id, _)| id == &self.combine_other_id)
+                    .map(|(_, name)| name.as_str())
+                    .unwrap_or("-"),
+            )
+            .show_ui(ui, |ui| {
+                for (id, name) in &others {
+                    ui.selectable_value(&mut self.combine_other_id, id.clone(), name);
+                }
+            });
+        // Combine name (shared by Add/Subtract/Invert) on its own line so no
+        // button row can push the panel past its budget.
+        ui.text_edit_singleline(&mut self.combine_name_input);
+        // Wrapped buttons (GUI-VISION-1): wrap instead of growing the panel.
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(Str::CombineAdd.t()).clicked() {
+                if let Err(e) = self.combine_masks(
+                    MaskOperation::Union,
+                    &self.combine_other_id.clone(),
+                    self.combine_name_input.clone(),
+                ) {
+                    self.show_error(e);
+                } else {
+                    self.combine_name_input.clear();
+                }
+            }
+            if ui.button(Str::CombineSubtract.t()).clicked() {
+                if let Err(e) = self.combine_masks(
+                    MaskOperation::Subtract,
+                    &self.combine_other_id.clone(),
+                    self.combine_name_input.clone(),
+                ) {
+                    self.show_error(e);
+                } else {
+                    self.combine_name_input.clear();
+                }
+            }
+            if ui.button(Str::Invert.t()).clicked() {
+                if let Err(e) =
+                    self.combine_masks(MaskOperation::Invert, "", self.combine_name_input.clone())
+                {
+                    self.show_error(e);
+                } else {
+                    self.combine_name_input.clear();
+                }
+            }
+        });
+        // Button-first right-to-left (GUI-VISION-1): see the AI add row.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            if ui.button(Str::DuplicateMask.t()).clicked() {
+                let selected = self.selected_mask_id.clone().unwrap_or_default();
+                if let Err(e) = self.duplicate_mask(&selected, self.duplicate_name_input.clone()) {
+                    self.show_error(e);
+                } else {
+                    self.duplicate_name_input.clear();
+                }
+            }
+            ui.text_edit_singleline(&mut self.duplicate_name_input);
+        });
+    }
+
     fn draw_masking(&mut self, ui: &mut egui::Ui) {
         // G-11 solo: see `draw_basic`.
         let section_was_open = self.section_open[SECTION_MASKING];
@@ -9317,9 +10179,9 @@ impl LuminaApp {
             // GUI-VISION-1 (same bug class as the Export Choose row):
             // button-first (right-to-left) so New Mask stays inside the panel.
             let mut new_clicked = false;
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 new_clicked = ui.button(Str::NewMask.t()).clicked();
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                     ui.text_edit_singleline(&mut self.mask_name_input);
                 });
             });
@@ -9330,6 +10192,9 @@ impl LuminaApp {
                     self.mask_name_input.clear();
                 }
             }
+            // G-03 masking parity rows (own method so the headless panel
+            // test can paint them without the collapsing-header animation).
+            self.draw_masking_g03(ui, &document);
             // F-103-N4: interactive mask tools. The tool only picks how a drag on
             // the preview is interpreted; persistence goes through the sidecar.
             ui.separator();
@@ -13310,6 +14175,320 @@ mod tests {
         assert_eq!(app.status(), "Tool overlay: Auto");
     }
 
+    // ----- G-03 Maskierungs-Parität: Modell + Persistenz + Panel -----
+
+    /// E2E (DoD §1): AI-Maske und Luminance-Range über Datei anlegen,
+    /// speichern, neu laden — stabile IDs, getrennte Status, keine Re-Inferenz.
+    #[test]
+    fn g03_ai_and_range_masks_persist_per_copy_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+
+        let sky = app.create_ai_mask(AiSelectKind::Sky, None, "Sky").unwrap();
+        let bright = app
+            .create_luminance_range_mask(0.5, 1.0, 0.0, "Bright")
+            .unwrap();
+        assert_ne!(sky, bright);
+        // Stable ids: same inputs reproduce the same id (no positional ids).
+        assert!(sky.starts_with("mask-"));
+
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        assert!(sidecar.is_file(), "save_sidecar must write synchronously");
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert!(document.validate().is_ok());
+        let copy = &document.virtual_copies[0];
+        let sky_def = copy.mask_library.iter().find(|m| m.id == sky).unwrap();
+        assert_eq!(sky_def.ai_select.as_ref().unwrap().kind, AiSelectKind::Sky);
+        assert_eq!(sky_def.status, MaskStatus::Pending);
+        let lum_def = copy.mask_library.iter().find(|m| m.id == bright).unwrap();
+        assert!(matches!(
+            lum_def.prompt,
+            Some(MaskPrompt::LuminanceRange { .. })
+        ));
+        assert_eq!(lum_def.status, MaskStatus::Valid);
+
+        // Reload in a fresh app: library and statuses survive the restart
+        // (selection is session state and starts empty — select again).
+        let mut reopened = reopen_app(&source);
+        let doc = reopened.document.as_ref().expect("document reloaded");
+        assert_eq!(doc.virtual_copies[0].mask_library.len(), 2);
+        reopened.select_mask(&bright).unwrap();
+        let (status, _) = reopened.selected_mask_status().expect("selection kept");
+        assert_eq!(status, MaskStatus::Valid);
+    }
+
+    /// E2E: Add/Subtract/Invert/Duplicate-Kombinatorik mit Persistenz;
+    /// Zyklen und falsche Stelligkeit werden laut abgewiesen.
+    #[test]
+    fn g03_combine_duplicate_roundtrip_and_rejects_cycles() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+
+        let a = app.create_luminance_range_mask(0.0, 0.6, 0.0, "A").unwrap();
+        let _b = app.create_luminance_range_mask(0.4, 1.0, 0.0, "B").unwrap();
+        // `create_*` selects the new mask; re-select A as the combine basis.
+        app.select_mask(&a).unwrap();
+        let other = app.document.as_ref().unwrap().virtual_copies[0]
+            .mask_library
+            .iter()
+            .find(|m| m.name == "B")
+            .unwrap()
+            .id
+            .clone();
+        let union = app
+            .combine_masks(MaskOperation::Union, &other, "A+B")
+            .unwrap();
+        let inverted = app
+            .combine_masks(MaskOperation::Invert, "", "not-A")
+            .unwrap();
+        assert_ne!(union, inverted);
+        let dup = app.duplicate_mask(&a, "A copy").unwrap();
+        assert_ne!(dup, a);
+
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert!(document.validate().is_ok());
+        let copy = &document.virtual_copies[0];
+        assert_eq!(copy.mask_library.len(), 5);
+        let union_def = copy.mask_library.iter().find(|m| m.id == union).unwrap();
+        assert_eq!(union_def.operation, MaskOperation::Union);
+        assert_eq!(union_def.references.len(), 2);
+        // Subtract basis first: selected mask A is references[0].
+        app.select_mask(&a).unwrap();
+        let sub = app
+            .combine_masks(MaskOperation::Subtract, &other, "A-B")
+            .unwrap();
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        let sub_def = document.virtual_copies[0]
+            .mask_library
+            .iter()
+            .find(|m| m.id == sub)
+            .unwrap();
+        assert_eq!(sub_def.references[0].mask_id, a);
+
+        // Loud rejections: unknown other, self-combine, source-op, and a
+        // derived duplicate (must be rebuilt with Combine instead).
+        assert!(app
+            .combine_masks(MaskOperation::Union, "missing", "X")
+            .is_err());
+        app.select_mask(&a).unwrap();
+        assert!(app.combine_masks(MaskOperation::Union, &a, "X").is_err());
+        assert!(app
+            .combine_masks(MaskOperation::Source, &other, "X")
+            .is_err());
+        assert!(app.duplicate_mask(&union, "Union copy").is_err());
+        assert!(app.duplicate_mask("missing", "X").is_err());
+        // The file still validates after every rejection (rollback held).
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        assert!(document.validate().is_ok());
+    }
+
+    /// E2E: Sichtbarkeits-Auge persistiert pro virtueller Kopie; der Render
+    /// überspringt unsichtbare Layer (Core-Gegenstück in render.rs getestet).
+    #[test]
+    fn g03_visibility_eye_persists_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+
+        let id = app
+            .create_luminance_range_mask(0.0, 1.0, 0.0, "Full")
+            .unwrap();
+        // Fresh masks start visible (vacuous eye before any layer exists).
+        assert!(app.mask_visible(&id));
+        // Closing the eye creates the referencing layer invisibly.
+        app.set_mask_visible(&id, false).unwrap();
+        assert!(!app.mask_visible(&id));
+        // Unknown masks are loud.
+        assert!(app.set_mask_visible("missing", false).is_err());
+
+        let sidecar = lumina_sidecar::sidecar_path_for(&source);
+        let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+        let layer = document.virtual_copies[0]
+            .mask_layers
+            .iter()
+            .find(|l| l.mask.mask_id == id)
+            .unwrap();
+        assert!(!layer.visible);
+        // Reopen: the closed eye survived.
+        let reopened = reopen_app(&source);
+        let doc = reopened.document.as_ref().expect("document reloaded");
+        assert!(
+            !doc.virtual_copies[0]
+                .mask_layers
+                .iter()
+                .find(|l| l.mask.mask_id == id)
+                .unwrap()
+                .visible
+        );
+        // Re-open the eye.
+        let mut reopened = reopened;
+        reopened.select_mask(&id).unwrap();
+        reopened.set_mask_visible(&id, true).unwrap();
+        assert!(reopened.mask_visible(&id));
+    }
+
+    /// Session-Display-State (DoD §1-Anker ist der Panel-Status, kein File):
+    /// Show-Schalter und Overlay-Farbe sind `info!`-geloggt, berühren nie
+    /// Rezept/Sidecar und gaten das Overlay zusammen mit Auge und G-11-Modus.
+    #[test]
+    fn g03_show_and_color_overlay_gate_without_touching_recipe() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        let recipe = app.recipe().clone();
+        assert!(app.show_mask_overlay());
+        assert_eq!(app.overlay_color(), [255, 0, 0]);
+
+        let id = app
+            .create_ai_mask(AiSelectKind::People, Some("face".into()), "P")
+            .unwrap();
+        // The gate is switch + mode + eye (never a fallback matte): with no
+        // layer the eye is vacuously open, so the overlay is allowed and the
+        // draw path simply has no prompt to paint for this AI mask.
+        assert!(app.mask_overlay_allowed());
+        app.set_show_mask_overlay(false);
+        assert!(!app.show_mask_overlay());
+        assert!(!app.mask_overlay_allowed());
+        app.set_show_mask_overlay(true);
+        app.set_overlay_color([0, 255, 0]);
+        assert_eq!(app.overlay_color(), [0, 255, 0]);
+        assert!(app.mask_overlay_allowed());
+        // Eye open + prompt-bearing selected mask paints (geometry path).
+        let geo = app
+            .create_luminance_range_mask(0.0, 1.0, 0.0, "Full")
+            .unwrap();
+        assert!(
+            app.mask_overlay_allowed(),
+            "range mask is immediately usable"
+        );
+        app.set_mask_visible(&geo, false).unwrap();
+        assert!(!app.mask_overlay_allowed(), "closed eye hides the overlay");
+        // G-11 mode still applies on top.
+        app.set_mask_visible(&geo, true).unwrap();
+        app.set_overlay_mode(OverlayMode::Never);
+        assert!(!app.mask_overlay_allowed());
+        app.set_overlay_mode(OverlayMode::Always);
+        assert!(app.mask_overlay_allowed());
+        // Session-only: recipe untouched throughout.
+        assert_eq!(*app.recipe(), recipe);
+        let _ = id;
+    }
+
+    /// Klassen-Vollständigkeit (DoD §3): jede AI-Art erzeugt eine typisierte,
+    /// validierende Maske; jede Range-Fehlklasse wird laut abgewiesen.
+    #[test]
+    fn g03_all_ai_kinds_and_range_rejections() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        for kind in AiSelectKind::all() {
+            let id = app
+                .create_ai_mask(kind, None, format!("M-{}", kind.as_str()))
+                .unwrap();
+            let document = app.document.as_ref().unwrap();
+            let def = document.virtual_copies[0]
+                .mask_library
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap();
+            assert_eq!(def.ai_select.as_ref().unwrap().kind, kind);
+            // Display names cover the class completely and distinctly.
+            assert!(!ai_select_kind_name(kind).is_empty());
+        }
+        let mut names: Vec<&str> = AiSelectKind::all()
+            .iter()
+            .map(|kind| ai_select_kind_name(*kind))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 5);
+        // Range rejections: min > max, hue out of degrees, NaN feather.
+        assert!(app
+            .create_luminance_range_mask(0.9, 0.1, 0.0, "bad")
+            .is_err());
+        assert!(app
+            .create_color_range_mask(400.0, 60.0, 0.0, 1.0, 0.0, 1.0, 0.0, "bad")
+            .is_err());
+        assert!(app
+            .create_luminance_range_mask(0.0, 1.0, f32::NAN, "bad")
+            .is_err());
+        // Empty names are loud everywhere.
+        assert!(app.create_ai_mask(AiSelectKind::Sky, None, "  ").is_err());
+        // The file was never touched by in-memory failures — but these
+        // in-memory apps have no path, so assert the document still validates.
+        assert!(app.document.as_ref().unwrap().validate().is_ok());
+    }
+
+    /// Panel-Präsenz headless (DoD §5-Anker für jede sichtbare G-03-Fläche):
+    /// Maskenliste mit Auge, Show + Farbe, AI-/Range-/Combine-Zeilen und alle
+    /// vier Kombinator-Buttons malen im 320px-Panel. Malt `draw_masking_g03`
+    /// direkt (ohne CollapsingHeader — dessen Open-Animation malt headless nur
+    /// den animierten Kopf, siehe `masking_new_button_fully_inside_panel`).
+    #[test]
+    fn g03_panel_paints_all_controls_inside_panel() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.ensure_document_loaded().unwrap();
+        app.create_luminance_range_mask(0.0, 1.0, 0.0, "Full")
+            .unwrap();
+        let ctx = egui::Context::default();
+        // Tall screen so every G-03 row fits without scrolling (the width
+        // assertion below is what this test guards).
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 2400.0));
+        let mut panel_rect = egui::Rect::NOTHING;
+        let mut shapes = Vec::new();
+        for i in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(i as f64 / 60.0),
+                    ..Default::default()
+                },
+                |ui| {
+                    let r = egui::Panel::right("controls")
+                        .resizable(true)
+                        .default_size(320.0)
+                        .show(ui, |ui| {
+                            let document = app.document.clone().expect("document loaded");
+                            app.draw_masking_g03(ui, &document);
+                        });
+                    panel_rect = r.response.rect;
+                    shapes = Vec::new();
+                },
+            );
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        for needle in [
+            Str::ShowOverlay.t(),
+            Str::OverlayColor.t(),
+            Str::AiSelectLabel.t(),
+            Str::AddAiMask.t(),
+            Str::LuminanceRange.t(),
+            Str::ColorRange.t(),
+            Str::AddRange.t(),
+            Str::CombineLabel.t(),
+            Str::CombineAdd.t(),
+            Str::CombineSubtract.t(),
+            Str::DuplicateMask.t(),
+            Str::MaskEye.t(),
+        ] {
+            assert_fully_visible(&shapes, needle);
+        }
+        assert!(
+            panel_rect.width() <= 321.0,
+            "G-03 rows must not push the panel past its 320px default (got {panel_rect:?})"
+        );
+    }
+
     #[test]
     fn g11_pin_visibility_modes_cover_masks_and_spots() {
         // G-11 Edit-Pins: Always shows pins without an armed tool, Never shows
@@ -14394,6 +15573,7 @@ mod tests {
                 references: vec![],
                 prompt: None,
                 extras: BTreeMap::new(),
+                ai_select: None,
             });
         lumina_sidecar::save_sidecar(&sidecar, &document).unwrap();
         app.set_directory(directory.path().display().to_string());

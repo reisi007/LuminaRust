@@ -315,6 +315,78 @@ pub enum MaskStatus {
     Pending,
 }
 
+/// AI-select source kind (G-03 Masking parity): declarative, versioned recipe
+/// selector for automatic segmentation. Persisted lowercase (`subject`,
+/// `sky`, `background`, `objects`, `people`); parsing is case-insensitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiSelectKind {
+    Subject,
+    Sky,
+    Background,
+    Objects,
+    People,
+}
+
+impl AiSelectKind {
+    /// Case-insensitive parse of the persisted form. Returns `None` for
+    /// unknown kinds instead of guessing (no silent fallback).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "subject" => Some(Self::Subject),
+            "sky" => Some(Self::Sky),
+            "background" => Some(Self::Background),
+            "objects" => Some(Self::Objects),
+            "people" => Some(Self::People),
+            _ => None,
+        }
+    }
+
+    /// Canonical persisted form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Subject => "subject",
+            Self::Sky => "sky",
+            Self::Background => "background",
+            Self::Objects => "objects",
+            Self::People => "people",
+        }
+    }
+
+    /// All selectable kinds in UI order.
+    pub fn all() -> [Self; 5] {
+        [
+            Self::Subject,
+            Self::Sky,
+            Self::Background,
+            Self::Objects,
+            Self::People,
+        ]
+    }
+}
+
+/// Documented person/object part names for [`AiSelect::detail`]. The list is
+/// advisory: validation accepts any trimmed, non-empty string without control
+/// characters up to 64 chars, so future parts stay readable (never silently
+/// remapped).
+pub const AI_SELECT_KNOWN_PARTS: &[&str] = &[
+    "face", "hair", "eyes", "pupil", "sclera", "lips", "teeth", "skin", "body",
+];
+
+/// Declarative AI-selection source (G-03). Additive schema-v2 field on
+/// [`MaskDefinition`]: `None` is the legacy/geometry behaviour and needs no
+/// migration. The selected matte still requires a loaded or inferred plane —
+/// an AI mask never falls back to geometric rasterization (see
+/// `lumina-core::masks`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AiSelect {
+    pub kind: AiSelectKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: Extras,
+}
+
 /// The operation performed by a mask definition. `Source` is the default so
 /// schema-1 definitions that predate operational masks remain readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -354,6 +426,12 @@ pub struct MaskDefinition {
     /// field (not part of `extras`) and additive to the schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<MaskPrompt>,
+    /// Optional declarative AI selection (G-03: subject/sky/background/
+    /// objects/people + part detail). Additive schema-v2 field; `None` is the
+    /// legacy behaviour and requires no migration. Only valid on `source`
+    /// nodes and never a geometric fallback (see module docs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_select: Option<AiSelect>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
 }
@@ -455,6 +533,30 @@ pub enum MaskPrompt {
         end: f32,
         transformation: PromptTransform,
     },
+    /// Deterministic color-range recipe stage (G-03): pure function of the
+    /// source pixels + parameters (no model, no RNG). `hue_center` and
+    /// `hue_width` are degrees (`0..=360`), `sat_*`/`lum_*`/`feather` are
+    /// `0..=1`. Evaluation lives in `lumina-core::range_masks`.
+    ColorRange {
+        hue_center: f32,
+        hue_width: f32,
+        sat_min: f32,
+        sat_max: f32,
+        lum_min: f32,
+        lum_max: f32,
+        feather: f32,
+        transformation: PromptTransform,
+    },
+    /// Deterministic luminance-range recipe stage (G-03): pure function of
+    /// the source pixels + parameters (no model, no RNG). `min`/`max`/
+    /// `feather` are `0..=1` with `min <= max`; Rec.709 luminance with
+    /// trapezoid ramps (`ramp = feather·(max-min)/2`).
+    LuminanceRange {
+        min: f32,
+        max: f32,
+        feather: f32,
+        transformation: PromptTransform,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,8 +567,20 @@ pub struct MaskLayer {
     pub feather: f32,
     pub blur: f32,
     pub density: f32,
+    /// Visibility eye of the mask list (G-03), persisted per virtual copy.
+    /// Absent in older sidecars reads as `true` (legacy identity). An
+    /// invisible layer is skipped by the render mask stage (explicit user
+    /// choice, no warning).
+    #[serde(default = "mask_layer_visible_default")]
+    pub visible: bool,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
+}
+
+/// Serde default for [`MaskLayer::visible`]: legacy sidecars without the key
+/// behave as if every layer were visible.
+fn mask_layer_visible_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2371,6 +2485,31 @@ impl SidecarDocument {
                     validate_artifact(a)?;
                 }
                 validate_prompt(&mask.prompt)?;
+                validate_ai_select(&mask.ai_select)?;
+                // G-03: an AI selection names an automatic source matte, so it
+                // is only meaningful on `source` nodes. Derived nodes combine
+                // already-resolved mattes; stamping them `ai_select` would
+                // silently change their meaning.
+                if mask.ai_select.is_some() && mask.operation != MaskOperation::Source {
+                    return invalid(format!(
+                        "mask `{}/{}` carries ai_select on a non-source operation; ai_select requires `source`",
+                        copy.id, mask.id
+                    ));
+                }
+                // G-03: a range prompt is a deterministic source stage and
+                // likewise never lives on a derived node.
+                if mask.operation != MaskOperation::Source
+                    && matches!(
+                        mask.prompt,
+                        Some(MaskPrompt::ColorRange { .. })
+                            | Some(MaskPrompt::LuminanceRange { .. })
+                    )
+                {
+                    return invalid(format!(
+                        "mask `{}/{}` carries a range prompt on a non-source operation; range prompts require `source`",
+                        copy.id, mask.id
+                    ));
+                }
                 let arity_is_valid = match mask.operation {
                     MaskOperation::Source => mask.references.is_empty(),
                     MaskOperation::Invert => mask.references.len() == 1,
@@ -2783,6 +2922,70 @@ fn validate_prompt(prompt: &Option<MaskPrompt>) -> Result<(), SidecarError> {
                     "prompt gradient must have a finite angle and finite normalized start/end within 0..=1",
                 );
             }
+        }
+        MaskPrompt::ColorRange {
+            hue_center,
+            hue_width,
+            sat_min,
+            sat_max,
+            lum_min,
+            lum_max,
+            feather,
+            ..
+        } => {
+            if !hue_center.is_finite() || !(0.0..=360.0).contains(hue_center) {
+                return invalid("prompt color_range hue_center must be finite within 0..=360");
+            }
+            if !hue_width.is_finite() || !(0.0..=360.0).contains(hue_width) {
+                return invalid("prompt color_range hue_width must be finite within 0..=360");
+            }
+            if !in_unit(*sat_min) || !in_unit(*sat_max) || sat_min > sat_max {
+                return invalid(
+                    "prompt color_range sat_min/sat_max must be within 0..=1 with sat_min <= sat_max",
+                );
+            }
+            if !in_unit(*lum_min) || !in_unit(*lum_max) || lum_min > lum_max {
+                return invalid(
+                    "prompt color_range lum_min/lum_max must be within 0..=1 with lum_min <= lum_max",
+                );
+            }
+            if !in_unit(*feather) {
+                return invalid("prompt color_range feather must be finite within 0..=1");
+            }
+        }
+        MaskPrompt::LuminanceRange {
+            min, max, feather, ..
+        } => {
+            if !in_unit(*min) || !in_unit(*max) || min > max {
+                return invalid(
+                    "prompt luminance_range min/max must be within 0..=1 with min <= max",
+                );
+            }
+            if !in_unit(*feather) {
+                return invalid("prompt luminance_range feather must be finite within 0..=1");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates a declarative AI selection (G-03). `detail` accepts the
+/// documented part names and any other trimmed, non-empty string without
+/// control characters up to 64 chars — unknown parts stay readable and are
+/// never silently remapped.
+fn validate_ai_select(select: &Option<AiSelect>) -> Result<(), SidecarError> {
+    let Some(select) = select else {
+        return Ok(());
+    };
+    if let Some(detail) = &select.detail {
+        if detail.len() > 64
+            || detail.trim().is_empty()
+            || detail != detail.trim()
+            || detail.chars().any(|c| c.is_control())
+        {
+            return invalid(
+                "ai_select detail must be trimmed, non-empty, free of control characters and at most 64 chars",
+            );
         }
     }
     Ok(())
@@ -3349,6 +3552,7 @@ mod tests {
             references: vec![],
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         }
     }
     #[test]
@@ -3444,6 +3648,7 @@ mod tests {
                 blur: 0.0,
                 density: 1.0,
                 extras: Extras::new(),
+                visible: true,
             }],
             history: vec![HistoryEntry {
                 id: "h".into(),
@@ -3844,6 +4049,7 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: Extras::new(),
+            visible: true,
         });
         assert!(d.validate().unwrap_err().to_string().contains("mask layer"));
     }
@@ -3981,6 +4187,7 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: Extras::new(),
+            visible: true,
         };
         d.virtual_copies[0].mask_layers = vec![layer.clone(), layer];
         assert!(d
@@ -4079,6 +4286,7 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: Extras::new(),
+            visible: true,
         });
         assert!(d
             .validate()
@@ -6017,6 +6225,209 @@ mod tests {
         assert!(ok.validate().is_ok());
     }
 
+    // ----- G-03 Maskierungs-Parität: AiSelect, Range-Prompts, visible -----
+
+    #[test]
+    fn ai_select_kind_parse_roundtrip() {
+        for kind in AiSelectKind::all() {
+            assert_eq!(AiSelectKind::parse(kind.as_str()), Some(kind));
+        }
+        // Case-insensitive reads; unknown kinds stay unknown (no guessing).
+        assert_eq!(AiSelectKind::parse("Subject"), Some(AiSelectKind::Subject));
+        assert_eq!(AiSelectKind::parse("SKY"), Some(AiSelectKind::Sky));
+        assert_eq!(AiSelectKind::parse("people"), Some(AiSelectKind::People));
+        assert_eq!(AiSelectKind::parse("cat"), None);
+        assert_eq!(AiSelectKind::parse(""), None);
+    }
+
+    #[test]
+    fn ai_select_roundtrip_and_validation() {
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut m = mask("ai");
+        m.ai_select = Some(AiSelect {
+            kind: AiSelectKind::People,
+            detail: Some("pupil".into()),
+            extras: BTreeMap::new(),
+        });
+        d.virtual_copies[0].mask_library.push(m);
+        assert!(d.validate().is_ok());
+        let json = d.to_json().unwrap();
+        assert!(json.contains("ai_select"));
+        assert!(json.contains("\"people\""));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(decoded, d);
+
+        // Every documented part validates.
+        for part in AI_SELECT_KNOWN_PARTS {
+            let mut d = SidecarDocument::new(source(), "p");
+            let mut m = mask("ai");
+            m.ai_select = Some(AiSelect {
+                kind: AiSelectKind::Subject,
+                detail: Some((*part).into()),
+                extras: BTreeMap::new(),
+            });
+            d.virtual_copies[0].mask_library.push(m);
+            assert!(d.validate().is_ok(), "part `{part}` must validate");
+        }
+
+        // Untrimmed, empty, overlong and control-char details are rejected.
+        for bad in [" face", "face ", "", "a".repeat(65).as_str(), "fa\tce"] {
+            let mut d = SidecarDocument::new(source(), "p");
+            let mut m = mask("bad");
+            m.ai_select = Some(AiSelect {
+                kind: AiSelectKind::Sky,
+                detail: Some(bad.into()),
+                extras: BTreeMap::new(),
+            });
+            d.virtual_copies[0].mask_library.push(m);
+            assert!(d.validate().is_err(), "detail `{bad:?}` must be rejected");
+        }
+    }
+
+    #[test]
+    fn ai_select_on_derived_node_is_rejected() {
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_library.push(mask("a"));
+        d.virtual_copies[0].mask_library.push(mask("b"));
+        let mut derived = mask("combo");
+        derived.operation = MaskOperation::Union;
+        derived.references = vec![
+            MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "a".into(),
+                extras: BTreeMap::new(),
+            },
+            MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "b".into(),
+                extras: BTreeMap::new(),
+            },
+        ];
+        derived.ai_select = Some(AiSelect {
+            kind: AiSelectKind::Subject,
+            detail: None,
+            extras: BTreeMap::new(),
+        });
+        d.virtual_copies[0].mask_library.push(derived);
+        let error = d.validate().unwrap_err().to_string();
+        assert!(error.contains("ai_select"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn range_prompts_roundtrip_and_validation() {
+        let mut d = SidecarDocument::new(source(), "p");
+        let mut lum = mask("lum");
+        lum.prompt = Some(MaskPrompt::LuminanceRange {
+            min: 0.2,
+            max: 0.8,
+            feather: 0.5,
+            transformation: PromptTransform::default(),
+        });
+        let mut col = mask("col");
+        col.prompt = Some(MaskPrompt::ColorRange {
+            hue_center: 120.0,
+            hue_width: 60.0,
+            sat_min: 0.1,
+            sat_max: 0.9,
+            lum_min: 0.0,
+            lum_max: 1.0,
+            feather: 0.25,
+            transformation: PromptTransform::default(),
+        });
+        d.virtual_copies[0].mask_library.push(lum);
+        d.virtual_copies[0].mask_library.push(col);
+        assert!(d.validate().is_ok());
+        let json = d.to_json().unwrap();
+        assert!(json.contains("luminancerange") || json.contains("luminance_range"));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(decoded, d);
+
+        // min > max is rejected.
+        let mut bad = SidecarDocument::new(source(), "p");
+        let mut m = mask("bad");
+        m.prompt = Some(MaskPrompt::LuminanceRange {
+            min: 0.9,
+            max: 0.1,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        });
+        bad.virtual_copies[0].mask_library.push(m);
+        assert!(bad.validate().is_err());
+
+        // hue out of degrees is rejected.
+        let mut bad2 = SidecarDocument::new(source(), "p");
+        let mut m2 = mask("bad2");
+        m2.prompt = Some(MaskPrompt::ColorRange {
+            hue_center: 400.0,
+            hue_width: 60.0,
+            sat_min: 0.0,
+            sat_max: 1.0,
+            lum_min: 0.0,
+            lum_max: 1.0,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        });
+        bad2.virtual_copies[0].mask_library.push(m2);
+        assert!(bad2.validate().is_err());
+
+        // A range prompt on a derived node is rejected.
+        let mut bad3 = SidecarDocument::new(source(), "p");
+        bad3.virtual_copies[0].mask_library.push(mask("a"));
+        let mut inv = mask("inv");
+        inv.operation = MaskOperation::Invert;
+        inv.references = vec![MaskReference {
+            copy_id: "vc-original".into(),
+            mask_id: "a".into(),
+            extras: BTreeMap::new(),
+        }];
+        inv.prompt = Some(MaskPrompt::LuminanceRange {
+            min: 0.0,
+            max: 1.0,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        });
+        bad3.virtual_copies[0].mask_library.push(inv);
+        let error = bad3.validate().unwrap_err().to_string();
+        assert!(error.contains("range prompt"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn mask_layer_visible_defaults_true_and_roundtrips() {
+        // Legacy JSON without `visible` reads as visible (identity).
+        let json = serde_json::json!({
+            "id": "layer",
+            "mask": {"copy_id": "vc-original", "mask_id": "a"},
+            "inverted": false,
+            "feather": 0.0,
+            "blur": 0.0,
+            "density": 1.0
+        });
+        let layer: MaskLayer = serde_json::from_value(json).unwrap();
+        assert!(layer.visible);
+
+        // Explicit false survives a full document roundtrip.
+        let mut d = SidecarDocument::new(source(), "p");
+        d.virtual_copies[0].mask_library.push(mask("a"));
+        d.virtual_copies[0].mask_layers.push(MaskLayer {
+            id: "layer".into(),
+            mask: MaskReference {
+                copy_id: "vc-original".into(),
+                mask_id: "a".into(),
+                extras: BTreeMap::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            visible: false,
+            extras: BTreeMap::new(),
+        });
+        assert!(d.validate().is_ok());
+        let decoded = SidecarDocument::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(decoded, d);
+        assert!(!decoded.virtual_copies[0].mask_layers[0].visible);
+    }
+
     // ----- F-103-N5: `paths_resolve_equal` non-destructive export guard -----
 
     #[test]
@@ -6583,6 +6994,7 @@ mod tests {
                 blur,
                 density,
                 extras: Extras::new(),
+                visible: true,
             });
             d.validate()
         };
@@ -6683,6 +7095,7 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: Extras::new(),
+            visible: true,
         });
         d.virtual_copies.push(VirtualCopy {
             id: "vc-target".into(),

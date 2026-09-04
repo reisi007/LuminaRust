@@ -47,6 +47,14 @@ pub enum MaskError {
     MemoryBudgetExceeded { required: u64, limit: u64 },
     #[error("mask layer density must be finite and in 0..=1, got {value}")]
     InvalidDensity { value: String },
+    #[error("mask prompt is not a deterministic range stage")]
+    NotRangePrompt,
+    #[error(
+        "range prompt requires source pixels; evaluate via range_masks::evaluate_range_prompt"
+    )]
+    RangeNeedsPixels,
+    #[error("invalid range mask parameters: {reason}")]
+    InvalidRange { reason: String },
 }
 
 impl MaskPlane {
@@ -156,6 +164,21 @@ impl<'a> MaskGraph<'a> {
                             actual: count,
                         });
                     }
+                    // G-03: an AI selection names an automatic matte. It is
+                    // only usable from a loaded or inferred plane and never
+                    // falls back to the geometric rasterizer — a missing model
+                    // stays loudly missing instead of silently painting
+                    // geometry.
+                    if definition.ai_select.is_some() {
+                        return self
+                            .sources
+                            .get(&(key.0.clone(), key.1.clone()))
+                            .cloned()
+                            .ok_or_else(|| MaskError::MissingSourcePayload {
+                                copy_id: key.0.clone(),
+                                mask_id: key.1.clone(),
+                            });
+                    }
                     // A prompt-source node can be evaluated without a model.
                     // If an inferred (loaded) plane exists it takes precedence
                     // (the matte can be recomputed and the prompt stays);
@@ -164,6 +187,12 @@ impl<'a> MaskGraph<'a> {
                     if let Some(prompt) = &definition.prompt {
                         if let Some(plane) = self.sources.get(&(key.0.clone(), key.1.clone())) {
                             return Ok(plane.clone());
+                        }
+                        // G-03: range stages need source pixels; the loader
+                        // computes them from the frame. Direct graph evaluation
+                        // without pixels is a loud error, never an empty mask.
+                        if crate::range_masks::is_range_prompt(Some(prompt)) {
+                            return Err(MaskError::RangeNeedsPixels);
                         }
                         let width = definition.geometry_context.width;
                         let height = definition.geometry_context.height;
@@ -401,6 +430,11 @@ pub fn rasterize_prompt(
                 }
             }
         }
+        // G-03: range stages need source pixels and cannot be rasterized from
+        // geometry alone — the loader evaluates them against the frame.
+        MaskPrompt::ColorRange { .. } | MaskPrompt::LuminanceRange { .. } => {
+            return Err(MaskError::RangeNeedsPixels);
+        }
     }
     MaskPlane::new(width, height, values)
 }
@@ -489,6 +523,7 @@ mod tests {
             references,
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         }
     }
     fn reference(id: &str) -> MaskReference {
@@ -1066,5 +1101,101 @@ mod tests {
             levels as usize + 1,
             "memoization must keep the doubly-referencing chain linear"
         );
+    }
+
+    // ----- G-03: AI-select never rasterizes, range needs pixels -----
+
+    #[test]
+    fn ai_select_without_plane_is_loud_missing_never_geometry() {
+        use lumina_sidecar::{AiSelect, AiSelectKind};
+        let mut ai = definition("ai", MaskOperation::Source, vec![]);
+        ai.ai_select = Some(AiSelect {
+            kind: AiSelectKind::Sky,
+            detail: None,
+            extras: Extras::new(),
+        });
+        // A persisted box prompt stays as model input but must not become a
+        // geometric fallback matte while the model plane is missing.
+        ai.prompt = Some(MaskPrompt::Box {
+            rect: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            transformation: PromptTransform::default(),
+        });
+        let graph = graph(vec![ai], &[]);
+        let error = graph.evaluate(&reference("ai")).unwrap_err();
+        assert_eq!(
+            error,
+            MaskError::MissingSourcePayload {
+                copy_id: "vc".into(),
+                mask_id: "ai".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn ai_select_with_loaded_plane_uses_plane() {
+        use lumina_sidecar::{AiSelect, AiSelectKind};
+        let mut ai = definition("ai", MaskOperation::Source, vec![]);
+        ai.ai_select = Some(AiSelect {
+            kind: AiSelectKind::Subject,
+            detail: Some("face".into()),
+            extras: Extras::new(),
+        });
+        let graph = graph(vec![ai], &[("ai", vec![7u16, 9])]);
+        let plane = graph.evaluate(&reference("ai")).unwrap();
+        assert_eq!(plane.values, vec![7u16, 9]);
+    }
+
+    #[test]
+    fn range_prompt_without_pixels_is_loud() {
+        let mut range = definition("range", MaskOperation::Source, vec![]);
+        range.prompt = Some(MaskPrompt::LuminanceRange {
+            min: 0.0,
+            max: 1.0,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        });
+        let graph = graph(vec![range], &[]);
+        assert_eq!(
+            graph.evaluate(&reference("range")).unwrap_err(),
+            MaskError::RangeNeedsPixels
+        );
+        assert_eq!(
+            rasterize_prompt(
+                &MaskPrompt::ColorRange {
+                    hue_center: 0.0,
+                    hue_width: 360.0,
+                    sat_min: 0.0,
+                    sat_max: 1.0,
+                    lum_min: 0.0,
+                    lum_max: 1.0,
+                    feather: 0.0,
+                    transformation: PromptTransform::default(),
+                },
+                2,
+                1,
+            )
+            .unwrap_err(),
+            MaskError::RangeNeedsPixels
+        );
+    }
+
+    #[test]
+    fn range_prompt_with_loaded_plane_prefers_plane() {
+        // A refined/inferred matte wins over recomputation, like geometry.
+        let mut range = definition("range", MaskOperation::Source, vec![]);
+        range.prompt = Some(MaskPrompt::LuminanceRange {
+            min: 0.0,
+            max: 1.0,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        });
+        let graph = graph(vec![range], &[("range", vec![3u16, 4])]);
+        let plane = graph.evaluate(&reference("range")).unwrap();
+        assert_eq!(plane.values, vec![3u16, 4]);
     }
 }

@@ -280,6 +280,59 @@ Jede Stufe ist bei ihrem Identitätswert ein No-op; die Modulation verändert di
 persistierte Maske nicht. 9 Unit-Tests sichern Invert/Feather/Blur/Density und
 die Reihenfolge ab.
 
+## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
+
+Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/
+Background/Objects/People + Teile bis Pupille/Sclera), Add/Subtract/Invert/
+Duplicate-Kombinatorik im Panel, Color-/Luminance-Range, Show + Color Overlay,
+Maskenliste mit Sichtbarkeits-Auge.
+
+- **AI-Auswahl (`AiSelect`, pro Maskendefinition):** `kind` ist
+  `subject`/`sky`/`background`/`objects`/`people` (kleingeschrieben
+  persistiert, case-insensitiv lesbar via `AiSelectKind::parse`); `detail`
+  ist optional und benennt einen Teil (`face`, `hair`, `eyes`, `pupil`,
+  `sclera`, `lips`, `teeth`, `skin`, `body` — dokumentierte Startliste,
+  technisch jede nicht-leere, getrimmte Zeichenkette ≤ 64 Zeichen ohne
+  Steuerzeichen). Das Feld ist additiv-optional (`None` = Legacy-/Geometrie-
+  Verhalten, kein Migrationspfad nötig). Regeln (laut, kein stiller
+  Fallback): `ai_select` nur auf `source`-Knoten (abgeleitete
+  `union`/`intersect`/`subtract`/`invert`-Knoten mit `ai_select` werden
+  abgelehnt); eine AI-Maske ohne geladene/inferierte Matte rasterisiert
+  **nie** geometrisch — die Auswertung meldet `MissingSourcePayload`
+  (sichtbar `missing`/`pending`), selbst wenn ein `prompt` persistiert ist
+  (der Prompt bleibt als Modell-Input erhalten, ersetzt aber kein Modell).
+  Fehlendes Modell/Artefakt folgt den F-048/F-051-Pfaden (`stale`/`missing`/
+  `corrupt` sichtbar, `--mask-policy warn|strict`, GUI-Recalc-Angebot).
+- **Color-/Luminance-Range (`MaskPrompt::ColorRange`/`LuminanceRange`):**
+  deterministische, modellfreie Rezept-Stufen (reine Funktionen aus
+  Quellpixeln + Parametern, kein RNG, keine Wanduhr). `LuminanceRange`
+  (`min`/`max`/`feather` in `0..=1`, `min <= max`) nutzt Rec.709-Luminanz
+  mit Trapez-Rampen (`ramp = feather·span/2`; `feather = 0` = harter
+  Schnitt); `ColorRange` (`hue_center`/`hue_width` in Grad, `sat_*`/`lum_*`
+  in `0..=1`, `feather` in `0..=1`) nutzt deterministisches RGB→HSL mit
+  Kreisdistanz auf Hue und Box+Rampen auf Sättigung/Luminanz. Der Loader
+  (`resolve_mask_planes`) berechnet Range-Ebenen direkt aus dem Frame
+  (`MaskResolvedFrom::ComputedDeterministic`, Status `Valid`) — kein Modell,
+  kein Cache, keine Re-Inferenz nötig; Parameteränderung invalidiert die
+  Ebene implizit (reine Funktion, keine persistierte Matte nötig).
+- **Kombinatorik (Panel):** `Add` erzeugt einen `union`-Knoten,
+  `Subtract` einen `subtract`-Knoten (`a` zuerst = Basis), `Invert` einen
+  `invert`-Knoten (genau eine Referenz), `Duplicate` einen neuen
+  Source-Knoten mit kopierter Definition (neue stabile ID, kein geteilter
+  Matte-Payload-Verweis außer Deduplizierung über Content-Hash im
+  `.zdata`-Container). Zyklen und falsche Stelligkeit lehnen Sidecar-
+  Validierung (`validate_mask_graph`) und `MaskGraph::evaluate` laut ab.
+  IDs sind stabil (`mask-<blake3>` über Art+Name+Zeitlosem), pro virtueller
+  Kopie eindeutig, nie positionsbasiert.
+- **Sichtbarkeit / Overlay:** `MaskLayer.visible` (Default `true`,
+  pro virtueller Kopie persistiert) ist das Auge der Maskenliste — ein
+  unsichtbarer Layer wird in `evaluate_mask_stage` übersprungen (explizite
+  Nutzerwahl, daher ohne Warnung, aber mit Zähler-Ausschluss). `Show` +
+  Overlay-Farbe sind reiner Session-Display-State (nie Rezept/Sidecar, wie
+  G-11): `show_mask_overlay` (Default an) UND-verknüpft mit `OverlayMode`,
+  `overlay_color` (Default Rot `[255, 0, 0]`, `0..=255` je Kanal) tönt das
+  Matte-Overlay; beide mit `info!`-Log und headless Test-Anker.
+
 ## Implementierungsstatus (F-047 / F-080)
 
 **Stand 2026-08-19 (F-047 Adapter-Crate `lumina-onnx` implementiert):**
@@ -434,3 +487,25 @@ Verhaltensabsicherung der Backend-Pfade.
   gleichwertige Eingabe behandeln; die GUI zeigt die nicht unterstützte
   Fähigkeit an.
 - Masken-Roundtrip, Prüfsumme, fehlendes Modell und Quelländerung sind getestet.
+
+## Implementierungsstatus (LRPAR-G03-MASK, G-03 Maskierungs-Parität)
+
+Umgesetzt (Sidecar + Core + CLI + GUI, Tests siehe unten): `AiSelectKind`
+(`subject`/`sky`/`background`/`objects`/`people`, case-insensitiv lesbar) mit
+optionalem `detail` auf `source`-Knoten (`None` = Legacy, keine Migration);
+`MaskPrompt::ColorRange`/`LuminanceRange` als deterministische Rezept-Stufen
+(`lumina-core::range_masks`: Rec.709-Trapez bzw. HSL-Kreisdistanz×Sättigung×
+Luminanz, ohne Modell/Cache, `ComputedDeterministic`); Kombinatorik
+(`union`/`subtract`/`invert` im Panel, zusätzlich `intersect` in der CLI;
+`duplicate` nur für Source-Knoten; Zyklen/Stelligkeit laut abgelehnt mit
+Rollback); `MaskLayer.visible` (Auge, persistiert pro virtueller Kopie,
+unsichtbare Layer werden im Render übersprungen); Show + Overlay-Farbe als
+Session-Display-State mit `info!`-Log. CLI: `mask --list/--add-ai-select/
+--add-luminance-range/--add-color-range/--combine/--duplicate/--attach-layer/
+--show-layer/--hide-layer` (stabile `mask-<blake3>`-IDs, `validate()`-Gate vor
+jedem Write, Exit 1 bei Fehlern, keine absoluten Pfade). GUI: Maskenliste mit
+Auge + Statuszeile, AI-/Range-/Combine-Zeilen, `draw_masking_g03` headless
+getestet (alle Labels malen, 320px-Budget gehalten). Bekannte Grenzen: echte
+Modellgewichte weiter `pending-integration` (AI-Masken brauchen Inferenz,
+sonst laut `pending`/`missing`); der Panel-Combine deckt gezielt
+Add/Subtract/Invert ab (`intersect` CLI-only, dokumentierte Entscheidung).

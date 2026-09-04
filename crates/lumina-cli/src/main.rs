@@ -37,11 +37,13 @@ use log::info;
 use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
 use lumina_sidecar::{
     apply_batch_op, artifact_status, load_sidecar, save_sidecar, sidecar_path_for,
-    validate_smart_collection_def, AnalysisFingerprint, ArtifactStatus, BatchOp,
-    CollectionMembership, DecodeFingerprint, EditRecipe, GeometryFingerprint, HistoryEntry,
-    MaskOperation, MaskStatus, Preset, SidecarDocument, SmartCollectionDef,
-    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceIdentity,
-    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION,
+    validate_smart_collection_def, AiSelect, AiSelectKind, AnalysisFingerprint, ArtifactStatus,
+    BatchOp, CollectionMembership, CoordinateSystem, DecodeFingerprint, EditRecipe,
+    GeometryFingerprint, HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt,
+    MaskReference, MaskStatus, ModelIdentity, Preprocessing, Preset, PromptTransform, Resolution,
+    SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SourceFingerprint, SourceIdentity, SMART_COLLECTION_VERSION,
+    SOURCE_ACTION_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -416,6 +418,10 @@ struct BatchArgs {
     mask_policy: CliMaskPolicy,
 }
 
+/// G-03 Masking parity: inspect and edit the mask DAG of one image sidecar.
+/// Reads and writes are loud (unknown copies/masks, bad ranges, arity/cycle
+/// violations abort with exit 1); nothing is inferred silently. New mask ids
+/// are stable (`mask-<blake3>` over kind + name), never positional.
 #[derive(Debug, Args)]
 struct MaskArgs {
     #[arg(long)]
@@ -426,6 +432,64 @@ struct MaskArgs {
     virtual_copy: Option<String>,
     #[arg(long)]
     json: bool,
+    /// List every mask (library + layers) with its status.
+    #[arg(long)]
+    list: bool,
+    /// Add an AI-select source mask (`subject|sky|background|objects|people`).
+    #[arg(long, value_name = "KIND")]
+    add_ai_select: Option<String>,
+    /// Name for `--add-*`, `--combine` and `--duplicate` targets.
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
+    /// Optional person/object part for `--add-ai-select`
+    /// (`face|hair|eyes|pupil|sclera|lips|teeth|skin|body`, …).
+    #[arg(long, value_name = "PART")]
+    detail: Option<String>,
+    /// Add a deterministic luminance-range source mask.
+    #[arg(long)]
+    add_luminance_range: bool,
+    #[arg(long, value_name = "0..=1")]
+    range_min: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    range_max: Option<f32>,
+    /// Add a deterministic color-range source mask.
+    #[arg(long)]
+    add_color_range: bool,
+    #[arg(long, value_name = "0..=360")]
+    hue_center: Option<f32>,
+    #[arg(long, value_name = "0..=360")]
+    hue_width: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    sat_min: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    sat_max: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    lum_min: Option<f32>,
+    #[arg(long, value_name = "0..=1")]
+    lum_max: Option<f32>,
+    /// Feather for `--add-*-range` (`0..=1`, default 0).
+    #[arg(long, value_name = "0..=1")]
+    feather: Option<f32>,
+    /// Combine existing masks into a derived node
+    /// (`union|intersect|subtract|invert`).
+    #[arg(long, value_name = "OP")]
+    combine: Option<String>,
+    /// Combine/duplicate inputs as `mask-id` (same copy) or
+    /// `copy-id/mask-id`, comma-separated for `--combine`.
+    #[arg(long, value_name = "REF,...")]
+    inputs: Option<String>,
+    /// Duplicate an existing mask under a new name (`--name` required).
+    #[arg(long, value_name = "REF")]
+    duplicate: Option<String>,
+    /// Attach an existing library mask to the target copy's layers.
+    #[arg(long, value_name = "REF")]
+    attach_layer: Option<String>,
+    /// Set a layer visible (eye open) by layer id.
+    #[arg(long, value_name = "LAYER")]
+    show_layer: Option<String>,
+    /// Set a layer invisible (eye closed) by layer id.
+    #[arg(long, value_name = "LAYER")]
+    hide_layer: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -946,6 +1010,114 @@ fn mark_masks_pending_refresh(input: &Path, virtual_copy: Option<&str>) -> Resul
 fn mask(args: MaskArgs) -> Result<(), CliError> {
     let path = sidecar_path_for(&args.input);
     let mut document = load_sidecar(&path)?;
+    let wants_mutation = args.update_masks
+        || args.add_ai_select.is_some()
+        || args.add_luminance_range
+        || args.add_color_range
+        || args.combine.is_some()
+        || args.duplicate.is_some()
+        || args.attach_layer.is_some()
+        || args.show_layer.is_some()
+        || args.hide_layer.is_some();
+    if args.list && !wants_mutation {
+        return mask_list(&args, &document);
+    }
+    if !wants_mutation {
+        // Historical behaviour: without flags the command reports status.
+        return mask_list(&args, &document);
+    }
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+    // Decode once for every mutation that mints a mask definition
+    // (dimensions for the geometry context); a loud error instead of
+    // zero-sized geometry.
+    let frame_dims = if args.add_ai_select.is_some()
+        || args.add_luminance_range
+        || args.add_color_range
+        || args.combine.is_some()
+    {
+        let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+        let (frame, _) = decode_input(&args.input, &bytes)?;
+        Some((frame.width, frame.height))
+    } else {
+        None
+    };
+    if let Some(kind) = args.add_ai_select.as_deref() {
+        let name = require_mask_name(args.name.as_deref())?;
+        mask_add_ai(
+            &mut document,
+            &copy_id,
+            kind,
+            name,
+            args.detail.as_deref(),
+            frame_dims,
+        )?;
+        info!("mask: added ai-select `{kind}` as `{name}` on copy `{copy_id}`");
+        actions.push(format!("add-ai-select:{name}"));
+    }
+    if args.add_luminance_range {
+        let name = require_mask_name(args.name.as_deref())?;
+        let min = args.range_min.ok_or_else(|| {
+            CliError::Message("--add-luminance-range requires --range-min".into())
+        })?;
+        let max = args.range_max.ok_or_else(|| {
+            CliError::Message("--add-luminance-range requires --range-max".into())
+        })?;
+        let feather = args.feather.unwrap_or(0.0);
+        mask_add_luminance(&mut document, &copy_id, name, min, max, feather, frame_dims)?;
+        info!("mask: added luminance-range `{name}` on copy `{copy_id}`");
+        actions.push(format!("add-luminance-range:{name}"));
+    }
+    if args.add_color_range {
+        let name = require_mask_name(args.name.as_deref())?;
+        let feather = args.feather.unwrap_or(0.0);
+        mask_add_color(
+            &mut document,
+            &copy_id,
+            name,
+            args.hue_center,
+            args.hue_width,
+            args.sat_min,
+            args.sat_max,
+            args.lum_min,
+            args.lum_max,
+            feather,
+            frame_dims,
+        )?;
+        info!("mask: added color-range `{name}` on copy `{copy_id}`");
+        actions.push(format!("add-color-range:{name}"));
+    }
+    if let Some(op) = args.combine.as_deref() {
+        let name = require_mask_name(args.name.as_deref())?;
+        let inputs = args
+            .inputs
+            .as_deref()
+            .ok_or_else(|| CliError::Message("--combine requires --inputs <ref,...>".into()))?;
+        mask_combine(&mut document, &copy_id, op, name, inputs, frame_dims)?;
+        info!("mask: combined `{op}` as `{name}` on copy `{copy_id}`");
+        actions.push(format!("combine:{name}"));
+    }
+    if let Some(source) = args.duplicate.as_deref() {
+        let name = require_mask_name(args.name.as_deref())?;
+        mask_duplicate(&mut document, &copy_id, source, name)?;
+        info!("mask: duplicated `{source}` as `{name}` on copy `{copy_id}`");
+        actions.push(format!("duplicate:{name}"));
+    }
+    if let Some(target) = args.attach_layer.as_deref() {
+        mask_attach_layer(&mut document, &copy_id, target)?;
+        info!("mask: attached layer for `{target}` on copy `{copy_id}`");
+        actions.push(format!("attach-layer:{target}"));
+    }
+    if let Some(layer) = args.show_layer.as_deref() {
+        mask_set_layer_visible(&mut document, &copy_id, layer, true)?;
+        info!("mask: layer `{layer}` visible on copy `{copy_id}`");
+        actions.push(format!("show-layer:{layer}"));
+    }
+    if let Some(layer) = args.hide_layer.as_deref() {
+        mask_set_layer_visible(&mut document, &copy_id, layer, false)?;
+        info!("mask: layer `{layer}` hidden on copy `{copy_id}`");
+        actions.push(format!("hide-layer:{layer}"));
+    }
     if args.update_masks {
         let copies = if let Some(id) = args.virtual_copy.as_deref() {
             document
@@ -964,13 +1136,532 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
                 mask.status = lumina_sidecar::MaskStatus::Pending;
             }
         }
-        save_sidecar(&path, &document)?;
+        info!("mask: marked masks pending (update_masks)");
+        actions.push("update-masks".into());
     }
+    // Loud gate: arity, unknown references, cycles, ranges and ai_select
+    // placement are rejected before anything is written.
+    document.validate()?;
+    save_sidecar(&path, &document)?;
     emit(
         args.json,
-        serde_json::json!({"command":"mask", "input":args.input, "updated":args.update_masks, "status":"ok"}),
-        "mask status updated",
+        serde_json::json!({"command":"mask", "input":args.input, "copy":copy_id, "actions":actions, "status":"ok"}),
+        &format!("mask updated: {}", actions.join(", ")),
     )
+}
+
+/// Lists every mask library entry and layer with its status (G-03). Read-only:
+/// the sidecar is never written.
+fn mask_list(args: &MaskArgs, document: &SidecarDocument) -> Result<(), CliError> {
+    let copies: Vec<&lumina_sidecar::VirtualCopy> = match args.virtual_copy.as_deref() {
+        Some(id) => document
+            .virtual_copies
+            .iter()
+            .filter(|copy| copy.id == id)
+            .collect(),
+        None => document.virtual_copies.iter().collect(),
+    };
+    if args.virtual_copy.is_some() && copies.is_empty() {
+        return Err(CliError::Message("unknown virtual copy".into()));
+    }
+    if args.json {
+        let copies_json = copies
+            .iter()
+            .map(|copy| {
+                serde_json::json!({
+                    "id": copy.id,
+                    "name": copy.name,
+                    "masks": copy.mask_library.iter().map(|mask| serde_json::json!({
+                        "id": mask.id,
+                        "name": mask.name,
+                        "operation": format!("{:?}", mask.operation).to_lowercase(),
+                        "status": format!("{:?}", mask.status).to_lowercase(),
+                        "ai_select": mask.ai_select.as_ref().map(|select| serde_json::json!({
+                            "kind": select.kind.as_str(),
+                            "detail": select.detail,
+                        })),
+                        "prompt": mask.prompt.as_ref().map(prompt_kind),
+                    })).collect::<Vec<_>>(),
+                    "layers": copy.mask_layers.iter().map(|layer| serde_json::json!({
+                        "id": layer.id,
+                        "mask": format!("{}/{}", layer.mask.copy_id, layer.mask.mask_id),
+                        "visible": layer.visible,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        emit(
+            true,
+            serde_json::json!({"command":"mask", "input":args.input, "copies":copies_json, "status":"ok"}),
+            "mask status listed",
+        )
+    } else {
+        for copy in &copies {
+            println!("copy: {} [{}]", copy.name, copy.id);
+            for mask in &copy.mask_library {
+                println!(
+                    "  mask: {} [{}] op={} status={}{}{}",
+                    mask.name,
+                    mask.id,
+                    format!("{:?}", mask.operation).to_lowercase(),
+                    format!("{:?}", mask.status).to_lowercase(),
+                    mask.ai_select.as_ref().map_or(String::new(), |select| {
+                        format!(
+                            " ai={}{}",
+                            select.kind.as_str(),
+                            select
+                                .detail
+                                .as_deref()
+                                .map_or(String::new(), |d| format!(":{d}"))
+                        )
+                    }),
+                    mask.prompt
+                        .as_ref()
+                        .map_or(String::new(), |p| format!(" prompt={}", prompt_kind(p))),
+                );
+            }
+            for layer in &copy.mask_layers {
+                println!(
+                    "  layer: {} -> {}/{} visible={}",
+                    layer.id, layer.mask.copy_id, layer.mask.mask_id, layer.visible
+                );
+            }
+        }
+        emit(
+            false,
+            serde_json::json!({"command":"mask", "input":args.input, "status":"ok"}),
+            "mask status listed",
+        )
+    }
+}
+
+fn prompt_kind(prompt: &MaskPrompt) -> &'static str {
+    match prompt {
+        MaskPrompt::Box { .. } => "box",
+        MaskPrompt::Brush { .. } => "brush",
+        MaskPrompt::Polygon { .. } => "polygon",
+        MaskPrompt::Ellipse { .. } => "ellipse",
+        MaskPrompt::Gradient { .. } => "gradient",
+        MaskPrompt::ColorRange { .. } => "color-range",
+        MaskPrompt::LuminanceRange { .. } => "luminance-range",
+    }
+}
+
+fn unix_now() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
+fn require_mask_name(name: Option<&str>) -> Result<&str, CliError> {
+    match name {
+        Some(name) if !name.trim().is_empty() => Ok(name),
+        _ => Err(CliError::Message(
+            "this mask operation requires --name <NAME>".into(),
+        )),
+    }
+}
+
+fn resolve_mask_copy(
+    document: &SidecarDocument,
+    requested: Option<&str>,
+) -> Result<String, CliError> {
+    if let Some(id) = requested {
+        if document.virtual_copies.iter().any(|copy| copy.id == id) {
+            return Ok(id.into());
+        }
+        return Err(CliError::Message(format!("unknown virtual copy `{id}`")));
+    }
+    if let Some(default) = document.virtual_copies.iter().find(|copy| copy.is_default) {
+        return Ok(default.id.clone());
+    }
+    document
+        .virtual_copies
+        .first()
+        .map(|copy| copy.id.clone())
+        .ok_or_else(|| CliError::Message("sidecar has no virtual copies".into()))
+}
+
+fn mask_copy_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut lumina_sidecar::VirtualCopy, CliError> {
+    document
+        .virtual_copies
+        .iter_mut()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))
+}
+
+/// Parses a mask reference as `mask-id` (same copy) or `copy-id/mask-id`.
+/// Anything else is a loud error — never a guess.
+fn parse_mask_ref(value: &str, default_copy: &str) -> Result<(String, String), CliError> {
+    let parts: Vec<&str> = value.split('/').collect();
+    match parts.as_slice() {
+        [mask] if !mask.trim().is_empty() => Ok((default_copy.into(), (*mask).into())),
+        [copy, mask] if !copy.trim().is_empty() && !mask.trim().is_empty() => {
+            Ok(((*copy).into(), (*mask).into()))
+        }
+        _ => Err(CliError::Message(format!(
+            "invalid mask reference `{value}`: expected `mask-id` or `copy-id/mask-id`"
+        ))),
+    }
+}
+
+fn stable_mask_id(parts: &[&str]) -> String {
+    let joined = parts.join("\0");
+    format!("mask-{}", blake3::hash(joined.as_bytes()).to_hex())
+}
+
+fn mask_library_contains(document: &SidecarDocument, copy_id: &str, mask_id: &str) -> bool {
+    document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .is_some_and(|copy| copy.mask_library.iter().any(|mask| mask.id == mask_id))
+}
+
+fn new_source_mask(
+    document: &SidecarDocument,
+    id: &str,
+    name: &str,
+    frame_dims: Option<(u32, u32)>,
+    status: MaskStatus,
+) -> MaskDefinition {
+    let (width, height) = frame_dims.unwrap_or((0, 0));
+    MaskDefinition {
+        id: id.into(),
+        name: name.into(),
+        source_fingerprint: SourceFingerprint {
+            content_hash: document.source.content_hash.clone(),
+            byte_length: document.source.byte_length,
+            extras: BTreeMap::new(),
+        },
+        decode_context: DecodeFingerprint {
+            decoder: "cli-mask".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            parameters: BTreeMap::new(),
+            extras: BTreeMap::new(),
+        },
+        geometry_context: GeometryFingerprint {
+            width,
+            height,
+            orientation: 1,
+            pixel_aspect_ratio: 1.0,
+            extras: BTreeMap::new(),
+        },
+        model: ModelIdentity {
+            name: "unavailable".into(),
+            version: "pending".into(),
+            hash: "pending".into(),
+            extras: BTreeMap::new(),
+        },
+        inference_resolution: Resolution {
+            width,
+            height,
+            extras: BTreeMap::new(),
+        },
+        preprocessing: Preprocessing {
+            name: "pending".into(),
+            version: "1".into(),
+            parameters: BTreeMap::new(),
+            extras: BTreeMap::new(),
+        },
+        rescaling_method: "none".into(),
+        rescaling_parameters: BTreeMap::new(),
+        coordinate_system: CoordinateSystem::SourceOriented,
+        status,
+        created_at: unix_now(),
+        generator_version: env!("CARGO_PKG_VERSION").into(),
+        error_text: None,
+        artifact: None,
+        operation: MaskOperation::Source,
+        references: vec![],
+        prompt: None,
+        ai_select: None,
+        extras: BTreeMap::new(),
+    }
+}
+
+fn mask_add_ai(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    kind: &str,
+    name: &str,
+    detail: Option<&str>,
+    frame_dims: Option<(u32, u32)>,
+) -> Result<(), CliError> {
+    let kind = AiSelectKind::parse(kind).ok_or_else(|| {
+        CliError::Message(format!(
+            "unknown ai-select kind `{kind}`: expected subject|sky|background|objects|people"
+        ))
+    })?;
+    if let Some(detail) = detail {
+        if detail.len() > 64
+            || detail.trim().is_empty()
+            || detail != detail.trim()
+            || detail.chars().any(|c| c.is_control())
+        {
+            return Err(CliError::Message(
+                "detail must be trimmed, non-empty, free of control characters and at most 64 chars".into(),
+            ));
+        }
+    }
+    let id = stable_mask_id(&["ai", kind.as_str(), name]);
+    if mask_library_contains(document, copy_id, &id) {
+        return Err(CliError::Message(format!(
+            "mask `{name}` already exists on copy `{copy_id}`"
+        )));
+    }
+    let mut mask = new_source_mask(document, &id, name, frame_dims, MaskStatus::Pending);
+    mask.ai_select = Some(AiSelect {
+        kind,
+        detail: detail.map(str::to_string),
+        extras: BTreeMap::new(),
+    });
+    mask_copy_mut(document, copy_id)?.mask_library.push(mask);
+    Ok(())
+}
+
+fn mask_add_luminance(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    name: &str,
+    min: f32,
+    max: f32,
+    feather: f32,
+    frame_dims: Option<(u32, u32)>,
+) -> Result<(), CliError> {
+    let id = stable_mask_id(&["luminance-range", name]);
+    if mask_library_contains(document, copy_id, &id) {
+        return Err(CliError::Message(format!(
+            "mask `{name}` already exists on copy `{copy_id}`"
+        )));
+    }
+    let mut mask = new_source_mask(document, &id, name, frame_dims, MaskStatus::Valid);
+    mask.prompt = Some(MaskPrompt::LuminanceRange {
+        min,
+        max,
+        feather,
+        transformation: PromptTransform::default(),
+    });
+    mask_copy_mut(document, copy_id)?.mask_library.push(mask);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mask_add_color(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    name: &str,
+    hue_center: Option<f32>,
+    hue_width: Option<f32>,
+    sat_min: Option<f32>,
+    sat_max: Option<f32>,
+    lum_min: Option<f32>,
+    lum_max: Option<f32>,
+    feather: f32,
+    frame_dims: Option<(u32, u32)>,
+) -> Result<(), CliError> {
+    let (hue_center, hue_width, sat_min, sat_max, lum_min, lum_max) = (
+        hue_center
+            .ok_or_else(|| CliError::Message("--add-color-range requires --hue-center".into()))?,
+        hue_width
+            .ok_or_else(|| CliError::Message("--add-color-range requires --hue-width".into()))?,
+        sat_min.ok_or_else(|| CliError::Message("--add-color-range requires --sat-min".into()))?,
+        sat_max.ok_or_else(|| CliError::Message("--add-color-range requires --sat-max".into()))?,
+        lum_min.ok_or_else(|| CliError::Message("--add-color-range requires --lum-min".into()))?,
+        lum_max.ok_or_else(|| CliError::Message("--add-color-range requires --lum-max".into()))?,
+    );
+    let id = stable_mask_id(&["color-range", name]);
+    if mask_library_contains(document, copy_id, &id) {
+        return Err(CliError::Message(format!(
+            "mask `{name}` already exists on copy `{copy_id}`"
+        )));
+    }
+    let mut mask = new_source_mask(document, &id, name, frame_dims, MaskStatus::Valid);
+    mask.prompt = Some(MaskPrompt::ColorRange {
+        hue_center,
+        hue_width,
+        sat_min,
+        sat_max,
+        lum_min,
+        lum_max,
+        feather,
+        transformation: PromptTransform::default(),
+    });
+    mask_copy_mut(document, copy_id)?.mask_library.push(mask);
+    Ok(())
+}
+
+fn mask_combine(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    op: &str,
+    name: &str,
+    inputs: &str,
+    frame_dims: Option<(u32, u32)>,
+) -> Result<(), CliError> {
+    let operation = match op.trim().to_ascii_lowercase().as_str() {
+        "union" | "add" => MaskOperation::Union,
+        "intersect" => MaskOperation::Intersect,
+        "subtract" | "sub" => MaskOperation::Subtract,
+        "invert" | "inv" => MaskOperation::Invert,
+        _ => {
+            return Err(CliError::Message(format!(
+                "unknown combine op `{op}`: expected union|intersect|subtract|invert"
+            )));
+        }
+    };
+    let refs: Vec<(String, String)> = inputs
+        .split(',')
+        .map(|part| parse_mask_ref(part.trim(), copy_id))
+        .collect::<Result<_, _>>()?;
+    let arity_ok = match operation {
+        MaskOperation::Invert => refs.len() == 1,
+        MaskOperation::Subtract => refs.len() == 2,
+        MaskOperation::Union | MaskOperation::Intersect => refs.len() >= 2,
+        MaskOperation::Source => false,
+    };
+    if !arity_ok {
+        return Err(CliError::Message(format!(
+            "combine op `{op}` needs {} input(s), got {}",
+            match operation {
+                MaskOperation::Invert => "exactly 1",
+                MaskOperation::Subtract => "exactly 2",
+                _ => "at least 2",
+            },
+            refs.len()
+        )));
+    }
+    for (ref_copy, ref_mask) in &refs {
+        if !mask_library_contains(document, ref_copy, ref_mask) {
+            return Err(CliError::Message(format!(
+                "combine input references unknown mask `{ref_copy}/{ref_mask}`"
+            )));
+        }
+    }
+    // Canonical op key (not the raw alias): `union` and `add` name the same
+    // node, so re-running with either spelling hits the loud duplicate.
+    let op_key = match operation {
+        MaskOperation::Union => "union",
+        MaskOperation::Intersect => "intersect",
+        MaskOperation::Subtract => "subtract",
+        MaskOperation::Invert => "invert",
+        MaskOperation::Source => "source",
+    };
+    let id = stable_mask_id(&["combine", op_key, name]);
+    if mask_library_contains(document, copy_id, &id) {
+        return Err(CliError::Message(format!(
+            "mask `{name}` already exists on copy `{copy_id}`"
+        )));
+    }
+    let references = refs
+        .into_iter()
+        .map(|(ref_copy, ref_mask)| MaskReference {
+            copy_id: ref_copy,
+            mask_id: ref_mask,
+            extras: BTreeMap::new(),
+        })
+        .collect();
+    let mut mask = new_source_mask(document, &id, name, frame_dims, MaskStatus::Pending);
+    mask.operation = operation;
+    mask.references = references;
+    // A derived node inherits usability only through the loader blessing pass;
+    // `Pending` keeps it honest until every input resolves.
+    mask_copy_mut(document, copy_id)?.mask_library.push(mask);
+    Ok(())
+}
+
+fn mask_duplicate(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    source: &str,
+    name: &str,
+) -> Result<(), CliError> {
+    let (ref_copy, ref_mask) = parse_mask_ref(source, copy_id)?;
+    let template = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == ref_copy)
+        .and_then(|copy| copy.mask_library.iter().find(|mask| mask.id == ref_mask))
+        .cloned()
+        .ok_or_else(|| CliError::Message(format!("unknown mask `{ref_copy}/{ref_mask}`")))?;
+    // Only source payloads duplicate cleanly; a derived node is rebuilt with
+    // `--combine` against the same inputs instead of aliasing them silently.
+    if template.operation != MaskOperation::Source {
+        return Err(CliError::Message(format!(
+            "cannot duplicate derived mask `{ref_copy}/{ref_mask}`; use --combine to rebuild it"
+        )));
+    }
+    let id = stable_mask_id(&["duplicate", &ref_copy, &ref_mask, name]);
+    if mask_library_contains(document, copy_id, &id) {
+        return Err(CliError::Message(format!(
+            "mask `{name}` already exists on copy `{copy_id}`"
+        )));
+    }
+    let mut duplicated = template;
+    duplicated.id = id;
+    duplicated.name = name.into();
+    duplicated.created_at = unix_now();
+    duplicated.generator_version = env!("CARGO_PKG_VERSION").into();
+    mask_copy_mut(document, copy_id)?
+        .mask_library
+        .push(duplicated);
+    Ok(())
+}
+
+fn mask_attach_layer(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    target: &str,
+) -> Result<(), CliError> {
+    let (ref_copy, ref_mask) = parse_mask_ref(target, copy_id)?;
+    if !mask_library_contains(document, &ref_copy, &ref_mask) {
+        return Err(CliError::Message(format!(
+            "cannot attach unknown mask `{ref_copy}/{ref_mask}`"
+        )));
+    }
+    let layer_id = format!("layer-{ref_mask}");
+    let copy = mask_copy_mut(document, copy_id)?;
+    if copy.mask_layers.iter().any(|layer| layer.id == layer_id) {
+        return Err(CliError::Message(format!(
+            "copy `{copy_id}` already has layer `{layer_id}`"
+        )));
+    }
+    copy.mask_layers.push(MaskLayer {
+        id: layer_id,
+        mask: MaskReference {
+            copy_id: ref_copy,
+            mask_id: ref_mask,
+            extras: BTreeMap::new(),
+        },
+        inverted: false,
+        feather: 0.0,
+        blur: 0.0,
+        density: 1.0,
+        visible: true,
+        extras: BTreeMap::new(),
+    });
+    Ok(())
+}
+
+fn mask_set_layer_visible(
+    document: &mut SidecarDocument,
+    copy_id: &str,
+    layer_id: &str,
+    visible: bool,
+) -> Result<(), CliError> {
+    let layer = mask_copy_mut(document, copy_id)?
+        .mask_layers
+        .iter_mut()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| {
+            CliError::Message(format!("unknown layer `{layer_id}` on copy `{copy_id}`"))
+        })?;
+    layer.visible = visible;
+    Ok(())
 }
 
 fn validate(args: IndexArgs) -> Result<(), CliError> {
@@ -3773,6 +4464,7 @@ mod tests {
             references,
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         }
     }
 
@@ -3810,9 +4502,315 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: BTreeMap::new(),
+            visible: true,
         }];
         save_sidecar(&sidecar_path_for(input), &document).unwrap();
         document
+    }
+
+    // ---- G-03 Maskierungs-Parität: mask DAG CLI ----
+
+    fn mask_imported_input(directory: &Path, name: &str) -> PathBuf {
+        let (input, _frame) = png_input(directory, name, 100);
+        import_file(ImportArgs {
+            input: input.clone(),
+            json: true,
+            migrate: false,
+        })
+        .unwrap();
+        input
+    }
+
+    fn mask_args(input: PathBuf) -> MaskArgs {
+        MaskArgs {
+            input,
+            update_masks: false,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            add_ai_select: None,
+            name: None,
+            detail: None,
+            add_luminance_range: false,
+            range_min: None,
+            range_max: None,
+            add_color_range: false,
+            hue_center: None,
+            hue_width: None,
+            sat_min: None,
+            sat_max: None,
+            lum_min: None,
+            lum_max: None,
+            feather: None,
+            combine: None,
+            inputs: None,
+            duplicate: None,
+            attach_layer: None,
+            show_layer: None,
+            hide_layer: None,
+        }
+    }
+
+    fn mask_library_ids(input: &Path) -> Vec<String> {
+        load_sidecar(&sidecar_path_for(input))
+            .unwrap()
+            .virtual_copies[0]
+            .mask_library
+            .iter()
+            .map(|mask| mask.id.clone())
+            .collect()
+    }
+
+    /// End-to-end: import → `mask --add-ai-select/--add-luminance-range` →
+    /// file → reload. New entries are stable, typed and carry loud statuses.
+    #[test]
+    fn mask_add_ai_and_range_roundtrip_through_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = mask_imported_input(directory.path(), "g03.png");
+
+        let mut add_sky = mask_args(input.clone());
+        add_sky.add_ai_select = Some("sky".into());
+        add_sky.name = Some("Sky".into());
+        mask(add_sky).unwrap();
+
+        let mut add_lum = mask_args(input.clone());
+        add_lum.add_luminance_range = true;
+        add_lum.name = Some("Bright".into());
+        add_lum.range_min = Some(0.5);
+        add_lum.range_max = Some(1.0);
+        mask(add_lum).unwrap();
+
+        // Reload from the file: both masks persisted with stable ids.
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(document.validate().is_ok());
+        let copy = &document.virtual_copies[0];
+        assert_eq!(copy.mask_library.len(), 2);
+        let sky = copy
+            .mask_library
+            .iter()
+            .find(|mask| mask.name == "Sky")
+            .unwrap();
+        assert_eq!(
+            sky.ai_select.as_ref().unwrap().kind,
+            lumina_sidecar::AiSelectKind::Sky
+        );
+        assert_eq!(sky.status, MaskStatus::Pending);
+        let lum = copy
+            .mask_library
+            .iter()
+            .find(|mask| mask.name == "Bright")
+            .unwrap();
+        assert!(matches!(
+            lum.prompt,
+            Some(lumina_sidecar::MaskPrompt::LuminanceRange { .. })
+        ));
+        assert_eq!(lum.status, MaskStatus::Valid);
+        // Stable ids: re-running the same add is a loud duplicate, not a copy.
+        let mut repeat = mask_args(input.clone());
+        repeat.add_ai_select = Some("sky".into());
+        repeat.name = Some("Sky".into());
+        assert!(mask(repeat).is_err());
+    }
+
+    /// Combinators, duplicate, attach and the visibility eye persist per copy.
+    #[test]
+    fn mask_combine_duplicate_layer_visibility_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = mask_imported_input(directory.path(), "g03c.png");
+
+        for (kind, name) in [("subject", "Subject"), ("sky", "Sky")] {
+            let mut add = mask_args(input.clone());
+            add.add_ai_select = Some(kind.into());
+            add.name = Some(name.into());
+            mask(add).unwrap();
+        }
+        let ids = mask_library_ids(&input);
+        assert_eq!(ids.len(), 2);
+
+        // Add = union over both inputs.
+        let mut combine = mask_args(input.clone());
+        combine.combine = Some("union".into());
+        combine.name = Some("Both".into());
+        combine.inputs = Some(format!("{},{}", ids[0], ids[1]));
+        mask(combine).unwrap();
+
+        // Intersect is CLI-reachable too (panel offers union/subtract/invert).
+        let mut intersect = mask_args(input.clone());
+        intersect.combine = Some("intersect".into());
+        intersect.name = Some("Overlap".into());
+        intersect.inputs = Some(format!("{},{}", ids[0], ids[1]));
+        mask(intersect).unwrap();
+
+        // Duplicate one source under a new name.
+        let mut duplicate = mask_args(input.clone());
+        duplicate.duplicate = Some(ids[0].clone());
+        duplicate.name = Some("Subject copy".into());
+        mask(duplicate).unwrap();
+
+        // Attach a layer for the union and close its eye again.
+        let union_id = mask_library_ids(&input)
+            .into_iter()
+            .find(|id| {
+                load_sidecar(&sidecar_path_for(&input))
+                    .unwrap()
+                    .virtual_copies[0]
+                    .mask_library
+                    .iter()
+                    .any(|mask| mask.id == *id && mask.name == "Both")
+            })
+            .unwrap();
+        let mut attach = mask_args(input.clone());
+        attach.attach_layer = Some(union_id);
+        mask(attach).unwrap();
+        // Layer id is `layer-<mask-id>`; resolve it from the file.
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let layer_id = document.virtual_copies[0].mask_layers[0].id.clone();
+        let mut hide = mask_args(input.clone());
+        hide.hide_layer = Some(layer_id.clone());
+        mask(hide).unwrap();
+
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(document.validate().is_ok());
+        let copy = &document.virtual_copies[0];
+        assert_eq!(copy.mask_library.len(), 5);
+        let union = copy
+            .mask_library
+            .iter()
+            .find(|mask| mask.name == "Both")
+            .unwrap();
+        assert_eq!(union.operation, lumina_sidecar::MaskOperation::Union);
+        assert_eq!(union.references.len(), 2);
+        let overlap = copy
+            .mask_library
+            .iter()
+            .find(|mask| mask.name == "Overlap")
+            .unwrap();
+        assert_eq!(overlap.operation, lumina_sidecar::MaskOperation::Intersect);
+        assert_eq!(overlap.references.len(), 2);
+        let layer = copy
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        assert!(!layer.visible);
+        // Re-open the eye.
+        let mut show = mask_args(input.clone());
+        show.show_layer = Some(layer_id);
+        mask(show).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(document.virtual_copies[0].mask_layers[0].visible);
+    }
+
+    /// Loud failures: unknown kind/copy/mask, bad ranges, wrong arity,
+    /// unknown layers and unknown combine ops abort with exit code 1 and
+    /// leave the sidecar byte-identical (no partial write).
+    #[test]
+    fn mask_failures_are_loud_and_leave_sidecar_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = mask_imported_input(directory.path(), "g03e.png");
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+
+        // Unknown AI kind.
+        let mut bad_kind = mask_args(input.clone());
+        bad_kind.add_ai_select = Some("cat".into());
+        bad_kind.name = Some("Cat".into());
+        let error = mask(bad_kind).unwrap_err();
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("unknown ai-select kind"));
+
+        // Unknown virtual copy.
+        let mut bad_copy = mask_args(input.clone());
+        bad_copy.virtual_copy = Some("nope".into());
+        bad_copy.add_ai_select = Some("sky".into());
+        bad_copy.name = Some("Sky".into());
+        assert!(mask(bad_copy).is_err());
+
+        // Missing range bounds.
+        let mut bad_range = mask_args(input.clone());
+        bad_range.add_luminance_range = true;
+        bad_range.name = Some("Bright".into());
+        assert!(mask(bad_range).is_err());
+
+        // Out-of-range values are rejected by the sidecar gate.
+        let mut bad_values = mask_args(input.clone());
+        bad_values.add_luminance_range = true;
+        bad_values.name = Some("Bright".into());
+        bad_values.range_min = Some(0.9);
+        bad_values.range_max = Some(0.1);
+        assert!(mask(bad_values).is_err());
+
+        // Unknown combine input.
+        let mut bad_input = mask_args(input.clone());
+        bad_input.combine = Some("union".into());
+        bad_input.name = Some("Both".into());
+        bad_input.inputs = Some("missing-a,missing-b".into());
+        assert!(mask(bad_input).is_err());
+
+        // Wrong arity: subtract needs exactly 2.
+        let mut add = mask_args(input.clone());
+        add.add_ai_select = Some("sky".into());
+        add.name = Some("Sky".into());
+        mask(add).unwrap();
+        let sky_id = mask_library_ids(&input)[0].clone();
+        let mut bad_arity = mask_args(input.clone());
+        bad_arity.combine = Some("subtract".into());
+        bad_arity.name = Some("Sub".into());
+        bad_arity.inputs = Some(sky_id);
+        assert!(mask(bad_arity).is_err());
+
+        // Unknown layer eye.
+        let mut bad_layer = mask_args(input.clone());
+        bad_layer.hide_layer = Some("layer-nope".into());
+        assert!(mask(bad_layer).is_err());
+
+        // Unknown combine op.
+        let mut bad_op = mask_args(input.clone());
+        bad_op.combine = Some("multiply".into());
+        bad_op.name = Some("X".into());
+        bad_op.inputs = Some("a,b".into());
+        assert!(mask(bad_op).is_err());
+
+        // Only the successful Sky add above changed the file.
+        let after_success = fs::read(sidecar_path_for(&input)).unwrap();
+        assert_ne!(before, after_success);
+        let snapshot = after_success;
+        // Every failing command after that left the file byte-identical.
+        let mut another_bad = mask_args(input.clone());
+        another_bad.hide_layer = Some("layer-nope".into());
+        assert!(another_bad.hide_layer.is_some());
+        let _ = mask(another_bad).unwrap_err();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), snapshot);
+    }
+
+    /// `mask --list` is read-only: stdout carries the statuses, the sidecar
+    /// bytes don't move.
+    #[test]
+    fn mask_list_reports_statuses_without_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = mask_imported_input(directory.path(), "g03l.png");
+        let mut add = mask_args(input.clone());
+        add.add_ai_select = Some("people".into());
+        add.name = Some("Person".into());
+        add.detail = Some("face".into());
+        mask(add).unwrap();
+
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+        let mut list = mask_args(input.clone());
+        list.list = true;
+        list.json = true;
+        mask(list).unwrap();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let person = document.virtual_copies[0]
+            .mask_library
+            .iter()
+            .find(|mask| mask.name == "Person")
+            .unwrap();
+        assert_eq!(
+            person.ai_select.as_ref().unwrap().detail.as_deref(),
+            Some("face")
+        );
     }
 
     // ---- F-082-FOLLOWUP: onnx-rt wiring semantics ----

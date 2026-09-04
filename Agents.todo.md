@@ -102,7 +102,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | AGENT-HARNESS-2 | alle G | AccessKit-Semantik |
 | 1.0 | AGENT-HARNESS-3 | G-01/G-07/G-08/G-10 | Green-Path-Matrix |
 | 1.0 | AGENT-HARNESS-4 | G-10 | Bildkorrektheit |
-| 1.0 | LRPAR-G03-MASK | G-03 | Maskierung |
 | 1.0 | LRPAR-G04-REMOVE | G-04 | Remove-Automatik |
 | 1.0 | LRPAR-G05-LENSBLUR | G-05 | Lens Blur |
 | 1.0 | LRPAR-G01-BASIC | G-01 | Develop-Basis |
@@ -152,7 +151,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] LRPAR-G03-MASK (Release: 1.0)** Maskierungs-Parität (G-03, ~30 %): AI-Auswahl Subject/Sky/Background/Objects/People (+ Teile bis Pupille/Sclera), Add/Subtract/Invert/Duplicate-Kombinatorik im Panel, Color-/Luminance-Range, Show + Color Overlay, Maskenliste mit Sichtbarkeits-Auge. Abnahme: CLI (Rezeptfelder, Roundtrip, Fehler laut, kein stiller Fallback) + `cargo test -p lumina-gui` headless (Panel, Overlay, Persistenz pro virtueller Kopie).
 - [ ] **[PRIO: hoch] LRPAR-G04-REMOVE (Release: 1.0)** Remove-Parität (G-04, ~35 %): Visualize-Spots-Slider, Tool-Overlay-Modi (Always/Auto/Never), Detect-Objects, Distraction Removal (Reflections/People/Dust, Auto), generativ-Varianten neu generieren. Abnahme: CLI + GUI-headless wie G03, Golden/PSNR-Gates für Heal-Pfade.
 - [ ] **[PRIO: hoch] LRPAR-G05-LENSBLUR (Release: 1.0)** Lens-Blur-Produktfunktion (G-05, ~10 %): Fokus-Rahmen, Focal Range, Blur Amount, Bokeh-Formen, Rezept + Persistenz. Abnahme: CLI + GUI-headless, kein stiller Fallback bei fehlendem Tiefenartefakt.
 - [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.

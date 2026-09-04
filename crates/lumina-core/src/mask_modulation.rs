@@ -164,6 +164,7 @@ mod tests {
             blur,
             density,
             extras: Default::default(),
+            visible: true,
         }
     }
 

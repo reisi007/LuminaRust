@@ -76,6 +76,10 @@ pub enum MaskResolvedFrom {
     ReInferred,
     /// No model was available; a cached (possibly stale) artifact was used.
     CachedUnavailable,
+    /// G-03: a deterministic range stage was computed straight from the
+    /// source frame (no artifact, no model, no cache). A parameter change
+    /// implicitly yields a new plane; stale/missing states don't apply.
+    ComputedDeterministic,
 }
 
 /// Per-mask resolution outcome for diagnostics / surfacing.
@@ -162,6 +166,33 @@ pub fn resolve_mask_planes(
         // Only source masks carry their own plane; derived (union/invert/…)
         // definitions are resolved in the blessing pass below.
         if definition.operation != MaskOperation::Source {
+            continue;
+        }
+
+        // G-03: deterministic range stages compute straight from the frame —
+        // no artifact, no model, no cache, no refresh flag. The plane is a
+        // pure function of pixels + parameters, so recomputation is the cache
+        // hit (byte-identical); a parameter change is the invalidation.
+        if crate::range_masks::is_range_prompt(definition.prompt.as_ref()) {
+            let prompt = definition
+                .prompt
+                .as_ref()
+                .expect("range prompt was checked");
+            let plane =
+                crate::range_masks::evaluate_range_prompt(frame, prompt).map_err(|error| {
+                    CoreError::MaskEvaluation {
+                        copy_id: key.0.clone(),
+                        mask_id: key.1.clone(),
+                        reason: error.to_string(),
+                    }
+                })?;
+            planes.insert(key.clone(), plane);
+            resolved_sources.insert(key.clone());
+            outcomes.push(MaskLoadOutcome {
+                copy_id: key.0.clone(),
+                mask_id: key.1.clone(),
+                from: MaskResolvedFrom::ComputedDeterministic,
+            });
             continue;
         }
 
@@ -451,8 +482,9 @@ mod tests {
     use super::*;
     use crate::masks::MaskPlane;
     use lumina_sidecar::{
-        ArtifactReference, CoordinateSystem, EditRecipe, Extras, GeometryFingerprint,
-        Preprocessing, Resolution, SourceFingerprint,
+        AiSelect, AiSelectKind, ArtifactReference, CoordinateSystem, EditRecipe, Extras,
+        GeometryFingerprint, MaskPrompt, Preprocessing, PromptTransform, Resolution,
+        SourceFingerprint,
     };
     use std::collections::BTreeMap;
 
@@ -654,6 +686,7 @@ mod tests {
             references: vec![],
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         }
     }
 
@@ -687,6 +720,7 @@ mod tests {
             blur: 0.0,
             density: 1.0,
             extras: Extras::new(),
+            visible: true,
         }
     }
 
@@ -1278,6 +1312,7 @@ mod tests {
             }],
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         };
         let mut copy = copy_with("vc", vec![source, derived]);
         copy.mask_layers = vec![layer_for("vc", "subject"), layer_for("vc", "inverted")];
@@ -1642,5 +1677,177 @@ mod tests {
         assert!(result.warnings[0].contains("model is unavailable"));
         // Existing blessing semantics apply untouched.
         assert_eq!(persisted_status(&result), MaskStatus::Valid);
+    }
+
+    // ----- G-03: deterministic range stages + loud AI-select -----
+
+    fn range_definition(id: &str, prompt: MaskPrompt) -> MaskDefinition {
+        let mut definition = source_definition(
+            "vc",
+            id,
+            MaskStatus::Pending,
+            "src",
+            model_identity(),
+            decode_context(),
+            false,
+        );
+        definition.prompt = Some(prompt);
+        definition
+    }
+
+    fn luminance_prompt(min: f32, max: f32) -> MaskPrompt {
+        MaskPrompt::LuminanceRange {
+            min,
+            max,
+            feather: 0.0,
+            transformation: PromptTransform::default(),
+        }
+    }
+
+    fn resolve_with_frame(
+        definition: MaskDefinition,
+        frame: &ImageFrame,
+        refresh: bool,
+    ) -> Result<MaskLoadResult, CoreError> {
+        let mut copy = copy_with("vc", vec![definition]);
+        copy.mask_layers = vec![layer_for("vc", "subject")];
+        resolve_mask_planes(
+            MaskLoadContext {
+                copies: &[copy],
+                active_copy_id: "vc",
+                source_hash: "src",
+                decode_context: &decode_context(),
+                loaded_planes: BTreeMap::new(),
+                inference: None,
+                model_identity: None,
+                refresh,
+                policy: MaskPolicy::Warn,
+            },
+            frame,
+        )
+    }
+
+    /// G-03 cache-hit: a range stage resolves without any model, artifact or
+    /// cache — deterministically computed from the frame — and is `Valid`.
+    #[test]
+    fn range_mask_computes_deterministically_without_model() {
+        let prompt = luminance_prompt(0.0, 1.0);
+        let frame = ImageFrame::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]).unwrap();
+        let expected = crate::range_masks::evaluate_range_prompt(&frame, &prompt).unwrap();
+        let result =
+            resolve_with_frame(range_definition("subject", prompt), &frame, false).unwrap();
+        assert_eq!(result.outcomes.len(), 1);
+        assert_eq!(
+            result.outcomes[0].from,
+            MaskResolvedFrom::ComputedDeterministic
+        );
+        assert!(result.warnings.is_empty());
+        assert!(!result.model_unavailable);
+        assert_eq!(
+            result.planes.get(&("vc".into(), "subject".into())).unwrap(),
+            &expected
+        );
+        assert_eq!(persisted_status(&result), MaskStatus::Valid);
+    }
+
+    /// G-03 cache-hit is byte-identical across refreshes (recomputation is
+    /// the hit); a parameter change is the invalidation (different plane).
+    #[test]
+    fn range_mask_hit_identical_and_param_change_invalidates() {
+        let frame = ImageFrame::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]).unwrap();
+        let first = resolve_with_frame(
+            range_definition("subject", luminance_prompt(0.0, 1.0)),
+            &frame,
+            false,
+        )
+        .unwrap();
+        let second = resolve_with_frame(
+            range_definition("subject", luminance_prompt(0.0, 1.0)),
+            &frame,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            first.planes.get(&("vc".into(), "subject".into())).unwrap(),
+            second.planes.get(&("vc".into(), "subject".into())).unwrap()
+        );
+        let changed = resolve_with_frame(
+            range_definition("subject", luminance_prompt(0.5, 1.0)),
+            &frame,
+            false,
+        )
+        .unwrap();
+        assert_ne!(
+            first.planes.get(&("vc".into(), "subject".into())).unwrap(),
+            changed
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+        );
+    }
+
+    /// G-03: an AI selection without a model and without a cached plane is a
+    /// loud hard error — never a silent empty mask.
+    #[test]
+    fn ai_select_without_model_and_cache_fails_loudly() {
+        let mut definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Pending,
+            "src",
+            model_identity(),
+            decode_context(),
+            false,
+        );
+        definition.ai_select = Some(AiSelect {
+            kind: AiSelectKind::People,
+            detail: Some("face".into()),
+            extras: Extras::new(),
+        });
+        let error = resolve_one(definition, None, None, None, false, "src").unwrap_err();
+        assert!(
+            error.to_string().contains("vc/subject"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// G-03: an AI selection re-infers through the model path when available.
+    #[test]
+    fn ai_select_reinfers_with_available_model() {
+        let mut definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Pending,
+            "src",
+            model_identity(),
+            decode_context(),
+            false,
+        );
+        definition.ai_select = Some(AiSelect {
+            kind: AiSelectKind::Sky,
+            detail: None,
+            extras: Extras::new(),
+        });
+        let result = resolve_one(
+            definition,
+            None,
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        assert_eq!(
+            result
+                .planes
+                .get(&("vc".into(), "subject".into()))
+                .unwrap()
+                .values,
+            vec![INFERRED_VALUE; 16]
+        );
     }
 }

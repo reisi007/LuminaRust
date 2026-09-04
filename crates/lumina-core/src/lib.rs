@@ -18,6 +18,7 @@ pub mod masks;
 pub mod memory;
 pub mod pipeline;
 pub mod preview_cache;
+pub mod range_masks;
 pub mod render;
 pub mod spot_heal;
 pub mod stage_cache;

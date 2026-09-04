@@ -585,6 +585,7 @@ fn ort_matte_feeds_maskgraph_builder_correctly() {
         references: vec![],
         prompt: None,
         extras: Extras::new(),
+        ai_select: None,
     };
 
     let b_plane = MaskPlane::new(4, 4, vec![1000u16; 16]).unwrap();
@@ -652,6 +653,7 @@ fn ort_matte_feeds_maskgraph_builder_correctly() {
             ],
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         },
         MaskDefinition {
             id: "n".into(),
@@ -707,6 +709,7 @@ fn ort_matte_feeds_maskgraph_builder_correctly() {
             }],
             prompt: None,
             extras: Extras::new(),
+            ai_select: None,
         },
     ];
 
