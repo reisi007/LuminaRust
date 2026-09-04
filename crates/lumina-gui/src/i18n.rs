@@ -170,6 +170,7 @@ pub enum Str {
 
     // Optics (F-098)
     LensCorrection,
+    LensProfile,
     DistortionK1,
     DistortionK2,
     DistortionK3,
@@ -178,7 +179,6 @@ pub enum Str {
     VignetteC2,
     ChromaticRed,
     ChromaticBlue,
-    OpticsRequiresLensfun,
     // GUI-OPTICS-1: visible profile status + grouped, self-explanatory
     // manual-correction controls (no silent inactive state).
     OpticsProfileNone,
@@ -207,6 +207,9 @@ pub enum Str {
     // Geometry (F-093 / F-099)
     Crop,
     Rotation,
+    Straighten,
+    Aspect,
+    ClearCrop,
     MirrorHorizontal,
     MirrorVertical,
     RotateLeft,
@@ -218,7 +221,7 @@ pub enum Str {
     AspectRatio,
     ShiftX,
     ShiftY,
-    GeometryRequiresLensfun,
+    LensfunAutoPattern,
 
     // Masking
     NewMask,
@@ -673,6 +676,7 @@ impl Str {
             Str::NoiseReduction => "Noise Reduction",
 
             Str::LensCorrection => "Lens Correction",
+            Str::LensProfile => "Lens Profile",
             Str::DistortionK1 => "Distortion K1 (r²)",
             Str::DistortionK2 => "Distortion K2 (r⁴)",
             Str::DistortionK3 => "Distortion K3 (r⁶)",
@@ -681,9 +685,6 @@ impl Str {
             Str::VignetteC2 => "Vignette C2 (corners)",
             Str::ChromaticRed => "CA Red (lateral)",
             Str::ChromaticBlue => "CA Blue (lateral)",
-            Str::OpticsRequiresLensfun => {
-                "Not available: the native Lensfun pipeline stage is disabled in this build."
-            }
             Str::OpticsProfileNone => {
                 "No lens profile — automatic correction inactive (manual sliders below apply on render)"
             }
@@ -727,6 +728,9 @@ impl Str {
 
             Str::Crop => "Crop",
             Str::Rotation => "Rotation",
+            Str::Straighten => "Straighten",
+            Str::Aspect => "Aspect",
+            Str::ClearCrop => "Clear Crop",
             Str::MirrorHorizontal => "Mirror Horizontal",
             Str::MirrorVertical => "Mirror Vertical",
             Str::RotateLeft => "Rotate Left 90°",
@@ -738,9 +742,7 @@ impl Str {
             Str::AspectRatio => "Aspect Ratio",
             Str::ShiftX => "Shift X",
             Str::ShiftY => "Shift Y",
-            Str::GeometryRequiresLensfun => {
-                "Not available: crop / perspective require the native Lensfun geometry stage, disabled in this build."
-            }
+            Str::LensfunAutoPattern => "Lensfun auto: {}",
 
             Str::NewMask => "New Mask",
             Str::SelectMask => "Select Mask",

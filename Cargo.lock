@@ -2190,6 +2190,7 @@ dependencies = [
  "log",
  "lumina-core",
  "lumina-gpu",
+ "lumina-lensfun",
  "lumina-raw",
  "lumina-sidecar",
  "rfd",

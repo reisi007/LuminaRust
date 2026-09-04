@@ -38,14 +38,14 @@ use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairReg
 use lumina_sidecar::{
     apply_batch_op, artifact_status, load_sidecar, save_sidecar, sidecar_path_for,
     validate_smart_collection_def, AiSelect, AiSelectKind, AnalysisFingerprint, ArtifactStatus,
-    BatchOp, BokehShape, CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem,
-    CurveChannels, CurvePoint, Curves, DecodeFingerprint, DepthArtifactRef, EditRecipe, FocusRect,
-    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, MaskDefinition,
-    MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus, ModelIdentity, PointColor,
-    PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument,
-    SmartCollectionDef, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
-    SourceFingerprint, SourceIdentity, SpotDistraction, SMART_COLLECTION_VERSION,
-    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    AspectPreset, BatchOp, BokehShape, CollectionMembership, ColorGrading, ColorGradingRange,
+    CoordinateSystem, Crop, CurveChannels, CurvePoint, Curves, DecodeFingerprint, DepthArtifactRef,
+    EditRecipe, FocusRect, Geometry, GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel,
+    LensBlur, LensCorrection, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference,
+    MaskStatus, ModelIdentity, Perspective, PointColor, PointColorEntry, Preprocessing, Preset,
+    PromptTransform, Resolution, SidecarDocument, SmartCollectionDef, SourceActionArtifactRef,
+    SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction,
+    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -307,6 +307,11 @@ enum Command {
     /// G-02 Color-Parität (LRPAR-G02-COLOR): inspect and edit the color
     /// stages of one virtual copy. See [`ColorArgs`].
     Color(ColorArgs),
+    /// G-06 Geometrie-Parität (LRPAR-G06-GEO): inspect and edit the
+    /// geometry stages of one virtual copy (crop/aspect, straighten/
+    /// rotation, mirrors, manual lens correction, manual perspective) plus
+    /// the Lensfun auto-profile status from EXIF. See [`GeometryArgs`].
+    Geometry(GeometryArgs),
     /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
     /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
     Keywords(KeywordsArgs),
@@ -920,6 +925,75 @@ struct InspectArgs {
     json: bool,
 }
 
+/// G-06 Geometrie-Parität (LRPAR-G06-GEO): inspect and edit the geometry
+/// stages of one image sidecar. Without mutation flags the command lists
+/// crop/lens/perspective values (read-only). `--straighten` is a documented
+/// alias of `--set-rotation` (same field, same validation). Every mutation
+/// validates loudly before anything is written and appends exactly one
+/// history entry (visible step per call); the original image is never
+/// modified. See `feature/architecture/pipeline.md` §§ F-093, F-098, F-099.
+#[derive(Debug, Args)]
+struct GeometryArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+    /// List crop/lens/perspective values (default when no mutation flag or
+    /// `--lensfun-status` is given).
+    #[arg(long)]
+    list: bool,
+    /// Set the crop to an aspect preset
+    /// (`original|1:1|4:5|5:4|3:2|2:3|4:3|3:4|16:9|9:16`).
+    #[arg(long, value_name = "PRESET")]
+    set_crop_aspect: Option<String>,
+    /// Set a free crop rectangle as `x,y,w,h` (normalized `0..=1`).
+    #[arg(long, value_name = "X,Y,W,H")]
+    set_crop_free: Option<String>,
+    /// Remove the crop (full frame, keeps rotation/mirrors).
+    #[arg(long)]
+    clear_crop: bool,
+    /// Set the rotation angle in degrees (`-180..=180`).
+    #[arg(long, value_name = "-180..=180")]
+    set_rotation: Option<f64>,
+    /// Straighten angle in degrees (`-180..=180`; alias of
+    /// `--set-rotation`, same field, same validation).
+    #[arg(long, value_name = "-180..=180")]
+    straighten: Option<f64>,
+    /// Set the mirror flags (`h|v|hv|none`).
+    #[arg(long, value_name = "h|v|hv|none")]
+    set_mirror: Option<String>,
+    /// Remove the whole geometry stage (crop, rotation, mirrors; identity).
+    #[arg(long)]
+    clear_geometry: bool,
+    /// Set the manual lens profile
+    /// (`wide-light|tele-light|standard-neutral`).
+    #[arg(long, value_name = "PROFILE")]
+    set_lens_profile: Option<String>,
+    /// Set one manual lens field as `FIELD:VALUE` with
+    /// `FIELD = distortion_k1|distortion_k2|distortion_k3|vignette_c0|
+    /// vignette_c1|vignette_c2|ca_red|ca_blue` (repeatable).
+    #[arg(long, value_name = "FIELD:VALUE")]
+    set_lens: Vec<String>,
+    /// Remove the whole manual lens-correction stage (identity).
+    #[arg(long)]
+    clear_lens: bool,
+    /// Set one manual perspective field as `FIELD:VALUE` with
+    /// `FIELD = vertical|horizontal|rotation|scale|aspect_ratio|shift_x|
+    /// shift_y` (repeatable).
+    #[arg(long, value_name = "FIELD:VALUE")]
+    set_perspective: Vec<String>,
+    /// Remove the whole manual perspective stage (identity).
+    #[arg(long)]
+    clear_perspective: bool,
+    /// Report the Lensfun auto-profile resolution for the input (EXIF →
+    /// profile match with distortion/vignetting/TCA flags, or the loud
+    /// reason no corrector applies). Read-only, no save.
+    #[arg(long)]
+    lensfun_status: bool,
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("{0}")]
@@ -980,6 +1054,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Spot(args) => spot(args),
         Command::LensBlur(args) => lens_blur(args),
         Command::Color(args) => color(args),
+        Command::Geometry(args) => geometry(args),
         Command::Keywords(args) => keywords(args),
         Command::Collections(args) => collections(args),
         Command::BatchMeta(args) => batch_meta(args),
@@ -3663,6 +3738,525 @@ fn color_list(
     }
 }
 
+/// G-06 Geometrie-Parität (LRPAR-G06-GEO): inspect and edit the geometry
+/// stages (crop/aspect, straighten/rotation, mirrors, manual lens
+/// correction, manual perspective) of one virtual copy. List-only mode is
+/// read-only (sidecar bytes unchanged). Mutations validate loudly
+/// (`document.validate()`) before `save_sidecar` and append exactly one
+/// history entry per call, so every step stays visible; the original image
+/// is never modified.
+fn geometry(args: GeometryArgs) -> Result<(), CliError> {
+    if args.set_rotation.is_some() && args.straighten.is_some() {
+        return Err(CliError::Message(
+            "--set-rotation and --straighten are aliases; pass only one".into(),
+        ));
+    }
+    if args.set_crop_aspect.is_some() && args.set_crop_free.is_some() {
+        return Err(CliError::Message(
+            "--set-crop-aspect and --set-crop-free are mutually exclusive".into(),
+        ));
+    }
+    let wants_mutation = args.set_crop_aspect.is_some()
+        || args.set_crop_free.is_some()
+        || args.clear_crop
+        || args.set_rotation.is_some()
+        || args.straighten.is_some()
+        || args.set_mirror.is_some()
+        || args.clear_geometry
+        || args.set_lens_profile.is_some()
+        || !args.set_lens.is_empty()
+        || args.clear_lens
+        || !args.set_perspective.is_empty()
+        || args.clear_perspective;
+    if args.lensfun_status && wants_mutation {
+        return Err(CliError::Message(
+            "--lensfun-status is read-only; pass no mutation flags with it".into(),
+        ));
+    }
+    // A clear and a set of the SAME stage contradict each other (loud, no
+    // half-apply); clears of different stages compose freely.
+    if args.clear_crop && (args.set_crop_aspect.is_some() || args.set_crop_free.is_some()) {
+        return Err(CliError::Message(
+            "--clear-crop contradicts --set-crop-aspect/--set-crop-free".into(),
+        ));
+    }
+    if args.clear_lens && (args.set_lens_profile.is_some() || !args.set_lens.is_empty()) {
+        return Err(CliError::Message(
+            "--clear-lens contradicts --set-lens-profile/--set-lens".into(),
+        ));
+    }
+    if args.clear_perspective && !args.set_perspective.is_empty() {
+        return Err(CliError::Message(
+            "--clear-perspective contradicts --set-perspective".into(),
+        ));
+    }
+    if args.clear_geometry
+        && (args.set_crop_aspect.is_some()
+            || args.set_crop_free.is_some()
+            || args.clear_crop
+            || args.set_rotation.is_some()
+            || args.straighten.is_some()
+            || args.set_mirror.is_some())
+    {
+        return Err(CliError::Message(
+            "--clear-geometry contradicts the crop/rotation/mirror flags".into(),
+        ));
+    }
+    let path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+    // Geometry stage: whole-stage clear or per-field mutations.
+    if args.clear_geometry {
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        copy.recipe.geometry = None;
+        info!("geometry: cleared stage on copy `{copy_id}`");
+        actions.push("clear-geometry".into());
+    } else {
+        if let Some(preset) = args.set_crop_aspect.as_deref() {
+            geometry_mut(&mut document, &copy_id)?.crop = Some(Crop::Aspect {
+                preset: parse_aspect_preset(preset)?,
+            });
+            info!("geometry: crop aspect {preset} on copy `{copy_id}`");
+            actions.push(format!("crop-aspect:{preset}"));
+        }
+        if let Some(rect) = args.set_crop_free.as_deref() {
+            let (x, y, width, height) = parse_crop_free(rect)?;
+            geometry_mut(&mut document, &copy_id)?.crop = Some(Crop::Free {
+                x,
+                y,
+                width,
+                height,
+            });
+            info!("geometry: crop free {rect} on copy `{copy_id}`");
+            actions.push(format!("crop-free:{rect}"));
+        }
+        if args.clear_crop {
+            geometry_mut(&mut document, &copy_id)?.crop = None;
+            info!("geometry: crop cleared on copy `{copy_id}`");
+            actions.push("crop:clear".into());
+        }
+        // `--straighten` is a documented alias of `--set-rotation`: same
+        // field (`geometry.rotation_degrees`), same validation, one step.
+        if let Some(degrees) = args.set_rotation.or(args.straighten) {
+            if !degrees.is_finite() {
+                return Err(CliError::Message(format!(
+                    "invalid rotation `{degrees}`: expected a finite number in -180..=180"
+                )));
+            }
+            geometry_mut(&mut document, &copy_id)?.rotation_degrees = degrees as f32;
+            info!("geometry: rotation {degrees} on copy `{copy_id}`");
+            actions.push(format!("rotation:{degrees}"));
+        }
+        if let Some(mirror) = args.set_mirror.as_deref() {
+            let (horizontal, vertical) = parse_mirror(mirror)?;
+            let geo = geometry_mut(&mut document, &copy_id)?;
+            geo.mirror_horizontal = horizontal;
+            geo.mirror_vertical = vertical;
+            info!("geometry: mirror {mirror} on copy `{copy_id}`");
+            actions.push(format!("mirror:{mirror}"));
+        }
+    }
+    // Manual lens stage: whole-stage clear or per-field mutations.
+    if args.clear_lens {
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        copy.recipe.lens_correction = None;
+        info!("geometry: lens correction cleared on copy `{copy_id}`");
+        actions.push("lens:clear".into());
+    } else {
+        if let Some(profile) = args.set_lens_profile.as_deref() {
+            lens_mut(&mut document, &copy_id)?.profile = Some(profile.into());
+            info!("geometry: lens profile {profile} on copy `{copy_id}`");
+            actions.push(format!("lens-profile:{profile}"));
+        }
+        for spec in &args.set_lens {
+            let (field, value) = parse_lens_field(spec)?;
+            set_lens_field(lens_mut(&mut document, &copy_id)?, &field, value);
+            info!("geometry: lens {field}={value} on copy `{copy_id}`");
+            actions.push(format!("lens:{field}={value}"));
+        }
+    }
+    // Manual perspective stage: whole-stage clear or per-field mutations.
+    if args.clear_perspective {
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        copy.recipe.perspective = None;
+        info!("geometry: perspective cleared on copy `{copy_id}`");
+        actions.push("perspective:clear".into());
+    } else {
+        for spec in &args.set_perspective {
+            let (field, value) = parse_perspective_field(spec)?;
+            set_perspective_field(perspective_mut(&mut document, &copy_id)?, &field, value);
+            info!("geometry: perspective {field}={value} on copy `{copy_id}`");
+            actions.push(format!("perspective:{field}={value}"));
+        }
+    }
+    if wants_mutation {
+        // Loud gate: aspect names, rect geometry, mirror words, field names
+        // and every range are rejected before anything is written. Exactly
+        // one history entry per call keeps every step visible (G-06).
+        document
+            .validate()
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        let final_recipe = copy.recipe.clone();
+        let mut id = format!("geometry-{}", timestamp());
+        let mut suffix = 0u32;
+        while copy.history.iter().any(|entry| entry.id == id) {
+            suffix += 1;
+            id = format!("geometry-{}-{suffix}", timestamp());
+        }
+        let mut extras = BTreeMap::new();
+        extras.insert("step".into(), serde_json::Value::String("geometry".into()));
+        extras.insert(
+            "actions".into(),
+            serde_json::Value::String(actions.join(",")),
+        );
+        copy.history.push(HistoryEntry {
+            id,
+            recipe: final_recipe,
+            recorded_at: Some(timestamp()),
+            extras,
+        });
+        save_sidecar(&path, &document)?;
+    }
+    geometry_list(&args, &document, &copy_id, &actions)
+}
+
+/// Mutable access to one virtual copy's geometry stage, creating an
+/// identity stage when none exists (loud on unknown ids).
+fn geometry_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut Geometry, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.geometry.get_or_insert(Geometry {
+        version: 1,
+        crop: None,
+        rotation_degrees: 0.0,
+        mirror_horizontal: false,
+        mirror_vertical: false,
+    }))
+}
+
+/// Mutable access to one virtual copy's manual lens-correction stage,
+/// creating an empty stage when none exists (loud on unknown ids).
+fn lens_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut LensCorrection, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.lens_correction.get_or_insert(LensCorrection {
+        version: 1,
+        profile: None,
+        distortion_k1: None,
+        distortion_k2: None,
+        distortion_k3: None,
+        vignette_c0: None,
+        vignette_c1: None,
+        vignette_c2: None,
+        ca_red: None,
+        ca_blue: None,
+    }))
+}
+
+/// Mutable access to one virtual copy's manual perspective stage, creating
+/// an identity stage when none exists (loud on unknown ids).
+fn perspective_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut Perspective, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.perspective.get_or_insert(Perspective {
+        version: 1,
+        vertical: 0.0,
+        horizontal: 0.0,
+        rotation: 0.0,
+        scale: 1.0,
+        aspect_ratio: 1.0,
+        shift_x: 0.0,
+        shift_y: 0.0,
+    }))
+}
+
+/// Parses an aspect preset name (loud on unknown names — never a guess).
+fn parse_aspect_preset(value: &str) -> Result<AspectPreset, CliError> {
+    match value {
+        "original" => Ok(AspectPreset::Original),
+        "1:1" => Ok(AspectPreset::OneToOne),
+        "4:5" => Ok(AspectPreset::FourToFive),
+        "5:4" => Ok(AspectPreset::FiveToFour),
+        "3:2" => Ok(AspectPreset::ThreeToTwo),
+        "2:3" => Ok(AspectPreset::TwoToThree),
+        "4:3" => Ok(AspectPreset::FourToThree),
+        "3:4" => Ok(AspectPreset::ThreeToFour),
+        "16:9" => Ok(AspectPreset::SixteenToNine),
+        "9:16" => Ok(AspectPreset::NineToSixteen),
+        _ => Err(CliError::Message(format!(
+            "invalid aspect preset `{value}`: expected one of original|1:1|4:5|5:4|3:2|2:3|4:3|3:4|16:9|9:16"
+        ))),
+    }
+}
+
+/// Parses a free crop rectangle as `x,y,w,h` (loud on malformed input;
+/// range geometry is validated on save, not guessed here).
+fn parse_crop_free(value: &str) -> Result<(f32, f32, f32, f32), CliError> {
+    let parts: Vec<&str> = value.split(',').collect();
+    let numbers: Option<Vec<f32>> = parts
+        .iter()
+        .map(|part| part.trim().parse::<f32>().ok())
+        .collect();
+    match numbers.as_deref() {
+        Some([x, y, width, height]) => Ok((*x, *y, *width, *height)),
+        _ => Err(CliError::Message(format!(
+            "invalid crop rect `{value}`: expected `x,y,w,h` with finite numbers"
+        ))),
+    }
+}
+
+/// Parses mirror flags as `h|v|hv|none` (loud on unknown words).
+fn parse_mirror(value: &str) -> Result<(bool, bool), CliError> {
+    match value {
+        "h" => Ok((true, false)),
+        "v" => Ok((false, true)),
+        "hv" => Ok((true, true)),
+        "none" => Ok((false, false)),
+        _ => Err(CliError::Message(format!(
+            "invalid mirror `{value}`: expected h|v|hv|none"
+        ))),
+    }
+}
+
+/// Parses one manual lens field as `FIELD:VALUE` (loud on unknown fields
+/// or non-numbers; ranges are validated on save).
+fn parse_lens_field(spec: &str) -> Result<(String, f32), CliError> {
+    const FIELDS: &[&str] = &[
+        "distortion_k1",
+        "distortion_k2",
+        "distortion_k3",
+        "vignette_c0",
+        "vignette_c1",
+        "vignette_c2",
+        "ca_red",
+        "ca_blue",
+    ];
+    let (field, value) = spec.split_once(':').ok_or_else(|| {
+        CliError::Message(format!(
+            "invalid lens field `{spec}`: expected `FIELD:VALUE`"
+        ))
+    })?;
+    if !FIELDS.contains(&field) {
+        return Err(CliError::Message(format!(
+            "invalid lens field `{field}`: expected one of {}",
+            FIELDS.join("|")
+        )));
+    }
+    let value: f32 = value
+        .trim()
+        .parse()
+        .map_err(|_| CliError::Message(format!("invalid lens value in `{spec}`: not a number")))?;
+    Ok((field.into(), value))
+}
+
+/// Applies one parsed manual lens field (fields are pre-validated by
+/// [`parse_lens_field`]).
+fn set_lens_field(lens: &mut LensCorrection, field: &str, value: f32) {
+    match field {
+        "distortion_k1" => lens.distortion_k1 = Some(value),
+        "distortion_k2" => lens.distortion_k2 = Some(value),
+        "distortion_k3" => lens.distortion_k3 = Some(value),
+        "vignette_c0" => lens.vignette_c0 = Some(value),
+        "vignette_c1" => lens.vignette_c1 = Some(value),
+        "vignette_c2" => lens.vignette_c2 = Some(value),
+        "ca_red" => lens.ca_red = Some(value),
+        "ca_blue" => lens.ca_blue = Some(value),
+        _ => unreachable!("lens field pre-validated by parse_lens_field"),
+    }
+}
+
+/// Parses one manual perspective field as `FIELD:VALUE` (loud on unknown
+/// fields or non-numbers; ranges are validated on save).
+fn parse_perspective_field(spec: &str) -> Result<(String, f32), CliError> {
+    const FIELDS: &[&str] = &[
+        "vertical",
+        "horizontal",
+        "rotation",
+        "scale",
+        "aspect_ratio",
+        "shift_x",
+        "shift_y",
+    ];
+    let (field, value) = spec.split_once(':').ok_or_else(|| {
+        CliError::Message(format!(
+            "invalid perspective field `{spec}`: expected `FIELD:VALUE`"
+        ))
+    })?;
+    if !FIELDS.contains(&field) {
+        return Err(CliError::Message(format!(
+            "invalid perspective field `{field}`: expected one of {}",
+            FIELDS.join("|")
+        )));
+    }
+    let value: f32 = value.trim().parse().map_err(|_| {
+        CliError::Message(format!(
+            "invalid perspective value in `{spec}`: not a number"
+        ))
+    })?;
+    Ok((field.into(), value))
+}
+
+/// Applies one parsed manual perspective field (fields are pre-validated by
+/// [`parse_perspective_field`]).
+fn set_perspective_field(perspective: &mut Perspective, field: &str, value: f32) {
+    match field {
+        "vertical" => perspective.vertical = value,
+        "horizontal" => perspective.horizontal = value,
+        "rotation" => perspective.rotation = value,
+        "scale" => perspective.scale = value,
+        "aspect_ratio" => perspective.aspect_ratio = value,
+        "shift_x" => perspective.shift_x = value,
+        "shift_y" => perspective.shift_y = value,
+        _ => unreachable!("perspective field pre-validated by parse_perspective_field"),
+    }
+}
+
+fn geometry_list(
+    args: &GeometryArgs,
+    document: &SidecarDocument,
+    copy_id: &str,
+    actions: &[String],
+) -> Result<(), CliError> {
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    let recipe = &copy.recipe;
+    // `--lensfun-status` resolves the EXIF→profile match for the input
+    // (read-only): which corrector a render would use, or the loud reason
+    // none applies. Never a guessed correction.
+    let lensfun_report = if args.lensfun_status {
+        Some(resolve_lensfun_report(&args.input))
+    } else {
+        None
+    };
+    if args.json {
+        emit(
+            true,
+            serde_json::json!({
+                "command": "geometry",
+                "input": args.input,
+                "copy": copy_id,
+                "geometry": recipe.geometry,
+                "lens_correction": recipe.lens_correction,
+                "perspective": recipe.perspective,
+                "lensfun": lensfun_report,
+                "actions": actions,
+            }),
+            "geometry status listed",
+        )
+    } else {
+        println!("copy: {} [{}]", copy.name, copy.id);
+        match &recipe.geometry {
+            Some(geo) => {
+                match &geo.crop {
+                    Some(Crop::Aspect { preset }) => {
+                        println!("  crop: aspect {preset:?}")
+                    }
+                    Some(Crop::Free {
+                        x,
+                        y,
+                        width,
+                        height,
+                    }) => {
+                        println!("  crop: free x={x} y={y} w={width} h={height}")
+                    }
+                    None => println!("  crop: none (full frame)"),
+                }
+                println!(
+                    "  rotation: {} mirror_h={} mirror_v={}",
+                    geo.rotation_degrees, geo.mirror_horizontal, geo.mirror_vertical
+                );
+            }
+            None => println!("  geometry: none"),
+        }
+        match &recipe.lens_correction {
+            Some(lens) => println!(
+                "  lens: profile={:?} k1={:?} k2={:?} k3={:?} c0={:?} c1={:?} c2={:?} ca_r={:?} ca_b={:?}",
+                lens.profile,
+                lens.distortion_k1,
+                lens.distortion_k2,
+                lens.distortion_k3,
+                lens.vignette_c0,
+                lens.vignette_c1,
+                lens.vignette_c2,
+                lens.ca_red,
+                lens.ca_blue
+            ),
+            None => println!("  lens: none"),
+        }
+        match &recipe.perspective {
+            Some(p) => println!(
+                "  perspective: v={} h={} rot={} scale={} aspect={} sx={} sy={}",
+                p.vertical, p.horizontal, p.rotation, p.scale, p.aspect_ratio, p.shift_x, p.shift_y
+            ),
+            None => println!("  perspective: none"),
+        }
+        if let Some(report) = lensfun_report {
+            println!("  lensfun: {report}");
+        }
+        if actions.is_empty() {
+            emit(
+                false,
+                serde_json::json!({"command":"geometry","status":"ok"}),
+                "geometry status listed",
+            )
+        } else {
+            emit(
+                false,
+                serde_json::json!({"command":"geometry","status":"ok"}),
+                &format!("geometry updated: {}", actions.join(", ")),
+            )
+        }
+    }
+}
+
+/// Resolves the Lensfun auto-profile status for one input file (G-06):
+/// which corrector a render would build from the input's EXIF, or the loud
+/// reason none applies (no metadata, missing EXIF fields, no system DB, no
+/// matching profile, identity correction). Read-only — never a correction.
+fn resolve_lensfun_report(input: &Path) -> String {
+    #[cfg(not(feature = "lensfun"))]
+    {
+        let _ = input;
+        "unavailable (build without the `lensfun` feature)".into()
+    }
+    #[cfg(feature = "lensfun")]
+    {
+        let metadata = match lumina_raw::read_metadata(input) {
+            Ok(metadata) => metadata,
+            Err(error) => return format!("no EXIF metadata ({error}) — manual model applies"),
+        };
+        match build_lensfun_corrector(Some(&metadata)) {
+            Some((_, corrector)) => format!(
+                "profile matched (distortion={} vignetting={} tca={}) — auto correction applies",
+                corrector.has_distortion(),
+                corrector.has_vignetting(),
+                corrector.has_tca()
+            ),
+            None => "no matching non-identity profile — manual model applies".into(),
+        }
+    }
+}
+
 fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     // Never overwrite the original — or its Lumina bundle files — with the
     // optional render output (REVIEW-CLI-WRITE-1).
@@ -4357,6 +4951,15 @@ fn load_persisted_mask_planes(
 /// `None` is returned and the manual LuminaRust model (or identity) applies
 /// instead — never a guessed correction.
 ///
+/// # Lens identification (G-06 EXIF-Erkennung)
+/// `RawMetadata.lens` (EXIF `LensModel`/Makernote, REVIEW-RAW-N2) is passed
+/// as the Lensfun lens name when present, so an exact lens match wins;
+/// without it (or when the named lens is unknown to the DB) Lensfun falls
+/// back to the body/mount match via `GuessParameters` (`LF_SEARCH_LOOSE`).
+/// A wrong-but-confident lens name can therefore still resolve to the body
+/// profile instead of failing — the `--lensfun-status` report and the
+/// render `info!` log name the matched correction explicitly.
+///
 /// # Subject (focus) distance
 /// `RawMetadata` carries no subject-distance field, so a documented default of
 /// `10.0` (metres) is used. Lensfun vignetting/distortion calibration is in
@@ -4364,17 +4967,13 @@ fn load_persisted_mask_planes(
 /// own reference tests use exactly this value, so it yields a matching,
 /// non-identity corrector for the `Nikon D40` example profile.
 ///
-/// # Known limits (MVP)
+/// # Known limits
 /// * The system Lensfun database is loaded once per call (no cross-render
 ///   cache). Acceptable for the MVP, but repeated `process`/`render` invocations
 ///   each re-load the DB.
-/// * `lens_name` is intentionally `None`: the camera body alone selects a lens
-///   profile instead of risking a spurious match on an EXIF lens string. (LibRaw
-///   now populates `RawMetadata.lens` from EXIF-LensModel/Makernote, but the
-///   corrector deliberately uses body-match via Lensfun `GuessParameters` rather
-///   than the EXIF lens name — see REVIEW-RAW-N2.)
-/// * CA (transverse chromatic aberration) stays manual — documented F-098-N1
-///   limit.
+/// * Manual `ca_red`/`ca_blue` are skipped when the built corrector carries
+///   TCA calibration (G-06: TCA is corrected geometrically in the lens
+///   stage; see `lumina-core` `apply_lens`).
 ///
 /// The returned `(LensfunDb, Corrector)` keeps the database handle alive as long
 /// as the corrector is used: the modifier internally references lens data owned
@@ -4395,7 +4994,7 @@ fn build_lensfun_corrector(metadata: Option<&RawMetadata>) -> Option<(LensfunDb,
     let corrector = db.for_camera(
         make,
         model,
-        None,
+        metadata.lens.as_deref(),
         metadata.width,
         metadata.height,
         focal_length,
@@ -7807,6 +8406,263 @@ mod tests {
             8
         );
         let _ = before;
+    }
+
+    // ---- G-06 Geometrie-Parität CLI ----
+
+    fn geometry_base_args(input: PathBuf) -> GeometryArgs {
+        GeometryArgs {
+            input,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            set_crop_aspect: None,
+            set_crop_free: None,
+            clear_crop: false,
+            set_rotation: None,
+            straighten: None,
+            set_mirror: None,
+            clear_geometry: false,
+            set_lens_profile: None,
+            set_lens: Vec::new(),
+            clear_lens: false,
+            set_perspective: Vec::new(),
+            clear_perspective: false,
+            lensfun_status: false,
+        }
+    }
+
+    /// G-06: set crop/straighten/mirror/lens/perspective, list (read-only),
+    /// clear — with sidecar roundtrip, exactly one history entry per
+    /// mutating call, and an untouched original.
+    #[test]
+    fn geometry_set_list_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        let original_bytes = fs::read(&input).unwrap();
+        import_sidecar_for(&input);
+        // Set every stage in one run.
+        let mut set = geometry_base_args(input.clone());
+        set.set_crop_aspect = Some("16:9".into());
+        set.straighten = Some(2.5);
+        set.set_mirror = Some("h".into());
+        set.set_lens_profile = Some("wide-light".into());
+        set.set_lens = vec!["distortion_k1:0.1".into(), "ca_red:0.01".into()];
+        set.set_perspective = vec!["vertical:0.2".into(), "scale:1.1".into()];
+        geometry(set).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let recipe = &document.virtual_copies[0].recipe;
+        assert!(matches!(
+            recipe.geometry.as_ref().and_then(|g| g.crop.as_ref()),
+            Some(Crop::Aspect {
+                preset: AspectPreset::SixteenToNine
+            })
+        ));
+        assert_eq!(
+            recipe.geometry.as_ref().map(|g| g.rotation_degrees),
+            Some(2.5)
+        );
+        assert_eq!(
+            (
+                recipe.geometry.as_ref().map(|g| g.mirror_horizontal),
+                recipe.geometry.as_ref().map(|g| g.mirror_vertical)
+            ),
+            (Some(true), Some(false))
+        );
+        let lens = recipe.lens_correction.as_ref().unwrap();
+        assert_eq!(lens.profile.as_deref(), Some("wide-light"));
+        assert_eq!(lens.distortion_k1, Some(0.1));
+        assert_eq!(lens.ca_red, Some(0.01));
+        let perspective = recipe.perspective.as_ref().unwrap();
+        assert_eq!(perspective.vertical, 0.2);
+        assert_eq!(perspective.scale, 1.1);
+        // Exactly one history entry for the mutating call (G-06 step rule).
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        let entry = &document.virtual_copies[0].history[0];
+        assert!(entry.id.starts_with("geometry-"), "got {}", entry.id);
+        assert_eq!(entry.recipe, *recipe);
+        // A second mutating call appends a second, uniquely-id'd entry.
+        let mut second = geometry_base_args(input.clone());
+        second.set_rotation = Some(-15.0);
+        geometry(second).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(document.virtual_copies[0].history.len(), 2);
+        assert_ne!(
+            document.virtual_copies[0].history[0].id,
+            document.virtual_copies[0].history[1].id
+        );
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .geometry
+                .as_ref()
+                .map(|g| g.rotation_degrees),
+            Some(-15.0)
+        );
+        // List-only mode is read-only: no new entry, bytes unchanged.
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+        let list = geometry_base_args(input.clone());
+        geometry(list).unwrap();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+        // Clear everything back to identity.
+        let mut clear = geometry_base_args(input.clone());
+        clear.clear_geometry = true;
+        clear.clear_lens = true;
+        clear.clear_perspective = true;
+        geometry(clear).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let recipe = &document.virtual_copies[0].recipe;
+        assert!(recipe.geometry.is_none());
+        assert!(recipe.lens_correction.is_none());
+        assert!(recipe.perspective.is_none());
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    /// G-06: free-crop rects and the straighten alias round-trip; `--list`
+    /// reports the stored stages.
+    #[test]
+    fn geometry_free_crop_and_straighten_alias_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 90);
+        import_sidecar_for(&input);
+        let mut set = geometry_base_args(input.clone());
+        set.set_crop_free = Some("0.1,0.2,0.5,0.5".into());
+        set.set_rotation = Some(45.0);
+        geometry(set).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(matches!(
+            document.virtual_copies[0]
+                .recipe
+                .geometry
+                .as_ref()
+                .and_then(|g| g.crop.as_ref()),
+            Some(Crop::Free { .. })
+        ));
+        // `--straighten` commits the same field as `--set-rotation`.
+        let mut straight = geometry_base_args(input.clone());
+        straight.straighten = Some(-3.0);
+        geometry(straight).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .geometry
+                .as_ref()
+                .map(|g| g.rotation_degrees),
+            Some(-3.0)
+        );
+    }
+
+    /// G-06: unknown presets/fields/words and out-of-range values abort
+    /// loudly (exit 1) without touching the sidecar.
+    #[test]
+    fn geometry_rejects_invalid_values_without_touching_the_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 60);
+        import_sidecar_for(&input);
+        let sidecar_path = sidecar_path_for(&input);
+        let before = fs::read_to_string(&sidecar_path).unwrap();
+        // Unknown aspect preset.
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_crop_aspect = Some("21:9".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Malformed free rect.
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_crop_free = Some("0.1,0.2".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Out-of-range free rect (rejected on save, not clipped).
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_crop_free = Some("0.0,0.0,2.0,1.0".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Out-of-range rotation (rejected on save, not clipped).
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_rotation = Some(270.0);
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Non-finite straighten.
+        let mut bad = geometry_base_args(input.clone());
+        bad.straighten = Some(f64::NAN);
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Unknown mirror word.
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_mirror = Some("diagonal".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Unknown lens profile (rejected on save).
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_lens_profile = Some("fisheye-extreme".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Unknown lens field / non-number / out-of-range coefficient.
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_lens = vec!["distortion_k9:0.1".into()];
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_lens = vec!["ca_red:much".into()];
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_lens = vec!["ca_red:0.5".into()];
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Unknown perspective field / out-of-range value.
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_perspective = vec!["tilt:0.5".into()];
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_perspective = vec!["scale:99.0".into()];
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Mutually exclusive flags.
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_rotation = Some(10.0);
+        bad.straighten = Some(10.0);
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_crop_aspect = Some("1:1".into());
+        bad.set_crop_free = Some("0,0,1,1".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.clear_crop = true;
+        bad.set_crop_aspect = Some("1:1".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.clear_lens = true;
+        bad.set_lens = vec!["distortion_k1:0.1".into()];
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.clear_geometry = true;
+        bad.set_mirror = Some("h".into());
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        let mut bad = geometry_base_args(input.clone());
+        bad.set_rotation = Some(10.0);
+        bad.lensfun_status = true;
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // Unknown virtual copy.
+        let mut bad = geometry_base_args(input.clone());
+        bad.virtual_copy = Some("no-such-copy".into());
+        bad.set_rotation = Some(10.0);
+        assert_eq!(geometry(bad).unwrap_err().exit_code(), 1);
+        // The loud failures above must not touch the sidecar.
+        assert_eq!(fs::read_to_string(&sidecar_path).unwrap(), before);
+    }
+
+    /// G-06: `--lensfun-status` is read-only (no save, no history entry)
+    /// and reports a usable status line for raster inputs without EXIF.
+    #[test]
+    fn geometry_lensfun_status_is_read_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 70);
+        import_sidecar_for(&input);
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+        let mut status = geometry_base_args(input.clone());
+        status.lensfun_status = true;
+        geometry(status).unwrap();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(document.virtual_copies[0].history.is_empty());
+        // The resolver itself names the fallback loudly: without the
+        // `lensfun` feature the missing capability, otherwise the
+        // missing-EXIF/manual reason.
+        let report = resolve_lensfun_report(&input);
+        assert!(
+            report.contains("manual model") || report.contains("unavailable"),
+            "raster input must report the manual fallback or the missing capability, got `{report}`"
+        );
     }
 
     /// R2-CLI-07: a partially failed batch exits with its own documented code

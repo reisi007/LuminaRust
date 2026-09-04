@@ -19,6 +19,11 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
+# EXIF→Lensfun auto-profile resolution (G-06 Lensfun-Vollausbau). Only
+# compiled/linked when the `lensfun` feature is on (same pattern as
+# `lumina-cli`); without it the GUI renders the manual model and names the
+# missing capability in the Geometry status line.
+lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 thiserror = "2"
 log = "0.4"
@@ -31,7 +36,7 @@ rfd = "0.17"
 # All GUI features are ON by default for the native desktop (Tester-Wunsch).
 # F-098-N1: Lensfun pipeline (native liblensfun).
 default = ["lensfun", "gpu"]
-lensfun = ["lumina-core/lensfun"]
+lensfun = ["lumina-core/lensfun", "lumina-lensfun/native"]
 # GPU-first rendering via `lumina-gpu` (wgpu/Metal). Enabled by default on
 # desktops; `--no-default-features` drops the wgpu stack and its native
 # dependencies.

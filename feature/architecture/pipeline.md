@@ -583,6 +583,22 @@ invalidiert. Abnahme: Presets, normiertes Rechteck, Drehung/Spiegelung,
 RenderKey-Trennung und F-041-Messbereich. MVP-Grenze: kein Auto-Crop; abhängig
 von F-029, F-039, F-041, F-098 und F-099.
 
+**Straighten + Aspect-Parität (G-06, LRPAR-G06-GEO, MVP/1.0):** Der
+Straighten-Winkel (Gerade-Ausrichten, Lightroom „Angle") ist kein eigenes
+Rezeptfeld, sondern ein dokumentierter Alias auf
+`geometry.rotation_degrees` (`-180..=180`, Default `0`): GUI-„Straighten"-
+Slider, CLI `--straighten` und `--set-rotation` committen dasselbe Feld
+(identische Validierung, identisches Renderverhalten). Die Aspect-Presets
+(`original`, `1:1`, `4:5`, `5:4`, `3:2`, `2:3`, `4:3`, `3:4`, `16:9`,
+`9:16`) sind in GUI (Preset-Auswahl) und CLI (`--set-crop-aspect`)
+vollständig verfügbar; freie Rechtecke (`--set-crop-free x,y,w,h`, GUI-
+Zahlenfelder) werden laut validiert (positive Fläche, `0..=1`-Grenzen, kein
+stilles Clipping). Das aktive Crop-Rechteck wird als Overlay-Rechteck in der
+Vorschau gezeichnet (reiner Session-Display-State, Werte rezept-persistiert).
+Jeder Geometrie-Schritt (Crop/Straighten/Aspect/Spiegelung) erzeugt genau
+einen sichtbaren History-Eintrag (CLI: ein Eintrag pro mutierendem Aufruf;
+GUI: ein Eintrag pro gespeichertem Commit, Slider-Drags koaleszieren).
+
 ### F-094 Präsenz
 
 **Ziel:** Feine und mittlere lokale Bildstrukturen sowie atmosphärischen Dunst
@@ -697,14 +713,34 @@ angewandt, damit Farbsaumkorrektur nicht durch spätere Geometrie verstärkt
 wird. Alle Felder und `profile` gehen in den RenderKey. Abnahme: Polynom,
 Kanalreferenz, Preset-Roundtrip und gezielte Cache-Invalidierung.
 
-**Lensfun-Integration (MVP):** Zusätzlich zum manuellen Modell wird die
-Lensfun-Datenbank (Kamera-/Objektiv-Profile, CC-BY-SA) zur automatischen
-Korrektur genutzt, wenn ein passendes Profil für die aus den RAW-Metadaten
-(`camera_make`, `camera_model`, ggf. Objektivname) ermittelte Kamera/Objektiv
-gefunden wird. Lensfun liefert Geometrie-, Vignette- und CA-Korrektur und
-ersetzt das manuelle Modell, sofern ein Profil vorliegt (Priorität: Lensfun >
+**Lensfun-Vollausbau (G-06, LRPAR-G06-GEO, MVP/1.0, User-Entscheid
+2026-09-03):** Zusätzlich zum manuellen Modell wird die Lensfun-Datenbank
+(Kamera-/Objektiv-Profile, CC-BY-SA) zur automatischen Korrektur genutzt, wenn
+ein passendes Profil für die aus den RAW-Metadaten (`camera_make`,
+`camera_model`, ggf. Objektivname) ermittelte Kamera/Objektiv gefunden wird.
+Lensfun liefert Geometrie-, Vignette- **und CA(TCA)-Korrektur** und ersetzt
+das manuelle Modell, sofern ein Profil vorliegt (Priorität: Lensfun >
 manuelle Koeffizienten > Identität); sonst greift das manuelle Modell
-(graceful fallback).
+(graceful fallback, laut sichtbar über den Profilstatus).
+
+- **EXIF-Profil-Erkennung:** Der Corrector wird aus `camera_make`/
+  `camera_model` (Pflicht, endlich vorhanden) plus `focal_length`/`aperture`
+  aufgebaut; `RawMetadata.lens` (EXIF-LensModel/Makernote) wird als
+  Lensfun-Lens-Name durchgereicht, wenn vorhanden (Body-Match als Fallback,
+  nie ein geratenes Profil). Fehlt ein Pflichtfeld, die System-DB oder ein
+  nicht-identisches Profil, gilt strikt der manuelle Pfad (kein stiller
+  Fallback, Status sichtbar).
+- **TCA via Lensfun:** Ist das Profil TCA-kalibriert (`LF_MODIFY_TCA`), sampled
+  der Lensfun-Pfad R/G/B an getrennten Subpixel-Koordinaten
+  (`lf_modifier_apply_subpixel_geometry_distortion`, Grün = Referenz wie im
+  manuellen Modell); ohne TCA-Kalibrierung bleibt die manuelle
+  `ca_red`/`ca_blue`-Korrektur wirksam. Der TCA-Pfad ist deterministisch
+  (gleiche Eingabe → gleiche Pixel) und per `has_tca` am Corrector abfragbar.
+- **Sichtbarkeit:** CLI (`lumina geometry --lensfun-status`, `info!`-Log je
+  Render mit aktivem Corrector inkl. `has_distortion`/`has_vignetting`/
+  `has_tca`) und GUI (Optics-adjazente Statuszeile: Profil gefunden/fehlt +
+  Grund) zeigen den Corrector-Zustand; ein fehlendes Profil ist ein sichtbarer
+  Zustand, nie ein stiller Identitäts-Render.
 
 Architektur- und Lizenzgrenzen:
 - Lensfun ist eine **native C-Bibliothek unter LGPL-3.0** (Datenbank CC-BY-SA).
@@ -746,9 +782,21 @@ Misch-Feature-Builds), N4 Lensfun-Lizenz-Eintrag in
 `THIRD-PARTY-NOTICES.md`/`fixtures-licensing.md` (LGPL-3.0 dynamisch,
 DB CC-BY-SA, SPDX-Detail vor Final-Release zu verifizieren).
 Bekannte Grenzen: per-pixel-FFI-Overhead (Benchmark/Optimierung als
-F-074-Folgeaufgabe), CA bewusst manuell, DB-Ladezyklus pro Render-Aufruf
-(MVP ok), Distance-Default 10,0 m (RawMetadata hat kein Distanzfeld),
-`lens_name` wird nicht befüllt (Body-Match statt falschem Lens-Match).
+F-074-Folgeaufgabe), DB-Ladezyklus pro Render-Aufruf im CLI (MVP ok; die
+GUI cacht den Corrector pro Quelle + Dimensionen), Distance-Default 10,0 m
+(RawMetadata hat kein Distanzfeld).
+**Lensfun-Vollausbau G-06 (LRPAR-G06-GEO, MVP/1.0):** TCA wird via
+`LF_MODIFY_TCA` + Subpixel-Resampling im Lens-Stufenpass korrigiert
+(`has_tca`, Grün = Referenz; das manuelle `ca_red`/`ca_blue`-Modell bleibt
+für Profile ohne TCA-Kalibrierung wirksam und wird bei aktivem TCA
+übersprungen — keine Doppelkorrektur); `RawMetadata.lens`
+(EXIF-LensModel/Makernote) wird als Lensfun-Lens-Name durchgereicht
+(Body-Match als Fallback); CLI `lumina geometry` (inkl.
+`--lensfun-status`, ein History-Eintrag pro Aufruf) und GUI
+(Geometrie-Sektion + Optics-Profilpicker + Lensfun-Auto-Statuszeile +
+Crop-Overlay, ein History-Eintrag pro Commit) sind paritätisch verdrahtet;
+die GUI baut den Corrector aus dem Decode-EXIF-Snapshot und cacht ihn pro
+Quelle.
 **Review-Nachziehen 2026-08-25 (verifiziert, BESTANDEN):**
 Vignetting-only-Profile kollabieren das Bild nicht mehr —
 `lf_modifier_apply_geometry_distortion` wird auf den Returnwert geprüft;
@@ -792,7 +840,11 @@ Ausgabeebene projiziert; bilineares Resampling und definierte Randfüllung
 (`transparent` wird im MVP zu Schwarz) sind verbindlich.
 
 Die manuelle Perspektive liegt nach F-098-Verzeichnung und vor F-093-Crop;
-die automatische Analyse stürzender Linien ist ausdrücklich Post-MVP. Alle
+die automatische Analyse stürzender Linien ist ausdrücklich 1.5
+(LRPAR-G06-UPRIGHT-15, nicht Teil des Geometrie-MVP). Das manuelle
+Perspektiv-Modell ist reines Core-Modell (bilineares Resampling, schwarze
+Randfüllung) und in CLI wie GUI **ohne** Lensfun-Capability verfügbar; ein
+GUI-Gate hinter ein Lensfun-Feature ist unzulässig (G-06-Parität). Alle
 Parameter, Homographie-/Pipelineversion und resultierenden Dimensionen
 gehören zum RenderKey; Geometrieänderungen invalidieren Preview/Export, nicht
 Decode oder AI-Artefakte. Abnahme: Identität, Eckpunktprojektion,

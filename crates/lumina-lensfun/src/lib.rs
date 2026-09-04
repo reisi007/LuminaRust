@@ -36,7 +36,12 @@
 //! maps a *destination* (corrected) pixel to the *source* (distorted) pixel to
 //! sample, and [`Corrector::color_gain`] applies the (position-dependent)
 //! vignetting correction to a single pixel's RGB. Both are wrapped in the
-//! inverse-bilinear resampling loop of the caller.
+//! inverse-bilinear resampling loop of the caller. [`Corrector::subpixel`]
+//! (G-06 Lensfun-Vollausbau) additionally maps each destination pixel to
+//! per-channel source pixels when the profile carries TCA calibration
+//! ([`Corrector::has_tca`]), so transverse chromatic aberration is corrected
+//! in the same geometric resampling pass (green = reference, as in the
+//! manual CA model).
 //!
 //! # Vignetting-only profiles
 //!
@@ -218,6 +223,24 @@ mod ffi {
             res: *mut c_float,
         ) -> c_int;
 
+        /// Maps a destination (corrected) pixel block to the source pixels
+        /// per colour channel (transverse chromatic aberration, stage 2 & 3
+        /// in one step). `res` must hold `width * height * 2 * 3` floats
+        /// (X/Y per pixel per R/G/B channel, channel-major: all R pairs,
+        /// then G, then B — matching `ApplySubpixelGeometryDistortion`).
+        ///
+        /// Return contract like `lf_modifier_apply_geometry_distortion`:
+        /// false (0) leaves `res` untouched (no TCA callback installed).
+        /// Callers must treat false as "keep the coordinates unchanged".
+        pub fn lf_modifier_apply_subpixel_geometry_distortion(
+            modifier: *mut lfModifier,
+            xu: c_float,
+            yu: c_float,
+            width: c_int,
+            height: c_int,
+            res: *mut c_float,
+        ) -> c_int;
+
         /// Applies the enabled colour callbacks (here: vignetting) to `pixels`.
         pub fn lf_modifier_apply_color_modification(
             modifier: *mut lfModifier,
@@ -258,6 +281,11 @@ mod ffi {
             1.0
         }
     }
+
+    /// Per-channel destination→source mapping (red, green, blue) for the
+    /// TCA subpixel path (G-06 Lensfun-Vollausbau). Green is the reference
+    /// channel, as in the manual CA model.
+    pub type SubpixelTriple = ((f64, f64), (f64, f64), (f64, f64));
 
     /// Handle to the system Lensfun database, loaded once.
     pub struct LensfunDb {
@@ -407,6 +435,13 @@ mod ffi {
         /// i.e. the profile carries vignetting calibration for the requested
         /// parameters.
         has_vignetting: bool,
+        /// True iff lensfun set up a transverse-chromatic-aberration
+        /// correction (`LF_MODIFY_TCA`), i.e. the profile carries TCA
+        /// calibration for the requested focal length. Only then may the
+        /// corrector be used for per-channel sampling
+        /// ([`Corrector::subpixel`]); without TCA calibration the manual
+        /// `ca_red`/`ca_blue` model stays in effect (G-06 Lensfun-Vollausbau).
+        has_tca: bool,
     }
 
     impl Corrector {
@@ -486,9 +521,11 @@ mod ffi {
                 //  - distortion maps a corrected (destination) pixel to the
                 //    distorted (source) pixel to sample, and
                 //  - vignetting divides by the falloff (flattens edges).
-                // CA (TCA) is intentionally NOT enabled — it stays manual in
-                // LuminaRust (documented MVP limit, F-098-N1).
-                let flags = LF_MODIFY_DISTORTION | LF_MODIFY_VIGNETTING;
+                //  - TCA (transverse chromatic aberration) shifts the R/B
+                //    sample coordinates relative to green (G-06
+                //    Lensfun-Vollausbau; replaces the manual ca_red/ca_blue
+                //    model whenever the profile carries TCA calibration).
+                let flags = LF_MODIFY_DISTORTION | LF_MODIFY_VIGNETTING | LF_MODIFY_TCA;
                 let enabled = lf_modifier_initialize(
                     modifier,
                     lens,
@@ -515,6 +552,7 @@ mod ffi {
                     height,
                     has_distortion: enabled & LF_MODIFY_DISTORTION != 0,
                     has_vignetting: enabled & LF_MODIFY_VIGNETTING != 0,
+                    has_tca: enabled & LF_MODIFY_TCA != 0,
                 };
                 // No-op detection: if the correction is ~identity at
                 // representative points, fall back to the manual model.
@@ -565,6 +603,57 @@ mod ffi {
         /// Whether this corrector performs colour (vignetting) correction.
         pub fn has_vignetting(&self) -> bool {
             self.has_vignetting
+        }
+
+        /// Whether this corrector performs transverse-chromatic-aberration
+        /// correction (G-06 Lensfun-Vollausbau). Per-channel sampling via
+        /// [`Self::subpixel`] is only valid when this returns `true`;
+        /// otherwise the manual `ca_red`/`ca_blue` model stays in effect.
+        pub fn has_tca(&self) -> bool {
+            self.has_tca
+        }
+
+        /// Map a destination pixel `(x, y)` to the per-channel source pixels
+        /// to sample: `(red, green, blue)` mappings (G-06 Lensfun-Vollausbau).
+        ///
+        /// Green is the reference channel (as in the manual CA model); red
+        /// and blue are shifted relative to it by the profile's TCA
+        /// calibration. Single native width=1/height=1 call (scalar path —
+        /// the multi-pixel SSE lane concern documented for `geometry_row`
+        /// can never trigger).
+        ///
+        /// If the modifier has no TCA callback (`has_tca() == false`),
+        /// lensfun reports false and leaves the buffer untouched; all three
+        /// mappings are then the identity `(x, y)` (same passthrough
+        /// contract as [`Self::geometry`], never a silent `(0, 0)`).
+        pub fn subpixel(&self, x: f64, y: f64) -> SubpixelTriple {
+            unsafe {
+                // Prefill with the identity mapping (false-return passthrough).
+                let mut res = [
+                    x as c_float,
+                    y as c_float,
+                    x as c_float,
+                    y as c_float,
+                    x as c_float,
+                    y as c_float,
+                ];
+                let ok = lf_modifier_apply_subpixel_geometry_distortion(
+                    self.modifier,
+                    x as c_float,
+                    y as c_float,
+                    1,
+                    1,
+                    res.as_mut_ptr(),
+                );
+                if ok == 0 {
+                    return ((x, y), (x, y), (x, y));
+                }
+                (
+                    (res[0] as f64, res[1] as f64),
+                    (res[2] as f64, res[3] as f64),
+                    (res[4] as f64, res[5] as f64),
+                )
+            }
         }
 
         /// Apply the Lensfun vignetting correction to a single pixel's RGB.
@@ -702,6 +791,61 @@ mod ffi {
             }
         }
 
+        /// Map a whole destination row to the per-channel source pixels it
+        /// samples (G-06 Lensfun-Vollausbau, TCA row batch).
+        ///
+        /// `out[i]` receives the `(red, green, blue)` destination→source
+        /// mappings of the destination pixel `(x_start + i, y)`, so one call
+        /// replaces `out.len()` calls to [`Self::subpixel`]. Without TCA
+        /// calibration (`has_tca() == false`) the row is filled with the
+        /// exact identity triple (as with [`Self::subpixel`]).
+        ///
+        /// Bit-identity vs. [`Self::subpixel`] contract: EVERY column is
+        /// bit-identical to the corresponding per-pixel call on every
+        /// platform — implemented as one native width=1/height=1 call per
+        /// column (scalar path), never as a single multi-pixel native batch
+        /// call (same SSE lane-shuffle concern as `geometry_row`).
+        pub fn subpixel_row(&self, x_start: f64, y: f64, out: &mut [SubpixelTriple]) {
+            // Prefill with the identity triple (no-TCA passthrough).
+            for (i, slot) in out.iter_mut().enumerate() {
+                let p = (x_start + i as f64, y);
+                *slot = (p, p, p);
+            }
+            if !self.has_tca {
+                return;
+            }
+            unsafe {
+                for (i, slot) in out.iter_mut().enumerate() {
+                    let x = x_start + i as f64;
+                    let mut res = [
+                        x as c_float,
+                        y as c_float,
+                        x as c_float,
+                        y as c_float,
+                        x as c_float,
+                        y as c_float,
+                    ];
+                    let ok = lf_modifier_apply_subpixel_geometry_distortion(
+                        self.modifier,
+                        x as c_float,
+                        y as c_float,
+                        1,
+                        1,
+                        res.as_mut_ptr(),
+                    );
+                    if ok != 0 {
+                        *slot = (
+                            (res[0] as f64, res[1] as f64),
+                            (res[2] as f64, res[3] as f64),
+                            (res[4] as f64, res[5] as f64),
+                        );
+                    }
+                    // `ok == 0`: keep the prefilled identity triple (never a
+                    // silent fallback onto (0, 0)).
+                }
+            }
+        }
+
         /// Apply the vignetting correction to a whole row of packed RGB pixels
         /// **in place**, in a single lensfun batch call (R2-LENS-01).
         ///
@@ -791,6 +935,27 @@ mod ffi {
                     }
                 }
             }
+            // TCA: red/blue mappings must coincide with green at the probed
+            // points (G-06). Any calibrated lateral shift makes the
+            // correction visibly non-identity.
+            if self.has_tca {
+                for (x, y) in [
+                    (w / 2.0, h / 2.0),
+                    (0.0, 0.0),
+                    (w - 1.0, 0.0),
+                    (0.0, h - 1.0),
+                    (w - 1.0, h - 1.0),
+                ] {
+                    let (r, g, b) = self.subpixel(x, y);
+                    if (r.0 - g.0).abs() > eps
+                        || (r.1 - g.1).abs() > eps
+                        || (b.0 - g.0).abs() > eps
+                        || (b.1 - g.1).abs() > eps
+                    {
+                        return false;
+                    }
+                }
+            }
             true
         }
     }
@@ -808,6 +973,7 @@ mod ffi {
                 .field("height", &self.height)
                 .field("has_distortion", &self.has_distortion)
                 .field("has_vignetting", &self.has_vignetting)
+                .field("has_tca", &self.has_tca)
                 .finish_non_exhaustive()
         }
     }
@@ -1459,6 +1625,165 @@ mod tests {
             let cam = FakeCamera::with_crop(good);
             let got = unsafe { lf_camera_crop_factor(cam.as_ptr()) };
             assert_eq!(got, good, "plausible crop factor {good} must pass through");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // G-06 Lensfun-Vollausbau: TCA (transverse chromatic aberration).
+    //
+    // A fixture lens with poly3 TCA calibration (strong lateral scales so
+    // the corner shift is unambiguous) drives the flag, the per-channel
+    // mapping and the row-batch contract without touching the system DB.
+    // -----------------------------------------------------------------------
+
+    /// Writes a minimal Lensfun *version_1* database XML with ONE lens that
+    /// carries distortion (PTLens) AND TCA (poly3) calibration, so a
+    /// corrector built from it enables the TCA callback.
+    fn write_distortion_and_tca_fixture(tag: &str) -> std::path::PathBuf {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<lensdatabase>
+    <camera>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Test Body</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+    <lens>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Distortion+TCA 50mm f/2.8</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="50" a="0.08" b="-0.10" c="0.02"/>
+            <tca model="poly3" focal="50" vr="1.005" vb="0.995"/>
+        </calibration>
+    </lens>
+</lensdatabase>
+"#;
+        write_fixture_xml(tag, xml)
+    }
+
+    fn tca_corrector(tag: &str) -> super::ffi::Corrector {
+        let path = write_distortion_and_tca_fixture(tag);
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            400,
+            300,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("tca-profile corrector must be built")
+    }
+
+    #[test]
+    fn tca_profile_enables_tca_flag() {
+        let c = tca_corrector("tcaflag");
+        assert!(c.has_distortion(), "fixture enables distortion");
+        assert!(c.has_tca(), "fixture TCA calibration must enable TCA");
+        // A profile without TCA calibration must NOT claim TCA.
+        let path = write_distortion_and_vignetting_fixture("notcaflag");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let plain = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            400,
+            300,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("plain-profile corrector must be built");
+        assert!(
+            !plain.has_tca(),
+            "profile without TCA calibration must report has_tca() == false"
+        );
+    }
+
+    #[test]
+    fn subpixel_green_matches_geometry_and_red_blue_diverge_at_corner() {
+        let c = tca_corrector("tcasplit");
+        // Green is the reference channel: its subpixel mapping must agree
+        // with the plain geometry mapping (documents the R,G,B order of the
+        // 6-float buffer — a wrong order fails loudly here, not silently in
+        // a render).
+        let (r, g, b) = c.subpixel(0.0, 0.0);
+        let (gx, gy) = c.geometry(0.0, 0.0);
+        assert!(
+            (g.0 - gx).abs() < 1e-2 && (g.1 - gy).abs() < 1e-2,
+            "green subpixel {g:?} must match geometry ({gx}, {gy})"
+        );
+        // Lateral TCA shifts R/B relative to G at the corner (vr=1.005 /
+        // vb=0.995 over a ~200 px radius ≈ 1 px shift — unambiguous).
+        let spread_r = (r.0 - g.0).abs() + (r.1 - g.1).abs();
+        let spread_b = (b.0 - g.0).abs() + (b.1 - g.1).abs();
+        assert!(
+            spread_r > 0.1,
+            "red must diverge from green at the corner, got r={r:?} g={g:?}"
+        );
+        assert!(
+            spread_b > 0.1,
+            "blue must diverge from green at the corner, got b={b:?} g={g:?}"
+        );
+        // The correction is lateral (radial): the image centre stays fixed.
+        let (rc, gc, bc) = c.subpixel(200.0, 150.0);
+        for (name, p, q) in [("red", rc, gc), ("blue", bc, gc)] {
+            assert!(
+                (p.0 - q.0).abs() < 0.05 && (p.1 - q.1).abs() < 0.05,
+                "{name} must coincide with green at the centre, got {p:?} vs {q:?}"
+            );
+        }
+        // A TCA shift makes the correction visibly non-identity.
+        assert!(!c.is_identity());
+    }
+
+    #[test]
+    fn subpixel_row_is_bit_identical_to_subpixel() {
+        let c = tca_corrector("tcarow");
+        let mut row = [((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)); 400];
+        c.subpixel_row(0.0, 123.0, &mut row);
+        for (i, triple) in row.iter().enumerate() {
+            assert_eq!(
+                *triple,
+                c.subpixel(i as f64, 123.0),
+                "subpixel_row column {i} must match subpixel exactly"
+            );
+        }
+    }
+
+    #[test]
+    fn subpixel_without_tca_is_identity_triple() {
+        let path = write_vignetting_only_fixture("notcasub");
+        let db = LensfunDb::load_file(&path).expect("fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let c = Corrector::for_camera(
+            &db,
+            FIXTURE_CAM_MAKE,
+            FIXTURE_CAM_MODEL,
+            None,
+            400,
+            300,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("vignetting-only corrector must be built");
+        assert!(!c.has_tca());
+        let triple = c.subpixel(123.0, 45.0);
+        assert_eq!(triple, ((123.0, 45.0), (123.0, 45.0), (123.0, 45.0)));
+        let mut row = [((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)); 8];
+        c.subpixel_row(10.0, 20.0, &mut row);
+        for (i, triple) in row.iter().enumerate() {
+            let p = (10.0 + i as f64, 20.0);
+            assert_eq!(*triple, (p, p, p));
         }
     }
 }

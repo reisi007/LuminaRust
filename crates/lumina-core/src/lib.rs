@@ -497,9 +497,17 @@ impl ImageFrame {
             *self = apply_perspective(self, p)?;
         }
         // CA stays manual (recipe lens only), applied after perspective like the
-        // original order (distortion → perspective → CA → crop).
+        // original order (distortion → perspective → CA → crop) — unless a
+        // non-identity TCA-capable Lensfun corrector already corrected CA in
+        // the lens stage (G-06, no double correction).
         if let Some(l) = lens {
-            apply_ca(self, l);
+            #[cfg(feature = "lensfun")]
+            let tca_active = lensfun.is_some_and(|c| !c.is_identity() && c.has_tca());
+            #[cfg(not(feature = "lensfun"))]
+            let tca_active = false;
+            if !tca_active {
+                apply_ca(self, l);
+            }
         }
         self.apply_crop_stage(geometry)
     }
@@ -578,17 +586,29 @@ impl ImageFrame {
     }
 
     /// GEN-FILL-01: apply perspective stage (perspective + CA) without lens/crop.
+    ///
+    /// The manual `apply_ca` is skipped when a non-identity TCA-capable
+    /// Lensfun corrector is passed (G-06): `apply_lens` already corrected CA
+    /// in the lens stage then, and a second channel-scale pass would be a
+    /// double correction. Without TCA the manual model stays authoritative.
     pub fn apply_perspective_stage(
         &mut self,
         lens: Option<&lumina_sidecar::LensCorrection>,
         perspective: Option<&lumina_sidecar::Perspective>,
+        #[cfg(feature = "lensfun")] lensfun: Option<&lumina_lensfun::Corrector>,
     ) -> Result<(), CoreError> {
         if let Some(p) = perspective {
             validate_perspective(p)?;
             *self = apply_perspective(self, p)?;
         }
+        #[cfg(feature = "lensfun")]
+        let tca_active = lensfun.is_some_and(|c| !c.is_identity() && c.has_tca());
+        #[cfg(not(feature = "lensfun"))]
+        let tca_active = false;
         if let Some(l) = lens {
-            apply_ca(self, l);
+            if !tca_active {
+                apply_ca(self, l);
+            }
         }
         Ok(())
     }
@@ -620,7 +640,14 @@ impl ImageFrame {
             lensfun,
         )?;
         self.apply_auto_fill_transparent(auto_fill_transparent, seed);
-        self.apply_perspective_stage(lens, perspective)?;
+        #[cfg(feature = "lensfun")]
+        {
+            self.apply_perspective_stage(lens, perspective, lensfun)?;
+        }
+        #[cfg(not(feature = "lensfun"))]
+        {
+            self.apply_perspective_stage(lens, perspective)?;
+        }
         self.apply_crop_stage(geometry)
     }
 
@@ -1329,11 +1356,46 @@ fn apply_lens(
     // `lumina-lensfun` wrapper contract). That is why this switch
     // deliberately changes the output and requires a Golden rebaseline
     // (F-043), it is not a silent fallback.
+    //
+    // G-06 Lensfun-Vollausbau (TCA): when the corrector carries TCA
+    // calibration (`has_tca`), R/G/B are sampled at separate subpixel
+    // coordinates (`subpixel_row`, green = reference like the manual CA
+    // model) in the SAME lens-stage resampling pass — TCA is a geometric
+    // lens property, so it is corrected together with the distortion, before
+    // perspective (unlike the manual channel-scale hack, which stays after
+    // perspective in `apply_perspective_stage`). The manual `apply_ca` must
+    // therefore be skipped whenever this TCA path ran (no double
+    // correction); see `lensfun_tca_active`.
     #[cfg(feature = "lensfun")]
     if let Some(corrector) = lensfun {
         if !corrector.is_identity() {
             let src = frame.clone();
             let width = frame.width as usize;
+            if corrector.has_tca() {
+                let mut coords = vec![((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)); width];
+                let mut rgb = vec![0f32; width * 3];
+                for y in 0..frame.height {
+                    corrector.subpixel_row(0.0, y as f64, &mut coords);
+                    for (i, (r, g, b)) in coords.iter().enumerate() {
+                        rgb[i * 3] = sample(&src, r.0 as f32, r.1 as f32, 0);
+                        rgb[i * 3 + 1] = sample(&src, g.0 as f32, g.1 as f32, 1);
+                        rgb[i * 3 + 2] = sample(&src, b.0 as f32, b.1 as f32, 2);
+                    }
+                    corrector.apply_vignetting_row(&mut rgb, 0.0, y as f64);
+                    let row_base = y as usize * width * 4;
+                    for (i, (_, g, _)) in coords.iter().enumerate() {
+                        let dst = row_base + i * 4;
+                        frame.pixels[dst] = rgb[i * 3].round().clamp(0.0, 255.0) as u8;
+                        frame.pixels[dst + 1] = rgb[i * 3 + 1].round().clamp(0.0, 255.0) as u8;
+                        frame.pixels[dst + 2] = rgb[i * 3 + 2].round().clamp(0.0, 255.0) as u8;
+                        frame.pixels[dst + 3] = sample(&src, g.0 as f32, g.1 as f32, 3)
+                            .round()
+                            .clamp(0.0, 255.0)
+                            as u8;
+                    }
+                }
+                return;
+            }
             let mut coords = vec![(0.0, 0.0); width];
             let mut rgb = vec![0f32; width * 3];
             for y in 0..frame.height {
@@ -4523,7 +4585,14 @@ mod tests {
                 None,
             )
             .unwrap();
-        staged.apply_perspective_stage(None, None).unwrap();
+        staged
+            .apply_perspective_stage(
+                None,
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         staged.apply_crop_stage(Some(&geometry)).unwrap();
         assert_eq!(legacy.pixels, staged.pixels);
         assert_eq!((legacy.width, legacy.height), (8, 8));
@@ -4580,7 +4649,14 @@ mod tests {
             )
             .unwrap();
         manual.apply_auto_fill_transparent(true, 99);
-        manual.apply_perspective_stage(Some(&lens), None).unwrap();
+        manual
+            .apply_perspective_stage(
+                Some(&lens),
+                None,
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
         manual.apply_crop_stage(Some(&geometry)).unwrap();
         assert_eq!(legacy.pixels, manual.pixels);
         assert_eq!((legacy.width, legacy.height), (4, 4));

@@ -50,10 +50,11 @@ use lumina_sidecar::{
     DEVELOP_PROFILES, DEVELOP_PROFILE_KEY, TREATMENT_BW, TREATMENT_COLOR, TREATMENT_KEY,
 };
 use lumina_sidecar::{
-    AnalysisFingerprint, BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint,
-    Curves, EditRecipe, Effects, Flag, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry,
-    Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective,
-    PointColor, PointColorEntry, Presence, Preset, Sharpening, SpotDistraction, Vignette,
+    AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
+    CurveChannels, CurvePoint, Curves, EditRecipe, Effects, Flag, FocusRect, GenerativeCanvas,
+    GenerativeEdit, Geometry, Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection,
+    NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset, Sharpening,
+    SpotDistraction, Vignette,
 };
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
@@ -1275,6 +1276,20 @@ pub struct LuminaApp {
     source_is_raw: bool,
     raw_orientation: u8,
     camera_white_balance: Option<[f32; 4]>,
+    /// EXIF lens identity of the loaded source (G-06): snapshot from the
+    /// decoder metadata at load time (`None` for raster sources / missing
+    /// EXIF). Drives the Lensfun auto-profile resolution (status line +
+    /// render corrector). Reset on every source change (REVIEW-GUI-N3).
+    loaded_lens_identity: Option<LensIdentity>,
+    /// Cached Lensfun auto-corrector for the loaded source (G-06, only
+    /// with the `lensfun` feature): rebuilt when the identity/dimensions
+    /// key changes, reused across preview/export renders so the system DB
+    /// is not re-loaded per slider tick. `None` = no profile applies
+    /// (manual model) or no EXIF. Never crosses threads (preview,
+    /// navigator and export render on the UI thread; thumbnails render
+    /// without auto-lens by design — documented in the G-06 status).
+    #[cfg(feature = "lensfun")]
+    lensfun_cache: Option<CachedLensCorrector>,
     source_name: String,
     path: String,
     directory: String,
@@ -1333,6 +1348,16 @@ pub struct LuminaApp {
     /// and logs `<key>=<value> saved`. Zoom/pan state is deliberately never
     /// recorded here — it stays GUI session state, never recipe.
     pending_slider_commit: Option<(String, f64)>,
+    /// Pending geometry history step (G-06, LRPAR-G06-GEO): armed by the
+    /// geometry setters (`set_geometry_*`, `set_crop_*`, `set_straighten`,
+    /// `set_perspective_value`, `set_lens_correction_value`,
+    /// `set_lens_profile`) alongside the slider commit. Consumed by
+    /// [`Self::save_sidecar`], which appends exactly one history entry
+    /// (`geometry-<n>`, final recipe) per saved commit — slider drags
+    /// coalesce to one step per debounce, discrete actions to one step
+    /// each. `None` outside geometry edits: all other sliders keep the
+    /// established no-history-commit behaviour.
+    pending_history_step: Option<String>,
     /// Effective mask layers of the last [`Self::render`] (F-041): the
     /// measurement domain of `Match Total Exposure` is the rendered preview
     /// weighted by these planes. Empty whenever the render produced no layers.
@@ -2024,6 +2049,67 @@ struct DecodedFrame {
     orientation: u8,
     camera_white_balance: Option<[f32; 4]>,
     source_is_raw: bool,
+    /// EXIF lens identity for the Lensfun auto-profile resolution (G-06):
+    /// populated for RAW sources from the decoder metadata, `None` for
+    /// raster sources (no EXIF) and when the metadata is unusable. Best
+    /// effort — never a decode failure.
+    lens_identity: Option<LensIdentity>,
+}
+
+/// EXIF lens identity snapshot driving the Lensfun auto-profile resolution
+/// (G-06, LRPAR-G06-GEO). Plain data (no lensfun types) so the decode path
+/// stays feature-independent; the corrector is built from it at render
+/// time behind the `lensfun` feature.
+#[derive(Debug, Clone, PartialEq)]
+struct LensIdentity {
+    camera_make: Option<String>,
+    camera_model: Option<String>,
+    lens: Option<String>,
+    focal_length: Option<f32>,
+    aperture: Option<f32>,
+}
+
+/// Snapshot helper: `None` when the metadata carries no lens-relevant EXIF
+/// at all (raster-equivalent); otherwise the identity, even partial (the
+/// corrector build enforces the required completeness strictly).
+fn lens_identity_from_metadata(metadata: &lumina_raw::RawMetadata) -> Option<LensIdentity> {
+    let identity = LensIdentity {
+        camera_make: metadata.camera_make.clone(),
+        camera_model: metadata.camera_model.clone(),
+        lens: metadata.lens.clone(),
+        focal_length: metadata.focal_length,
+        aperture: metadata.aperture,
+    };
+    if identity.camera_make.is_none()
+        && identity.camera_model.is_none()
+        && identity.lens.is_none()
+        && identity.focal_length.is_none()
+        && identity.aperture.is_none()
+    {
+        None
+    } else {
+        Some(identity)
+    }
+}
+
+/// Cached Lensfun auto-corrector pair (G-06, `lensfun` feature only).
+/// The database handle is kept alive alongside the corrector (the modifier
+/// references DB-owned lens data); field order matters — `corrector`
+/// (modifier destroy) drops before `_db`.
+#[cfg(feature = "lensfun")]
+struct CachedLensCorrector {
+    corrector: lumina_lensfun::Corrector,
+    _db: lumina_lensfun::LensfunDb,
+    /// Identity + frame dimensions this corrector was built for.
+    key: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        u32,
+        u32,
+        u32,
+        u32,
+    ),
 }
 
 type DecodeResult = Result<DecodedFrame, (String, String)>;
@@ -2110,6 +2196,10 @@ impl LuminaApp {
             tone_analysis: None,
             preview_histogram: None,
             pending_slider_commit: None,
+            pending_history_step: None,
+            loaded_lens_identity: None,
+            #[cfg(feature = "lensfun")]
+            lensfun_cache: None,
             render_mask_layers: Vec::new(),
             document: None,
             virtual_copy_id: "vc-original".into(),
@@ -2324,6 +2414,7 @@ impl LuminaApp {
         // Persisted state is untouched either way.
         if self.reset_sliders_automatically {
             self.pending_slider_commit = None;
+            self.pending_history_step = None;
             info!("{}", Str::ResetSlidersDropped.t());
             self.status = Str::ResetSlidersDropped.t().into();
             return;
@@ -3936,7 +4027,7 @@ impl LuminaApp {
     /// Crop controls. Never mutates the recipe.
     pub fn toggle_crop_mode(&mut self) {
         self.crop_mode = !self.crop_mode;
-        trace!("GUI interaction: toggle_crop_mode -> {}", self.crop_mode);
+        info!("GUI interaction: toggle_crop_mode -> {}", self.crop_mode);
         self.status = if self.crop_mode {
             Str::CropModeOn.t().into()
         } else {
@@ -6853,7 +6944,7 @@ impl LuminaApp {
         // armed commit (no-op without a file-backed image loaded).
         self.flush_pending_edit();
         let source_is_raw = is_raw_name(&name);
-        let (frame, orientation, camera_white_balance) = if source_is_raw {
+        let (frame, orientation, camera_white_balance, lens_identity) = if source_is_raw {
             let image = lumina_raw::decode_bytes(&bytes, &name)?;
             let wb = image.metadata.camera_white_balance;
             let camera_white_balance = if wb.iter().any(|v| !v.is_finite() || *v <= 0.0) {
@@ -6865,13 +6956,16 @@ impl LuminaApp {
             } else {
                 Some(wb)
             };
+            let lens_identity = lens_identity_from_metadata(&image.metadata);
+            let orientation = image.metadata.orientation;
             (
                 image.frame,
-                image.metadata.orientation,
+                orientation,
                 camera_white_balance,
+                lens_identity,
             )
         } else {
-            (ImageFrame::decode(&bytes)?, 1, None)
+            (ImageFrame::decode(&bytes)?, 1, None, None)
         };
         // PERF-GUI-7: shared post-decode setup (also used by the async path).
         self.apply_decoded_frame(
@@ -6881,6 +6975,7 @@ impl LuminaApp {
             &name,
             &bytes,
             source_is_raw,
+            lens_identity,
         );
         if let Err(e) = self.render() {
             error!("render after load failed for {}: {e}", self.source_name);
@@ -6896,6 +6991,11 @@ impl LuminaApp {
     /// (viewport-resolution) source once per load so draft renders during a
     /// slider drag never re-allocate (PERF-GUI-3 "zero alloc during
     /// interaction").
+    ///
+    /// Eight arguments by design (like `Corrector::for_camera`): this is the
+    /// single construction funnel for a new source — bundling would churn
+    /// both decode paths for no behaviour gain.
+    #[allow(clippy::too_many_arguments)]
     fn apply_decoded_frame(
         &mut self,
         frame: &ImageFrame,
@@ -6904,12 +7004,18 @@ impl LuminaApp {
         name: &str,
         bytes: &[u8],
         source_is_raw: bool,
+        lens_identity: Option<LensIdentity>,
     ) {
         self.source_name = name.to_string();
         self.source_bytes = Some(bytes.to_vec());
         self.source_is_raw = source_is_raw;
         self.raw_orientation = orientation;
         self.camera_white_balance = camera_white_balance;
+        self.loaded_lens_identity = lens_identity;
+        #[cfg(feature = "lensfun")]
+        {
+            self.lensfun_cache = None;
+        }
         {
             self.document = None;
             self.virtual_copy_id = "vc-original".into();
@@ -6945,6 +7051,7 @@ impl LuminaApp {
         self.tone_analysis = None;
         self.preview_histogram = None;
         self.pending_slider_commit = None;
+        self.pending_history_step = None;
         self.pending_full_render = false;
         self.last_edit_time = 0.0;
         self.original = Some(frame.clone());
@@ -7600,8 +7707,20 @@ impl LuminaApp {
         self.mark_recipe_dirty(&format!("noise_reduction.{field}"), value);
     }
 
+    /// Remove the manual lens profile (keeps the coefficients). Arms one
+    /// G-06 history step.
+    pub fn clear_lens_profile(&mut self) {
+        if let Some(lens) = self.recipe.lens_correction.as_mut() {
+            lens.profile = None;
+        }
+        self.mark_recipe_dirty("lens_correction.profile_clear", 0.0);
+        self.pending_history_step = Some("lens_correction.profile_clear".into());
+        info!("GUI interaction: clear_lens_profile");
+    }
+
     /// Set one lens-correction field (`distortion_k1`…`ca_blue`) and record the
     /// save commit (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    /// Arms one G-06 history step.
     fn set_lens_correction_value(&mut self, field: &str, value: f64) {
         let mut lc = self
             .recipe
@@ -7636,11 +7755,134 @@ impl LuminaApp {
         *slot = Some(value as f32);
         self.recipe.lens_correction = Some(lc);
         self.mark_recipe_dirty(&format!("lens_correction.{field}"), value);
+        self.pending_history_step = Some(format!("lens_correction.{field}"));
+        info!("GUI interaction: set_lens_correction_value {field} -> {value}");
     }
 
     /// Current lens-blur stage (G-05), if the active virtual copy carries one.
     pub fn lens_blur(&self) -> Option<LensBlur> {
         self.recipe.lens_blur.clone()
+    }
+
+    /// User-visible Lensfun auto status (G-06): EXIF snapshot plus the
+    /// manual profile state. Always visible, never implied; DB-backed
+    /// profile matching itself happens at render time (CLI
+    /// `--lensfun-status` resolves it on demand for one file).
+    pub fn lensfun_auto_status_text(&self) -> String {
+        #[cfg(not(feature = "lensfun"))]
+        {
+            "unavailable in this build (manual correction applies)".into()
+        }
+        #[cfg(feature = "lensfun")]
+        {
+            let exif = match &self.loaded_lens_identity {
+                Some(identity) => {
+                    let mut parts = Vec::new();
+                    if let Some(make) = &identity.camera_make {
+                        parts.push(make.clone());
+                    }
+                    if let Some(model) = &identity.camera_model {
+                        parts.push(model.clone());
+                    }
+                    if let Some(lens) = &identity.lens {
+                        parts.push(format!("({lens})"));
+                    }
+                    if parts.is_empty() {
+                        "partial EXIF".into()
+                    } else {
+                        parts.join(" ")
+                    }
+                }
+                None => "no EXIF".into(),
+            };
+            let manual = match self
+                .recipe
+                .lens_correction
+                .as_ref()
+                .and_then(|lens| lens.profile.as_deref())
+            {
+                Some(name) => format!("manual profile `{name}`"),
+                None => "no manual profile".to_string(),
+            };
+            format!("{exif}; {manual}; auto applies at render when a system profile matches")
+        }
+    }
+
+    /// Lensfun auto-corrector cache refresh for a render at `width`×`height`
+    /// (G-06, `lensfun` feature only): rebuilds the cached corrector when
+    /// the identity/dimensions key changed. Split from
+    /// [`Self::lensfun_render_ref`] so renders can refresh under `&mut`
+    /// first and then build the `RenderContext` under shared borrows.
+    #[cfg(feature = "lensfun")]
+    fn ensure_lensfun_cache(&mut self, width: u32, height: u32) {
+        let Some(identity) = self.loaded_lens_identity.clone() else {
+            return;
+        };
+        let (Some(make), Some(model), Some(focal), Some(aperture)) = (
+            identity.camera_make.clone(),
+            identity.camera_model.clone(),
+            identity.focal_length.filter(|v| v.is_finite()),
+            identity.aperture.filter(|v| v.is_finite()),
+        ) else {
+            return;
+        };
+        let key = (
+            Some(make.clone()),
+            Some(model.clone()),
+            identity.lens.clone(),
+            width,
+            height,
+            focal.to_bits(),
+            aperture.to_bits(),
+        );
+        let fresh = match &self.lensfun_cache {
+            Some(cached) => cached.key != key,
+            None => true,
+        };
+        if !fresh {
+            return;
+        }
+        // Rebuild: a new source (or new dimensions) needs a new modifier.
+        // A rebuild that finds no profile caches NOTHING, so every render
+        // retries the lookup instead of pinning a stale miss across a DB
+        // install — the lookup itself is strict (never a guessed
+        // correction, same contract as the CLI `build_lensfun_corrector`).
+        let Some(db) = lumina_lensfun::LensfunDb::load_system() else {
+            return;
+        };
+        let Some(corrector) = db.for_camera(
+            &make,
+            &model,
+            identity.lens.as_deref(),
+            width,
+            height,
+            focal,
+            aperture,
+            10.0,
+        ) else {
+            return;
+        };
+        info!(
+            "lensfun auto: profile matched for {make} {model} (distortion={} vignetting={} tca={})",
+            corrector.has_distortion(),
+            corrector.has_vignetting(),
+            corrector.has_tca()
+        );
+        self.lensfun_cache = Some(CachedLensCorrector {
+            corrector,
+            _db: db,
+            key,
+        });
+    }
+
+    /// Shared borrow of the cached Lensfun auto-corrector for a render
+    /// (G-06, `lensfun` feature only). Call [`Self::ensure_lensfun_cache`]
+    /// first so the cache matches the rendered frame.
+    #[cfg(feature = "lensfun")]
+    fn lensfun_render_ref(&self) -> Option<lumina_core::LensfunCorrectorRef<'_>> {
+        self.lensfun_cache
+            .as_ref()
+            .map(|cached| lumina_core::LensfunCorrectorRef(&cached.corrector))
     }
 
     /// User-visible lens-blur depth status (G-05): `off`, `heuristic active`
@@ -7679,7 +7921,76 @@ impl LuminaApp {
         Some(egui::Rect::from_min_max(min, max))
     }
 
-    /// Mutable access to the lens-blur stage (G-05), creating an enabled
+    /// Crop-rectangle overlay rect (G-06) in preview-image coordinates: the
+    /// normalized recipe crop mapped into `img_rect`. Aspect presets resolve
+    /// to the same centered rectangle as the core `crop_rect` (needs the
+    /// source dimensions); free rects map directly. `None` when no crop is
+    /// set or the rect is invalid. Pure helper so the mapping is
+    /// unit-testable headless.
+    pub fn crop_overlay_rect(
+        img_rect: egui::Rect,
+        crop: Option<&Crop>,
+        src_w: u32,
+        src_h: u32,
+    ) -> Option<egui::Rect> {
+        let (x, y, w, h) = match crop? {
+            Crop::Free {
+                x,
+                y,
+                width,
+                height,
+            } => (*x, *y, *width, *height),
+            Crop::Aspect { preset } => {
+                if src_w == 0 || src_h == 0 {
+                    return None;
+                }
+                let ratio = match preset {
+                    AspectPreset::Original => f64::from(src_w) / f64::from(src_h),
+                    AspectPreset::OneToOne => 1.0,
+                    AspectPreset::FourToFive => 4.0 / 5.0,
+                    AspectPreset::FiveToFour => 5.0 / 4.0,
+                    AspectPreset::ThreeToTwo => 3.0 / 2.0,
+                    AspectPreset::TwoToThree => 2.0 / 3.0,
+                    AspectPreset::FourToThree => 4.0 / 3.0,
+                    AspectPreset::ThreeToFour => 3.0 / 4.0,
+                    AspectPreset::SixteenToNine => 16.0 / 9.0,
+                    AspectPreset::NineToSixteen => 9.0 / 16.0,
+                };
+                let source_ratio = f64::from(src_w) / f64::from(src_h);
+                if source_ratio > ratio {
+                    (
+                        ((1.0 - ratio / source_ratio) / 2.0) as f32,
+                        0.0,
+                        (ratio / source_ratio) as f32,
+                        1.0,
+                    )
+                } else {
+                    (
+                        0.0,
+                        ((1.0 - source_ratio / ratio) / 2.0) as f32,
+                        1.0,
+                        (source_ratio / ratio) as f32,
+                    )
+                }
+            }
+        };
+        if !x.is_finite() || !y.is_finite() || !w.is_finite() || !h.is_finite() {
+            return None;
+        }
+        if !(0.0..=1.0).contains(&x)
+            || !(0.0..=1.0).contains(&y)
+            || w <= 0.0
+            || h <= 0.0
+            || x + w > 1.0
+            || y + h > 1.0
+        {
+            return None;
+        }
+        let min = img_rect.min + egui::vec2(x * img_rect.width(), y * img_rect.height());
+        let max =
+            img_rect.min + egui::vec2((x + w) * img_rect.width(), (y + h) * img_rect.height());
+        Some(egui::Rect::from_min_max(min, max))
+    }
     /// stage with centered defaults when none exists (same defaults as the
     /// CLI `lens-blur` command: touching lens blur enables it).
     fn lens_blur_mut(&mut self) -> &mut LensBlur {
@@ -7814,7 +8125,8 @@ impl LuminaApp {
     /// Set the geometry rotation and record the save commit
     /// (GUI-SLIDER-SAVE-1). Public so headless/integration harnesses and
     /// future shortcuts drive the same path as the Geometry slider
-    /// (GUI-ROTATE-1: one wired path, no shadow state).
+    /// (GUI-ROTATE-1: one wired path, no shadow state). Arms one G-06
+    /// history step consumed at save time.
     pub fn set_geometry_rotation(&mut self, degrees: f64) {
         let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
             version: 1,
@@ -7826,6 +8138,137 @@ impl LuminaApp {
         geo.rotation_degrees = degrees as f32;
         self.recipe.geometry = Some(geo);
         self.mark_recipe_dirty("geometry.rotation_degrees", degrees);
+        self.pending_history_step = Some("geometry.rotation".into());
+        info!("GUI interaction: set_geometry_rotation -> {degrees}");
+    }
+
+    /// Straighten angle (G-06, LRPAR-G06-GEO): documented alias of
+    /// [`Self::set_geometry_rotation`] — same field
+    /// (`geometry.rotation_degrees`), same validation, same render effect.
+    /// Commits through the rotation path so slider, button and straighten
+    /// control can never diverge; the history step is labelled
+    /// `geometry.straighten`.
+    pub fn set_straighten(&mut self, degrees: f64) {
+        self.set_geometry_rotation(degrees);
+        self.pending_history_step = Some("geometry.straighten".into());
+        info!("GUI interaction: set_straighten -> {degrees}");
+    }
+
+    /// Set the crop to an aspect preset (G-06). Unknown names are rejected
+    /// loudly without touching the recipe. Arms one G-06 history step.
+    pub fn set_crop_aspect(&mut self, preset: &str) -> Result<(), GuiError> {
+        let parsed = match preset {
+            "original" => AspectPreset::Original,
+            "1:1" => AspectPreset::OneToOne,
+            "4:5" => AspectPreset::FourToFive,
+            "5:4" => AspectPreset::FiveToFour,
+            "3:2" => AspectPreset::ThreeToTwo,
+            "2:3" => AspectPreset::TwoToThree,
+            "4:3" => AspectPreset::FourToThree,
+            "3:4" => AspectPreset::ThreeToFour,
+            "16:9" => AspectPreset::SixteenToNine,
+            "9:16" => AspectPreset::NineToSixteen,
+            _ => {
+                return Err(GuiError::Io(format!(
+                    "Unknown aspect preset `{preset}` (expected original|1:1|4:5|5:4|3:2|2:3|4:3|3:4|16:9|9:16)"
+                )));
+            }
+        };
+        let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        geo.crop = Some(Crop::Aspect { preset: parsed });
+        self.recipe.geometry = Some(geo);
+        self.mark_recipe_dirty("geometry.crop_aspect", 0.0);
+        self.pending_history_step = Some("geometry.crop_aspect".into());
+        info!("GUI interaction: set_crop_aspect -> {preset}");
+        Ok(())
+    }
+
+    /// Set a free crop rectangle in normalized `0..=1` coordinates (G-06).
+    /// Non-finite inputs are rejected loudly without touching the recipe;
+    /// deeper rect validation (positive area, frame bounds) runs at save
+    /// time via the sidecar validator. Arms one G-06 history step.
+    pub fn set_crop_free(
+        &mut self,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> Result<(), GuiError> {
+        for (name, value) in [("x", x), ("y", y), ("width", width), ("height", height)] {
+            if !value.is_finite() {
+                return Err(GuiError::Io(format!(
+                    "Crop rect {name} must be finite, got {value}"
+                )));
+            }
+        }
+        let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        });
+        geo.crop = Some(Crop::Free {
+            x: x as f32,
+            y: y as f32,
+            width: width as f32,
+            height: height as f32,
+        });
+        self.recipe.geometry = Some(geo);
+        self.mark_recipe_dirty("geometry.crop_free", width);
+        self.pending_history_step = Some("geometry.crop_free".into());
+        info!("GUI interaction: set_crop_free -> {x},{y},{width},{height}");
+        Ok(())
+    }
+
+    /// Remove the crop (back to the full frame, keeps rotation/mirrors).
+    /// Arms one G-06 history step.
+    pub fn clear_crop(&mut self) {
+        if let Some(geo) = self.recipe.geometry.as_mut() {
+            geo.crop = None;
+        }
+        self.mark_recipe_dirty("geometry.crop_clear", 0.0);
+        self.pending_history_step = Some("geometry.crop_clear".into());
+        info!("GUI interaction: clear_crop");
+    }
+
+    /// Set the manual lens profile by name (G-06). Only the Core whitelist
+    /// is accepted; anything else is rejected loudly without touching the
+    /// recipe (the sidecar validator is the second gate at save time).
+    pub fn set_lens_profile(&mut self, profile: &str) -> Result<(), GuiError> {
+        if !matches!(profile, "wide-light" | "tele-light" | "standard-neutral") {
+            return Err(GuiError::Io(format!(
+                "Unknown lens profile `{profile}` (expected wide-light|tele-light|standard-neutral)"
+            )));
+        }
+        let mut lc = self
+            .recipe
+            .lens_correction
+            .clone()
+            .unwrap_or(LensCorrection {
+                version: 1,
+                profile: None,
+                distortion_k1: None,
+                distortion_k2: None,
+                distortion_k3: None,
+                vignette_c0: None,
+                vignette_c1: None,
+                vignette_c2: None,
+                ca_red: None,
+                ca_blue: None,
+            });
+        lc.profile = Some(profile.into());
+        self.recipe.lens_correction = Some(lc);
+        self.mark_recipe_dirty("lens_correction.profile", 0.0);
+        self.pending_history_step = Some("lens_correction.profile".into());
+        info!("GUI interaction: set_lens_profile -> {profile}");
+        Ok(())
     }
 
     /// Rotate by a relative step in degrees (GUI-ROTATE-1: the ±90° quick
@@ -7845,13 +8288,13 @@ impl LuminaApp {
         } else if next > 180.0 {
             next -= 360.0;
         }
-        trace!("GUI interaction: rotate_step {delta_degrees:+} -> {next}");
+        info!("GUI interaction: rotate_step {delta_degrees:+} -> {next}");
         self.set_geometry_rotation(next);
     }
 
     /// Set the geometry mirror flags and record the save commit
     /// (GUI-SLIDER-SAVE-1). Public for the same reason as
-    /// [`Self::set_geometry_rotation`].
+    /// [`Self::set_geometry_rotation`]. Arms one G-06 history step.
     pub fn set_geometry_mirror(&mut self, horizontal: bool, vertical: bool) {
         let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
             version: 1,
@@ -7867,11 +8310,14 @@ impl LuminaApp {
             "geometry.mirror",
             f64::from(u8::from(horizontal) * 2 + u8::from(vertical)),
         );
+        self.pending_history_step = Some("geometry.mirror".into());
+        info!("GUI interaction: set_geometry_mirror -> h={horizontal} v={vertical}");
     }
 
     /// Set one perspective field (`vertical`/`horizontal`/`rotation`/`scale`/
     /// `aspect_ratio`/`shift_x`/`shift_y`) and record the save commit
-    /// (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
+    /// (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly. Arms one G-06
+    /// history step.
     fn set_perspective_value(&mut self, field: &str, value: f64) {
         let mut persp = self.recipe.perspective.unwrap_or(Perspective {
             version: 1,
@@ -7898,6 +8344,8 @@ impl LuminaApp {
         }
         self.recipe.perspective = Some(persp);
         self.mark_recipe_dirty(&format!("perspective.{field}"), value);
+        self.pending_history_step = Some(format!("perspective.{field}"));
+        info!("GUI interaction: set_perspective_value {field} -> {value}");
     }
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
@@ -8002,6 +8450,7 @@ impl LuminaApp {
         // would misattribute the reset state). Drop it; the reset itself
         // re-renders below and persists on the next committed edit.
         self.pending_slider_commit = None;
+        self.pending_history_step = None;
         if self.original.is_some() {
             let _ = self.render();
         }
@@ -8529,6 +8978,17 @@ impl LuminaApp {
         // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
         // (native only).  Missing or unreadable zdata is not a hard error:
         // affected layers are reported through the `MaskPolicy::Warn` path.
+        // G-06: Lensfun auto-corrector for the rendered base (cached by
+        // identity + dimensions; the manual model applies when none
+        // matches — same strict contract as the CLI render path). Runs
+        // BEFORE the shared `masks_context` borrow below (`&mut` first,
+        // shared borrows after).
+        #[cfg(feature = "lensfun")]
+        self.ensure_lensfun_cache(base_frame.width, base_frame.height);
+        #[cfg(feature = "lensfun")]
+        let lensfun = self.lensfun_render_ref();
+        #[cfg(not(feature = "lensfun"))]
+        let lensfun = None;
         let masks_context = if with_masks {
             let planes = self.load_mask_planes();
             match &self.document {
@@ -8555,7 +9015,7 @@ impl LuminaApp {
                 camera_white_balance: self.camera_white_balance,
                 source_actions: &[],
                 masks: masks_context,
-                lensfun: None,
+                lensfun,
                 depth: None,
             },
             &mut work,
@@ -8674,6 +9134,15 @@ impl LuminaApp {
                         prepared
                     }
                 };
+                // G-06: Lensfun auto-corrector for the analysed full frame
+                // (same cached lookup as the preview render above). Runs
+                // BEFORE the shared `full_masks` borrow below.
+                #[cfg(feature = "lensfun")]
+                self.ensure_lensfun_cache(full_base.width, full_base.height);
+                #[cfg(feature = "lensfun")]
+                let full_lensfun = self.lensfun_render_ref();
+                #[cfg(not(feature = "lensfun"))]
+                let full_lensfun = None;
                 let full_masks = if with_masks {
                     let planes = self.load_mask_planes();
                     match &self.document {
@@ -8699,7 +9168,7 @@ impl LuminaApp {
                         camera_white_balance: self.camera_white_balance,
                         source_actions: &[],
                         masks: full_masks,
-                        lensfun: None,
+                        lensfun: full_lensfun,
                         depth: None,
                     },
                     &mut analysis_work,
@@ -9228,7 +9697,7 @@ impl LuminaApp {
                     .unwrap_or("image")
                     .to_string();
                 let source_is_raw = is_raw_name(&name);
-                let (frame, orientation, camera_white_balance) = if source_is_raw {
+                let (frame, orientation, camera_white_balance, lens_identity) = if source_is_raw {
                     let image = lumina_raw::decode_bytes(&bytes, &name)
                         .map_err(|e| (path.clone(), e.to_string()))?;
                     let wb = image.metadata.camera_white_balance;
@@ -9241,15 +9710,19 @@ impl LuminaApp {
                     } else {
                         Some(wb)
                     };
+                    let lens_identity = lens_identity_from_metadata(&image.metadata);
+                    let orientation = image.metadata.orientation;
                     (
                         image.frame,
-                        image.metadata.orientation,
+                        orientation,
                         camera_white_balance,
+                        lens_identity,
                     )
                 } else {
                     (
                         ImageFrame::decode(&bytes).map_err(|e| (path.clone(), e.to_string()))?,
                         1,
+                        None,
                         None,
                     )
                 };
@@ -9261,6 +9734,7 @@ impl LuminaApp {
                     orientation,
                     camera_white_balance,
                     source_is_raw,
+                    lens_identity,
                 })
             })();
             let _ = tx.send(result);
@@ -9289,6 +9763,7 @@ impl LuminaApp {
                     &frame.name,
                     &frame.bytes,
                     frame.source_is_raw,
+                    frame.lens_identity,
                 );
                 if let Err(e) = self.render() {
                     error!("render after load failed for {}: {e}", self.source_name);
@@ -9743,6 +10218,29 @@ impl LuminaApp {
             return;
         };
         copy.recipe = self.recipe.clone();
+        // G-06 (LRPAR-G06-GEO): an armed geometry edit becomes exactly one
+        // visible history step. The entry stores the saved (final) recipe,
+        // like the CLI `geometry` command; slider drags coalesce because the
+        // label is armed once per debounce window and consumed here.
+        if let Some(step) = self.pending_history_step.take() {
+            let mut counter = copy.history.len() + 1;
+            while copy
+                .history
+                .iter()
+                .any(|entry| entry.id == format!("geometry-{counter}"))
+            {
+                counter += 1;
+            }
+            let mut extras = BTreeMap::new();
+            extras.insert("step".into(), Value::String("geometry".into()));
+            extras.insert("action".into(), Value::String(step));
+            copy.history.push(HistoryEntry {
+                id: format!("geometry-{counter}"),
+                recipe: copy.recipe.clone(),
+                recorded_at: None,
+                extras,
+            });
+        }
         match lumina_sidecar::save_sidecar_if_unchanged(
             &sidecar_path,
             &document,
@@ -9847,6 +10345,22 @@ impl LuminaApp {
     /// recipe/sidecar is left untouched by the export itself (the user saves
     /// the recipe explicitly via "Save Recipe / Sidecar").
     pub fn export_to(&mut self, output: PathBuf) -> Result<(), GuiError> {
+        // G-06: read the source dimensions BEFORE borrowing `original` —
+        // the Lensfun cache refresh below needs `&mut`.
+        let (export_w, export_h) = self
+            .original
+            .as_ref()
+            .map(|frame| (frame.width, frame.height))
+            .unwrap_or((0, 0));
+        // G-06: Lensfun auto-corrector for the exported source (same
+        // cached lookup as the preview render — export and preview share
+        // the correction, no second pipeline).
+        #[cfg(feature = "lensfun")]
+        self.ensure_lensfun_cache(export_w, export_h);
+        #[cfg(feature = "lensfun")]
+        let export_lensfun = self.lensfun_render_ref();
+        #[cfg(not(feature = "lensfun"))]
+        let export_lensfun = None;
         let Some(original) = self.original.as_ref() else {
             return Err(GuiError::Io(
                 "No image loaded; open or drop an image first".into(),
@@ -9885,12 +10399,15 @@ impl LuminaApp {
                     })
             })
         };
+        // G-06: Lensfun auto-corrector for the exported source (same
+        // cached lookup as the preview render — export and preview share
+        // the correction, no second pipeline).
         let context = RenderContext {
             recipe: &self.recipe,
             camera_white_balance: self.camera_white_balance,
             source_actions: &[],
             masks: masks_context,
-            lensfun: None,
+            lensfun: export_lensfun,
             depth: None,
         };
         // GEN-PIPELINE-DECOUPLE: `export_image` renders via `render_frame`,
@@ -10332,6 +10849,7 @@ impl LuminaApp {
                 self.draw_mask_overlay(ui, full_rect);
                 self.draw_edit_pins(ui, full_rect);
                 self.draw_lens_blur_overlay(ui, full_rect);
+                self.draw_crop_overlay(ui, full_rect);
             }
             ui.set_clip_rect(previous_clip);
         } else {
@@ -10667,6 +11185,29 @@ impl LuminaApp {
             rect,
             1.0_f32,
             egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
+            egui::StrokeKind::Middle,
+        );
+    }
+
+    /// Crop-rectangle overlay (G-06): paints the active recipe crop as a
+    /// white stroke over the full-frame preview rect. Pure display (never
+    /// recipe/sidecar); the mapping is covered headless via
+    /// [`Self::crop_overlay_rect`]. Visible when the tool-overlay mode
+    /// shows overlays OR the crop-mode badge (`R`) is armed (cropping
+    /// intent) — reiner Session-Display-State.
+    fn draw_crop_overlay(&self, ui: &mut egui::Ui, full_rect: egui::Rect) {
+        if !self.overlay_visible() && !self.crop_mode {
+            return;
+        }
+        let crop = self.recipe.geometry.as_ref().and_then(|g| g.crop.as_ref());
+        let (src_w, src_h) = self.image_dims().unwrap_or((0, 0));
+        let Some(rect) = Self::crop_overlay_rect(full_rect, crop, src_w, src_h) else {
+            return;
+        };
+        ui.painter().rect_stroke(
+            rect,
+            1.0_f32,
+            egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
             egui::StrokeKind::Middle,
         );
     }
@@ -11888,12 +12429,48 @@ impl LuminaApp {
             egui::CollapsingHeader::new(Str::Optics.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
             self.draw_section_prev_reset(ui, SECTION_OPTICS);
-            if cfg!(feature = "lensfun") {
-                ui.label(Str::LensCorrection.t());
-                // GUI-OPTICS-1: the profile status is always visible (name or
-                // "no profile — correction inactive"), never implied.
-                let (status, _) = Self::lens_profile_status(&self.recipe.lens_correction);
-                ui.label(status);
+            // G-06 (LRPAR-G06-GEO): the manual lens model is pure
+            // core-pipeline state — always settable, never behind a
+            // Lensfun feature gate (like geometry: F-098 manual is
+            // core-only). The Lensfun *auto* correction keeps its own
+            // status line below; without the feature it names the
+            // missing capability instead of hiding the sliders.
+            ui.label(Str::LensCorrection.t());
+            // GUI-OPTICS-1: the profile status is always visible (name or
+            // "no profile — correction inactive"), never implied.
+            let (status, _) = Self::lens_profile_status(&self.recipe.lens_correction);
+            ui.label(status);
+            // G-06: manual profile picker (Core whitelist; anything else
+            // is rejected loudly by `set_lens_profile`, never guessed).
+            // Owned snapshot (no recipe borrow across the setter calls).
+            let current_profile = self
+                .recipe
+                .lens_correction
+                .as_ref()
+                .and_then(|lens| lens.profile.clone())
+                .unwrap_or_else(|| "none".into());
+            egui::ComboBox::from_label(Str::LensProfile.t())
+                .selected_text(&current_profile)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(current_profile == "none", "none")
+                        .clicked()
+                        && current_profile != "none"
+                    {
+                        self.clear_lens_profile();
+                    }
+                    for name in ["wide-light", "tele-light", "standard-neutral"] {
+                        if ui.selectable_label(current_profile == name, name).clicked()
+                            && current_profile != name
+                        {
+                            if let Err(error) = self.set_lens_profile(name) {
+                                self.show_error(error);
+                            }
+                        }
+                    }
+                });
+            ui.label(Str::LensfunAutoPattern.format_arg(&self.lensfun_auto_status_text()));
+            {
                 let mut lc = self
                     .recipe
                     .lens_correction
@@ -12005,9 +12582,6 @@ impl LuminaApp {
                         self.set_lens_correction_value(name, f64::from(v));
                     }
                 }
-            } else {
-                ui.label(Str::OpticsRequiresLensfun.t());
-                ui.label(Str::NotAvailable.t());
             }
             // G-05 Lens Blur: optics-adjacent subgroup (own collapsible group
             // inside Optics so the 8-section F-100 order stays intact). All
@@ -12142,15 +12716,16 @@ impl LuminaApp {
             egui::CollapsingHeader::new(Str::Geometry.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
             self.draw_section_prev_reset(ui, SECTION_GEOMETRY);
-            // GUI-ROTATE-1: rotation + mirror are pure core-pipeline controls
-            // (no Lensfun stage involved), so they are always available — the
-            // N6 finding was "not rotatable / wiring missing or unfindable".
-            // Only crop/perspective stay behind the lensfun gate (see the
-            // `GeometryRequiresLensfun` message).
+            // G-06 (LRPAR-G06-GEO): crop, straighten, mirrors and manual
+            // perspective are pure core-pipeline controls — always
+            // available, never behind a Lensfun feature gate (F-093/F-099
+            // are core-only models; the N6 finding was "not rotatable /
+            // wiring missing or unfindable"). The Lensfun *auto* correction
+            // keeps its own status line below.
             ui.label(Str::Crop.t());
             // GUI-SLIDER-SAVE-1: geometry edits commit through the
-            // `set_geometry_*` setters (save at debounce); `geo` is only a
-            // control binding buffer.
+            // `set_*` setters (save at debounce); locals are only control
+            // binding buffers.
             let geo = self.recipe.geometry.clone().unwrap_or(Geometry {
                 version: 1,
                 crop: None,
@@ -12158,17 +12733,93 @@ impl LuminaApp {
                 mirror_horizontal: false,
                 mirror_vertical: false,
             });
-            let mut rotation = geo.rotation_degrees;
+            // Aspect preset selector: Off (full frame), the ten F-093
+            // presets, or Custom for a free rectangle (edited below).
+            let current_aspect = match &geo.crop {
+                None => "off",
+                Some(Crop::Aspect { preset }) => Self::aspect_name(preset),
+                Some(Crop::Free { .. }) => "custom",
+            };
+            egui::ComboBox::from_label(Str::Aspect.t())
+                .selected_text(current_aspect)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(current_aspect == "off", "off")
+                        .clicked()
+                        && geo.crop.is_some()
+                    {
+                        // `clear_crop` removes only the rectangle and keeps
+                        // rotation/mirrors by design.
+                        self.clear_crop();
+                    }
+                    for name in Self::ASPECT_NAMES {
+                        if ui.selectable_label(current_aspect == name, name).clicked()
+                            && current_aspect != name
+                        {
+                            if let Err(error) = self.set_crop_aspect(name) {
+                                self.show_error(error);
+                            }
+                        }
+                    }
+                });
+            // Free rectangle fields (normalized 0..=1). Editing any field
+            // commits a free rect through `set_crop_free` (loud on invalid
+            // input, rejected at save without a silent clip).
+            let mut free = match &geo.crop {
+                Some(Crop::Free {
+                    x,
+                    y,
+                    width,
+                    height,
+                }) => [*x, *y, *width, *height],
+                _ => [0.0, 0.0, 1.0, 1.0],
+            };
+            let mut free_changed = false;
+            ui.horizontal(|ui| {
+                for (i, label) in ["x", "y", "w", "h"].into_iter().enumerate() {
+                    let mut v = free[i];
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut v)
+                                .speed(0.01)
+                                .range(0.0..=1.0)
+                                .prefix(format!("{label} ")),
+                        )
+                        .changed()
+                    {
+                        free[i] = v;
+                        free_changed = true;
+                    }
+                }
+            });
+            if free_changed {
+                if let Err(error) = self.set_crop_free(
+                    f64::from(free[0]),
+                    f64::from(free[1]),
+                    f64::from(free[2]),
+                    f64::from(free[3]),
+                ) {
+                    self.show_error(error);
+                }
+            }
+            if geo.crop.is_some() && ui.button(Str::ClearCrop.t()).clicked() {
+                // `clear_crop` removes only the rectangle and keeps
+                // rotation/mirrors by design.
+                self.clear_crop();
+            }
+            // Straighten (G-06): documented alias of the rotation field —
+            // same setter path as the former Rotation slider.
+            let mut straighten = geo.rotation_degrees;
             if matches!(
                 lr_slider(
                     ui,
-                    Str::Rotation.t(),
-                    &mut rotation,
+                    Str::Straighten.t(),
+                    &mut straighten,
                     identity_spec(-180.0..=180.0, 0.0, 1.0)
                 ),
                 SliderAction::Changed | SliderAction::ResetRequested
             ) {
-                self.set_geometry_rotation(f64::from(rotation));
+                self.set_straighten(f64::from(straighten));
             }
             ui.horizontal(|ui| {
                 if ui.button(Str::RotateLeft.t()).clicked() {
@@ -12194,83 +12845,103 @@ impl LuminaApp {
                     .unwrap_or(mh);
                 self.set_geometry_mirror(horizontal, mv);
             }
-            if cfg!(feature = "lensfun") {
-                ui.label(Str::Perspective.t());
-                // GUI-SLIDER-SAVE-1: perspective sliders commit through
-                // `set_perspective_value` (save at debounce); `persp` is only
-                // a slider binding buffer.
-                let mut persp = self.recipe.perspective.unwrap_or(Perspective {
-                    version: 1,
-                    vertical: 0.0,
-                    horizontal: 0.0,
-                    rotation: 0.0,
-                    scale: 1.0,
-                    aspect_ratio: 1.0,
-                    shift_x: 0.0,
-                    shift_y: 0.0,
-                });
-                for (field, label, spec) in [
-                    (
-                        &mut persp.vertical,
-                        Str::Vertical,
-                        percent_spec(-1.0..=1.0, 0.0),
-                    ),
-                    (
-                        &mut persp.horizontal,
-                        Str::Horizontal,
-                        percent_spec(-1.0..=1.0, 0.0),
-                    ),
-                    (
-                        &mut persp.rotation,
-                        Str::Rotation,
-                        percent_spec(-1.0..=1.0, 0.0),
-                    ),
-                    (
-                        &mut persp.scale,
-                        Str::Scale,
-                        identity_spec(0.1..=10.0, 1.0, 0.01),
-                    ),
-                    (
-                        &mut persp.aspect_ratio,
-                        Str::AspectRatio,
-                        identity_spec(0.1..=10.0, 1.0, 0.01),
-                    ),
-                    (
-                        &mut persp.shift_x,
-                        Str::ShiftX,
-                        percent_spec(-1.0..=1.0, 0.0),
-                    ),
-                    (
-                        &mut persp.shift_y,
-                        Str::ShiftY,
-                        percent_spec(-1.0..=1.0, 0.0),
-                    ),
-                ] {
-                    let mut v = *field;
-                    if matches!(
-                        lr_slider(ui, label.t(), &mut v, spec),
-                        SliderAction::Changed | SliderAction::ResetRequested
-                    ) {
-                        let name = match label {
-                            Str::Vertical => "vertical",
-                            Str::Horizontal => "horizontal",
-                            Str::Rotation => "rotation",
-                            Str::Scale => "scale",
-                            Str::AspectRatio => "aspect_ratio",
-                            Str::ShiftX => "shift_x",
-                            Str::ShiftY => "shift_y",
-                            _ => continue,
-                        };
-                        self.set_perspective_value(name, f64::from(v));
-                    }
+            ui.label(Str::Perspective.t());
+            // GUI-SLIDER-SAVE-1: perspective sliders commit through
+            // `set_perspective_value` (save at debounce); `persp` is only
+            // a slider binding buffer.
+            let mut persp = self.recipe.perspective.unwrap_or(Perspective {
+                version: 1,
+                vertical: 0.0,
+                horizontal: 0.0,
+                rotation: 0.0,
+                scale: 1.0,
+                aspect_ratio: 1.0,
+                shift_x: 0.0,
+                shift_y: 0.0,
+            });
+            for (field, label, spec) in [
+                (
+                    &mut persp.vertical,
+                    Str::Vertical,
+                    percent_spec(-1.0..=1.0, 0.0),
+                ),
+                (
+                    &mut persp.horizontal,
+                    Str::Horizontal,
+                    percent_spec(-1.0..=1.0, 0.0),
+                ),
+                (
+                    &mut persp.rotation,
+                    Str::Rotation,
+                    percent_spec(-1.0..=1.0, 0.0),
+                ),
+                (
+                    &mut persp.scale,
+                    Str::Scale,
+                    identity_spec(0.1..=10.0, 1.0, 0.01),
+                ),
+                (
+                    &mut persp.aspect_ratio,
+                    Str::AspectRatio,
+                    identity_spec(0.1..=10.0, 1.0, 0.01),
+                ),
+                (
+                    &mut persp.shift_x,
+                    Str::ShiftX,
+                    percent_spec(-1.0..=1.0, 0.0),
+                ),
+                (
+                    &mut persp.shift_y,
+                    Str::ShiftY,
+                    percent_spec(-1.0..=1.0, 0.0),
+                ),
+            ] {
+                let mut v = *field;
+                if matches!(
+                    lr_slider(ui, label.t(), &mut v, spec),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    let name = match label {
+                        Str::Vertical => "vertical",
+                        Str::Horizontal => "horizontal",
+                        Str::Rotation => "rotation",
+                        Str::Scale => "scale",
+                        Str::AspectRatio => "aspect_ratio",
+                        Str::ShiftX => "shift_x",
+                        Str::ShiftY => "shift_y",
+                        _ => continue,
+                    };
+                    self.set_perspective_value(name, f64::from(v));
                 }
-            } else {
-                ui.label(Str::GeometryRequiresLensfun.t());
-                ui.label(Str::NotAvailable.t());
             }
+            // Lensfun auto status (G-06): always visible (EXIF snapshot or
+            // the missing-capability reason), never implied.
+            ui.label(Str::LensfunAutoPattern.format_arg(&self.lensfun_auto_status_text()));
         });
         if section_response.header_response.clicked() {
             self.set_section_open(SECTION_GEOMETRY, !section_was_open);
+        }
+    }
+
+    /// Canonical aspect preset names in F-093 order (G-06 crop selector;
+    /// same vocabulary as the CLI `--set-crop-aspect`).
+    const ASPECT_NAMES: [&'static str; 10] = [
+        "original", "1:1", "4:5", "5:4", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16",
+    ];
+
+    /// Canonical name of one aspect preset (matches [`Self::ASPECT_NAMES`]).
+    fn aspect_name(preset: &AspectPreset) -> &'static str {
+        match preset {
+            AspectPreset::Original => "original",
+            AspectPreset::OneToOne => "1:1",
+            AspectPreset::FourToFive => "4:5",
+            AspectPreset::FiveToFour => "5:4",
+            AspectPreset::ThreeToTwo => "3:2",
+            AspectPreset::TwoToThree => "2:3",
+            AspectPreset::FourToThree => "4:3",
+            AspectPreset::ThreeToFour => "3:4",
+            AspectPreset::SixteenToNine => "16:9",
+            AspectPreset::NineToSixteen => "9:16",
         }
     }
 
@@ -14467,12 +15138,20 @@ impl LuminaApp {
         let small = self
             .navigator_frame()
             .map(|frame| frame.downscale(NAVIGATOR_OVERVIEW_MAX_DIM))?;
+        // G-06: Lensfun auto-corrector for the navigator overview (same
+        // cached lookup as the preview render).
+        #[cfg(feature = "lensfun")]
+        self.ensure_lensfun_cache(small.width, small.height);
+        #[cfg(feature = "lensfun")]
+        let nav_lensfun = self.lensfun_render_ref();
+        #[cfg(not(feature = "lensfun"))]
+        let nav_lensfun = None;
         let context = RenderContext {
             recipe: &self.recipe,
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
-            lensfun: None,
+            lensfun: nav_lensfun,
             depth: None,
         };
         let frame = render_frame(&small, &context).map(|o| o.frame).ok()?;
@@ -20901,6 +21580,296 @@ mod tests {
         );
     }
 
+    // ---- G-06 Geometrie-Parität (LRPAR-G06-GEO) ----
+
+    /// G-06: crop aspect + straighten + mirror commit through the debounced
+    /// save path (DoD §1: setter → commit → file → reload), each committed
+    /// step leaves exactly one visible history entry.
+    #[test]
+    fn g06_crop_aspect_straighten_mirror_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_crop_aspect("16:9").unwrap();
+        app.set_straighten(2.5);
+        app.set_geometry_mirror(true, false);
+        let document = commit_and_load_doc(&mut app, &source);
+        let recipe = &document.virtual_copies[0].recipe;
+        assert!(matches!(
+            recipe.geometry.as_ref().and_then(|g| g.crop.as_ref()),
+            Some(Crop::Aspect {
+                preset: AspectPreset::SixteenToNine
+            })
+        ));
+        assert_eq!(
+            recipe.geometry.as_ref().map(|g| g.rotation_degrees),
+            Some(2.5_f32)
+        );
+        assert_eq!(
+            recipe.geometry.as_ref().map(|g| g.mirror_horizontal),
+            Some(true)
+        );
+        // Three setters before one debounce commit coalesce to ONE step.
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        let entry = &document.virtual_copies[0].history[0];
+        assert!(entry.id.starts_with("geometry-"), "got {}", entry.id);
+        assert_eq!(entry.recipe, *recipe);
+        let reopened = reopen_app(&source);
+        assert!(matches!(
+            reopened
+                .recipe()
+                .geometry
+                .as_ref()
+                .and_then(|g| g.crop.as_ref()),
+            Some(Crop::Aspect {
+                preset: AspectPreset::SixteenToNine
+            })
+        ));
+        assert_eq!(
+            reopened
+                .recipe()
+                .geometry
+                .as_ref()
+                .map(|g| g.rotation_degrees),
+            Some(2.5_f32)
+        );
+    }
+
+    /// G-06: free-crop rect round-trips; clearing removes only the rectangle
+    /// and keeps rotation/mirrors; each commit is its own history step.
+    #[test]
+    fn g06_crop_free_and_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_crop_free(0.1, 0.2, 0.5, 0.5).unwrap();
+        app.set_geometry_rotation(30.0);
+        let document = commit_and_load_doc(&mut app, &source);
+        assert!(matches!(
+            document.virtual_copies[0]
+                .recipe
+                .geometry
+                .as_ref()
+                .and_then(|g| g.crop.as_ref()),
+            Some(Crop::Free { .. })
+        ));
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        // Clear the rect in a second commit: rotation survives, second step.
+        app.clear_crop();
+        let document = commit_and_load_doc(&mut app, &source);
+        let recipe = &document.virtual_copies[0].recipe;
+        assert!(recipe
+            .geometry
+            .as_ref()
+            .and_then(|g| g.crop.as_ref())
+            .is_none());
+        assert_eq!(
+            recipe.geometry.as_ref().map(|g| g.rotation_degrees),
+            Some(30.0_f32)
+        );
+        assert_eq!(document.virtual_copies[0].history.len(), 2);
+        let reopened = reopen_app(&source);
+        assert!(reopened
+            .recipe()
+            .geometry
+            .as_ref()
+            .and_then(|g| g.crop.as_ref())
+            .is_none());
+        assert_eq!(
+            reopened
+                .recipe()
+                .geometry
+                .as_ref()
+                .map(|g| g.rotation_degrees),
+            Some(30.0_f32)
+        );
+    }
+
+    /// G-06: lens profile + coefficients + perspective commit and reload;
+    /// the profile picker rejects unknown names loudly without touching
+    /// the recipe.
+    #[test]
+    fn g06_lens_profile_and_perspective_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_lens_profile("wide-light").unwrap();
+        app.set_lens_correction_value("ca_red", 0.01);
+        app.set_perspective_value("shift_x", -0.3);
+        let document = commit_and_load_doc(&mut app, &source);
+        let recipe = &document.virtual_copies[0].recipe;
+        assert_eq!(
+            recipe
+                .lens_correction
+                .as_ref()
+                .and_then(|l| l.profile.as_deref()),
+            Some("wide-light")
+        );
+        assert_eq!(
+            recipe.lens_correction.as_ref().and_then(|l| l.ca_red),
+            Some(0.01_f32)
+        );
+        assert_eq!(
+            recipe.perspective.as_ref().map(|p| p.shift_x),
+            Some(-0.3_f32)
+        );
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        let reopened = reopen_app(&source);
+        assert_eq!(
+            reopened
+                .recipe()
+                .lens_correction
+                .as_ref()
+                .and_then(|l| l.profile.as_deref()),
+            Some("wide-light")
+        );
+        // Unknown profile: loud error, recipe untouched, nothing armed.
+        assert!(app.set_lens_profile("fisheye-extreme").is_err());
+        assert!(app.set_crop_aspect("21:9").is_err());
+        assert!(app.set_crop_free(f64::NAN, 0.0, 1.0, 1.0).is_err());
+        assert_eq!(
+            app.recipe
+                .lens_correction
+                .as_ref()
+                .and_then(|l| l.profile.as_deref()),
+            Some("wide-light"),
+            "rejected edits must not touch the recipe"
+        );
+    }
+
+    /// G-06: non-geometry sliders keep the established no-history-commit
+    /// behaviour — only armed geometry steps append entries.
+    #[test]
+    fn g06_only_geometry_commits_append_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.0);
+        let document = commit_and_load_doc(&mut app, &source);
+        assert!(
+            document.virtual_copies[0].history.is_empty(),
+            "plain slider commits must not append history"
+        );
+        app.set_straighten(5.0);
+        let document = commit_and_load_doc(&mut app, &source);
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        let entry = &document.virtual_copies[0].history[0];
+        assert_eq!(
+            entry.extras.get("step").and_then(|v| v.as_str()),
+            Some("geometry")
+        );
+        assert_eq!(
+            entry.extras.get("action").and_then(|v| v.as_str()),
+            Some("geometry.straighten")
+        );
+    }
+
+    /// G-06: the crop overlay maps normalized rects into preview pixels
+    /// (free direct, aspect centered like the core crop, invalid → None).
+    #[test]
+    fn g06_crop_overlay_maps_normalized_rect() {
+        let img = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0));
+        assert!(LuminaApp::crop_overlay_rect(img, None, 400, 300).is_none());
+        let free = Crop::Free {
+            x: 0.25,
+            y: 0.5,
+            width: 0.5,
+            height: 0.25,
+        };
+        let rect = LuminaApp::crop_overlay_rect(img, Some(&free), 400, 300).unwrap();
+        assert_eq!(rect.min, egui::pos2(60.0, 70.0));
+        assert_eq!(rect.max, egui::pos2(160.0, 95.0));
+        // 1:1 on a 4:3 source centres horizontally (same math as core):
+        // x=(1-3/4)/2=0.125, w=0.75 → min.x=10+25=35, max.x=10+175=185.
+        let square = Crop::Aspect {
+            preset: AspectPreset::OneToOne,
+        };
+        let rect = LuminaApp::crop_overlay_rect(img, Some(&square), 400, 300).unwrap();
+        assert_eq!(rect.min, egui::pos2(35.0, 20.0));
+        assert_eq!(rect.max, egui::pos2(185.0, 120.0));
+        // Invalid rects map to None (never a painted lie); aspect presets
+        // need source dimensions, free rects do not.
+        let bad = Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.5,
+        };
+        assert!(LuminaApp::crop_overlay_rect(img, Some(&bad), 400, 300).is_none());
+        assert!(LuminaApp::crop_overlay_rect(img, Some(&square), 0, 300).is_none());
+        assert!(LuminaApp::crop_overlay_rect(img, Some(&free), 0, 300).is_some());
+    }
+
+    /// G-06: the Geometry section paints crop, aspect, straighten,
+    /// mirrors, perspective and the Lensfun auto status WITHOUT any
+    /// feature gate (both builds — F-093/F-099 are core-only).
+    #[test]
+    fn g06_geometry_section_paints_crop_and_straighten() {
+        let mut app = new_app();
+        app.set_section_open(SECTION_GEOMETRY, true);
+        // "Clear Crop" paints only while a crop is set — arm one first
+        // (paint-only, no commit needed).
+        app.set_crop_aspect("3:2").unwrap();
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_geometry(ui));
+        let texts = painted_texts(&shapes);
+        for want in [
+            Str::Crop.t(),
+            Str::Aspect.t(),
+            Str::Straighten.t(),
+            Str::MirrorHorizontal.t(),
+            Str::MirrorVertical.t(),
+            Str::Perspective.t(),
+            Str::ClearCrop.t(),
+        ] {
+            assert!(
+                texts.iter().any(|t| t == want),
+                "geometry control {want:?} must be painted, got {texts:?}"
+            );
+        }
+        assert!(
+            texts.iter().any(|t| t.starts_with("Lensfun auto:")),
+            "lensfun auto status must be painted, got {texts:?}"
+        );
+    }
+
+    /// G-06: the Lensfun auto status names the EXIF state (no EXIF vs.
+    /// snapshot) and the missing-capability reason without the feature.
+    #[test]
+    fn g06_lensfun_auto_status_names_exif_state() {
+        let app = new_app();
+        let status = app.lensfun_auto_status_text();
+        #[cfg(not(feature = "lensfun"))]
+        assert!(
+            status.contains("unavailable in this build"),
+            "got `{status}`"
+        );
+        #[cfg(feature = "lensfun")]
+        assert!(status.contains("no EXIF"), "got `{status}`");
+        let mut app = new_app();
+        app.loaded_lens_identity = Some(LensIdentity {
+            camera_make: Some("Canon".into()),
+            camera_model: Some("EOS R1".into()),
+            lens: Some("RF200-800".into()),
+            focal_length: Some(800.0),
+            aperture: Some(9.0),
+        });
+        let status = app.lensfun_auto_status_text();
+        #[cfg(feature = "lensfun")]
+        {
+            assert!(status.contains("Canon"), "got `{status}`");
+            assert!(status.contains("EOS R1"), "got `{status}`");
+            assert!(status.contains("RF200-800"), "got `{status}`");
+        }
+    }
+
     /// GUI-SLIDER-SAVE-1: mask layer sliders (feather/blur/density) and local
     /// adjustments commit, persist and reload.
     #[test]
@@ -26339,13 +27308,21 @@ mod tests {
         assert_ne!(Str::OpticsDistortionHint.t(), Str::OpticsCaHint.t());
         let mut app = new_app();
         if !cfg!(feature = "lensfun") {
-            // Without the native corrector the panel names the missing
-            // capability instead of the sliders (no silent empty section).
+            // G-06: the manual sliders paint WITHOUT the native feature
+            // (core-only model); only the auto status names the missing
+            // capability (no silent empty section, no hidden sliders).
+            app.set_section_open(SECTION_OPTICS, true);
             let shapes = headless_shapes(&mut app, |app, ui| app.draw_optics(ui));
             let texts = painted_texts(&shapes);
             assert!(
-                texts.iter().any(|t| t == Str::OpticsRequiresLensfun.t()),
-                "missing lensfun capability must be painted, got {texts:?}"
+                texts.iter().any(|t| t == Str::OpticsDistortionGroup.t()),
+                "manual distortion group must paint without lensfun, got {texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|t| t.contains("unavailable in this build")),
+                "missing lensfun capability must be named in the auto status, got {texts:?}"
             );
             return;
         }

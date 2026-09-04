@@ -199,9 +199,11 @@ Sidecars vollständig wiederherstellbar sein.
   Rauschreduzierung und Schärfen. Geometrisch gilt:
   Objektivkorrektur → Perspektive → Crop → Rotation → Spiegelung.
 - HSL verwendet acht getrennte Zentren: Rot, Orange, Gelb, Grün, Cyan, Blau,
-  Violett und Magenta. Lensfun ist Post-MVP und erfordert Lizenz- sowie
-  Capability-Prüfung gemäß F-078; KI-Denoise und automatische Upright-Analyse
-  sind ebenfalls Post-MVP.
+  Violett und Magenta. Lensfun-Vollausbau (Verzeichnung/CA/Vignettierung,
+  EXIF-Profil-Erkennung) ist MVP/1.0 (User-Entscheid 2026-09-03,
+  LRPAR-G06-GEO); nur die automatische Upright-Analyse ist 1.5
+  (LRPAR-G06-UPRIGHT-15). Lizenz- sowie Capability-Prüfung gemäß F-078;
+  KI-Denoise bleibt Post-MVP.
 - Auto-WB, Auto-Tone und Auto-Exposure persistieren Ergebnis und
   Analysefingerprint.
 - Der Raster-MVP misst sRGB-codierte RGBA8-RGB-Werte mit Rec.709-Gewichten,

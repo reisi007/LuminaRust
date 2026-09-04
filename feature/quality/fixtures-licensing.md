@@ -236,8 +236,8 @@ zählt zur F-078-Abnahme.
 
 | Punkt | Befund |
 | --- | --- |
-| Rolle | Automatische Objektivkorrektur (Distortion + Vignetting); CA bleibt manuell (F-098-N1-MVP-Grenze) |
-| Integration | Pre-MVP (F-098-N1), verifiziert 2026-08-20 |
+| Rolle | Automatische Objektivkorrektur (Distortion + Vignetting + TCA/CA via Lensfun seit G-06; manuelles `ca_red`/`ca_blue`-Modell nur noch für Profile ohne TCA-Kalibrierung) |
+| Integration | Pre-MVP (F-098-N1), verifiziert 2026-08-20; TCA-Vollausbau + EXIF-Lens-Erkennung + CLI/GUI-Parität mit G-06 (LRPAR-G06-GEO, MVP/1.0) |
 | Feature-Gating | `native`-Feature im Crate `lumina-lensfun` — **Standard AUS**; Default- und CI-Builds linken nichts und bleiben grün |
 | Linkart | **dynamisch** über `pkg-config` (`build.rs` → `cargo:rustc-link-lib=dylib=lensfun`), nur wenn `native` an |
 | Version (bewiesen) | **0.3.4** — `brew info lensfun` **und** `LF_VERSION_*` in `/opt/homebrew/include/lensfun/lensfun.h` (`LF_VERSION_MAJOR 0` / `_MINOR 3` / `_MICRO 4`) |

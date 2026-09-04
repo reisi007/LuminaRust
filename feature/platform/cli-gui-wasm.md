@@ -646,6 +646,57 @@ kollabierbare Untergruppe „Lens Blur“, kein zweiter Renderpfad):
   headless E2E-Tests (Setter → Datei → Reload); fehlendes Tiefenartefakt
   bricht Render/Export mit Exit 1 bzw. sichtbarem GUI-Fehler ab.
 
+### Geometrie-Parität G-06 (LRPAR-G06-GEO, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-06 (Feldsemantik,
+Stufenreihenfolge, Straighten-Alias, Lensfun-Vollausbau:
+`feature/architecture/pipeline.md` §§ F-093, F-098, F-099). Auto-Upright ist
+explizit **nicht** Teil dieses Slices (1.5, LRPAR-G06-UPRIGHT-15).
+
+- **Crop:** Aspect-Preset-Auswahl (`original`, `1:1`, `4:5`, `5:4`, `3:2`,
+  `2:3`, `4:3`, `3:4`, `16:9`, `9:16`) plus freie Rechteck-Felder
+  (`x`/`y`/`width`/`height`, normiert `0..=1`) plus Löschen-Button; ungültige
+  Rechtecke werden laut verweigert (Status + kein Save), nie still geclippt.
+  Das aktive Rechteck erscheint als Overlay-Rechteck in der Vorschau (reiner
+  Session-Display-State, UND-verknüpft mit dem G-11-`OverlayMode`).
+- **Straighten:** Slider `-180..=180` (Alias auf `geometry.rotation_degrees`,
+  gleiche Validierung/Renderwirkung wie Rotation) plus ±90°-Buttons; der
+  Crop-Modus-Badge (`R`) bleibt reine Anzeige, Edits laufen über diese
+  Controls.
+- **Spiegelung:** Checkboxen horizontal/vertikal über den normalen
+  Save/Render-Commit.
+- **Objektivkorrektur manuell:** Profil-Dropdown aus der Core-Whitelist
+  (`wide-light`/`tele-light`/`standard-neutral`, Freitext laut verweigert)
+  plus Koeffizienten-Slider (`distortion_k1..k3`, `vignette_c0..c2`,
+  `ca_red`/`ca_blue` in den F-098-Domänen).
+- **Lensfun-Status:** sichtbare Statuszeile (Profil gefunden mit
+  Distortion/Vignetting/TCA-Markierung vs. fehlt + Grund); kein stiller
+  Identitäts-Render. Die manuellen Crop-/Perspektiv-Controls sind **immer**
+  verfügbar (kein Lensfun-Feature-Gate — F-093/F-099 sind reine Core-Modelle).
+- **Perspektive manuell:** sieben Slider (`vertical`/`horizontal`/`rotation`
+  `-1..=1`, `scale`/`aspect_ratio` `0.1..=10`, `shift_x`/`shift_y` `-1..=1`)
+  über den normalen Save/Render-Commit.
+- **History-Regel:** Jeder Geometrie-Schritt ist genau ein sichtbarer
+  History-Eintrag — CLI: ein Eintrag pro mutierendem `geometry`-Aufruf;
+  GUI: pro gespeichertem Geometrie-Commit ein Eintrag (Slider-Drags
+  koaleszieren zu einem Eintrag je Commit, diskrete Aktionen je einer).
+- **CLI:** `lumina geometry --list` (Crop/Lens/Perspektive je Kopie),
+  `--set-crop-aspect PRESET`, `--set-crop-free x,y,w,h`, `--clear-crop`,
+  `--set-rotation DEG`, `--straighten DEG` (Alias), `--set-mirror
+  h|v|hv|none`, `--set-lens-profile NAME`, `--set-lens FELD WERT`,
+  `--clear-lens`, `--set-perspective FELD WERT`, `--clear-perspective`,
+  `--clear-geometry`, `--lensfun-status` (EXIF→Profil-Auflösung, laut mit
+  Grund bei Fehlschlag); Roundtrip über `save_sidecar`/`load_sidecar`, laute
+  Fehler (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller
+  Fallback, keine absoluten Pfade).
+- **Status (LRPAR-G06-GEO):** umgesetzt — Schema (bestand, additiv v2),
+  Core-Stufen (keine zweite Pipeline, Reihenfolge
+  Lens→Perspektive→Crop→Rotation→Spiegelung), TCA via Lensfun, CLI-Befehl,
+  GUI-Sektion (Crop/Straighten/Aspect/Spiegelung/Lens/Perspektive +
+  Lensfun-Status + Crop-Overlay) + headless E2E-Tests (Setter → Commit →
+  Datei → Reload, Preview-Änderung); GPU routet aktive Geometrie laut auf
+  CPU (Bestand).
+
 ### Color-Parität G-02 (LRPAR-G02-COLOR, Release 1.0)
 
 Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-02 (Feldsemantik,

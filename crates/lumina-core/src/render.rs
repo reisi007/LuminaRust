@@ -408,6 +408,8 @@ pub fn render_frame_from_base(
     base.apply_perspective_stage(
         context.recipe.lens_correction.as_ref(),
         context.recipe.perspective.as_ref(),
+        #[cfg(feature = "lensfun")]
+        context.lensfun.map(|LensfunCorrectorRef(c)| c),
     )?;
     if context
         .recipe
@@ -2392,6 +2394,160 @@ mod tests {
         );
     }
 
+    // ---- G-06 Lensfun-Vollausbau: TCA (feature-gated; fixture DB, hermetic) ----
+
+    /// Minimal fixture database XML with ONE lens carrying distortion
+    /// (PTLens) calibration; `with_tca` adds a poly3 TCA calibration line.
+    /// Same distortion in both variants isolates the TCA render effect.
+    #[cfg(feature = "lensfun")]
+    fn write_tca_isolation_fixture(tag: &str, with_tca: bool) -> std::path::PathBuf {
+        let tca = if with_tca {
+            r#"<tca model="poly3" focal="50" vr="1.005" vb="0.995"/>"#
+        } else {
+            "<!-- no TCA calibration -->"
+        };
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<lensdatabase>
+    <camera>
+        <maker>Lumina TCA Corp</maker>
+        <model>Lumina TCA Body</model>
+        <mount>LuminaTcaMount</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+    <lens>
+        <maker>Lumina TCA Corp</maker>
+        <model>Lumina TCA 50mm f/2.8</model>
+        <mount>LuminaTcaMount</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="50" a="0.08" b="-0.10" c="0.02"/>
+            {tca}
+        </calibration>
+    </lens>
+</lensdatabase>
+"#
+        );
+        let path =
+            std::env::temp_dir().join(format!("lumina-core-tca-{tag}-{}.xml", std::process::id()));
+        std::fs::write(&path, xml).expect("write tca fixture database");
+        path
+    }
+
+    #[cfg(feature = "lensfun")]
+    fn tca_fixture_corrector(
+        tag: &str,
+        with_tca: bool,
+    ) -> (lumina_lensfun::LensfunDb, lumina_lensfun::Corrector) {
+        use lumina_lensfun::{Corrector, LensfunDb};
+        let path = write_tca_isolation_fixture(tag, with_tca);
+        let db = LensfunDb::load_file(&path).expect("tca fixture database must load");
+        let _ = std::fs::remove_file(&path);
+        let corrector = Corrector::for_camera(
+            &db,
+            "Lumina TCA Corp",
+            "Lumina TCA Body",
+            None,
+            120,
+            80,
+            50.0,
+            2.8,
+            10.0,
+        )
+        .expect("tca fixture corrector must be built");
+        (db, corrector)
+    }
+
+    /// A TCA-capable corrector must shift R/B relative to G in the render:
+    /// with the same distortion, the TCA render differs from the non-TCA
+    /// render at the corners (G-06 Lensfun-Vollausbau, TCA path active).
+    #[cfg(feature = "lensfun")]
+    #[test]
+    fn tca_corrector_render_differs_from_non_tca_render() {
+        let (_tca_db, tca) = tca_fixture_corrector("diff-tca", true);
+        let (_plain_db, plain) = tca_fixture_corrector("diff-plain", false);
+        assert!(tca.has_tca());
+        assert!(!plain.has_tca());
+        let frame = lensfun_gradient_frame(120, 80);
+        let recipe = EditRecipe::default();
+        let render_with = |corrector: &lumina_lensfun::Corrector| {
+            render_frame(
+                &frame,
+                &RenderContext {
+                    recipe: &recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: Some(LensfunCorrectorRef(corrector)),
+                    depth: None,
+                },
+            )
+            .unwrap()
+            .frame
+        };
+        let tca_frame = render_with(&tca);
+        let plain_frame = render_with(&plain);
+        assert_ne!(
+            tca_frame.pixels, plain_frame.pixels,
+            "TCA render must differ from the same-distortion non-TCA render"
+        );
+        // Deterministic: the same TCA render repeats byte-identically.
+        assert_eq!(tca_frame.pixels, render_with(&tca).pixels);
+    }
+
+    /// No double correction: with a TCA-capable corrector the manual
+    /// `ca_red`/`ca_blue` model is skipped, so setting manual CA changes
+    /// nothing (byte-identical renders); without a corrector the same manual
+    /// CA visibly applies (existing behaviour preserved).
+    #[cfg(feature = "lensfun")]
+    #[test]
+    fn manual_ca_skipped_under_tca_corrector_and_applied_without() {
+        use lumina_sidecar::LensCorrection;
+        let (_tca_db, tca) = tca_fixture_corrector("skip-tca", true);
+        let frame = lensfun_gradient_frame(120, 80);
+        let mut recipe = EditRecipe::default();
+        recipe.lens_correction = Some(LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: None,
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: Some(0.02),
+            ca_blue: Some(-0.02),
+        });
+        let plain_recipe = EditRecipe::default();
+        let render_with = |recipe: &EditRecipe, corrector: Option<&lumina_lensfun::Corrector>| {
+            render_frame(
+                &frame,
+                &RenderContext {
+                    recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: corrector.map(LensfunCorrectorRef),
+                    depth: None,
+                },
+            )
+            .unwrap()
+            .frame
+        };
+        // Under TCA: manual CA is skipped → identical to no-manual-CA.
+        assert_eq!(
+            render_with(&recipe, Some(&tca)).pixels,
+            render_with(&plain_recipe, Some(&tca)).pixels,
+            "manual CA must be skipped when Lensfun TCA is active"
+        );
+        // Without a corrector: manual CA applies → differs from identity.
+        assert_ne!(
+            render_with(&recipe, None).pixels,
+            render_with(&plain_recipe, None).pixels,
+            "manual CA must still apply without a Lensfun corrector"
+        );
+    }
+
     // ---- GEN-FILL-01: auto-fill transparent after lens ----
 
     fn checker_8x8() -> ImageFrame {
@@ -2694,7 +2850,12 @@ mod tests {
         let ge = recipe.generative_edit.as_ref().unwrap();
         manual.apply_auto_fill_transparent(true, ge.seed.unwrap_or(0));
         manual
-            .apply_perspective_stage(recipe.lens_correction.as_ref(), recipe.perspective.as_ref())
+            .apply_perspective_stage(
+                recipe.lens_correction.as_ref(),
+                recipe.perspective.as_ref(),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         manual = crate::generative::apply_generative_expand(&manual, &recipe).unwrap();
         manual.apply_crop_stage(recipe.geometry.as_ref()).unwrap();
@@ -2815,7 +2976,12 @@ mod tests {
         assert!(forward.apply_auto_fill_transparent(true, 11));
         assert!(!crate::generative::has_transparent_pixels(&forward));
         forward
-            .apply_perspective_stage(None, Some(&perspective))
+            .apply_perspective_stage(
+                None,
+                Some(&perspective),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         assert_eq!(rendered.pixels, forward.pixels);
 
@@ -2829,7 +2995,12 @@ mod tests {
             )
             .unwrap();
         reversed
-            .apply_perspective_stage(None, Some(&perspective))
+            .apply_perspective_stage(
+                None,
+                Some(&perspective),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
             .unwrap();
         reversed.apply_auto_fill_transparent(true, 11);
         assert_eq!(
