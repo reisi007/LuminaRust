@@ -69,8 +69,10 @@ Migrationszwang pre-MVP):
 - **Historie:** `rev` startet bei 1 und ist streng monoton; je Mutation ein
   Eintrag mit `timestamp` (RFC 3339, UTC), `origin`
   (`manual` | `preset:<name>` | `sync:<quell-sidecar-id>` | `cli` | `gui` |
-  `mcp`) und `changed` (Liste betroffener Feld-IDs). Cap **100 Einträge**,
-  FIFO (älteste fallen deterministisch). Die Historie ist Herkunfts-/Diagnose-
+  `mcp`) und `changed` (Liste betroffener Feld-IDs). Speicherordnung
+  neueste-zuerst (der erste Eintrag trägt die höchste `rev`); neue Einträge
+  werden vorangestellt. Cap **100 Einträge**, FIFO (älteste fallen
+  deterministisch vom Ende). Die Historie ist Herkunfts-/Diagnose-
   kontext, **kein Undo**; Leeren nur als ausdrückliche Operation.
 - **Persistenz:** jede Mutation via `load → mutate → validate → save`
   (CAS/`save_sidecar_if_unchanged`, atomarer Write, pro-Ziel-Schreiblock wie

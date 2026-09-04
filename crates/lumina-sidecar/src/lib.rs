@@ -41,6 +41,47 @@ pub const MAX_COLLECTIONS_PER_DOCUMENT: usize = 512;
 pub const MAX_COLLECTION_ID_CHARS: usize = 128;
 pub const MAX_COLLECTION_NAME_CHARS: usize = 256;
 
+/// LRPAR-G15-IPTC-S1: current schema version of the source-level IPTC
+/// metadata draft (`SidecarDocument::metadata`). Independent of
+/// `SCHEMA_VERSION`; an unknown `version` is rejected during validation
+/// rather than silently ignored.
+pub const METADATA_DRAFT_VERSION: u8 = 1;
+/// LRPAR-G15-IPTC-S1: maximum number of entries kept in the metadata draft
+/// history. New entries are prepended (newest first); once a mutation would
+/// exceed the cap, the oldest entries fall off the end deterministically.
+/// A persisted history longer than the cap fails validation loudly — it is
+/// never truncated silently.
+pub const MAX_METADATA_HISTORY_ENTRIES: usize = 100;
+/// LRPAR-G15-IPTC-S1: the fixed draft field registry (SOLL §4). `keywords`
+/// is deliberately *not* a draft field — it stays the existing source-level
+/// sidecar field and is only routed/carried by draft UI, sync and export.
+pub const METADATA_FIELD_IDS: &[&str] = &[
+    "title",
+    "headline",
+    "description",
+    "copyright_notice",
+    "creator",
+    "credit",
+    "source",
+    "city",
+    "state_province",
+    "country",
+    "date_created",
+];
+/// LRPAR-G15-IPTC-S1: per-field Sidecar character limits (SOLL §4).
+/// `date_created` carries no character limit; it is constrained to the
+/// `YYYY-MM-DD` format instead (see [`validate_metadata_date_created`]).
+pub const MAX_METADATA_TITLE_CHARS: usize = 256;
+pub const MAX_METADATA_HEADLINE_CHARS: usize = 256;
+pub const MAX_METADATA_DESCRIPTION_CHARS: usize = 2000;
+pub const MAX_METADATA_COPYRIGHT_NOTICE_CHARS: usize = 256;
+pub const MAX_METADATA_CREATOR_CHARS: usize = 256;
+pub const MAX_METADATA_CREDIT_CHARS: usize = 256;
+pub const MAX_METADATA_SOURCE_CHARS: usize = 256;
+pub const MAX_METADATA_CITY_CHARS: usize = 128;
+pub const MAX_METADATA_STATE_PROVINCE_CHARS: usize = 128;
+pub const MAX_METADATA_COUNTRY_CHARS: usize = 128;
+
 /// G-15 META-MVP (Slice 1): current schema version for a persisted smart
 /// collection definition. Independent of `SCHEMA_VERSION`; an unknown
 /// `version` is rejected during validation rather than silently ignored.
@@ -1911,6 +1952,531 @@ pub fn apply_batch_op(document: &mut SidecarDocument, op: &BatchOp) -> Result<bo
     }
 }
 
+/// LRPAR-G15-IPTC-S1: one entry of the metadata draft history. The history
+/// is provenance/diagnostic context — **not** an undo log. Entries are
+/// stored newest-first (the first entry carries the highest `rev`);
+/// [`SidecarDocument::apply_metadata_draft`] and the clear helpers prepend
+/// exactly one entry per mutating call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetadataHistoryEntry {
+    /// Strictly monotonous revision, starting at 1. Strictly decreasing in
+    /// stored order (newest first).
+    pub rev: u64,
+    /// RFC 3339 UTC timestamp (`YYYY-MM-DDTHH:MM:SS[.frac]Z`), e.g.
+    /// `2026-09-04T10:00:00Z`.
+    pub timestamp: String,
+    /// Mutation origin: `manual` | `cli` | `gui` | `mcp` |
+    /// `preset:<name>` | `sync:<quell-sidecar-id>`.
+    pub origin: String,
+    /// Registry field IDs affected by the mutation (`keywords` allowed: a
+    /// sync may carry keywords alongside draft fields). Sorted
+    /// deterministically by the mutation helpers.
+    pub changed: Vec<String>,
+}
+
+/// LRPAR-G15-IPTC-S1: the source-level IPTC metadata draft. Additive and
+/// optional: absent in older sidecars reads as the empty draft (see the
+/// `Default` impl) and an empty draft serializes back absent, so legacy
+/// documents stay byte-stable. Drafts live on source-image level — never
+/// per virtual copy — and sync/bake-in never touch recipes, masks or the
+/// per-copy edit history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetadataDraft {
+    #[serde(default = "metadata_draft_version_default")]
+    pub version: u8,
+    /// Draft values keyed by registry field ID. A stored value is always
+    /// trimmed and non-empty; clearing a field removes its key (see
+    /// [`SidecarDocument::apply_metadata_draft`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub draft: BTreeMap<String, String>,
+    /// Provenance history, newest first, capped at
+    /// [`MAX_METADATA_HISTORY_ENTRIES`] entries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<MetadataHistoryEntry>,
+}
+
+fn metadata_draft_version_default() -> u8 {
+    METADATA_DRAFT_VERSION
+}
+
+impl Default for MetadataDraft {
+    fn default() -> Self {
+        Self {
+            version: METADATA_DRAFT_VERSION,
+            draft: BTreeMap::new(),
+            history: Vec::new(),
+        }
+    }
+}
+
+impl MetadataDraft {
+    /// True when both the draft map and the history are empty — the legacy
+    /// identity, serialized back absent on `SidecarDocument`.
+    pub fn is_empty(&self) -> bool {
+        self.draft.is_empty() && self.history.is_empty()
+    }
+
+    /// Current draft value of `field`, if set.
+    pub fn get(&self, field: &str) -> Option<&str> {
+        self.draft.get(field).map(String::as_str)
+    }
+
+    /// Highest `rev` in the history, or 0 when the history is empty. The
+    /// next mutation entry carries `latest_rev() + 1`.
+    pub fn latest_rev(&self) -> u64 {
+        self.history.first().map(|entry| entry.rev).unwrap_or(0)
+    }
+
+    fn validate(&self) -> Result<(), SidecarError> {
+        if self.version != METADATA_DRAFT_VERSION {
+            return invalid(format!(
+                "unsupported metadata version {} (expected {METADATA_DRAFT_VERSION})",
+                self.version
+            ));
+        }
+        for (field, value) in &self.draft {
+            validate_metadata_field_id(field)?;
+            validate_metadata_stored_value(field, value)?;
+        }
+        if self.history.len() > MAX_METADATA_HISTORY_ENTRIES {
+            return invalid(format!(
+                "metadata history exceeds limit of {MAX_METADATA_HISTORY_ENTRIES} entries"
+            ));
+        }
+        let mut previous_rev: Option<u64> = None;
+        for entry in &self.history {
+            if entry.rev == 0 {
+                return invalid("metadata history rev must start at 1");
+            }
+            if let Some(previous) = previous_rev {
+                if entry.rev >= previous {
+                    return invalid(
+                        "metadata history rev must be strictly decreasing (newest first)",
+                    );
+                }
+            }
+            previous_rev = Some(entry.rev);
+            validate_metadata_timestamp(&entry.timestamp)?;
+            validate_metadata_origin(&entry.origin)?;
+            if entry.changed.is_empty() {
+                return invalid(format!(
+                    "metadata history rev {} must list at least one changed field",
+                    entry.rev
+                ));
+            }
+            let mut seen = BTreeSet::new();
+            for field in &entry.changed {
+                validate_metadata_changed_id(field)?;
+                if !seen.insert(field) {
+                    return invalid(format!(
+                        "metadata history rev {} lists duplicate changed field `{field}`",
+                        entry.rev
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// LRPAR-G15-IPTC-S1: true for the 11 registered draft field IDs (SOLL §4).
+/// `keywords` is *not* a draft field (see [`METADATA_FIELD_IDS`]).
+pub fn is_metadata_field(id: &str) -> bool {
+    METADATA_FIELD_IDS.contains(&id)
+}
+
+/// LRPAR-G15-IPTC-S1: Sidecar character limit of a registered draft field,
+/// or `None` for `date_created` (format-constrained instead). Returns `None`
+/// for unknown IDs as well — callers must reject those loudly via
+/// [`validate_metadata_field_id`].
+pub fn metadata_field_limit(field: &str) -> Option<usize> {
+    match field {
+        "title" => Some(MAX_METADATA_TITLE_CHARS),
+        "headline" => Some(MAX_METADATA_HEADLINE_CHARS),
+        "description" => Some(MAX_METADATA_DESCRIPTION_CHARS),
+        "copyright_notice" => Some(MAX_METADATA_COPYRIGHT_NOTICE_CHARS),
+        "creator" => Some(MAX_METADATA_CREATOR_CHARS),
+        "credit" => Some(MAX_METADATA_CREDIT_CHARS),
+        "source" => Some(MAX_METADATA_SOURCE_CHARS),
+        "city" => Some(MAX_METADATA_CITY_CHARS),
+        "state_province" => Some(MAX_METADATA_STATE_PROVINCE_CHARS),
+        "country" => Some(MAX_METADATA_COUNTRY_CHARS),
+        "date_created" => None,
+        _ => None,
+    }
+}
+
+/// LRPAR-G15-IPTC-S1: rejects unknown draft field IDs loudly. `keywords`
+/// gets an explicit routing hint instead of the generic unknown-ID error:
+/// it stays the existing source-level sidecar field and is never duplicated
+/// into the draft map.
+fn validate_metadata_field_id(field: &str) -> Result<(), SidecarError> {
+    if is_metadata_field(field) {
+        return Ok(());
+    }
+    if field == "keywords" {
+        return invalid(
+            "keywords is not a metadata draft field; use the document `keywords` field",
+        );
+    }
+    invalid(format!("unknown metadata field `{field}`"))
+}
+
+/// LRPAR-G15-IPTC-S1: IDs allowed in a history `changed` list — the draft
+/// registry plus `keywords` (a field-selective sync may carry keywords
+/// alongside draft fields; see SOLL §6).
+fn validate_metadata_changed_id(field: &str) -> Result<(), SidecarError> {
+    if is_metadata_field(field) || field == "keywords" {
+        return Ok(());
+    }
+    invalid(format!("unknown metadata changed field `{field}`"))
+}
+
+/// LRPAR-G15-IPTC-S1: validates a candidate new value *before* mutation.
+/// An empty or whitespace-only value is accepted and means "remove the
+/// field" (see [`SidecarDocument::apply_metadata_draft`]); anything else
+/// must be trimmed, free of control characters, within the field limit, and
+/// — for `date_created` — a valid `YYYY-MM-DD` date. Unknown IDs fail
+/// loudly; nothing is ever normalized silently.
+pub fn validate_metadata_field_value(field: &str, value: &str) -> Result<(), SidecarError> {
+    validate_metadata_field_id(field)?;
+    if value.is_empty() || value.trim().is_empty() {
+        return Ok(());
+    }
+    if value != value.trim() {
+        return invalid(format!(
+            "metadata field `{field}` must be trimmed (no leading/trailing whitespace)"
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return invalid(format!(
+            "metadata field `{field}` must not contain control characters"
+        ));
+    }
+    if field == "date_created" {
+        return validate_metadata_date_created(value);
+    }
+    if let Some(limit) = metadata_field_limit(field) {
+        if value.chars().count() > limit {
+            return invalid(format!(
+                "metadata field `{field}` exceeds limit of {limit} characters"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// LRPAR-G15-IPTC-S1: validates an already-stored draft value. Unlike the
+/// mutation input (where empty means "remove"), a persisted empty or
+/// untrimmed value is a loud schema violation — helpers never write such
+/// states, so their presence means hand-editing or corruption.
+fn validate_metadata_stored_value(field: &str, value: &str) -> Result<(), SidecarError> {
+    if value.is_empty() || value != value.trim() {
+        return invalid(format!(
+            "metadata field `{field}` must be stored trimmed and non-empty"
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return invalid(format!(
+            "metadata field `{field}` must not contain control characters"
+        ));
+    }
+    if field == "date_created" {
+        return validate_metadata_date_created(value);
+    }
+    if let Some(limit) = metadata_field_limit(field) {
+        if value.chars().count() > limit {
+            return invalid(format!(
+                "metadata field `{field}` exceeds limit of {limit} characters"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// LRPAR-G15-IPTC-S1: `date_created` accepts exactly `YYYY-MM-DD` with a
+/// calendar-valid month/day (including leap years). Anything else —
+/// datetimes, other separators, out-of-range months or impossible days —
+/// fails loudly.
+fn validate_metadata_date_created(value: &str) -> Result<(), SidecarError> {
+    const HINT: &str = "metadata field `date_created` must use format `YYYY-MM-DD`";
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return invalid(HINT);
+    }
+    let digits = |range: std::ops::Range<usize>| -> Option<u32> {
+        let slice = value.get(range)?;
+        if !slice.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        slice.parse().ok()
+    };
+    let (Some(year), Some(month), Some(day)) = (digits(0..4), digits(5..7), digits(8..10)) else {
+        return invalid(HINT);
+    };
+    if !(1..=12).contains(&month) {
+        return invalid(HINT);
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day == 0 || day > max_day {
+        return invalid(HINT);
+    }
+    Ok(())
+}
+
+/// LRPAR-G15-IPTC-S1: validates a history `origin`: `manual` | `cli` |
+/// `gui` | `mcp` | `preset:<name>` | `sync:<quell-sidecar-id>`. The suffixed
+/// forms require a trimmed, non-empty name without control characters; a
+/// leading `/` is rejected so no absolute path can hide in `metadata`
+/// (SOLL invariant "keine absoluten Pfade"). Unknown origins fail loudly.
+pub fn validate_metadata_origin(origin: &str) -> Result<(), SidecarError> {
+    const SIMPLE: &[&str] = &["manual", "cli", "gui", "mcp"];
+    if SIMPLE.contains(&origin) {
+        return Ok(());
+    }
+    for prefix in ["preset:", "sync:"] {
+        if let Some(name) = origin.strip_prefix(prefix) {
+            if name.is_empty()
+                || name != name.trim()
+                || name.chars().any(char::is_control)
+                || name.starts_with('/')
+            {
+                return invalid(format!(
+                    "metadata origin `{origin}` has an invalid `{prefix}` name \
+                     (must be trimmed, non-empty, without control characters or leading `/`)"
+                ));
+            }
+            return Ok(());
+        }
+    }
+    invalid(format!(
+        "unknown metadata origin `{origin}` \
+         (expected `manual`|`cli`|`gui`|`mcp`|`preset:<name>`|`sync:<quell-id>`)"
+    ))
+}
+
+/// LRPAR-G15-IPTC-S1: validates a history `timestamp` as canonical RFC 3339
+/// UTC (`YYYY-MM-DDTHH:MM:SS[.frac]Z` with calendar-valid fields). Offsets
+/// (`+02:00`) and offset-less datetimes are rejected loudly — history
+/// timestamps are always UTC (`Z`).
+pub fn validate_metadata_timestamp(timestamp: &str) -> Result<(), SidecarError> {
+    const HINT: &str = "metadata timestamp must be RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`)";
+    let inner = timestamp
+        .strip_suffix('Z')
+        .ok_or_else(|| SidecarError::Invalid(HINT.into()))?;
+    let (date, time) = inner
+        .split_once('T')
+        .ok_or_else(|| SidecarError::Invalid(HINT.into()))?;
+    let date_parts: Vec<&str> = date.split('-').collect();
+    let time_parts: Vec<&str> = time.split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() != 3 {
+        return invalid(HINT);
+    }
+    let number = |part: &str, len: usize| -> Option<u32> {
+        if part.len() != len || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        part.parse().ok()
+    };
+    let (Some(year), Some(month), Some(day)) = (
+        number(date_parts[0], 4),
+        number(date_parts[1], 2),
+        number(date_parts[2], 2),
+    ) else {
+        return invalid(HINT);
+    };
+    let (Some(hour), Some(minute)) = (number(time_parts[0], 2), number(time_parts[1], 2)) else {
+        return invalid(HINT);
+    };
+    let second = match time_parts[2].split_once('.') {
+        None => number(time_parts[2], 2),
+        Some((secs, frac)) => {
+            if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) {
+                None
+            } else {
+                number(secs, 2)
+            }
+        }
+    };
+    let Some(second) = second else {
+        return invalid(HINT);
+    };
+    if month == 0 || month > 12 || hour > 23 || minute > 59 || second > 59 {
+        return invalid(HINT);
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day == 0 || day > max_day {
+        return invalid(HINT);
+    }
+    Ok(())
+}
+
+/// LRPAR-G15-IPTC-S1: current UTC time as canonical RFC 3339 (`...Z`),
+/// std-only (no date crate needed in this crate). Mutation helpers take an
+/// explicit `timestamp` so tests stay deterministic; CLI/GUI/MCP slices use
+/// this constructor for real mutations.
+pub fn now_rfc3339_utc() -> String {
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let second_of_day = secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second_of_day / 3_600,
+        (second_of_day % 3_600) / 60,
+        second_of_day % 60
+    )
+}
+
+/// Days since the Unix epoch → (year, month, day). Howard Hinnant's
+/// `civil_from_days` algorithm; Euclidean division keeps pre-1970 inputs
+/// well-defined (practically unreachable: falls back to the epoch).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_prime + 2) / 5 + 1) as u32;
+    let month = (if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    }) as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+impl SidecarDocument {
+    /// LRPAR-G15-IPTC-S1: sets draft fields and records one history entry.
+    /// `fields` maps registry field IDs to new values; an empty or
+    /// whitespace-only value removes the field ("leer = Feld entfernen").
+    /// All-or-nothing per call: any unknown ID or invalid value rejects the
+    /// whole call and leaves the document unchanged. Returns `Ok(true)` when
+    /// the draft changed (exactly one history entry prepended, `rev =
+    /// latest + 1`, `changed` = actually affected IDs in sorted order) and
+    /// `Ok(false)` for idempotent no-ops (no entry appended). Recipes,
+    /// masks and per-copy edit history are never touched.
+    pub fn apply_metadata_draft(
+        &mut self,
+        fields: &BTreeMap<String, String>,
+        origin: &str,
+        timestamp: &str,
+    ) -> Result<bool, SidecarError> {
+        validate_metadata_origin(origin)?;
+        validate_metadata_timestamp(timestamp)?;
+        for (field, value) in fields {
+            validate_metadata_field_value(field, value)?;
+        }
+        let mut draft = self.metadata.draft.clone();
+        let mut changed = BTreeSet::new();
+        for (field, value) in fields {
+            if value.is_empty() || value.trim().is_empty() {
+                if draft.remove(field).is_some() {
+                    changed.insert(field.clone());
+                }
+            } else if draft.get(field).map(String::as_str) != Some(value.as_str()) {
+                draft.insert(field.clone(), value.clone());
+                changed.insert(field.clone());
+            }
+        }
+        if changed.is_empty() {
+            return Ok(false);
+        }
+        self.metadata.draft = draft;
+        self.push_metadata_history(origin, timestamp, changed.into_iter().collect());
+        self.validate().map(|()| true)
+    }
+
+    /// LRPAR-G15-IPTC-S1: removes the given draft fields (unknown IDs fail
+    /// loudly, all-or-nothing). `Ok(false)` when none of the fields was set
+    /// (no history entry); otherwise one entry with the removed IDs.
+    pub fn clear_metadata_fields(
+        &mut self,
+        fields: &[&str],
+        origin: &str,
+        timestamp: &str,
+    ) -> Result<bool, SidecarError> {
+        validate_metadata_origin(origin)?;
+        validate_metadata_timestamp(timestamp)?;
+        for field in fields {
+            validate_metadata_field_id(field)?;
+        }
+        let mut removed = BTreeSet::new();
+        for field in fields {
+            if self.metadata.draft.remove(*field).is_some() {
+                removed.insert((*field).to_string());
+            }
+        }
+        if removed.is_empty() {
+            return Ok(false);
+        }
+        self.push_metadata_history(origin, timestamp, removed.into_iter().collect());
+        self.validate().map(|()| true)
+    }
+
+    /// LRPAR-G15-IPTC-S1: removes every draft field (`--all`; the history
+    /// itself is kept and gains one entry listing the removed IDs).
+    /// `Ok(false)` when the draft was already empty (history untouched).
+    pub fn clear_metadata_draft(
+        &mut self,
+        origin: &str,
+        timestamp: &str,
+    ) -> Result<bool, SidecarError> {
+        validate_metadata_origin(origin)?;
+        validate_metadata_timestamp(timestamp)?;
+        if self.metadata.draft.is_empty() {
+            return Ok(false);
+        }
+        let removed: Vec<String> = self.metadata.draft.keys().cloned().collect();
+        self.metadata.draft.clear();
+        self.push_metadata_history(origin, timestamp, removed);
+        self.validate().map(|()| true)
+    }
+
+    /// LRPAR-G15-IPTC-S1: explicitly clears the whole draft history (the
+    /// only way to empty it; there is no undo). Idempotent: clearing an
+    /// already-empty history is a no-op. Draft values are kept.
+    pub fn clear_metadata_history(&mut self) {
+        self.metadata.history.clear();
+    }
+
+    /// Prepends one history entry (`rev = latest + 1`) and enforces the FIFO
+    /// cap deterministically (oldest entries fall off the end). Callers have
+    /// validated `origin`/`timestamp` and computed a non-empty, sorted
+    /// `changed` list.
+    fn push_metadata_history(&mut self, origin: &str, timestamp: &str, changed: Vec<String>) {
+        let rev = self.metadata.latest_rev() + 1;
+        self.metadata.history.insert(
+            0,
+            MetadataHistoryEntry {
+                rev,
+                timestamp: timestamp.to_string(),
+                origin: origin.to_string(),
+                changed,
+            },
+        );
+        self.metadata.history.truncate(MAX_METADATA_HISTORY_ENTRIES);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VirtualCopy {
     pub id: String,
@@ -1953,6 +2519,12 @@ pub struct SidecarDocument {
     /// Additive: absent in older sidecars reads as empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub collections: Vec<CollectionMembership>,
+    /// LRPAR-G15-IPTC-S1: source-level IPTC metadata draft (draft map plus
+    /// its own provenance history, separate from the per-copy edit
+    /// history). Additive: absent in older sidecars reads as the empty
+    /// draft and an empty draft serializes back absent.
+    #[serde(default, skip_serializing_if = "MetadataDraft::is_empty")]
+    pub metadata: MetadataDraft,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
 }
@@ -2629,6 +3201,7 @@ impl SidecarDocument {
             presets: vec![],
             keywords: vec![],
             collections: vec![],
+            metadata: MetadataDraft::default(),
             extras: Extras::new(),
         }
     }
@@ -2824,6 +3397,9 @@ impl SidecarDocument {
                 }
             }
         }
+        // LRPAR-G15-IPTC-S1: source-level metadata draft (own history,
+        // separate from the per-copy edit history below).
+        self.metadata.validate()?;
         if self.virtual_copies.is_empty() {
             return invalid("at least one virtual copy is required");
         }
@@ -8660,5 +9236,543 @@ mod tests {
         assert!(validate_adjustments(&recipe).is_err());
         recipe.options.remove(DEVELOP_PROFILE_KEY);
         validate_adjustments(&recipe).unwrap();
+    }
+
+    // =====================================================================
+    // LRPAR-G15-IPTC-S1: Sidecar-`metadata`-Draft (Datenmodell, Validierung,
+    // Historie, CAS-Persistenz).
+    // =====================================================================
+
+    fn draft_fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
+    fn metadata_doc() -> SidecarDocument {
+        SidecarDocument::new(source(), "pipeline-1")
+    }
+
+    #[test]
+    fn iptc_s1_absent_metadata_reads_as_empty_and_serializes_absent() {
+        // Legacy JSON without the additive key: absent = empty draft.
+        let json = r#"{"format":"lumina-sidecar","schema_version":2,"source":{"relative_name":"x","content_hash":"h","byte_length":1,"raw_format":"PNG","orientation":1,"decode_fingerprint":{"decoder":"d","version":"1","parameters":{}},"geometry_fingerprint":{"width":1,"height":1,"orientation":1,"pixel_aspect_ratio":1.0}},"pipeline_version":"p","presets":[],"virtual_copies":[{"id":"vc-original","name":"Original","is_default":true,"recipe":{},"mask_library":[],"mask_layers":[],"history":[],"export_records":[]}]}"#;
+        let decoded = SidecarDocument::from_json(json).unwrap();
+        assert!(decoded.metadata.is_empty());
+        assert_eq!(decoded.metadata.version, METADATA_DRAFT_VERSION);
+        assert_eq!(decoded.metadata.latest_rev(), 0);
+        // Empty drafts serialize back absent: legacy documents stay byte-stable.
+        let reserialized = decoded.to_json().unwrap();
+        assert!(
+            !reserialized.contains("\"metadata\""),
+            "empty draft must serialize absent, got {reserialized}"
+        );
+        // A fresh document behaves the same.
+        assert!(metadata_doc().metadata.is_empty());
+        assert!(!metadata_doc().to_json().unwrap().contains("\"metadata\""));
+    }
+
+    #[test]
+    fn iptc_s1_draft_roundtrip_file() {
+        let mut doc = metadata_doc();
+        doc.apply_metadata_draft(
+            &draft_fields(&[
+                ("title", "Startschuss"),
+                ("description", "Mehrzeilige … Beschreibung"),
+                ("city", "Berlin"),
+                ("date_created", "2026-09-04"),
+            ]),
+            "manual",
+            "2026-09-04T09:30:00Z",
+        )
+        .unwrap();
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Zieleinlauf"), ("creator", "Fotografin Ü")]),
+            "preset:veranstaltung",
+            "2026-09-04T10:00:00Z",
+        )
+        .unwrap();
+        // JSON roundtrip is a fixed point, newest entry first.
+        let json = doc.to_json().unwrap();
+        assert!(json.contains("\"metadata\""));
+        let decoded = SidecarDocument::from_json(&json).unwrap();
+        assert_eq!(decoded, doc);
+        assert_eq!(decoded.metadata.history.len(), 2);
+        assert_eq!(decoded.metadata.history[0].rev, 2);
+        assert_eq!(decoded.metadata.history[1].rev, 1);
+        assert_eq!(decoded.metadata.get("title"), Some("Zieleinlauf"));
+        // File roundtrip through the atomic + CAS write path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("IMG_0001.ARW.lumina.json");
+        save_sidecar(&path, &doc).unwrap();
+        let reloaded = load_sidecar(&path).unwrap();
+        assert_eq!(reloaded, doc);
+        let revision = document_revision(&doc).unwrap();
+        let saved_revision = save_sidecar_if_unchanged(&path, &reloaded, Some(&revision)).unwrap();
+        assert_eq!(saved_revision, revision);
+    }
+
+    #[test]
+    fn iptc_s1_validation_matrix() {
+        // Per-field limits: exactly at the limit passes, one char over fails.
+        for (field, limit) in [
+            ("title", MAX_METADATA_TITLE_CHARS),
+            ("headline", MAX_METADATA_HEADLINE_CHARS),
+            ("description", MAX_METADATA_DESCRIPTION_CHARS),
+            ("copyright_notice", MAX_METADATA_COPYRIGHT_NOTICE_CHARS),
+            ("creator", MAX_METADATA_CREATOR_CHARS),
+            ("credit", MAX_METADATA_CREDIT_CHARS),
+            ("source", MAX_METADATA_SOURCE_CHARS),
+            ("city", MAX_METADATA_CITY_CHARS),
+            ("state_province", MAX_METADATA_STATE_PROVINCE_CHARS),
+            ("country", MAX_METADATA_COUNTRY_CHARS),
+        ] {
+            assert_eq!(metadata_field_limit(field), Some(limit));
+            validate_metadata_field_value(field, &"x".repeat(limit)).unwrap();
+            assert!(
+                validate_metadata_field_value(field, &"x".repeat(limit + 1)).is_err(),
+                "field `{field}` must reject {} chars",
+                limit + 1
+            );
+            // Multi-byte chars count as chars, not bytes.
+            validate_metadata_field_value(field, &"ü".repeat(limit)).unwrap();
+            assert!(
+                validate_metadata_field_value(field, &"ü".repeat(limit + 1)).is_err(),
+                "field `{field}` must count chars, not bytes"
+            );
+        }
+        assert_eq!(metadata_field_limit("date_created"), None);
+        // `date_created`: valid dates pass, everything else fails loudly.
+        for valid in ["2026-09-04", "2024-02-29", "2000-02-29", "1999-12-31"] {
+            validate_metadata_field_value("date_created", valid).unwrap();
+        }
+        for invalid_date in [
+            "2026-9-4",
+            "04.09.2026",
+            "2026/09/04",
+            "2026-09-04T10:00:00Z",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-02-30",
+            "2023-02-29",
+            "1900-02-29",
+            "2026-04-31",
+            "not-a-date",
+        ] {
+            assert!(
+                validate_metadata_field_value("date_created", invalid_date).is_err(),
+                "`{invalid_date}` must be rejected"
+            );
+        }
+        // Unknown IDs, control characters and untrimmed values fail loudly.
+        assert!(validate_metadata_field_value("byline_title", "x").is_err());
+        assert!(validate_metadata_field_value("Title", "x").is_err());
+        assert!(validate_metadata_field_value("title", "a\tb").is_err());
+        assert!(validate_metadata_field_value("title", "a\nb").is_err());
+        assert!(validate_metadata_field_value("title", " padded").is_err());
+        assert!(validate_metadata_field_value("title", "padded ").is_err());
+        // Empty / whitespace-only means "remove" at mutation time.
+        validate_metadata_field_value("title", "").unwrap();
+        validate_metadata_field_value("title", "   ").unwrap();
+        // ...but a *stored* empty/untrimmed value is a loud schema violation.
+        let mut doc = metadata_doc();
+        doc.metadata.draft.insert("title".into(), "".into());
+        assert!(doc.validate().is_err());
+        doc.metadata.draft.insert("title".into(), " padded ".into());
+        assert!(doc.validate().is_err());
+        doc.metadata.draft.insert("mystery".into(), "x".into());
+        assert!(doc.validate().is_err());
+        // Unsupported metadata version fails loudly, never silently accepted.
+        let mut versioned = metadata_doc();
+        versioned.metadata.version = METADATA_DRAFT_VERSION + 1;
+        assert!(versioned.validate().is_err());
+    }
+
+    #[test]
+    fn iptc_s1_keywords_routing_rejected() {
+        // `keywords` stays the existing source-level field: using it as a
+        // draft ID fails loudly with a routing hint, on both paths.
+        let error = validate_metadata_field_value("keywords", "festival").unwrap_err();
+        assert!(
+            matches!(&error, SidecarError::Invalid(message) if message.contains("keywords")),
+            "unexpected error: {error}"
+        );
+        let mut doc = metadata_doc();
+        let failed = doc.apply_metadata_draft(
+            &draft_fields(&[("keywords", "festival")]),
+            "manual",
+            "2026-09-04T10:00:00Z",
+        );
+        assert!(failed.is_err());
+        assert!(doc.metadata.is_empty());
+        assert!(doc.metadata.history.is_empty());
+    }
+
+    #[test]
+    fn iptc_s1_origin_timestamp_validation() {
+        for valid in [
+            "manual",
+            "cli",
+            "gui",
+            "mcp",
+            "preset:veranstaltung",
+            "preset:a b_c-9",
+            "sync:vc-original",
+            "sync:copy-42",
+        ] {
+            validate_metadata_origin(valid).unwrap();
+        }
+        for bad in [
+            "",
+            "Manual",
+            "MANUAL",
+            " manual",
+            "manual ",
+            "preset:",
+            "sync:",
+            "preset: name",
+            "preset:name ",
+            "sync:/abs/path",
+            "preset:/abs",
+            "mail",
+            "user:fred",
+            "preset:a\tb",
+        ] {
+            assert!(
+                validate_metadata_origin(bad).is_err(),
+                "origin `{bad}` must be rejected"
+            );
+        }
+        for valid in [
+            "2026-09-04T10:00:00Z",
+            "2026-09-04T10:00:00.123Z",
+            "2024-02-29T23:59:59Z",
+        ] {
+            validate_metadata_timestamp(valid).unwrap();
+        }
+        for bad in [
+            "",
+            "yesterday",
+            "2026-09-04",
+            "2026-09-04T10:00:00",
+            "2026-09-04T10:00:00+02:00",
+            "2026-09-04 10:00:00Z",
+            "2026-13-01T00:00:00Z",
+            "2026-09-04T24:00:00Z",
+            "2026-09-04T10:00:00.Z",
+            "2026-02-30T00:00:00Z",
+        ] {
+            assert!(
+                validate_metadata_timestamp(bad).is_err(),
+                "timestamp `{bad}` must be rejected"
+            );
+        }
+        // The std-only constructor always produces valid UTC timestamps.
+        let now = now_rfc3339_utc();
+        validate_metadata_timestamp(&now).unwrap();
+        assert!(now.ends_with('Z'));
+        // Bad origin/timestamp reject the whole mutation, all-or-nothing.
+        let mut doc = metadata_doc();
+        assert!(doc
+            .apply_metadata_draft(
+                &draft_fields(&[("title", "x")]),
+                "carrier-pigeon",
+                "2026-09-04T10:00:00Z",
+            )
+            .is_err());
+        assert!(doc
+            .apply_metadata_draft(&draft_fields(&[("title", "x")]), "manual", "sometime",)
+            .is_err());
+        assert!(doc.metadata.is_empty());
+    }
+
+    #[test]
+    fn iptc_s1_apply_all_or_nothing_and_idempotent() {
+        let mut doc = metadata_doc();
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Start")]),
+            "manual",
+            "2026-09-04T09:00:00Z",
+        )
+        .unwrap();
+        // One invalid field among valid ones rejects everything.
+        let failed = doc.apply_metadata_draft(
+            &draft_fields(&[("city", "Berlin"), ("nope", "x")]),
+            "manual",
+            "2026-09-04T10:00:00Z",
+        );
+        assert!(failed.is_err());
+        assert_eq!(doc.metadata.get("city"), None);
+        assert_eq!(doc.metadata.history.len(), 1);
+        assert_eq!(doc.metadata.latest_rev(), 1);
+        // Idempotent re-application: no change, no history entry.
+        assert!(!doc
+            .apply_metadata_draft(
+                &draft_fields(&[("title", "Start")]),
+                "manual",
+                "2026-09-04T11:00:00Z",
+            )
+            .unwrap());
+        assert_eq!(doc.metadata.history.len(), 1);
+        // Empty call: no change, no entry.
+        assert!(!doc
+            .apply_metadata_draft(&BTreeMap::new(), "manual", "2026-09-04T11:00:00Z")
+            .unwrap());
+        assert_eq!(doc.metadata.history.len(), 1);
+        // A real change records exactly one entry with the affected IDs.
+        assert!(doc
+            .apply_metadata_draft(
+                &draft_fields(&[("title", "Ziel"), ("city", "Berlin")]),
+                "cli",
+                "2026-09-04T12:00:00Z",
+            )
+            .unwrap());
+        assert_eq!(doc.metadata.history.len(), 2);
+        let entry = &doc.metadata.history[0];
+        assert_eq!(entry.rev, 2);
+        assert_eq!(entry.origin, "cli");
+        assert_eq!(entry.timestamp, "2026-09-04T12:00:00Z");
+        assert_eq!(entry.changed, vec!["city".to_string(), "title".to_string()]);
+    }
+
+    #[test]
+    fn iptc_s1_empty_value_removes_field() {
+        let mut doc = metadata_doc();
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Start"), ("city", "Berlin")]),
+            "manual",
+            "2026-09-04T09:00:00Z",
+        )
+        .unwrap();
+        // Empty and whitespace-only both remove; unaffected fields are not
+        // listed in `changed`.
+        assert!(doc
+            .apply_metadata_draft(
+                &draft_fields(&[("title", ""), ("city", "   ")]),
+                "gui",
+                "2026-09-04T10:00:00Z",
+            )
+            .unwrap());
+        assert!(doc.metadata.draft.is_empty());
+        assert_eq!(
+            doc.metadata.history[0].changed,
+            vec!["city".to_string(), "title".to_string()]
+        );
+        // Removing an absent field is an idempotent no-op (no entry).
+        assert!(!doc
+            .apply_metadata_draft(
+                &draft_fields(&[("title", "")]),
+                "gui",
+                "2026-09-04T11:00:00Z",
+            )
+            .unwrap());
+        assert_eq!(doc.metadata.history.len(), 2);
+    }
+
+    #[test]
+    fn iptc_s1_clear_semantics() {
+        let mut doc = metadata_doc();
+        // Clearing an empty draft touches neither draft nor history.
+        assert!(!doc
+            .clear_metadata_draft("manual", "2026-09-04T09:00:00Z")
+            .unwrap());
+        assert!(doc.metadata.history.is_empty());
+        assert!(!doc
+            .clear_metadata_fields(&["title"], "manual", "2026-09-04T09:00:00Z")
+            .unwrap());
+        assert!(doc.metadata.history.is_empty());
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Start"), ("city", "Berlin")]),
+            "manual",
+            "2026-09-04T09:00:00Z",
+        )
+        .unwrap();
+        // Selective clear: one entry, history kept.
+        assert!(doc
+            .clear_metadata_fields(&["title", "headline"], "mcp", "2026-09-04T10:00:00Z")
+            .unwrap());
+        assert_eq!(doc.metadata.get("title"), None);
+        assert_eq!(doc.metadata.get("city"), Some("Berlin"));
+        assert_eq!(doc.metadata.history[0].changed, vec!["title".to_string()]);
+        assert_eq!(doc.metadata.history[0].origin, "mcp");
+        // `--all`: draft emptied, history kept and extended.
+        assert!(doc
+            .clear_metadata_draft("cli", "2026-09-04T11:00:00Z")
+            .unwrap());
+        assert!(doc.metadata.draft.is_empty());
+        assert_eq!(doc.metadata.history.len(), 3);
+        assert_eq!(doc.metadata.history[0].changed, vec!["city".to_string()]);
+        // History clear is explicit and total; draft values survive it.
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Neu")]),
+            "manual",
+            "2026-09-04T12:00:00Z",
+        )
+        .unwrap();
+        doc.clear_metadata_history();
+        assert!(doc.metadata.history.is_empty());
+        assert_eq!(doc.metadata.get("title"), Some("Neu"));
+        doc.clear_metadata_history();
+        assert!(doc.metadata.history.is_empty());
+        // Unknown IDs fail loudly on the clear paths too.
+        assert!(doc
+            .clear_metadata_fields(&["mystery"], "manual", "2026-09-04T13:00:00Z")
+            .is_err());
+        assert!(doc.metadata.history.is_empty());
+    }
+
+    #[test]
+    fn iptc_s1_history_cap_and_rev_monotonic() {
+        let mut doc = metadata_doc();
+        for index in 1..=(MAX_METADATA_HISTORY_ENTRIES + 5) {
+            let value = format!("Titel {index}");
+            assert!(doc
+                .apply_metadata_draft(
+                    &draft_fields(&[("title", value.as_str())]),
+                    "manual",
+                    "2026-09-04T10:00:00Z",
+                )
+                .unwrap());
+        }
+        // Cap is enforced FIFO-deterministically: oldest fall off the end.
+        assert_eq!(doc.metadata.history.len(), MAX_METADATA_HISTORY_ENTRIES);
+        assert_eq!(
+            doc.metadata.history[0].rev as usize,
+            MAX_METADATA_HISTORY_ENTRIES + 5
+        );
+        assert_eq!(doc.metadata.history[0].changed, vec!["title".to_string()]);
+        assert_eq!(
+            doc.metadata.latest_rev() as usize,
+            MAX_METADATA_HISTORY_ENTRIES + 5
+        );
+        let last = doc.metadata.history.last().unwrap();
+        assert_eq!(last.rev, 6);
+        let mut previous = u64::MAX;
+        for entry in &doc.metadata.history {
+            assert!(entry.rev < previous, "revs must strictly decrease");
+            previous = entry.rev;
+        }
+        assert_eq!(
+            doc.metadata.get("title"),
+            Some(format!("Titel {}", MAX_METADATA_HISTORY_ENTRIES + 5).as_str())
+        );
+        doc.validate().unwrap();
+        // Hand-crafted violations fail loudly instead of being normalized.
+        let mut ascending = metadata_doc();
+        ascending.metadata.history = vec![
+            MetadataHistoryEntry {
+                rev: 1,
+                timestamp: "2026-09-04T09:00:00Z".into(),
+                origin: "manual".into(),
+                changed: vec!["title".into()],
+            },
+            MetadataHistoryEntry {
+                rev: 2,
+                timestamp: "2026-09-04T10:00:00Z".into(),
+                origin: "manual".into(),
+                changed: vec!["title".into()],
+            },
+        ];
+        assert!(ascending.validate().is_err());
+        let mut overlong = metadata_doc();
+        overlong.metadata.history = (1..=(MAX_METADATA_HISTORY_ENTRIES + 1) as u64)
+            .rev()
+            .map(|rev| MetadataHistoryEntry {
+                rev,
+                timestamp: "2026-09-04T10:00:00Z".into(),
+                origin: "manual".into(),
+                changed: vec!["title".into()],
+            })
+            .collect();
+        assert!(overlong.validate().is_err());
+        let mut bad_changed = metadata_doc();
+        bad_changed.metadata.history = vec![MetadataHistoryEntry {
+            rev: 1,
+            timestamp: "2026-09-04T10:00:00Z".into(),
+            origin: "manual".into(),
+            changed: vec!["mystery".into()],
+        }];
+        assert!(bad_changed.validate().is_err());
+        bad_changed.metadata.history[0].changed = vec![];
+        assert!(bad_changed.validate().is_err());
+        bad_changed.metadata.history[0].changed = vec!["title".into(), "title".into()];
+        assert!(bad_changed.validate().is_err());
+        // `keywords` is a legal `changed` ID (sync carries it); rev 0 is not.
+        bad_changed.metadata.history[0].changed = vec!["keywords".into(), "title".into()];
+        bad_changed.validate().unwrap();
+        bad_changed.metadata.history[0].rev = 0;
+        assert!(bad_changed.validate().is_err());
+    }
+
+    #[test]
+    fn iptc_s1_cas_conflict_on_concurrent_metadata_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("IMG_0001.ARW.lumina.json");
+        let mut doc = metadata_doc();
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Start")]),
+            "manual",
+            "2026-09-04T09:00:00Z",
+        )
+        .unwrap();
+        save_sidecar(&path, &doc).unwrap();
+        let stale_revision = document_revision(&load_sidecar(&path).unwrap()).unwrap();
+        // A concurrent writer moves the file forward...
+        let mut concurrent = load_sidecar(&path).unwrap();
+        concurrent
+            .apply_metadata_draft(
+                &draft_fields(&[("city", "Berlin")]),
+                "sync:other",
+                "2026-09-04T10:00:00Z",
+            )
+            .unwrap();
+        save_sidecar(&path, &concurrent).unwrap();
+        // ...so the stale revision conflicts loudly instead of last-write-wins.
+        let mut stale = load_sidecar(&path).unwrap();
+        stale
+            .apply_metadata_draft(
+                &draft_fields(&[("title", "Stale")]),
+                "manual",
+                "2026-09-04T11:00:00Z",
+            )
+            .unwrap();
+        let conflict = save_sidecar_if_unchanged(&path, &stale, Some(&stale_revision));
+        assert!(
+            matches!(&conflict, Err(SidecarError::Conflict(_))),
+            "stale CAS save must conflict, got {conflict:?}"
+        );
+        // The concurrent edit survived; the stale one was not persisted.
+        let current = load_sidecar(&path).unwrap();
+        assert_eq!(current.metadata.get("city"), Some("Berlin"));
+        assert_eq!(current.metadata.get("title"), Some("Start"));
+    }
+
+    #[test]
+    fn iptc_s1_mutations_leave_recipes_masks_and_copy_history_untouched() {
+        let mut doc = metadata_doc();
+        doc.keywords = vec!["alps".into()];
+        let recipe_before = serde_json::to_value(&doc.virtual_copies[0].recipe).unwrap();
+        let history_before = doc.virtual_copies[0].history.clone();
+        doc.apply_metadata_draft(
+            &draft_fields(&[("title", "Start"), ("date_created", "2026-09-04")]),
+            "preset:veranstaltung",
+            "2026-09-04T10:00:00Z",
+        )
+        .unwrap();
+        doc.clear_metadata_fields(&["title"], "sync:copy-7", "2026-09-04T11:00:00Z")
+            .unwrap();
+        doc.clear_metadata_draft("gui", "2026-09-04T12:00:00Z")
+            .unwrap();
+        doc.clear_metadata_history();
+        assert_eq!(
+            serde_json::to_value(&doc.virtual_copies[0].recipe).unwrap(),
+            recipe_before
+        );
+        assert_eq!(doc.virtual_copies[0].history, history_before);
+        assert!(doc.virtual_copies[0].mask_layers.is_empty());
+        assert!(doc.virtual_copies[0].mask_library.is_empty());
+        assert_eq!(doc.keywords, vec!["alps".to_string()]);
+        doc.validate().unwrap();
     }
 }
