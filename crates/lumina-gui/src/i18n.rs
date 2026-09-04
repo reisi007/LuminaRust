@@ -97,6 +97,18 @@ pub enum Str {
     ToneCurveDarks,
     ToneCurveLights,
     ToneCurveHighlights,
+    // G-02: per-channel tone curve (channel selector + point editor)
+    ToneCurveChannel,
+    ToneCurveChannelMaster,
+    ToneCurveChannelRed,
+    ToneCurveChannelGreen,
+    ToneCurveChannelBlue,
+    ToneCurvePoints,
+    ToneCurveAddPoint,
+    ToneCurveRemovePoint,
+    ToneCurvePointInput,
+    ToneCurvePointOutput,
+    ToneCurveInvalidPattern,
 
     // Color — HSL mixer
     HslMixer,
@@ -120,6 +132,18 @@ pub enum Str {
     GradingMidtones,
     GradingHighlights,
     GradingBalance,
+    GradingBlending,
+    // G-02: Point Color (F-090b)
+    PointColor,
+    PointColorAdd,
+    PointColorRemove,
+    PointColorHueCenter,
+    PointColorRange,
+    PointColorHueShift,
+    PointColorSatShift,
+    PointColorLumShift,
+    PointColorFull,
+    PointColorRangePattern,
 
     // Color — Presence (F-094) and Dynamics/Saturation (F-092)
     Presence,
@@ -320,6 +344,7 @@ pub enum Str {
 
     HuePattern,
     SatPattern,
+    LumPattern,
     UnsetPattern,
 
     // LR-01 rating / flag (Library badge + rating section + shortcuts).
@@ -584,6 +609,17 @@ impl Str {
             Str::ToneCurveDarks => "Darks",
             Str::ToneCurveLights => "Lights",
             Str::ToneCurveHighlights => "Highlights",
+            Str::ToneCurveChannel => "Channel",
+            Str::ToneCurveChannelMaster => "Master",
+            Str::ToneCurveChannelRed => "Red",
+            Str::ToneCurveChannelGreen => "Green",
+            Str::ToneCurveChannelBlue => "Blue",
+            Str::ToneCurvePoints => "Point curve",
+            Str::ToneCurveAddPoint => "Add point",
+            Str::ToneCurveRemovePoint => "Remove",
+            Str::ToneCurvePointInput => "Input {}",
+            Str::ToneCurvePointOutput => "Output {}",
+            Str::ToneCurveInvalidPattern => "Tone curve: invalid points ({}) — not saved",
 
             Str::HslMixer => "HSL / Color Mixer",
             Str::Hue => "Hue",
@@ -604,6 +640,17 @@ impl Str {
             Str::GradingMidtones => "Midtones",
             Str::GradingHighlights => "Highlights",
             Str::GradingBalance => "Balance",
+            Str::GradingBlending => "Blending",
+            Str::PointColor => "Point Color",
+            Str::PointColorAdd => "Add color",
+            Str::PointColorRemove => "Remove",
+            Str::PointColorHueCenter => "Hue center",
+            Str::PointColorRange => "Range",
+            Str::PointColorHueShift => "Hue shift",
+            Str::PointColorSatShift => "Saturation shift",
+            Str::PointColorLumShift => "Luminance shift",
+            Str::PointColorFull => "Point Color: entry limit (8) reached",
+            Str::PointColorRangePattern => "Point Color: {} out of range — not saved",
 
             Str::Presence => "Presence",
             Str::Texture => "Texture",
@@ -816,6 +863,7 @@ impl Str {
 
             Str::HuePattern => "{} Hue",
             Str::SatPattern => "{} Sat",
+            Str::LumPattern => "{} Lum",
             Str::UnsetPattern => "{} (unset)",
 
             Str::Rating => "Rating",

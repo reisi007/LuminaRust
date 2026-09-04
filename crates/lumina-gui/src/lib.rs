@@ -53,7 +53,7 @@ use lumina_sidecar::{
     AnalysisFingerprint, BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint,
     Curves, EditRecipe, Effects, Flag, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry,
     Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective,
-    Presence, Preset, Sharpening, SpotDistraction, Vignette,
+    PointColor, PointColorEntry, Presence, Preset, Sharpening, SpotDistraction, Vignette,
 };
 use serde_json::Value;
 use slider::{identity_spec, lr_slider, percent_spec, SliderAction, SliderSpec};
@@ -1459,6 +1459,12 @@ pub struct LuminaApp {
     combine_other_id: String,
     combine_name_input: String,
     duplicate_name_input: String,
+    /// G-02 (LRPAR-G02-COLOR) tone-curve panel session state. Display-only
+    /// (never recipe/sidecar): selected curve channel (`0` master, `1..=3`
+    /// red/green/blue) plus the add-point input buffers.
+    tone_curve_channel: usize,
+    tone_curve_new_input: f32,
+    tone_curve_new_output: f32,
     /// Welle 3 (LR-13/LR-20/LR-09/LR-12/LR-17 light) display/session state.
     /// All of these are display-only or `extras`/history-backed, so no
     /// sidecar schema change was needed:
@@ -2181,6 +2187,9 @@ impl LuminaApp {
             combine_other_id: String::new(),
             combine_name_input: String::new(),
             duplicate_name_input: String::new(),
+            tone_curve_channel: 0,
+            tone_curve_new_input: 0.5,
+            tone_curve_new_output: 0.5,
             filter_bar_visible: false,
             library_filter: String::new(),
             compare_mode: None,
@@ -3421,6 +3430,7 @@ impl LuminaApp {
             SECTION_TONE_CURVE => dst.curves.clone_from(&src.curves),
             SECTION_COLOR => {
                 dst.hsl.clone_from(&src.hsl);
+                dst.point_color.clone_from(&src.point_color);
                 dst.color_grading.clone_from(&src.color_grading);
                 dst.presence.clone_from(&src.presence);
                 for key in ["vibrance", "saturation"] {
@@ -3472,6 +3482,7 @@ impl LuminaApp {
             SECTION_TONE_CURVE => recipe.curves = None,
             SECTION_COLOR => {
                 recipe.hsl = None;
+                recipe.point_color = None;
                 recipe.color_grading = None;
                 recipe.presence = None;
                 // B&W-owned `-1` values stay while the treatment is active
@@ -7049,26 +7060,242 @@ impl LuminaApp {
     /// `highlights`) and record the save commit (GUI-SLIDER-SAVE-1). Unknown
     /// region names are ignored loudly (`warn!`) — all call sites pass
     /// literals, and the headless save tests pin every valid name.
+    /// Master-channel shorthand over [`Self::set_tone_curve_channel_region`]
+    /// (test- and compat-owned; the panel binds the channel variant).
+    #[cfg(test)]
     fn set_tone_curve_region(&mut self, region: &str, value: f64) {
-        let (mut s, mut d, mut l, mut h) = tone_curve_regions(&self.recipe);
+        self.set_tone_curve_channel_region("master", region, value);
+    }
+
+    /// Set one parametric tone-curve region (`shadows`/`darks`/`lights`/
+    /// `highlights`) of one channel (`master`/`red`/`green`/`blue`,
+    /// G-02) and record the save commit (GUI-SLIDER-SAVE-1). The four
+    /// region values persist as that channel's 4-point curve (same mapping
+    /// as the master path); setting a region replaces a free point list
+    /// (Last-Write-Wins je Kanal). Unknown names are ignored loudly — all
+    /// call sites pass literals, and the headless save tests pin every
+    /// valid name.
+    fn set_tone_curve_channel_region(&mut self, channel: &str, region: &str, value: f64) {
+        if !matches!(channel, "master" | "red" | "green" | "blue") {
+            warn!("set_tone_curve_channel_region: unknown channel {channel}");
+            return;
+        }
+        let (mut s, mut d, mut l, mut h) = tone_curve_channel_regions(&self.recipe, channel);
         match region {
             "shadows" => s = value,
             "darks" => d = value,
             "lights" => l = value,
             "highlights" => h = value,
             _ => {
-                warn!("set_tone_curve_region: unknown region {region}");
+                warn!("set_tone_curve_channel_region: unknown region {region}");
                 return;
             }
         }
-        self.recipe.curves = Some(build_tone_curve(s, d, l, h));
-        self.mark_recipe_dirty(&format!("curves.{region}"), value);
+        let mut curves = self.recipe.curves.clone().unwrap_or(Curves {
+            version: 1,
+            master: vec![
+                CurvePoint {
+                    input: 0.0,
+                    output: 0.0,
+                },
+                CurvePoint {
+                    input: 1.0,
+                    output: 1.0,
+                },
+            ],
+            channels: CurveChannels::default(),
+        });
+        curves.version = 1;
+        let points = build_tone_curve_points(s, d, l, h);
+        match channel {
+            "master" => curves.master = points,
+            "red" => curves.channels.red = Some(points),
+            "green" => curves.channels.green = Some(points),
+            "blue" => curves.channels.blue = Some(points),
+            _ => unreachable!(),
+        }
+        self.recipe.curves = Some(curves);
+        self.mark_recipe_dirty(&format!("curves.{channel}.{region}"), value);
         // REVIEW-GUI-CURVE-1: a clamped output absorbs part of a delta, so the
         // affected slider visibly snaps back. Surface that MVP limit explicitly
         // instead of leaving the user with a silently moving slider.
         if tone_curve_roundtrip_is_lossy(s, d, l, h) {
             self.status = "Tone curve: extreme region values are clamped to the 0..=1 output range (MVP limit) — negative Shadows beyond the base point are not representable.".into();
         }
+    }
+
+    /// Validate curve points like the core (`2..=32` points, finite values in
+    /// `0..=1`, strictly ascending inputs, `(0,0)`/`(1,1)` endpoints). `None`
+    /// is valid with the offending description.
+    fn validate_curve_points(points: &[CurvePoint]) -> Option<String> {
+        if !(2..=32).contains(&points.len()) {
+            return Some(format!("need 2..=32 points, got {}", points.len()));
+        }
+        for (index, point) in points.iter().enumerate() {
+            for (field, value) in [("input", point.input), ("output", point.output)] {
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Some(format!("points[{index}].{field} out of range"));
+                }
+            }
+            if index > 0 && point.input <= points[index - 1].input {
+                return Some(format!("points[{index}].input not ascending"));
+            }
+        }
+        let (first, last) = (&points[0], &points[points.len() - 1]);
+        if first.input != 0.0 || first.output != 0.0 {
+            return Some("first point must be (0,0)".into());
+        }
+        if last.input != 1.0 || last.output != 1.0 {
+            return Some("last point must be (1,1)".into());
+        }
+        None
+    }
+
+    /// Set one free point-curve control point (`input`/`output`) of one
+    /// channel (G-02) and record the save commit. Replaces that channel's
+    /// parametric 4-point list (Last-Write-Wins je Kanal). Violations of the
+    /// point rules are refused loudly (status + no save), never clipped
+    /// silently.
+    fn set_curve_point(&mut self, channel: &str, index: usize, field: &str, value: f64) {
+        if !matches!(field, "input" | "output") {
+            warn!("set_curve_point: unknown field {field}");
+            return;
+        }
+        if !matches!(channel, "master" | "red" | "green" | "blue") {
+            warn!("set_curve_point: unknown channel {channel}");
+            return;
+        }
+        let mut candidate = self.recipe.curves.clone().unwrap_or_else(|| Curves {
+            version: 1,
+            master: identity_curve_points(),
+            channels: CurveChannels::default(),
+        });
+        let slot: &mut Vec<CurvePoint> = match channel {
+            "master" => &mut candidate.master,
+            "red" => candidate
+                .channels
+                .red
+                .get_or_insert_with(identity_curve_points),
+            "green" => candidate
+                .channels
+                .green
+                .get_or_insert_with(identity_curve_points),
+            "blue" => candidate
+                .channels
+                .blue
+                .get_or_insert_with(identity_curve_points),
+            _ => unreachable!(),
+        };
+        let Some(point) = slot.get_mut(index) else {
+            warn!("set_curve_point: {channel}[{index}] out of bounds");
+            return;
+        };
+        match field {
+            "input" => point.input = value as f32,
+            "output" => point.output = value as f32,
+            _ => unreachable!(),
+        }
+        if let Some(reason) = Self::validate_curve_points(slot) {
+            self.status = Str::ToneCurveInvalidPattern.format_arg(&reason);
+            warn!("set_curve_point: {channel}[{index}].{field} refused ({reason})");
+            return;
+        }
+        self.recipe.curves = Some(candidate);
+        self.mark_recipe_dirty(&format!("curves.{channel}.points[{index}].{field}"), value);
+    }
+
+    /// Insert a free point-curve control point into one channel (G-02),
+    /// sorted by input. Refuses invalid/duplicate inputs loudly (status +
+    /// no save). Replaces that channel's parametric list (Last-Write-Wins).
+    fn add_curve_point(&mut self, channel: &str, input: f64, output: f64) {
+        if !matches!(channel, "master" | "red" | "green" | "blue") {
+            warn!("add_curve_point: unknown channel {channel}");
+            return;
+        }
+        let mut candidate = self.recipe.curves.clone().unwrap_or_else(|| Curves {
+            version: 1,
+            master: identity_curve_points(),
+            channels: CurveChannels::default(),
+        });
+        let slot: &mut Vec<CurvePoint> = match channel {
+            "master" => &mut candidate.master,
+            "red" => candidate
+                .channels
+                .red
+                .get_or_insert_with(identity_curve_points),
+            "green" => candidate
+                .channels
+                .green
+                .get_or_insert_with(identity_curve_points),
+            "blue" => candidate
+                .channels
+                .blue
+                .get_or_insert_with(identity_curve_points),
+            _ => unreachable!(),
+        };
+        slot.push(CurvePoint {
+            input: input as f32,
+            output: output as f32,
+        });
+        slot.sort_by(|a, b| a.input.total_cmp(&b.input));
+        if let Some(reason) = Self::validate_curve_points(slot) {
+            self.status = Str::ToneCurveInvalidPattern.format_arg(&reason);
+            warn!("add_curve_point: {channel} ({input},{output}) refused ({reason})");
+            return;
+        }
+        self.recipe.curves = Some(candidate);
+        info!("GUI interaction: curves.{channel} add point ({input},{output})");
+        self.mark_recipe_dirty(&format!("curves.{channel}.add"), input);
+    }
+
+    /// Remove a free point-curve control point from one channel (G-02).
+    /// Refuses loudly when fewer than 3 points remain or an endpoint
+    /// (`(0,0)`/`(1,1)`) is targeted — endpoints are mandatory.
+    fn remove_curve_point(&mut self, channel: &str, index: usize) {
+        if !matches!(channel, "master" | "red" | "green" | "blue") {
+            warn!("remove_curve_point: unknown channel {channel}");
+            return;
+        }
+        let mut candidate = match self.recipe.curves.clone() {
+            Some(curves) => curves,
+            None => {
+                warn!("remove_curve_point: no curves for {channel}");
+                return;
+            }
+        };
+        let len = match channel {
+            "master" => candidate.master.len(),
+            "red" => candidate.channels.red.as_ref().map_or(0, Vec::len),
+            "green" => candidate.channels.green.as_ref().map_or(0, Vec::len),
+            "blue" => candidate.channels.blue.as_ref().map_or(0, Vec::len),
+            _ => unreachable!(),
+        };
+        if len <= 2 {
+            self.status = Str::ToneCurveInvalidPattern.format_arg("need 2..=32 points");
+            warn!("remove_curve_point: {channel} already minimal");
+            return;
+        }
+        if index == 0 || index + 1 >= len {
+            self.status =
+                Str::ToneCurveInvalidPattern.format_arg("endpoints (0,0)/(1,1) are mandatory");
+            warn!("remove_curve_point: {channel}[{index}] is an endpoint");
+            return;
+        }
+        let slot: &mut Vec<CurvePoint> = match channel {
+            "master" => &mut candidate.master,
+            "red" => candidate.channels.red.as_mut().expect("len>0"),
+            "green" => candidate.channels.green.as_mut().expect("len>0"),
+            "blue" => candidate.channels.blue.as_mut().expect("len>0"),
+            _ => unreachable!(),
+        };
+        if index >= slot.len() {
+            warn!("remove_curve_point: {channel}[{index}] out of bounds");
+            return;
+        }
+        slot.remove(index);
+        self.recipe.curves = Some(candidate);
+        info!("GUI interaction: curves.{channel} remove point {index}");
+        self.mark_recipe_dirty(&format!("curves.{channel}.remove"), index as f64);
     }
 
     /// Set one HSL mixer channel field (`red`…`magenta` × `hue`/`saturation`/
@@ -7102,25 +7329,14 @@ impl LuminaApp {
     }
 
     /// Set one color-grading range field (`shadows`/`midtones`/`highlights` ×
-    /// `hue_degrees`/`saturation`) and record the save commit
+    /// `hue_degrees`/`saturation`/`luminance`) and record the save commit
     /// (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
     fn set_color_grading_value(&mut self, range: &str, field: &str, value: f64) {
-        let mut cg = self.recipe.color_grading.clone().unwrap_or(ColorGrading {
-            version: 1,
-            shadows: ColorGradingRange {
-                hue_degrees: 0.0,
-                saturation: 0.0,
-            },
-            midtones: ColorGradingRange {
-                hue_degrees: 0.0,
-                saturation: 0.0,
-            },
-            highlights: ColorGradingRange {
-                hue_degrees: 0.0,
-                saturation: 0.0,
-            },
-            balance: 0.0,
-        });
+        let mut cg = self
+            .recipe
+            .color_grading
+            .clone()
+            .unwrap_or_else(ColorGrading::neutral);
         let slot = match range {
             "shadows" => &mut cg.shadows,
             "midtones" => &mut cg.midtones,
@@ -7133,6 +7349,7 @@ impl LuminaApp {
         match field {
             "hue_degrees" => slot.hue_degrees = value as f32,
             "saturation" => slot.saturation = value as f32,
+            "luminance" => slot.luminance = value as f32,
             _ => {
                 warn!("set_color_grading_value: unknown field {field}");
                 return;
@@ -7145,25 +7362,129 @@ impl LuminaApp {
     /// Set the color-grading balance and record the save commit
     /// (GUI-SLIDER-SAVE-1).
     fn set_color_grading_balance(&mut self, value: f64) {
-        let mut cg = self.recipe.color_grading.clone().unwrap_or(ColorGrading {
-            version: 1,
-            shadows: ColorGradingRange {
-                hue_degrees: 0.0,
-                saturation: 0.0,
-            },
-            midtones: ColorGradingRange {
-                hue_degrees: 0.0,
-                saturation: 0.0,
-            },
-            highlights: ColorGradingRange {
-                hue_degrees: 0.0,
-                saturation: 0.0,
-            },
-            balance: 0.0,
-        });
+        let mut cg = self
+            .recipe
+            .color_grading
+            .clone()
+            .unwrap_or_else(ColorGrading::neutral);
         cg.balance = value as f32;
         self.recipe.color_grading = Some(cg);
         self.mark_recipe_dirty("color_grading.balance", value);
+    }
+
+    /// Set the color-grading blending (G-02 Feinschliff, `0..=1`) and record
+    /// the save commit (GUI-SLIDER-SAVE-1).
+    fn set_color_grading_blending(&mut self, value: f64) {
+        let mut cg = self
+            .recipe
+            .color_grading
+            .clone()
+            .unwrap_or_else(ColorGrading::neutral);
+        cg.blending = value as f32;
+        self.recipe.color_grading = Some(cg);
+        self.mark_recipe_dirty("color_grading.blending", value);
+    }
+
+    /// Add a Point Color entry (G-02, F-090b) with neutral shifts and record
+    /// the save commit. The id is the next stable `pc-<n>` over the current
+    /// recipe state (never positional). At most 8 entries; a ninth is
+    /// refused loudly via the status line.
+    fn add_point_color(&mut self) {
+        let mut block = self.recipe.point_color.clone().unwrap_or(PointColor {
+            version: 1,
+            entries: Vec::new(),
+        });
+        block.version = 1;
+        if block.entries.len() >= 8 {
+            self.status = Str::PointColorFull.t().to_string();
+            warn!("add_point_color: entry limit (8) reached");
+            return;
+        }
+        let id = PointColorEntry::next_id(&block.entries);
+        block.entries.push(PointColorEntry {
+            id: id.clone(),
+            hue_center: 0.0,
+            hue_range: 30.0,
+            hue_shift: 0.0,
+            saturation_shift: 0.0,
+            luminance_shift: 0.0,
+        });
+        self.recipe.point_color = Some(block);
+        info!("GUI interaction: point_color add {id}");
+        self.mark_recipe_dirty(
+            "point_color.add",
+            self.recipe
+                .point_color
+                .as_ref()
+                .map_or(0.0, |block| block.entries.len() as f64),
+        );
+    }
+
+    /// Remove one Point Color entry by stable id (G-02). Unknown ids are
+    /// refused loudly; removing the last entry drops the whole block
+    /// (absent = identity).
+    fn remove_point_color(&mut self, id: &str) {
+        let Some(block) = self.recipe.point_color.clone() else {
+            warn!("remove_point_color: no point_color block for id {id}");
+            return;
+        };
+        let len = block.entries.len();
+        let entries: Vec<PointColorEntry> =
+            block.entries.into_iter().filter(|e| e.id != id).collect();
+        if entries.len() == len {
+            warn!("remove_point_color: unknown id {id}");
+            return;
+        }
+        self.recipe.point_color = if entries.is_empty() {
+            None
+        } else {
+            Some(PointColor {
+                version: 1,
+                entries,
+            })
+        };
+        info!("GUI interaction: point_color remove {id}");
+        self.mark_recipe_dirty("point_color.remove", len as f64);
+    }
+
+    /// Set one Point Color entry field (`hue_center`/`hue_range`/
+    /// `hue_shift`/`saturation_shift`/`luminance_shift`) and record the save
+    /// commit (GUI-SLIDER-SAVE-1). Unknown ids/fields are ignored loudly.
+    /// Out-of-range values are refused loudly (status + no save) instead of
+    /// being clipped silently.
+    fn set_point_color_value(&mut self, id: &str, field: &str, value: f64) {
+        let Some(mut block) = self.recipe.point_color.clone() else {
+            warn!("set_point_color_value: no point_color block for id {id}");
+            return;
+        };
+        let Some(entry) = block.entries.iter_mut().find(|e| e.id == id) else {
+            warn!("set_point_color_value: unknown id {id}");
+            return;
+        };
+        let (lo, hi) = match field {
+            "hue_center" => (0.0, 360.0),
+            "hue_range" => (0.0, 180.0),
+            "hue_shift" | "saturation_shift" | "luminance_shift" => (-1.0, 1.0),
+            _ => {
+                warn!("set_point_color_value: unknown field {field}");
+                return;
+            }
+        };
+        if !value.is_finite() || !(lo..=hi).contains(&value) {
+            self.status = Str::PointColorRangePattern.format_arg(&format!("{id}.{field}"));
+            warn!("set_point_color_value: {id}.{field}={value} out of range");
+            return;
+        }
+        match field {
+            "hue_center" => entry.hue_center = value as f32,
+            "hue_range" => entry.hue_range = value as f32,
+            "hue_shift" => entry.hue_shift = value as f32,
+            "saturation_shift" => entry.saturation_shift = value as f32,
+            "luminance_shift" => entry.luminance_shift = value as f32,
+            _ => unreachable!(),
+        }
+        self.recipe.point_color = Some(block);
+        self.mark_recipe_dirty(&format!("point_color.{id}.{field}"), value);
     }
 
     /// Set one effects field (`vignette` × `amount`/`midpoint`/`roundness`/
@@ -10881,12 +11202,40 @@ impl LuminaApp {
             egui::CollapsingHeader::new(Str::ToneCurve.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
             self.draw_section_prev_reset(ui, SECTION_TONE_CURVE);
+            // G-02: channel selector (Master/Red/Green/Blue). Display-only
+            // session state; the parametric sliders and the point editor
+            // below bind to the selected channel.
+            ui.label(Str::ToneCurveChannel.t());
+            let channels = [
+                (0usize, Str::ToneCurveChannelMaster),
+                (1, Str::ToneCurveChannelRed),
+                (2, Str::ToneCurveChannelGreen),
+                (3, Str::ToneCurveChannelBlue),
+            ];
+            let mut selected = self.tone_curve_channel;
+            ui.horizontal(|ui| {
+                for (index, label) in channels {
+                    if ui.selectable_label(selected == index, label.t()).clicked() {
+                        selected = index;
+                    }
+                }
+            });
+            if selected != self.tone_curve_channel {
+                self.tone_curve_channel = selected;
+                info!("GUI interaction: tone_curve_channel {selected}");
+            }
+            let channel = match self.tone_curve_channel {
+                1 => "red",
+                2 => "green",
+                3 => "blue",
+                _ => "master",
+            };
             ui.label(Str::CurveRegions.t());
-            let (mut s, mut d, mut l, mut h) = tone_curve_regions(&self.recipe);
+            let (mut s, mut d, mut l, mut h) = tone_curve_channel_regions(&self.recipe, channel);
             let spec = percent_spec(-1.0..=1.0, 0.0);
             // GUI-SLIDER-SAVE-1: each region slider commits through
-            // `set_tone_curve_region` (save at debounce); the locals are only
-            // slider binding buffers.
+            // `set_tone_curve_channel_region` (save at debounce); the locals
+            // are only slider binding buffers.
             for (val, label) in [
                 (&mut s, Str::ToneCurveShadows),
                 (&mut d, Str::ToneCurveDarks),
@@ -10904,9 +11253,99 @@ impl LuminaApp {
                         Str::ToneCurveHighlights => "highlights",
                         _ => continue,
                     };
-                    self.set_tone_curve_region(region, *val);
+                    self.set_tone_curve_channel_region(channel, region, *val);
                 }
             }
+            // G-02: free point editor for the selected channel. Editing a
+            // point replaces the parametric 4-point list (Last-Write-Wins je
+            // Kanal); invalid edits are refused loudly by the setters.
+            ui.separator();
+            ui.label(Str::ToneCurvePoints.t());
+            let points: Vec<CurvePoint> = match channel {
+                "red" => self
+                    .recipe
+                    .curves
+                    .as_ref()
+                    .and_then(|c| c.channels.red.clone())
+                    .unwrap_or_else(identity_curve_points),
+                "green" => self
+                    .recipe
+                    .curves
+                    .as_ref()
+                    .and_then(|c| c.channels.green.clone())
+                    .unwrap_or_else(identity_curve_points),
+                "blue" => self
+                    .recipe
+                    .curves
+                    .as_ref()
+                    .and_then(|c| c.channels.blue.clone())
+                    .unwrap_or_else(identity_curve_points),
+                _ => self
+                    .recipe
+                    .curves
+                    .as_ref()
+                    .map(|c| c.master.clone())
+                    .unwrap_or_else(identity_curve_points),
+            };
+            let point_count = points.len();
+            for (index, point) in points.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("P{index} ({:.2})", point.input));
+                    let mut output = point.output;
+                    if matches!(
+                        lr_slider(
+                            ui,
+                            &Str::ToneCurvePointOutput.format_arg(&index.to_string()),
+                            &mut output,
+                            identity_spec(0.0..=1.0, 0.0, 0.01)
+                        ),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        self.set_curve_point(channel, index, "output", f64::from(output));
+                    }
+                    if index > 0
+                        && index + 1 < point_count
+                        && ui.button(Str::ToneCurveRemovePoint.t()).clicked()
+                    {
+                        self.remove_curve_point(channel, index);
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                let mut input = self.tone_curve_new_input;
+                let mut output = self.tone_curve_new_output;
+                let changed_input = matches!(
+                    lr_slider(
+                        ui,
+                        &Str::ToneCurvePointInput.format_arg(""),
+                        &mut input,
+                        identity_spec(0.0..=1.0, 0.5, 0.01)
+                    ),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                );
+                let changed_output = matches!(
+                    lr_slider(
+                        ui,
+                        &Str::ToneCurvePointOutput.format_arg(""),
+                        &mut output,
+                        identity_spec(0.0..=1.0, 0.5, 0.01)
+                    ),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                );
+                if changed_input {
+                    self.tone_curve_new_input = input;
+                }
+                if changed_output {
+                    self.tone_curve_new_output = output;
+                }
+                if ui.button(Str::ToneCurveAddPoint.t()).clicked() {
+                    self.add_curve_point(
+                        channel,
+                        f64::from(self.tone_curve_new_input),
+                        f64::from(self.tone_curve_new_output),
+                    );
+                }
+            });
         });
         if section_response.header_response.clicked() {
             self.set_section_open(SECTION_TONE_CURVE, !section_was_open);
@@ -10961,26 +11400,20 @@ impl LuminaApp {
                 }
             }
             ui.separator();
+            // G-02 Point Color group (F-090b): targeted entries after the HSL
+            // mixer, before Color Grading (F-100 order: curve → HSL →
+            // Point Color → grading → presence → vibrance/saturation).
+            self.draw_point_color(ui);
+            ui.separator();
             ui.label(Str::ColorGrading.t());
             // GUI-SLIDER-SAVE-1: grading sliders commit through the
             // `set_color_grading_*` setters (save at debounce); `cg` is only a
             // slider binding buffer.
-            let mut cg = self.recipe.color_grading.clone().unwrap_or(ColorGrading {
-                version: 1,
-                shadows: ColorGradingRange {
-                    hue_degrees: 0.0,
-                    saturation: 0.0,
-                },
-                midtones: ColorGradingRange {
-                    hue_degrees: 0.0,
-                    saturation: 0.0,
-                },
-                highlights: ColorGradingRange {
-                    hue_degrees: 0.0,
-                    saturation: 0.0,
-                },
-                balance: 0.0,
-            });
+            let mut cg = self
+                .recipe
+                .color_grading
+                .clone()
+                .unwrap_or_else(ColorGrading::neutral);
             for (range, range_name, label) in [
                 (&mut cg.shadows, "shadows", Str::GradingShadows),
                 (&mut cg.midtones, "midtones", Str::GradingMidtones),
@@ -11000,6 +11433,21 @@ impl LuminaApp {
             ) {
                 self.set_color_grading_balance(f64::from(balance));
             }
+            // G-02 Feinschliff: global blending slider (0..=1, default 0.5).
+            let mut blending = cg.blending;
+            if matches!(
+                lr_slider(
+                    ui,
+                    Str::GradingBlending.t(),
+                    &mut blending,
+                    identity_spec(0.0..=1.0, 0.5, 0.01)
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
+            ) {
+                self.set_color_grading_blending(f64::from(blending));
+            }
+
+            ui.separator();
 
             ui.separator();
             // F-100 (F-094): Presence (Texture, Clarity, Dehaze) belongs to the
@@ -11061,9 +11509,10 @@ impl LuminaApp {
         }
     }
 
-    /// One Lightroom color-grading range (hue + saturation sliders) bound to the
-    /// `set_color_grading_value` commit path (GUI-SLIDER-SAVE-1). `range` is
-    /// only a slider binding buffer; the setter re-reads the recipe.
+    /// One Lightroom color-grading range (hue + saturation + luminance
+    /// sliders, G-02 Feinschliff) bound to the `set_color_grading_value`
+    /// commit path (GUI-SLIDER-SAVE-1). `range` is only a slider binding
+    /// buffer; the setter re-reads the recipe.
     fn color_grading_range_slider(
         &mut self,
         ui: &mut egui::Ui,
@@ -11094,6 +11543,90 @@ impl LuminaApp {
             SliderAction::Changed | SliderAction::ResetRequested
         ) {
             self.set_color_grading_value(range_name, "saturation", f64::from(sat));
+        }
+        // G-02 Feinschliff: per-range luminance.
+        let mut lum = range.luminance;
+        if matches!(
+            lr_slider(
+                ui,
+                &Str::LumPattern.format_arg(label.t()),
+                &mut lum,
+                percent_spec(-1.0..=1.0, 0.0)
+            ),
+            SliderAction::Changed | SliderAction::ResetRequested
+        ) {
+            self.set_color_grading_value(range_name, "luminance", f64::from(lum));
+        }
+    }
+
+    /// G-02 Point Color group (F-090b) inside the Color section: entry list
+    /// with stable ids, per-entry sliders and add/remove buttons. All edits
+    /// commit through the `add/remove/set_point_color_*` setters (save at
+    /// debounce); the locals are only binding buffers.
+    fn draw_point_color(&mut self, ui: &mut egui::Ui) {
+        ui.label(Str::PointColor.t());
+        let entries: Vec<PointColorEntry> = self
+            .recipe
+            .point_color
+            .as_ref()
+            .map(|block| block.entries.clone())
+            .unwrap_or_default();
+        for entry in &entries {
+            ui.horizontal(|ui| {
+                ui.label(entry.id.clone());
+                if ui.button(Str::PointColorRemove.t()).clicked() {
+                    self.remove_point_color(&entry.id.clone());
+                }
+            });
+            let mut center = entry.hue_center;
+            if matches!(
+                lr_slider(
+                    ui,
+                    Str::PointColorHueCenter.t(),
+                    &mut center,
+                    identity_spec(0.0..=360.0, 0.0, 1.0)
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
+            ) {
+                self.set_point_color_value(&entry.id, "hue_center", f64::from(center));
+            }
+            let mut range = entry.hue_range;
+            if matches!(
+                lr_slider(
+                    ui,
+                    Str::PointColorRange.t(),
+                    &mut range,
+                    identity_spec(0.0..=180.0, 30.0, 1.0)
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
+            ) {
+                self.set_point_color_value(&entry.id, "hue_range", f64::from(range));
+            }
+            let spec = percent_spec(-1.0..=1.0, 0.0);
+            for (mut value, field, label) in [
+                (entry.hue_shift, "hue_shift", Str::PointColorHueShift.t()),
+                (
+                    entry.saturation_shift,
+                    "saturation_shift",
+                    Str::PointColorSatShift.t(),
+                ),
+                (
+                    entry.luminance_shift,
+                    "luminance_shift",
+                    Str::PointColorLumShift.t(),
+                ),
+            ] {
+                if matches!(
+                    lr_slider(ui, label, &mut value, spec),
+                    SliderAction::Changed | SliderAction::ResetRequested
+                ) {
+                    let id = entry.id.clone();
+                    self.set_point_color_value(&id, field, f64::from(value));
+                }
+            }
+        }
+        if entries.len() < 8 && ui.button(Str::PointColorAdd.t()).clicked() {
+            self.add_point_color();
         }
     }
 
@@ -14131,17 +14664,56 @@ impl LuminaApp {
     }
 }
 
+/// The two-point identity curve `[(0,0),(1,1)]`.
+fn identity_curve_points() -> Vec<CurvePoint> {
+    vec![
+        CurvePoint {
+            input: 0.0,
+            output: 0.0,
+        },
+        CurvePoint {
+            input: 1.0,
+            output: 1.0,
+        },
+    ]
+}
+
 /// The four Lightroom parametric tone-curve regions (Shadows, Darks, Lights,
-/// Highlights) as the GUI's source of truth.  They are persisted as a master
-/// [`Curves`] point list via [`build_tone_curve`]; the read-back keeps the
-/// slider values stable for typical (unclamped) adjustments.
+/// Highlights) of one curve channel as the GUI's source of truth. They are
+/// persisted as that channel's point list via [`build_tone_curve_points`];
+/// the read-back keeps the slider values stable for typical (unclamped)
+/// adjustments. A channel without an explicit list reads as all-zero deltas.
+fn tone_curve_channel_regions(recipe: &EditRecipe, channel: &str) -> (f64, f64, f64, f64) {
+    let points: &[CurvePoint] = match channel {
+        "red" => recipe
+            .curves
+            .as_ref()
+            .and_then(|c| c.channels.red.as_deref())
+            .unwrap_or(&[]),
+        "green" => recipe
+            .curves
+            .as_ref()
+            .and_then(|c| c.channels.green.as_deref())
+            .unwrap_or(&[]),
+        "blue" => recipe
+            .curves
+            .as_ref()
+            .and_then(|c| c.channels.blue.as_deref())
+            .unwrap_or(&[]),
+        _ => recipe
+            .curves
+            .as_ref()
+            .map(|c| c.master.as_slice())
+            .unwrap_or(&[]),
+    };
+    tone_curve_regions_from_points(points)
+}
+
+/// Master-channel regions (backwards-compatible wrapper over
+/// [`tone_curve_channel_regions`]; test-owned, the panel binds channels).
+#[cfg(test)]
 fn tone_curve_regions(recipe: &EditRecipe) -> (f64, f64, f64, f64) {
-    let points = recipe
-        .curves
-        .as_ref()
-        .map(|c| c.master.clone())
-        .unwrap_or_default();
-    tone_curve_regions_from_points(&points)
+    tone_curve_channel_regions(recipe, "master")
 }
 
 /// Read-back of the four region deltas from stored curve points
@@ -14162,23 +14734,32 @@ fn tone_curve_regions_from_points(points: &[CurvePoint]) -> (f64, f64, f64, f64)
     out
 }
 
-/// Persist the four region values as a master [`Curves`] point list.  Outputs
+/// Persist the four region values as a [`Curves`] point list.  Outputs
 /// stay in `[0,1]` so the render pipeline never sees an out-of-range control
 /// point; extreme region values are clamped (a documented MVP simplification).
-fn build_tone_curve(shadows: f64, darks: f64, lights: f64, highlights: f64) -> Curves {
+fn build_tone_curve_points(
+    shadows: f64,
+    darks: f64,
+    lights: f64,
+    highlights: f64,
+) -> Vec<CurvePoint> {
     let base: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
     let deltas = [shadows, darks, lights, highlights];
-    let master: Vec<CurvePoint> = base
-        .iter()
+    base.iter()
         .zip(deltas.iter())
         .map(|(bx, d)| CurvePoint {
             input: *bx as f32,
             output: ((bx + d).clamp(0.0, 1.0)) as f32,
         })
-        .collect();
+        .collect()
+}
+
+/// Persist the four region values as a master [`Curves`] point list (see
+/// [`build_tone_curve_points`]).
+fn build_tone_curve(shadows: f64, darks: f64, lights: f64, highlights: f64) -> Curves {
     Curves {
         version: 1,
-        master,
+        master: build_tone_curve_points(shadows, darks, lights, highlights),
         channels: CurveChannels::default(),
     }
 }
@@ -19937,7 +20518,7 @@ mod tests {
         app.set_tone_curve_region("lights", 0.2);
         assert_eq!(
             app.pending_slider_commit,
-            Some(("curves.lights".to_string(), 0.2))
+            Some(("curves.master.lights".to_string(), 0.2))
         );
         let document = commit_and_load_doc(&mut app, &source);
         let (_, _, l, _) = tone_curve_regions(&document.virtual_copies[0].recipe);
@@ -20005,6 +20586,218 @@ mod tests {
             .expect("grading reloaded");
         assert!((f64::from(rcg.shadows.hue_degrees) - 120.0).abs() < 1e-4);
         assert!((f64::from(rcg.balance) - 0.3).abs() < 1e-6);
+    }
+
+    /// G-02 Feinschliff: grading luminance + blending commit, persist and
+    /// reload (GUI-SLIDER-SAVE-1, Datei → Reload).
+    #[test]
+    fn color_grading_refinement_commits_and_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_color_grading_value("highlights", "luminance", 0.4);
+        app.set_color_grading_blending(0.7);
+        let document = commit_and_load_doc(&mut app, &source);
+        let cg = document.virtual_copies[0]
+            .recipe
+            .color_grading
+            .clone()
+            .expect("color grading persisted");
+        assert!((f64::from(cg.highlights.luminance) - 0.4).abs() < 1e-6);
+        assert!((f64::from(cg.blending) - 0.7).abs() < 1e-6);
+        let reopened = reopen_app(&source);
+        let rcg = reopened
+            .recipe()
+            .color_grading
+            .clone()
+            .expect("grading reloaded");
+        assert!((f64::from(rcg.highlights.luminance) - 0.4).abs() < 1e-6);
+        assert!((f64::from(rcg.blending) - 0.7).abs() < 1e-6);
+    }
+
+    /// G-02 Kurve je Kanal: rote Parametrik + freier Punkt committen,
+    /// persistieren und laden; Master bleibt unberührt.
+    #[test]
+    fn channel_curve_param_and_points_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_tone_curve_channel_region("red", "lights", 0.2);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("curves.red.lights".to_string(), 0.2))
+        );
+        // Alle Kanäle teilen sich denselben parametrischen Pfad (Klassen-
+        // Vollständigkeit): Grün läuft zusätzlich durch.
+        app.set_tone_curve_channel_region("green", "darks", -0.1);
+        app.add_curve_point("red", 0.25, 0.3);
+        let document = commit_and_load_doc(&mut app, &source);
+        let curves = document.virtual_copies[0]
+            .recipe
+            .curves
+            .clone()
+            .expect("curves persisted");
+        let red = curves.channels.red.expect("red channel persisted");
+        assert!(
+            red.iter().any(|p| (f64::from(p.input) - 0.25).abs() < 1e-6),
+            "added red point persisted, got {red:?}"
+        );
+        // Master stammt aus der Default-Identität (2 Punkte, unberührt), Rot
+        // trägt die Parametrik-Liste (4 Punkte) plus den freien Punkt.
+        assert_eq!(curves.master.len(), 2);
+        assert_eq!(red.len(), 5);
+        let green = curves.channels.green.expect("green channel persisted");
+        assert_eq!(green.len(), 4, "green parametric persisted: {green:?}");
+        let reopened = reopen_app(&source);
+        let rred = reopened
+            .recipe()
+            .curves
+            .clone()
+            .expect("curves reloaded")
+            .channels
+            .red
+            .expect("red channel reloaded");
+        assert_eq!(rred.len(), 5);
+        let rgreen = reopened
+            .recipe()
+            .curves
+            .clone()
+            .expect("curves reloaded")
+            .channels
+            .green
+            .expect("green channel reloaded");
+        assert_eq!(rgreen.len(), 4);
+    }
+
+    /// G-02 Punkteditor: ungültige Punkte (Duplikat, Endpunkt-Entfernung)
+    /// werden laut verweigert — kein Commit, kein Save.
+    #[test]
+    fn curve_point_editor_refuses_invalid_edits_loudly() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.add_curve_point("red", 0.25, 0.3);
+        assert!(app.pending_slider_commit.is_some());
+        // Duplikat-Input verstößt gegen streng aufsteigende Inputs.
+        app.add_curve_point("red", 0.25, 0.4);
+        assert!(app.status.contains("not saved"), "status: {}", app.status);
+        // Endpunkte sind Pflicht und können nicht entfernt werden.
+        app.remove_curve_point("red", 0);
+        assert!(app.status.contains("mandatory"), "status: {}", app.status);
+        let red = app
+            .recipe
+            .curves
+            .clone()
+            .expect("curves")
+            .channels
+            .red
+            .expect("red");
+        assert_eq!(red.len(), 3, "invalid edits left no trace: {red:?}");
+        // Unbekannter Kanal warnt ohne Commit.
+        app.set_tone_curve_channel_region("bogus", "lights", 0.2);
+        app.set_curve_point("bogus", 0, "output", 0.5);
+        app.add_curve_point("bogus", 0.5, 0.5);
+        app.remove_curve_point("bogus", 0);
+    }
+
+    /// G-02 Point Color: Hinzufügen/Setzen/Entfernen committet, persistiert
+    /// und lädt (Datei → Reload); der Preview ändert sich sichtbar.
+    #[test]
+    fn point_color_add_set_remove_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let original_bytes = std::fs::read(&source).unwrap();
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let preview_before = app.preview().expect("preview after load").pixels.clone();
+        app.add_point_color();
+        app.set_point_color_value("pc-1", "hue_center", 30.0);
+        app.set_point_color_value("pc-1", "hue_range", 20.0);
+        app.set_point_color_value("pc-1", "hue_shift", 0.2);
+        app.set_point_color_value("pc-1", "saturation_shift", -0.5);
+        app.set_point_color_value("pc-1", "luminance_shift", 0.1);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("point_color.pc-1.luminance_shift".to_string(), 0.1))
+        );
+        let document = commit_and_load_doc(&mut app, &source);
+        let preview_after = app.preview().expect("preview after commit").pixels.clone();
+        assert_ne!(
+            preview_before, preview_after,
+            "point color desaturation must change the preview"
+        );
+        let entries = document.virtual_copies[0]
+            .recipe
+            .point_color
+            .clone()
+            .expect("point color persisted")
+            .entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "pc-1");
+        assert!((f64::from(entries[0].hue_center) - 30.0).abs() < 1e-6);
+        assert!((f64::from(entries[0].hue_range) - 20.0).abs() < 1e-6);
+        assert!((f64::from(entries[0].hue_shift) - 0.2).abs() < 1e-6);
+        assert!((f64::from(entries[0].saturation_shift) + 0.5).abs() < 1e-6);
+        assert!((f64::from(entries[0].luminance_shift) - 0.1).abs() < 1e-6);
+        let reopened = reopen_app(&source);
+        let rentries = reopened
+            .recipe()
+            .point_color
+            .clone()
+            .expect("point color reloaded")
+            .entries;
+        assert_eq!(rentries.len(), 1);
+        assert_eq!(rentries[0].id, "pc-1");
+        // Entfernen des letzten Eintrags löscht den Block (Absent = Identität).
+        let mut app = reopened;
+        app.remove_point_color("pc-1");
+        assert!(app.recipe.point_color.is_none());
+        let document = commit_and_load_doc(&mut app, &source);
+        assert!(document.virtual_copies[0].recipe.point_color.is_none());
+        // Das Original bleibt byte-identisch (nur Sidecar geschrieben).
+        assert_eq!(std::fs::read(&source).unwrap(), original_bytes);
+    }
+
+    /// G-02 Point Color: Out-of-Range und Limit werden laut verweigert —
+    /// kein Commit, kein Save.
+    #[test]
+    fn point_color_refuses_invalid_edits_loudly() {
+        let mut app = new_app();
+        app.load_bytes(png(), "test.png").unwrap();
+        app.set_point_color_value("pc-99", "hue_center", 30.0);
+        assert_eq!(app.pending_slider_commit, None);
+        app.add_point_color();
+        app.set_point_color_value("pc-1", "hue_center", 400.0);
+        assert!(app.status.contains("not saved"), "status: {}", app.status);
+        assert_eq!(
+            app.pending_slider_commit,
+            Some(("point_color.add".to_string(), 1.0)),
+            "refused edit recorded no commit"
+        );
+        // Neunter Eintrag wird verweigert (Limit 8).
+        for _ in 0..7 {
+            app.add_point_color();
+        }
+        assert_eq!(
+            app.recipe.point_color.clone().expect("block").entries.len(),
+            8
+        );
+        app.add_point_color();
+        assert_eq!(
+            app.recipe.point_color.clone().expect("block").entries.len(),
+            8,
+            "ninth entry refused"
+        );
+        app.remove_point_color("pc-99");
+        assert_eq!(
+            app.recipe.point_color.clone().expect("block").entries.len(),
+            8,
+            "unknown remove left no trace"
+        );
     }
 
     /// GUI-SLIDER-SAVE-1: effects sliders (vignette + grain seed) commit,

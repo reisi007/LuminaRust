@@ -406,9 +406,31 @@ ihre Version und der wirksame Inhalt müssen im `recipe_hash` enthalten sein;
 eine Änderung invalidiert ab `adjustments` alle abhängigen Preview-/Export-
 Einträge, nicht Decode oder AI-Masken. Abnahme: JSON-Roundtrip, monotone
 Interpolation ohne Overshoot, Kanaltrennung, Endpunktvalidierung, Clipping
-und Cache-Miss werden getestet. MVP-Grenze: keine parametrische Kurve und keine
+und Cache-Miss werden getestet. MVP-Grenze: keine
 lineare-Farbraum-Variante; spätere Pipelineversionen dürfen diese nur migriert
 einführen. Abhängigkeiten: F-029, F-031, F-036, F-039 und F-041.
+
+**Parametrik vs. Punkte je Kanal (G-02, LRPAR-G02-COLOR):** Jeder der vier
+Kanäle (`master`, `red`, `green`, `blue`) besitzt genau eine aktive
+Darstellung — parametrisch ODER Punkte; die zuletzt gesetzte ersetzt die
+andere (Last-Write-Wins je Kanal, kein implizites Mischen):
+
+- *Parametrisch:* vier Regions-Deltas `shadows/darks/lights/highlights` je in
+  `-1..=1`, persistiert als 4-Punkte-Kurve an den Basispositionen
+  `0, 1/3, 2/3, 1` mit auf `0..=1` geclippten Ausgaben (`output =
+  clamp(base + delta)`). Master parametrisch entspricht dem bisherigen
+  Verhalten; Kanal-Parametrik nutzt dieselbe Abbildung je Kanal.
+- *Punkte:* freie Stützpunkte (`2..=32`, streng aufsteigende `input`,
+  Endpunkte `(0,0)`/`(1,1)` Pflicht) ersetzen die 4-Punkte-Liste des Kanals.
+- Beide Darstellungen teilen Interpolation (monotone kubische Hermite,
+  kein Overshoot bei monotonen Stützpunkten) und Clipping (`0..=1` nach
+  Interpolation). Die Master-Anwendung (Luminanz-Verhältnis) und die
+  Kanal-Anwendung (direkt je Kanal) bleiben unverändert; Reihenfolge je Pixel:
+  erst Kanal-Punkt/Parametrik-Kurve, dann Master-Skalierung.
+- Bekannte MVP-Grenze (unverändert): geclippte Ausgaben sind nicht darstellbar
+  (z. B. positives `shadows`-Delta hebt `(0,0)` an und verletzt die
+  Endpunktpflicht) — Setzen wird laut verweigert bzw. sichtbar gemeldet,
+  nie still normalisiert.
 
 ### F-090 HSL/Farbmischer
 
@@ -436,6 +458,40 @@ Nachbarübergänge, zyklische Hue-Grenzen, Wertevalidierung, neutrale Identität
 und Cache-Invalidierung. MVP-Grenzen: keine selektive Masken-HSL-Matrix und
 keine lineare HSL-Alternative. Abhängigkeiten: F-031, F-036, F-039.
 
+### F-090b Point Color (G-02, LRPAR-G02-COLOR)
+
+**Ziel:** Gezielte Farbauswahl mit frei wählbarem Zentrum (statt der acht
+festen HSL-Zentren) plus Anpassung — deterministisch, rezept-persistiert.
+`recipe.adjustments.point_color` enthält `version` und `entries` (Liste,
+`0..=8` Einträge). Jeder Eintrag trägt:
+
+- `id` (stabile, innerhalb des Rezepts eindeutige Zeichenkette, z. B.
+  `pc-1`; Vergabe: laufende Nummer über dem Rezeptzustand, dokumentiert,
+  nie positionsbasiert),
+- Auswahl: `hue_center` in `0..=360`, `hue_range` (halbe Flankenbreite der
+  Dreiecksgewichtung) in `0..=180`,
+- Anpassung: `hue_shift`, `saturation_shift`, `luminance_shift` je in
+  `-1..=1` (`hue_shift` entspricht einer Drehung von höchstens ±30°).
+
+**Render-Semantik (sRGB-codiertes RGB, HSL-Konvertierung pro Pixel wie F-090):**
+Gewicht `w` = zyklische Dreiecksfunktion des Hue-Abstands zu `hue_center`
+(`1` im Zentrum, linear fallend auf `0` bei Abstand `>= hue_range`;
+`hue_range == 0` wirkt nur auf exakt `hue_center`). Anwendung gewichtet:
+`hue' = hue + hue_shift * 30° * w`, `sat' = clamp(sat + saturation_shift *
+w)`, `lum' = clamp(lum + luminance_shift * w)`, danach zurück nach RGB und
+Clipping auf `0..=1`. Mehrere Einträge wirken sequentiell in Listenreihenfolge.
+Alle-Null-Shifts sind Identität (Pixel bleiben bis auf HSL-Rundung unverändert).
+
+Die Stufe liegt in `Adjustments` nach HSL (F-090) und vor Vibrance/Saturation
+(F-092). `version`, alle Einträge und die Listenreihenfolge gehen in den
+`recipe_hash`; Änderungen invalidieren ab dieser Unterstufe. Abnahme:
+JSON-Roundtrip (inkl. stabiler IDs), Wertevalidierung (laut, kein Clipping),
+zyklische Hue-Grenzen (`359° ↔ 0°`), Identität bei Null-Shifts, Determinismus
+(zwei Läufe byte-identisch), Selektivität (ferne Farben unverändert) und
+Cache-Invalidierung. MVP-Grenzen: nur Hue-Dreiecksgewichtung (kein
+Sättigungs-/Luminanz-Gating der Auswahl, keine Masken-Kopplung), sRGB-HSL
+statt linearem/perzeptuellem Modell. Abhängigkeiten: F-031, F-036, F-090.
+
 ### F-091 Color Grading
 
 **Ziel:** Unabhängige Tönung von Schatten, Mitteltönen und Lichtern mit einem
@@ -452,14 +508,37 @@ Luminanz: Schatten `smoothstep(0.65,0.0, L)`, Lichter
 Summe 1 normiert. `balance` verschiebt die beiden Übergänge symmetrisch
 zwischen Schatten und Lichtern. Color Grading folgt HSL und globaler Kurve,
 liegt vor Masken und wird vor Crop ausgeführt. Damit ist die dokumentierte
-Zusammenwirkung: Auto-Tone → Kurve → HSL → Color Grading.
+Zusammenwirkung: Auto-Tone → Kurve → HSL → Point Color → Vibrance/Saturation
+→ Color Grading.
 
 `recipe_hash` berücksichtigt alle Werte und `version`; Änderungen invalidieren
 Preview/Export ab Color Grading, nicht Decode/Maskenartefakte. Abnahme:
 zyklische Hue-Werte, weiche Übergänge, Balance-Richtung, Identität bei
 Sättigung 0 und reproduzierbarer Cache-Miss. MVP-Grenzen: sRGB-HSL statt
-linearem oder perceptuellem Farbmodell, keine getrennte Blending-Methodik.
-Abhängigkeiten: F-031, F-036, F-039.
+linearem oder perceptuellem Farbmodell, keine getrennten Blend-Modi (nur der
+`blending`-Breitenparameter unten). Abhängigkeiten: F-031, F-036, F-039.
+
+**Feinschliff Schatten/Mitten/Lichter (G-02, LRPAR-G02-COLOR):** Jeder Bereich
+(`shadows`, `midtones`, `highlights`) trägt zusätzlich `luminance` in
+`-1..=1` (additiver Helligkeitsversatz der Tönung, `0` = Identität); global
+kommt `blending` in `0..=1` hinzu (Überlappungsweite der Bereichsgewichte,
+`0.5` = bisheriges Verhalten exakt):
+
+- `shadow_edge = 0.65 - balance * 0.15 + (blending - 0.5) * 0.2`,
+  `highlight_edge = 0.35 - balance * 0.15 - (blending - 0.5) * 0.2`
+  (`blending == 0.5` reproduziert die bisherigen Kanten bit-identisch;
+  höheres `blending` verbreitert die Mitteltöne).
+- Tönungsmischung wie bisher (kanalweise `x' = x + (tint - x) * weight *
+  saturation`); danach Luminanzversatz `lum_w = Σ weight_i * luminance_i` in
+  HSL: `L' = clamp(L + lum_w)`, zurück nach RGB, Clipping `0..=1`. Sind alle
+  drei `luminance`-Werte `0`, entfällt der HSL-Rundlauf (bit-identisch zum
+  bisherigen Pfad).
+- Fehlende Felder in Altdateien bedeuten `luminance = 0`, `blending = 0.5`
+  (additiv, keine Migration; identisches Renderverhalten).
+- Abnahme: `luminance`-Identität bei 0, sichtbare Aufhellung/Abdunklung je
+  Bereich bei ±1, `blending`-Richtung (Mitteltöne breiter/schmaler),
+  Legacy-Identität (`blending = 0.5`, `luminance = 0` rendert byte-identisch
+  zum Vor-Feinschliff-Pfad), Wertevalidierung laut.
 
 ### F-092 Dynamik und Sättigung
 
@@ -474,7 +553,8 @@ weichen Rändern); bereits gesättigte Farben und geschützte Hauttöne werden
 höchstens proportional schwach verändert. Negative Vibrance wirkt ebenfalls
 gewichtet, nicht als zweiter linearer Sättigungsregler.
 
-Die Unterstufenreihenfolge ist `vibrance → saturation`, nach HSL und vor Color
+Die Unterstufenreihenfolge ist `vibrance → saturation`, nach HSL und Point
+Color (F-090b), vor Color
 Grading, Masken und Crop. Werte, Schutzfunktion und `version` gehen in den
 `recipe_hash`; Änderungen invalidieren ab Adjustments. Abnahme: Identität bei
 0, Begrenzung, Schutz gesättigter Farben/Hauttöne und Cache-Invalidierung.

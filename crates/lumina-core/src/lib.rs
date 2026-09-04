@@ -896,6 +896,12 @@ impl ImageFrame {
         if let Some(hsl) = &recipe.hsl {
             apply_hsl(&mut self.pixels, hsl)?;
         }
+        // F-090b Point Color follows HSL: targeted selection before the
+        // global vibrance/saturation scaling (pipeline order HSL → Point
+        // Color → Vibrance/Saturation → Color Grading).
+        if let Some(point_color) = &recipe.point_color {
+            apply_point_color(&mut self.pixels, point_color);
+        }
         // F-092 deliberately follows HSL: vibrance is the selective operation,
         // then global saturation scales the resulting HSL saturation.
         apply_vibrance_and_saturation(
@@ -1904,6 +1910,14 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
                 maximum: 1.0,
             });
         }
+        if !c.blending.is_finite() || !(0.0..=1.0).contains(&c.blending) {
+            return Err(CoreError::InvalidAdjustment {
+                name: "color_grading.blending".into(),
+                value: c.blending as f64,
+                minimum: 0.0,
+                maximum: 1.0,
+            });
+        }
         for (name, range) in [
             ("shadows", c.shadows),
             ("midtones", c.midtones),
@@ -1924,6 +1938,61 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
                     minimum: 0.0,
                     maximum: 1.0,
                 });
+            }
+            if !range.luminance.is_finite() || !(-1.0..=1.0).contains(&range.luminance) {
+                return Err(CoreError::InvalidAdjustment {
+                    name: format!("color_grading.{name}.luminance"),
+                    value: range.luminance as f64,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                });
+            }
+        }
+    }
+    if let Some(p) = &recipe.point_color {
+        if p.version != 1 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "point_color.version".into(),
+                value: p.version as f64,
+                minimum: 1.0,
+                maximum: 1.0,
+            });
+        }
+        if p.entries.len() > 8 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "point_color.entries".into(),
+                value: p.entries.len() as f64,
+                minimum: 0.0,
+                maximum: 8.0,
+            });
+        }
+        let mut seen = std::collections::HashSet::new();
+        for entry in &p.entries {
+            if entry.id.is_empty() || !seen.insert(entry.id.clone()) {
+                return Err(CoreError::UnsupportedAdjustment {
+                    key: format!("point_color entry id `{}` (empty or duplicate)", entry.id),
+                });
+            }
+            for (field, value, lo, hi) in [
+                ("hue_center", entry.hue_center, 0.0_f32, 360.0_f32),
+                ("hue_range", entry.hue_range, 0.0_f32, 180.0_f32),
+                ("hue_shift", entry.hue_shift, -1.0_f32, 1.0_f32),
+                (
+                    "saturation_shift",
+                    entry.saturation_shift,
+                    -1.0_f32,
+                    1.0_f32,
+                ),
+                ("luminance_shift", entry.luminance_shift, -1.0_f32, 1.0_f32),
+            ] {
+                if !value.is_finite() || !(lo..=hi).contains(&value) {
+                    return Err(CoreError::InvalidAdjustment {
+                        name: format!("point_color.{}.{}", entry.id, field),
+                        value: value as f64,
+                        minimum: lo as f64,
+                        maximum: hi as f64,
+                    });
+                }
             }
         }
     }
@@ -2438,8 +2507,13 @@ fn apply_vibrance_and_saturation(
 fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading) {
     // Positive balance moves both transition points downward (0.15 max): the
     // highlight region expands toward shadows, matching Lightroom's direction.
-    let shadow_edge = 0.65 - grading.balance * 0.15;
-    let highlight_edge = 0.35 - grading.balance * 0.15;
+    // `blending == 0.5` reproduces the pre-refinement edges exactly; higher
+    // blending widens the midtones symmetrically.
+    let shadow_edge = 0.65 - grading.balance * 0.15 + (grading.blending - 0.5) * 0.2;
+    let highlight_edge = 0.35 - grading.balance * 0.15 - (grading.blending - 0.5) * 0.2;
+    let apply_luminance = grading.shadows.luminance != 0.0
+        || grading.midtones.luminance != 0.0
+        || grading.highlights.luminance != 0.0;
     let smooth = |edge: f32, value: f32| {
         let t = (value / edge).clamp(0.0, 1.0);
         1.0 - t * t * (3.0 - 2.0 * t)
@@ -2473,8 +2547,66 @@ fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading
                 output[channel] += (tint[channel] - output[channel]) * amount;
             }
         }
+        if apply_luminance {
+            let lum_shift = weights[0] * grading.shadows.luminance
+                + weights[1] * grading.midtones.luminance
+                + weights[2] * grading.highlights.luminance;
+            let (hue, sat, light) = rgb_to_hsl(output[0], output[1], output[2]);
+            let rgb = hsl_to_rgb(hue, sat, (light + lum_shift).clamp(0.0, 1.0));
+            output = rgb;
+        }
         for channel in 0..3 {
             px[channel] = (output[channel].clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    });
+}
+
+/// F-090b Point Color: targeted color selection with a free hue center.
+/// Each entry weights pixels by a cyclic triangular function of the hue
+/// distance to `hue_center` (`1` at the center, linearly to `0` at
+/// `hue_range`; `hue_range == 0` matches only the exact center hue) and
+/// applies its shifts weighted: hue rotation (`hue_shift * 30°`), additive
+/// saturation and luminance. Entries apply sequentially in list order in
+/// sRGB-codified HSL; all-zero shifts are identity. Outputs clip to `0..=1`.
+fn apply_point_color(pixels: &mut [u8], point_color: &lumina_sidecar::PointColor) {
+    if point_color.entries.is_empty() {
+        return;
+    }
+    for_each_rgba_mut(pixels, |px| {
+        let (mut hue, mut sat, mut light) = rgb_to_hsl(
+            px[0] as f32 / 255.0,
+            px[1] as f32 / 255.0,
+            px[2] as f32 / 255.0,
+        );
+        let mut touched = false;
+        for entry in &point_color.entries {
+            let distance = (hue - entry.hue_center)
+                .rem_euclid(360.0)
+                .min((entry.hue_center - hue).rem_euclid(360.0));
+            let weight = if entry.hue_range <= f32::EPSILON {
+                if distance <= f32::EPSILON {
+                    1.0
+                } else {
+                    0.0
+                }
+            } else if distance >= entry.hue_range {
+                0.0
+            } else {
+                1.0 - distance / entry.hue_range
+            };
+            if weight <= f32::EPSILON {
+                continue;
+            }
+            touched = true;
+            hue = (hue + entry.hue_shift * 30.0 * weight).rem_euclid(360.0);
+            sat = (sat + entry.saturation_shift * weight).clamp(0.0, 1.0);
+            light = (light + entry.luminance_shift * weight).clamp(0.0, 1.0);
+        }
+        if touched {
+            let rgb = hsl_to_rgb(hue, sat, light);
+            px[0] = (rgb[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+            px[1] = (rgb[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+            px[2] = (rgb[2] * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     });
 }
@@ -3344,6 +3476,7 @@ mod tests {
         let range = |hue_degrees| lumina_sidecar::ColorGradingRange {
             hue_degrees,
             saturation: 0.7,
+            luminance: 0.0,
         };
         let grading = lumina_sidecar::ColorGrading {
             version: 1,
@@ -3351,6 +3484,7 @@ mod tests {
             midtones: range(120.0),
             highlights: range(240.0),
             balance: 0.0,
+            blending: 0.5,
         };
         let mut a = ImageFrame::new(1, 1, vec![30, 40, 50, 13]).unwrap();
         let mut b = a.clone();
@@ -3375,6 +3509,7 @@ mod tests {
         let base = lumina_sidecar::ColorGradingRange {
             hue_degrees: 0.0,
             saturation: 0.0,
+            luminance: 0.0,
         };
         for grading in [
             lumina_sidecar::ColorGrading {
@@ -3383,6 +3518,7 @@ mod tests {
                 midtones: base,
                 highlights: base,
                 balance: 0.0,
+                blending: 0.5,
             },
             lumina_sidecar::ColorGrading {
                 version: 1,
@@ -3393,6 +3529,7 @@ mod tests {
                 midtones: base,
                 highlights: base,
                 balance: 0.0,
+                blending: 0.5,
             },
             lumina_sidecar::ColorGrading {
                 version: 1,
@@ -3403,6 +3540,7 @@ mod tests {
                 midtones: base,
                 highlights: base,
                 balance: 0.0,
+                blending: 0.5,
             },
             lumina_sidecar::ColorGrading {
                 version: 1,
@@ -3410,6 +3548,26 @@ mod tests {
                 midtones: base,
                 highlights: base,
                 balance: 1.1,
+                blending: 0.5,
+            },
+            lumina_sidecar::ColorGrading {
+                version: 1,
+                shadows: base,
+                midtones: base,
+                highlights: base,
+                balance: 0.0,
+                blending: 1.1,
+            },
+            lumina_sidecar::ColorGrading {
+                version: 1,
+                shadows: lumina_sidecar::ColorGradingRange {
+                    luminance: -1.1,
+                    ..base
+                },
+                midtones: base,
+                highlights: base,
+                balance: 0.0,
+                blending: 0.5,
             },
         ] {
             let mut frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
@@ -3420,6 +3578,369 @@ mod tests {
                 }),
                 Err(CoreError::InvalidAdjustment { .. })
             ));
+        }
+    }
+
+    /// G-02 Feinschliff: `luminance = 0` + `blending = 0.5` ist Identität bei
+    /// neutralen Tönungen, Luminance wirkt je Bereich, Blending ändert die
+    /// Gewichte deterministisch.
+    #[test]
+    fn color_grading_luminance_and_blending_behave() {
+        let range = |saturation, luminance| lumina_sidecar::ColorGradingRange {
+            hue_degrees: 0.0,
+            saturation,
+            luminance,
+        };
+        let grading = |saturation, luminance, blending| lumina_sidecar::ColorGrading {
+            version: 1,
+            shadows: range(saturation, luminance),
+            midtones: range(saturation, luminance),
+            highlights: range(saturation, luminance),
+            balance: 0.0,
+            blending,
+        };
+        let original = ImageFrame::new(2, 1, vec![30, 40, 50, 9, 200, 190, 180, 9]).unwrap();
+        // Neutral grading (no saturation, no luminance, legacy blending) is identity.
+        let mut identity = original.clone();
+        identity
+            .apply_recipe(&EditRecipe {
+                color_grading: Some(grading(0.0, 0.0, 0.5)),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(identity, original);
+        // Positive shadows luminance lightens the dark pixel's lightness.
+        let mut lightened = original.clone();
+        lightened
+            .apply_recipe(&EditRecipe {
+                color_grading: Some(lumina_sidecar::ColorGrading {
+                    shadows: range(0.0, 1.0),
+                    midtones: range(0.0, 0.0),
+                    highlights: range(0.0, 0.0),
+                    version: 1,
+                    balance: 0.0,
+                    blending: 0.5,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        let before = 0.2126 * 30.0 + 0.7152 * 40.0 + 0.0722 * 50.0;
+        let after = 0.2126 * f64::from(lightened.pixels[0])
+            + 0.7152 * f64::from(lightened.pixels[1])
+            + 0.0722 * f64::from(lightened.pixels[2]);
+        assert!(
+            after > before,
+            "shadows luminance +1 lightens, {before} -> {after}"
+        );
+        assert_eq!(&lightened.pixels[3..4], &[9]);
+        assert_eq!(&lightened.pixels[7..8], &[9]);
+        // Blending changes the range weights deterministically.
+        let render = |blending| {
+            let mut frame = original.clone();
+            frame
+                .apply_recipe(&EditRecipe {
+                    color_grading: Some(grading(0.6, 0.0, blending)),
+                    ..Default::default()
+                })
+                .unwrap();
+            frame.pixels.clone()
+        };
+        let narrow = render(0.0);
+        let legacy = render(0.5);
+        let wide = render(1.0);
+        assert_ne!(narrow, legacy);
+        assert_ne!(legacy, wide);
+        assert_eq!(render(0.5), legacy, "deterministic re-render");
+    }
+
+    /// G-02 Point Color: Identität bei Null-Shifts/leerer Liste, Selektivität
+    /// (ferne Farben unverändert), zyklische Auswahl über 0°, Determinismus
+    /// und Alpha-Erhalt.
+    #[test]
+    fn point_color_identity_selectivity_and_cyclic_wrap() {
+        use lumina_sidecar::{PointColor, PointColorEntry};
+        let recipe_with = |entries: Vec<PointColorEntry>| EditRecipe {
+            point_color: Some(PointColor {
+                version: 1,
+                entries,
+            }),
+            ..Default::default()
+        };
+        // Pure red + pure blue pixels (alpha 7/19).
+        let original = ImageFrame::new(2, 1, vec![255, 0, 0, 7, 0, 0, 255, 19]).unwrap();
+        // Empty list is identity.
+        let mut frame = original.clone();
+        frame.apply_recipe(&recipe_with(vec![])).unwrap();
+        assert_eq!(frame, original);
+        // All-zero shifts are identity (untouched pixels see no HSL drift).
+        let mut frame = original.clone();
+        frame
+            .apply_recipe(&recipe_with(vec![PointColorEntry {
+                id: "pc-1".into(),
+                hue_center: 0.0,
+                hue_range: 30.0,
+                hue_shift: 0.0,
+                saturation_shift: 0.0,
+                luminance_shift: 0.0,
+            }]))
+            .unwrap();
+        assert_eq!(frame, original);
+        // Desaturate reds: red pixel changes, blue pixel is untouched.
+        let red_entry = PointColorEntry {
+            id: "pc-1".into(),
+            hue_center: 0.0,
+            hue_range: 30.0,
+            hue_shift: 0.0,
+            saturation_shift: -1.0,
+            luminance_shift: 0.0,
+        };
+        let mut frame = original.clone();
+        frame
+            .apply_recipe(&recipe_with(vec![red_entry.clone()]))
+            .unwrap();
+        assert_ne!(&frame.pixels[..3], &original.pixels[..3]);
+        assert_eq!(&frame.pixels[4..7], &original.pixels[4..7]);
+        assert_eq!(&frame.pixels[3..4], &[7]);
+        assert_eq!(&frame.pixels[7..8], &[19]);
+        // Cyclic selection wraps over 0°: center 360° behaves exactly like
+        // center 0° (pure red, hue 0°, gets full weight in both cases).
+        let mut wrapped = original.clone();
+        wrapped
+            .apply_recipe(&recipe_with(vec![PointColorEntry {
+                hue_center: 360.0,
+                hue_range: 30.0,
+                ..red_entry.clone()
+            }]))
+            .unwrap();
+        assert_eq!(wrapped.pixels, frame.pixels);
+        // Determinism: two runs are byte-identical.
+        let mut again = original.clone();
+        again.apply_recipe(&recipe_with(vec![red_entry])).unwrap();
+        assert_eq!(again.pixels, frame.pixels);
+    }
+
+    #[test]
+    fn point_color_rejects_invalid_fields() {
+        use lumina_sidecar::{PointColor, PointColorEntry};
+        let entry = PointColorEntry {
+            id: "pc-1".into(),
+            hue_center: 30.0,
+            hue_range: 20.0,
+            hue_shift: 0.0,
+            saturation_shift: 0.0,
+            luminance_shift: 0.0,
+        };
+        let recipes = vec![
+            EditRecipe {
+                point_color: Some(PointColor {
+                    version: 2,
+                    entries: vec![entry.clone()],
+                }),
+                ..Default::default()
+            },
+            EditRecipe {
+                point_color: Some(PointColor {
+                    version: 1,
+                    entries: vec![PointColorEntry {
+                        hue_center: 400.0,
+                        ..entry.clone()
+                    }],
+                }),
+                ..Default::default()
+            },
+            EditRecipe {
+                point_color: Some(PointColor {
+                    version: 1,
+                    entries: vec![entry.clone(), entry.clone()],
+                }),
+                ..Default::default()
+            },
+            EditRecipe {
+                point_color: Some(PointColor {
+                    version: 1,
+                    entries: vec![entry; 9],
+                }),
+                ..Default::default()
+            },
+        ];
+        for recipe in recipes {
+            let mut frame = ImageFrame::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+            assert!(frame.apply_recipe(&recipe).is_err());
+        }
+    }
+
+    /// G-02 Kurve je Kanal: eine rote Punktkurve wirkt nur auf den R-Kanal.
+    #[test]
+    fn per_channel_point_curves_are_independent() {
+        use lumina_sidecar::{CurveChannels, CurvePoint, Curves};
+        let lift_red = Curves {
+            version: 1,
+            master: vec![
+                CurvePoint {
+                    input: 0.0,
+                    output: 0.0,
+                },
+                CurvePoint {
+                    input: 1.0,
+                    output: 1.0,
+                },
+            ],
+            channels: CurveChannels {
+                red: Some(vec![
+                    CurvePoint {
+                        input: 0.0,
+                        output: 0.0,
+                    },
+                    CurvePoint {
+                        input: 0.5,
+                        output: 0.75,
+                    },
+                    CurvePoint {
+                        input: 1.0,
+                        output: 1.0,
+                    },
+                ]),
+                green: None,
+                blue: None,
+            },
+        };
+        let original = ImageFrame::new(1, 1, vec![128, 128, 128, 255]).unwrap();
+        let mut frame = original.clone();
+        frame
+            .apply_recipe(&EditRecipe {
+                curves: Some(lift_red),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(frame.pixels[0] > original.pixels[0], "red lifted");
+        assert_eq!(frame.pixels[1], original.pixels[1], "green untouched");
+        assert_eq!(frame.pixels[2], original.pixels[2], "blue untouched");
+        assert_eq!(frame.pixels[3], 255);
+    }
+
+    /// G-02 Render-Golden (CPU-Referenz, Toleranz 0): alle neuen/berührten
+    /// Stufen (Kanal-Kurve + HSL + Point Color + Vibrance + Grading mit
+    /// Luminance/Blending) rendern auf einem fixen 8x8-Verlauf deterministisch
+    /// byte-identisch; die Änderung gegenüber dem unbearbeiteten Frame ist
+    /// echt (L1 > 0) und beschränkt (L1 pro Pixel <= 3*255, Alpha unberührt).
+    /// CPU-Stufen sind reine Funktionen der Eingabe-Bytes — daher ist die
+    /// Re-Render-Toleranz exakt 0 (kein PSNR-Schlupf nötig); die GPU-Route
+    /// ist für diese Stufen gegated (s. `lumina-gpu`).
+    #[test]
+    fn g02_color_stages_render_byte_identical_golden() {
+        use lumina_sidecar::{
+            ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves, HslAdjustments,
+            HslChannel, PointColor, PointColorEntry,
+        };
+        let mut pixels = Vec::new();
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                pixels.extend_from_slice(&[
+                    (x * 32) as u8,
+                    (y * 32) as u8,
+                    ((x + y) * 16) as u8,
+                    255,
+                ]);
+            }
+        }
+        let original = ImageFrame::new(8, 8, pixels).unwrap();
+        let recipe = EditRecipe {
+            curves: Some(Curves {
+                version: 1,
+                master: vec![
+                    CurvePoint {
+                        input: 0.0,
+                        output: 0.0,
+                    },
+                    CurvePoint {
+                        input: 1.0,
+                        output: 1.0,
+                    },
+                ],
+                channels: CurveChannels {
+                    red: Some(vec![
+                        CurvePoint {
+                            input: 0.0,
+                            output: 0.0,
+                        },
+                        CurvePoint {
+                            input: 0.5,
+                            output: 0.6,
+                        },
+                        CurvePoint {
+                            input: 1.0,
+                            output: 1.0,
+                        },
+                    ]),
+                    green: None,
+                    blue: None,
+                },
+            }),
+            hsl: Some(HslAdjustments {
+                version: 1,
+                red: Some(HslChannel {
+                    hue: 0.2,
+                    saturation: 0.1,
+                    luminance: -0.1,
+                }),
+                ..Default::default()
+            }),
+            point_color: Some(PointColor {
+                version: 1,
+                entries: vec![PointColorEntry {
+                    id: "pc-1".into(),
+                    hue_center: 30.0,
+                    hue_range: 40.0,
+                    hue_shift: 0.3,
+                    saturation_shift: -0.2,
+                    luminance_shift: 0.1,
+                }],
+            }),
+            ..Default::default()
+        };
+        let mut recipe = recipe;
+        recipe.adjustments.insert("vibrance".into(), 0.3);
+        recipe.color_grading = Some(ColorGrading {
+            version: 1,
+            shadows: ColorGradingRange {
+                hue_degrees: 200.0,
+                saturation: 0.4,
+                luminance: 0.2,
+            },
+            midtones: ColorGradingRange {
+                hue_degrees: 40.0,
+                saturation: 0.3,
+                luminance: 0.0,
+            },
+            highlights: ColorGradingRange {
+                hue_degrees: 0.0,
+                saturation: 0.0,
+                luminance: -0.2,
+            },
+            balance: 0.2,
+            blending: 0.7,
+        });
+        let render = |recipe: &EditRecipe| {
+            let mut frame = original.clone();
+            frame.apply_recipe(recipe).unwrap();
+            frame.pixels.clone()
+        };
+        let first = render(&recipe);
+        let second = render(&recipe);
+        assert_eq!(first, second, "re-render is byte-identical (tolerance 0)");
+        assert_ne!(first, original.pixels, "stages visibly change the frame");
+        let l1: u64 = first
+            .iter()
+            .zip(original.pixels.iter())
+            .map(|(a, b)| a.abs_diff(*b) as u64)
+            .sum();
+        let pixels_n = (8 * 8) as u64;
+        assert!(
+            l1 > 0 && l1 <= pixels_n * 3 * 255,
+            "bounded change, L1={l1}"
+        );
+        for (index, chunk) in first.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(chunk[3], 255, "alpha untouched at pixel {index}");
         }
     }
 

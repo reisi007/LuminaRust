@@ -38,12 +38,14 @@ use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairReg
 use lumina_sidecar::{
     apply_batch_op, artifact_status, load_sidecar, save_sidecar, sidecar_path_for,
     validate_smart_collection_def, AiSelect, AiSelectKind, AnalysisFingerprint, ArtifactStatus,
-    BatchOp, BokehShape, CollectionMembership, CoordinateSystem, DecodeFingerprint,
-    DepthArtifactRef, EditRecipe, FocusRect, GeometryFingerprint, HistoryEntry, LensBlur,
-    MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus, ModelIdentity,
-    Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument, SmartCollectionDef,
-    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity,
-    SpotDistraction, SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    BatchOp, BokehShape, CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem,
+    CurveChannels, CurvePoint, Curves, DecodeFingerprint, DepthArtifactRef, EditRecipe, FocusRect,
+    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, MaskDefinition,
+    MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus, ModelIdentity, PointColor,
+    PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument,
+    SmartCollectionDef, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
+    SourceFingerprint, SourceIdentity, SpotDistraction, SMART_COLLECTION_VERSION,
+    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -302,6 +304,9 @@ enum Command {
     /// silent heuristic render). See
     /// `feature/architecture/pipeline.md` § „G-05 Lens Blur“.
     LensBlur(LensBlurArgs),
+    /// G-02 Color-Parität (LRPAR-G02-COLOR): inspect and edit the color
+    /// stages of one virtual copy. See [`ColorArgs`].
+    Color(ColorArgs),
     /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
     /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
     Keywords(KeywordsArgs),
@@ -738,6 +743,101 @@ struct LensBlurArgs {
     clear: bool,
 }
 
+/// G-02 Color-Parität (LRPAR-G02-COLOR): inspect and edit the color stages
+/// of one virtual copy (tone curve per channel, HSL mixer, Point Color,
+/// color grading incl. luminance/blending, vibrance/saturation). Reads and
+/// writes are loud (unknown copies/channels/fields/ids, bad ranges abort
+/// with exit 1); the original image is never modified. See
+/// `feature/architecture/pipeline.md` §§ F-089, F-090, F-090b, F-091.
+#[derive(Debug, Args)]
+struct ColorArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+    /// List curve/HSL/Point-Color/grading values (default when no mutation
+    /// flag is given).
+    #[arg(long)]
+    list: bool,
+    /// Set parametric curve regions as `CHANNEL:S,D,L,H` with
+    /// `CHANNEL = master|red|green|blue` and four `-1..=1` deltas
+    /// (repeatable).
+    #[arg(long, value_name = "CHANNEL:S,D,L,H")]
+    set_curve_param: Vec<String>,
+    /// Set free curve points as `CHANNEL:I,O;I,O;...` with 2..=32 points,
+    /// strictly ascending inputs and `(0,0)`/`(1,1)` endpoints (repeatable).
+    #[arg(long, value_name = "CHANNEL:I,O;...")]
+    set_curve_points: Vec<String>,
+    /// Remove the whole tone-curve stage (all channels).
+    #[arg(long)]
+    clear_curves: bool,
+    /// Remove one tone-curve channel (`master|red|green|blue`; master
+    /// resets to identity, channel lists are dropped).
+    #[arg(long, value_name = "CHANNEL")]
+    clear_curve_channel: Option<String>,
+    /// Set one HSL mixer field as `CHANNEL:FIELD:VALUE` with
+    /// `CHANNEL = red|orange|yellow|green|cyan|blue|violet|magenta` and
+    /// `FIELD = hue|saturation|luminance` (repeatable).
+    #[arg(long, value_name = "CHANNEL:FIELD:VALUE")]
+    set_hsl: Vec<String>,
+    /// Remove the whole HSL mixer stage.
+    #[arg(long)]
+    clear_hsl: bool,
+    /// Add a Point Color entry (takes `--hue-center/--hue-range/
+    /// --hue-shift/--sat-shift/--lum-shift`; the id is the next stable
+    /// `pc-<n>`).
+    #[arg(long)]
+    add_point_color: bool,
+    /// Hue center for `--add-point-color` (`0..=360`, default 0).
+    #[arg(long, value_name = "0..=360")]
+    hue_center: Option<f32>,
+    /// Hue range for `--add-point-color` (`0..=180`, default 30).
+    #[arg(long, value_name = "0..=180")]
+    hue_range: Option<f32>,
+    /// Hue shift for `--add-point-color` (`-1..=1`, default 0).
+    #[arg(long, value_name = "-1..=1")]
+    hue_shift: Option<f32>,
+    /// Saturation shift for `--add-point-color` (`-1..=1`, default 0).
+    #[arg(long, value_name = "-1..=1")]
+    sat_shift: Option<f32>,
+    /// Luminance shift for `--add-point-color` (`-1..=1`, default 0).
+    #[arg(long, value_name = "-1..=1")]
+    lum_shift: Option<f32>,
+    /// Set one Point Color field as `ID:FIELD:VALUE` with
+    /// `FIELD = hue_center|hue_range|hue_shift|saturation_shift|
+    /// luminance_shift` (repeatable).
+    #[arg(long, value_name = "ID:FIELD:VALUE")]
+    set_point_color: Vec<String>,
+    /// Remove one Point Color entry by stable id (repeatable).
+    #[arg(long, value_name = "ID")]
+    remove_point_color: Vec<String>,
+    /// Remove the whole Point Color stage (identity).
+    #[arg(long)]
+    clear_point_color: bool,
+    /// Set one color-grading field as `RANGE:FIELD:VALUE` with
+    /// `RANGE = shadows|midtones|highlights` and
+    /// `FIELD = hue_degrees|saturation|luminance` (repeatable).
+    #[arg(long, value_name = "RANGE:FIELD:VALUE")]
+    set_grading: Vec<String>,
+    /// Set the color-grading balance (`-1..=1`).
+    #[arg(long, value_name = "-1..=1")]
+    set_grading_balance: Option<f32>,
+    /// Set the color-grading blending (`0..=1`, 0.5 = legacy edges).
+    #[arg(long, value_name = "0..=1")]
+    set_grading_blending: Option<f32>,
+    /// Remove the whole color-grading stage.
+    #[arg(long)]
+    clear_grading: bool,
+    /// Set vibrance (`-1..=1`).
+    #[arg(long, value_name = "-1..=1")]
+    set_vibrance: Option<f64>,
+    /// Set saturation (`-1..=1`).
+    #[arg(long, value_name = "-1..=1")]
+    set_saturation: Option<f64>,
+}
+
 /// Repair-region definition consumed by the `dust-removal` command.  The
 /// `region_values` are little-endian `u16` (0..=u16::MAX); pixels `>= 32768`
 /// are replaced by the corresponding `replacement_path` RGBA8 pixel.  Region
@@ -879,6 +979,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::DustRemoval(args) => dust_removal(args),
         Command::Spot(args) => spot(args),
         Command::LensBlur(args) => lens_blur(args),
+        Command::Color(args) => color(args),
         Command::Keywords(args) => keywords(args),
         Command::Collections(args) => collections(args),
         Command::BatchMeta(args) => batch_meta(args),
@@ -2946,6 +3047,617 @@ fn lens_blur_list(
                 false,
                 serde_json::json!({"command":"lens-blur","status":"ok"}),
                 &format!("lens-blur updated: {}", actions.join(", ")),
+            )
+        }
+    }
+}
+
+/// G-02 Color-Parität (LRPAR-G02-COLOR): inspect and edit the color stages
+/// (tone curve per channel, HSL mixer, Point Color, color grading,
+/// vibrance/saturation) of one virtual copy. Unknown copies, channels,
+/// fields, ids and malformed values abort loudly (exit 1) before anything
+/// is written; range validation runs on save via `document.validate()`.
+/// The original image is never modified.
+fn color(args: ColorArgs) -> Result<(), CliError> {
+    let wants_mutation = !args.set_curve_param.is_empty()
+        || !args.set_curve_points.is_empty()
+        || args.clear_curves
+        || args.clear_curve_channel.is_some()
+        || !args.set_hsl.is_empty()
+        || args.clear_hsl
+        || args.add_point_color
+        || !args.set_point_color.is_empty()
+        || !args.remove_point_color.is_empty()
+        || args.clear_point_color
+        || !args.set_grading.is_empty()
+        || args.set_grading_balance.is_some()
+        || args.set_grading_blending.is_some()
+        || args.clear_grading
+        || args.set_vibrance.is_some()
+        || args.set_saturation.is_some();
+    let path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+    if args.clear_curves && args.clear_curve_channel.is_some() {
+        return Err(CliError::Message(
+            "--clear-curves and --clear-curve-channel are mutually exclusive".into(),
+        ));
+    }
+    if args.clear_hsl && !args.set_hsl.is_empty() {
+        return Err(CliError::Message(
+            "--clear-hsl and --set-hsl are mutually exclusive".into(),
+        ));
+    }
+    if args.clear_grading
+        && (!args.set_grading.is_empty()
+            || args.set_grading_balance.is_some()
+            || args.set_grading_blending.is_some())
+    {
+        return Err(CliError::Message(
+            "--clear-grading and --set-grading* are mutually exclusive".into(),
+        ));
+    }
+    if args.clear_point_color
+        && (args.add_point_color
+            || !args.set_point_color.is_empty()
+            || !args.remove_point_color.is_empty())
+    {
+        return Err(CliError::Message(
+            "--clear-point-color and --add/set/remove-point-color are mutually exclusive".into(),
+        ));
+    }
+    if args.clear_curves {
+        mask_copy_mut(&mut document, &copy_id)?.recipe.curves = None;
+        info!("color: cleared curves on copy `{copy_id}`");
+        actions.push("clear-curves".into());
+    }
+    if let Some(channel) = args.clear_curve_channel.as_deref() {
+        check_curve_channel(channel)?;
+        let curves = curves_block_mut(&mut document, &copy_id)?;
+        match channel {
+            "master" => {
+                curves.master = vec![
+                    CurvePoint {
+                        input: 0.0,
+                        output: 0.0,
+                    },
+                    CurvePoint {
+                        input: 1.0,
+                        output: 1.0,
+                    },
+                ];
+            }
+            "red" => curves.channels.red = None,
+            "green" => curves.channels.green = None,
+            "blue" => curves.channels.blue = None,
+            _ => unreachable!(),
+        }
+        info!("color: cleared curve channel {channel} on copy `{copy_id}`");
+        actions.push(format!("clear-curve-channel:{channel}"));
+    }
+    for spec in &args.set_curve_param {
+        let (channel, deltas) = parse_curve_param(spec)?;
+        let points = curve_param_points(&deltas);
+        set_curve_channel_points(curves_block_mut(&mut document, &copy_id)?, channel, points)?;
+        info!("color: curve param {channel} on copy `{copy_id}`");
+        actions.push(format!("curve-param:{channel}"));
+    }
+    for spec in &args.set_curve_points {
+        let (channel, points) = parse_curve_points(spec)?;
+        set_curve_channel_points(curves_block_mut(&mut document, &copy_id)?, channel, points)?;
+        info!("color: curve points {channel} on copy `{copy_id}`");
+        actions.push(format!("curve-points:{channel}"));
+    }
+    if args.clear_hsl {
+        mask_copy_mut(&mut document, &copy_id)?.recipe.hsl = None;
+        info!("color: cleared hsl on copy `{copy_id}`");
+        actions.push("clear-hsl".into());
+    }
+    for spec in &args.set_hsl {
+        let (channel, field, value) = parse_hsl_triple(spec)?;
+        let slot = hsl_slot_mut(hsl_block_mut(&mut document, &copy_id)?, channel);
+        match field {
+            "hue" => slot.hue = value,
+            "saturation" => slot.saturation = value,
+            "luminance" => slot.luminance = value,
+            _ => unreachable!(),
+        }
+        info!("color: hsl {channel}.{field}={value} on copy `{copy_id}`");
+        actions.push(format!("hsl:{channel}.{field}"));
+    }
+    if args.clear_point_color {
+        mask_copy_mut(&mut document, &copy_id)?.recipe.point_color = None;
+        info!("color: cleared point_color on copy `{copy_id}`");
+        actions.push("clear-point-color".into());
+    }
+    if args.add_point_color {
+        let block = point_color_block_mut(&mut document, &copy_id)?;
+        if block.entries.len() >= 8 {
+            return Err(CliError::Message(
+                "point_color entry limit (8) reached".into(),
+            ));
+        }
+        let id = PointColorEntry::next_id(&block.entries);
+        block.entries.push(PointColorEntry {
+            id: id.clone(),
+            hue_center: args.hue_center.unwrap_or(0.0),
+            hue_range: args.hue_range.unwrap_or(30.0),
+            hue_shift: args.hue_shift.unwrap_or(0.0),
+            saturation_shift: args.sat_shift.unwrap_or(0.0),
+            luminance_shift: args.lum_shift.unwrap_or(0.0),
+        });
+        info!("color: point_color add {id} on copy `{copy_id}`");
+        actions.push(format!("point-color-add:{id}"));
+    }
+    for spec in &args.set_point_color {
+        let (id, field, value) = parse_point_color_triple(spec)?;
+        let block = point_color_block_mut(&mut document, &copy_id)?;
+        let Some(entry) = block.entries.iter_mut().find(|e| e.id == id) else {
+            return Err(CliError::Message(format!(
+                "unknown point_color entry `{id}` on copy `{copy_id}`"
+            )));
+        };
+        match field {
+            "hue_center" => entry.hue_center = value,
+            "hue_range" => entry.hue_range = value,
+            "hue_shift" => entry.hue_shift = value,
+            "saturation_shift" => entry.saturation_shift = value,
+            "luminance_shift" => entry.luminance_shift = value,
+            _ => unreachable!(),
+        }
+        info!("color: point_color {id}.{field}={value} on copy `{copy_id}`");
+        actions.push(format!("point-color:{id}.{field}"));
+    }
+    for id in &args.remove_point_color {
+        let block = point_color_block_mut(&mut document, &copy_id)?;
+        let len = block.entries.len();
+        block.entries.retain(|e| e.id != *id);
+        if block.entries.len() == len {
+            return Err(CliError::Message(format!(
+                "unknown point_color entry `{id}` on copy `{copy_id}`"
+            )));
+        }
+        if block.entries.is_empty() {
+            mask_copy_mut(&mut document, &copy_id)?.recipe.point_color = None;
+        }
+        info!("color: point_color remove {id} on copy `{copy_id}`");
+        actions.push(format!("point-color-remove:{id}"));
+    }
+    if args.clear_grading {
+        mask_copy_mut(&mut document, &copy_id)?.recipe.color_grading = None;
+        info!("color: cleared grading on copy `{copy_id}`");
+        actions.push("clear-grading".into());
+    }
+    for spec in &args.set_grading {
+        let (range, field, value) = parse_grading_triple(spec)?;
+        let slot = grading_slot_mut(grading_block_mut(&mut document, &copy_id)?, range);
+        match field {
+            "hue_degrees" => slot.hue_degrees = value,
+            "saturation" => slot.saturation = value,
+            "luminance" => slot.luminance = value,
+            _ => unreachable!(),
+        }
+        info!("color: grading {range}.{field}={value} on copy `{copy_id}`");
+        actions.push(format!("grading:{range}.{field}"));
+    }
+    if let Some(balance) = args.set_grading_balance {
+        grading_block_mut(&mut document, &copy_id)?.balance = balance;
+        info!("color: grading balance {balance} on copy `{copy_id}`");
+        actions.push(format!("grading-balance:{balance}"));
+    }
+    if let Some(blending) = args.set_grading_blending {
+        grading_block_mut(&mut document, &copy_id)?.blending = blending;
+        info!("color: grading blending {blending} on copy `{copy_id}`");
+        actions.push(format!("grading-blending:{blending}"));
+    }
+    if let Some(vibrance) = args.set_vibrance {
+        mask_copy_mut(&mut document, &copy_id)?
+            .recipe
+            .adjustments
+            .insert("vibrance".into(), vibrance);
+        info!("color: vibrance {vibrance} on copy `{copy_id}`");
+        actions.push(format!("vibrance:{vibrance}"));
+    }
+    if let Some(saturation) = args.set_saturation {
+        mask_copy_mut(&mut document, &copy_id)?
+            .recipe
+            .adjustments
+            .insert("saturation".into(), saturation);
+        info!("color: saturation {saturation} on copy `{copy_id}`");
+        actions.push(format!("saturation:{saturation}"));
+    }
+    if wants_mutation {
+        // Loud gate: ranges, point rules, focal order and ids are rejected
+        // before anything is written (no silent clipping, no half-apply).
+        document
+            .validate()
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        save_sidecar(&path, &document)?;
+    }
+    color_list(&args, &document, &copy_id, &actions)
+}
+
+/// Mutable access to one virtual copy's tone-curve stage, creating an
+/// identity stage when none exists (loud on unknown ids).
+fn curves_block_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut Curves, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.curves.get_or_insert(Curves {
+        version: 1,
+        master: vec![
+            CurvePoint {
+                input: 0.0,
+                output: 0.0,
+            },
+            CurvePoint {
+                input: 1.0,
+                output: 1.0,
+            },
+        ],
+        channels: CurveChannels::default(),
+    }))
+}
+
+/// Mutable access to one virtual copy's HSL mixer, creating a neutral stage
+/// when none exists (loud on unknown ids).
+fn hsl_block_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut HslAdjustments, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    let hsl = copy.recipe.hsl.get_or_insert(HslAdjustments {
+        version: 1,
+        ..Default::default()
+    });
+    hsl.version = 1;
+    Ok(hsl)
+}
+
+/// Mutable access to one virtual copy's Point Color stage, creating an empty
+/// stage when none exists (loud on unknown ids).
+fn point_color_block_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut PointColor, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    let block = copy.recipe.point_color.get_or_insert(PointColor {
+        version: 1,
+        entries: Vec::new(),
+    });
+    block.version = 1;
+    Ok(block)
+}
+
+/// Mutable access to one virtual copy's color-grading stage, creating a
+/// neutral stage when none exists (loud on unknown ids).
+fn grading_block_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut ColorGrading, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy
+        .recipe
+        .color_grading
+        .get_or_insert_with(ColorGrading::neutral))
+}
+
+fn check_curve_channel(channel: &str) -> Result<(), CliError> {
+    if matches!(channel, "master" | "red" | "green" | "blue") {
+        Ok(())
+    } else {
+        Err(CliError::Message(format!(
+            "invalid curve channel `{channel}`: expected master|red|green|blue"
+        )))
+    }
+}
+
+fn set_curve_channel_points(
+    curves: &mut Curves,
+    channel: &str,
+    points: Vec<CurvePoint>,
+) -> Result<(), CliError> {
+    check_curve_channel(channel)?;
+    curves.version = 1;
+    match channel {
+        "master" => curves.master = points,
+        "red" => curves.channels.red = Some(points),
+        "green" => curves.channels.green = Some(points),
+        "blue" => curves.channels.blue = Some(points),
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// Builds the parametric 4-point list at base positions `0, 1/3, 2/3, 1`
+/// (same mapping as the GUI); endpoint/range validity is enforced on save.
+fn curve_param_points(deltas: &[f64; 4]) -> Vec<CurvePoint> {
+    const BASE: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
+    BASE.iter()
+        .zip(deltas.iter())
+        .map(|(base, delta)| CurvePoint {
+            input: *base as f32,
+            output: ((base + delta).clamp(0.0, 1.0)) as f32,
+        })
+        .collect()
+}
+
+fn parse_f32_list(value: &str, expected: usize, what: &str) -> Result<Vec<f32>, CliError> {
+    let parts: Vec<&str> = value.split(',').collect();
+    if parts.len() != expected {
+        return Err(CliError::Message(format!(
+            "invalid {what} `{value}`: expected {expected} comma-separated numbers"
+        )));
+    }
+    parts
+        .iter()
+        .map(|part| {
+            part.trim().parse::<f32>().map_err(|_| {
+                CliError::Message(format!(
+                    "invalid {what} `{value}`: `{part}` is not a number"
+                ))
+            })
+        })
+        .collect()
+}
+
+/// Parses `CHANNEL:S,D,L,H` (loud on malformed input; ranges on save).
+fn parse_curve_param(spec: &str) -> Result<(&str, [f64; 4]), CliError> {
+    let (channel, rest) = spec.split_once(':').ok_or_else(|| {
+        CliError::Message(format!(
+            "invalid curve param `{spec}`: expected `CHANNEL:S,D,L,H`"
+        ))
+    })?;
+    check_curve_channel(channel)?;
+    let values = parse_f32_list(rest, 4, "curve param")?;
+    Ok((
+        channel,
+        [
+            f64::from(values[0]),
+            f64::from(values[1]),
+            f64::from(values[2]),
+            f64::from(values[3]),
+        ],
+    ))
+}
+
+/// Parses `CHANNEL:I,O;I,O;...` (loud on malformed input; point rules on
+/// save).
+fn parse_curve_points(spec: &str) -> Result<(&str, Vec<CurvePoint>), CliError> {
+    let (channel, rest) = spec.split_once(':').ok_or_else(|| {
+        CliError::Message(format!(
+            "invalid curve points `{spec}`: expected `CHANNEL:I,O;I,O;...`"
+        ))
+    })?;
+    check_curve_channel(channel)?;
+    let mut points = Vec::new();
+    for pair in rest.split(';') {
+        let values = parse_f32_list(pair, 2, "curve point")?;
+        points.push(CurvePoint {
+            input: values[0],
+            output: values[1],
+        });
+    }
+    Ok((channel, points))
+}
+
+fn hsl_slot_mut<'a>(hsl: &'a mut HslAdjustments, channel: &str) -> &'a mut HslChannel {
+    let slot = match channel {
+        "red" => &mut hsl.red,
+        "orange" => &mut hsl.orange,
+        "yellow" => &mut hsl.yellow,
+        "green" => &mut hsl.green,
+        "cyan" => &mut hsl.cyan,
+        "blue" => &mut hsl.blue,
+        "violet" => &mut hsl.violet,
+        _ => &mut hsl.magenta,
+    };
+    slot.get_or_insert_with(HslChannel::default)
+}
+
+/// Parses `CHANNEL:FIELD:VALUE` for the HSL mixer (loud on unknown
+/// channels/fields; ranges on save).
+fn parse_hsl_triple(spec: &str) -> Result<(&str, &str, f32), CliError> {
+    let mut parts = spec.splitn(3, ':');
+    let (Some(channel), Some(field), Some(value)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return Err(CliError::Message(format!(
+            "invalid hsl `{spec}`: expected `CHANNEL:FIELD:VALUE`"
+        )));
+    };
+    if !matches!(
+        channel,
+        "red" | "orange" | "yellow" | "green" | "cyan" | "blue" | "violet" | "magenta"
+    ) {
+        return Err(CliError::Message(format!(
+            "invalid hsl channel `{channel}`: expected red|orange|yellow|green|cyan|blue|violet|magenta"
+        )));
+    }
+    if !matches!(field, "hue" | "saturation" | "luminance") {
+        return Err(CliError::Message(format!(
+            "invalid hsl field `{field}`: expected hue|saturation|luminance"
+        )));
+    }
+    let value: f32 = value
+        .trim()
+        .parse()
+        .map_err(|_| CliError::Message(format!("invalid hsl value in `{spec}`: not a number")))?;
+    Ok((channel, field, value))
+}
+
+fn grading_slot_mut<'a>(grading: &'a mut ColorGrading, range: &str) -> &'a mut ColorGradingRange {
+    match range {
+        "shadows" => &mut grading.shadows,
+        "midtones" => &mut grading.midtones,
+        _ => &mut grading.highlights,
+    }
+}
+
+/// Parses `RANGE:FIELD:VALUE` for color grading (loud on unknown
+/// ranges/fields; ranges on save).
+fn parse_grading_triple(spec: &str) -> Result<(&str, &str, f32), CliError> {
+    let mut parts = spec.splitn(3, ':');
+    let (Some(range), Some(field), Some(value)) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(CliError::Message(format!(
+            "invalid grading `{spec}`: expected `RANGE:FIELD:VALUE`"
+        )));
+    };
+    if !matches!(range, "shadows" | "midtones" | "highlights") {
+        return Err(CliError::Message(format!(
+            "invalid grading range `{range}`: expected shadows|midtones|highlights"
+        )));
+    }
+    if !matches!(field, "hue_degrees" | "saturation" | "luminance") {
+        return Err(CliError::Message(format!(
+            "invalid grading field `{field}`: expected hue_degrees|saturation|luminance"
+        )));
+    }
+    let value: f32 = value.trim().parse().map_err(|_| {
+        CliError::Message(format!("invalid grading value in `{spec}`: not a number"))
+    })?;
+    Ok((range, field, value))
+}
+
+/// Parses `ID:FIELD:VALUE` for Point Color (loud on unknown fields or a
+/// missing entry; ranges on save).
+fn parse_point_color_triple(spec: &str) -> Result<(&str, &str, f32), CliError> {
+    let mut parts = spec.splitn(3, ':');
+    let (Some(id), Some(field), Some(value)) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(CliError::Message(format!(
+            "invalid point_color `{spec}`: expected `ID:FIELD:VALUE`"
+        )));
+    };
+    if id.trim().is_empty() {
+        return Err(CliError::Message(format!(
+            "invalid point_color `{spec}`: empty entry id"
+        )));
+    }
+    if !matches!(
+        field,
+        "hue_center" | "hue_range" | "hue_shift" | "saturation_shift" | "luminance_shift"
+    ) {
+        return Err(CliError::Message(format!(
+            "invalid point_color field `{field}`: expected hue_center|hue_range|hue_shift|saturation_shift|luminance_shift"
+        )));
+    }
+    let value: f32 = value.trim().parse().map_err(|_| {
+        CliError::Message(format!(
+            "invalid point_color value in `{spec}`: not a number"
+        ))
+    })?;
+    Ok((id, field, value))
+}
+
+fn color_list(
+    args: &ColorArgs,
+    document: &SidecarDocument,
+    copy_id: &str,
+    actions: &[String],
+) -> Result<(), CliError> {
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    let recipe = &copy.recipe;
+    if args.json {
+        emit(
+            true,
+            serde_json::json!({
+                "command": "color",
+                "input": args.input,
+                "copy": copy_id,
+                "curves": recipe.curves,
+                "hsl": recipe.hsl,
+                "point_color": recipe.point_color,
+                "color_grading": recipe.color_grading,
+                "vibrance": recipe.adjustments.get("vibrance"),
+                "saturation": recipe.adjustments.get("saturation"),
+                "actions": actions,
+            }),
+            "color status listed",
+        )
+    } else {
+        println!("copy: {} [{}]", copy.name, copy.id);
+        match &recipe.curves {
+            Some(curves) => {
+                println!(
+                    "  curves: master={}pts red={} green={} blue={}",
+                    curves.master.len(),
+                    curves.channels.red.as_ref().map_or(0, Vec::len),
+                    curves.channels.green.as_ref().map_or(0, Vec::len),
+                    curves.channels.blue.as_ref().map_or(0, Vec::len)
+                );
+            }
+            None => println!("  curves: none"),
+        }
+        println!(
+            "  hsl: {}",
+            if recipe.hsl.is_some() { "set" } else { "none" }
+        );
+        match &recipe.point_color {
+            Some(block) => {
+                println!("  point_color: {} entries", block.entries.len());
+                for entry in &block.entries {
+                    println!(
+                        "    {}: center={} range={} hue={} sat={} lum={}",
+                        entry.id,
+                        entry.hue_center,
+                        entry.hue_range,
+                        entry.hue_shift,
+                        entry.saturation_shift,
+                        entry.luminance_shift
+                    );
+                }
+            }
+            None => println!("  point_color: none"),
+        }
+        match &recipe.color_grading {
+            Some(grading) => {
+                println!(
+                    "  grading: balance={} blending={}",
+                    grading.balance, grading.blending
+                );
+                for (name, range) in [
+                    ("shadows", grading.shadows),
+                    ("midtones", grading.midtones),
+                    ("highlights", grading.highlights),
+                ] {
+                    println!(
+                        "    {name}: hue={} sat={} lum={}",
+                        range.hue_degrees, range.saturation, range.luminance
+                    );
+                }
+            }
+            None => println!("  grading: none"),
+        }
+        println!(
+            "  vibrance={:?} saturation={:?}",
+            recipe.adjustments.get("vibrance"),
+            recipe.adjustments.get("saturation")
+        );
+        if actions.is_empty() {
+            emit(
+                false,
+                serde_json::json!({"command":"color","status":"ok"}),
+                "color status listed",
+            )
+        } else {
+            emit(
+                false,
+                serde_json::json!({"command":"color","status":"ok"}),
+                &format!("color updated: {}", actions.join(", ")),
             )
         }
     }
@@ -6870,6 +7582,231 @@ mod tests {
         assert_eq!(error.exit_code(), 1);
         assert!(error.to_string().contains("lens_blur"));
         assert!(!output.exists());
+    }
+
+    fn color_base_args(input: PathBuf) -> ColorArgs {
+        ColorArgs {
+            input,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            set_curve_param: Vec::new(),
+            set_curve_points: Vec::new(),
+            clear_curves: false,
+            clear_curve_channel: None,
+            set_hsl: Vec::new(),
+            clear_hsl: false,
+            add_point_color: false,
+            hue_center: None,
+            hue_range: None,
+            hue_shift: None,
+            sat_shift: None,
+            lum_shift: None,
+            set_point_color: Vec::new(),
+            remove_point_color: Vec::new(),
+            clear_point_color: false,
+            set_grading: Vec::new(),
+            set_grading_balance: None,
+            set_grading_blending: None,
+            clear_grading: false,
+            set_vibrance: None,
+            set_saturation: None,
+        }
+    }
+
+    /// G-02: set every color stage in one run, list (read-only), then clear —
+    /// with sidecar roundtrip and an untouched original.
+    #[test]
+    fn color_set_list_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        let original_bytes = fs::read(&input).unwrap();
+        import_sidecar_for(&input);
+        // Set every stage in one run.
+        let mut set = color_base_args(input.clone());
+        set.set_curve_param = vec!["red:0.0,0.0,0.2,0.0".into()];
+        set.set_curve_points = vec!["master:0,0;0.5,0.6;1,1".into()];
+        set.set_hsl = vec!["red:hue:0.5".into(), "blue:luminance:-0.25".into()];
+        set.add_point_color = true;
+        set.hue_center = Some(30.0);
+        set.hue_range = Some(20.0);
+        set.sat_shift = Some(-0.5);
+        set.set_grading = vec![
+            "shadows:hue_degrees:120.0".into(),
+            "highlights:luminance:0.4".into(),
+        ];
+        set.set_grading_balance = Some(0.1);
+        set.set_grading_blending = Some(0.7);
+        set.set_vibrance = Some(0.2);
+        set.set_saturation = Some(-0.1);
+        color(set).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let recipe = &document.virtual_copies[0].recipe;
+        let curves = recipe.curves.as_ref().expect("curves");
+        assert_eq!(curves.master.len(), 3);
+        assert_eq!(
+            curves.channels.red.as_ref().expect("red").len(),
+            4,
+            "parametric red persists as a 4-point list"
+        );
+        let hsl = recipe.hsl.as_ref().expect("hsl");
+        assert_eq!(hsl.red.expect("red").hue, 0.5);
+        assert_eq!(hsl.blue.expect("blue").luminance, -0.25);
+        let point_color = recipe.point_color.as_ref().expect("point_color");
+        assert_eq!(point_color.entries.len(), 1);
+        assert_eq!(point_color.entries[0].id, "pc-1");
+        assert_eq!(point_color.entries[0].hue_center, 30.0);
+        assert_eq!(point_color.entries[0].saturation_shift, -0.5);
+        let grading = recipe.color_grading.as_ref().expect("grading");
+        assert_eq!(grading.shadows.hue_degrees, 120.0);
+        assert_eq!(grading.highlights.luminance, 0.4);
+        assert_eq!(grading.balance, 0.1);
+        assert_eq!(grading.blending, 0.7);
+        assert_eq!(recipe.adjustments["vibrance"], 0.2);
+        assert_eq!(recipe.adjustments["saturation"], -0.1);
+        // Sidecar JSON carries the stages in the adjustments map.
+        let raw = fs::read_to_string(sidecar_path_for(&input)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let adjustments = &value["virtual_copies"][0]["recipe"]["adjustments"];
+        assert!(adjustments.get("curves").is_some());
+        assert!(adjustments.get("hsl").is_some());
+        assert!(adjustments.get("point_color").is_some());
+        assert!(adjustments.get("color_grading").is_some());
+        // List-only is read-only: sidecar bytes unchanged.
+        let before = fs::read(sidecar_path_for(&input)).unwrap();
+        color(color_base_args(input.clone())).unwrap();
+        assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+        // Mutate one Point Color entry, then remove it (last remove drops
+        // the block).
+        let mut edit = color_base_args(input.clone());
+        edit.set_point_color = vec!["pc-1:hue_center:200.0".into()];
+        color(edit).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .point_color
+                .as_ref()
+                .expect("point_color")
+                .entries[0]
+                .hue_center,
+            200.0
+        );
+        let mut remove = color_base_args(input.clone());
+        remove.remove_point_color = vec!["pc-1".into()];
+        color(remove).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert!(document.virtual_copies[0].recipe.point_color.is_none());
+        // Clear the remaining stages.
+        let mut clear = color_base_args(input.clone());
+        clear.clear_curves = true;
+        clear.clear_hsl = true;
+        clear.clear_grading = true;
+        color(clear).unwrap();
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let recipe = &document.virtual_copies[0].recipe;
+        assert!(recipe.curves.is_none());
+        assert!(recipe.hsl.is_none());
+        assert!(recipe.color_grading.is_none());
+        // Original image untouched throughout.
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    /// G-02: every invalid color input fails loudly (exit 1) and never
+    /// mutates the sidecar — no silent clipping.
+    #[test]
+    fn color_rejects_invalid_values_without_touching_the_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 60);
+        import_sidecar_for(&input);
+        let sidecar_path = sidecar_path_for(&input);
+        let before = fs::read_to_string(&sidecar_path).unwrap();
+
+        // Unknown curve channel.
+        let mut bad = color_base_args(input.clone());
+        bad.set_curve_param = vec!["purple:0,0,0,0".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Malformed curve param.
+        let mut bad = color_base_args(input.clone());
+        bad.set_curve_param = vec!["red:0,0".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Non-ascending curve points (rejected on save, not reordered).
+        let mut bad = color_base_args(input.clone());
+        bad.set_curve_points = vec!["master:0,0;0.3,0.5;0.2,0.4;1,1".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Missing (0,0) endpoint.
+        let mut bad = color_base_args(input.clone());
+        bad.set_curve_points = vec!["master:0.1,0.1;1,1".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Unknown HSL channel / field.
+        let mut bad = color_base_args(input.clone());
+        bad.set_hsl = vec!["infrared:hue:0.5".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        let mut bad = color_base_args(input.clone());
+        bad.set_hsl = vec!["red:brightness:0.5".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Out-of-range HSL value (rejected on save, not clipped).
+        let mut bad = color_base_args(input.clone());
+        bad.set_hsl = vec!["red:hue:2.0".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Unknown Point Color entry / field.
+        let mut bad = color_base_args(input.clone());
+        bad.set_point_color = vec!["pc-99:hue_center:30.0".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        let mut bad = color_base_args(input.clone());
+        bad.add_point_color = true;
+        color(bad).unwrap();
+        let mut bad = color_base_args(input.clone());
+        bad.set_point_color = vec!["pc-1:brightness:0.5".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Out-of-range point color value.
+        let mut bad = color_base_args(input.clone());
+        bad.set_point_color = vec!["pc-1:hue_center:400.0".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Unknown grading range / field / out-of-range blending.
+        let mut bad = color_base_args(input.clone());
+        bad.set_grading = vec!["lowlights:saturation:0.5".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        let mut bad = color_base_args(input.clone());
+        bad.set_grading = vec!["shadows:brightness:0.5".into()];
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        let mut bad = color_base_args(input.clone());
+        bad.set_grading_blending = Some(1.5);
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Mutually exclusive flags.
+        let mut bad = color_base_args(input.clone());
+        bad.clear_curves = true;
+        bad.clear_curve_channel = Some("red".into());
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        let mut bad = color_base_args(input.clone());
+        bad.clear_grading = true;
+        bad.set_grading_balance = Some(0.1);
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+        // Ninth point color entry (limit 8).
+        for _ in 0..7 {
+            let mut add = color_base_args(input.clone());
+            add.add_point_color = true;
+            color(add).unwrap();
+        }
+        let mut bad = color_base_args(input.clone());
+        bad.add_point_color = true;
+        assert_eq!(color(bad).unwrap_err().exit_code(), 1);
+
+        // The loud failures above (except the intentional successful adds)
+        // must not corrupt the sidecar: it still loads and the stages that
+        // were set on purpose round-trip.
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .point_color
+                .as_ref()
+                .expect("point_color")
+                .entries
+                .len(),
+            8
+        );
+        let _ = before;
     }
 
     /// R2-CLI-07: a partially failed batch exits with its own documented code

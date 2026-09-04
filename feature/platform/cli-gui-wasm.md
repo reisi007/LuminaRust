@@ -327,8 +327,11 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 - Die Sektionen werden in dieser Reihenfolge angezeigt. Innerhalb der Sektionen
   wird die Bearbeitungsreihenfolge der F-089–F-099-Unterstufen sichtbar und
   verbindlich abgebildet: **globale Tonwerte** (Exposure, Contrast,
-  Highlights, Shadows, Whites, Blacks) → **Kurve** (F-089 Tone Curve) →
-  **HSL/Farbmischer** (F-090 HSL/Color Mixer) → **Color Grading** (F-091) →
+  Highlights, Shadows, Whites, Blacks) → **Kurve** (F-089 Tone Curve,
+  parametrisch + Punkte je Kanal Master/R/G/B) →
+  **HSL/Farbmischer** (F-090 HSL/Color Mixer) → **Point Color** (F-090b,
+  gezielte Farbauswahl) → **Color Grading** (F-091, inkl. Luminance je
+  Bereich + Blending) →
   **Präsenz** (F-094 Texture, Clarity, Dehaze) → **Dynamik/Sättigung** (F-092
   Vibrance, Saturation) → **Schärfen** (F-095
   Sharpening) → **Rauschreduzierung** (F-096 Noise Reduction) →
@@ -642,6 +645,53 @@ kollabierbare Untergruppe „Lens Blur“, kein zweiter Renderpfad):
   (Lens-Blur-Untergruppe mit Statuszeile), Fokus-Overlay im Preview und
   headless E2E-Tests (Setter → Datei → Reload); fehlendes Tiefenartefakt
   bricht Render/Export mit Exit 1 bzw. sichtbarem GUI-Fehler ab.
+
+### Color-Parität G-02 (LRPAR-G02-COLOR, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-02 (Feldsemantik,
+Stufenregeln, Interpolations- und Gewichtungsformeln:
+`feature/architecture/pipeline.md` §§ F-089, F-090, F-090b, F-091):
+
+- **Tone Curve je Kanal:** Kanalwahl `Master`/`Red`/`Green`/`Blue` in der
+  Tone-Curve-Sektion. Parametrisch = vier Regions-Slider
+  (Shadows/Darks/Lights/Highlights, `-1..=1`) je Kanal, persistiert als
+  4-Punkte-Kurve des Kanals (gleiche Abbildung wie Master-Bestand); Punkte =
+  freie Stützpunktliste (`2..=32`, Endpunkte `(0,0)`/`(1,1)` Pflicht) je
+  Kanal, ersetzt die 4-Punkte-Liste (Last-Write-Wins je Kanal). Ungültige
+  Punkte/Regionen werden laut verweigert (Status + kein Save), nie still
+  normalisiert. Interpolation (monotone kubische Hermite) und Clipping
+  (`0..=1`) wie F-089 dokumentiert.
+- **Point Color:** Gruppe in der Color-Sektion (nach HSL-Mixer, vor Color
+  Grading): Eintragsliste mit stabilen IDs (`pc-<n>`), je Eintrag Slider
+  `Hue Center` (`0..=360`), `Range` (`0..=180`), `Hue Shift`/`Sat
+  Shift`/`Lum Shift` (je `-1..=1`) plus Entfernen-Button und
+  Hinzufügen-Button. Rezept-persistiert, deterministisch, Reload stellt die
+  Liste exakt wieder her.
+- **Color-Grading-Feinschliff:** je Bereich (`Shadows`/`Midtones`/
+  `Highlights`) zusätzlich `Luminance`-Slider (`-1..=1`) plus globaler
+  `Blending`-Slider (`0..=1`, Default `0.5` = bisheriges Verhalten);
+  Commit-Pfad und Persistenz wie die bestehenden Grading-Slider.
+- **Previous/Reset:** Tone-Curve-Sektion umfasst Master + alle Kanalkurven;
+  Color-Sektion umfasst HSL + Point Color + Grading (+ Presence +
+  Vibrance/Saturation wie bisher).
+- **CLI:** `lumina color --list` (Kurven/HSL/Point-Color/Grading je Kopie),
+  `--set-curve-param KANAL S,D,L,H`, `--set-curve-points KANAL
+  'i,o;i,o;…'`, `--clear-curves [KANAL]`, `--set-hsl KANAL FELD WERT`,
+  `--clear-hsl`, `--add-point-color` (+ `--hue-center/--hue-range/
+  --hue-shift/--sat-shift/--lum-shift`), `--set-point-color ID FELD WERT`,
+  `--remove-point-color ID`, `--clear-point-color`, `--set-grading BEREICH
+  FELD WERT` (Felder `hue_degrees|saturation|luminance`),
+  `--set-grading-balance V`, `--set-grading-blending V`,
+  `--set-vibrance V`, `--set-saturation V`; Roundtrip über
+  `save_sidecar`/`load_sidecar`, laute Fehler (Exit 1
+  Benutzungs-/Laufzeitfehler wie Bestand, kein stiller Fallback, keine
+  absoluten Pfade).
+- **Status (LRPAR-G02-COLOR):** umgesetzt — Schema (`point_color`,
+  `luminance`/`blending`), Core-Stufen (keine zweite Pipeline),
+  CLI-Befehl, GUI-Sektionen (Kanalwahl, Punkteditor, Point-Color-Gruppe,
+  Luminance/Blending-Slider) + headless E2E-Tests (Setter → Commit →
+  Datei → Reload, Preview-Änderung); GPU routet aktives `point_color`
+  (nicht-neutral) laut auf CPU.
 
 ### Develop-Basis G-01 (LRPAR-G01-BASIC, Release 1.0)
 

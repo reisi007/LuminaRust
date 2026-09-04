@@ -38,7 +38,7 @@ use lumina_core::masks::MaskPlane;
 #[cfg(feature = "gpu")]
 use lumina_core::render::SourceActionArtifact;
 use lumina_core::ImageFrame;
-use lumina_sidecar::{CurvePoint, Curves, EditRecipe, HslAdjustments};
+use lumina_sidecar::{CurvePoint, Curves, EditRecipe, HslAdjustments, PointColor};
 use thiserror::Error;
 
 // Shader + tiling modules are scaffolded (empty) so parallel subagents can fill
@@ -159,7 +159,7 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   their neutral default back into the recipe map; at that value the CPU
 ///   stage is pixel-identical to not having the key, so it must not block the
 ///   GPU route);
-/// - non-neutral Curves, HSL, Presence;
+/// - non-neutral Curves, HSL, Point Color, Presence;
 /// - Color Grading, Noise Reduction, Sharpening, Effects (vignette/grain);
 /// - Geometry / Lens Correction / Perspective;
 /// - non-empty SourceActions **unless** GPU source-action artifacts are bound
@@ -225,6 +225,11 @@ pub fn unsupported_gpu_stages_with_context(
     if let Some(hsl) = &recipe.hsl {
         if !hsl_is_neutral(hsl) {
             reasons.push("hsl".into());
+        }
+    }
+    if let Some(point_color) = &recipe.point_color {
+        if !point_color_is_neutral(point_color) {
+            reasons.push("point_color".into());
         }
     }
     if let Some(presence) = &recipe.presence {
@@ -306,6 +311,16 @@ fn curves_are_neutral(curves: &Curves) -> bool {
         && curves.channels.red.is_none()
         && curves.channels.green.is_none()
         && curves.channels.blue.is_none()
+}
+
+/// Point Color is neutral when no entry shifts any channel (the CPU leaves
+/// every pixel unchanged: untouched pixels skip the HSL roundtrip, zero-shift
+/// entries roundtrip exactly).
+fn point_color_is_neutral(point_color: &PointColor) -> bool {
+    point_color
+        .entries
+        .iter()
+        .all(|e| e.hue_shift == 0.0 && e.saturation_shift == 0.0 && e.luminance_shift == 0.0)
 }
 
 /// HSL is neutral when every present channel carries all-zero hue/saturation/
@@ -2566,6 +2581,36 @@ mod routing_gate_tests {
         let reasons = unsupported_gpu_stages(&bogus);
         assert!(
             reasons.iter().any(|r| r.contains("clarity_v2")),
+            "{reasons:?}"
+        );
+    }
+
+    /// G-02: a non-neutral Point Color stage routes to CPU loudly; an
+    /// absent or all-zero-shift stage does not block the GPU route.
+    #[test]
+    fn point_color_neutrality_gates_gpu_route() {
+        use lumina_sidecar::{PointColor, PointColorEntry};
+        let entry = |saturation_shift| PointColorEntry {
+            id: "pc-1".into(),
+            hue_center: 30.0,
+            hue_range: 20.0,
+            hue_shift: 0.0,
+            saturation_shift,
+            luminance_shift: 0.0,
+        };
+        let recipe = |entries: Vec<PointColorEntry>| EditRecipe {
+            point_color: Some(PointColor {
+                version: 1,
+                entries,
+            }),
+            ..Default::default()
+        };
+        assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
+        assert!(unsupported_gpu_stages(&recipe(vec![])).is_empty());
+        assert!(unsupported_gpu_stages(&recipe(vec![entry(0.0)])).is_empty());
+        let reasons = unsupported_gpu_stages(&recipe(vec![entry(0.5)]));
+        assert!(
+            reasons.iter().any(|r| r.contains("point_color")),
             "{reasons:?}"
         );
     }

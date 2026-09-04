@@ -878,6 +878,9 @@ pub struct EditRecipe {
     pub adjustments: BTreeMap<String, f64>,
     pub curves: Option<Curves>,
     pub hsl: Option<HslAdjustments>,
+    /// Optional F-090b point color (targeted color selection + shifts).
+    /// Additive in schema v2; absent is identity and requires no migration.
+    pub point_color: Option<PointColor>,
     /// Pre-MVP schema decision: these optional fields are additive in schema v2;
     /// absent values remain identity and require no migration.
     pub color_grading: Option<ColorGrading>,
@@ -943,6 +946,12 @@ impl Serialize for EditRecipe {
             adjustment.insert(
                 "hsl".into(),
                 serde_json::to_value(hsl).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(point_color) = &self.point_color {
+            adjustment.insert(
+                "point_color".into(),
+                serde_json::to_value(point_color).map_err(serde::ser::Error::custom)?,
             );
         }
         if let Some(color_grading) = &self.color_grading {
@@ -1059,6 +1068,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut adjustments = BTreeMap::new();
         let mut curves = None;
         let mut hsl = None;
+        let mut point_color = None;
         let mut color_grading = None;
         let mut presence = None;
         let mut noise_reduction = None;
@@ -1123,6 +1133,10 @@ impl<'de> Deserialize<'de> for EditRecipe {
             if let Some(value) = object.remove("hsl") {
                 hsl = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
+            if let Some(value) = object.remove("point_color") {
+                point_color =
+                    Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
             if let Some(value) = object.remove("color_grading") {
                 color_grading =
                     Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
@@ -1171,6 +1185,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             adjustments,
             curves,
             hsl,
+            point_color,
             color_grading,
             presence,
             noise_reduction,
@@ -1247,6 +1262,26 @@ pub struct HslChannel {
 pub struct ColorGradingRange {
     pub hue_degrees: f32,
     pub saturation: f32,
+    /// G-02 Feinschliff: additive lightness offset of the tint (`-1..=1`,
+    /// `0` = identity). Missing in legacy documents means `0` (additive,
+    /// no migration; identical rendering).
+    #[serde(default)]
+    pub luminance: f32,
+}
+
+impl ColorGradingRange {
+    /// Neutral range (no tint, no luminance shift).
+    pub fn neutral() -> Self {
+        Self {
+            hue_degrees: 0.0,
+            saturation: 0.0,
+            luminance: 0.0,
+        }
+    }
+}
+
+fn default_color_grading_blending() -> f32 {
+    0.5
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1256,6 +1291,70 @@ pub struct ColorGrading {
     pub midtones: ColorGradingRange,
     pub highlights: ColorGradingRange,
     pub balance: f32,
+    /// G-02 Feinschliff: overlap width of the range weights (`0..=1`).
+    /// `0.5` reproduces the pre-refinement edges exactly; missing in legacy
+    /// documents means `0.5` (additive, no migration; identical rendering).
+    #[serde(default = "default_color_grading_blending")]
+    pub blending: f32,
+}
+
+impl ColorGrading {
+    /// Neutral grading (no tint, centered balance, legacy blending).
+    pub fn neutral() -> Self {
+        Self {
+            version: 1,
+            shadows: ColorGradingRange::neutral(),
+            midtones: ColorGradingRange::neutral(),
+            highlights: ColorGradingRange::neutral(),
+            balance: 0.0,
+            blending: default_color_grading_blending(),
+        }
+    }
+}
+
+/// F-090b Point Color (G-02, LRPAR-G02-COLOR): targeted color selection with
+/// a free hue center plus hue/saturation/luminance shifts. Serialized into
+/// the `adjustments` map (like `hsl`); absent is identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PointColor {
+    pub version: u8,
+    #[serde(default)]
+    pub entries: Vec<PointColorEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PointColorEntry {
+    /// Stable id, unique within the recipe (e.g. `pc-1`); entries are
+    /// never identified by their list position.
+    pub id: String,
+    /// Selection center, cyclic degrees `0..=360`.
+    pub hue_center: f32,
+    /// Half flank width of the triangular hue weighting `0..=180`
+    /// (`0` matches only the exact center hue).
+    pub hue_range: f32,
+    /// Hue rotation of at most ±30° (`-1..=1`).
+    pub hue_shift: f32,
+    /// Additive saturation shift (`-1..=1`).
+    pub saturation_shift: f32,
+    /// Additive luminance shift (`-1..=1`).
+    pub luminance_shift: f32,
+}
+
+impl PointColorEntry {
+    /// Next stable entry id over the current recipe state (`pc-<n>`,
+    /// `n` = one past the highest numeric `pc-` suffix, starting at 1).
+    /// Deterministic given the recipe; stable across roundtrips.
+    pub fn next_id(entries: &[PointColorEntry]) -> String {
+        let mut max: u32 = 0;
+        for entry in entries {
+            if let Some(suffix) = entry.id.strip_prefix("pc-") {
+                if let Ok(n) = suffix.parse::<u32>() {
+                    max = max.max(n);
+                }
+            }
+        }
+        format!("pc-{}", max + 1)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1478,6 +1577,7 @@ impl Default for EditRecipe {
             adjustments: BTreeMap::new(),
             curves: None,
             hsl: None,
+            point_color: None,
             color_grading: None,
             presence: None,
             noise_reduction: None,
@@ -3574,6 +3674,9 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         if !c.balance.is_finite() || !(-1.0..=1.0).contains(&c.balance) {
             return invalid("invalid color_grading balance");
         }
+        if !c.blending.is_finite() || !(0.0..=1.0).contains(&c.blending) {
+            return invalid("invalid color_grading blending");
+        }
         for (name, range) in [
             ("shadows", c.shadows),
             ("midtones", c.midtones),
@@ -3584,6 +3687,38 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
             if !range.saturation.is_finite() || !(0.0..=1.0).contains(&range.saturation) {
                 return invalid(format!("invalid color_grading {name}.saturation"));
+            }
+            if !range.luminance.is_finite() || !(-1.0..=1.0).contains(&range.luminance) {
+                return invalid(format!("invalid color_grading {name}.luminance"));
+            }
+        }
+    }
+    if let Some(p) = &a.point_color {
+        if p.version != 1 {
+            return invalid("unsupported point_color version");
+        }
+        if p.entries.len() > 8 {
+            return invalid("too many point_color entries (max 8)");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for entry in &p.entries {
+            if entry.id.is_empty() || !seen.insert(entry.id.clone()) {
+                return invalid("invalid point_color entry id (empty or duplicate)");
+            }
+            if !entry.hue_center.is_finite() || !(0.0..=360.0).contains(&entry.hue_center) {
+                return invalid(format!("invalid point_color {} hue_center", entry.id));
+            }
+            if !entry.hue_range.is_finite() || !(0.0..=180.0).contains(&entry.hue_range) {
+                return invalid(format!("invalid point_color {} hue_range", entry.id));
+            }
+            for (field, v) in [
+                ("hue_shift", entry.hue_shift),
+                ("saturation_shift", entry.saturation_shift),
+                ("luminance_shift", entry.luminance_shift),
+            ] {
+                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                    return invalid(format!("invalid point_color {} {field}", entry.id));
+                }
             }
         }
     }
@@ -4037,6 +4172,7 @@ mod tests {
                 adjustments: BTreeMap::from([("exposure".into(), 1.25)]),
                 curves: None,
                 hsl: None,
+                point_color: None,
                 color_grading: None,
                 presence: None,
                 noise_reduction: None,
@@ -4075,6 +4211,7 @@ mod tests {
                     adjustments: BTreeMap::from([("contrast".into(), -0.4)]),
                     curves: None,
                     hsl: None,
+                    point_color: None,
                     color_grading: None,
                     presence: None,
                     noise_reduction: None,
@@ -4111,6 +4248,7 @@ mod tests {
                 adjustments: BTreeMap::from([("highlights".into(), -0.75)]),
                 curves: None,
                 hsl: None,
+                point_color: None,
                 color_grading: None,
                 presence: None,
                 noise_reduction: None,
@@ -4930,22 +5068,100 @@ mod tests {
                 shadows: ColorGradingRange {
                     hue_degrees: 360.0,
                     saturation: 0.5,
+                    luminance: 0.0,
                 },
                 midtones: ColorGradingRange {
                     hue_degrees: 120.0,
                     saturation: 0.25,
+                    luminance: 0.0,
                 },
                 highlights: ColorGradingRange {
                     hue_degrees: 240.0,
                     saturation: 0.75,
+                    luminance: 0.0,
                 },
                 balance: -0.2,
+                blending: 0.5,
             }),
             ..Default::default()
         };
         let value = serde_json::to_value(&recipe).unwrap();
         assert!(value["adjustments"]["color_grading"].is_object());
         assert_eq!(recipe, serde_json::from_value(value).unwrap());
+    }
+
+    #[test]
+    fn color_grading_legacy_fields_default_without_migration() {
+        // Altdateien ohne `luminance`/`blending` lesen sich als
+        // `luminance = 0` / `blending = 0.5` (identisches Renderverhalten).
+        let legacy = serde_json::json!({
+            "version": 1,
+            "shadows": {"hue_degrees": 0.0, "saturation": 0.0},
+            "midtones": {"hue_degrees": 0.0, "saturation": 0.0},
+            "highlights": {"hue_degrees": 0.0, "saturation": 0.0},
+            "balance": 0.0
+        });
+        let grading: ColorGrading = serde_json::from_value(legacy).unwrap();
+        assert_eq!(grading.blending, 0.5);
+        assert_eq!(grading.shadows.luminance, 0.0);
+    }
+
+    #[test]
+    fn point_color_roundtrips_as_nested_adjustment_with_stable_ids() {
+        let recipe = EditRecipe {
+            point_color: Some(PointColor {
+                version: 1,
+                entries: vec![PointColorEntry {
+                    id: "pc-1".into(),
+                    hue_center: 30.0,
+                    hue_range: 20.0,
+                    hue_shift: 0.5,
+                    saturation_shift: -0.25,
+                    luminance_shift: 0.1,
+                }],
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        assert!(value["adjustments"]["point_color"].is_object());
+        let roundtrip: EditRecipe = serde_json::from_value(value).unwrap();
+        assert_eq!(recipe, roundtrip);
+        assert_eq!(
+            PointColorEntry::next_id(&roundtrip.point_color.expect("point color").entries),
+            "pc-2"
+        );
+    }
+
+    #[test]
+    fn point_color_validation_rejects_bad_entries_loudly() {
+        let bad = |entries: Vec<PointColorEntry>| {
+            let recipe = EditRecipe {
+                point_color: Some(PointColor {
+                    version: 1,
+                    entries,
+                }),
+                ..Default::default()
+            };
+            validate_adjustments(&recipe).is_err()
+        };
+        let entry = || PointColorEntry {
+            id: "pc-1".into(),
+            hue_center: 30.0,
+            hue_range: 20.0,
+            hue_shift: 0.0,
+            saturation_shift: 0.0,
+            luminance_shift: 0.0,
+        };
+        let mut out_of_range = entry();
+        out_of_range.hue_center = 400.0;
+        assert!(bad(vec![out_of_range]));
+        let mut dup = entry();
+        assert!(bad(vec![entry(), dup.clone()]));
+        dup.id = String::new();
+        assert!(bad(vec![dup]));
+        assert!(bad(vec![entry(); 9]));
+        // Gültiger Eintrag passiert die Validierung.
+        assert!(!bad(vec![entry()]));
     }
 
     #[test]
