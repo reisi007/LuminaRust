@@ -36,3 +36,6 @@ gui.log
 # OS files
 .DS_Store
 Thumbs.db
+
+# Goal tracking (Lightroom-Parität, Screenshots + Zielstand) — lokal, nie committen
+.goal/

@@ -120,12 +120,12 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
-| 1.5 | LRPAR-G13-MERGE-15 | G-13 | HDR/Panorama-Merge |
+| 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
 | 1.5 | LRPAR-G14-REDEYE-15 | G-14 | Rote Augen |
 | 1.5 | LRPAR-G15-META-15 | G-15 | IPTC/Presets |
-| 2.0 | LRPAR-G12-FACE-20 | G-12 | Gesichtserkennung |
-| 2.0 | LRPAR-G14-DENOISE-20 | G-14 | KI-Denoise |
-| 2.5 | LRPAR-G09-CULL-25 | G-09 | KI-Culling |
+| 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
+| 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
+| 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
 | nie | — | G-12 | Karten-Modul/GPS (Nicht-Ziel) |
 | nie | — | G-15 | Veröffentlichungsdienste (Nicht-Ziel) |
 
@@ -171,11 +171,11 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: niedrig
 
-- [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-20 (Release: 2.0)** KI-Denoise (G-14-Abspaltung, User-Entscheid 2026-09-03): Modell-/Lizenz-/Capability-Entscheid (F-078) + Doku-first, manuelles NR F-096 bleibt MVP. Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
-- [ ] **[PRIO: niedrig] LRPAR-G09-CULL-25 (Release: 2.5)** KI-Culling (G-09-Abspaltung, User-Entscheid 2026-09-03): Assisted-Culling-Automatik (Vorschlags-Sichtung) — Doku-first (Modell-/Capability-Scope). Manuelles Sichten (Sterne/Flags) bleibt MVP. Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
+- [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-IMPL-20 (Release: 2.0)** KI-Denoise-Implementierung nach Entscheid `feature/decisions/LRPAR-G14-DENOISE-20.md` (F-078-Freigabe → Schema `denoise_ai` → Pipeline-Stufe → ONNX-`denoise`-Capability → Perf-Budgets F-074). Abnahme: CLI + GUI-headless + Golden/PSNR, kein stiller Fallback.
+- [ ] **[PRIO: niedrig] LRPAR-G09-CULL-IMPL-25 (Release: 2.5)** KI-Culling-Implementierung nach Entscheid `feature/decisions/LRPAR-G09-CULL-25.md` (Schema → Heuristik Stufe 1 → CLI → GUI → optional ONNX Stufe 2 → Perf F-074). Abnahme: CLI-Exit-Codes + GUI-headless + kittest, Vorschlag schreibt nie Rating/Flag/Label.
 
-- [ ] **[PRIO: niedrig] LRPAR-G12-FACE-20 (Release: 2.0)** Gesichtserkennung (G-12-Abspaltung, Ziel 2.0, User-Entscheid 2026-09-03): Doku-first (Modell-/Lizenz-/Capability-Entscheid, ONNX-Detektion + Embedding + Clustering + UI + Persistenz-Scope). Abnahme: Entscheid in `feature/` + Folge-Implementierungstask. Karten-Modul/GPS ist explizit nie Ziel (kein Task, in `.goal/Goal.md` als Nicht-Ziel vermerkt).
-- [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-15 (Release: 1.5)** HDR-/Panorama-Merge (G-13, Ziel 1.5, User-Entscheid 2026-09-03): `Cmd/Ctrl+H` + `Cmd/Ctrl+M` → DNG — Doku-first (Pipeline-Einordnung, DNG-Schreibung, Ausrichtungs-Scope). Abnahme: Entscheid in `feature/` + Folge-Implementierungstask.
+- [ ] **[PRIO: niedrig] LRPAR-G12-FACE-IMPL-20 (Release: 2.0)** Gesichtserkennung-Implementierung nach Entscheid `feature/decisions/LRPAR-G12-FACE-20.md` (S1 Schema → S2 ONNX → S3 Clustering → S4 CLI → S5 GUI → S6 Lizenzen). Abnahme: CLI + GUI-headless, Sidecar-first, kein stiller Fallback. Karten-Modul/GPS bleibt nie Ziel (kein Task).
+- [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-IMPL-15 (Release: 1.5)** HDR-/Panorama-Merge-Implementierung nach Entscheid `feature/decisions/LRPAR-G13-MERGE-15.md` (Schema → Core `lumina-merge` → DNG-Writer + Re-Import → CLI → GUI → Golden). Abnahme: CLI-Exit-Codes + GUI-headless + Golden-Gates mit Toleranzen.
 
 ### PRIO: niedrig (Block A, nicht-LRPAR)
 
@@ -220,7 +220,9 @@ wo möglich, vor dem nächsten manuellen GUI-Test geklärt werden.
 
 - [ ] **[PRIO: mittel] NAMING-F1 (kein Goal, Release: 1.0)** Produktname final entscheiden
   (`docs/naming-brainstorm.md`). **User-Entscheidung 2026-08-25:** Brainstorm
-  läuft bewusst weiter, Naming bleibt offen. Die übrigen F-101-F1-Anteile
+  läuft bewusst weiter, Naming bleibt offen. **User-Entscheidung 2026-09-04:**
+  Naming erst kurz vor MVP entscheiden — bis dahin keine Naming-Arbeit, kein
+  Vorziehen. Die übrigen F-101-F1-Anteile
   (MCP-Scope) wurden zur Umsetzung freigegeben und stehen in Block A.
 
 ## Block C – „Nach dem nächsten manuellen GUI-Test“
