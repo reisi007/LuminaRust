@@ -77,6 +77,7 @@ Sidecars vollständig wiederherstellbar sein.
   Modell/Prompt/Seed/Prüfsumme, Auto-Fill Transparent nach Lens (GEN-EXPAND-1, erweitert), manueller Expand mit Checkbox `expand_beyond_image` und Crop-Entscheidung `keep_generative_content`
 - [`product/spot-removal.md`](product/spot-removal.md): Staub entfernen schnell (heuristisch, kein Modell, instant) vs. generativ lokal (ONNX Inpaint, `kind = "spot_heal_generative"`) — `SpotRemoval`-Rezept-Stufe, Identität wie AI-Masken, kein stiller Fallback (SPOT-REMOVE-1)
 - [`product/metadata.md`](product/metadata.md): Metadaten-MVP (G-15): Keywords, erweiterte Library-Filter (Kamera/ISO/Brennweite/Keyword/Sammlung), statische + Smart-Sammlungen (Sidecar-first, portabler `lumina-smart-catalog`), Stapel-`BatchOp` über die Auswahl (LRPAR-G15-META-MVP)
+- [`product/iptc-metadata.md`](product/iptc-metadata.md): IPTC-Metadaten (LRPAR-G15-IPTC, Release 1.0): nicht-destruktive IPTC-Entwürfe mit eigener Historie im Sidecar, statische + dynamische Presets mit Platzhaltern, Feld-selektiver Sync, GUI-Metadaten-Panel und JPEG-IPTC-Bake-In beim Export (pure Rust, keine Runtime-Abhängigkeit; Entscheid: [`decisions/LRPAR-G15-META-15.md`](decisions/LRPAR-G15-META-15.md))
 
 ### Plattformen
 
@@ -148,6 +149,7 @@ Sidecars vollständig wiederherstellbar sein.
 | F-071 | Quantitative Plattform-Limits (Browser-Anteil ENTFERNT 2026-09-04) | [WASM Limits](platform/wasm-limits.md) (historisch) | mittel |
 | GEN-EXPAND-1 | Generatives Entfernen + Erweitern | [Generative Expand](product/generative-expand.md) | hoch |
 | SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
+| LRPAR-G15-IPTC-1 | IPTC-Metadaten (Draft, Presets, Sync, JPEG-Bake-In) | [IPTC Metadaten](product/iptc-metadata.md) | hoch |
 
 ## Arbeitsweise
 
@@ -167,7 +169,13 @@ Sidecars vollständig wiederherstellbar sein.
 - `.lumina.zdata` ist ein eigener, versionierter Container mit Zstd-
   komprimierten `uint16`-Maskenkacheln.
 - Presets werden als einzelne `<name>.lumina-preset.json`-Dateien exportiert.
-- XMP wird in v1 nicht unterstützt.
+- XMP wird in v1 nicht unterstützt. Präzisierung (LRPAR-G15-IPTC,
+  2026-09-04): Die Einschränkung betrifft XMP als Lese- und Sidecar-Format —
+  `<datei>.xmp`-Sidecars und XMP als Bearbeitungsquelle bleiben verboten
+  (`SidecarError::XmpUnsupported`). Das Schreiben von IPTC IIM + XMP in
+  **neu erzeugte Exportdateien** (JPEG, Opt-in) ist mit dem IPTC-Feature
+  ausdrücklich erlaubt; die XMP-/IPTC-Lesung als Import-Quelle bleibt
+  Post-MVP (Details: `product/iptc-metadata.md`).
 - Entwicklungshistorie ist persistent und kann für die ausgewählte virtuelle
   Kopie vollständig gelöscht werden.
 - Maskenbibliotheken gehören zunächst zu virtuellen Kopien; Cross-Copy-

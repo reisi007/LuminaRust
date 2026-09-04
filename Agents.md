@@ -53,6 +53,9 @@ unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
   einzige Quelle für Rezept, virtuelle Kopien oder Maskendefinitionen.
 - XMP wird in v1 nicht unterstützt. Ein späterer XMP-Adapter darf Lumina-
   spezifische Daten niemals stillschweigend zur autoritativen Quelle machen.
+  Präzisierung (LRPAR-G15-IPTC, 2026-09-04): Das betrifft XMP als Lese- und
+  Sidecar-Format; das Opt-in-Schreiben von IPTC IIM + XMP in **neu erzeugte
+  Exportdateien** (JPEG) ist erlaubt (siehe `feature/product/iptc-metadata.md`).
 
 ### Sidecar-Struktur
 

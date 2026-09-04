@@ -7,9 +7,15 @@ verlustbehafteten Weg). Qualität liegt bei `1..=100`, Standard ist 90.
 
 Der MVP-Ausgaberaum ist RGBA8/sRGB. 16 Bit pro Kanal ist eine ausdrücklich
 dokumentierte Post-MVP-Grenze. sRGB ist das einzige Exportprofil; ein ICC-Profil
-muss im MVP nicht eingebettet werden, eine ICC-Datei ist Post-MVP. EXIF- und
-XMP-Weitergabe ist ebenfalls Post-MVP; der MVP schreibt keine Metadaten und
-macht darüber keine stillen Annahmen.
+muss im MVP nicht eingebettet werden, eine ICC-Datei ist Post-MVP.
+EXIF-Weitergabe (Kamera-/Objektiv-/Aufnahmezeit-Daten) bleibt Post-MVP. Mit
+LRPAR-G15-IPTC (User-Entscheid 2026-09-04) schreibt der Export auf Opt-in
+(`--write-metadata`) IPTC-Metadaten aus dem Sidecar-Entwurf in **neu
+erzeugte** JPEG-Exporte (IPTC IIM + XMP, pure Rust, keine Runtime-
+Abhängigkeit); PNG/WebP lehnen die Option im MVP pro Datei **laut** ab. Ohne
+Opt-in schreibt der Export weiterhin keine Metadaten und macht darüber keine
+stillen Annahmen. Normative Regeln: [`iptc-metadata.md`](iptc-metadata.md)
+(Entscheid: [`../decisions/LRPAR-G15-META-15.md`](../decisions/LRPAR-G15-META-15.md)).
 
 `ExportOptions` enthält `format`, `bit_depth`, `quality`, `dither` und einen
 deterministischen `seed`. `Default` wählt PNG, 8 Bit, Qualität 90, Dithering

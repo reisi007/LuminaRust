@@ -37,6 +37,10 @@ Semantik: Fehlender Dateiname und `fs::metadata`-Fehler brechen laut ab
 (`InvalidParams` bzw. `FileNotFound`) — der bisherige stille
 `bytes.len()`-Fallback ist entfernt.
 **MVP-Erklärung:** letzter vor MVP offener Punkt ist geschlossen
+(Präzisierung 2026-09-04: neuer MVP-Scope **LRPAR-G15-IPTC** — Metadaten-
+Tools + `metadata://`-Resource — ist als SOLL im Abschnitt „Metadaten-
+Schnittstelle“ dokumentiert, Umsetzung über LRPAR-G15-IPTC-S7 in
+`Agents.todo.md`; bis dahin nicht implementiert)
 
 ## Inhaltsverzeichnis
 
@@ -575,12 +579,21 @@ keinen Sidecar, daher kann `-32010` dort nicht auftreten (R2-MCP-03).
 - Kein HTTP/WebSocket-Transport — stdio reicht für Agent-in-Terminal.
 - Keine Multi-Image-Parallelverarbeitung.
 - Keine AI-Masken-Inferenz über MCP.
-- Keine Preset-Verwaltung über MCP (kein `lumina_apply_preset`).
+- ~~Keine Preset-Verwaltung über MCP (kein `lumina_apply_preset`)~~
+  **LRPAR-G15-IPTC (SOLL, 2026-09-04): aufgehoben** für Meta-Presets
+  (`lumina_apply_meta_preset`, dynamisch mit `vars`); Rezept-Edit-Presets
+  bleiben außerhalb des MCP-Scopes. Normativ: „Metadaten-Schnittstelle“ +
+  `feature/product/iptc-metadata.md` §9.
 - ~~Keine Batch-Befehle~~ **F-101-F1 (2026-08-26): aufgehoben** für
   `lumina_batch` mit dokumentierten Grenzen (sequenziell, ohne Resume);
   die Single-Image-*Session* bleibt weiterhin single-scoped.
 - Keine Authentifizierung oder Zugriffssteuerung (lokaler Prozess).
-- Keine `resources` oder `prompts` MCP-Capabilities.
+- ~~Keine `resources` oder `prompts` MCP-Capabilities~~ **LRPAR-G15-IPTC
+  (SOLL, 2026-09-04): teilweise aufgehoben** — die `resources`-Capability
+  wird für die Read-only-Resource `metadata://draft/<urlencoded-pfad>`
+  eingeführt (pfadbasiert, weil `image_id` prozess-lokal ist); `prompts`
+  bleiben nicht implementiert. Normativ: „Metadaten-Schnittstelle“ +
+  `feature/product/iptc-metadata.md` §9.
 - Keine Virtual-Copy-Erstellung oder Löschung über MCP (nur Lesen
   und Rezept-Bearbeitung).
 
@@ -705,6 +718,34 @@ Das Original bleibt unverändert.
   `InvalidParams` (Dimensions-/Werte-Verstöße), `UnknownCopy`,
   `SidecarError` (fehlender Sidecar → „run lumina_import first“),
   `EncodeError`.
+
+### Metadaten-Schnittstelle (LRPAR-G15-IPTC — SOLL, nicht umgesetzt, 2026-09-04)
+
+Der MCP-Server erhält fünf **pfadbasierte** Metadaten-Tools (Muster der
+F-101-F1-Bulk-Tools: laufen neben der Single-Image-Session, mutieren sie
+nicht) und eine Read-only-Resource. Normative Fachregeln:
+`feature/product/iptc-metadata.md` §9; Entscheid:
+`feature/decisions/LRPAR-G15-META-15.md`.
+
+| Tool | Zweck | Bemerkung |
+| --- | --- | --- |
+| `lumina_get_metadata_draft` | `{ path }` → `{ path, embedded, draft, keywords, history_len, status }` | Embedded-Read nur JPEG IIM/XMP; sonst laut „nicht verfügbar“ |
+| `lumina_update_metadata_draft` | `{ path, fields?, clear_fields? }` → `{ ok, rev }` | Write-Through per CAS; CAS-Konflikt → `SidecarConflict` (`-32010`, analog `lumina_edit`) |
+| `lumina_apply_meta_preset` | `{ paths, preset, vars? }` → per-Pfad-Report | Statisch ohne `vars`; dynamisch verlangt alle Platzhalter-Variablen als JSON-Objekt — unaufgelöst/unbekannt = lauter Tool-Fehler |
+| `lumina_batch_sync_metadata` | `{ source, targets, fields }` → Report | Feld-selektiv (`fields` Pflicht), pro Ziel CAS/atomar, Fehler pro Bild isoliert |
+| `lumina_trigger_export` | `{ path, output_path, format, quality?, virtual_copy?, write_metadata: true }` | Wrappt denselben Choke-Point wie `lumina_save`; `write_metadata` + Nicht-JPEG = `InvalidParams` (laut) |
+
+**Resource (Read-only):** `metadata://draft/<urlencoded-pfad>` — stabile
+Adresse über den **Pfad**, nicht `image_id` (prozess-lokal, Server-Neustart →
+IDs neu nummeriert). `resources/read` liefert dasselbe JSON wie
+`lumina_get_metadata_draft`; `initialize` deklariert die `resources`-
+Capability (`subscribe`/`listChanged` false). `prompts` bleiben nicht
+implementiert.
+
+Abnahme: Tool-Schemas in `tools/list`, Fehlerpfade (FileNotFound,
+UnsupportedFormat, InvalidParams, SidecarError, `-32010`), Report-Semantik
+`updated`/`unchanged`/`failed`, Capability-Deklaration — jeweils mit Tests
+(`cargo test -p lumina-mcp`).
 
 ### Vision-fähiger Agent (Vorschau analysieren) — UMGESETZT
 

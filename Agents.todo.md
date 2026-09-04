@@ -48,7 +48,9 @@ Feature-Dokumenten und der Git-Historie.
   + workspace-clippy laufen lassen.
 - **Post-MVP Backlog (nicht MVP-blockierend):** F-019 (siehe Phase 2), Phase 9
   Index (F-064…F-067), MCP-Erweiterungen (siehe
-  F-101-F1), Lensfun-Ausbau (CA via Lensfun, automatische Profil-Erkennung per
+  F-101-F1; die Metadaten-Tools/-Resource sind mit LRPAR-G15-IPTC ab 1.0
+  normativ und gehören nicht in dieses Backlog),
+  Lensfun-Ausbau (CA via Lensfun, automatische Profil-Erkennung per
   EXIF), Produktnamen-Entscheidung (`docs/naming-brainstorm.md`,
   Brainstorm-Phase offen bis MVP-Entscheidung). WASM-Browser (F-069…F-071)
   ist ersatzlos gestrichen, kein Backlog.
@@ -76,8 +78,9 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-03:
-28 offene Tasks — Block A: 24, Block B: 1, Block C: 3.
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-04:
+21 offene Tasks (Checkbox-Zählung dieser Datei; der frühere Stand „28“
+entsprach nicht der Checkbox-Zahl) — Block A: 17, Block B: 1, Block C: 3.
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -152,7 +155,7 @@ Ziel: UI zum Verwechseln ähnlich zu Lightroom Classic; jedes Feature auf
 CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 `.goal/lighroom screenshots batch 1/Content.md`. Umsetzung je Task via
 `general`-Implementierungs-Agent + unabhängiger `general`-Verifizierungs-Agent
-(Regel oben). 20 Tasks: 4 hoch, 12 mittel, 4 niedrig (Stand 2026-09-03 inkl. Release-Staffel-Entscheiden; Versionszuordnung s. `Releaseplan`).
+(Regel oben). 27 Tasks: 4 hoch, 19 mittel, 4 niedrig (Stand 2026-09-04 inkl. Release-Staffel-Entscheiden; Versionszuordnung s. `Releaseplan`).
 
 ### PRIO: hoch
 
@@ -164,7 +167,18 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-EXPANDED-VIEWPORT-1 (Release: 1.0)** `develop_sections_expanded` zeigt Color/Masking nie pixel-sichtbar (1024×720-Viewport-Clipping, schon vor G-01 so): im Test zu Color/Masking scrollen und/oder Sektionen einzeln snapshotten. Abnahme: Color-/Masking-Widgets pixel-sichtbar im Golden + Vision-Check per DoD §6. (Gefunden 2026-09-04 im G01-Vision-Loop.)
 - [ ] **[PRIO: mittel] KITTEST-PREEXIST-1 (Release: 1.0)** Vorbestehende rote kittest-Goldens `histogram_graphic` + `navigator_viewport` klären (per `git stash`-Gegenprobe auf sauberem Tree reproduziert, umgebungsbedingt vermutet, außerhalb G-01-Scope): Ursache verifizieren (Umgebung vs. echter Bug), fixen oder begründet rebaselinen + Vision-Review per DoD §6. Abnahme: `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` voll grün. (Gefunden 2026-09-04 in G01-B1-Gegenprobe; Änderungsregel: keine vorbestehenden Fehler als „bekannt" abhaken.)
-- [ ] **[PRIO: mittel] LRPAR-G15-META-15 (Release: 1.5)** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S1 (Release: 1.0)** Sidecar-`metadata`-Draft (G-15-IPTC; SOLL `feature/product/iptc-metadata.md`, Entscheid `feature/decisions/LRPAR-G15-META-15.md`): additiv-optional-Feld `metadata` in `SidecarDocument` (Version 1: `draft`-Feldmap + **eigene, von der Bearbeitungshistorie getrennte `history`** mit `rev`/`timestamp`/`origin`/`changed`, FIFO-Cap 100, `rev` monoton), Feld-Registry mit lauter Validierung (keine Still-Normalisierung), `keywords`-Routing aufs bestehende Feld, CAS + atomarer Write. Abnahme: additive-Lese-, JSON-Roundtrip-, Validierungs- und History-Cap-Tests; `cargo test -p lumina-sidecar` grün. Crate: `lumina-sidecar`.
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S2 (Release: 1.0)** Crate `lumina-iptc` (pure Rust, **keine Runtime-Abhängigkeit**, kein ExifTool/Subprozess/Download): IPTC-IIM-Writer/Parser (JPEG APP13/8BIM, `1:90` CodedCharacterSet UTF-8), JPEG-Marker-Splice, XMP-APP1-Writer via `xmp-writer` (Compile-time-Dep; Lizenzprüfung nach F-073 **vor** Integration, Eintrag in `THIRD-PARTY-NOTICES.md`). Abnahme: Property-Tests (Splice lässt Pixelbytes byte-identisch, Re-Parse-Roundtrip aller Registry-Felder inkl. UTF-8/Escapes), malformed-JPEG = lauter Fehler; `cargo test -p lumina-iptc` grün. Crate: `lumina-iptc`.
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S3 (Release: 1.0)** CLI `lumina meta inspect` / `meta draft set` / `meta draft clear` (+ `meta history show|clear`): Embedded-Read aus JPEG IIM/XMP (RAW/Raster ohne IIM/XMP = laut „nicht verfügbar"), Draft-Overlay je Feld, all-or-nothing je Aufruf, Exit-Codes 0/≠0. Abnahme: set→inspect→clear-Roundtrip + Persistenz über Neuladen; CLI-E2E-Tests. Crate: `lumina-cli` (liest `lumina-iptc`).
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S4 (Release: 1.0)** Meta-Presets: `<name>.lumina-meta-preset.json` v1 (Envelope `lumina-meta-preset`, Ablage analog Edit-Presets), statisch + dynamisch (`{platzhalter}`-Syntax, `{{`/`}}`-Escape, Namen `[a-z][a-z0-9_]*`), `lumina meta preset list|show|apply` mit wiederholbarem `--var name=wert`; unaufgelöste Platzhalter/unbekannte Variablen/Limitverletzungen = lauter Fehler, all-or-nothing je Ziel, Idempotenz → `unchanged`. Abnahme: Format-Validierungs- + Apply-Roundtrip-Tests über ≥ 2 Ziele. Crates: `lumina-sidecar`, `lumina-cli`.
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S5 (Release: 1.0)** `lumina meta sync --source --targets --fields`: Feld-selektiver Draft-/Keyword-Transfer (`--fields` Pflicht, Registry-IDs), pro Ziel CAS + atomar + eigener Historie-Eintrag (`origin = "sync:<quell-id>"`), Ziel ohne Sidecar = lauter Pro-Bild-Fehler, Fehler isoliert ohne Serien-Abbruch, Report `updated`/`unchanged`/`failed`. Abnahme: Sync-Roundtrip, Fehlerisolation, Idempotenz-Tests. Crate: `lumina-cli`.
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S6 (Release: 1.0)** Export-Bake-In: `--write-metadata` an `export`/`process`/`batch`; nur JPEG (IIM+XMP aus Draft+Keywords), IIM-Oktettlimitüberschreitung = lauter per-Datei-Fehler, leere Entwürfe = lauter Warnung + `metadata_written: "empty"`, PNG/WebP mit Option = lauter Fehler pro Datei; Ziel-Guard gegen Quelle/`lumina.*`-Bundle; `ExportRecord.metadata_written` additiv-optional; Original bleibt byte-identisch. Abnahme: Golden-JPEG (Tags re-lesbar, Pixelbytes identisch zum Export ohne Option), Guard-Tests, Exit-Codes. Crates: `lumina-cli` (konsumiert `lumina-iptc`).
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S7 (Release: 1.0)** MCP Metadaten: pfadbasierte Tools `lumina_get_metadata_draft`, `lumina_update_metadata_draft`, `lumina_apply_meta_preset`, `lumina_batch_sync_metadata`, `lumina_trigger_export` + `resources`-Capability `metadata://draft/<urlencoded-pfad>` (Read-only; pfadbasiert statt `image_id`, weil die bei Server-Neustart neu nummeriert wird; `prompts` bleiben aus). Abnahme: Tool-Schema-, Fehlerpfad- (`SidecarConflict` `-32010` bei CAS, `InvalidParams` bei Nicht-JPEG + `write_metadata`) und initialize-Capability-Tests; `cargo test -p lumina-mcp` grün; SOLL-Abschnitt „Metadaten-Schnittstelle" in `mcp-server.md` ist bereits dokumentiert. Crate: `lumina-mcp`.
+- [ ] **[PRIO: mittel] LRPAR-G15-IPTC-S8 (Release: 1.0)** GUI Metadaten-Panel (Library-Modul, egui): Draft-Feld-Editor (alle Registry-Felder; `description` mehrzeilig) + Keywords-Chips, Embedded-Werte nur lesend (JPEG), Historie-Ansicht, Preset-Auswahl + „Anwenden", Prompt-Dialog für dynamische Preset-Variablen (Pflichtfelder, Abbrechen ohne Änderung), „Auf Auswahl synchronisieren" mit Feld-Checkboxen + Report; jede Mutation über denselben Sidecar-Pfad wie CLI (CAS, atomar, laute Fehler). Abnahme: headless GUI-Tests (egui Context + LuminaApp, tempdir) je Aktion mit Kette Edit→Commit→Datei→Reload + kittest-Golden des Panels; `cargo test -p lumina-gui` grün ohne GPU. Crate: `lumina-gui`.
+  Ausführungsreihenfolge: S1 ∥ S2 (verschiedene Crates, keine gemeinsamen
+  APIs), dann S3–S6 seriell auf `lumina-cli` (ein Crate = ein schreibender
+  Agent), dann S7 (MCP) und S8 (GUI); S8 braucht S1 + S4. Veröffentlichungs-
+  dienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig
 

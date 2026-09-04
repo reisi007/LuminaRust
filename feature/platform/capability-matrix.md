@@ -22,12 +22,34 @@ CLI und nativer Desktop-GUI.
 | ONNX-Inferenz (BiRefNet/SAM2) | ja (MVP) | ja (MVP) |
 | Persistente AI-Masken | post-MVP | post-MVP |
 | Export (PNG/JPEG/WebP) | ja | ja |
+| IPTC-/XMP-Metadaten in JPEG-Exporte (`--write-metadata`, Opt-in) | ja (LRPAR-G15-IPTC) | ja (Metadaten-Panel) |
 | Optionale zentrale Indizierung (`lumina-index`) | post-MVP (optional) | post-MVP (optional) |
 
 ## RAW-Backend (nativ)
 
 - Der native LibRaw-Adapter (`lumina-raw`) liefert `decode_bytes` /
   `RawMetadata` für CLI/Desktop.
+
+## IPTC-Metadaten-Write (Capability-Entscheid LRPAR-G15-IPTC, 2026-09-04)
+
+- **Pure Rust, keine externe Binary, kein Subprozess, kein Runtime-Download.**
+  IPTC IIM (JPEG `APP13`/8BIM, `1:90` CodedCharacterSet UTF-8) wird im neuen
+  Crate `lumina-iptc` handgeschrieben; XMP (`APP1`) via pure-Rust-Crate
+  `xmp-writer` (Compile-time-Dependency). **ExifTool wird bewusst nicht
+  gebündelt** — User-Vorgabe „keine Runtime-Dependency“; Bündeln wäre trotz
+  eigenem Binary eine Runtime-Abhängigkeit (Perl-Runtime, Lizenz-/Distri-
+  butionslast).
+- **Format-Scope bewusst JPEG-only (MVP):** PNG/WebP lehnen `--write-metadata`
+  pro Datei **laut** ab (kein stiller Fallback, kein stilles Weglassen);
+  TIFF/EXIF-Write bleiben Post-MVP (siehe `feature/product/export.md`).
+- **Lizenzprüfung vor Integration** gemäß F-078 (`feature/quality/fixtures-
+  licensing.md`, `THIRD-PARTY-NOTICES.md`): `xmp-writer`-Lizenz verifizieren
+  und dokumentieren; andernfalls XMP-Packet-Eigenschreibweise in
+  `lumina-iptc`.
+- **Nicht-destruktiv:** Bake-In schreibt ausschließlich in neu erzeugte
+  Exportdateien; Ziel-Guard gegen Quelle/Bundle (Muster
+  `write_output_guarded`). Entwürfe liegen Sidecar-first
+  (`feature/product/iptc-metadata.md`).
 
 ## Binäre Sidecar-Artefakte (`zdata`) und zstd (native-only)
 

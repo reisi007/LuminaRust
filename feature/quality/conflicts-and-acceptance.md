@@ -24,6 +24,8 @@
 | Zwei Prozesse schreiben | Revision/Lock/Atomic Write | Konflikt melden, kein stilles Last-Write-Wins |
 | Virtuelle-Kopie-ID doppelt | Schema-Validierung | Sidecar ablehnen, korrigierbare Meldung |
 | XMP widerspricht Lumina | Import-/Export-Prüfung | Lumina-Sidecar bleibt autoritativ |
+| Entwurfswert überschreitet IIM-Oktettlimit | Bake-In-Validierung gegen Feld-Registry | Lauter Fehler pro Exportdatei (Feld + Limit genannt), kein Still-Kürzen |
+| IPTC-Entwurf leer, `--write-metadata` gesetzt | Bake-In-Status vor Schreiben | Export folgt mit lauter Warnung + `metadata_written: "empty"`, kein stiller No-Op |
 | Pipeline nicht verfügbar | Versionsregistry | Render blockieren oder migrieren |
 | RAW-Backend fehlt | Capability-Prüfung | Sidecar lesbar, Render nicht verfügbar |
 
@@ -99,6 +101,20 @@
 4. Jedes Zielbild erhält genau einen neuen History-Schritt; die Quellhistorie
    wird nicht kopiert.
 
+### IPTC-Draft und JPEG-Bake-In
+
+1. Ein IPTC-Entwurf wird gesetzt (CLI, MCP oder GUI) — nur das Sidecar ändert
+   sich, das Original bleibt byte-identisch.
+2. Ausgewählte Felder werden per Sync auf zwei Ziel-Sidecars übertragen;
+   ein Ziel ohne Sidecar schlägt laut und isoliert fehl.
+3. Der JPEG-Export mit `--write-metadata` erzeugt eine Exportdatei, deren
+   IPTC-Tags (IIM + XMP) re-lesbar sind und deren Pixelbytes dem Export ohne
+   Metadaten entsprechen; ein PNG/WebP-Export mit derselben Option scheitert
+   laut.
+4. Ohne Opt-in bleiben Exporte exakt wie heute (keine Metadaten, keine
+   stillen Annahmen); dynamische Presets ohne alle Platzhalter-Variablen
+   scheitern laut, ohne etwas zu schreiben.
+
 ### Preview-Cache
 
 1. Beim Verlassen eines Bildes wird standardmäßig nur die aktuelle Standard-
@@ -118,6 +134,9 @@
 - Box-/Pinsel-Prompt-, SAM-Adapter- und nicht unterstützte Capability-Tests
 - Source-Action-Tests vor Auto-Analyse und vor Maskenanwendung
 - Golden-Image-Tests mit dokumentierten Toleranzen
+- IPTC-Draft-Roundtrip-, Preset-Platzhalter-, Sync- und Meta-Historie-Tests
+- JPEG-IPTC-Bake-In-Tests: Tag-Re-Parse, Pixelbyte-Identität, laute
+  PNG/WebP- und IIM-Limit-Fehler, Ziel-Guard gegen Quelle/Bundle
 - CLI-End-to-End-Tests mit Exit-Codes
 - native Build-/Smoke-Tests
 - Performance- und Speicherbenchmarks für RAW, Vorschau, Masken und Batch
