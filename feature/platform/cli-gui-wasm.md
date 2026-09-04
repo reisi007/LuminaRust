@@ -643,6 +643,37 @@ kollabierbare Untergruppe „Lens Blur“, kein zweiter Renderpfad):
   headless E2E-Tests (Setter → Datei → Reload); fehlendes Tiefenartefakt
   bricht Render/Export mit Exit 1 bzw. sichtbarem GUI-Fehler ab.
 
+### Develop-Basis G-01 (LRPAR-G01-BASIC, Release 1.0)
+
+Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-01 (Feldsemantik,
+Stufenregeln, Messpfade: `feature/architecture/pipeline.md` § „G-01
+Develop-Basis“):
+
+- **Treatment:** Basic-Kopfzeile mit Auswahl `Color` / `Black & White`
+  (derselbe `apply_treatment`-Pfad wie `V`, persistiert, `info!`-Log).
+  `V` bleibt das Tastatur-Alias (Stash-Semantik unverändert).
+- **Profile:** Basic-Dropdown aus der normativen Whitelist (`default |
+  neutral | vivid | portrait | landscape | monochrome`, absent =
+  `default`); nur Listenauswahl, Freitext wird laut verweigert. MVP-Grenze:
+  Auswahlabsicht ohne eigene Renderwirkung (s. Pipeline-Doc).
+- **Original-Photo-Vergleich:** Histogramm-Sektion wie bisher (G-10-Schalter
+  „Show original“); G-01-Anteil ist die deterministische Referenzseite
+  (`histogram_compare_data()` Original + Edit, Delta-Zeile Δ Mean + L1 bei
+  aktivem Vergleich). Reiner Session-Display-State, `info!`-Log.
+- **Reset Sliders Automatically:** Checkbox im Develop-Footer (Default aus),
+  persistiert ordner-vererbt in `.lumina/settings.json`
+  (`reset_sliders_automatically`); AN = Bildwechsel verwirft anstehende
+  Commits, AUS = Bildwechsel flusht sie (kein Edit-Verlust). `info!`-Log.
+- **Previous/Reset je Panel:** Jede Develop-Sektion trägt Sektions-Buttons
+  `Previous` (Baseline wiederherstellen) und `Reset` (Sektions-Defaults)
+  über den normalen Save/Render-Commit (History, `info!`-Log). Kein
+  Mehrbild-Previous (LRPAR-G08-PREVIOUS).
+- **CLI:** `lumina develop --treatment color|bw --profile NAME`
+  (Vorab-Validierung, Exit 1 bei unbekanntem Wert, kein Halb-Apply);
+  `lumina inspect [--json]` zeigt Treatment/Profil je Kopie
+  (absent = `color`/`default`). Roundtrip über
+  `save_sidecar`/`load_sidecar`, keine absoluten Pfade.
+
 ### Tool-Overlays, Edit-Pins, Solo-Mode, Shift+Tab (G-11, LRPAR-G11-OVERLAYS)
 
 Overlay-/Panel-Comfort nach Lightroom-Vorbild, GUI-contained (kein CLI-Anteil).

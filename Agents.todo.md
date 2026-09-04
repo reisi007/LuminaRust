@@ -102,7 +102,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | AGENT-HARNESS-2 | alle G | AccessKit-Semantik |
 | 1.0 | AGENT-HARNESS-3 | G-01/G-07/G-08/G-10 | Green-Path-Matrix |
 | 1.0 | AGENT-HARNESS-4 | G-10 | Bildkorrektheit |
-| 1.0 | LRPAR-G01-BASIC | G-01 | Develop-Basis |
 | 1.0 | LRPAR-G02-COLOR | G-02 | Kurve/Mixer/Grading |
 | 1.0 | LRPAR-G06-GEO | G-06 | Crop/Lensfun |
 | 1.0 | LRPAR-G08-PREVIOUS | G-08 | Previous |
@@ -114,6 +113,8 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
+| 1.0 | KITTEST-EXPANDED-VIEWPORT-1 | G-01 | Expanded-Snapshot |
+| 1.0 | KITTEST-PREEXIST-1 | alle G | Rote Goldens klären |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -152,13 +153,14 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] LRPAR-G01-BASIC (Release: 1.0)** Develop-Basis-Lücken (G-01, ~75 %): Treatment/Profile-Parität, „Original Photo“-Histogrammvergleich, „Reset Sliders Automatically“-Option, Previous-Button-Verhalten je Panel. Abnahme: CLI + GUI-headless.
 - [ ] **[PRIO: mittel] LRPAR-G02-COLOR (Release: 1.0)** Kurve/Mixer/Grading-Lücken (G-02, ~60 %): Point Color, Color-Grading-Feinschliff (Schatten/Mitten/Lichter), parametrische + Punkt-Kurve je Kanal. Abnahme: CLI + GUI-headless, Render-Golden.
 - [ ] **[PRIO: mittel] LRPAR-G06-GEO (Release: 1.0)** Geometrie-MVP (G-06): Crop + Straighten + Aspect-Parität (History-sichtbar) + Lensfun-Vollausbau (User-Entscheid 2026-09-03). Abnahme: CLI + GUI-headless.
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G08-PREVIOUS (Release: 1.0)** Previous-Übernahme (G-08, ~55 %): Ein-Klick-Übernahme vom Vorbild (Previous) zusätzlich zu Sync/Match. Abnahme: CLI + GUI-headless, History-Schritt je Zielbild.
 - [ ] **[PRIO: mittel] LRPAR-G09-LIB (Release: 1.0)** Library-Parität Kern (G-09, ~45 %): Grid/Loupe/Compare/Survey-Vollparität inkl. `G`/`E`/`C`/`N`, Katalog-/Ordner-Verwaltung; Assisted Culling ist 2.5, KI-Culling kein MVP (User-Entscheid 2026-09-03). Abnahme: GUI-headless je Ansicht + CLI-Seite wo Rezept-relevant.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
+- [ ] **[PRIO: mittel] KITTEST-EXPANDED-VIEWPORT-1 (Release: 1.0)** `develop_sections_expanded` zeigt Color/Masking nie pixel-sichtbar (1024×720-Viewport-Clipping, schon vor G-01 so): im Test zu Color/Masking scrollen und/oder Sektionen einzeln snapshotten. Abnahme: Color-/Masking-Widgets pixel-sichtbar im Golden + Vision-Check per DoD §6. (Gefunden 2026-09-04 im G01-Vision-Loop.)
+- [ ] **[PRIO: mittel] KITTEST-PREEXIST-1 (Release: 1.0)** Vorbestehende rote kittest-Goldens `histogram_graphic` + `navigator_viewport` klären (per `git stash`-Gegenprobe auf sauberem Tree reproduziert, umgebungsbedingt vermutet, außerhalb G-01-Scope): Ursache verifizieren (Umgebung vs. echter Bug), fixen oder begründet rebaselinen + Vision-Review per DoD §6. Abnahme: `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` voll grün. (Gefunden 2026-09-04 in G01-B1-Gegenprobe; Änderungsregel: keine vorbestehenden Fehler als „bekannt" abhaken.)
 - [ ] **[PRIO: mittel] LRPAR-G15-META-15 (Release: 1.5)** Metadaten-Verwaltung 1.5 (User-Entscheid 2026-09-03): IPTC-Vergabe, Metadaten-Presets, Stapelvergabe. Abnahme: CLI + GUI-headless. Veröffentlichungsdienste sind explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig

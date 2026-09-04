@@ -81,6 +81,14 @@ impl DiskFolderCache {
                 if let Some(v) = value.get("one_to_one_preview").and_then(|v| v.as_bool()) {
                     effective.one_to_one_preview = v;
                 }
+                // LRPAR-G01-BASIC: same field-wise inheritance as the preview
+                // flags — absent keeps the parent value, never resets it.
+                if let Some(v) = value
+                    .get("reset_sliders_automatically")
+                    .and_then(|v| v.as_bool())
+                {
+                    effective.reset_sliders_automatically = v;
+                }
             }
         }
         Ok(effective)
@@ -211,6 +219,7 @@ mod tests {
             .save_settings(&FolderCacheSettings {
                 standard_preview: false,
                 one_to_one_preview: true,
+                ..Default::default()
             })
             .unwrap();
         assert!(cache.effective_settings().unwrap().one_to_one_preview);
@@ -221,6 +230,7 @@ mod tests {
             .save_settings(&FolderCacheSettings {
                 standard_preview: true,
                 one_to_one_preview: false,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(
@@ -264,6 +274,7 @@ mod tests {
             .save_settings(&FolderCacheSettings {
                 standard_preview: false,
                 one_to_one_preview: true,
+                ..Default::default()
             })
             .unwrap();
         let child_path = path.join("child");
@@ -275,8 +286,42 @@ mod tests {
             FolderCacheSettings {
                 standard_preview: true,
                 one_to_one_preview: true,
+                ..Default::default()
             }
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// LRPAR-G01-BASIC: `reset_sliders_automatically` defaults to false,
+    /// roundtrips, and inherits field-wise (a partial child file keeps the
+    /// parent value instead of resetting it).
+    #[test]
+    fn reset_sliders_automatically_inherits_field_wise() {
+        let (path, parent) = setup();
+        assert!(
+            !parent
+                .effective_settings()
+                .unwrap()
+                .reset_sliders_automatically
+        );
+        parent
+            .save_settings(&FolderCacheSettings {
+                reset_sliders_automatically: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            parent
+                .effective_settings()
+                .unwrap()
+                .reset_sliders_automatically
+        );
+        let child_path = path.join("child");
+        let child = DiskFolderCache::in_folder(&child_path).unwrap();
+        fs::write(child.settings_path(), br#"{"standard_preview":true}"#).unwrap();
+        let effective = child.effective_settings().unwrap();
+        assert!(effective.reset_sliders_automatically);
+        assert!(effective.standard_preview);
         fs::remove_dir_all(path).unwrap();
     }
 

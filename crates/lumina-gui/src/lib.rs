@@ -46,7 +46,8 @@ use lumina_sidecar::{
     BrushMarkSign, CollectionMembership, CoordinateSystem, DecodeFingerprint, GeometryFingerprint,
     HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
     ModelIdentity, Point2, Preprocessing, PromptTransform, Resolution, SidecarDocument,
-    SmartCollectionDef, SmartRule, SourceFingerprint, SourceIdentity, SourceStatus,
+    SmartCollectionDef, SmartRule, SourceFingerprint, SourceIdentity, SourceStatus, BW_STASH_KEY,
+    DEVELOP_PROFILES, DEVELOP_PROFILE_KEY, TREATMENT_BW, TREATMENT_COLOR, TREATMENT_KEY,
 };
 use lumina_sidecar::{
     AnalysisFingerprint, BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint,
@@ -336,6 +337,20 @@ pub const SECTION_EFFECTS: usize = 4;
 pub const SECTION_OPTICS: usize = 5;
 pub const SECTION_GEOMETRY: usize = 6;
 pub const SECTION_MASKING: usize = 7;
+
+/// LRPAR-G01-BASIC: flat recipe keys owned by the Basic section (panel-
+/// Previous/Reset scope). `vibrance`/`saturation` live in the Color section
+/// and are only touched by Basic through the B&W treatment stash path.
+const BASIC_TONE_KEYS: &[&str] = &[
+    "wb_temperature",
+    "wb_tint",
+    "exposure",
+    "contrast",
+    "highlights",
+    "shadows",
+    "whites",
+    "blacks",
+];
 
 /// F-100 label of a Develop section index (G-11, routed through [`Str`]).
 /// `None` for out-of-range indices.
@@ -1473,6 +1488,22 @@ pub struct LuminaApp {
     softproof_preview: bool,
     show_original_histogram: bool,
     masking_preview: Option<String>,
+    /// LRPAR-G01-BASIC: "Reset Sliders Automatically" (Develop footer
+    /// checkbox, default off). Folder-inherited via `.lumina/settings.json`
+    /// (`FolderCacheSettings::reset_sliders_automatically`): when armed,
+    /// switching images discards an armed-but-uncommitted slider edit;
+    /// otherwise it is flushed to the previous image's sidecar. Never part
+    /// of a recipe or sidecar (edit behaviour, not image state).
+    reset_sliders_automatically: bool,
+    /// LRPAR-G01-BASIC: Previous baseline (recipe snapshot captured at image
+    /// load and after every successful save). `Previous` restores one
+    /// section's fields from this snapshot; `Reset` sets the section's
+    /// documented defaults. Masking layers travel separately in
+    /// `mask_baseline` (they live on the virtual copy, not the recipe).
+    recipe_baseline: Option<EditRecipe>,
+    /// LRPAR-G01-BASIC: mask-layer baseline of the active virtual copy for
+    /// the Masking section Previous/Reset (same capture points as above).
+    mask_baseline: Vec<MaskLayer>,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
     /// Generated filmstrip thumbnail textures.
@@ -2158,6 +2189,9 @@ impl LuminaApp {
             softproof_preview: false,
             show_original_histogram: false,
             masking_preview: None,
+            reset_sliders_automatically: false,
+            recipe_baseline: None,
+            mask_baseline: Vec::new(),
             wb_pick_mode: false,
             thumbnails: ThumbnailManager::new(),
             filmstrip_selection: BTreeSet::new(),
@@ -2275,6 +2309,16 @@ impl LuminaApp {
         {
             return;
         }
+        // LRPAR-G01-BASIC: with "Reset Sliders Automatically" armed, an image
+        // switch discards the armed-but-uncommitted edit (sliders reset)
+        // instead of flushing it to the previous image's sidecar.
+        // Persisted state is untouched either way.
+        if self.reset_sliders_automatically {
+            self.pending_slider_commit = None;
+            info!("{}", Str::ResetSlidersDropped.t());
+            self.status = Str::ResetSlidersDropped.t().into();
+            return;
+        }
         trace!("GUI save: flushing pending edit before source change");
         self.commit_pending_slider_save([0, 0]);
     }
@@ -2302,6 +2346,10 @@ impl LuminaApp {
         // still surface via Open/Refresh/`set_directory` rescans.
         if let Some(parent) = Path::new(&p).parent() {
             let dir = parent.display().to_string();
+            // LRPAR-G01-BASIC: the reset-sliders flag is folder-inherited —
+            // refresh it for the target folder on every open (no-op without
+            // a settings file).
+            self.refresh_reset_sliders_flag(parent);
             if dir != self.directory || self.entries.is_empty() {
                 self.directory = dir;
                 // GUI-STARTUP-SELECTION-1: an explicit open discharges the
@@ -2334,6 +2382,10 @@ impl LuminaApp {
     pub fn set_directory(&mut self, directory: impl Into<String>) {
         self.directory = directory.into();
         info!("directory set: {}", self.directory);
+        // LRPAR-G01-BASIC: keep the folder-inherited reset-sliders flag in
+        // sync on explicit navigation (same refresh as `open_file`).
+        let folder = PathBuf::from(self.directory.trim());
+        self.refresh_reset_sliders_flag(&folder);
         self.list_directory_flat();
     }
 
@@ -2990,7 +3042,18 @@ impl LuminaApp {
             .extras
             .get("treatment")
             .and_then(|v| v.as_str())
-            .is_some_and(|t| t == "bw")
+            .is_some_and(|t| t == TREATMENT_BW)
+    }
+
+    /// LRPAR-G01-BASIC (B2): whether exiting B&W needs the stash warning —
+    /// true only when the stash is actually missing or unparsable. A clean
+    /// stash restores silently (no log noise suggesting corruption). Pure
+    /// helper so the condition is unit-testable without a logger.
+    fn bw_restore_needs_stash_warning(recipe: &EditRecipe) -> bool {
+        recipe.treatment() == TREATMENT_BW
+            && recipe.extras.get(BW_STASH_KEY).is_none_or(|stash| {
+                serde_json::from_value::<BTreeMap<String, Option<f64>>>(stash.clone()).is_err()
+            })
     }
 
     /// Toggle the Lightroom-style B&W treatment (`V`, Welle 2). Enabling
@@ -3000,57 +3063,29 @@ impl LuminaApp {
     /// Disabling restores the stashed values exactly (absent keys are removed
     /// again, never left at `-1`). Persists via [`Self::save_sidecar`] and
     /// re-renders, so the preview generation bumps. Fails loudly without a
-    /// loaded image.
+    /// loaded image. LRPAR-G01-BASIC: delegates to the shared
+    /// [`lumina_sidecar::EditRecipe::apply_treatment`] path (same as
+    /// `lumina develop --treatment` and the Treatment selector).
     pub fn toggle_black_white(&mut self) -> Result<(), GuiError> {
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         }
         self.ensure_document_loaded()?;
-        if self.bw_active() {
-            let stash = self.recipe.extras.remove("bw_stash");
-            self.recipe.extras.remove("treatment");
-            match stash.as_ref().and_then(|v| {
-                serde_json::from_value::<BTreeMap<String, Option<f64>>>(v.clone()).ok()
-            }) {
-                Some(map) => {
-                    for key in ["saturation", "vibrance"] {
-                        match map.get(key).copied().flatten() {
-                            Some(value) => {
-                                self.recipe.adjustments.insert(key.into(), value);
-                            }
-                            None => {
-                                self.recipe.adjustments.remove(key);
-                            }
-                        }
-                    }
-                }
-                None => {
-                    // No (or corrupt) stash: the treatment marker is still
-                    // removed above, but `-1` values must not linger silently
-                    // — drop both keys so the recipe returns to identity.
-                    warn!(
-                        "B&W stash missing or corrupt; resetting saturation/vibrance to identity"
-                    );
-                    self.recipe.adjustments.remove("saturation");
-                    self.recipe.adjustments.remove("vibrance");
-                }
-            }
-            self.status = Str::BlackWhiteOff.t().into();
+        let target = if self.bw_active() {
+            TREATMENT_COLOR
         } else {
-            let mut stash = BTreeMap::new();
-            for key in ["saturation", "vibrance"] {
-                stash.insert(key.to_string(), self.recipe.adjustments.get(key).copied());
-            }
-            self.recipe.extras.insert(
-                "bw_stash".into(),
-                serde_json::to_value(&stash).expect("f64 stash serializes"),
-            );
-            self.recipe
-                .extras
-                .insert("treatment".into(), serde_json::Value::String("bw".into()));
-            self.recipe.adjustments.insert("saturation".into(), -1.0);
-            self.recipe.adjustments.insert("vibrance".into(), -1.0);
-            self.status = Str::BlackWhiteOn.t().into();
+            TREATMENT_BW
+        };
+        // B2: warn only when the stash is actually missing/corrupt — a clean
+        // restore stays silent. (`apply_treatment` itself still falls back to
+        // identity loudly-by-contract; this flag is just the log gate.)
+        let needs_stash_warning =
+            target == TREATMENT_COLOR && Self::bw_restore_needs_stash_warning(&self.recipe);
+        self.recipe
+            .apply_treatment(target)
+            .map_err(GuiError::from)?;
+        if needs_stash_warning {
+            warn!("B&W stash missing or corrupt; resetting saturation/vibrance to identity");
         }
         trace!(
             "GUI interaction: toggle_black_white -> {}",
@@ -3181,6 +3216,367 @@ impl LuminaApp {
         let mean_delta = edited_analysis.mean - original_analysis.mean;
         let l1 = normalized_histogram_l1(&original_histogram.bins, &edited_histogram.bins)?;
         Some((mean_delta, l1))
+    }
+
+    /// LRPAR-G01-BASIC: both histogram sides at once — the unedited
+    /// Original-Decode histogram plus the edited full-frame render histogram
+    /// (`preview_histogram`, never a viewport/ROI slice). Same
+    /// `LuminanceHistogram` measurement path as Before/After on both sides;
+    /// `None` when either side is missing (no image yet, or no committed
+    /// render). Deterministic: two calls over the same state are identical.
+    pub fn histogram_compare_data(&self) -> Option<(LuminanceHistogram, LuminanceHistogram)> {
+        let original = self.original.as_ref().map(LuminanceHistogram::new)?;
+        let edited = self.preview_histogram.clone()?;
+        Some((original, edited))
+    }
+
+    /// LRPAR-G01-BASIC: set the Develop treatment through the shared sidecar
+    /// path (same stash semantics as the `V` toggle and
+    /// `lumina develop --treatment`). Only `"color"` and `"bw"` are
+    /// accepted — anything else fails loudly. Commits through the normal
+    /// save/render path (history, `preview_generation`-bump, `info!`-log).
+    /// A no-change call succeeds without saving.
+    pub fn set_treatment(&mut self, treatment: &str) -> Result<(), GuiError> {
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        if treatment != TREATMENT_COLOR && treatment != TREATMENT_BW {
+            return Err(GuiError::Io(Str::InvalidTreatment.t().to_string()));
+        }
+        let changed = self
+            .recipe
+            .apply_treatment(treatment)
+            .map_err(GuiError::from)?;
+        info!("GUI interaction: set_treatment -> {treatment}");
+        self.status = Str::TreatmentSetPattern.format_arg(treatment);
+        if !changed {
+            return Ok(());
+        }
+        self.mark_recipe_dirty("treatment", f64::from(treatment == TREATMENT_BW));
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
+    }
+
+    /// LRPAR-G01-BASIC: set the Develop profile through the shared sidecar
+    /// path (same whitelist as `lumina develop --profile`; `"default"`
+    /// removes the key). Unknown names fail loudly. MVP renders every known
+    /// profile identically (persisted selection intent — see
+    /// `feature/architecture/pipeline.md` § G-01). Commits like a slider.
+    pub fn set_profile(&mut self, profile: &str) -> Result<(), GuiError> {
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        if !DEVELOP_PROFILES.contains(&profile) {
+            return Err(GuiError::Io(Str::InvalidProfile.t().to_string()));
+        }
+        let position = DEVELOP_PROFILES
+            .iter()
+            .position(|p| *p == profile)
+            .unwrap_or(0);
+        let changed = self
+            .recipe
+            .apply_develop_profile(profile)
+            .map_err(GuiError::from)?;
+        info!("GUI interaction: set_profile -> {profile}");
+        self.status = Str::ProfileSetPattern.format_arg(profile);
+        if !changed {
+            return Ok(());
+        }
+        self.mark_recipe_dirty("profile", position as f64);
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
+    }
+
+    /// LRPAR-G01-BASIC: snapshot the current Previous baseline (recipe +
+    /// active-copy mask layers). Captured at image load and after every
+    /// successful save, so `Previous` always means "last saved state".
+    fn capture_section_baselines(&mut self) {
+        self.recipe_baseline = Some(self.recipe.clone());
+        self.mask_baseline = self
+            .document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == self.virtual_copy_id)
+            })
+            .map(|copy| copy.mask_layers.clone())
+            .unwrap_or_default();
+    }
+
+    /// LRPAR-G01-BASIC: restore one Develop section from the Previous
+    /// baseline (panel-local undo to the last saved state — explicitly NOT a
+    /// cross-image Previous, which is LRPAR-G08-PREVIOUS). Out-of-range
+    /// indices and a missing baseline fail loudly. Commits through the
+    /// normal save/render path.
+    pub fn restore_section_previous(&mut self, index: usize) -> Result<(), GuiError> {
+        let label = section_name(index)
+            .ok_or_else(|| GuiError::Io(format!("unknown develop section {index}")))?;
+        let baseline = self
+            .recipe_baseline
+            .clone()
+            .ok_or_else(|| GuiError::Io(Str::SectionPreviousUnavailable.t().to_string()))?;
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        if index == SECTION_MASKING {
+            let id = self.virtual_copy_id.clone();
+            let layers = self.mask_baseline.clone();
+            let document = self
+                .document
+                .as_mut()
+                .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?;
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            copy.mask_layers = layers;
+        } else {
+            Self::restore_recipe_section(&mut self.recipe, &baseline, index);
+        }
+        info!("GUI interaction: restore_section_previous {label}");
+        self.status = Str::SectionPreviousPattern.format_arg(label);
+        self.mark_recipe_dirty("section_previous", index as f64);
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
+    }
+
+    /// LRPAR-G01-BASIC: reset one Develop section to its documented defaults
+    /// (Basic tone keys to slider defaults, nested blocks to absent, profile
+    /// to default, Masking layers of the active copy removed). Treatment is
+    /// exited via the stash path (never stranded at `-1`); a Color reset
+    /// leaves B&W-owned `-1` values untouched while the treatment is active
+    /// (ownership of the toggle). Commits through the normal save/render path.
+    pub fn reset_section(&mut self, index: usize) -> Result<(), GuiError> {
+        let label = section_name(index)
+            .ok_or_else(|| GuiError::Io(format!("unknown develop section {index}")))?;
+        if self.original.is_none() {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        }
+        self.ensure_document_loaded()?;
+        if index == SECTION_MASKING {
+            let id = self.virtual_copy_id.clone();
+            let document = self
+                .document
+                .as_mut()
+                .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?;
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            copy.mask_layers.clear();
+        } else {
+            Self::reset_recipe_section(&mut self.recipe, index).map_err(GuiError::from)?;
+        }
+        info!("GUI interaction: reset_section {label}");
+        self.status = Str::SectionResetPattern.format_arg(label);
+        self.mark_recipe_dirty("section_reset", index as f64);
+        self.commit_pending_slider_save([0, 0]);
+        Ok(())
+    }
+
+    /// LRPAR-G01-BASIC: copy one section's recipe fields from `src` to `dst`
+    /// (exact restore, absence included). Masking is handled by the caller
+    /// (layers live on the virtual copy, not the recipe).
+    fn restore_recipe_section(dst: &mut EditRecipe, src: &EditRecipe, index: usize) {
+        match index {
+            SECTION_BASIC => {
+                for key in BASIC_TONE_KEYS {
+                    match src.adjustments.get(*key) {
+                        Some(value) => {
+                            dst.adjustments.insert((*key).to_string(), *value);
+                        }
+                        None => {
+                            dst.adjustments.remove(*key);
+                        }
+                    }
+                }
+                // Treatment marker + stash travel together (toggle-owned pair).
+                for key in [TREATMENT_KEY, BW_STASH_KEY] {
+                    match src.extras.get(key) {
+                        Some(value) => {
+                            dst.extras.insert(key.to_string(), value.clone());
+                        }
+                        None => {
+                            dst.extras.remove(key);
+                        }
+                    }
+                }
+                match src.options.get(DEVELOP_PROFILE_KEY) {
+                    Some(value) => {
+                        dst.options
+                            .insert(DEVELOP_PROFILE_KEY.into(), value.clone());
+                    }
+                    None => {
+                        dst.options.remove(DEVELOP_PROFILE_KEY);
+                    }
+                }
+            }
+            SECTION_TONE_CURVE => dst.curves.clone_from(&src.curves),
+            SECTION_COLOR => {
+                dst.hsl.clone_from(&src.hsl);
+                dst.color_grading.clone_from(&src.color_grading);
+                dst.presence.clone_from(&src.presence);
+                for key in ["vibrance", "saturation"] {
+                    match src.adjustments.get(key) {
+                        Some(value) => {
+                            dst.adjustments.insert(key.to_string(), *value);
+                        }
+                        None => {
+                            dst.adjustments.remove(key);
+                        }
+                    }
+                }
+            }
+            SECTION_DETAIL => {
+                dst.sharpening.clone_from(&src.sharpening);
+                dst.noise_reduction.clone_from(&src.noise_reduction);
+            }
+            SECTION_EFFECTS => dst.effects.clone_from(&src.effects),
+            SECTION_OPTICS => {
+                dst.lens_correction.clone_from(&src.lens_correction);
+                dst.lens_blur.clone_from(&src.lens_blur);
+            }
+            SECTION_GEOMETRY => {
+                dst.geometry.clone_from(&src.geometry);
+                dst.perspective.clone_from(&src.perspective);
+            }
+            _ => {}
+        }
+    }
+
+    /// LRPAR-G01-BASIC: reset one section's recipe fields to documented
+    /// defaults (pure helper; Masking and I/O handled by the caller).
+    fn reset_recipe_section(
+        recipe: &mut EditRecipe,
+        index: usize,
+    ) -> Result<(), lumina_sidecar::SidecarError> {
+        match index {
+            SECTION_BASIC => {
+                for key in BASIC_TONE_KEYS {
+                    recipe
+                        .adjustments
+                        .insert((*key).to_string(), Self::default_for_adjustment(key));
+                }
+                // Exit B&W through the stash path (restores pre-B&W values,
+                // never strands `-1`); a no-op when already color.
+                recipe.apply_treatment(TREATMENT_COLOR)?;
+                recipe.options.remove(DEVELOP_PROFILE_KEY);
+            }
+            SECTION_TONE_CURVE => recipe.curves = None,
+            SECTION_COLOR => {
+                recipe.hsl = None;
+                recipe.color_grading = None;
+                recipe.presence = None;
+                // B&W-owned `-1` values stay while the treatment is active
+                // (ownership of the toggle); otherwise back to identity.
+                if recipe.treatment() != TREATMENT_BW {
+                    recipe.adjustments.remove("vibrance");
+                    recipe.adjustments.remove("saturation");
+                }
+            }
+            SECTION_DETAIL => {
+                recipe.sharpening = None;
+                recipe.noise_reduction = None;
+            }
+            SECTION_EFFECTS => recipe.effects = None,
+            SECTION_OPTICS => {
+                recipe.lens_correction = None;
+                recipe.lens_blur = None;
+            }
+            SECTION_GEOMETRY => {
+                recipe.geometry = None;
+                recipe.perspective = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Whether "Reset Sliders Automatically" is armed (read-only accessor
+    /// for the footer checkbox and headless tests).
+    pub fn reset_sliders_automatically(&self) -> bool {
+        self.reset_sliders_automatically
+    }
+
+    /// Set "Reset Sliders Automatically" (LRPAR-G01-BASIC). Persists
+    /// folder-inherited in the current folder's `.lumina/settings.json`
+    /// (other folder flags are preserved via an effective-settings
+    /// read-modify-write); a persistence failure stays visible via
+    /// `show_error` instead of silently diverging from disk.
+    pub fn set_reset_sliders_automatically(&mut self, enabled: bool) {
+        if self.reset_sliders_automatically == enabled {
+            return;
+        }
+        self.reset_sliders_automatically = enabled;
+        info!("GUI interaction: set_reset_sliders_automatically -> {enabled}");
+        self.status = if enabled {
+            Str::ResetSlidersOn.t().into()
+        } else {
+            Str::ResetSlidersOff.t().into()
+        };
+        if let Err(error) = self.persist_reset_sliders_flag() {
+            self.show_error(error);
+        }
+    }
+
+    /// Write the current flag into the current folder's settings file,
+    /// preserving the other inherited flags (read-modify-write over the
+    /// effective settings).
+    fn persist_reset_sliders_flag(&self) -> Result<(), GuiError> {
+        let folder = if self.path.trim().is_empty() {
+            PathBuf::from(self.directory.trim())
+        } else {
+            Path::new(self.path.trim())
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(self.directory.trim()))
+        };
+        let cache = DiskFolderCache::in_folder(&folder)
+            .map_err(|error| GuiError::Io(format!("cannot open folder settings: {error}")))?;
+        let mut settings = cache
+            .effective_settings()
+            .map_err(|error| GuiError::Io(format!("cannot read folder settings: {error}")))?;
+        settings.reset_sliders_automatically = self.reset_sliders_automatically;
+        cache
+            .save_settings(&settings)
+            .map_err(|error| GuiError::Io(format!("cannot save folder settings: {error}")))?;
+        Ok(())
+    }
+
+    /// Refresh the flag from the given folder's inherited settings (called
+    /// on folder navigation). Folders without a settings file keep the
+    /// current value; unreadable files warn loudly and keep the current
+    /// value instead of silently resetting it.
+    fn refresh_reset_sliders_flag(&mut self, folder: &Path) {
+        if !folder.join(".lumina").join("settings.json").exists() {
+            return;
+        }
+        match DiskFolderCache::in_folder(folder).map_err(|error| error.to_string()) {
+            Ok(cache) => match cache.effective_settings() {
+                Ok(settings) => {
+                    self.reset_sliders_automatically = settings.reset_sliders_automatically;
+                }
+                Err(error) => {
+                    warn!(
+                        "cannot read folder settings for {}: {error}",
+                        folder.display()
+                    );
+                }
+            },
+            Err(error) => {
+                warn!(
+                    "cannot open folder settings for {}: {error}",
+                    folder.display()
+                );
+            }
+        }
     }
 
     /// Arm or disarm the transient `Alt`+tone-slider masking preview (G-16).
@@ -6542,6 +6938,9 @@ impl LuminaApp {
         self.last_edit_time = 0.0;
         self.original = Some(frame.clone());
         self.recipe = EditRecipe::default();
+        // LRPAR-G01-BASIC: a new image starts from the default baseline
+        // (finish_decode re-captures after adopting a persisted recipe).
+        self.capture_section_baselines();
         self.error = None;
         self.preview_is_draft = false;
         // PERF-GUI-1: a new source identity invalidates every cached stage at
@@ -8615,6 +9014,9 @@ impl LuminaApp {
                             .as_ref()
                             .is_some_and(|stored| is_current_tone_analysis(stored, &fingerprint));
                         self.recipe = candidate;
+                        // LRPAR-G01-BASIC: the persisted recipe is the new
+                        // Previous baseline (panel-Previous = last saved state).
+                        self.capture_section_baselines();
                         // G04-FOLLOWUP-1: the session detect input defaults
                         // to the recipe visualize threshold (else 0.5) so the
                         // panel slider shows the restored default after reload.
@@ -9029,6 +9431,9 @@ impl LuminaApp {
                 self.status = Str::SidecarSaved.t().into();
                 self.sidecar_revision = Some(new_revision);
                 self.document = Some(document);
+                // LRPAR-G01-BASIC: a successful save moves the Previous
+                // baseline to the saved state (panel-Previous = last saved).
+                self.capture_section_baselines();
                 // GUI-VIEW-2: targeted single-file refresh instead of a full
                 // `list_directory` rescan (full-file hash per entry). The
                 // success status stands as set above.
@@ -10067,6 +10472,8 @@ impl LuminaApp {
         // G-10 "Original Photo" compare: while the switch is armed the numbers
         // and curve above already describe the unedited decode; the badge says
         // so and the delta line quantifies edited-vs-original drift.
+        // LRPAR-G01-BASIC: the edited reference line keeps the current render
+        // visible next to the original (both sides from real analysis values).
         if self.show_original_histogram {
             ui.colored_label(egui::Color32::YELLOW, Str::HistogramOriginalBadge.t());
             match self.histogram_delta() {
@@ -10076,6 +10483,14 @@ impl LuminaApp {
                         .replacen("{}", &format!("{:+.3}", mean_delta), 1)
                         .replacen("{}", &format!("{:.3}", l1), 1);
                     ui.label(text);
+                    if let Some(edited) = self.tone_analysis {
+                        let edited_text = Str::HistogramEditedPattern
+                            .t()
+                            .replacen("{}", &format!("{:.3}", edited.mean), 1)
+                            .replacen("{}", &format!("{:+.3}", mean_delta), 1)
+                            .replacen("{}", &format!("{:.3}", l1), 1);
+                        ui.label(edited_text);
+                    }
                 }
                 None => {
                     ui.label(Str::NotCurrent.t());
@@ -10324,6 +10739,25 @@ impl LuminaApp {
 
     // ---- Develop panel sections (fixed F-100 order) ----
 
+    /// LRPAR-G01-BASIC: per-panel Previous/Reset row (panel-local undo to
+    /// the last saved state / reset to documented defaults). Shared by all
+    /// eight Develop sections so the behaviour is identical per panel;
+    /// failures stay visible via `show_error`, never silent.
+    fn draw_section_prev_reset(&mut self, ui: &mut egui::Ui, section: usize) {
+        ui.horizontal(|ui| {
+            if ui.button(Str::Previous.t()).clicked() {
+                if let Err(error) = self.restore_section_previous(section) {
+                    self.show_error(error);
+                }
+            }
+            if ui.button(Str::Reset.t()).clicked() {
+                if let Err(error) = self.reset_section(section) {
+                    self.show_error(error);
+                }
+            }
+        });
+    }
+
     fn draw_basic(&mut self, ui: &mut egui::Ui) {
         // G-11 solo: the explicit `section_open` state drives the header (not
         // egui-implicit memory), so solo mode stays headless-testable.
@@ -10331,6 +10765,44 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::Basic.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            // LRPAR-G01-BASIC: Treatment + Profile headline (Lightroom Basic
+            // order) — same `apply_treatment`/whitelist paths as `V` and the
+            // CLI, persisted through the normal save/render commit.
+            ui.horizontal(|ui| {
+                ui.label(Str::Treatment.t());
+                let bw = self.bw_active();
+                if ui.selectable_label(!bw, Str::TreatmentColor.t()).clicked() {
+                    if let Err(error) = self.set_treatment(TREATMENT_COLOR) {
+                        self.show_error(error);
+                    }
+                }
+                if ui
+                    .selectable_label(bw, Str::TreatmentBlackWhite.t())
+                    .clicked()
+                {
+                    if let Err(error) = self.set_treatment(TREATMENT_BW) {
+                        self.show_error(error);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(Str::Profile.t());
+                let mut profile = self.recipe.develop_profile().to_string();
+                egui::ComboBox::from_id_salt("develop_profile")
+                    .selected_text(profile.clone())
+                    .show_ui(ui, |ui| {
+                        for candidate in DEVELOP_PROFILES {
+                            ui.selectable_value(&mut profile, (*candidate).to_string(), *candidate);
+                        }
+                    });
+                if profile != self.recipe.develop_profile() {
+                    if let Err(error) = self.set_profile(&profile) {
+                        self.show_error(error);
+                    }
+                }
+            });
+            self.draw_section_prev_reset(ui, SECTION_BASIC);
+            ui.separator();
             ui.label(Str::WhiteBalance.t());
             self.adjustment_slider(
                 ui,
@@ -10408,6 +10880,7 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::ToneCurve.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            self.draw_section_prev_reset(ui, SECTION_TONE_CURVE);
             ui.label(Str::CurveRegions.t());
             let (mut s, mut d, mut l, mut h) = tone_curve_regions(&self.recipe);
             let spec = percent_spec(-1.0..=1.0, 0.0);
@@ -10446,6 +10919,7 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::Color.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            self.draw_section_prev_reset(ui, SECTION_COLOR);
             ui.label(Str::HslMixer.t());
             // GUI-SLIDER-SAVE-1: mixer sliders commit through `set_hsl_value`
             // (save at debounce); `hsl` is only a slider binding buffer.
@@ -10629,6 +11103,7 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::Effects.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            self.draw_section_prev_reset(ui, SECTION_EFFECTS);
             ui.label(Str::Vignette.t());
             let mut effects = self.recipe.effects.clone().unwrap_or(Effects {
                 vignette: Some(Vignette {
@@ -10763,6 +11238,7 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::Detail.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            self.draw_section_prev_reset(ui, SECTION_DETAIL);
             ui.label(Str::Sharpening.t());
             // GUI-SLIDER-SAVE-1: sharpening sliders commit through
             // `set_sharpening_value` (save at debounce); `sh` is only a
@@ -10878,6 +11354,7 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::Optics.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            self.draw_section_prev_reset(ui, SECTION_OPTICS);
             if cfg!(feature = "lensfun") {
                 ui.label(Str::LensCorrection.t());
                 // GUI-OPTICS-1: the profile status is always visible (name or
@@ -11131,6 +11608,7 @@ impl LuminaApp {
         let section_header =
             egui::CollapsingHeader::new(Str::Geometry.t()).open(Some(section_was_open));
         let section_response = section_header.show(ui, |ui| {
+            self.draw_section_prev_reset(ui, SECTION_GEOMETRY);
             // GUI-ROTATE-1: rotation + mirror are pure core-pipeline controls
             // (no Lensfun stage involved), so they are always available — the
             // N6 finding was "not rotatable / wiring missing or unfindable".
@@ -11643,6 +12121,7 @@ impl LuminaApp {
             let Some(document) = self.document.clone() else {
                 return;
             };
+            self.draw_section_prev_reset(ui, SECTION_MASKING);
             let mask_options: Vec<(String, String)> = document
                 .virtual_copies
                 .iter()
@@ -12920,6 +13399,13 @@ impl LuminaApp {
                 if let Err(error) = self.match_total_exposure(0.5) {
                     self.show_error(error);
                 }
+            }
+            // LRPAR-G01-BASIC: "Reset Sliders Automatically" — folder-inherited
+            // edit behaviour (see `set_reset_sliders_automatically`).
+            let mut reset_auto = self.reset_sliders_automatically;
+            ui.checkbox(&mut reset_auto, Str::ResetSlidersAutomatically.t());
+            if reset_auto != self.reset_sliders_automatically {
+                self.set_reset_sliders_automatically(reset_auto);
             }
             ui.separator();
             egui::ScrollArea::vertical()
@@ -26284,5 +26770,223 @@ mod tests {
         assert_eq!(report.applied_count(), 0);
         assert_eq!(report.failed_count(), 0);
         assert_eq!(empty.status(), "No images selected");
+    }
+
+    /// LRPAR-G01-BASIC (B2): the B&W-exit stash warning fires only on a
+    /// missing or corrupt stash — a clean restore is silent.
+    #[test]
+    fn g01_bw_stash_warning_only_on_missing_or_corrupt_stash() {
+        // No B&W state at all: nothing to warn about.
+        assert!(!LuminaApp::bw_restore_needs_stash_warning(
+            &EditRecipe::default()
+        ));
+        // Clean stash (written by the shared path): silent restore.
+        let mut clean = EditRecipe::default();
+        clean.apply_treatment("bw").unwrap();
+        assert!(!LuminaApp::bw_restore_needs_stash_warning(&clean));
+        // Marker without stash: warn.
+        let mut missing = EditRecipe::default();
+        missing
+            .extras
+            .insert("treatment".into(), serde_json::Value::String("bw".into()));
+        assert!(LuminaApp::bw_restore_needs_stash_warning(&missing));
+        // Marker with corrupt stash: warn.
+        let mut corrupt = EditRecipe::default();
+        corrupt
+            .extras
+            .insert("treatment".into(), serde_json::Value::String("bw".into()));
+        corrupt.extras.insert(
+            BW_STASH_KEY.into(),
+            serde_json::Value::String("corrupt".into()),
+        );
+        assert!(LuminaApp::bw_restore_needs_stash_warning(&corrupt));
+    }
+
+    /// LRPAR-G01-BASIC: Treatment + Profile end-to-end —
+    /// setter → commit → sidecar file → reload restores both; invalid values
+    /// fail loudly; the `V` toggle keeps working through the shared path.
+    #[test]
+    fn g01_treatment_profile_end_to_end() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.error().is_none());
+        assert!(!app.bw_active());
+        app.set_treatment("bw").unwrap();
+        assert!(app.error().is_none());
+        assert!(app.bw_active());
+        app.set_profile("vivid").unwrap();
+        assert!(app.error().is_none());
+        assert_eq!(app.recipe().develop_profile(), "vivid");
+        // Reload from disk: both fields restored.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert!(reopened.bw_active());
+        assert_eq!(reopened.recipe().develop_profile(), "vivid");
+        assert_eq!(reopened.recipe().adjustments.get("saturation"), Some(&-1.0));
+        // Invalid values fail loudly without touching the recipe.
+        assert!(reopened.set_treatment("sepia").is_err());
+        assert!(reopened.set_profile("adobe-color").is_err());
+        assert!(reopened.bw_active());
+        // The `V` toggle exits through the same stash path (identity again).
+        reopened.toggle_black_white().unwrap();
+        assert!(!reopened.bw_active());
+        assert!(!reopened.recipe().adjustments.contains_key("saturation"));
+        assert!(!reopened.recipe().adjustments.contains_key("vibrance"));
+        let mut reread = new_app();
+        open_and_decode(&mut reread, source.display().to_string());
+        assert!(!reread.bw_active());
+    }
+
+    /// LRPAR-G01-BASIC: Basic panel Previous/Reset end-to-end — edit →
+    /// Previous restores the last saved state, Reset sets documented
+    /// defaults, reload confirms the file state.
+    #[test]
+    fn g01_panel_previous_reset_basic_end_to_end() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // Uncommitted edit → Previous restores the load baseline (absent).
+        app.set_adjustment("exposure", 1.5);
+        app.restore_section_previous(SECTION_BASIC).unwrap();
+        assert!(app.error().is_none());
+        assert!(!app.recipe().adjustments.contains_key("exposure"));
+        // Committed edit moves the baseline; a later uncommitted edit is
+        // undone back to the committed value.
+        app.set_adjustment("exposure", 2.0);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        app.set_adjustment("exposure", 0.5);
+        app.restore_section_previous(SECTION_BASIC).unwrap();
+        assert_eq!(app.recipe().adjustments.get("exposure"), Some(&2.0));
+        // Reset sets documented defaults (persisted).
+        app.reset_section(SECTION_BASIC).unwrap();
+        assert_eq!(app.recipe().adjustments.get("exposure"), Some(&0.0));
+        assert_eq!(
+            app.recipe().adjustments.get("wb_temperature"),
+            Some(&6500.0)
+        );
+        assert_eq!(app.recipe().develop_profile(), "default");
+        // Out-of-range sections fail loudly.
+        assert!(app.restore_section_previous(SECTION_COUNT).is_err());
+        assert!(app.reset_section(SECTION_COUNT).is_err());
+        // Reload confirms the persisted reset state.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, source.display().to_string());
+        assert_eq!(reopened.recipe().adjustments.get("exposure"), Some(&0.0));
+    }
+
+    /// LRPAR-G01-BASIC (DoD Klassen-Vollständigkeit): Previous + Reset are
+    /// accepted for every one of the eight Develop sections (no sampling).
+    #[test]
+    fn g01_panel_previous_reset_all_sections_accept() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.0);
+        app.commit_pending_slider_save([0, 0]);
+        assert!(app.error().is_none());
+        for index in 0..SECTION_COUNT {
+            app.restore_section_previous(index)
+                .unwrap_or_else(|_| panic!("previous must accept section {index}"));
+            app.reset_section(index)
+                .unwrap_or_else(|_| panic!("reset must accept section {index}"));
+            assert!(
+                app.error().is_none(),
+                "section {index} must stay error-free"
+            );
+        }
+        // The section names cover the F-100 panel order exactly.
+        let names: Vec<&str> = (0..SECTION_COUNT)
+            .map(|i| section_name(i).unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "Basic",
+                "Tone Curve",
+                "Color",
+                "Detail",
+                "Effects",
+                "Optics",
+                "Geometry",
+                "Masking"
+            ]
+        );
+    }
+
+    /// LRPAR-G01-BASIC: the Original-Photo reference is deterministic —
+    /// two measurements of the same state are identical, and an edit moves
+    /// the edited side (delta present, never silent zero).
+    #[test]
+    fn g01_histogram_compare_is_deterministic() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_adjustment("exposure", 1.0);
+        app.commit_pending_slider_save([0, 0]);
+        let (original_a, edited_a) = app
+            .histogram_compare_data()
+            .expect("compare needs both sides");
+        let (original_b, edited_b) = app
+            .histogram_compare_data()
+            .expect("compare needs both sides");
+        assert_eq!(original_a.bins, original_b.bins);
+        assert_eq!(edited_a.bins, edited_b.bins);
+        // The edit moved the edited side away from the unedited decode.
+        assert_ne!(edited_a.bins, original_a.bins);
+        let (mean_delta, l1) = app.histogram_delta().expect("delta needs both sides");
+        assert!(mean_delta.is_finite() && l1.is_finite());
+        assert!(l1 > 0.0, "an exposure edit must drift the histogram");
+    }
+
+    /// LRPAR-G01-BASIC: "Reset Sliders Automatically" — armed, an image
+    /// switch discards the pending edit (no sidecar for the old image);
+    /// disarmed, the same switch flushes it (sidecar carries the edit).
+    /// The flag itself roundtrips through `.lumina/settings.json`.
+    #[test]
+    fn g01_reset_sliders_automatically_drop_vs_flush() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_a = directory.path().join("a.png");
+        let source_b = directory.path().join("b.png");
+        save_png(&source_a);
+        save_png(&source_b);
+        let sidecar_a = lumina_sidecar::sidecar_path_for(&source_a);
+        let mut app = new_app();
+        open_and_decode(&mut app, source_a.display().to_string());
+        // Armed: the pending edit is discarded on switch.
+        app.set_reset_sliders_automatically(true);
+        assert!(app.reset_sliders_automatically());
+        app.set_adjustment("exposure", 1.0);
+        open_and_decode(&mut app, source_b.display().to_string());
+        assert!(
+            !sidecar_a.exists(),
+            "armed switch must not save the old image"
+        );
+        // Disarmed: the pending edit is flushed to the old image's sidecar.
+        open_and_decode(&mut app, source_a.display().to_string());
+        app.set_reset_sliders_automatically(false);
+        assert!(!app.reset_sliders_automatically());
+        app.set_adjustment("exposure", 2.0);
+        open_and_decode(&mut app, source_b.display().to_string());
+        let document = lumina_sidecar::load_sidecar(&sidecar_a).unwrap();
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .adjustments
+                .get("exposure"),
+            Some(&2.0)
+        );
+        // The flag roundtripped through the folder settings file (the second
+        // `open_file` refreshed it from disk and it stayed off).
+        assert!(!app.reset_sliders_automatically());
     }
 }

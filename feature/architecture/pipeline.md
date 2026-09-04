@@ -1082,6 +1082,89 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   headless nicht automatisiert testbar und braucht den nächsten manuellen
   GUI-Test (Block C).
 
+### G-01 Develop-Basis: Treatment, Profil, Reset-Automatik, Panel-Previous
+(LRPAR-G01-BASIC, Release 1.0)
+
+**Ziel:** Die Lightroom-Basic-Kopfzeile (Treatment, Profil) sowie das
+footer-/panel-lokale Zurücksetzverhalten als Rezept-Semantik festlegen —
+ohne zweite Renderpipeline, ohne Schema-Bump (alle Felder additiv,
+absent = Identität/Default, keine Migration nötig).
+
+**Treatment:** `recipe.extras["treatment"]` trägt `"color"` oder `"bw"`;
+absent bedeutet `color` (Default). `"bw"` ist die Schwarz-Weiß-Behandlung:
+`saturation`/`vibrance` stehen auf `-1.0` (volle Entsättigung über die
+bestehende Pipeline-Stufe, keine GUI-Pixel-Logik); die Vorwerte liegen in
+`extras["bw_stash"]` (`{saturation: f64|null, vibrance: f64|null}`,
+absent-Key = Key war ungesetzt) und werden beim Zurückschalten exakt
+wiederhergestellt (ungesetzte Keys werden entfernt, nie auf `-1`
+stehen gelassen). Andere Werte sowie ein korruptes Stash-Format werden
+laut abgelehnt (Sidecar-Validierung, CLI-Pre-Check); ein fehlendes Stash
+beim Ausschalten fällt laut-warnend auf Identität zurück (beide Keys
+entfernt), nie auf stilles Beibehalten von `-1`. `treatment`/`bw_stash`
+sind Teil des serialisierten Rezepts und fließen damit in `recipe_hash`/
+RenderKey ein (Preview-/Export-Invalidierung). Einziger
+Mutationspfad ist `lumina-sidecar::apply_treatment` (CLI + GUI teilen
+ihn; der GUI-`V`-Toggle ruft ihn auf).
+
+**Profil:** `recipe.options["profile"]` trägt einen benannten
+Entwicklungs-Look aus der Whitelist `default | neutral | vivid |
+portrait | landscape | monochrome`; absent bedeutet `default`. Leere
+oder unbekannte Namen werden laut abgelehnt (Sidecar-Validierung,
+CLI-Pre-Check, GUI-Auswahl nur aus der Liste), niemals still auf
+`default` normalisiert. Ehrliche Grenze (MVP): Das Profil ist eine
+persistierte, roundtrippte Auswahlabsicht und Teil von `recipe_hash`
+(Wechsel invalidiert Preview/Export), hat aber noch keine eigene
+colorimetrische Renderwirkung — alle bekannten Profile rendern
+identisch; die echte Profilanwendung braucht den linearen
+ProPhoto-Pfad (reserviert, s. Arbeitsfarbraum) und bleibt Folgearbeit.
+Absolute Pfade sind als Profilwert verboten (portables Sidecar).
+
+**Original-Photo-Referenz:** Das Referenz-Histogramm des unbearbeiteten
+Originals ist der Original-Decode (`LuminaApp.original`), gemessen mit
+demselben `analyze_tone`/`LuminanceHistogram`-Pfad wie die
+Before/After-Ansicht — kein zweiter Analysepfad, kein Rezept-Reset
+(Reset würde „unbearbeitet" mit „Default-Rezept" verwechseln; Demosaic/
+Decode bleiben auch beim Reset aktiv). Die GUI hält beide Seiten
+gleichzeitig vor (`histogram_compare_data()`: Original- + Edit-Histogramm
+aus dem Full-Frame-Render, nie Viewport/ROI) und zeigt bei aktivem
+Vergleich das Delta (Δ Mean + normierte L1-Distanz der 256 Bins, echte
+Analysewerte, kein `(0,0)`-Fallback). Der Vergleichsschalter ist reiner
+Session-Display-State (nie Rezept/Sidecar). Determinismus: Zwei Messungen
+desselben Decodes sind byte-identisch (headless-testbar).
+
+**Reset Sliders Automatically:** Ordner-vererbte Einstellung
+`.lumina/settings.json` (`reset_sliders_automatically`, Default `false`,
+siehe `FolderCacheSettings`); kein Rezept-/Sidecar-Feld (Edit-Verhalten,
+kein Bildzustand). Semantik: AUS (Default) = Bildwechsel flusht
+anstehende, noch nicht committete Regler-Edits ins Sidecar des alten
+Bildes (bisheriges Verhalten, kein Edit-Verlust); AN = Bildwechsel
+verwirft den anstehenden Commit (Regler werden automatisch
+zurückgesetzt), Persistiertes bleibt unberührt. Die Umschaltung loggt
+`info!`.
+
+**Panel-Previous/Reset:** Jede der acht Develop-Sektionen (F-100-Reihenfolge)
+besitzt einen Sektions-Baseline-Snapshot (Rezept-Ausschnitt + Masken-Layer
+der aktiven Kopie), aufgenommen beim Bild-Load und nach jedem
+erfolgreichen Save. **Previous** stellt die Sektions-Felder aus der
+Baseline wieder her (Panel-lokales Undo auf den gespeicherten Stand, kein
+Mehrbild-Previous — das ist LRPAR-G08-PREVIOUS); **Reset** setzt die
+Sektions-Felder auf ihre dokumentierten Defaults. Beide laufen über den
+normalen Save/Render-Commit (History-Eintrag, `preview_generation`-Bump,
+`info!`-Log). Sektions-Feldzuordnung (disjunkt, keine Überlappung):
+Basic = `wb_temperature/wb_tint/exposure/contrast/highlights/shadows/
+whites/blacks` + Treatment/Stash + Profil; Tone Curve = `curves`;
+Color = `hsl/color_grading/presence` + `vibrance/saturation`;
+Detail = `sharpening/noise_reduction`; Effects = `effects`;
+Optics = `lens_correction/lens_blur`; Geometry = `geometry/perspective`;
+Masking = `mask_layers` der aktiven Kopie (Reset = Layer der aktiven
+Kopie entfernen — explizite Nutzeraktion, laut persistiert).
+
+**Abnahme:** JSON-Roundtrip Treatment/Profil, Validierungsablehnung
+(unbekannt/leer/korrupt), CLI-Roundtrip mit Exit-Codes, GUI-headless
+(Setter → Datei → Reload) je Basic-Feld, Panel-Previous/Reset je Sektion
+(Mapping-Test alle 8 + E2E Basic), Determinismus der Referenzmessung,
+`cargo test`/`clippy`/`fmt` grün.
+
 ## Abnahme
 
 - CPU und CLI liefern für identische Eingaben reproduzierbare Ergebnisse mit

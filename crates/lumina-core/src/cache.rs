@@ -53,6 +53,13 @@ pub struct FolderCacheSettings {
     pub standard_preview: bool,
     #[serde(default = "default_one_to_one_preview")]
     pub one_to_one_preview: bool,
+    /// LRPAR-G01-BASIC: when true, switching images discards an armed but
+    /// uncommitted slider edit (sliders reset automatically) instead of
+    /// flushing it to the previous image's sidecar. Default false (flush,
+    /// no edit loss). Folder-inherited like the preview flags; never part
+    /// of a recipe or sidecar (edit behaviour, not image state).
+    #[serde(default = "default_reset_sliders_automatically")]
+    pub reset_sliders_automatically: bool,
 }
 
 fn default_standard_preview() -> bool {
@@ -63,11 +70,16 @@ fn default_one_to_one_preview() -> bool {
     FolderCacheSettings::default().one_to_one_preview
 }
 
+fn default_reset_sliders_automatically() -> bool {
+    FolderCacheSettings::default().reset_sliders_automatically
+}
+
 impl Default for FolderCacheSettings {
     fn default() -> Self {
         Self {
             standard_preview: true,
             one_to_one_preview: false,
+            reset_sliders_automatically: false,
         }
     }
 }

@@ -232,6 +232,34 @@ pub const SPOT_VISUALIZE_KEY: &str = "spot_visualize_threshold";
 /// (see [`SpotDistraction`], all default off). Absent = all off.
 pub const SPOT_DISTRACTION_KEY: &str = "spot_distraction";
 
+/// LRPAR-G01-BASIC: extras key of the Develop treatment (`"color"` or
+/// `"bw"`). Absent = `"color"` (default). Additive, no migration.
+pub const TREATMENT_KEY: &str = "treatment";
+/// LRPAR-G01-BASIC: the two normative treatment values.
+pub const TREATMENT_COLOR: &str = "color";
+pub const TREATMENT_BW: &str = "bw";
+/// LRPAR-G01-BASIC: extras key stashing the pre-B&W `saturation`/`vibrance`
+/// values (`{saturation: f64|null, vibrance: f64|null}`; null = key was
+/// unset). Managed solely by [`EditRecipe::apply_treatment`].
+pub const BW_STASH_KEY: &str = "bw_stash";
+/// LRPAR-G01-BASIC: options key of the Develop profile (named look).
+/// Absent = [`DEFAULT_DEVELOP_PROFILE`]. Additive, no migration.
+pub const DEVELOP_PROFILE_KEY: &str = "profile";
+/// LRPAR-G01-BASIC: normative Develop-profile whitelist. MVP renders every
+/// known profile identically (persisted selection intent, see
+/// `feature/architecture/pipeline.md` § G-01); unknown names are rejected
+/// loudly, never silently normalised.
+pub const DEVELOP_PROFILES: &[&str] = &[
+    "default",
+    "neutral",
+    "vivid",
+    "portrait",
+    "landscape",
+    "monochrome",
+];
+/// LRPAR-G01-BASIC: default Develop profile (also the absent-key meaning).
+pub const DEFAULT_DEVELOP_PROFILE: &str = "default";
+
 /// SPOT-REMOVE-1: the mode of a persisted spot removal. `Heuristic` is the
 /// instant CPU heal (recipe parameters only, no model, no bundle record);
 /// `Generative` is the local ONNX inpaint whose replaced tile lives in the
@@ -336,6 +364,115 @@ impl EditRecipe {
         } else if let Ok(value) = serde_json::to_value(setting) {
             self.extras.insert(SPOT_DISTRACTION_KEY.into(), value);
         }
+    }
+
+    /// LRPAR-G01-BASIC: current Develop treatment (`"color"` or `"bw"`).
+    /// Absent or unparsable reads as `"color"` here; validation fails loudly
+    /// instead (never a silent reinterpretation).
+    pub fn treatment(&self) -> &str {
+        self.extras
+            .get(TREATMENT_KEY)
+            .and_then(|v| v.as_str())
+            .filter(|t| *t == TREATMENT_COLOR || *t == TREATMENT_BW)
+            .unwrap_or(TREATMENT_COLOR)
+    }
+
+    /// LRPAR-G01-BASIC: current Develop profile. Absent or unknown reads as
+    /// [`DEFAULT_DEVELOP_PROFILE`] here; validation fails loudly instead.
+    pub fn develop_profile(&self) -> &str {
+        self.options
+            .get(DEVELOP_PROFILE_KEY)
+            .map(String::as_str)
+            .filter(|p| DEVELOP_PROFILES.contains(p))
+            .unwrap_or(DEFAULT_DEVELOP_PROFILE)
+    }
+
+    /// LRPAR-G01-BASIC: single mutation path for the Treatment selector
+    /// (shared by the GUI `V` toggle and `lumina develop --treatment`).
+    /// `"bw"` stashes the current `saturation`/`vibrance` (including absence)
+    /// in `extras["bw_stash"]` and sets both to `-1.0` through the shared
+    /// pipeline stage (no caller-side pixel logic). `"color"` removes the
+    /// marker and restores the stashed values exactly (unset keys are removed
+    /// again, never left at `-1`; a missing/corrupt stash falls back to
+    /// identity with the marker still removed). Anything else fails loudly.
+    /// Returns whether the recipe changed.
+    pub fn apply_treatment(&mut self, treatment: &str) -> Result<bool, SidecarError> {
+        match treatment {
+            TREATMENT_BW => {
+                if self.treatment() == TREATMENT_BW {
+                    return Ok(false);
+                }
+                let mut stash = BTreeMap::new();
+                for key in ["saturation", "vibrance"] {
+                    stash.insert(key.to_string(), self.adjustments.get(key).copied());
+                }
+                self.extras.insert(
+                    BW_STASH_KEY.into(),
+                    serde_json::to_value(&stash).map_err(|e| {
+                        SidecarError::Invalid(format!("cannot encode bw stash: {e}"))
+                    })?,
+                );
+                self.extras
+                    .insert(TREATMENT_KEY.into(), Value::String(TREATMENT_BW.into()));
+                self.adjustments.insert("saturation".into(), -1.0);
+                self.adjustments.insert("vibrance".into(), -1.0);
+                Ok(true)
+            }
+            TREATMENT_COLOR => {
+                if self.treatment() == TREATMENT_COLOR && !self.extras.contains_key(TREATMENT_KEY) {
+                    return Ok(false);
+                }
+                let stash = self.extras.remove(BW_STASH_KEY);
+                self.extras.remove(TREATMENT_KEY);
+                match stash
+                    .and_then(|v| serde_json::from_value::<BTreeMap<String, Option<f64>>>(v).ok())
+                {
+                    Some(map) => {
+                        for key in ["saturation", "vibrance"] {
+                            match map.get(key).copied().flatten() {
+                                Some(value) => {
+                                    self.adjustments.insert(key.into(), value);
+                                }
+                                None => {
+                                    self.adjustments.remove(key);
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        // No (or corrupt) stash: `-1` values must not linger
+                        // silently — drop both keys so the recipe is identity.
+                        self.adjustments.remove("saturation");
+                        self.adjustments.remove("vibrance");
+                    }
+                }
+                Ok(true)
+            }
+            other => Err(SidecarError::Invalid(format!(
+                "unknown treatment `{other}` (expected `color` or `bw`)"
+            ))),
+        }
+    }
+
+    /// LRPAR-G01-BASIC: single mutation path for the Profile dropdown
+    /// (shared by GUI and `lumina develop --profile`). `"default"` removes
+    /// the key (absent = default, legacy documents stay byte-stable); known
+    /// non-default names are stored; anything else (empty included) fails
+    /// loudly. Returns whether the recipe changed.
+    pub fn apply_develop_profile(&mut self, profile: &str) -> Result<bool, SidecarError> {
+        if !DEVELOP_PROFILES.contains(&profile) {
+            return Err(SidecarError::Invalid(format!(
+                "unknown develop profile `{profile}` (expected one of {})",
+                DEVELOP_PROFILES.join("|")
+            )));
+        }
+        if profile == DEFAULT_DEVELOP_PROFILE {
+            return Ok(self.options.remove(DEVELOP_PROFILE_KEY).is_some());
+        }
+        let changed = self.options.get(DEVELOP_PROFILE_KEY).map(String::as_str) != Some(profile);
+        self.options
+            .insert(DEVELOP_PROFILE_KEY.into(), profile.to_string());
+        Ok(changed)
     }
 }
 
@@ -3571,6 +3708,7 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     }
     validate_spot_removal_extras(a)?;
     validate_spot_g04_extras(a)?;
+    validate_treatment_profile(a)?;
     if let Some(g) = &a.generative_edit {
         if g.version != 1 {
             return invalid("unsupported generative_edit version");
@@ -3664,6 +3802,45 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
     }
     Ok(())
 }
+/// LRPAR-G01-BASIC: validates the additive G-01 recipe fields —
+/// `extras["treatment"]` (`"color"`|`"bw"` when present), `extras["bw_stash"]`
+/// (object with optional finite `-1..=1` `saturation`/`vibrance` when
+/// present) and `options["profile"]` (whitelisted name when present).
+/// Every deviation fails loudly, never a silent reinterpretation.
+fn validate_treatment_profile(recipe: &EditRecipe) -> Result<(), SidecarError> {
+    if let Some(value) = recipe.extras.get(TREATMENT_KEY) {
+        let ok = value
+            .as_str()
+            .is_some_and(|t| t == TREATMENT_COLOR || t == TREATMENT_BW);
+        if !ok {
+            return invalid(format!("extras `{TREATMENT_KEY}` must be `color` or `bw`"));
+        }
+    }
+    if let Some(value) = recipe.extras.get(BW_STASH_KEY) {
+        let map = serde_json::from_value::<BTreeMap<String, Option<f64>>>(value.clone()).map_err(
+            |_| SidecarError::Invalid(format!("extras `{BW_STASH_KEY}` must be an object")),
+        )?;
+        for key in ["saturation", "vibrance"] {
+            if let Some(Some(v)) = map.get(key) {
+                if !v.is_finite() || !(-1.0..=1.0).contains(v) {
+                    return invalid(format!(
+                        "extras `{BW_STASH_KEY}.{key}` must be finite within -1..=1"
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(profile) = recipe.options.get(DEVELOP_PROFILE_KEY) {
+        if !DEVELOP_PROFILES.contains(&profile.as_str()) {
+            return invalid(format!(
+                "options `{DEVELOP_PROFILE_KEY}` must be one of {}",
+                DEVELOP_PROFILES.join("|")
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// LRPAR-G04-REMOVE: validates the additive G-04 recipe extras —
 /// `spot_visualize_threshold` (finite `0..=1` when present, absent = off) and
 /// `spot_distraction` (an object of bools when present, absent = all off).
@@ -8187,5 +8364,85 @@ mod tests {
         let document = meta_document();
         save_sidecar(&path, &document).unwrap();
         assert_eq!(load_sidecar(&path).unwrap(), document);
+    }
+
+    /// LRPAR-G01-BASIC: treatment/profile roundtrip — defaults read as
+    /// `color`/`default`, `bw` stashes and restores, JSON roundtrips.
+    #[test]
+    fn g01_treatment_profile_roundtrip() {
+        let mut recipe = EditRecipe::default();
+        assert_eq!(recipe.treatment(), TREATMENT_COLOR);
+        assert_eq!(recipe.develop_profile(), DEFAULT_DEVELOP_PROFILE);
+        // Enabling B&W from defaults stashes absence and sets -1.
+        assert!(recipe.apply_treatment(TREATMENT_BW).unwrap());
+        assert_eq!(recipe.treatment(), TREATMENT_BW);
+        assert_eq!(recipe.adjustments.get("saturation"), Some(&-1.0));
+        assert_eq!(recipe.adjustments.get("vibrance"), Some(&-1.0));
+        // Idempotent re-apply reports no change.
+        assert!(!recipe.apply_treatment(TREATMENT_BW).unwrap());
+        // A pre-existing saturation survives the roundtrip via the stash.
+        let mut recipe2 = EditRecipe::default();
+        recipe2.adjustments.insert("saturation".into(), 0.3);
+        assert!(recipe2.apply_treatment(TREATMENT_BW).unwrap());
+        assert!(recipe2.apply_treatment(TREATMENT_COLOR).unwrap());
+        assert_eq!(recipe2.treatment(), TREATMENT_COLOR);
+        assert_eq!(recipe2.adjustments.get("saturation"), Some(&0.3));
+        assert!(!recipe2.adjustments.contains_key("vibrance"));
+        // Absent keys are removed again, never left at -1.
+        assert!(recipe.apply_treatment(TREATMENT_COLOR).unwrap());
+        assert!(!recipe.adjustments.contains_key("saturation"));
+        assert!(!recipe.adjustments.contains_key("vibrance"));
+        assert!(!recipe.apply_treatment(TREATMENT_COLOR).unwrap());
+        // Profile: default removes the key, others persist.
+        assert!(!recipe
+            .apply_develop_profile(DEFAULT_DEVELOP_PROFILE)
+            .unwrap());
+        assert!(recipe.apply_develop_profile("vivid").unwrap());
+        assert_eq!(recipe.develop_profile(), "vivid");
+        assert!(!recipe.apply_develop_profile("vivid").unwrap());
+        assert!(recipe
+            .apply_develop_profile(DEFAULT_DEVELOP_PROFILE)
+            .unwrap());
+        assert!(!recipe.options.contains_key(DEVELOP_PROFILE_KEY));
+        // Full JSON roundtrip + validation of the bw state.
+        recipe.apply_treatment(TREATMENT_BW).unwrap();
+        recipe.apply_develop_profile("portrait").unwrap();
+        let json = serde_json::to_value(&recipe).unwrap();
+        let decoded: EditRecipe = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, recipe);
+        validate_adjustments(&decoded).unwrap();
+    }
+
+    /// LRPAR-G01-BASIC: unknown/empty/corrupt treatment/profile values fail
+    /// loudly — never a silent normalisation to a default.
+    #[test]
+    fn g01_treatment_profile_rejects_invalid() {
+        let mut recipe = EditRecipe::default();
+        assert!(recipe.apply_treatment("sepia").is_err());
+        assert!(recipe.apply_treatment("").is_err());
+        assert!(recipe.apply_develop_profile("adobe-color").is_err());
+        assert!(recipe.apply_develop_profile("").is_err());
+        assert!(recipe.apply_develop_profile("/abs/path").is_err());
+        // Crafted invalid states fail validation.
+        recipe
+            .extras
+            .insert(TREATMENT_KEY.into(), Value::String("sepia".into()));
+        assert!(validate_adjustments(&recipe).is_err());
+        recipe.extras.remove(TREATMENT_KEY);
+        recipe
+            .extras
+            .insert(BW_STASH_KEY.into(), serde_json::json!({"saturation": 99.0}));
+        assert!(validate_adjustments(&recipe).is_err());
+        recipe
+            .extras
+            .insert(BW_STASH_KEY.into(), Value::String("corrupt".into()));
+        assert!(validate_adjustments(&recipe).is_err());
+        recipe.extras.remove(BW_STASH_KEY);
+        recipe
+            .options
+            .insert(DEVELOP_PROFILE_KEY.into(), "unknown".into());
+        assert!(validate_adjustments(&recipe).is_err());
+        recipe.options.remove(DEVELOP_PROFILE_KEY);
+        validate_adjustments(&recipe).unwrap();
     }
 }

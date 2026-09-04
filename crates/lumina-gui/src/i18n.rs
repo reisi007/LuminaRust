@@ -478,6 +478,27 @@ pub enum Str {
     BatchApply,
     BatchAppliedPattern,
     NoImagesSelected,
+
+    // G-01 develop basis (LRPAR-G01-BASIC): treatment/profile selectors,
+    // per-panel Previous/Reset, reset-sliders-automatically, original
+    // reference line.
+    Treatment,
+    TreatmentColor,
+    TreatmentBlackWhite,
+    TreatmentSetPattern,
+    Profile,
+    ProfileSetPattern,
+    InvalidTreatment,
+    InvalidProfile,
+    Previous,
+    SectionPreviousPattern,
+    SectionResetPattern,
+    SectionPreviousUnavailable,
+    ResetSlidersAutomatically,
+    ResetSlidersOn,
+    ResetSlidersOff,
+    ResetSlidersDropped,
+    HistogramEditedPattern,
 }
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
@@ -941,6 +962,23 @@ impl Str {
             Str::BatchApply => "Apply to selection",
             Str::BatchAppliedPattern => "Batch applied to {} image(s)",
             Str::NoImagesSelected => "No images selected",
+            Str::Treatment => "Treatment",
+            Str::TreatmentColor => "Color",
+            Str::TreatmentBlackWhite => "Black & White",
+            Str::TreatmentSetPattern => "Treatment: {}",
+            Str::Profile => "Profile",
+            Str::ProfileSetPattern => "Profile: {}",
+            Str::InvalidTreatment => "Unknown treatment (expected Color or Black & White)",
+            Str::InvalidProfile => "Unknown profile",
+            Str::Previous => "Previous",
+            Str::SectionPreviousPattern => "Previous restored ({})",
+            Str::SectionResetPattern => "{} reset",
+            Str::SectionPreviousUnavailable => "No saved state for this section yet",
+            Str::ResetSlidersAutomatically => "Reset sliders automatically",
+            Str::ResetSlidersOn => "Reset sliders automatically on",
+            Str::ResetSlidersOff => "Reset sliders automatically off",
+            Str::ResetSlidersDropped => "Pending edit discarded (reset sliders automatically)",
+            Str::HistogramEditedPattern => "Edited mean {} (Δ {}, L1 {})",
         }
     }
 }
