@@ -2137,6 +2137,7 @@ dependencies = [
  "log",
  "lumina-core",
  "lumina-gpu",
+ "lumina-iptc",
  "lumina-lensfun",
  "lumina-mcp",
  "lumina-onnx",

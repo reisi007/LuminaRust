@@ -12,6 +12,8 @@ lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-onnx = { path = "../lumina-onnx" }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `lumina meta inspect`.
+lumina-iptc = { path = "../lumina-iptc" }
 # F-098-N2: optional Lensfun dependency so the CLI can build a corrector from
 # EXIF metadata. Only compiled/linked when the `lensfun` feature is on.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
