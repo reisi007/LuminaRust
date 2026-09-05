@@ -2241,6 +2241,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-merge"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "lumina-core",
+ "lumina-sidecar",
+ "proptest",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "lumina-onnx"
 version = "0.1.0"
 dependencies = [

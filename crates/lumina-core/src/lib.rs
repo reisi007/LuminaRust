@@ -17,6 +17,7 @@ pub mod mask_modulation;
 pub mod mask_tiles;
 pub mod masks;
 pub mod memory;
+pub mod merge_geom;
 pub mod pipeline;
 pub mod preview_cache;
 pub mod range_masks;

@@ -1,0 +1,14 @@
+[package]
+name = "lumina-merge"
+version = "0.1.0"
+edition = "2021"
+description = "HDR/panorama merge: alignment + linear merge (LRPAR-G13-MERGE-15, MERGE-CORE-1)"
+
+[dependencies]
+lumina-core = { path = "../lumina-core" }
+lumina-sidecar = { path = "../lumina-sidecar" }
+blake3 = "1"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
