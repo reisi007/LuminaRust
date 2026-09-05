@@ -21,7 +21,7 @@
 
 use egui_kittest::kittest::NodeT;
 use egui_kittest::{kittest::Queryable, Harness};
-use lumina_gui::{LuminaApp, Module};
+use lumina_gui::{LuminaApp, Module, SECTION_COLOR, SECTION_COUNT, SECTION_MASKING};
 
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
 /// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
@@ -171,6 +171,95 @@ fn develop_sections_expanded() {
     // Basic + Color + Masking expanded; the rest collapsed.
     collapse_except(&mut harness, &["Basic", "Color", "Masking"]);
     harness.snapshot("develop_sections_expanded");
+}
+
+/// Open exactly one Develop section via the public `set_section_open`
+/// setter (deterministic, no header clicks — the other seven stay closed)
+/// and scroll `target_label` into view so its widgets are pixel-visible in
+/// the golden at the default 1024x720 viewport.
+///
+/// KITTEST-EXPANDED-VIEWPORT-1: `develop_sections_expanded` above expands
+/// Basic + Color + Masking at once, so Color/Masking content is pushed
+/// below the viewport fold and never pixel-visible (1024x720 clipping, a
+/// single frame cannot show the Basic top and the Masking bottom at
+/// once). These per-section snapshots are the chosen "einzeln snapshotten"
+/// alternative: one open section each, scrolled into view.
+fn expand_and_scroll_to(harness: &mut Harness<'_, LuminaApp>, section: usize, target_label: &str) {
+    assert!(
+        section < SECTION_COUNT,
+        "unknown Develop section index {section}; SECTION_COUNT = {SECTION_COUNT}"
+    );
+    for i in 0..SECTION_COUNT {
+        harness.state_mut().set_section_open(i, i == section);
+    }
+    // Layout frame so the accesskit tree contains the opened section.
+    harness.run();
+    let found = harness
+        .query_all_by_label(target_label)
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        found,
+        "scroll target {target_label:?} not found in headed harness (section {section})"
+    );
+    // One frame dispatches the ScrollIntoView event, the second settles the
+    // scrolled layout before snapshotting.
+    harness.run();
+    harness.run();
+}
+
+/// Assert that `label` is laid out inside the 1024x720 window (not below
+/// the ScrollArea fold): existence in the accesskit tree alone does not
+/// prove pixel-visibility.
+fn assert_label_on_screen(harness: &mut Harness<'_, LuminaApp>, label: &str) {
+    let rect = harness
+        .query_all_by_label(label)
+        .next()
+        .unwrap_or_else(|| panic!("label {label:?} not found in headed harness"))
+        .rect();
+    assert!(
+        rect.min.y >= 0.0 && rect.max.y <= 720.0 && rect.max.x <= 1024.0,
+        "label {label:?} must be pixel-visible in the 1024x720 viewport, got {rect:?}"
+    );
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_color() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Color open: the HSL mixer renders near the panel top.
+    expand_and_scroll_to(&mut harness, SECTION_COLOR, "HSL / Color Mixer");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen,
+    // otherwise the golden below could pass on clipped (invisible) pixels.
+    assert_label_on_screen(&mut harness, "HSL / Color Mixer");
+    harness.snapshot("develop_section_color");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_masking() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // `load_bytes` leaves `document` empty (lazy `ensure_document_loaded`),
+    // and `draw_masking` returns early without one — so seed an in-memory
+    // mask entry first. `create_mask` is pure session state (no sidecar
+    // write, no disk), keeping this snapshot side-effect-free like the rest.
+    harness
+        .state_mut()
+        .create_mask("Snapshot Mask")
+        .expect("seed mask entry");
+    // Only Masking open: the mask controls render near the panel top.
+    expand_and_scroll_to(&mut harness, SECTION_MASKING, "New Mask");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen.
+    assert_label_on_screen(&mut harness, "New Mask");
+    harness.snapshot("develop_section_masking");
 }
 
 #[test]

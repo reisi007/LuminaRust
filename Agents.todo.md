@@ -116,7 +116,11 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | KITTEST-EXPANDED-VIEWPORT-1 | G-01 | Expanded-Snapshot |
+| 1.0 | KITTEST-COVERAGE-SECTIONS-1 | alle G | Develop-Sections-Goldens |
+| 1.0 | KITTEST-COVERAGE-META-1 | G-15 | Meta-Subpanels-Dialog |
+| 1.0 | KITTEST-COVERAGE-LIBRARY-1 | G-09 | Loupe-Compare-Survey |
+| 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
+| 1.0 | KITTEST-COVERAGE-STATES-1 | alle G | Toast-Error-Export-States |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -156,7 +160,11 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] KITTEST-EXPANDED-VIEWPORT-1 (Release: 1.0)** `develop_sections_expanded` zeigt Color/Masking nie pixel-sichtbar (1024×720-Viewport-Clipping, schon vor G-01 so): im Test zu Color/Masking scrollen und/oder Sektionen einzeln snapshotten. Abnahme: Color-/Masking-Widgets pixel-sichtbar im Golden + Vision-Check per DoD §6. (Gefunden 2026-09-04 im G01-Vision-Loop.)
+- [ ] **[PRIO: mittel] KITTEST-COVERAGE-SECTIONS-1 (Release: 1.0)** Develop-Restsektionen pixel-sichtbar: je ein Golden für Tone Curve, Detail, Effects, Optics, Geometry, Presets, History, Rating (einzeln expandiert + Non-vacuous-Guard per Accesskit-Label, Muster `library_metadata` Date-created-Guard). Abnahme: jede Sektion 1× pixel-sichtbar im Golden + Vision-Check per DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] KITTEST-COVERAGE-META-1 (Release: 1.0)** Metadaten-Subpanels + Dialog pixel-sichtbar: Embedded (read-only, JPEG-Fixture on-the-fly eingebettet), History (10 Einträge), Preset-Combo, Sync-Checkboxen je 1× expandiert snapshotten + `draw_meta_preset_dialog` mit Pflichtfeldern als eigener Golden (Abbrechen ohne Write). Abnahme: alle 5 Subpanels + Dialog pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] KITTEST-COVERAGE-LIBRARY-1 (Release: 1.0)** Library-Ansichten pixel-sichtbar: Loupe, Compare, Survey je 1 Golden (deterministische Fixtures, keine Pfad-Pixel, Muster `library_badges`), dazu Folder-Tree + Keyword-Chips + Rating-Sektion im Grid-Golden. Vision-Baseline 2026-09-05: `library_with_image` zeigt kein Thumbnail (Grid-Mitte = Empty-State, BEFUND), `subfolder_badges` Zelltexte gequetscht/überlappend (minor) — mitabdecken. Abnahme: Loupe/Compare/Survey je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] KITTEST-COVERAGE-OVERLAYS-1 (Release: 1.0)** Preview-Overlays pixel-sichtbar: Mask-Overlay, Edit-Pins, Crop-Overlay, Lens-Blur-Overlay, Navigator auf/zu je 1 Golden oder als Zustands-Matrix mit Headless-Asserts (kein manueller Test als einzige Absicherung). Abnahme: alle 4 Overlays + Navigator-Zustände pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig
