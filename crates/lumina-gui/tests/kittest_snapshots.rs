@@ -21,10 +21,13 @@
 
 use egui_kittest::kittest::NodeT;
 use egui_kittest::{kittest::Queryable, Harness};
+use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_gui::{
     LuminaApp, Module, SECTION_COLOR, SECTION_COUNT, SECTION_DETAIL, SECTION_EFFECTS,
     SECTION_GEOMETRY, SECTION_MASKING, SECTION_OPTICS, SECTION_TONE_CURVE,
 };
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
 /// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
@@ -799,4 +802,430 @@ fn library_subfolder_badges() {
     // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
     harness.run_steps(3);
     harness.snapshot("library_subfolder_badges");
+}
+
+// ---------------------------------------------------------------------------
+// KITTEST-COVERAGE-META-1: Library Metadata subpanels + preset dialog.
+//
+// The draft editor already has a golden (`library_metadata` above); the four
+// remaining subpanels (Embedded / History / Preset / Sync) get one expanded
+// golden each (exactly one open, the rest collapsed), plus one golden with
+// the dynamic-preset prompt dialog open. Pattern per test (68215fd/7fd528b):
+// deterministic seeds, header click + scroll-into-view, non-vacuous
+// accesskit guard + on-screen assert, then `snapshot`. No production code is
+// touched; existing goldens are not rebaselined.
+// ---------------------------------------------------------------------------
+
+/// 2x1 JPEG bytes through the real encoder (same fixture pixels as the
+/// lib `jpeg()` helper) so embedded-IPTC tests decode genuine JPEG bytes.
+fn test_jpeg_bytes() -> Vec<u8> {
+    ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
+        .expect("fixture frame")
+        .encode(ImageFileFormat::Jpeg)
+        .expect("jpeg encodes")
+}
+
+/// Write `photo.jpg` with embedded IPTC into a fresh tempdir on the fly
+/// (no repo binary). Returns the dir (keep alive until the snapshot is
+/// taken) and the image path. The file name is fixed so the `Loaded:
+/// photo.jpg` status line stays deterministic; the random tempdir prefix
+/// never reaches pixels (see `open_file_and_restore_fixture`).
+fn embedded_jpeg_fixture(title: &str, keywords: &[&str]) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let meta = lumina_iptc::IptcMetadata {
+        title: Some(title.to_owned()),
+        keywords: keywords.iter().map(|name| name.to_string()).collect(),
+        ..Default::default()
+    };
+    let embedded =
+        lumina_iptc::embed_metadata(&test_jpeg_bytes(), &meta).expect("embed IPTC fixture");
+    let path = dir.path().join("photo.jpg");
+    std::fs::write(&path, embedded).expect("write jpeg fixture");
+    (dir, path)
+}
+
+/// Seed `photo.jpg`'s sidecar with exactly 10 metadata history entries
+/// carrying fixed RFC 3339 UTC timestamps (no wall-clock): the History
+/// panel renders `rev | timestamp | origin | changed`, so real timestamps
+/// would leak nondeterministic pixels into the golden. Seeding goes through
+/// the public sidecar API into a tempdir file — the snapshot itself (like
+/// the `create_mask` precedents) performs no disk write.
+fn seed_metadata_history_sidecar(photo: &Path) {
+    use lumina_sidecar::{DecodeFingerprint, GeometryFingerprint, SidecarDocument, SourceIdentity};
+    let identity = SourceIdentity {
+        relative_name: "photo.jpg".to_owned(),
+        content_hash: "blake3:kittest-meta-history".to_owned(),
+        byte_length: 0,
+        modified_at: None,
+        raw_format: "JPG".to_owned(),
+        orientation: 1,
+        decode_fingerprint: DecodeFingerprint {
+            decoder: "kittest".to_owned(),
+            version: "1".to_owned(),
+            parameters: BTreeMap::new(),
+            extras: BTreeMap::new(),
+        },
+        geometry_fingerprint: GeometryFingerprint {
+            width: 2,
+            height: 1,
+            orientation: 1,
+            pixel_aspect_ratio: 1.0,
+            extras: BTreeMap::new(),
+        },
+        extras: BTreeMap::new(),
+    };
+    let mut document = SidecarDocument::new(identity, "raster-mvp-1");
+    for index in 1..=10_u32 {
+        let mut fields = BTreeMap::new();
+        fields.insert("title".to_owned(), format!("Titel {index}"));
+        let timestamp = format!("2026-01-{index:02}T12:00:00Z");
+        assert!(
+            document
+                .apply_metadata_draft(&fields, "gui", &timestamp)
+                .expect("seed history entry"),
+            "history entry {index} must change the draft"
+        );
+    }
+    let sidecar = lumina_sidecar::sidecar_path_for(photo);
+    lumina_sidecar::save_sidecar(&sidecar, &document).expect("seed sidecar");
+}
+
+/// Rendered History line for a seeded entry (`MetadataHistoryEntryPattern`).
+fn history_line(rev: u64, day: u32) -> String {
+    format!("rev {rev} | 2026-01-{day:02}T12:00:00Z | gui | title")
+}
+
+/// Write a dynamic meta preset file (one placeholder) into `dir`.
+fn write_dynamic_meta_preset(dir: &Path, file: &str, name: &str) {
+    let preset = serde_json::json!({
+        "format": "lumina-meta-preset",
+        "version": 1,
+        "name": name,
+        "fields": { "title": "{event}" },
+        "placeholders": [{ "name": "event", "description": "Event name" }],
+    });
+    std::fs::write(dir.join(file), serde_json::to_vec_pretty(&preset).unwrap())
+        .expect("write preset");
+}
+
+/// Open a real file (async decode) and pump headed frames until `ready`
+/// holds, then point the browser back at the deterministic fixture
+/// directory: `open_file` adopts the file's parent as the browser
+/// directory, and the tempdir prefix must never leak into folders/grid/
+/// filmstrip pixels (same rationale as `use_library_fixture`).
+fn open_file_and_restore_fixture(
+    harness: &mut Harness<'_, LuminaApp>,
+    path: &Path,
+    mut ready: impl FnMut(&mut LuminaApp) -> bool,
+) {
+    harness.state_mut().open_file(path.display().to_string());
+    for _ in 0..500 {
+        harness.run_steps(1);
+        if ready(harness.state_mut()) {
+            break;
+        }
+    }
+    assert!(
+        ready(harness.state_mut()),
+        "decode of {} never settled in headed harness",
+        path.display()
+    );
+    harness
+        .state_mut()
+        .set_directory(LIBRARY_FIXTURE_DIR.to_owned());
+    harness.run();
+}
+
+/// Click one Library Metadata collapsing header (all default closed) and
+/// scroll a content label into view. The header itself is scrolled into
+/// view first — a below-fold click would be discarded (7fd528b optics2
+/// lesson) — with the same 2-frame settle as `expand_and_scroll_to`.
+fn open_meta_section_and_scroll_to(
+    harness: &mut Harness<'_, LuminaApp>,
+    header_label: &str,
+    target_label: &str,
+) {
+    harness.run();
+    let header_visible = harness
+        .query_all_by_label(header_label)
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        header_visible,
+        "Metadata header {header_label:?} not found in headed harness"
+    );
+    harness.run();
+    harness.run();
+    let clicked = harness
+        .query_all_by_label(header_label)
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        clicked,
+        "Metadata header {header_label:?} lost after scrolling"
+    );
+    harness.run();
+    let found = harness
+        .query_all_by_label(target_label)
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        found,
+        "scroll target {target_label:?} not found in headed harness (header {header_label})"
+    );
+    harness.run();
+    harness.run();
+}
+
+/// Embedded subpanel expanded (read-only JPEG IPTC): the keywords line is
+/// the section-unique content label. Draft stays collapsed, so its
+/// per-field `Embedded: …` overlay labels are absent.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_meta_embedded() {
+    let (_tmp, photo) = embedded_jpeg_fixture("Eingebettet", &["k1", "k2"]);
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    open_file_and_restore_fixture(&mut harness, &photo, |app| {
+        app.preview_generation() >= 1 && app.embedded_metadata().unwrap().is_some()
+    });
+    // Non-vacuous in-memory guard: the file really carries IPTC.
+    let meta = harness
+        .state_mut()
+        .embedded_metadata()
+        .unwrap()
+        .expect("JPEG carries IPTC");
+    assert_eq!(meta.title.as_deref(), Some("Eingebettet"));
+    assert_eq!(meta.keywords, vec!["k1".to_owned(), "k2".to_owned()]);
+    open_meta_section_and_scroll_to(
+        &mut harness,
+        "Embedded (read-only)",
+        "Embedded keywords: k1, k2",
+    );
+    // Non-vacuous guard: the keywords line must actually be on-screen,
+    // otherwise the golden below could pass on a collapsed header.
+    assert_label_on_screen(&mut harness, "Embedded keywords: k1, k2");
+    harness.snapshot("library_meta_embedded");
+}
+
+/// History subpanel expanded with 10 fixed-timestamp entries (newest
+/// first). The scroll target is the oldest row at the bottom.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_meta_history() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let photo = dir.path().join("photo.jpg");
+    std::fs::write(&photo, test_jpeg_bytes()).expect("write jpeg");
+    seed_metadata_history_sidecar(&photo);
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    open_file_and_restore_fixture(&mut harness, &photo, |app| {
+        app.metadata_history().len() == 10
+    });
+    // Non-vacuous in-memory guard: newest-first order with fixed labels.
+    // (Row-label existence is asserted after expanding below: collapsed
+    // section content has no accesskit nodes.)
+    let history = harness.state_mut().metadata_history();
+    assert_eq!(history.len(), 10);
+    assert_eq!(history[0].rev, 10);
+    assert_eq!(history[9].rev, 1);
+    let oldest = history_line(1, 1);
+    let newest = history_line(10, 10);
+    open_meta_section_and_scroll_to(&mut harness, "History", &oldest);
+    assert!(
+        harness.query_all_by_label(newest.as_str()).next().is_some(),
+        "newest history row missing"
+    );
+    // Non-vacuous guard: the oldest row must actually be on-screen.
+    assert_label_on_screen(&mut harness, &oldest);
+    harness.snapshot("library_meta_history");
+}
+
+/// Preset subpanel expanded with an empty override dir (same pattern as
+/// `library_metadata`): no machine-global preset name leaks into the
+/// golden — the path itself is never rendered, only preset names.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_meta_preset() {
+    let presets = tempfile::tempdir().expect("temp dir");
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    harness
+        .state_mut()
+        .set_meta_presets_dir(Some(presets.path().to_path_buf()));
+    load_sample(&mut harness);
+    harness.run();
+    harness.run();
+    // Non-vacuous in-memory guard: the override really yields no presets.
+    assert!(
+        harness.state_mut().meta_preset_names().is_empty(),
+        "empty override dir must list no presets"
+    );
+    open_meta_section_and_scroll_to(&mut harness, "Meta preset", "Apply preset");
+    // Non-vacuous guard: the action row must actually be on-screen,
+    // otherwise the golden below could pass on a collapsed header.
+    assert_label_on_screen(&mut harness, "Apply preset");
+    harness.snapshot("library_meta_preset");
+}
+
+/// Sync subpanel expanded: all 12 field rows (11 draft fields + keywords)
+/// render checked by default (`default_meta_sync_fields`; the checked
+/// pixels are the golden's signal, the Vision check confirms them).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_meta_sync() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    load_sample(&mut harness);
+    harness.run();
+    harness.run();
+    // At click time only the header carries this label (the action button
+    // with the same text appears after expanding).
+    open_meta_section_and_scroll_to(&mut harness, "Sync to selection", "Title");
+    // Non-vacuous guard: every sync row must exist (draft stays collapsed,
+    // so these labels are unique to the sync section).
+    for label in [
+        "Title",
+        "Headline",
+        "Description",
+        "Copyright",
+        "Creator",
+        "Credit",
+        "Source",
+        "City",
+        "State / Province",
+        "Country",
+        "Date created",
+        "Keywords",
+    ] {
+        assert!(
+            harness.query_all_by_label(label).next().is_some(),
+            "sync row {label:?} missing"
+        );
+    }
+    assert_label_on_screen(&mut harness, "Title");
+    harness.snapshot("library_meta_sync");
+}
+
+/// Dynamic-preset prompt dialog open with its required field
+/// (`draw_meta_preset_dialog` draws it as a floating window from `update`).
+/// The preset is selected through the combo UI (no private state poking);
+/// after the snapshot Cancel is clicked headless and the no-write path is
+/// asserted on disk (dialog-cancel state semantics themselves are covered
+/// by the lib `iptc_gui_dynamic_preset_requires_vars` test).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn draw_meta_preset_dialog() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let png = dir.path().join("photo.png");
+    std::fs::write(&png, LuminaApp::sample_image_png()).expect("write png");
+    let presets = tempfile::tempdir().expect("temp dir");
+    write_dynamic_meta_preset(
+        presets.path(),
+        "KittestDialog.lumina-meta-preset.json",
+        "KittestDialog",
+    );
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    harness
+        .state_mut()
+        .set_meta_presets_dir(Some(presets.path().to_path_buf()));
+    open_file_and_restore_fixture(&mut harness, &png, |app| app.preview_generation() >= 1);
+    // Non-vacuous in-memory guard: the dynamic preset is listed. The
+    // panel auto-refresh runs inside the (closed) section closure, so an
+    // explicit refresh is needed before the section is opened below.
+    harness.state_mut().refresh_meta_presets();
+    assert_eq!(
+        harness.state_mut().meta_preset_names(),
+        vec!["KittestDialog".to_owned()]
+    );
+    open_meta_section_and_scroll_to(&mut harness, "Meta preset", "Apply preset");
+    // Select the preset through the combo UI: egui exposes the ComboBox as
+    // a `ComboBox`-role node carrying the selected text as its *value*
+    // (not its label), so it is queried by value. Before the selection the
+    // value is still the hint, keeping the popup item unambiguous.
+    let combo_open = harness
+        .query_all_by_value("Choose a preset…")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(combo_open, "preset combo not found in headed harness");
+    harness.run();
+    harness.run();
+    let item_picked = harness
+        .query_all_by_label("KittestDialog")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(item_picked, "preset popup item not found in headed harness");
+    harness.run();
+    harness.run();
+    let apply_clicked = harness
+        .query_all_by_label("Apply preset")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(apply_clicked, "Apply preset button lost after selection");
+    harness.run();
+    harness.run();
+    // Non-vacuous guard: the dialog window with its required field must
+    // actually be on-screen.
+    assert!(
+        harness
+            .query_all_by_label("Preset variables (all required)")
+            .next()
+            .is_some(),
+        "preset dialog did not open"
+    );
+    assert_label_on_screen(&mut harness, "Preset variables (all required)");
+    assert_label_on_screen(&mut harness, "Event name");
+    harness.snapshot("draw_meta_preset_dialog");
+    // Cancel path headless: the dialog closes and no sidecar is written.
+    let cancel_clicked = harness
+        .query_all_by_label("Cancel")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(cancel_clicked, "dialog Cancel button not found");
+    harness.run();
+    assert!(
+        harness
+            .query_all_by_label("Preset variables (all required)")
+            .next()
+            .is_none(),
+        "dialog must close on Cancel"
+    );
+    assert!(
+        !lumina_sidecar::sidecar_path_for(&png).is_file(),
+        "cancelled dialog must not write a sidecar"
+    );
 }
