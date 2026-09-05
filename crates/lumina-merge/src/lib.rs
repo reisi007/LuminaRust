@@ -36,6 +36,7 @@
 
 pub mod align;
 pub mod digest;
+pub mod dng;
 pub mod image;
 pub mod merge;
 
@@ -83,5 +84,11 @@ impl AlignStatus {
 
 pub use align::{estimate_hdr_translation, estimate_pano_transform, HdrShift, PanoTransform};
 pub use digest::merge_inputs_digest;
+pub use dng::{
+    encode_linear_dng, exif_timestamp_utc, linear_to_u16, merge_dng_filename,
+    validate_dng_file_name, write_merge_dng, DngError, DngExif, DNG_BITS_PER_SAMPLE,
+    DNG_MAX_DIMENSION_PX, DNG_MIN_DIMENSION_PX, DNG_PHOTOMETRIC_LINEAR_RAW, DNG_SOFTWARE,
+    DNG_VERSION, HDR_DNG_SUFFIX, PANO_DNG_SUFFIX,
+};
 pub use image::LinearImage;
 pub use merge::{blend_panorama, merge_hdr_weighted};

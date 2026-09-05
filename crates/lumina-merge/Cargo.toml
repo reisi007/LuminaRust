@@ -9,6 +9,14 @@ lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 blake3 = "1"
 thiserror = "2"
+# MERGE-DNG-1: pure-Rust TIFF/DNG writer backend (MIT, no native code;
+# already in the workspace tree via `image`, so no new transitive deps).
+# Pinned exact: writer bytes must stay deterministic across builds.
+tiff = "=0.11.3"
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"
+serde_json = "1"
+# Re-import gate only (tests): written DNG must decode via lumina-raw/LibRaw.
+lumina-raw = { path = "../lumina-raw" }

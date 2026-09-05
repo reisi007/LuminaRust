@@ -151,6 +151,61 @@ Folge-Task fest):
   native Dependency ohne Capability-Entscheid und Lizenzprüfung (s. unten).
   Bis zur Entscheidung ist der DNG-Writer der größte technische Risikopunkt.
 
+### MERGE-DNG-1 Konkretisierung (2026-09-05, normativ für die Umsetzung)
+
+- **Writer-Auswahl:** `tiff` 0.11.3 (reines Rust, MIT, exakter Pin `=0.11.3`,
+  Upgrade nur per ADR). Begründung: DNG ist TIFF/EP-basiert; die Crate schreibt
+  alle benötigten Tags (Basis-Tags, DNG-Private-Tags 50706ff., EXIF-Sub-IFD via
+  unverketteter Extra-Directory) ohne nativen Code — kein LGPL-/Capability-
+  Risiko, kein neues Capability-Gate in `feature/platform/capability-matrix.md`
+  (`lumina-merge` bleibt pure-Rust, nativ immer verfügbar), kein neuer
+  THIRD-PARTY-NOTICES-Eintrag (`tiff` 0.11.3 MIT ist bereits inventarisiert).
+  Keine native Alternative evaluiert, weil der Re-Import-Beleg (s. u.) mit
+  purem Rust gelingt. Größter Risikopunkt damit geschlossen.
+- **Schreibumfang:** lineares 16-Bit-DNG, unkomprimiert (Compression = 1),
+  PhotometricInterpretation = LinearRaw (34892), Chunky, SampleFormat UINT,
+  ein Strip. DNG-Tags: DNGVersion/DNGBackwardVersion 1.4.0.0, UniqueCameraModel
+  `LuminaMerge HDR` bzw. `LuminaMerge Pano`, CalibrationIlluminant1 D65 (21),
+  ColorMatrix1 (sRGB-D65→XYZ-D50, Bradford, Nenner 10⁷, im Code dokumentiert),
+  AsShotNeutral 1:1:1, WhiteLevel 65535. EXIF-Übernahme aus der Referenzquelle
+  (erste Quelle): Make/Model (Top-Level-Tags), ExposureTime/FNumber/
+  ISOSpeedRatings/DateTimeOriginal (UTC, `YYYY:MM:DD HH:MM:SS`)/LensModel
+  (EXIF-Sub-IFD); fehlende Referenzfelder → Tag entfällt (kein Raten, kein
+  Default). Merge-Provenienz ausschließlich im Merge-Sidecar, kein
+  proprietärer EXIF-Hack. Orientation wird als 1 geschrieben (Merge-Frames
+  sind bereits orientiert).
+- **Wertabbildung:** `u16 = round(clamp(radiance / white_scale, 0, 1) * 65535)`
+  mit `white_scale = max(1.0, Spitzen-Radiance)` (deterministisch aus den
+  Pixeln; kein stilles Lichter-Clippen, kein BaselineExposure-Tag — der
+  LibRaw-Decode bleibt vorhersagbar). Quantisierungsfehler ≤ 0,5/65535.
+- **LibRaw-Grenzen (belegt an LibRaw 0.22.2, `src/metadata/identify.cpp`):**
+  Breite und Höhe je ≥ 22 px (`!load_raw || height < 22 || width < 22` →
+  `is_raw = 0`), je ≤ 64000 px; unkomprimierte Integer-DNGs dekodiert LibRaw
+  via `packed_dng_load_raw`. Kleinere/größere Frames lehnt der Writer laut als
+  `unsupported` ab. Baseline-TIFFs ohne DNG-Tags lehnt LibRaw ab — daher sind
+  die DNG-Tags Pflicht, kein TIFF-Ersatz.
+- **Dateiname:** `<Basis>-HDR.dng` / `<Basis>-Pano.dng`; Basis = Dateistemm
+  (ohne letzte Extension) der Referenzquelle (ersten Quelle). Laut abgelehnt
+  statt umgedeutet: leere Basis, Pfad-Trennzeichen (`/`/`\`), Laufwerks-`:`,
+  absolute Pfade, `..`-Segmente.
+- **Atomarität:** Temp-Datei im Zielverzeichnis + Rename; unvollständige
+  Dateien gelten nie als gültig. Alle Pfade relativ, absolute Pfade verboten.
+- **Re-Import:** Das DNG muss via `lumina-raw` (gepinntes LibRaw 0.22.2) als
+  Quelle dekodieren (Geometrie, Make/Model, EXIF-Belichtung lesbar); andernfalls
+  ist der Pfad `unsupported`. Der Decode-Kontext (`libraw_decode_version`,
+  Weißabgleich-/Farb-Pipeline von `decode_file`) gehört zur Test-Doku, nicht
+  in die DNG-Bytes.
+- **`"type": "merge"`-Envelope (Entscheid):** Der Diskriminator gehört auf
+  Dokument-Ebene des Merge-DNG-Sidecars, nicht in `MergeRecipe` (dort bewusst
+  kein Feld — ein `"type"`-Schlüssel im Rezept-JSON wird per
+  `deny_unknown_fields` laut abgelehnt, s. MERGE-SCHEMA-1). Regel: fehlendes
+  `type` → Standard-Sidecar; `"type": "merge"` ohne valides `merge_recipe` →
+  laut ablehnen; unbekanntes `type` → laut ablehnen. Das Merge-Sidecar ist ein
+  volles Sidecar-Dokument (Standardkopie mit eigenem Rezept) plus Pflichtfeld
+  `merge_recipe` und DNG-Artefaktverweis (relativ, BLAKE3, Auflösung, Kanaltyp,
+  Datenversion). Umsetzung (Schema-Code) in MERGE-CLI-1; dieser Entscheid ist
+  Doku-only.
+
 ## Ausrichtung / Alignment (Scope)
 
 - **HDR (1.5-Scope):** Translation-Ausgleich (ganzzahlig + subpixel light)
