@@ -219,6 +219,35 @@ Regeln:
 - Das Merge-Rezept gehört zur **neuen** Quelle (Merge-DNG-Sidecar trägt die
   Provenienz), nicht als Mutation in die Quell-Sidecars.
 
+### MERGE-SCHEMA-1 Konkretisierung (2026-09-05, normativ für die Umsetzung)
+
+Der Schema-Folge-Task (`lumina-sidecar`, Modul `merge_recipe`) legt fest:
+
+- `merge_version` ist auf 1 gepinnt; fremde Versionen werden laut
+  abgelehnt (Pre-MVP: keine Abwärtskompatibilitätspflicht, aber versioniert).
+- Quellen: mindestens 2, höchstens 256 (`MIN_`/`MAX_MERGE_SOURCES`).
+- `content_hash` je Quelle im Vertrag `blake3:<64 lowercase hex>`.
+- `decode_context.orientation` ist 1..=8; `exposure` verlangt endliches
+  `exposure_time_s` in (0, 86400 s], `iso` in 1..=10 000 000,
+  endliches `f_number` in (0, 256].
+- `residual_px` ist endlich in 0..=100 000; `blend_width_px` ist
+  0..=65 536; jede `matrix_3x3`-Komponente ist endlich.
+  `transforms[].source_index` liegt unter der Quellenzahl und ist eindeutig.
+- 1.5-Scope-Paarung (laut abgelehnt statt umgedeutet): `hdr` verlangt
+  `hdr_translate` + `none`; `panorama` verlangt
+  `pano_cylindrical_homography` + `cylindrical`.
+- `output` ist 1.5-Scope linear 16 Bit nicht-mosaik (`bits` = 16,
+  `mosaic` = false); `file` ist relativ wie jede Quelle.
+- `created_at` folgt dem Sidecar-RFC-3339-UTC-Vertrag; `status` `ok`
+  trägt keinen Fehlertext, sonst ist `error` optional (nicht-leer).
+- Digest: BLAKE3 über kanonischem JSON (schlüsselsortiert) aus
+  `merge_version` + `mode` + `sources` + `alignment`, gerendert als
+  `blake3:<hex>`; `output`/`created_at`/`status`/`error` sind
+  Artefakt-Metadaten und kein Teil der Merge-Identität.
+- Der `"type": "merge"`-Schlüssel des Skizzen-JSON ist kein Feld des
+  Rezept-Typs: die Envelope-Unterscheidung gehört zum einbettenden
+  Sidecar-Dokument (Entscheid in MERGE-DNG-1).
+
 ## Persistenz (Sidecar-first)
 
 - **Autoritativ:** Das Merge-DNG erhält ein eigenes Sidecar-Bundle

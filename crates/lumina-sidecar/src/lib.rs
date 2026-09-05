@@ -30,6 +30,17 @@ pub use meta_preset::{
     META_PRESET_FILE_SUFFIX, META_PRESET_FORMAT, META_PRESET_VERSION,
 };
 
+// LRPAR-G13-MERGE-15 / MERGE-SCHEMA-1: versioned HDR/panorama merge recipe
+// (schema + validation + digest; no DNG writer, no alignment computation).
+mod merge_recipe;
+pub use merge_recipe::{
+    merge_digest, validate_merge_recipe, MergeAlignment, MergeAlignmentMethod, MergeDecodeContext,
+    MergeExposure, MergeMode, MergeOutput, MergeProjection, MergeRecipe, MergeSource, MergeStatus,
+    MergeTransform, MAX_MERGE_BLEND_WIDTH_PX, MAX_MERGE_EXPOSURE_TIME_S, MAX_MERGE_F_NUMBER,
+    MAX_MERGE_ISO, MAX_MERGE_RESIDUAL_PX, MAX_MERGE_SOURCES, MERGE_HASH_HEX_LEN, MERGE_HASH_PREFIX,
+    MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
+};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
 
