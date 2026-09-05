@@ -21,7 +21,10 @@
 
 use egui_kittest::kittest::NodeT;
 use egui_kittest::{kittest::Queryable, Harness};
-use lumina_gui::{LuminaApp, Module, SECTION_COLOR, SECTION_COUNT, SECTION_MASKING};
+use lumina_gui::{
+    LuminaApp, Module, SECTION_COLOR, SECTION_COUNT, SECTION_DETAIL, SECTION_EFFECTS,
+    SECTION_GEOMETRY, SECTION_MASKING, SECTION_OPTICS, SECTION_TONE_CURVE,
+};
 
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
 /// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
@@ -260,6 +263,244 @@ fn develop_section_masking() {
     // Non-vacuous guard: the scrolled-to widgets must actually be on-screen.
     assert_label_on_screen(&mut harness, "New Mask");
     harness.snapshot("develop_section_masking");
+}
+
+/// KITTEST-COVERAGE-SECTIONS-1: one golden per remaining Develop section.
+/// Each test opens exactly one section (the other seven stay closed) and
+/// scrolls a section-unique static group label into view, following the
+/// KITTEST-EXPANDED-VIEWPORT-1 pattern (`expand_and_scroll_to` +
+/// `assert_label_on_screen` + non-vacuous guard). No production code is
+/// touched; the five `section_open` sections below need no document seed
+/// (they render on `original.is_some()` from `load_sample`).
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_tone_curve() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Tone Curve open: the parametric regions + point-curve editor.
+    // B1: scroll target is the first point row (not the "Point curve"
+    // group label) so the P0/P1 editor rows are pixel-visible in the
+    // golden; the group label alone left them below the fold.
+    expand_and_scroll_to(&mut harness, SECTION_TONE_CURVE, "P0 (0.00)");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen,
+    // otherwise the golden below could pass on clipped (invisible) pixels.
+    assert_label_on_screen(&mut harness, "P0 (0.00)");
+    harness.snapshot("develop_section_tone_curve");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_detail() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Detail open: Sharpening + Noise Reduction sliders.
+    expand_and_scroll_to(&mut harness, SECTION_DETAIL, "Sharpening");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen.
+    assert_label_on_screen(&mut harness, "Sharpening");
+    harness.snapshot("develop_section_detail");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_effects() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Effects open: Vignette + Grain sliders ("Grain" is unique to
+    // this section; Optics uses "Vignette (light falloff)").
+    expand_and_scroll_to(&mut harness, SECTION_EFFECTS, "Grain");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen.
+    assert_label_on_screen(&mut harness, "Grain");
+    harness.snapshot("develop_section_effects");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_optics() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Optics open: lens profile picker + manual correction groups.
+    expand_and_scroll_to(&mut harness, SECTION_OPTICS, "Lens Correction");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen.
+    assert_label_on_screen(&mut harness, "Lens Correction");
+    harness.snapshot("develop_section_optics");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_optics2() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Optics open, scrolled to its lower half: the CA group + Lens
+    // Blur subgroup sit below the Vignette fold (`develop_section_optics`
+    // ends at Vignette C1). Lens Blur is a nested collapsing header
+    // (default closed) — scroll it into view first (a below-fold click
+    // would be discarded), then click it open so its controls render.
+    expand_and_scroll_to(&mut harness, SECTION_OPTICS, "Lens Blur");
+    let clicked = harness
+        .query_all_by_label("Lens Blur")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(clicked, "Lens Blur subgroup not found in headed harness");
+    harness.run();
+    // Re-scroll after expanding (the new content moved the layout), same
+    // 2-frame settle as `expand_and_scroll_to`.
+    let found = harness
+        .query_all_by_label("Lens Blur")
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(found, "scroll target \"Lens Blur\" lost after expanding");
+    harness.run();
+    harness.run();
+    // Non-vacuous guard: the subgroup header must actually be on-screen,
+    // otherwise the golden below could pass on clipped (invisible) pixels.
+    assert_label_on_screen(&mut harness, "Lens Blur");
+    harness.snapshot("develop_section_optics2");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_geometry() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Geometry open: Crop / Straighten / Perspective controls (no
+    // Auto-Upright control exists yet — LRPAR-G06-UPRIGHT-15, Release 1.5).
+    expand_and_scroll_to(&mut harness, SECTION_GEOMETRY, "Crop");
+    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen.
+    assert_label_on_screen(&mut harness, "Crop");
+    harness.snapshot("develop_section_geometry");
+}
+
+/// Open exactly one of the Presets / History / Rating Develop headers.
+///
+/// Those three are plain `ui.collapsing` headers *outside* the eight
+/// `section_open` F-100 sections, so `expand_and_scroll_to` cannot open
+/// them: all eight sections are closed via `set_section_open` and the
+/// target header is clicked open instead (default closed on a fresh
+/// harness). `target_label` is then scrolled into view with the same
+/// 2-frame settle as `expand_and_scroll_to` before snapshotting.
+fn open_collapsing_and_scroll_to(
+    harness: &mut Harness<'_, LuminaApp>,
+    header_label: &str,
+    target_label: &str,
+) {
+    for i in 0..SECTION_COUNT {
+        harness.state_mut().set_section_open(i, false);
+    }
+    // Layout frame so the accesskit tree contains the (closed) headers.
+    harness.run();
+    let clicked = harness
+        .query_all_by_label(header_label)
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        clicked,
+        "Develop header {header_label:?} not found in headed harness"
+    );
+    harness.run();
+    let found = harness
+        .query_all_by_label(target_label)
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        found,
+        "scroll target {target_label:?} not found in headed harness (header {header_label})"
+    );
+    // One frame dispatches the ScrollIntoView event, the second settles the
+    // scrolled layout before snapshotting.
+    harness.run();
+    harness.run();
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_presets() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only Presets open: file list + Create & Apply / Save-as-file buttons.
+    // No seed needed (the section renders without a document); the preset
+    // list itself mirrors the machine-global presets dir, so the folder row
+    // carries a machine-specific path (known risk, see report).
+    open_collapsing_and_scroll_to(&mut harness, "Presets", "Create & Apply Preset");
+    // Non-vacuous guard: the expanded section must expose its action row,
+    // otherwise the golden below could pass on a collapsed header.
+    assert_label_on_screen(&mut harness, "Create & Apply Preset");
+    harness.snapshot("develop_section_presets");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_history() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // `load_bytes` leaves `document` empty, and the History section shows
+    // "No sidecar loaded" without one — so seed an in-memory document plus
+    // one history step first. `create_mask` (pure session state, Masking
+    // precedent above) ensures the document; `create_preset`/`apply_preset`
+    // records `history-1` with `recorded_at: None` (deterministic label, no
+    // timestamp pixels) and only re-renders — no sidecar write, no disk.
+    harness
+        .state_mut()
+        .create_mask("Snapshot Seed")
+        .expect("seed mask entry");
+    let preset = harness
+        .state_mut()
+        .create_preset("Snapshot Seed")
+        .expect("seed preset");
+    harness
+        .state_mut()
+        .apply_preset(&preset)
+        .expect("seed history entry");
+    // Only History open: the recorded entry row.
+    open_collapsing_and_scroll_to(&mut harness, "History", "1. history-1");
+    // Non-vacuous guard: the entry row must actually be on-screen.
+    assert_label_on_screen(&mut harness, "1. history-1");
+    harness.snapshot("develop_section_history");
+}
+
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_rating() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Same in-memory document seed as History (`draw_rating_section`
+    // shows "No sidecar loaded" without one). Deliberately no
+    // `set_rating`: it calls `save_sidecar` (disk write) — rating 0 already
+    // renders the star / flag / color-label rows deterministically.
+    harness
+        .state_mut()
+        .create_mask("Snapshot Seed")
+        .expect("seed mask entry");
+    // Only Rating open: star buttons + flag + color-label rows.
+    open_collapsing_and_scroll_to(&mut harness, "Rating", "Color Label");
+    // Non-vacuous guard: the color-label row must actually be on-screen.
+    assert_label_on_screen(&mut harness, "Color Label");
+    harness.snapshot("develop_section_rating");
 }
 
 #[test]

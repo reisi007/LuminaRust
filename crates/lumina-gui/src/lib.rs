@@ -13304,41 +13304,43 @@ impl LuminaApp {
                     }
                 });
             }
-            ui.horizontal(|ui| {
-                let mut input = self.tone_curve_new_input;
-                let mut output = self.tone_curve_new_output;
-                let changed_input = matches!(
-                    lr_slider(
-                        ui,
-                        &Str::ToneCurvePointInput.format_arg(""),
-                        &mut input,
-                        identity_spec(0.0..=1.0, 0.5, 0.01)
-                    ),
-                    SliderAction::Changed | SliderAction::ResetRequested
+            // New-point editor: one control per row. Two side-by-side
+            // `lr_slider`s forced the resizable right panel to ~540px min
+            // width (squeezing the preview to ~100px at 1024x720) — stack
+            // them instead. Same setters, same behavior, layout only.
+            let mut input = self.tone_curve_new_input;
+            let mut output = self.tone_curve_new_output;
+            let changed_input = matches!(
+                lr_slider(
+                    ui,
+                    &Str::ToneCurvePointInput.format_arg(""),
+                    &mut input,
+                    identity_spec(0.0..=1.0, 0.5, 0.01)
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
+            );
+            let changed_output = matches!(
+                lr_slider(
+                    ui,
+                    &Str::ToneCurvePointOutput.format_arg(""),
+                    &mut output,
+                    identity_spec(0.0..=1.0, 0.5, 0.01)
+                ),
+                SliderAction::Changed | SliderAction::ResetRequested
+            );
+            if changed_input {
+                self.tone_curve_new_input = input;
+            }
+            if changed_output {
+                self.tone_curve_new_output = output;
+            }
+            if ui.button(Str::ToneCurveAddPoint.t()).clicked() {
+                self.add_curve_point(
+                    channel,
+                    f64::from(self.tone_curve_new_input),
+                    f64::from(self.tone_curve_new_output),
                 );
-                let changed_output = matches!(
-                    lr_slider(
-                        ui,
-                        &Str::ToneCurvePointOutput.format_arg(""),
-                        &mut output,
-                        identity_spec(0.0..=1.0, 0.5, 0.01)
-                    ),
-                    SliderAction::Changed | SliderAction::ResetRequested
-                );
-                if changed_input {
-                    self.tone_curve_new_input = input;
-                }
-                if changed_output {
-                    self.tone_curve_new_output = output;
-                }
-                if ui.button(Str::ToneCurveAddPoint.t()).clicked() {
-                    self.add_curve_point(
-                        channel,
-                        f64::from(self.tone_curve_new_input),
-                        f64::from(self.tone_curve_new_output),
-                    );
-                }
-            });
+            }
         });
         if section_response.header_response.clicked() {
             self.set_section_open(SECTION_TONE_CURVE, !section_was_open);
