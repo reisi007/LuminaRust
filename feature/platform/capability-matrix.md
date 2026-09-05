@@ -23,6 +23,8 @@ CLI und nativer Desktop-GUI.
 | Persistente AI-Masken | post-MVP | post-MVP |
 | Export (PNG/JPEG/WebP) | ja | ja |
 | IPTC-/XMP-Metadaten in JPEG-Exporte (`--write-metadata`, Opt-in) | ja (LRPAR-G15-IPTC) | ja (Metadaten-Panel) |
+| HDR-Merge → lineares DNG (`merge-hdr`, LRPAR-G13-MERGE-15) | ja (nativ, `lumina-merge` + DNG-Writer, 1.5) | geplant 1.5 (gleicher Einstiegspunkt, Jobsteuerung in GUI) |
+| Panorama-Merge → lineares DNG (`merge-pano`, LRPAR-G13-MERGE-15) | ja (nativ, gleicher Scope wie oben) | geplant 1.5 |
 | Optionale zentrale Indizierung (`lumina-index`) | post-MVP (optional) | post-MVP (optional) |
 
 ## RAW-Backend (nativ)

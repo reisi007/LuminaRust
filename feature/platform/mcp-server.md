@@ -8,6 +8,11 @@ Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
 in `lumina-cli`, Default an). Insgesamt 12 Tools. Verträge und dokumentierte
 Grenzen: Abschnitt „Erweiterter MVP-Scope“.
+**LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
+pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
+`lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
+`lumina_batch_sync_metadata`, `lumina_trigger_export`, s. Abschnitt
+„Metadaten-Schnittstelle“) — aktueller Gesamtstand: **17 Tools**.
 Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes

@@ -12,6 +12,12 @@ lumina-core = { path = "../lumina-core" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-onnx = { path = "../lumina-onnx" }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr`/`merge-pano` consume alignment,
+# merge, digest and the linear-DNG writer from `lumina-merge` (pure Rust, no
+# native dependency, no capability gate). The CLI adds orchestration only
+# (decode via `lumina-raw`/core, sidecar bundle, exit codes) — no second
+# image-processing implementation.
+lumina-merge = { path = "../lumina-merge" }
 # LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `lumina meta inspect`.
 lumina-iptc = { path = "../lumina-iptc" }
 # F-098-N2: optional Lensfun dependency so the CLI can build a corrector from

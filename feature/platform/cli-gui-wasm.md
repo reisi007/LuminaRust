@@ -204,6 +204,55 @@ hier nur genutzt — keine Schemaänderung, kein Bump.
   (`keywords`, `collections`) nutzen `0`/`1`; Mehrdatei-Befehle
   (`batch-meta`, `smart-collections`) melden Teilfehler mit `3`.
 
+### HDR-/Panorama-Merge (G-13, Release 1.5: CLI, LRPAR-G13-MERGE-15)
+
+Normativer CLI-SOLL für den Merge-Mehrbild-Vorlauf (Entscheid:
+`decisions/LRPAR-G13-MERGE-15.md`). Beide Befehle rufen denselben
+Merge-Einstiegspunkt auf wie die GUI-Aktionen `Cmd/Ctrl+H`/`Cmd/Ctrl+M`
+(keine GUI-eigene Bildlogik). Quell-Sidecars werden nie verändert; das
+Merge-Ergebnis ist ein neues lineares DNG plus eigenes Sidecar-Bundle.
+
+- `lumina merge-hdr --input <a> --input <b> [--input <c>...]
+  [--exposure-times <s,s,...>] [--isos <n,n,...>] [--f-numbers <f,f,...>]
+  [--max-shift-px <n>] [--output <dng>] [--force] [--json]`: führt eine
+  Belichtungsreihe (mindestens 2, höchstens 256 Quellen) zu einem linearen
+  DNG zusammen (Translation-Ausgleich via `lumina-merge`, gewichtetes
+  lineares Merge). Belichtungswerte kommen je Quelle aus den expliziten
+  Listen (Reihenfolge = `--input`-Reihenfolge) oder — nur bei RAW-Quellen —
+  aus deren EXIF (`shutter`/`iso`/`aperture`); fehlt beides, scheitert der
+  Lauf laut als `unsupported` (kein Raten aus Pixeln). Eine Restverschiebung
+  über der dokumentierten Schwelle (`HDR_SHIFT_WARN_PX`) meldet eine
+  sichtbare Warnung (`aligned_with_residual`), bricht aber nicht ab.
+- `lumina merge-pano --input <a> --input <b> [--input <c>...]
+  [--max-shift-px <n>] [--blend-width-px <n>] [--output <dng>] [--force]
+  [--json]`: richtet überlappende Einzelbilder aus (verkettete
+  Translation+Rotation-light-Homographie, nur zylindrische Projektion) und
+  verbindet sie mit Feder-Blend im Überlapp. Nicht überlappende oder nicht
+  verkettbare Sätze scheitern laut als `unsupported` (kein Teil-Panorama).
+  Belichtung fließt nicht in die Panorama-Pixel ein; je Quelle wird die
+  EXIF-Belichtung — oder, falls keine vorhanden, der dokumentierte neutrale
+  Default (0,01 s, ISO 100, f/8) — nur als Provenienz im Rezept gespeichert.
+- **Ausgabe:** Standardmäßig `<Basis>-HDR.dng` / `<Basis>-Pano.dng` neben
+  der Referenzquelle (erste `--input`; Namensregel `merge_dng_filename`),
+  dazu `<basis>.dng.lumina.json` (via `sidecar_path_for`): volles
+  Sidecar-Dokument (Standardkopie mit eigenem Rezept) plus
+  `"type": "merge"`-Envelope auf Dokument-Ebene, `merge_recipe`
+  (`merge_version` 1, Modus, Quellen mit BLAKE3-Hash/Decode-Kontext/
+  Belichtung, Alignment, Status) und DNG-Artefaktverweis (relativer Pfad,
+  Format `dng`, BLAKE3-Prüfsumme, Auflösung, Kanäle `rgb16`,
+  Datenversion `1`). Quellenverweise sind relativ zum Sidecar-Bundle
+  (gleiche Datei → Dateiname; Unterverzeichnis → `sub/datei`); Quellen
+  außerhalb des Bundle-Verzeichnisses scheitern laut als `unsupported`
+  (das Schema verbietet `..`-Segmente und absolute Pfade). DNG und Sidecar
+  werden atomar geschrieben (Temp-Datei + Rename).
+- **Status/Exit-Codes (Ergänzung zur Tabelle oben):** `0` Erfolg (auch
+  „Bundle bereits aktuell" ohne Rewrite); `1` mit klarem stderr-Präfix bei
+  `merge missing:` (Quelle/DNG/Sidecar fehlt), `merge stale:` (bestehendes
+  Bundle, aber Quell-Hash, Decode-Kontext oder DNG-Prüfsumme weichen vom
+  gespeicherten Digest ab — nur mit `--force` neu erzeugen, nie still) und
+  `merge unsupported:` (Decode-, Geometrie-, Belichtungs-, Dimensions- oder
+  Writer-Grenze); `2` bei clap-Benutzungsfehlern.
+
 ## Desktop-GUI
 
 Die GUI zeigt Datei-, Sidecar-, Offline-, Masken- und Konfliktstatus. Vorschau

@@ -64,6 +64,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+// LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands
+// (orchestration; alignment/merge/DNG live in `lumina-merge`).
+mod merge;
+
 /// Minimal stderr logger installed once so the backend-selection `info!` is
 /// actually visible. It only installs when no other logger has been registered
 /// in this process (so an embedding application that installs its own is
@@ -355,6 +359,15 @@ enum Command {
     /// stdin/stdout). Takes no arguments; see `feature/platform/mcp-server.md`.
     #[cfg(feature = "mcp")]
     Mcp,
+    /// LRPAR-G13-MERGE-15 (G-13, Release 1.5): merge an exposure bracket
+    /// into one linear DNG (`Cmd/Ctrl+H` GUI action shares the entry
+    /// point). See [`merge::MergeArgs`] and
+    /// `feature/platform/cli-gui-wasm.md` § „HDR-/Panorama-Merge".
+    MergeHdr(merge::MergeArgs),
+    /// LRPAR-G13-MERGE-15 (G-13, Release 1.5): merge overlapping frames
+    /// into one linear DNG (`Cmd/Ctrl+M` GUI action shares the entry
+    /// point). See [`merge::MergeArgs`].
+    MergePano(merge::MergeArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1340,6 +1353,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Meta(args) => meta(args),
         Command::Previous(args) => previous(args),
         Command::Relocate(args) => relocate(args),
+        Command::MergeHdr(args) => merge::merge_hdr(args),
+        Command::MergePano(args) => merge::merge_pano(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -7679,8 +7694,9 @@ mod tests {
             .expect("tools/list expects a response");
         let tools = listing["result"]["tools"].as_array().unwrap();
         // Drift guard pinned to the SOLL (feature/platform/mcp-server.md):
-        // 7 editing tools + lumina_analyze + 4 F-101-F1 CLI-coverage tools.
-        assert_eq!(tools.len(), 12, "tool set drifted; update SOLL + tests");
+        // 7 editing tools + lumina_analyze + 4 F-101-F1 CLI-coverage tools
+        // + 5 LRPAR-G15-IPTC-S7 metadata tools.
+        assert_eq!(tools.len(), 17, "tool set drifted; update SOLL + tests");
     }
 
     /// R2-WB (parity with lumina-gui): non-finite or non-positive As-Shot gains

@@ -2140,6 +2140,7 @@ dependencies = [
  "lumina-iptc",
  "lumina-lensfun",
  "lumina-mcp",
+ "lumina-merge",
  "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",

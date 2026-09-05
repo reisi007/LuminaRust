@@ -150,6 +150,7 @@ Sidecars vollständig wiederherstellbar sein.
 | GEN-EXPAND-1 | Generatives Entfernen + Erweitern | [Generative Expand](product/generative-expand.md) | hoch |
 | SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
 | LRPAR-G15-IPTC-1 | IPTC-Metadaten (Draft, Presets, Sync, JPEG-Bake-In) | [IPTC Metadaten](product/iptc-metadata.md) | hoch |
+| LRPAR-G13-MERGE-15 | HDR-/Panorama-Merge (G-13, Release 1.5): Merge-Rezept-Schema, `lumina-merge`-Alignment, linearer DNG-Writer + Re-Import, CLI `merge-hdr`/`merge-pano`, GUI-Aktionen, Golden-Gates | [HDR-/Panorama-Merge](decisions/LRPAR-G13-MERGE-15.md) | hoch |
 
 ## Arbeitsweise
 
