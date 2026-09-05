@@ -952,6 +952,12 @@ impl ImageFrame {
                 effective_scale,
             );
         }
+        // LRPAR-G14-REDEYE-15: red-eye correction runs after sharpening and
+        // before effects (F-097), so grain applies uniformly over corrected
+        // pupils. The pixel tuple is unchanged.
+        if let Some(red_eye) = &recipe.red_eye {
+            apply_red_eye(&mut self.pixels, self.width, self.height, red_eye);
+        }
         // F-097: vignette + grain are the LAST sub-stage of `Adjustments`,
         // after sharpening and before masks / crop. The pixel tuple is unchanged.
         if let Some(effects) = &recipe.effects {
@@ -2104,6 +2110,57 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
             }
         }
     }
+    // LRPAR-G14-REDEYE-15: out-of-range or non-finite values are rejected
+    // loudly, never clipped; regions are identified by stable unique ids.
+    if let Some(r) = &recipe.red_eye {
+        if r.version != 1 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "red_eye.version".into(),
+                value: r.version as f64,
+                minimum: 1.0,
+                maximum: 1.0,
+            });
+        }
+        if r.regions.len() > lumina_sidecar::RED_EYE_MAX_REGIONS {
+            return Err(CoreError::InvalidAdjustment {
+                name: "red_eye.regions".into(),
+                value: r.regions.len() as f64,
+                minimum: 0.0,
+                maximum: lumina_sidecar::RED_EYE_MAX_REGIONS as f64,
+            });
+        }
+        let mut seen = std::collections::HashSet::new();
+        for region in &r.regions {
+            if region.id.is_empty() || !seen.insert(region.id.clone()) {
+                return Err(CoreError::UnsupportedAdjustment {
+                    key: format!("red_eye region id `{}` (empty or duplicate)", region.id),
+                });
+            }
+            for (field, value, lo, hi) in [
+                ("x", region.x, 0.0_f32, 1.0_f32),
+                ("y", region.y, 0.0_f32, 1.0_f32),
+                ("desaturate", region.desaturate, 0.0_f32, 1.0_f32),
+                ("darken", region.darken, 0.0_f32, 1.0_f32),
+            ] {
+                if !value.is_finite() || !(lo..=hi).contains(&value) {
+                    return Err(CoreError::InvalidAdjustment {
+                        name: format!("red_eye.{}.{}", region.id, field),
+                        value: value as f64,
+                        minimum: lo as f64,
+                        maximum: hi as f64,
+                    });
+                }
+            }
+            if !region.radius.is_finite() || region.radius <= 0.0 || region.radius > 1.0 {
+                return Err(CoreError::InvalidAdjustment {
+                    name: format!("red_eye.{}.radius", region.id),
+                    value: region.radius as f64,
+                    minimum: f32::MIN_POSITIVE as f64,
+                    maximum: 1.0,
+                });
+            }
+        }
+    }
     if let Some(e) = &recipe.effects {
         if let Some(v) = &e.vignette {
             if v.version != 1 {
@@ -2438,6 +2495,83 @@ fn apply_noise_reduction(
             for c in 0..3 {
                 pixels[i + c] = out[c].round().clamp(0.0, 255.0) as u8;
             }
+        }
+    }
+}
+
+/// LRPAR-G14-REDEYE-15 (Release 1.5): deterministic red-eye correction.
+///
+/// Each region is a normalized pupil center (`x * width`, `y * height`) with
+/// a pixel radius of `radius * min(width, height)`. A pixel's correction
+/// weight is its red-dominance
+/// (`clamp((R - max(G, B)) / max(R, ε), 0, 1)`, so grey and non-red pixels
+/// are untouched) times a spatial falloff (full strength inside 75 % of the
+/// radius, linear falloff to the edge). Desaturation pulls the red channel
+/// toward the Rec.709 luminance; darkening scales all three channels. Alpha
+/// is preserved; results are rounded and clipped to `0..=255`. An empty
+/// region list (or only zero strengths) is identity. Pure, platform-neutral
+/// arithmetic: no FS/IO, no randomness — identical inputs render
+/// byte-identical outputs.
+fn apply_red_eye(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    red_eye: &lumina_sidecar::RedEyeCorrection,
+) {
+    if red_eye.regions.is_empty() {
+        return;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+    if red_eye
+        .regions
+        .iter()
+        .all(|r| r.desaturate == 0.0 && r.darken == 0.0)
+    {
+        return;
+    }
+    let min_dim = w.min(h) as f32;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            let r = pixels[i] as f32 / 255.0;
+            let g = pixels[i + 1] as f32 / 255.0;
+            let b = pixels[i + 2] as f32 / 255.0;
+            let redness = ((r - g.max(b)) / r.max(1e-3)).clamp(0.0, 1.0);
+            if redness <= 0.0 {
+                continue;
+            }
+            let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let (mut out_r, mut out_g, mut out_b) = (r, g, b);
+            for region in &red_eye.regions {
+                let cx = region.x * w as f32;
+                let cy = region.y * h as f32;
+                let radius_px = region.radius * min_dim;
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cy;
+                let dist = dx.hypot(dy);
+                if dist > radius_px {
+                    continue;
+                }
+                // Full strength inside 75 % of the radius, linear falloff to
+                // the edge (guarded against a degenerate zero radius, which
+                // validation rejects but costs nothing to tolerate here).
+                let feather = (radius_px * 0.25).max(1e-6);
+                let falloff = ((radius_px - dist) / feather).clamp(0.0, 1.0);
+                let desat_k = region.desaturate * falloff * redness;
+                out_r += (luminance - out_r) * desat_k;
+                let darken_k = region.darken * falloff * redness;
+                let factor = 1.0 - darken_k;
+                out_r *= factor;
+                out_g *= factor;
+                out_b *= factor;
+            }
+            pixels[i] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
+            pixels[i + 1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
+            pixels[i + 2] = (out_b.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
     }
 }
@@ -5208,6 +5342,209 @@ mod tests {
         c.apply_recipe(&r).unwrap();
         assert_eq!(once, c.pixels);
         assert_eq!(&once[3..4], &[9]);
+    }
+
+    // ---- LRPAR-G14-REDEYE-15: red-eye correction stage ----
+
+    fn red_eye_recipe(desaturate: f32, darken: f32) -> EditRecipe {
+        EditRecipe {
+            red_eye: Some(lumina_sidecar::RedEyeCorrection {
+                version: 1,
+                regions: vec![lumina_sidecar::RedEyeRegion {
+                    id: "re-1".into(),
+                    x: 0.5,
+                    y: 0.5,
+                    radius: 0.4,
+                    desaturate,
+                    darken,
+                }],
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// 8x8 frame: red pupil block in the center, grey surround, distinct
+    /// alphas (alpha must survive the stage untouched).
+    fn red_eye_frame() -> (ImageFrame, usize) {
+        let mut pixels = Vec::new();
+        for y in 0..8usize {
+            for x in 0..8usize {
+                let pupil = (3..=4).contains(&x) && (3..=4).contains(&y);
+                if pupil {
+                    pixels.extend_from_slice(&[220, 30, 40, 200]);
+                } else {
+                    pixels.extend_from_slice(&[120, 120, 120, 77]);
+                }
+            }
+        }
+        let center = (3 * 8 + 3) * 4;
+        (ImageFrame::new(8, 8, pixels).unwrap(), center)
+    }
+
+    #[test]
+    fn red_eye_identity_and_determinism_and_alpha() {
+        let (frame, _) = red_eye_frame();
+        // `None` is identity.
+        let mut none = frame.clone();
+        none.apply_recipe(&EditRecipe::default()).unwrap();
+        assert_eq!(none.pixels, frame.pixels);
+        // Empty region list is identity.
+        let mut empty = frame.clone();
+        empty
+            .apply_recipe(&EditRecipe {
+                red_eye: Some(lumina_sidecar::RedEyeCorrection {
+                    version: 1,
+                    regions: Vec::new(),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(empty.pixels, frame.pixels);
+        // Zero strengths are identity.
+        let mut zero = frame.clone();
+        zero.apply_recipe(&red_eye_recipe(0.0, 0.0)).unwrap();
+        assert_eq!(zero.pixels, frame.pixels);
+        // Determinism: two runs are byte-identical, alpha preserved.
+        let recipe = red_eye_recipe(1.0, 0.5);
+        let mut a = frame.clone();
+        a.apply_recipe(&recipe).unwrap();
+        let mut b = frame.clone();
+        b.apply_recipe(&recipe).unwrap();
+        assert_eq!(a.pixels, b.pixels);
+        for pixel in a.pixels.as_chunks::<4>().0 {
+            assert!(pixel[3] == 200 || pixel[3] == 77);
+        }
+    }
+
+    #[test]
+    fn red_eye_corrects_red_pupil_and_spares_grey() {
+        let (frame, center) = red_eye_frame();
+        let mut corrected = frame.clone();
+        corrected.apply_recipe(&red_eye_recipe(1.0, 0.0)).unwrap();
+        // Red pupil pixel: red channel pulled toward luminance (down),
+        // green/blue unchanged by desaturation alone.
+        assert!(corrected.pixels[center] < frame.pixels[center]);
+        assert_eq!(corrected.pixels[center + 1], frame.pixels[center + 1]);
+        assert_eq!(corrected.pixels[center + 2], frame.pixels[center + 2]);
+        // Grey surround pixel far from the pupil is untouched.
+        assert_eq!(&corrected.pixels[..4], &frame.pixels[..4]);
+        // Darkening additionally lowers all three channels of the pupil.
+        let mut darkened = frame.clone();
+        darkened.apply_recipe(&red_eye_recipe(1.0, 1.0)).unwrap();
+        assert!(darkened.pixels[center] <= corrected.pixels[center]);
+        assert!(darkened.pixels[center + 1] <= frame.pixels[center + 1]);
+        assert!(darkened.pixels[center + 2] <= frame.pixels[center + 2]);
+    }
+
+    #[test]
+    fn red_eye_monotonicity_and_clipping() {
+        let (frame, center) = red_eye_frame();
+        // Monotonicity over the full strength grid: stronger desaturation
+        // never raises the red channel, stronger darkening never raises any
+        // channel; every output stays within `0..=255` (clipping property).
+        let mut prev_r = u8::MAX;
+        for step in 0..=10 {
+            let s = step as f32 / 10.0;
+            let mut f = frame.clone();
+            f.apply_recipe(&red_eye_recipe(s, 0.0)).unwrap();
+            assert!(f.pixels[center] <= prev_r);
+            prev_r = f.pixels[center];
+        }
+        let mut prev = [u8::MAX; 3];
+        for step in 0..=10 {
+            let s = step as f32 / 10.0;
+            let mut f = frame.clone();
+            f.apply_recipe(&red_eye_recipe(1.0, s)).unwrap();
+            assert!(f.pixels[center] <= prev[0]);
+            assert!(f.pixels[center + 1] <= prev[1]);
+            assert!(f.pixels[center + 2] <= prev[2]);
+            prev = [f.pixels[center], f.pixels[center + 1], f.pixels[center + 2]];
+        }
+        // Value-range sweep: every channel combination in a tiny frame stays
+        // in range and alpha is preserved under full strength.
+        for v in [0u8, 1, 127, 128, 254, 255] {
+            let input = vec![v, v, v, 9, 255, 0, 0, 10, 0, 255, 0, 11];
+            let mut f = ImageFrame::new(3, 1, input.clone()).unwrap();
+            f.apply_recipe(&red_eye_recipe(1.0, 1.0)).unwrap();
+            assert_eq!(&f.pixels[3..4], &[9]);
+            assert_eq!(&f.pixels[7..8], &[10]);
+            assert_eq!(&f.pixels[11..12], &[11]);
+        }
+        // Pure-red pixel under full correction: red dominance is removed
+        // deterministically (desaturate pulls R toward luminance, darken
+        // scales the rest to black).
+        let mut f = ImageFrame::new(1, 1, vec![255, 0, 0, 255]).unwrap();
+        f.apply_recipe(&EditRecipe {
+            red_eye: Some(lumina_sidecar::RedEyeCorrection {
+                version: 1,
+                regions: vec![lumina_sidecar::RedEyeRegion {
+                    id: "re-1".into(),
+                    x: 0.0,
+                    y: 0.0,
+                    radius: 1.0,
+                    desaturate: 1.0,
+                    darken: 1.0,
+                }],
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(f.pixels, vec![0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn red_eye_validation_rejects_invalid_values() {
+        // Unsupported version.
+        let mut recipe = red_eye_recipe(0.5, 0.5);
+        recipe.red_eye.as_mut().unwrap().version = 2;
+        assert!(ImageFrame::new(1, 1, vec![10, 10, 10, 255])
+            .unwrap()
+            .apply_recipe(&recipe)
+            .is_err());
+        // Each out-of-range / non-finite mutation fails loudly.
+        for mutate in [
+            |r: &mut lumina_sidecar::RedEyeRegion| r.x = 2.0,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.y = f32::NAN,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.radius = 0.0,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.radius = 1.1,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.radius = f32::INFINITY,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.desaturate = -1.0,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.desaturate = f32::NAN,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.darken = 1.5,
+            |r: &mut lumina_sidecar::RedEyeRegion| r.darken = f32::NEG_INFINITY,
+        ] {
+            let mut candidate = red_eye_recipe(0.5, 0.5);
+            mutate(&mut candidate.red_eye.as_mut().unwrap().regions[0]);
+            assert!(ImageFrame::new(1, 1, vec![10, 10, 10, 255])
+                .unwrap()
+                .apply_recipe(&candidate)
+                .is_err());
+        }
+        // Empty and duplicate ids are rejected.
+        let mut candidate = red_eye_recipe(0.5, 0.5);
+        candidate.red_eye.as_mut().unwrap().regions[0].id.clear();
+        assert!(ImageFrame::new(1, 1, vec![10, 10, 10, 255])
+            .unwrap()
+            .apply_recipe(&candidate)
+            .is_err());
+        let mut candidate = red_eye_recipe(0.5, 0.5);
+        candidate
+            .red_eye
+            .as_mut()
+            .unwrap()
+            .regions
+            .push(lumina_sidecar::RedEyeRegion {
+                id: "re-1".into(),
+                x: 0.1,
+                y: 0.1,
+                radius: 0.1,
+                desaturate: 0.5,
+                darken: 0.5,
+            });
+        assert!(ImageFrame::new(1, 1, vec![10, 10, 10, 255])
+            .unwrap()
+            .apply_recipe(&candidate)
+            .is_err());
     }
 
     #[test]

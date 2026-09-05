@@ -948,6 +948,9 @@ pub struct EditRecipe {
     pub presence: Option<Presence>,
     pub noise_reduction: Option<NoiseReduction>,
     pub sharpening: Option<Sharpening>,
+    /// Optional G-14 red-eye correction (LRPAR-G14-REDEYE-15, Release 1.5).
+    /// Additive in schema v2; absent is identity and requires no migration.
+    pub red_eye: Option<RedEyeCorrection>,
     /// Optional top-level geometric transform. Absent is the identity.
     pub geometry: Option<Geometry>,
     /// Optional F-098 lens model, additive in schema v2.
@@ -1037,6 +1040,12 @@ impl Serialize for EditRecipe {
             adjustment.insert(
                 "sharpening".into(),
                 serde_json::to_value(sharpening).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(red_eye) = &self.red_eye {
+            adjustment.insert(
+                "red_eye".into(),
+                serde_json::to_value(red_eye).map_err(serde::ser::Error::custom)?,
             );
         }
         if let Some(geometry) = &self.geometry {
@@ -1134,6 +1143,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut presence = None;
         let mut noise_reduction = None;
         let mut sharpening = None;
+        let mut red_eye = None;
         let geometry = root
             .remove("geometry")
             .map(serde_json::from_value)
@@ -1212,6 +1222,9 @@ impl<'de> Deserialize<'de> for EditRecipe {
             if let Some(value) = object.remove("sharpening") {
                 sharpening = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
+            if let Some(value) = object.remove("red_eye") {
+                red_eye = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
             for (key, value) in object {
                 adjustments.insert(
                     key,
@@ -1251,6 +1264,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             presence,
             noise_reduction,
             sharpening,
+            red_eye,
             geometry,
             lens_correction,
             perspective,
@@ -1444,6 +1458,43 @@ pub struct Sharpening {
     pub detail: f32,
     pub masking: f32,
 }
+
+/// LRPAR-G14-REDEYE-15 (Release 1.5): a single persisted red-eye correction
+/// region. `x`/`y` is the normalized pupil center (`0..=1`, mapping to
+/// `x * width` / `y * height` in pixels); `radius` is normalized
+/// (`0 < radius <= 1`, pixel radius `radius * min(width, height)`).
+/// `desaturate`/`darken` are per-region correction strengths (`0..=1`,
+/// `0` = no effect). Regions are identified by their stable `id`, never by
+/// their list position. See `feature/architecture/pipeline.md` § G-14.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedEyeRegion {
+    /// Stable id, unique within the recipe (e.g. `re-1`).
+    pub id: String,
+    /// Normalized pupil-center x (`0..=1`).
+    pub x: f32,
+    /// Normalized pupil-center y (`0..=1`).
+    pub y: f32,
+    /// Normalized radius (`0 < radius <= 1`).
+    pub radius: f32,
+    /// Desaturation strength (`0..=1`).
+    pub desaturate: f32,
+    /// Darkening strength (`0..=1`).
+    pub darken: f32,
+}
+
+/// LRPAR-G14-REDEYE-15 (Release 1.5): red-eye correction recipe stage.
+/// Additive in schema v2; absent is identity and requires no migration.
+/// Serialized into the `adjustments` map (like `noise_reduction`);
+/// `None`/empty is identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedEyeCorrection {
+    pub version: u8,
+    #[serde(default)]
+    pub regions: Vec<RedEyeRegion>,
+}
+
+/// LRPAR-G14-REDEYE-15: maximum number of persisted red-eye regions.
+pub const RED_EYE_MAX_REGIONS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Geometry {
@@ -1643,6 +1694,7 @@ impl Default for EditRecipe {
             presence: None,
             noise_reduction: None,
             sharpening: None,
+            red_eye: None,
             geometry: None,
             lens_correction: None,
             perspective: None,
@@ -4357,6 +4409,35 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    // LRPAR-G14-REDEYE-15: out-of-range or non-finite values are rejected
+    // loudly, never clipped; regions are identified by stable unique ids.
+    if let Some(r) = &a.red_eye {
+        if r.version != 1 {
+            return invalid("unsupported red_eye version");
+        }
+        if r.regions.len() > RED_EYE_MAX_REGIONS {
+            return invalid("too many red_eye regions (max 32)");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for region in &r.regions {
+            if region.id.is_empty() || !seen.insert(region.id.clone()) {
+                return invalid("invalid red_eye region id (empty or duplicate)");
+            }
+            for (field, v) in [("x", region.x), ("y", region.y)] {
+                if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                    return invalid(format!("invalid red_eye {} {field}", region.id));
+                }
+            }
+            if !region.radius.is_finite() || region.radius <= 0.0 || region.radius > 1.0 {
+                return invalid(format!("invalid red_eye {} radius", region.id));
+            }
+            for (field, v) in [("desaturate", region.desaturate), ("darken", region.darken)] {
+                if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                    return invalid(format!("invalid red_eye {} {field}", region.id));
+                }
+            }
+        }
+    }
     if let Some(g) = &a.geometry {
         if g.version != 1
             || !g.rotation_degrees.is_finite()
@@ -4773,6 +4854,7 @@ mod tests {
                 presence: None,
                 noise_reduction: None,
                 sharpening: None,
+                red_eye: None,
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
@@ -4812,6 +4894,7 @@ mod tests {
                     presence: None,
                     noise_reduction: None,
                     sharpening: None,
+                    red_eye: None,
                     geometry: None,
                     lens_correction: None,
                     perspective: None,
@@ -4849,6 +4932,7 @@ mod tests {
                 presence: None,
                 noise_reduction: None,
                 sharpening: None,
+                red_eye: None,
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
@@ -6013,6 +6097,115 @@ mod tests {
             color: 0.0,
         });
         assert!(d.validate().is_err());
+    }
+
+    // ---- LRPAR-G14-REDEYE-15: red_eye recipe schema field ----
+
+    fn red_eye_region(id: &str) -> RedEyeRegion {
+        RedEyeRegion {
+            id: id.into(),
+            x: 0.25,
+            y: 0.35,
+            radius: 0.05,
+            desaturate: 0.8,
+            darken: 0.4,
+        }
+    }
+
+    #[test]
+    fn red_eye_roundtrip_and_validate_ranges() {
+        let recipe = EditRecipe {
+            red_eye: Some(RedEyeCorrection {
+                version: 1,
+                regions: vec![red_eye_region("re-1"), red_eye_region("re-2")],
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        // `red_eye` lives inside `adjustments` (like `noise_reduction`).
+        assert!(value["adjustments"]["red_eye"].is_object());
+        assert_eq!(
+            value["adjustments"]["red_eye"]["regions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(recipe, serde_json::from_value(value).unwrap());
+
+        // Absent key stays absent (additive, legacy identity, no migration).
+        let legacy = serde_json::json!({
+            "recipe_version": "1",
+            "adjustments": {},
+            "options": {},
+            "auto_features": {"enable_auto_tone": false, "match_total_exposure": false, "target_luminance": 0.5},
+        });
+        let decoded: EditRecipe = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.red_eye.is_none());
+        assert!(validate_adjustments(&decoded).is_ok());
+
+        // Empty region list roundtrips and validates (identity).
+        let empty = EditRecipe {
+            red_eye: Some(RedEyeCorrection {
+                version: 1,
+                regions: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&empty).unwrap();
+        assert_eq!(empty, serde_json::from_value(value).unwrap());
+        assert!(validate_adjustments(&empty).is_ok());
+
+        // Unknown version is rejected loudly.
+        let mut bad = SidecarDocument::new(source(), "pipeline-1");
+        bad.virtual_copies[0].recipe.red_eye = Some(RedEyeCorrection {
+            version: 2,
+            regions: vec![red_eye_region("re-1")],
+        });
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn red_eye_rejects_out_of_range_and_nan() {
+        let recipe = EditRecipe {
+            red_eye: Some(RedEyeCorrection {
+                version: 1,
+                regions: vec![red_eye_region("re-1")],
+            }),
+            ..Default::default()
+        };
+        // Each invalid mutation fails loudly instead of being clipped.
+        for mutate in [
+            |r: &mut RedEyeRegion| r.x = 1.5,
+            |r: &mut RedEyeRegion| r.y = -0.1,
+            |r: &mut RedEyeRegion| r.x = f32::NAN,
+            |r: &mut RedEyeRegion| r.radius = 0.0,
+            |r: &mut RedEyeRegion| r.radius = 1.5,
+            |r: &mut RedEyeRegion| r.radius = f32::INFINITY,
+            |r: &mut RedEyeRegion| r.desaturate = -0.1,
+            |r: &mut RedEyeRegion| r.desaturate = 1.1,
+            |r: &mut RedEyeRegion| r.desaturate = f32::NAN,
+            |r: &mut RedEyeRegion| r.darken = 2.0,
+            |r: &mut RedEyeRegion| r.darken = f32::NAN,
+        ] {
+            let mut candidate = recipe.clone();
+            mutate(&mut candidate.red_eye.as_mut().unwrap().regions[0]);
+            assert!(validate_adjustments(&candidate).is_err());
+        }
+        // Empty and duplicate ids are rejected.
+        let mut candidate = recipe.clone();
+        candidate.red_eye.as_mut().unwrap().regions[0].id.clear();
+        assert!(validate_adjustments(&candidate).is_err());
+        let mut candidate = recipe.clone();
+        candidate
+            .red_eye
+            .as_mut()
+            .unwrap()
+            .regions
+            .push(red_eye_region("re-1"));
+        assert!(validate_adjustments(&candidate).is_err());
+        // The valid recipe passes.
+        assert!(validate_adjustments(&recipe).is_ok());
     }
 
     // ---- F-097: effects (vignette + grain) recipe schema field ----

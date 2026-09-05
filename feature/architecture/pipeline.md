@@ -659,6 +659,50 @@ Determinismus und Schärfen-Reihenfolge. KI-Denoise ist nur eine optionale
 spätere Erweiterung und wird hier nicht spezifiziert. Abhängigkeiten: F-031,
 F-036.
 
+### G-14 Rote Augen (RedEye, Release 1.5)
+
+**Ziel:** Rote Blitz-Pupillen in markierten Regionen deterministisch
+entsättigen und abdunkeln, ohne übrige Bildteile zu verändern.
+`recipe.adjustments.red_eye` enthält `version` (1) und `regions` (Liste,
+`0..=32` Einträge). Jede Region trägt:
+
+- `id` (stabile, innerhalb des Rezepts eindeutige nicht-leere Zeichenkette;
+  Regionen werden nie über ihre Listenposition identifiziert),
+- Pupillen-Zentrum `x`/`y` in normierten Quellkoordinaten `0..=1`
+  (`x * Breite`, `y * Höhe` in Pixeln),
+- `radius` in normierten Einheiten `0 < radius <= 1`
+  (Pixelradius `radius * min(Breite, Höhe)`),
+- `desaturate`/`darken` je `0..=1` (0 = keine Wirkung).
+
+**Render-Semantik (sRGB-codiertes RGBA8, CPU, deterministisch):** Pro Pixel in
+einer Region bestimmt die Rot-Dominanz
+`redness = clamp((R - max(G, B)) / max(R, ε), 0, 1)` die Wirkstärke; graue
+oder nicht-rote Pixel bleiben unverändert. Gewichtung innerhalb des Radius:
+volle Stärke bis 75 % des Radius, danach linearer Abfall auf 0 am Rand.
+Entsättigung zieht den Rotkanal in Richtung der Rec.709-Luminanz
+(`R' = R + (L - R) * desaturate * Gewicht * redness`), Abdunklung skaliert
+alle drei Kanäle (`c' = c * (1 - darken * Gewicht * redness)`); Alpha bleibt
+unverändert, Ergebnis pro Kanal auf `0..=255` gerundet und geclippt. Leere
+Regionenliste oder nur Null-Stärken sind Identität (kein Pixel verändert).
+
+**Validierung (laut, kein Clipping):** `version == 1`, höchstens 32 Regionen,
+nicht-leere eindeutige `id`s, endliche `x`/`y` in `0..=1`, endlicher Radius
+in `(0, 1]`, endliche `desaturate`/`darken` in `0..=1` — jede Abweichung
+(inkl. NaN) wird mit einem Fehler abgelehnt. Unbekannte Felder bleiben
+erhalten (Roundtrip-Regel).
+
+**Platzierung, Cache und Abnahme:** In `Adjustments` nach Schärfen (F-095)
+und vor Effekten (F-097)/Masken/Crop; das Format-Tupel bleibt unverändert.
+Feld, Version und alle Regionen gehen in den `recipe_hash` (BLAKE3 über das
+serialisierte Rezept); Änderungen invalidieren ab dieser Unterstufe.
+Abnahme: JSON-Roundtrip, Validierungsablehnung (Out-of-Range/NaN),
+Identität bei leerer Liste/Null-Stärken, Lokalität (Pixel außerhalb von
+Regionen und nicht-rote Pixel unverändert), Monotonie (größeres
+`desaturate`/`darken` verstärkt oder erhält die Korrektur), Determinismus
+(zwei Läufe byte-identisch), Alpha-Erhalt und Clipping. MVP-Grenze: keine
+automatische Pupillen-Erkennung — Regionen werden explizit persistiert
+(Erkennung bleibt Folgearbeit); Abhängigkeiten: F-031, F-036.
+
 ### F-097 Vignettierung und Körnung (niedrige Priorität)
 
 **Ziel:** Eine reproduzierbare Randabdunklung und eine deterministische
