@@ -116,7 +116,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | KITTEST-COVERAGE-LIBRARY-1 | G-09 | Loupe-Compare-Survey |
 | 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
 | 1.0 | KITTEST-COVERAGE-STATES-1 | alle G | Toast-Error-Export-States |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
@@ -158,7 +157,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] KITTEST-COVERAGE-LIBRARY-1 (Release: 1.0)** Library-Ansichten pixel-sichtbar: Loupe, Compare, Survey je 1 Golden (deterministische Fixtures, keine Pfad-Pixel, Muster `library_badges`), dazu Folder-Tree + Keyword-Chips + Rating-Sektion im Grid-Golden. Vision-Baseline 2026-09-05: `library_with_image` zeigt kein Thumbnail (Grid-Mitte = Empty-State, BEFUND), `subfolder_badges` Zelltexte gequetscht/überlappend (minor) — mitabdecken. Abnahme: Loupe/Compare/Survey je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-OVERLAYS-1 (Release: 1.0)** Preview-Overlays pixel-sichtbar: Mask-Overlay, Edit-Pins, Crop-Overlay, Lens-Blur-Overlay, Navigator auf/zu je 1 Golden oder als Zustands-Matrix mit Headless-Asserts (kein manueller Test als einzige Absicherung). Abnahme: alle 4 Overlays + Navigator-Zustände pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).

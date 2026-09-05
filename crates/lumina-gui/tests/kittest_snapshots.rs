@@ -21,9 +21,10 @@
 
 use egui_kittest::kittest::NodeT;
 use egui_kittest::{kittest::Queryable, Harness};
+use lumina_core::cache::{disk::DiskFolderCache, PreviewKind};
 use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_gui::{
-    LuminaApp, Module, SECTION_COLOR, SECTION_COUNT, SECTION_DETAIL, SECTION_EFFECTS,
+    LibraryView, LuminaApp, Module, SECTION_COLOR, SECTION_COUNT, SECTION_DETAIL, SECTION_EFFECTS,
     SECTION_GEOMETRY, SECTION_MASKING, SECTION_OPTICS, SECTION_TONE_CURVE,
 };
 use std::collections::BTreeMap;
@@ -1228,4 +1229,420 @@ fn draw_meta_preset_dialog() {
         !lumina_sidecar::sidecar_path_for(&png).is_file(),
         "cancelled dialog must not write a sidecar"
     );
+}
+
+// ---------------------------------------------------------------------------
+// KITTEST-COVERAGE-LIBRARY-1: Library Loupe / Compare / Survey goldens.
+//
+// The default Library grid already has goldens (`library_empty`,
+// `library_with_image`, `library_subfolder_badges`); the three remaining
+// G-09 views get one golden each here, following the 68215fd/7fd528b/dd73806
+// pattern: deterministic seeds, non-vacuous guard + on-screen assert, then
+// `snapshot`. Two minimal production layout fixes were required along the
+// way (B1: the folder-tree path row claimed the whole panel height via a
+// direction-changing `with_layout`, hiding the tree; B2: the fixed Loupe
+// height buried the rating line under the filmstrip) — the 9 pre-existing
+// Library goldens pinning that broken layout were rebaselined with them
+// (diffs limited to the fixed regions, verified per golden).
+//
+// Vision baselines covered:
+// * `library_with_image` shows no thumbnail (grid center = empty state):
+//   `library_loupe` proves real image content — each sentinel's Standard
+//   disk-cache preview is seeded with deterministic pixels and the guard
+//   decodes them back (dims + distinct dominant channels), so Loupe paints
+//   thumbnail textures, never the empty/placeholder text.
+// * `subfolder_badges` cell texts squeezed/overlapping (minor): the views
+//   fixture stays flat with short names (`a01.arw` …), so no badge row can
+//   overlap; the badges themselves stay pinned by `library_subfolder_badges`.
+// ---------------------------------------------------------------------------
+
+/// Committed fixture directory for the Loupe/Compare/Survey snapshots below
+/// (same rationale as `LIBRARY_BADGES_FIXTURE_DIR`: a relative path keeps
+/// every rendered string fixed; a `tempfile::tempdir` would leak its random
+/// prefix into the folder-tree + path-field pixels).
+const LIBRARY_VIEWS_FIXTURE_DIR: &str = "tests/fixtures/library_views";
+
+/// Sentinel files (flat, short names — see the badge note above) with the
+/// base color of their seeded Standard preview. Distinct per file so Survey
+/// shows three visibly different thumbnails.
+const LIBRARY_VIEWS_FILES: &[(&str, [u8; 3])] = &[
+    ("a01.arw", [200, 60, 50]),
+    ("a02.arw", [60, 170, 80]),
+    ("b01.arw", [70, 110, 200]),
+];
+
+/// Seeded preview dimensions. Large enough to stay clearly visible in the
+/// Loupe/Compare panes (which paint the thumbnail texture at native size);
+/// the golden pins these pixels.
+const LIBRARY_VIEWS_PREVIEW_SIZE: (u32, u32) = (288, 192);
+
+/// Deterministic preview pixels: vertical gradient around `base` (the ramp
+/// proves non-trivial content; the per-file means stay distinct).
+fn library_views_preview_png(base: [u8; 3]) -> Vec<u8> {
+    let (width, height) = LIBRARY_VIEWS_PREVIEW_SIZE;
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        // 192..255 ramp over the frame height (deterministic, no wall-clock).
+        let factor = 192 + ((y * 63) / height.max(1));
+        for _ in 0..width {
+            for channel in base {
+                pixels.push(((u32::from(channel) * factor) / 255) as u8);
+            }
+            pixels.push(255);
+        }
+    }
+    ImageFrame::new(width, height, pixels)
+        .expect("fixture frame")
+        .encode(ImageFileFormat::Png)
+        .expect("fixture preview encodes")
+}
+
+/// Serializes the (re-)write + cache seeding below: the three views tests
+/// run in one process on threads and share the same fixture files, while
+/// `DiskFolderCache::store_preview` stages through a pid-named temp file —
+/// concurrent seeds of the same entry would race on that temp path.
+static LIBRARY_VIEWS_FIXTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// (Re-)write the sentinel RAWs and seed each file's Standard disk-cache
+/// preview (`vc-original`, the key `ensure_thumbnail` probes). RAW sentinel
+/// bytes suffice for the scan (same as `ensure_library_badges_fixture` — no
+/// decode runs during a directory scan); the seeded cache is what lets the
+/// views paint real pixels without a native RAW decode. The cache lives
+/// under the fixture's (gitignored) `.lumina/` dir, so re-seeding is stable
+/// and never git churn. Idempotent: called on every run.
+fn ensure_library_views_fixture() {
+    let _guard = LIBRARY_VIEWS_FIXTURE_LOCK
+        .lock()
+        .expect("views fixture lock");
+    let root = Path::new(LIBRARY_VIEWS_FIXTURE_DIR);
+    std::fs::create_dir_all(root).expect("create views fixture dir");
+    for &(name, base) in LIBRARY_VIEWS_FILES {
+        std::fs::write(root.join(name), b"lumina-raw-fixture").expect("write views fixture");
+        let png = library_views_preview_png(base);
+        let cache = DiskFolderCache::for_image(root.join(name)).expect("views fixture cache");
+        assert!(
+            cache
+                .store_preview(name, "vc-original", PreviewKind::Standard, &png)
+                .expect("seed views preview"),
+            "Standard previews must be enabled for {name}"
+        );
+    }
+}
+
+/// Dominant (mean-brightest) channel index of an RGBA buffer.
+fn dominant_channel(pixels: &[u8]) -> usize {
+    let mut means = [0u64; 3];
+    let (chunks, _) = pixels.as_chunks::<4>();
+    for pixel in chunks {
+        for (index, mean) in means.iter_mut().enumerate() {
+            *mean += u64::from(pixel[index]);
+        }
+    }
+    means
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, mean)| mean)
+        .map(|(index, _)| index)
+        .expect("non-empty pixels")
+}
+
+/// Non-vacuous guard: every seeded preview decodes back to real, distinct
+/// pixels (expected dims, dominant channel matches the file's base color, a
+/// non-trivial vertical ramp). If seeding broke, the views below would paint
+/// the LibRaw-failure placeholder — this assert pins the real-pixel path.
+fn assert_library_views_thumbnails() {
+    for &(name, base) in LIBRARY_VIEWS_FILES {
+        let cache = DiskFolderCache::for_image(Path::new(LIBRARY_VIEWS_FIXTURE_DIR).join(name))
+            .expect("views fixture cache");
+        let bytes = cache
+            .load_preview(name, "vc-original", PreviewKind::Standard)
+            .expect("load views preview")
+            .unwrap_or_else(|| panic!("seeded preview missing for {name}"));
+        let frame = ImageFrame::decode(&bytes).expect("seeded preview decodes");
+        assert_eq!(
+            frame.width, LIBRARY_VIEWS_PREVIEW_SIZE.0,
+            "preview width for {name}"
+        );
+        assert_eq!(
+            frame.height, LIBRARY_VIEWS_PREVIEW_SIZE.1,
+            "preview height for {name}"
+        );
+        let expected = base
+            .iter()
+            .enumerate()
+            .max_by_key(|&(_, channel)| channel)
+            .map(|(index, _)| index)
+            .expect("non-empty base");
+        assert_eq!(
+            dominant_channel(&frame.pixels),
+            expected,
+            "seeded preview for {name} must keep its base color"
+        );
+        // The vertical ramp must survive the PNG roundtrip: min/max mean-row
+        // luminance spread proves non-empty, non-flat pixels.
+        let (width, height) = (frame.width as usize, frame.height as usize);
+        let mut brightest: u32 = 0;
+        let mut darkest: u32 = u32::MAX;
+        for y in 0..height {
+            let mut row: u32 = 0;
+            for x in 0..width {
+                let offset = (y * width + x) * 4;
+                row += u32::from(frame.pixels[offset])
+                    + u32::from(frame.pixels[offset + 1])
+                    + u32::from(frame.pixels[offset + 2]);
+            }
+            brightest = brightest.max(row);
+            darkest = darkest.min(row);
+        }
+        assert!(
+            brightest > darkest + 20 * width as u32,
+            "seeded preview for {name} must carry the brightness ramp"
+        );
+    }
+}
+
+/// Assert that a label *containing* `needle` is laid out inside the
+/// 1024x720 window (same rationale as `assert_label_on_screen`, but for
+/// composite labels like the Loupe `name [status]` line whose status suffix
+/// is not worth hardcoding).
+///
+/// NOTE (B1 lesson): a contains-query can match a *different* widget than
+/// the intended one (the path text field also contains the fixture dir, a
+/// covered line is still "on-screen" for accesskit). Guards for tree nodes
+/// and the rating line therefore use exact labels (below) plus a coverage
+/// assert — never a bare contains.
+fn assert_contains_on_screen(harness: &mut Harness<'_, LuminaApp>, needle: &str) {
+    let rect = harness
+        .query_all_by_label_contains(needle)
+        .next()
+        .unwrap_or_else(|| panic!("label containing {needle:?} not found in headed harness"))
+        .rect();
+    assert!(
+        rect.min.y >= 0.0 && rect.max.y <= 720.0 && rect.max.x <= 1024.0,
+        "label containing {needle:?} must be pixel-visible in the 1024x720 viewport, got {rect:?}"
+    );
+}
+
+/// B1 guard: the folder-tree root node, matched EXACTLY (the path text
+/// field carries the same directory string, so a contains-query passes
+/// vacuously on the field while the tree stays invisible). The root is
+/// expanded by production code every frame (`open_folders.insert`), so an
+/// exact on-screen match proves a pixel-visible tree node — no test scroll
+/// involved.
+fn assert_tree_root_on_screen(harness: &mut Harness<'_, LuminaApp>) {
+    assert_label_on_screen(harness, "library_views (3)");
+}
+
+/// B2 guard: the Loupe rating line must paint strictly above the bottom
+/// filmstrip panel. An accesskit on-screen rect alone does not prove it —
+/// the line used to sit underneath the filmstrip while still reporting an
+/// in-viewport rect (vacuous pass, invisible pixels).
+fn assert_rating_above_filmstrip(harness: &mut Harness<'_, LuminaApp>) {
+    let rating = harness
+        .query_all_by_label_contains("Rating:")
+        .next()
+        .unwrap_or_else(|| panic!("rating line not found in headed harness"))
+        .rect();
+    let filmstrip = harness
+        .query_all_by_label("Filmstrip")
+        .next()
+        .unwrap_or_else(|| panic!("filmstrip heading not found in headed harness"))
+        .rect();
+    assert!(
+        rating.max.y <= filmstrip.min.y,
+        "rating line {rating:?} must sit above the filmstrip (top {})",
+        filmstrip.min.y
+    );
+}
+
+/// Point a Library harness at the views fixture with a recursive listing.
+///
+/// Returns the three RAW display-string paths in raster order. Asserts the
+/// relative directory (no tempdir-prefix leakage into folder-tree /
+/// path-field pixels) plus the 3-file RAW order the views below share.
+fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> Vec<String> {
+    ensure_library_views_fixture();
+    assert_library_views_thumbnails();
+    harness.state_mut().set_module(Module::Library);
+    harness
+        .state_mut()
+        .set_directory(LIBRARY_VIEWS_FIXTURE_DIR.to_owned());
+    // `set_directory` lists flat; the recursive aggregation is the views'
+    // shared order (identical here — the fixture is flat).
+    harness.state_mut().list_directory();
+    assert_eq!(
+        harness.state_mut().directory(),
+        LIBRARY_VIEWS_FIXTURE_DIR,
+        "views must render the relative fixture dir (no tmp-prefix pixels)"
+    );
+    assert_eq!(
+        harness.state_mut().entries().len(),
+        3,
+        "views fixture must list all files"
+    );
+    let order = harness.state_mut().filtered_library_order();
+    assert_eq!(order.len(), 3, "RAW-only order must see all files");
+    let mut keys: Vec<String> = harness
+        .state_mut()
+        .entries()
+        .iter()
+        .map(|entry| entry.thumb_key().to_owned())
+        .collect();
+    keys.sort();
+    assert!(keys[0].ends_with("a01.arw"), "unexpected key {}", keys[0]);
+    assert!(keys[1].ends_with("a02.arw"), "unexpected key {}", keys[1]);
+    assert!(keys[2].ends_with("b01.arw"), "unexpected key {}", keys[2]);
+    // Display-string paths (`dir/name`, the unit `select_filmstrip_path`
+    // compares against): the flat fixture joins deterministically. A wrong
+    // assumption fails loudly at the selection asserts below, never silent.
+    let mut paths: Vec<String> = LIBRARY_VIEWS_FILES
+        .iter()
+        .map(|(name, _)| format!("{LIBRARY_VIEWS_FIXTURE_DIR}/{name}"))
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Loupe (`E`): the active selection shown large with real thumbnail pixels
+/// (seeded cache, see above) plus the rating line. The rating line doubles
+/// as the "Rating-Sektion im Grid-Kontext"/w visible rating UI of the
+/// Library module (the Develop rating section has its own golden).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_loupe() {
+    let mut harness = build_harness();
+    setup_library_views(&mut harness);
+    // A real in-memory decode alongside (Preview-Generations-Assert): proves
+    // genuine image content flows while the Loupe view paints thumbnails.
+    load_sample(&mut harness);
+    harness.run();
+    assert!(
+        harness.state_mut().preview_generation() >= 1,
+        "loaded sample must render at least once"
+    );
+    harness.state_mut().set_library_view(LibraryView::Loupe);
+    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
+    harness.run_steps(3);
+    // Non-vacuous guards: the Loupe heading, the active file line, the
+    // folder-tree root node (B1: exact match — a contains-query passes
+    // vacuously on the path text field) and the rating line above the
+    // filmstrip (B2) must actually be pixel-visible — otherwise the golden
+    // below could pass on the empty-state text the Vision baseline flagged.
+    assert_label_on_screen(&mut harness, "Loupe (E): single image");
+    assert_contains_on_screen(&mut harness, "a01.arw");
+    assert_tree_root_on_screen(&mut harness);
+    assert_contains_on_screen(&mut harness, "Rating:");
+    assert_rating_above_filmstrip(&mut harness);
+    harness.snapshot("library_loupe");
+}
+
+/// Compare (`C`): Before/After of the active image side by side (same seeded
+/// thumbnail texture twice, `before_after` held by `set_library_view`).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_compare() {
+    let mut harness = build_harness();
+    setup_library_views(&mut harness);
+    harness.state_mut().set_library_view(LibraryView::Compare);
+    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
+    harness.run_steps(3);
+    // Non-vacuous guards: the Compare heading, both pane labels, the
+    // live status line (proves the `before_after` Compare branch, not the
+    // empty state) and the folder-tree root node (B1: exact match) must
+    // actually be on-screen.
+    assert_label_on_screen(&mut harness, "Compare");
+    assert_label_on_screen(&mut harness, "Before");
+    assert_label_on_screen(&mut harness, "After");
+    assert_contains_on_screen(&mut harness, "Compare view on (Compare)");
+    assert_tree_root_on_screen(&mut harness);
+    harness.snapshot("library_compare");
+}
+
+/// Survey (`N`): the multi-selection side by side (all three seeded files
+/// selected, so the real multi-selection branch renders — not the
+/// below-two fallback raster). Folder tree (left) and the expanded keyword
+/// chips (right Metadata panel) are part of this golden: the grid-context
+/// companions the task requires.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_survey() {
+    let mut harness = build_harness();
+    let paths = setup_library_views(&mut harness);
+    // Select all three (first plain, rest toggle-add): proves the genuine
+    // multi-selection branch. A wrong path is a loud no-op in
+    // `apply_filmstrip_click`, so the length assert below guards the join
+    // assumption in `setup_library_views` too.
+    harness
+        .state_mut()
+        .select_filmstrip_path(paths[0].clone(), false, false);
+    harness
+        .state_mut()
+        .select_filmstrip_path(paths[1].clone(), true, false);
+    harness
+        .state_mut()
+        .select_filmstrip_path(paths[2].clone(), true, false);
+    let selected = harness.state_mut().filmstrip_selection();
+    assert_eq!(selected.len(), 3, "survey needs all three files selected");
+    for path in &paths {
+        assert!(
+            selected.contains(path),
+            "selection must contain {path} (got {selected:?})"
+        );
+    }
+    harness.state_mut().set_library_view(LibraryView::Survey);
+    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
+    harness.run_steps(3);
+    // Non-vacuous guards: heading + live count (proves the multi-selection
+    // branch, not the fallback) and the folder-tree root node (B1: exact
+    // match, not the path-field contains) as grid context.
+    assert_label_on_screen(&mut harness, "Survey");
+    assert_label_on_screen(&mut harness, "3 selected");
+    assert_tree_root_on_screen(&mut harness);
+    // Keyword chips (right Metadata panel): expand the section so the golden
+    // pins the input row, not just the collapsed header. Same scroll-first
+    // pattern as the metadata subpanels (a below-fold click is discarded).
+    harness.run();
+    let header_visible = harness
+        .query_all_by_label("Keywords")
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(
+        header_visible,
+        "Keywords header not found in headed harness"
+    );
+    harness.run();
+    harness.run();
+    let clicked = harness
+        .query_all_by_label("Keywords")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(clicked, "Keywords header lost after scrolling");
+    harness.run();
+    let found = harness
+        .query_all_by_label("Add keyword")
+        .next()
+        .map(|node| {
+            node.scroll_to_me();
+            true
+        })
+        .unwrap_or(false);
+    assert!(found, "keyword input row missing after expanding");
+    harness.run();
+    harness.run();
+    assert_label_on_screen(&mut harness, "Add keyword");
+    // Kosmetik (c/K1): park the pointer fully outside the frame so the
+    // rendered cursor cannot leave a tip on the golden (an in-frame park
+    // position still showed a 1–2px arrow tip). Out-of-viewport positions
+    // are clipped by the renderer and stay invisible.
+    harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
+    harness.run_steps(2);
+    harness.snapshot("library_survey");
 }

@@ -15126,14 +15126,17 @@ impl LuminaApp {
         ui.heading(Str::Folders.t());
         // Direct path entry stays available (replaces the old text browser's
         // address row) plus a manual rescan.
-        // GUI-VISION-1 (same bug class as the Export Choose row):
-        // button-first (right-to-left) so Open stays inside the panel.
+        // Button-first in a plain row so Open stays inside the panel
+        // (GUI-VISION-1). A direction-changing `with_layout(right_to_left)`
+        // must NOT be used here: the sub-layout claims all remaining
+        // vertical panel space and pushes the folder tree below the fold
+        // (B1 — the tree ScrollArea below then starts off-panel and no test
+        // scroll can recover it). A plain horizontal row wraps its height to
+        // the content.
         let mut open_clicked = false;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.horizontal(|ui| {
             open_clicked = ui.button(Str::Open.t()).clicked();
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.text_edit_singleline(&mut self.directory);
-            });
+            ui.text_edit_singleline(&mut self.directory);
         });
         if open_clicked {
             let target = self.directory.clone();
@@ -16109,7 +16112,14 @@ impl LuminaApp {
         let entry = self.entries[active].clone();
         ui.heading(Str::LoupeOn.t());
         ui.label(format!("{}  [{}]", entry.name, entry.status_label()));
-        let size = egui::vec2(ui.available_width().max(64.0), 420.0);
+        // B2: the image height is derived from the remaining center space
+        // (minus the rating line below) instead of a fixed 420px: a fixed
+        // height overflows short viewports and the rating line ends up
+        // painted underneath the bottom filmstrip panel (invisible but still
+        // in the accesskit tree — a vacuous guard). Clamped so absurdly
+        // short windows still paint something.
+        let height = (ui.available_height() - 30.0).clamp(64.0, 600.0);
+        let size = egui::vec2(ui.available_width().max(64.0), height);
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         if let Some(texture) = self.thumbnails.get(&entry.thumb_key).cloned() {
             ui.put(
