@@ -1262,7 +1262,9 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   bleibt CPU-only. Ein CPU-Fallback wegen nicht implementierter GPU-Stufen
   („Render routed to CPU") ist ein Fail mit Fix-Pflicht (Task
   GPU-RENDER-PARITY-1), kein akzeptierter Zustand. Die CPU bleibt daneben
-  die vollständige Referenz (kein GPU-only-Weg).
+  die vollständige Referenz (kein GPU-only-Weg). Lebendes Inventar der noch
+  nicht GPU-tauglichen Rezept-Konfigurationen:
+  `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`).
 
 ### G-01 Develop-Basis: Treatment, Profil, Reset-Automatik, Panel-Previous
 (LRPAR-G01-BASIC, Release 1.0)

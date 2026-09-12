@@ -79,8 +79,8 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-26 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 22,
-Block B: 1, Block C: 3.
+17 offene Tasks (Checkbox-Zählung dieser Datei; die älteren Stände waren
+zu hoch gegriffen) — Block A: 13, Block B: 1, Block C: 3.
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -158,7 +158,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
+- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Stand: Stufe 1 (Ton-Domäne) + Gate-Vollständigkeit (red_eye/spot/generative melden, volle `render_frame`-Fallback-Kette, VRAM-Verweigerung) verifiziert BESTANDEN. Rest: Stufe 2 (effects/NR/sharpening), Stufe 3 (geometry/lens/perspective/lens_blur/red_eye/spots/generative/Camera-WB), Perf-Pooling (Scratch-/Dark-Texturen, Dehaze-Readback). Lebendes Inventar: `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`) — jede Reason-Klasse konstruiert + geflaggt. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
 - [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
