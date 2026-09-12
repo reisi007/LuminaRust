@@ -79,7 +79,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-23 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 19,
+26 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 22,
 Block B: 1, Block C: 3.
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
@@ -121,6 +121,9 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | KITTEST-COVERAGE-STATES-1 | alle G | Toast-Error-Export-States |
 | 1.0 | UX-SLICE-1 | G-09/G-10 | UX-Polish-Slice-1 |
 | 1.0 | UX-SLICE-2 | G-09/G-10 | UX-Polish-Follow-ups |
+| 1.0 | CROP-MAXRECT-1 | G-06 | Default-Crop-MaxRect |
+| 1.0 | KITTEST-PARITY-PATHS-1 | G-10 | Pfad-Parity-Framework |
+| 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
@@ -163,6 +166,9 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] CROP-MAXRECT-1 (Release: 1.0)** Default-Crop ist das Maximum-Rectangle mit Constrain-to-Image (User-Entscheid 2026-09-12): Nach Lens-/Perspektiv-Korrektur keine transparenten Ränder ohne expliziten Crop — der Default-Crop umschließt maximalen Inhalt. Abnahme: Core-Geometrie + CLI/GUI-headless mit Golden (transparenter Keil → Default-Crop enthält nur Inhalt), kein stiller Beschnitt jenseits der Regel. Crates: `lumina-core`, `lumina-gui`.
+- [ ] **[PRIO: mittel] KITTEST-PARITY-PATHS-1 (Release: 1.0)** Pfad-Parity-Framework (User-Input manueller Test): gleiche Szene über CPU- und GPU-Pfad rendern, beide Frames snapshotten, Parität per Toleranz assertieren (F-043-Maßstab) PLUS absolute Geometrie-Checks (Preview füllt Fit-Rect, Overlays auf Foto — Parität allein fängt beidseitig gleiche Fehler nicht). Abnahme: Matrix-Test grün auf Metal, SKIP-Verdict ohne Adapter (nie still grün), DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
 - [ ] **[PRIO: mittel] UX-SLICE-2 (Release: 1.0)** UX-Polish-Follow-ups aus UX-SLICE-1-Verifizierung (F1–F6, niedrig/mittel): F1 Stale-Hash bei 0 Bildern (render_key-Clear/Gate); F2 „Open Folder"-CTA verspricht zu viel (ehrliches Label oder Picker-Scope entscheiden); F3 Empty-State nur in Grid (Loupe/Compare/Survey + Navigator-Hint vereinheitlichen); F4 Badge-Painting ohne Pixel-Beleg (Golden mit bewerteten Fixtures); F5 schärfere Asserts (Hash-Abwesenheit am Canvas, CTA-Verdrahtung); F6 Traceability-Labels (P1–P5/UXG-Mapper). Abnahme: wie Slice-1-Gates + Vision-Check. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 

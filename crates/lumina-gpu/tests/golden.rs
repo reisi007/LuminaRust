@@ -117,11 +117,13 @@ fn noise_frame(width: u32, height: u32, seed: u64) -> ImageFrame {
 
 /// The recipe basket exercised by the harness.
 ///
-/// REVIEW-GPU-DIVERGENCE-1: the basket deliberately includes recipes whose
-/// stages the GPU tone stage does NOT implement (vibrance/saturation, curves,
-/// HSL, presence, effects, source actions). For those, `render_with_gpu` must
-/// route to the CPU pipeline instead of silently dropping the stage — the
-/// routing test below pins this byte-exactly.
+/// Since GPU-RENDER-PARITY-1 the tone basket (default/exposure/contrast/WB) and
+/// the curves/HSL/presence/vibrance recipes all render on the GPU and are gated
+/// on the ≤1-code / ≥45 dB tolerance below. The basket also deliberately keeps
+/// recipes whose stages the GPU still does not implement (effects, unbound
+/// source actions): `render_with_gpu` must route those to the CPU pipeline
+/// instead of silently dropping the stage — the routing test below pins this
+/// byte-exactly.
 fn recipes() -> Vec<(&'static str, EditRecipe)> {
     vec![
         ("default", EditRecipe::default()),
@@ -245,17 +247,12 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
     ]
 }
 
-/// The subset of [`recipes`] the GPU tone stage cannot render (validator must
-/// flag each of them; the default/tone/WB recipes must stay unflagged).
+/// The subset of [`recipes`] the GPU pipeline still cannot render (validator
+/// must flag each of them). Since GPU-RENDER-PARITY-1 curves, HSL, Presence and
+/// vibrance/saturation are rendered on the GPU, so only Effects and unbound
+/// SourceActions remain CPU-routed here.
 fn unsupported_recipe_names() -> &'static [&'static str] {
-    &[
-        "vibrance_saturation_unsupported",
-        "curves_s_master_unsupported",
-        "hsl_red_shift_unsupported",
-        "presence_clarity_unsupported",
-        "vignette_effects_unsupported",
-        "source_actions_unsupported",
-    ]
+    &["vignette_effects_unsupported", "source_actions_unsupported"]
 }
 
 // ---------------------------------------------------------------------------
@@ -381,13 +378,15 @@ fn cpu_gpu_golden_equivalence() {
     }
 
     // Bootstrap note: since REVIEW-GPU-DIVERGENCE-1 the GPU path validates the
-    // recipe and CPU-routes anything its tone stage cannot render, so every
-    // pair below is pixel-safe by construction; the tolerance gates still catch
-    // real GPU/CPU divergence on the supported (tone/WB) recipes.
+    // recipe and CPU-routes anything its pipeline cannot render, so every pair
+    // below is pixel-safe by construction; the tolerance gates still catch real
+    // GPU/CPU divergence on the GPU-rendered recipes (tone/WB plus the
+    // GPU-RENDER-PARITY-1 color/Presence stages).
     eprintln!(
-        "[INFO] lumina-gpu routes GPU-unsupported recipes to the CPU pipeline \
-         (REVIEW-GPU-DIVERGENCE-1); tone/WB-only recipes exercise the real GPU \
-         stage and are gated on maxAbsDiff<=1 / PSNR>=45dB below."
+        "[INFO] lumina-gpu routes still-unsupported recipes to the CPU pipeline \
+         (REVIEW-GPU-DIVERGENCE-1); tone/WB and the parity color/Presence \
+         recipes exercise the real GPU path and are gated on maxAbsDiff<=1 / \
+         PSNR>=45dB below."
     );
 
     let frames: Vec<(&'static str, ImageFrame)> = vec![
@@ -521,11 +520,16 @@ fn unsupported_recipes_route_to_cpu_byte_identically() {
 }
 
 /// Always-runs unit checks for [`unsupported_gpu_stages`]: supported recipes
-/// stay unflagged; neutral/identity nested objects do not trigger false
-/// positives; every unsupported stage produces its reason.
+/// stay unflagged; every still-unsupported stage produces its reason.
+///
+/// GPU-RENDER-PARITY-1 moved curves, HSL, Point Color, Presence and
+/// vibrance/saturation into the GPU pipeline, so they are no longer flagged —
+/// including at non-neutral values. Effects, unbound source actions, geometry/
+/// lens/perspective and the remaining neighborhood stages stay CPU-routed.
 #[test]
 fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
-    // Supported: default + tone/WB sliders only.
+    // Supported: tone/WB sliders plus the GPU-RENDER-PARITY-1 color/presence
+    // stages, at non-neutral values.
     assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
     assert!(unsupported_gpu_stages(&EditRecipe {
         adjustments: BTreeMap::from([
@@ -537,13 +541,9 @@ fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
             ("blacks".into(), -0.2),
             ("wb_temperature".into(), 5500.0),
             ("wb_tint".into(), 0.05),
+            ("vibrance".into(), 0.3),
+            ("saturation".into(), -0.5),
         ]),
-        ..Default::default()
-    })
-    .is_empty());
-
-    // Neutral nested objects are NOT unsupported (identity semantics).
-    assert!(unsupported_gpu_stages(&EditRecipe {
         curves: Some(Curves {
             version: 1,
             master: vec![
@@ -552,80 +552,37 @@ fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
                     output: 0.0
                 },
                 CurvePoint {
+                    input: 0.5,
+                    output: 0.4
+                },
+                CurvePoint {
                     input: 1.0,
                     output: 1.0
                 }
             ],
             channels: Default::default(),
         }),
-        hsl: Some(HslAdjustments::default()),
+        hsl: Some(HslAdjustments {
+            version: 1,
+            blue: Some(HslChannel {
+                hue: -0.1,
+                saturation: 0.2,
+                luminance: 0.0,
+            }),
+            ..Default::default()
+        }),
         presence: Some(Presence {
             version: 1,
-            texture: 0.0,
-            clarity: 0.0,
-            dehaze: 0.0,
+            texture: 0.1,
+            clarity: 0.2,
+            dehaze: 0.3,
         }),
         ..Default::default()
     })
     .is_empty());
 
-    // Each unsupported stage is flagged with a recognisable reason.
+    // Each still-unsupported stage is flagged with a recognisable reason.
     let cases: Vec<(&str, EditRecipe)> = vec![
-        (
-            "vibrance",
-            EditRecipe {
-                adjustments: BTreeMap::from([("vibrance".into(), 0.2)]),
-                ..Default::default()
-            },
-        ),
-        (
-            "saturation",
-            EditRecipe {
-                adjustments: BTreeMap::from([("saturation".into(), -0.5)]),
-                ..Default::default()
-            },
-        ),
-        (
-            "curves",
-            EditRecipe {
-                curves: Some(Curves {
-                    version: 1,
-                    master: vec![CurvePoint {
-                        input: 0.5,
-                        output: 0.4,
-                    }],
-                    channels: Default::default(),
-                }),
-                ..Default::default()
-            },
-        ),
-        (
-            "hsl",
-            EditRecipe {
-                hsl: Some(HslAdjustments {
-                    version: 1,
-                    blue: Some(HslChannel {
-                        hue: -0.1,
-                        saturation: 0.0,
-                        luminance: 0.0,
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        ),
-        (
-            "presence",
-            EditRecipe {
-                presence: Some(Presence {
-                    version: 1,
-                    texture: 0.1,
-                    clarity: 0.0,
-                    dehaze: 0.0,
-                }),
-                ..Default::default()
-            },
-        ),
         (
             "effects",
             EditRecipe {

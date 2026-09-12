@@ -2176,6 +2176,7 @@ dependencies = [
  "lumina-core",
  "lumina-sidecar",
  "pollster 1.0.1",
+ "serde_json",
  "thiserror 2.0.20",
  "wgpu",
 ]

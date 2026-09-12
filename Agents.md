@@ -330,5 +330,12 @@ erst fertig, wenn:
 - Keine GUI-spezifische Bildlogik außerhalb der gemeinsamen Pipeline.
 - Keine native Dependency ohne dokumentierte
   Capability-Entscheidung.
+- Volle GPU-Parität (User-Entscheid 2026-09-12, GUI-Bedarf): Jede
+  Renderstufe muss auch GPU-tauglich sein — nichts darf CPU-only bleiben.
+  Ein Rezept, das wegen einer nicht implementierten GPU-Stufe auf CPU
+  zurückfällt („Render routed to CPU"), ist ein Fail mit Fix-Pflicht, kein
+  akzeptierter Zustand. Umgekehrt bleibt die CPU die vollständige Referenz:
+  Jede Renderung ist auf CPU erreichbar; GPU ist reine Beschleunigung, nie
+  Voraussetzung (kein GPU-only-Weg).
 - Lizenzbedingungen von RAW-Backends, ONNX-Runtime und Modellen werden vor
   Integration geprüft und dokumentiert.

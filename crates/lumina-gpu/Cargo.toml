@@ -5,10 +5,11 @@ edition = "2021"
 description = "GPU-first rendering path for Lumina (wgpu/Metal), with a CPU fallback"
 
 [dependencies]
-# Platform-neutral core provides the `ImageFrame` type and the CPU render
-# fallback (`ImageFrame::apply_recipe`), which `lumina-gpu` relies on whenever
-# no GPU adapter is available (or when the `gpu` feature is disabled). The core
-# crate stays free of any GPU/native dependency per `Agents.md`.
+# Platform-neutral core provides the `ImageFrame` type and the complete CPU
+# reference (`lumina_core::render_frame`, via the local `render_cpu`), which
+# `lumina-gpu` relies on whenever no GPU adapter is available (or when the
+# `gpu` feature is disabled). The core crate stays free of any GPU/native
+# dependency per `Agents.md`.
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
@@ -33,3 +34,7 @@ gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 # of the CPU and GPU render outputs. Already resolved in the workspace lockfile
 # (consumed by lumina-core/cli/gui), so this adds no new transitive dependency.
 blake3 = "1"
+# Used by the parity/routing tests to build legacy `extras["spot_removals"]`
+# values. Already a `lumina-sidecar` dependency resolved in the workspace
+# lockfile, so this adds no new transitive dependency.
+serde_json = "1"

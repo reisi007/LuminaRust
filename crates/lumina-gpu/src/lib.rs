@@ -9,18 +9,48 @@
 //! **Bootstrap scope.** This crate currently exposes the [`GpuContext`] handle
 //! and the adapter/device init. [`GpuContext::render_with_gpu`] runs the real
 //! color/tone fragment shader (`SHADER_SRC`) when a GPU adapter is bound, and
-//! transparently falls back to the CPU pipeline in `lumina-core` when no adapter
-//! is present (or the `gpu` feature is disabled). The shader mirrors the
+//! when no adapter is present (or the `gpu` feature is disabled) falls back to
+//! the complete `lumina-core` CPU reference (`render_cpu`; see the fallback note
+//! below). The shader mirrors the
 //! integer-rounded per-channel math of `lumina-core::apply_channel_lut_adjustments`,
-//! so the GPU and CPU outputs agree within the golden-image tolerance
-//! (maxAbsDiff ≤ 1, PSNR ≥ 45 dB) for the stages the shader implements.
+//! so the tone stage matches the CPU oracle within the golden-image tolerance
+//! (maxAbsDiff ≤ 1, PSNR ≥ 45 dB; `tests/golden.rs`). The post-tone stages are
+//! pinned separately by `tests/parity.rs` (below).
 //!
-//! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** The tone stage implements
-//! only WB + seven sliders. [`unsupported_gpu_stages`] lists any recipe stage the
-//! shader cannot render (Curves, HSL, Presence, Vibrance/Saturation, Effects,
-//! Geometry, SourceActions, …); `render_with_gpu` then explicitly routes the
-//! render to the full CPU pipeline and logs once per reason set — the GPU is an
-//! accelerator, never a semantic change.
+//! **Adjustment stages (GPU-RENDER-PARITY-1).** After the tone/WB pass the
+//! pipeline runs the [`stages`] post-tone chain in the CPU oracle's order:
+//! Presence (Texture/Clarity box DoG + Dehaze), then the per-pixel color pass
+//! (Curves → HSL → Point Color → vibrance/saturation → Color Grading).
+//!
+//! The equivalence is **per stage**, asserted by `tests/parity.rs` at the
+//! strongest property observed on this backend: Point Color, Color Grading,
+//! neutral vibrance/saturation, Presence Clarity and positive Dehaze are
+//! byte-identical to the oracle; Curves, HSL, non-neutral vibrance/saturation
+//! and Presence Texture/stacked Presence are bounded at maxAbsDiff ≤ 1; a
+//! recipe that stacks tone + Presence + all color stages is bounded at ≤ 2 with
+//! a mean signed error ≤ 0.05 (no systematic bias). The residual comes from the
+//! oracle evaluating the curves ratio in `f64` (the GPU is `f32`) and from the
+//! Metal backend rounding one ulp differently at a `round()` tie.
+//!
+//! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
+//! lists any recipe stage the pipeline cannot yet render (Effects, Sharpening,
+//! Noise Reduction, Geometry, Lens Correction, Perspective, Lens Blur, unbound
+//! SourceActions, As-Shot WB context, Red-Eye, spot removals, generative edit,
+//! non-schema adjustment keys, the source-action slot limit, …). On every
+//! entry point the outcome is loud and pixel-safe:
+//!
+//! - [`GpuContext::render_with_gpu`] routes such a recipe to the free
+//!   `render_cpu`, which runs the **full** `lumina_core::render_frame` chain
+//!   (spot healing, all adjustments, geometry, generative expand), so the
+//!   CPU fallback is the complete reference — not a partial `apply_recipe`.
+//! - [`GpuContext::render_to_vram`] cannot CPU-route without a readback, so it
+//!   **refuses** the recipe with [`GpuError::RenderFailed`] rather than writing
+//!   divergent pixels into VRAM; the caller falls back to the CPU reference.
+//!
+//! Both log once per reason set, and a stage is either fully parity-tested or
+//! reported here — there is no third state. Context the recipe-only API does not
+//! carry (decoder As-Shot WB, mask layers, Lensfun correctors, depth planes)
+//! remains the caller's responsibility ([`unsupported_gpu_stages_with_context`]).
 //!
 //! [`unsupported_gpu_stages_with_context`] extends that verdict with the
 //! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
@@ -38,13 +68,18 @@ use lumina_core::masks::MaskPlane;
 #[cfg(feature = "gpu")]
 use lumina_core::render::SourceActionArtifact;
 use lumina_core::ImageFrame;
-use lumina_sidecar::{CurvePoint, Curves, EditRecipe, HslAdjustments, PointColor};
+use lumina_sidecar::EditRecipe;
 use thiserror::Error;
 
 // Shader + tiling modules are scaffolded (empty) so parallel subagents can fill
 // them in without touching this file. They are GPU-specific, hence gated.
 #[cfg(feature = "gpu")]
 pub mod shaders;
+// GPU post-tone adjustment stages (GPU-RENDER-PARITY-1): per-pixel color
+// (curves/HSL/Point Color/vibrance/saturation/Color Grading) and the
+// neighborhood Presence stages (Texture/Clarity DoG + Dehaze).
+#[cfg(feature = "gpu")]
+pub mod stages;
 #[cfg(feature = "gpu")]
 pub mod tiling;
 
@@ -113,13 +148,15 @@ pub enum GpuError {
 // Recipe-support validation (REVIEW-GPU-DIVERGENCE-1)
 // ---------------------------------------------------------------------------
 
-/// Adjustment keys the GPU color/tone stage actually implements.
+/// Adjustment keys the GPU adjustment pipeline actually implements.
 ///
-/// This is the exact key set of `lumina-core::apply_channel_lut_adjustments`
-/// mirrored by the WGSL shader. Note that `vibrance`/`saturation` have uniform
-/// fields but are **not** applied by the shader yet, so they are deliberately
-/// absent here.
-const GPU_SUPPORTED_ADJUSTMENT_KEYS: [&str; 8] = [
+/// The first eight are the exact key set of
+/// `lumina-core::apply_channel_lut_adjustments` mirrored by the tone shader.
+/// `vibrance`/`saturation` are applied by the [`stages`] per-pixel color pass
+/// (GPU-RENDER-PARITY-1), so they are supported too — including a present but
+/// neutral (`0.0`) value, which the CPU oracle still routes through its HSL
+/// roundtrip.
+const GPU_SUPPORTED_ADJUSTMENT_KEYS: [&str; 10] = [
     "exposure",
     "contrast",
     "highlights",
@@ -128,6 +165,8 @@ const GPU_SUPPORTED_ADJUSTMENT_KEYS: [&str; 8] = [
     "blacks",
     "wb_temperature",
     "wb_tint",
+    "vibrance",
+    "saturation",
 ];
 
 /// Maximum number of source-action artifacts the GPU source-action stage can
@@ -144,26 +183,37 @@ const GPU_SUPPORTED_ADJUSTMENT_KEYS: [&str; 8] = [
 /// required.
 pub const MAX_SOURCE_ACTIONS: usize = 7;
 
-/// Lists the recipe stages the current GPU color/tone stage cannot render.
+/// Lists the recipe stages the GPU pipeline cannot render.
 ///
-/// An empty result means the GPU path produces pixels within the documented
-/// golden tolerance (maxAbsDiff ≤ 1, PSNR ≥ 45 dB) of the CPU oracle. A
+/// An empty result means the GPU path produces pixels within the per-stage
+/// equivalence declared in `tests/parity.rs`: Point Color, Color Grading,
+/// neutral vibrance/saturation and Presence Clarity/positive Dehaze are
+/// byte-identical; Curves, HSL, non-neutral vibrance/saturation and Presence
+/// Texture/stacked Presence are bounded at maxAbsDiff ≤ 1 (≤ 2 for a fully
+/// stacked recipe) with `PSNR ≥ 48 dB` and `|mean signed error| ≤ 0.05`. A
 /// non-empty result means running the GPU path would **silently drop** those
 /// stages and produce different pixels than every CPU build — callers must
 /// route such renders to the CPU pipeline instead (Agents.md: no silent
 /// fallbacks).
+///
+/// Rendered by the GPU ([`stages`], GPU-RENDER-PARITY-1) and therefore **not**
+/// flagged: Curves, HSL, Point Color, vibrance/saturation, Color Grading and
+/// Presence (Texture / Clarity / Dehaze).
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
 ///   non-neutral value** (R2-GPU-05: sliders the GUI touched and reset store
 ///   their neutral default back into the recipe map; at that value the CPU
 ///   stage is pixel-identical to not having the key, so it must not block the
-///   GPU route);
-/// - non-neutral Curves, HSL, Point Color, Presence;
-/// - Color Grading, Noise Reduction, Sharpening, Effects (vignette/grain);
-/// - Geometry / Lens Correction / Perspective;
+///   GPU route; keys outside the schema have no neutral value and always flag);
+/// - Noise Reduction, Sharpening, Effects (vignette/grain);
+/// - Geometry / Lens Correction / Perspective / Lens Blur;
 /// - non-empty SourceActions **unless** GPU source-action artifacts are bound
-///   (see [`unsupported_gpu_stages_with_context`]).
+///   (see [`unsupported_gpu_stages_with_context`]);
+/// - Red-Eye (`red_eye`), typed `spot_removals`, non-empty legacy
+///   `extras["spot_removals"]` and `generative_edit` — stages the CPU
+///   reference applies/validates but the GPU does not implement (R2 follow-up:
+///   GPUs must not silently drop them or the related CPU hard error).
 ///
 /// This predicate sees only the recipe. Render-context state the GPU stage
 /// cannot reproduce — decoder As-Shot white balance above all (R2-MCP-01) — is
@@ -217,28 +267,11 @@ pub fn unsupported_gpu_stages_with_context(
         }
         reasons.push(format!("adjustment `{key}` not implemented on GPU"));
     }
-    if let Some(curves) = &recipe.curves {
-        if !curves_are_neutral(curves) {
-            reasons.push("curves".into());
-        }
-    }
-    if let Some(hsl) = &recipe.hsl {
-        if !hsl_is_neutral(hsl) {
-            reasons.push("hsl".into());
-        }
-    }
-    if let Some(point_color) = &recipe.point_color {
-        if !point_color_is_neutral(point_color) {
-            reasons.push("point_color".into());
-        }
-    }
-    if let Some(presence) = &recipe.presence {
-        if presence.texture != 0.0 || presence.clarity != 0.0 || presence.dehaze != 0.0 {
-            reasons.push("presence".into());
-        }
-    }
+    // GPU-RENDER-PARITY-1: curves, HSL, Point Color, Presence (Texture /
+    // Clarity / Dehaze), vibrance/saturation and Color Grading are all rendered
+    // by the [`stages`] post-tone passes, so they no longer route to the CPU.
+    // The stages below remain CPU-routed until their own parity tests land.
     for (active, name) in [
-        (recipe.color_grading.is_some(), "color_grading"),
         (recipe.noise_reduction.is_some(), "noise_reduction"),
         (recipe.sharpening.is_some(), "sharpening"),
         (recipe.effects.is_some(), "effects"),
@@ -260,6 +293,32 @@ pub fn unsupported_gpu_stages_with_context(
         if active {
             reasons.push(name.to_string());
         }
+    }
+    // GPU-RENDER-PARITY-1 follow-up (gate completeness): the CPU reference
+    // applies/validates these recipe stages (`apply_red_eye` in core,
+    // `apply_spot_heals_from_recipe` and `apply_generative_expand` in
+    // `render_frame_from_base`), but the GPU pipeline has no notion of them.
+    // Presence must therefore route to the CPU — otherwise the GPU path would
+    // silently drop red-eye correction / spot healing / generative expansion,
+    // and for a typed-but-unhealable spot the CPU hard `InvalidAdjustment`
+    // would be dropped too. The two spot views are checked independently: the
+    // typed `spot_removals` field (unhealable without the extras geometry) and
+    // the geometry-carrying `extras["spot_removals"]` array. An *empty*
+    // extras array is an explicit no-op in core and does not flag.
+    if recipe.red_eye.is_some() {
+        reasons.push("red_eye".into());
+    }
+    if !recipe.spot_removals.is_empty() {
+        reasons.push("spot_removals".into());
+    }
+    if let Some(value) = recipe.extras.get("spot_removals") {
+        let empty_array = value.as_array().is_some_and(|entries| entries.is_empty());
+        if !empty_array {
+            reasons.push("spot_removals (legacy extras)".into());
+        }
+    }
+    if recipe.generative_edit.is_some() {
+        reasons.push("generative_edit".into());
     }
     // More actions referenced than the unrolled shader slots can composite:
     // the surplus would be dropped silently, so the whole recipe stays
@@ -298,47 +357,6 @@ fn adjustment_neutral_value(key: &str) -> Option<f64> {
         | "vibrance" | "saturation" => Some(0.0),
         _ => None,
     }
-}
-
-/// A curve is neutral when its master is the identity (`input == output` for
-/// every point) and no per-channel curve exists — the CPU then leaves the
-/// pixel unchanged modulo rounding within the golden tolerance.
-fn curves_are_neutral(curves: &Curves) -> bool {
-    fn identity(points: &[CurvePoint]) -> bool {
-        points.iter().all(|p| (p.input - p.output).abs() <= 1e-6)
-    }
-    identity(&curves.master)
-        && curves.channels.red.is_none()
-        && curves.channels.green.is_none()
-        && curves.channels.blue.is_none()
-}
-
-/// Point Color is neutral when no entry shifts any channel (the CPU leaves
-/// every pixel unchanged: untouched pixels skip the HSL roundtrip, zero-shift
-/// entries roundtrip exactly).
-fn point_color_is_neutral(point_color: &PointColor) -> bool {
-    point_color
-        .entries
-        .iter()
-        .all(|e| e.hue_shift == 0.0 && e.saturation_shift == 0.0 && e.luminance_shift == 0.0)
-}
-
-/// HSL is neutral when every present channel carries all-zero hue/saturation/
-/// luminance (the CPU applies no visible change).
-fn hsl_is_neutral(hsl: &HslAdjustments) -> bool {
-    [
-        hsl.red,
-        hsl.orange,
-        hsl.yellow,
-        hsl.green,
-        hsl.cyan,
-        hsl.blue,
-        hsl.violet,
-        hsl.magenta,
-    ]
-    .iter()
-    .flatten()
-    .all(|c| c.hue == 0.0 && c.saturation == 0.0 && c.luminance == 0.0)
 }
 
 /// Combines evaluated mask-layer planes into one effective coverage plane
@@ -406,8 +424,10 @@ pub fn log_cpu_routing_once(reasons: &[String], context: &str) {
     }
 }
 
-/// Warns once per unique reason set that the VRAM interactive path is rendering
-/// a recipe whose stages the GPU tone pass does not implement.
+/// Warns once per unique reason set that the VRAM interactive path refuses
+/// a recipe with stages the GPU adjustment pipeline (tone + [`stages`]) does
+/// not implement. Refusal happens before any VRAM write, so no divergent
+/// pixels are ever presented; the caller falls back to the CPU reference.
 #[cfg(feature = "gpu")]
 fn warn_unsupported_vram_once(reasons: &[String]) {
     use std::collections::BTreeSet;
@@ -417,9 +437,9 @@ fn warn_unsupported_vram_once(reasons: &[String]) {
     let mut guard = WARNED.lock().unwrap();
     if guard.get_or_insert_with(BTreeSet::new).insert(key.clone()) {
         log::warn!(
-            "GPU VRAM preview renders only the tone stage; recipe uses \
-             GPU-unsupported stage(s): {key}. Interactive preview may diverge \
-             from the CPU reference until these stages land on GPU."
+            "GPU VRAM preview refuses recipes with GPU-unsupported stage(s): \
+             {key}. No VRAM pixels are written; the caller falls back to \
+             the CPU reference."
         );
     }
 }
@@ -438,8 +458,8 @@ pub fn log_gpu_init_failure(err: &GpuError) {
 ///
 /// Construct with [`GpuContext::new`]. Use [`GpuContext::is_available`] to learn
 /// whether a real adapter/device is bound; if not, [`GpuContext::render_with_gpu`]
-/// transparently uses the CPU pipeline. The context is cheap to keep around and
-/// reuse across frames once the GPU stages are implemented.
+/// falls back to the complete CPU reference (`render_cpu`). The context is
+/// cheap to keep around and reuse across frames.
 pub struct GpuContext {
     /// Bound GPU resources. `None` means "no adapter → CPU fallback only".
     #[cfg(feature = "gpu")]
@@ -454,6 +474,11 @@ pub struct GpuContext {
     /// first render that runs with bound artifacts; `None` otherwise.
     #[cfg(feature = "gpu")]
     sa_pipeline: std::sync::Mutex<Option<SourceActionPipelineState>>,
+    /// Compiled GPU-RENDER-PARITY-1 post-tone pipelines (per-pixel color,
+    /// Presence DoG, dark channel, Dehaze). Built lazily on the first render
+    /// whose recipe uses one of those stages.
+    #[cfg(feature = "gpu")]
+    post_pipeline: std::sync::Mutex<Option<PostPipelineState>>,
     /// VRAM-resident interactive state pool (GPU-60FPS-1 / GUI-WGPU-PRESENT-1):
     /// output + mask textures and overlay uniforms for a small LRU set of
     /// source dimensions, kept resident across frames so slider drags and brush
@@ -784,6 +809,7 @@ impl GpuContext {
             resources,
             pipeline: std::sync::Mutex::new(None),
             sa_pipeline: std::sync::Mutex::new(None),
+            post_pipeline: std::sync::Mutex::new(None),
             vram: std::sync::Mutex::new(VramPool::new()),
             source_actions: None,
             #[cfg(feature = "gpu")]
@@ -871,6 +897,254 @@ impl GpuContext {
             });
         }
         Ok(())
+    }
+
+    /// Lazily build the GPU-RENDER-PARITY-1 post-tone pipelines.
+    fn ensure_post_pipelines(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<PostPipelineState>>, GpuError> {
+        let mut guard = self.post_pipeline.lock().unwrap();
+        if guard.is_none() {
+            let Some(resources) = self.resources.as_ref() else {
+                return Ok(guard);
+            };
+            *guard = Some(build_post_pipelines(&resources.device)?);
+        }
+        Ok(guard)
+    }
+
+    /// Encode the post-tone adjustment chain (GPU-RENDER-PARITY-1) so `output`
+    /// ends up holding the pixel the CPU oracle would produce for `recipe`
+    /// after the tone pass.
+    ///
+    /// Pass order mirrors `apply_recipe` exactly:
+    /// `Presence Texture DoG → Presence Clarity DoG → Dehaze → color
+    /// (curves → HSL → Point Color → vibrance/saturation → Color Grading)`.
+    /// Each pass is a self-contained fullscreen draw into a ping-pong scratch
+    /// texture; the last pass writes `output`. Only the Dehaze pass needs a
+    /// host round-trip (the deterministic dark-channel percentile), so that one
+    /// pass pair is split across two submissions — every other pass shares one
+    /// encoder. No-op when the recipe uses none of these stages.
+    fn render_post_stages(
+        &self,
+        resources: &GpuResources,
+        width: u32,
+        height: u32,
+        recipe: &EditRecipe,
+        tone_view: &wgpu::TextureView,
+        output_view: &wgpu::TextureView,
+    ) -> Result<(), GpuError> {
+        // Resolve the ordered list of writing passes.
+        let mut writes: Vec<PostWrite> = Vec::new();
+        if let Some(presence) = recipe.presence {
+            if presence.texture != 0.0 {
+                writes.push(PostWrite::Dog(stages::DogParams::texture(presence.texture)));
+            }
+            if presence.clarity != 0.0 {
+                writes.push(PostWrite::Dog(stages::DogParams::clarity(presence.clarity)));
+            }
+            if presence.dehaze != 0.0 {
+                writes.push(PostWrite::Dehaze(presence.dehaze));
+            }
+        }
+        if stages::ColorParams::needs_stage(recipe) {
+            writes.push(PostWrite::Color(Box::new(
+                stages::ColorParams::from_recipe(recipe),
+            )));
+        }
+        if writes.is_empty() {
+            return Ok(());
+        }
+
+        let post = self.ensure_post_pipelines()?;
+        let Some(post) = post.as_ref() else {
+            return Ok(());
+        };
+
+        // Ping-pong scratch targets for the intermediate passes. `create_output_texture`
+        // already carries RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC.
+        let scratch0 = shaders::create_output_texture(
+            &resources.device,
+            width,
+            height,
+            "lumina-gpu-post-scratch0",
+        );
+        let scratch0_view = scratch0.create_view(&wgpu::TextureViewDescriptor::default());
+        let scratch1 = shaders::create_output_texture(
+            &resources.device,
+            width,
+            height,
+            "lumina-gpu-post-scratch1",
+        );
+        let scratch1_view = scratch1.create_view(&wgpu::TextureViewDescriptor::default());
+        let dark = shaders::create_output_texture(
+            &resources.device,
+            width,
+            height,
+            "lumina-gpu-post-dark",
+        );
+        let dark_view = dark.create_view(&wgpu::TextureViewDescriptor::default());
+        let scratch_views = [&scratch0_view, &scratch1_view];
+
+        let count = writes.len();
+        let mut current: &wgpu::TextureView = tone_view;
+        let mut ping = 0usize;
+        let mut encoder =
+            resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumina-gpu-post"),
+                });
+        for (index, write) in writes.iter().enumerate() {
+            let is_last = index + 1 == count;
+            let dst = if is_last {
+                output_view
+            } else {
+                scratch_views[ping]
+            };
+            match write {
+                PostWrite::Dog(params) => {
+                    // A dedicated uniform buffer per DoG pass: two passes can
+                    // share one encoder, and a shared buffer would make the
+                    // second `write_buffer` retroactively change the first draw.
+                    let dog_params = stages::create_dog_params_buffer(&resources.device);
+                    stages::write_dog_params(&resources.queue, &dog_params, params);
+                    let bind = stages::create_dog_bind_group(
+                        &resources.device,
+                        &post.dog_layout,
+                        &dog_params,
+                        current,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.dog_pipeline, &bind, dst);
+                }
+                PostWrite::Dehaze(strength) => {
+                    // The dark-channel percentile has to reach the host before
+                    // the apply pass, so flush the encoder built so far (which
+                    // holds every preceding DoG pass) together with the dark
+                    // pass, then continue in a fresh encoder.
+                    let dark_bind = stages::create_dark_bind_group(
+                        &resources.device,
+                        &post.dark_layout,
+                        current,
+                    );
+                    encode_fullscreen_pass(
+                        &mut encoder,
+                        &post.dark_pipeline,
+                        &dark_bind,
+                        &dark_view,
+                    );
+                    resources.queue.submit(Some(encoder.finish()));
+                    let airlight = self.readback_dark_airlight(resources, &dark, width, height)?;
+                    encoder =
+                        resources
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("lumina-gpu-post-dehaze"),
+                            });
+                    let params = stages::DehazeParams {
+                        airlight,
+                        strength: *strength,
+                        _pad: [0; 2],
+                    };
+                    stages::write_dehaze_params(&resources.queue, &post.dehaze_params, &params);
+                    let bind = stages::create_dehaze_bind_group(
+                        &resources.device,
+                        &post.dehaze_layout,
+                        &post.dehaze_params,
+                        current,
+                        &dark_view,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.dehaze_pipeline, &bind, dst);
+                }
+                PostWrite::Color(params) => {
+                    stages::write_color_params(&resources.queue, &post.color_params, params);
+                    let bind = stages::create_color_bind_group(
+                        &resources.device,
+                        &post.color_layout,
+                        &post.color_params,
+                        current,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.color_pipeline, &bind, dst);
+                }
+            }
+            current = dst;
+            if !is_last {
+                ping ^= 1;
+            }
+        }
+        resources.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Read the GPU dark-channel texture back and return the oracle's
+    /// deterministic Dehaze airlight ([`stages::dehaze_airlight`]).
+    fn readback_dark_airlight(
+        &self,
+        resources: &GpuResources,
+        dark: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Result<f32, GpuError> {
+        let bytes_per_row = shaders::aligned_bytes_per_row(width * 4);
+        let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lumina-gpu-dark-readback"),
+            size: (bytes_per_row * height.max(1)) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumina-gpu-dark-readback-enc"),
+                });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: dark,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        resources.queue.submit(Some(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        resources
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
+        rx.recv()
+            .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
+            .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
+        let mut dark_bytes = Vec::with_capacity((width * height) as usize);
+        for y in 0..height as usize {
+            let row = &mapped[y * bytes_per_row as usize..(y + 1) * bytes_per_row as usize];
+            for x in 0..width as usize {
+                dark_bytes.push(row[x * 4]);
+            }
+        }
+        drop(mapped);
+        staging.unmap();
+        Ok(stages::dehaze_airlight(&dark_bytes))
     }
 
     /// Bind the source-action artifacts the GPU source-action stage composites
@@ -1039,22 +1313,41 @@ impl GpuContext {
     /// intermediate texture first; the tone pass then samples *that* result.
     /// Otherwise the tone stage (`SHADER_SRC`) renders the uploaded frame
     /// directly into the cached `output` VRAM texture of the active pool entry.
+    /// When the recipe uses GPU-RENDER-PARITY-1 post-tone stages (Presence,
+    /// Curves, HSL, Point Color, vibrance/saturation, Color Grading) the tone
+    /// result feeds the same post chain as [`Self::render_with_gpu`] before the
+    /// final pixels land in the resident output texture. Dehaze is the one
+    /// post stage that needs a host round-trip (the deterministic dark-channel
+    /// percentile).
+    ///
     /// Caller presents via [`Self::copy_vram_to_texture`] or the overlay pass
     /// without ever mapping to CPU. Export/full-rebuild paths should use
     /// [`Self::render_with_gpu`] (which still reads back).
+    ///
+    /// **Unsupported recipes are refused.** The VRAM path cannot CPU-route
+    /// without a readback, so a recipe with GPU-unsupported stages returns
+    /// [`GpuError::RenderFailed`] (after a loud, once-per-reason-set warning)
+    /// instead of writing divergent pixels into the resident output. The caller
+    /// must render such a recipe through the full CPU reference instead; the
+    /// GUI already drops `vram_fresh` and falls back on this error.
     pub fn render_to_vram(&self, frame: &ImageFrame, recipe: &EditRecipe) -> Result<(), GpuError> {
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: the VRAM hot path cannot
-        // CPU-route without a readback (that would defeat its purpose). Recipes
-        // whose stages are unsupported *given the currently bound artifacts*
-        // are surfaced with a loud, once-per-reason-set warning instead of
-        // silently diverging. With bound artifacts, `source_actions` is no
-        // longer "unsupported" — the dedicated GPU stage composites them.
+        // CPU-route without a readback (that would defeat its purpose). A
+        // recipe whose stages are unsupported *given the currently bound
+        // artifacts* is therefore rejected loudly (no divergent pixels are ever
+        // written). With bound artifacts, `source_actions` is no longer
+        // "unsupported" — the dedicated GPU stage composites them.
         let sa_bound = self
             .matching_source_actions(frame.width, frame.height)
             .is_some();
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
             warn_unsupported_vram_once(&unsupported);
+            return Err(GpuError::RenderFailed(format!(
+                "VRAM path refuses a recipe with GPU-unsupported stage(s): {}; \
+                 render it through the full CPU reference (render_frame) instead",
+                unsupported.join("; ")
+            )));
         }
         let Some(resources) = self.resources.as_ref() else {
             return Err(GpuError::AdapterUnavailable(
@@ -1209,11 +1502,31 @@ impl GpuContext {
             tone_input_view,
             sampler,
         );
+        // GPU-RENDER-PARITY-1: when the recipe uses post-tone stages, the tone
+        // pass renders into a transient texture and the post chain writes the
+        // final pixels into the resident VRAM output (which the overlay/present
+        // path samples); without post stages the tone pass writes it directly.
+        let needs_post = post_stages_needed(recipe);
+        let tone_texture: Option<wgpu::Texture> = if needs_post {
+            Some(shaders::create_output_texture(
+                &resources.device,
+                frame.width,
+                frame.height,
+                "lumina-gpu-vram-tone-intermediate",
+            ))
+        } else {
+            None
+        };
+        let tone_view_owned: Option<wgpu::TextureView> = tone_texture
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let tone_target_view: &wgpu::TextureView =
+            tone_view_owned.as_ref().unwrap_or(&v.output_view);
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lumina-gpu-vram-tone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &v.output_view,
+                    view: tone_target_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -1236,6 +1549,16 @@ impl GpuContext {
             pass.draw(0..3, 0..1);
         }
         resources.queue.submit(Some(enc.finish()));
+        if needs_post {
+            self.render_post_stages(
+                resources,
+                frame.width,
+                frame.height,
+                recipe,
+                tone_target_view,
+                &v.output_view,
+            )?;
+        }
         if let Some(t0) = start {
             log::info!(
                 "lumina perf: render_to_vram {}x{} {:.2} ms",
@@ -1514,23 +1837,116 @@ impl GpuContext {
         Ok((width, height, values))
     }
 
+    /// Diagnostic/test helper: read the active VRAM output (the result of
+    /// [`Self::render_to_vram`], including any GPU-RENDER-PARITY-1 post-tone
+    /// stages) back to the CPU as a [`Frame`]. This is the counterpart of the
+    /// readback-free present path and exists so the interactive VRAM chain has
+    /// a byte-level regression net; the present path itself never calls it.
+    pub fn readback_output_frame(&self) -> Result<Frame, GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Err(GpuError::AdapterUnavailable(
+                "no adapter for output readback".into(),
+            ));
+        };
+        let mut guard = self.vram.lock().unwrap();
+        let Some(v) = guard.active() else {
+            return Err(GpuError::RenderFailed("vram not ready".into()));
+        };
+        let (width, height) = (v.width, v.height);
+        let bytes_per_row = shaders::aligned_bytes_per_row(width * 4);
+        let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lumina-gpu-output-readback"),
+            size: (bytes_per_row * height.max(1)) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = resources
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lumina-gpu-output-readback-enc"),
+            });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &v.output,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        resources.queue.submit(Some(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        resources
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
+        rx.recv()
+            .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
+            .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
+        let row_bytes = (width * 4) as usize;
+        let mut pixels = Vec::with_capacity(row_bytes * height as usize);
+        for y in 0..height as usize {
+            let start = y * bytes_per_row as usize;
+            pixels.extend_from_slice(&mapped[start..start + row_bytes]);
+        }
+        drop(mapped);
+        drop(guard);
+        staging.unmap();
+        Ok(Frame {
+            width,
+            height,
+            pixels,
+        })
+    }
+
     /// Full-frame render entry point.
     ///
     /// When a real GPU adapter is bound this runs the color/tone fragment shader
     /// (`SHADER_SRC`) on the decoded [`ImageFrame`] uploaded as an `Rgba8Unorm`
-    /// texture, rendering into an `Rgba8Unorm` target and reading the result back
-    /// into a [`Frame`]. The shader mirrors the integer-rounded per-channel math
-    /// of `lumina-core::apply_channel_lut_adjustments`, so the output matches the
-    /// CPU oracle within the golden-image tolerance (maxAbsDiff ≤ 1, PSNR ≥ 45 dB).
+    /// texture, then the [`stages`] post-tone chain, rendering into an
+    /// `Rgba8Unorm` target and reading the result back into a [`Frame`]. The
+    /// shaders mirror the integer-rounded per-channel math of the CPU oracle;
+    /// the measured CPU↔GPU equivalence is pinned by `tests/golden.rs` (tone)
+    /// and `tests/parity.rs` (post-tone stages).
     ///
-    /// **Recipe validation (REVIEW-GPU-DIVERGENCE-1).** The shader only implements
-    /// white balance plus the seven tone sliders. When [`unsupported_gpu_stages`]
-    /// reports any unsupported stage (Curves, HSL, Presence, Vibrance/Saturation,
-    /// Color Grading, Noise Reduction, Sharpening, Effects, Geometry, Lens
-    /// Correction, Perspective, SourceActions), the render is **explicitly routed
-    /// to the full CPU pipeline** instead of silently producing divergent pixels.
-    /// The routing decision is logged once per unique reason set — the GPU is an
-    /// accelerator, never a semantic change (Agents.md: no silent fallbacks).
+    /// **Recipe validation (REVIEW-GPU-DIVERGENCE-1).** The tone shader runs
+    /// white balance plus the seven tone sliders; the [`stages`] post-tone
+    /// chain then runs Presence and the per-pixel color stages. When
+    /// [`unsupported_gpu_stages`] reports any remaining unsupported stage
+    /// (Noise Reduction, Sharpening, Effects, Geometry, Lens Correction,
+    /// Perspective, Lens Blur, SourceActions, Red-Eye, spot removals,
+    /// generative edit, …), the render is **explicitly routed to the `render_cpu`
+    /// fallback** rather than silently GPU-rendering with the stage dropped. The
+    /// routing decision is logged once per unique reason set.
+    ///
+    /// **Complete CPU reference on fallback.** `render_cpu` (this method's
+    /// fallback) runs the full `lumina_core::render_frame` chain — spot
+    /// healing, every adjustment stage (including Red-Eye), the decoupled
+    /// geometry stages (lens/fill/perspective/crop) and generative expand — so
+    /// a CPU-routed render is the complete reference, not a partial
+    /// `apply_recipe`. Context the recipe-only API does not carry (decoder
+    /// As-Shot white balance, mask layers, Lensfun correctors, depth planes)
+    /// stays the caller's responsibility (see
+    /// [`unsupported_gpu_stages_with_context`]).
     ///
     /// This method only sees the recipe. Render-context state — decoder As-Shot
     /// white balance, mask layers, Lensfun correctors — cannot be expressed
@@ -1539,9 +1955,9 @@ impl GpuContext {
     /// *before* calling this method; the CLI/MCP routing mirrors do exactly
     /// that (R2-MCP-01).
     ///
-    /// When no adapter is bound (or the `gpu` feature is disabled downstream) this
-    /// transparently falls back to the CPU pipeline so the public API always
-    /// returns a real [`Frame`].
+    /// When no adapter is bound (or the `gpu` feature is disabled downstream) it
+    /// likewise uses the `render_cpu` fallback, so the public API always returns
+    /// a real [`Frame`].
     ///
     /// TODO(PERF): the current path copies the render target back to a CPU buffer
     /// via `map_async`. A later stage should present directly to a swapchain /
@@ -1552,7 +1968,7 @@ impl GpuContext {
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
         let Some(resources) = self.resources.as_ref() else {
-            return Self::render_cpu(frame, recipe);
+            return render_cpu(frame, recipe);
         };
         // R2-GPU-06: a lost device must not panic — degrade to the CPU oracle.
         if resources
@@ -1560,7 +1976,7 @@ impl GpuContext {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             log::warn!("GPU device lost; routing render_with_gpu to CPU");
-            return Self::render_cpu(frame, recipe);
+            return render_cpu(frame, recipe);
         }
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: never let the GPU path drop
         // recipe stages. Route to the CPU oracle loudly instead of rendering
@@ -1573,12 +1989,12 @@ impl GpuContext {
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
             log_cpu_routing_once(&unsupported, "render_with_gpu");
-            return Self::render_cpu(frame, recipe);
+            return render_cpu(frame, recipe);
         }
         self.ensure_pipeline()?;
         let guard = self.pipeline.lock().unwrap();
         let Some(pipeline) = guard.as_ref() else {
-            return Self::render_cpu(frame, recipe);
+            return render_cpu(frame, recipe);
         };
 
         let width = frame.width;
@@ -1653,6 +2069,27 @@ impl GpuContext {
         let output_texture = &pooled.output;
         let output_view = &pooled.output_view;
         let readback = &pooled.readback;
+
+        // GPU-RENDER-PARITY-1: recipes that use post-tone stages (Presence,
+        // curves/HSL/Point Color/vibrance/saturation/Color Grading) render the
+        // tone pass into a transient texture first; the post chain then writes
+        // the final pixels into `output`. Without post stages the tone pass
+        // keeps writing `output` directly.
+        let needs_post = post_stages_needed(recipe);
+        let tone_texture: Option<wgpu::Texture> = if needs_post {
+            Some(shaders::create_output_texture(
+                &resources.device,
+                width,
+                height,
+                "lumina-gpu-tone-intermediate",
+            ))
+        } else {
+            None
+        };
+        let tone_view_owned: Option<wgpu::TextureView> = tone_texture
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let tone_target_view: &wgpu::TextureView = tone_view_owned.as_ref().unwrap_or(output_view);
 
         // Bind group: uniform (0) + tone input texture (1) + sampler (2).
         // Built below once the (possibly source-action-composited) tone input
@@ -1757,7 +2194,7 @@ impl GpuContext {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lumina-gpu-color-tone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: output_view,
+                    view: tone_target_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -1778,6 +2215,24 @@ impl GpuContext {
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &tone_bind, &[]);
             pass.draw(0..3, 0..1);
+        }
+        if needs_post {
+            // Flush source-action + tone first: `render_post_stages` samples the
+            // tone result and writes `output` (submitting its own encoders).
+            resources.queue.submit(Some(encoder.finish()));
+            self.render_post_stages(
+                resources,
+                width,
+                height,
+                recipe,
+                tone_target_view,
+                output_view,
+            )?;
+            encoder = resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumina-gpu-readback-enc"),
+                });
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -1841,10 +2296,11 @@ impl GpuContext {
 
     /// Draft render for an interactive viewport (ROI) using the draft pyramid.
     ///
-    /// Sets up the GPU scaffolding (pipeline + uniforms + ROI tile set) and,
-    /// because the color/tone shader stage is not implemented yet, falls back to
-    /// the CPU reference to produce real pixels. The tile set is logged so the
-    /// parallel tiling subagent has a concrete call site to plug into.
+    /// Sets up the GPU scaffolding (pipeline + uniforms + ROI tile set) and
+    /// produces real pixels through the CPU reference (the draft path stays
+    /// on the CPU scaffold even though the tone shader stage exists). The
+    /// tile set is logged so the parallel tiling subagent has a concrete
+    /// call site to plug into.
     pub fn render_draft(
         &self,
         frame: &ImageFrame,
@@ -1885,22 +2341,14 @@ impl GpuContext {
         self.render_draft_cpu(frame)
     }
 
-    /// CPU fallback used by the bootstrap stub. Applies the recipe with the
-    /// platform-neutral core pipeline and returns a [`Frame`].
-    fn render_cpu(frame: &ImageFrame, recipe: &EditRecipe) -> Result<Frame, GpuError> {
-        let mut out = frame.clone();
-        out.apply_recipe(recipe)?;
-        Ok(Frame::from_image_frame(out))
-    }
-
     /// CPU fallback that uses the recipe stored via [`update_uniforms`], or the
-    /// untouched frame when none has been set.
+    /// untouched frame when none has been set. Runs the full CPU reference
+    /// chain (the free `render_cpu`), not just `apply_recipe`.
     fn render_draft_cpu(&self, frame: &ImageFrame) -> Result<Frame, GpuError> {
-        let mut out = frame.clone();
-        if let Some(recipe) = self.recipe.as_ref() {
-            out.apply_recipe(recipe)?;
+        match self.recipe.as_ref() {
+            Some(recipe) => render_cpu(frame, recipe),
+            None => Ok(Frame::from_image_frame(frame.clone())),
         }
-        Ok(Frame::from_image_frame(out))
     }
 }
 
@@ -1922,15 +2370,14 @@ impl GpuContext {
         None
     }
 
-    /// CPU fallback render (the only path when the `gpu` feature is off).
+    /// CPU fallback render (the only path when the `gpu` feature is off): runs
+    /// the full CPU reference chain (the free `render_cpu`).
     pub fn render_with_gpu(
         &self,
         frame: &ImageFrame,
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
-        let mut out = frame.clone();
-        out.apply_recipe(recipe)?;
-        Ok(Frame::from_image_frame(out))
+        render_cpu(frame, recipe)
     }
 
     pub fn perf_log_enabled() -> bool {
@@ -1955,6 +2402,35 @@ impl GpuContext {
     pub fn copy_vram_to_texture(&self, _d: &()) -> Result<(), GpuError> {
         Ok(())
     }
+}
+
+/// The **full** CPU reference render used as the fallback whenever the GPU
+/// cannot run a recipe.
+///
+/// Runs the complete `lumina_core::render_frame` chain — spot healing, every
+/// adjustment stage (tone, color, Presence, Red-Eye), the decoupled geometry
+/// stages (lens/fill/perspective/crop) and generative expand — not just
+/// `ImageFrame::apply_recipe`. That keeps the CPU fallback a *complete*
+/// reference for every recipe-driven stage the GPU reports as unsupported
+/// (Agents.md: CPU bleibt vollständige Referenz; kein stiller Fallback).
+///
+/// Render-context inputs the recipe-only GPU API does not carry (decoder
+/// As-Shot white balance, mask layers, Lensfun correctors, depth planes) are
+/// `None`/empty here; a caller that owns them must re-gate on
+/// [`unsupported_gpu_stages_with_context`] and run its own full-chain render.
+fn render_cpu(frame: &ImageFrame, recipe: &EditRecipe) -> Result<Frame, GpuError> {
+    let output = lumina_core::render_frame(
+        frame,
+        &lumina_core::RenderContext {
+            recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )?;
+    Ok(Frame::from_image_frame(output.frame))
 }
 
 // ---------------------------------------------------------------------------
@@ -2011,6 +2487,103 @@ struct SourceActionPipelineState {
     uniform_buffer: wgpu::Buffer,
     #[allow(dead_code)]
     bind_group_layout: wgpu::BindGroupLayout,
+}
+
+/// Compiled GPU-RENDER-PARITY-1 post-tone pipelines (GPU-RENDER-PARITY-1).
+///
+/// Groups the four fullscreen adjustment passes that run *after* the tone pass
+/// in the CPU oracle's order: the per-pixel color pass (curves → HSL → Point
+/// Color → vibrance/saturation → Color Grading), the box Difference-of-
+/// Gaussians used for Presence Texture/Clarity, the dark-channel pass, and the
+/// Dehaze apply pass. Built once and reused; only the bind groups (which
+/// reference per-frame input textures) are rebuilt per pass.
+#[cfg(feature = "gpu")]
+struct PostPipelineState {
+    color_pipeline: wgpu::RenderPipeline,
+    color_layout: wgpu::BindGroupLayout,
+    color_params: wgpu::Buffer,
+    dog_pipeline: wgpu::RenderPipeline,
+    dog_layout: wgpu::BindGroupLayout,
+    // NOTE: no shared dog uniform buffer — a render can run two DoG passes
+    // (Texture then Clarity) in one encoder, and a shared buffer would make
+    // `queue.write_buffer` apply the *last* params to both draws. Each pass
+    // allocates its own tiny uniform buffer instead.
+    dark_pipeline: wgpu::RenderPipeline,
+    dark_layout: wgpu::BindGroupLayout,
+    dehaze_pipeline: wgpu::RenderPipeline,
+    dehaze_layout: wgpu::BindGroupLayout,
+    dehaze_params: wgpu::Buffer,
+}
+
+/// Build all post-tone pipelines targeting [`shaders::RGBA8_FORMAT`].
+#[cfg(feature = "gpu")]
+fn build_post_pipelines(device: &wgpu::Device) -> Result<PostPipelineState, GpuError> {
+    let format = shaders::RGBA8_FORMAT;
+    Ok(PostPipelineState {
+        color_pipeline: stages::create_color_pipeline(device, format)?,
+        color_layout: stages::create_color_bind_group_layout(device),
+        color_params: stages::create_color_params_buffer(device),
+        dog_pipeline: stages::create_dog_pipeline(device, format)?,
+        dog_layout: stages::create_dog_bind_group_layout(device),
+        dark_pipeline: stages::create_dark_pipeline(device, format)?,
+        dark_layout: stages::create_dark_bind_group_layout(device),
+        dehaze_pipeline: stages::create_dehaze_pipeline(device, format)?,
+        dehaze_layout: stages::create_dehaze_bind_group_layout(device),
+        dehaze_params: stages::create_dehaze_params_buffer(device),
+    })
+}
+
+/// One post-tone fullscreen writing pass (GPU-RENDER-PARITY-1).
+#[cfg(feature = "gpu")]
+enum PostWrite {
+    /// Presence Texture/Clarity box Difference-of-Gaussians.
+    Dog(stages::DogParams),
+    /// Presence Dehaze apply pass (holds the signed strength).
+    Dehaze(f32),
+    /// Per-pixel curves/HSL/Point Color/vibrance/saturation/Color Grading.
+    /// Boxed: the fixed-capacity parameter block is far larger than the other
+    /// variants (clippy::large_enum_variant).
+    Color(Box<stages::ColorParams>),
+}
+
+/// Whether the recipe uses any post-tone adjustment stage the GPU renders in
+/// [`GpuContext::render_post_stages`]. The tone target is chosen from this so a
+/// recipe that needs no post pass keeps rendering straight into the output.
+#[cfg(feature = "gpu")]
+fn post_stages_needed(recipe: &EditRecipe) -> bool {
+    let presence = recipe.presence.is_some_and(|presence| {
+        presence.texture != 0.0 || presence.clarity != 0.0 || presence.dehaze != 0.0
+    });
+    presence || stages::ColorParams::needs_stage(recipe)
+}
+
+/// Encode one fullscreen-triangle draw into `dst` with `pipeline`/`bind_group`.
+#[cfg(feature = "gpu")]
+fn encode_fullscreen_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    dst: &wgpu::TextureView,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("lumina-gpu-post-pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: dst,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind_group, &[]);
+    pass.draw(0..3, 0..1);
 }
 
 /// Pooled resources for a single [`GpuContext::render_with_gpu`] size bucket
@@ -2550,27 +3123,20 @@ mod routing_gate_tests {
         }
     }
 
-    /// R2-GPU-05: sliders that were touched and reset carry their neutral
-    /// default (`0.0`) in the recipe map instead of being removed. They must
-    /// not flag the GPU route — only non-neutral values may.
+    /// R2-GPU-05 / GPU-RENDER-PARITY-1: vibrance and saturation are rendered by
+    /// the color pass, so neither a present-but-neutral (`0.0`) value nor a
+    /// non-neutral one may flag the GPU route anymore.
     #[test]
-    fn neutral_reset_adjustments_do_not_flag() {
+    fn vibrance_and_saturation_are_always_supported() {
         let touched_and_reset =
             recipe_with_adjustments(&[("vibrance", 0.0), ("saturation", 0.0), ("exposure", 0.0)]);
         assert!(unsupported_gpu_stages(&touched_and_reset).is_empty());
 
-        let reasons = unsupported_gpu_stages(&recipe_with_adjustments(&[
+        assert!(unsupported_gpu_stages(&recipe_with_adjustments(&[
             ("vibrance", 0.2),
             ("saturation", -0.5),
-        ]));
-        assert!(
-            reasons.iter().any(|r| r.contains("vibrance")),
-            "{reasons:?}"
-        );
-        assert!(
-            reasons.iter().any(|r| r.contains("saturation")),
-            "{reasons:?}"
-        );
+        ]))
+        .is_empty());
     }
 
     /// Keys outside the recipe schema have no neutral value and stay flagged
@@ -2585,10 +3151,10 @@ mod routing_gate_tests {
         );
     }
 
-    /// G-02: a non-neutral Point Color stage routes to CPU loudly; an
-    /// absent or all-zero-shift stage does not block the GPU route.
+    /// GPU-RENDER-PARITY-1: Point Color is rendered by the color pass, so no
+    /// Point Color configuration blocks the GPU route anymore.
     #[test]
-    fn point_color_neutrality_gates_gpu_route() {
+    fn point_color_is_always_supported() {
         use lumina_sidecar::{PointColor, PointColorEntry};
         let entry = |saturation_shift| PointColorEntry {
             id: "pc-1".into(),
@@ -2608,11 +3174,7 @@ mod routing_gate_tests {
         assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
         assert!(unsupported_gpu_stages(&recipe(vec![])).is_empty());
         assert!(unsupported_gpu_stages(&recipe(vec![entry(0.0)])).is_empty());
-        let reasons = unsupported_gpu_stages(&recipe(vec![entry(0.5)]));
-        assert!(
-            reasons.iter().any(|r| r.contains("point_color")),
-            "{reasons:?}"
-        );
+        assert!(unsupported_gpu_stages(&recipe(vec![entry(0.5)])).is_empty());
     }
 
     /// Documented per-key identity values (R2-GPU-05 follow-up): everything is
@@ -2661,14 +3223,18 @@ mod routing_gate_tests {
             unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty()
         );
 
-        // WB stacks with recipe reasons instead of replacing them.
+        // WB stacks with recipe reasons instead of replacing them. (A key
+        // outside the schema has no neutral value and stays CPU-routed.)
         let mixed = unsupported_gpu_stages_with_context(
-            &recipe_with_adjustments(&[("vibrance", 0.3)]),
+            &recipe_with_adjustments(&[("unknown_stage", 0.3)]),
             false,
             Some(&wb),
         );
         assert_eq!(mixed.len(), 2, "{mixed:?}");
-        assert!(mixed.iter().any(|r| r.contains("vibrance")), "{mixed:?}");
+        assert!(
+            mixed.iter().any(|r| r.contains("unknown_stage")),
+            "{mixed:?}"
+        );
         assert!(
             mixed.iter().any(|r| r.starts_with("camera_white_balance")),
             "{mixed:?}"

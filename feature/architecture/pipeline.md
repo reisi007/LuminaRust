@@ -1251,12 +1251,18 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   env-konfigurierbar) ersetzt den Single-Slot.
 - **Kein `lumina-core`-API-Bruch:** Core blieb vollständig unverändert; alle
   Erweiterungen sind additiv in `lumina-gpu`/`lumina-gui`.
-- **Restrisiken:** (1) Rezepte mit GPU-unterstützten Stufen rendern in der
-  interaktiven Drag-Vorschau weiter tone-only (mit Warnung) — Present bleibt
-  dort bewusst auf dem exakten CPU-Pfad; (2) >45-MP-Zoom nutzt weiterhin
-  Volltextur-Pooling statt 512²-Tile-Cache (M2); (3) der Present-Pfad ist
-  headless nicht automatisiert testbar und braucht den nächsten manuellen
-  GUI-Test (Block C).
+- **Restrisiken:** (1) Rezepte mit nicht implementierten GPU-Stufen werden
+  vom VRAM-Pfad vor jedem Write verweigert (Warnung) — Present fällt dort
+  auf den exakten CPU-Pfad zurück, divergente Pixel werden nie geschrieben;
+  (2) >45-MP-Zoom nutzt weiterhin Volltextur-Pooling statt 512²-Tile-Cache
+  (M2); (3) der Present-Pfad ist headless nicht automatisiert testbar und
+  braucht den nächsten manuellen GUI-Test (Block C).
+- **User-Entscheid 2026-09-12 (volle GPU-Parität, Agents.md
+  Änderungsregeln):** Jede Renderstufe muss auch GPU-tauglich sein — nichts
+  bleibt CPU-only. Ein CPU-Fallback wegen nicht implementierter GPU-Stufen
+  („Render routed to CPU") ist ein Fail mit Fix-Pflicht (Task
+  GPU-RENDER-PARITY-1), kein akzeptierter Zustand. Die CPU bleibt daneben
+  die vollständige Referenz (kein GPU-only-Weg).
 
 ### G-01 Develop-Basis: Treatment, Profil, Reset-Automatik, Panel-Previous
 (LRPAR-G01-BASIC, Release 1.0)

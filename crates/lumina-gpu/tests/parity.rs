@@ -1,0 +1,1175 @@
+//! GPU-RENDER-PARITY-1 parity harness: the post-tone GPU stages (per-pixel
+//! color + Presence) against the CPU oracle (`lumina_core::render_frame`).
+//!
+//! Each implemented stage gets a recipe that drives it at a non-neutral value;
+//! the test asserts
+//!
+//! 1. [`unsupported_gpu_stages`] is **empty** (the stage is genuinely GPU-
+//!    renderable, not silently CPU-routed), and
+//! 2. the GPU output matches the CPU oracle at that stage's **strongest
+//!    measured property** ([`Equivalence`]): stages measured byte-identical on
+//!    both frames (Point Color, Color Grading, neutral vibrance/saturation,
+//!    Presence Clarity and positive Dehaze) assert `maxAbsDiff == 0`; the rest
+//!    assert their measured bound (≤ 1, or ≤ 2 for the fully stacked recipe)
+//!    plus a structural PSNR floor and a **mean-signed-error bias bound** so the
+//!    tolerance cannot hide a systematic tilt. The bound is not loosened to fit
+//!    the data — the prose in `lib.rs` and here states exactly what is asserted.
+//!
+//! The residuals come from the oracle evaluating the curves ratio in `f64`
+//! (the GPU is `f32`) and from the Metal backend rounding one ulp differently
+//! at a `round()` tie.
+//!
+//! Without a bound adapter the hardware checks are skipped loudly, never
+//! failed (matching `golden.rs`); the validator assertions still run.
+#![cfg(feature = "gpu")]
+
+use lumina_core::{render_frame, ImageFrame, RenderContext};
+use lumina_gpu::{
+    unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
+    GpuContext, MAX_SOURCE_ACTIONS,
+};
+use lumina_sidecar::{
+    BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves, EditRecipe,
+    Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, HslAdjustments, HslChannel,
+    LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry, Presence,
+    RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SpotRemoval, SpotRemovalMode, SOURCE_ACTION_VERSION,
+};
+use std::collections::BTreeMap;
+
+const SKIP_MESSAGE: &str = "GPU adapter unavailable - skipped parity check";
+
+/// The strongest CPU↔GPU equivalence property a recipe is asserted at.
+#[derive(Clone, Copy, Debug)]
+enum Equivalence {
+    /// Measured byte-identical on both parity frames (`maxAbsDiff == 0`).
+    ByteIdentical,
+    /// Measured within this many 8-bit codes on both parity frames.
+    Bounded(u8),
+}
+
+/// Structural PSNR floor for bounded stages (in addition to `maxAbsDiff`).
+const MIN_PSNR_DB: f64 = 48.0;
+/// Maximum absolute **mean signed** per-byte error for bounded stages: the
+/// residual must be rounding noise, not a systematic brightness/colour tilt.
+const MAX_ABS_MEAN_SIGNED_ERROR: f64 = 0.05;
+
+fn gradient_frame(width: u32, height: u32) -> ImageFrame {
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let rx = x as f64 / (width as f64 - 1.0).max(1.0);
+            let ry = y as f64 / (height as f64 - 1.0).max(1.0);
+            pixels.extend_from_slice(&[
+                (rx * 255.0).round() as u8,
+                (ry * 255.0).round() as u8,
+                (((rx + ry) * 0.5) * 255.0).round() as u8,
+                255,
+            ]);
+        }
+    }
+    ImageFrame::new(width, height, pixels).expect("synthetic gradient frame")
+}
+
+fn noise_frame(width: u32, height: u32, seed: u64) -> ImageFrame {
+    let mut state = seed;
+    let mut next = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for _ in 0..(width * height) {
+        pixels.extend_from_slice(&[
+            (next() & 0xFF) as u8,
+            (next() & 0xFF) as u8,
+            (next() & 0xFF) as u8,
+            255,
+        ]);
+    }
+    ImageFrame::new(width, height, pixels).expect("synthetic noise frame")
+}
+
+fn max_abs_diff(a: &[u8], b: &[u8]) -> u8 {
+    assert_eq!(a.len(), b.len());
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.abs_diff(*y))
+        .max()
+        .unwrap_or(0)
+}
+
+fn psnr_db(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let mut mse = 0.0f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let e = (*x as f64) - (*y as f64);
+        mse += e * e;
+    }
+    let mse = mse / a.len() as f64;
+    if mse == 0.0 {
+        f64::INFINITY
+    } else {
+        10.0 * (255.0f64 * 255.0 / mse).log10()
+    }
+}
+
+/// Mean signed per-byte error `mean(a - b)`. A tolerance that merely capped the
+/// maximum would let a systematic brightness shift through; this metric makes
+/// such a bias visible (both signs cancel only for zero-mean rounding noise).
+fn mean_signed_error(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let sum: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) - (*y as f64))
+        .sum();
+    sum / a.len() as f64
+}
+
+fn curve(points: &[(f32, f32)]) -> Vec<CurvePoint> {
+    points
+        .iter()
+        .map(|&(input, output)| CurvePoint { input, output })
+        .collect()
+}
+
+fn hsl(hue: f32, saturation: f32, luminance: f32) -> HslChannel {
+    HslChannel {
+        hue,
+        saturation,
+        luminance,
+    }
+}
+
+fn entry(id: &str, center: f32, range: f32, hue: f32, sat: f32, lum: f32) -> PointColorEntry {
+    PointColorEntry {
+        id: id.into(),
+        hue_center: center,
+        hue_range: range,
+        hue_shift: hue,
+        saturation_shift: sat,
+        luminance_shift: lum,
+    }
+}
+
+fn range(hue: f32, saturation: f32, luminance: f32) -> ColorGradingRange {
+    ColorGradingRange {
+        hue_degrees: hue,
+        saturation,
+        luminance,
+    }
+}
+
+/// The implemented stages, each represented by a non-neutral recipe.
+fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
+    vec![
+        (
+            "curves_s_curve",
+            EditRecipe {
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.25, 0.18), (0.75, 0.85), (1.0, 1.0)]),
+                    channels: CurveChannels {
+                        red: Some(curve(&[(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)])),
+                        green: None,
+                        blue: Some(curve(&[(0.0, 0.0), (0.5, 0.45), (1.0, 1.0)])),
+                    },
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "hsl_all_channels",
+            EditRecipe {
+                hsl: Some(HslAdjustments {
+                    version: 1,
+                    red: Some(hsl(0.2, 0.1, 0.05)),
+                    orange: Some(hsl(-0.1, -0.2, 0.0)),
+                    yellow: Some(hsl(0.0, 0.3, -0.1)),
+                    green: Some(hsl(0.15, 0.0, 0.1)),
+                    cyan: Some(hsl(-0.3, 0.2, 0.0)),
+                    blue: Some(hsl(0.25, -0.15, 0.05)),
+                    violet: Some(hsl(0.0, 0.1, -0.05)),
+                    magenta: Some(hsl(-0.2, 0.25, 0.0)),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "point_color_two_entries",
+            EditRecipe {
+                point_color: Some(PointColor {
+                    version: 1,
+                    entries: vec![
+                        entry("pc-1", 30.0, 40.0, 0.5, -0.3, 0.1),
+                        entry("pc-2", 210.0, 90.0, -0.4, 0.2, -0.2),
+                    ],
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "vibrance_saturation",
+            EditRecipe {
+                adjustments: BTreeMap::from([
+                    ("vibrance".into(), 0.45),
+                    ("saturation".into(), -0.25),
+                ]),
+                ..Default::default()
+            },
+        ),
+        (
+            "vibrance_present_zero",
+            EditRecipe {
+                adjustments: BTreeMap::from([("vibrance".into(), 0.0), ("saturation".into(), 0.0)]),
+                ..Default::default()
+            },
+        ),
+        (
+            "color_grading_full",
+            EditRecipe {
+                color_grading: Some(ColorGrading {
+                    version: 1,
+                    shadows: range(220.0, 0.4, -0.1),
+                    midtones: range(40.0, 0.2, 0.05),
+                    highlights: range(120.0, 0.3, 0.1),
+                    balance: 0.2,
+                    blending: 0.6,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_texture",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.7,
+                    clarity: 0.0,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_clarity",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.0,
+                    clarity: 0.4,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_dehaze_positive",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.0,
+                    clarity: 0.0,
+                    dehaze: 0.6,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_dehaze_negative",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.0,
+                    clarity: 0.0,
+                    dehaze: -0.4,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_full",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.5,
+                    clarity: 0.3,
+                    dehaze: 0.5,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_texture_clarity",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.4,
+                    clarity: 0.2,
+                    dehaze: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "presence_texture_clarity_curves",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.4,
+                    clarity: 0.2,
+                    dehaze: 0.0,
+                }),
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.5, 0.45), (1.0, 1.0)]),
+                    channels: CurveChannels::default(),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "tone_curves",
+            EditRecipe {
+                adjustments: BTreeMap::from([
+                    ("exposure".into(), 0.35),
+                    ("contrast".into(), 0.15),
+                    ("wb_temperature".into(), 5800.0),
+                ]),
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.5, 0.45), (1.0, 1.0)]),
+                    channels: CurveChannels::default(),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "combined_tone_color_presence",
+            EditRecipe {
+                adjustments: BTreeMap::from([
+                    ("exposure".into(), 0.35),
+                    ("contrast".into(), 0.15),
+                    ("wb_temperature".into(), 5800.0),
+                    ("vibrance".into(), 0.2),
+                ]),
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.4,
+                    clarity: 0.2,
+                    dehaze: 0.0,
+                }),
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.5, 0.45), (1.0, 1.0)]),
+                    channels: CurveChannels::default(),
+                }),
+                hsl: Some(HslAdjustments {
+                    version: 1,
+                    blue: Some(hsl(0.2, 0.1, 0.0)),
+                    ..Default::default()
+                }),
+                point_color: Some(PointColor {
+                    version: 1,
+                    entries: vec![entry("pc-1", 120.0, 60.0, 0.3, -0.1, 0.0)],
+                }),
+                color_grading: Some(ColorGrading {
+                    version: 1,
+                    shadows: range(200.0, 0.2, 0.0),
+                    midtones: ColorGradingRange::neutral(),
+                    highlights: range(60.0, 0.2, 0.05),
+                    balance: 0.0,
+                    blending: 0.5,
+                }),
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
+/// The strongest CPU↔GPU equivalence **measured** for each recipe on this
+/// backend (MAX-frames run: gradient 64² + noise 64²).
+///
+/// Every recipe must declare a bound — there is no catch-all, so adding a
+/// recipe forces an explicit, reviewed decision instead of silently inheriting
+/// a loose tolerance. The byte-identical group is asserted at `diff == 0`; the
+/// bounded groups additionally require the PSNR floor and the mean-signed-error
+/// bias bound.
+fn equivalence_for(name: &str) -> Equivalence {
+    match name {
+        // Measured 0 on both frames.
+        "point_color_two_entries"
+        | "vibrance_present_zero"
+        | "color_grading_full"
+        | "presence_clarity"
+        | "presence_dehaze_positive"
+        | "presence_texture_clarity" => Equivalence::ByteIdentical,
+        // Measured ≤ 1 on both frames (one rounding-tie code).
+        "curves_s_curve"
+        | "hsl_all_channels"
+        | "vibrance_saturation"
+        | "presence_texture"
+        | "presence_dehaze_negative"
+        | "presence_full"
+        | "presence_texture_clarity_curves"
+        | "tone_curves" => Equivalence::Bounded(1),
+        // Stacks tone + Presence + every color stage; two ±1 codes coincide on
+        // one pixel of the gradient frame.
+        "combined_tone_color_presence" => Equivalence::Bounded(2),
+        other => panic!("no measured equivalence bound declared for recipe `{other}`"),
+    }
+}
+
+#[test]
+fn tone_only_is_byte_identical() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let frame = gradient_frame(64, 64);
+    for (name, recipe) in [
+        ("default", EditRecipe::default()),
+        (
+            "exposure",
+            EditRecipe {
+                adjustments: BTreeMap::from([("exposure".into(), 0.5)]),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let cpu = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .expect("CPU oracle render")
+        .frame;
+        let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
+        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+        eprintln!("tone[{name}]: maxAbsDiff={diff}");
+        assert_eq!(
+            diff, 0,
+            "tone-only render must stay byte-identical ({name})"
+        );
+    }
+}
+
+#[test]
+fn implemented_stages_are_not_flagged() {
+    for (name, recipe) in supported_recipes() {
+        let reasons = unsupported_gpu_stages(&recipe);
+        assert!(
+            reasons.is_empty(),
+            "{name} must be fully GPU-supported, got {reasons:?}"
+        );
+    }
+}
+
+#[test]
+fn implemented_stages_match_cpu_oracle() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped parity check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+
+    let frames: Vec<(&'static str, ImageFrame)> = vec![
+        ("gradient_64x64", gradient_frame(64, 64)),
+        ("noise_64x64", noise_frame(64, 64, 0x0BAD_F00D_1234_5678)),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    for (frame_name, frame) in &frames {
+        for (recipe_name, recipe) in supported_recipes() {
+            let cpu = render_frame(
+                frame,
+                &RenderContext {
+                    recipe: &recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: None,
+                    depth: None,
+                },
+            )
+            .expect("CPU oracle render")
+            .frame;
+            let gpu = ctx
+                .render_with_gpu(frame, &recipe)
+                .unwrap_or_else(|error| panic!("{frame_name}/{recipe_name}: GPU render: {error}"));
+            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+            let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+            eprintln!(
+                "parity[{frame_name}/{recipe_name}]: maxAbsDiff={diff} psnr={psnr:.2} dB \
+                 meanSignedErr={bias:+.4}"
+            );
+            match equivalence_for(recipe_name) {
+                Equivalence::ByteIdentical => {
+                    if diff != 0 {
+                        failures.push(format!(
+                            "{frame_name}/{recipe_name}: asserted byte-identical, got \
+                             maxAbsDiff={diff} psnr={psnr:.2} meanSignedErr={bias:+.4}"
+                        ));
+                    }
+                }
+                Equivalence::Bounded(bound) => {
+                    if diff > bound || psnr < MIN_PSNR_DB || bias.abs() > MAX_ABS_MEAN_SIGNED_ERROR
+                    {
+                        failures.push(format!(
+                            "{frame_name}/{recipe_name}: exceeded declared bound \
+                             maxAbsDiff <= {bound} / PSNR >= {MIN_PSNR_DB} dB / \
+                             |meanSignedErr| <= {MAX_ABS_MEAN_SIGNED_ERROR}: got \
+                             maxAbsDiff={diff} psnr={psnr:.2} meanSignedErr={bias:+.4}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "post-tone GPU stages exceeded their per-stage declared equivalence: {failures:?}"
+    );
+}
+
+/// The interactive VRAM path (`render_to_vram`, which the GUI uses for the
+/// readback-free present) must apply the same post-tone chain as
+/// `render_with_gpu`. Read the VRAM output back through the diagnostic seam and
+/// gate it on the same tolerance.
+#[test]
+fn vram_path_applies_post_stages() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped VRAM parity check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    const W: u32 = 32;
+    const H: u32 = 32;
+    let frame = gradient_frame(W, H);
+    let recipes: [(&str, EditRecipe, Equivalence); 3] = [
+        (
+            "curves",
+            EditRecipe {
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.5, 0.4), (1.0, 1.0)]),
+                    channels: CurveChannels::default(),
+                }),
+                ..Default::default()
+            },
+            // Measured 1 on the VRAM gradient frame (same rounding tie as the
+            // streaming path).
+            Equivalence::Bounded(1),
+        ),
+        (
+            "presence_full",
+            EditRecipe {
+                presence: Some(Presence {
+                    version: 1,
+                    texture: 0.5,
+                    clarity: 0.3,
+                    dehaze: 0.5,
+                }),
+                ..Default::default()
+            },
+            Equivalence::Bounded(1),
+        ),
+        (
+            "grading",
+            EditRecipe {
+                color_grading: Some(ColorGrading {
+                    version: 1,
+                    shadows: range(200.0, 0.3, 0.0),
+                    midtones: ColorGradingRange::neutral(),
+                    highlights: range(60.0, 0.2, 0.05),
+                    balance: 0.1,
+                    blending: 0.5,
+                }),
+                ..Default::default()
+            },
+            // Color Grading measured byte-identical.
+            Equivalence::ByteIdentical,
+        ),
+    ];
+    ctx.ensure_vram(W, H).expect("vram state");
+    for (name, recipe, equivalence) in recipes {
+        ctx.render_to_vram(&frame, &recipe).expect("vram render");
+        let gpu = ctx.readback_output_frame().expect("vram readback");
+        let cpu = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .expect("CPU oracle render")
+        .frame;
+        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+        let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+        let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+        eprintln!("vram[{name}]: maxAbsDiff={diff} psnr={psnr:.2} dB meanSignedErr={bias:+.4}");
+        match equivalence {
+            Equivalence::ByteIdentical => assert_eq!(
+                diff, 0,
+                "vram[{name}] asserted byte-identical (got {diff}, psnr={psnr:.2})"
+            ),
+            Equivalence::Bounded(bound) => assert!(
+                diff <= bound && psnr >= MIN_PSNR_DB && bias.abs() <= MAX_ABS_MEAN_SIGNED_ERROR,
+                "vram[{name}] exceeded declared bound maxAbsDiff <= {bound}: \
+                 maxAbsDiff={diff} psnr={psnr:.2} meanSignedErr={bias:+.4}"
+            ),
+        }
+    }
+}
+
+/// A recipe that still uses an unimplemented stage stays CPU-routed and yields
+/// CPU-identical pixels; this guards the "no third state" rule.
+#[test]
+fn unimplemented_stages_still_route_to_cpu() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped routing check");
+            return;
+        }
+    };
+    let frame = gradient_frame(48, 48);
+    let recipe = EditRecipe {
+        effects: Some(Effects::default()),
+        ..Default::default()
+    };
+    let reasons = unsupported_gpu_stages(&recipe);
+    assert!(reasons.iter().any(|r| r.contains("effects")), "{reasons:?}");
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE} - validator-only assertion");
+        return;
+    }
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
+    assert_eq!(max_abs_diff(&cpu.pixels, &gpu.pixels), 0);
+}
+
+/// A Red-Eye recipe with a real, pixel-effective region on a red frame.
+fn red_eye_recipe() -> EditRecipe {
+    EditRecipe {
+        red_eye: Some(RedEyeCorrection {
+            version: 1,
+            regions: vec![RedEyeRegion {
+                id: "re-1".into(),
+                x: 0.5,
+                y: 0.5,
+                radius: 0.3,
+                desaturate: 0.8,
+                darken: 0.3,
+            }],
+        }),
+        ..Default::default()
+    }
+}
+
+/// A typed `spot_removals` entry with no `extras` geometry: the CPU reference
+/// rejects it loudly (`reject_unsupported_spot_modes_typed`), never heals it.
+fn typed_spot_recipe() -> EditRecipe {
+    EditRecipe {
+        spot_removals: vec![SpotRemoval {
+            version: 1,
+            mode: SpotRemovalMode::Heuristic,
+            artifact: None,
+        }],
+        ..Default::default()
+    }
+}
+
+/// A legacy `extras["spot_removals"]` entry with valid, pixel-effective heal
+/// geometry (`apply_spot_heals` copies an offset source patch).
+fn legacy_spot_recipe() -> EditRecipe {
+    let mut recipe = EditRecipe::default();
+    recipe.extras.insert(
+        "spot_removals".into(),
+        // Valid heuristic geometry (id + center + radius + offset), matching
+        // `validate_spot_removal_extra_entry`.
+        serde_json::json!([{
+            "id": "spot-1",
+            "version": 1,
+            "mode": "heuristic",
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "radius": 8.0,
+            "feather": 0.5,
+            "offset_dx": 0.25,
+            "offset_dy": 0.0,
+            "opacity": 1.0,
+            "status": "valid"
+        }]),
+    );
+    recipe
+}
+
+/// A generative edit with a valid, larger canvas and `expand_beyond_image` on:
+/// the CPU reference expands the frame to the canvas size.
+fn generative_expand_recipe() -> EditRecipe {
+    EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: Some(GenerativeCanvas {
+                output_width: 128,
+                output_height: 96,
+                source_offset_x: 0,
+                source_offset_y: 0,
+                extras: BTreeMap::new(),
+            }),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(false),
+            expand_beyond_image: Some(true),
+            seed: Some(7),
+            prompt: None,
+            extras: BTreeMap::new(),
+        }),
+        ..Default::default()
+    }
+}
+
+/// GPU-RENDER-PARITY-1 follow-up (gate completeness): Red-Eye, typed
+/// `spot_removals`, legacy `extras["spot_removals"]` and `generative_edit` are
+/// applied/validated by the CPU reference but not implemented on the GPU, so
+/// every one must be reported as CPU-only. This test asserts the gate verdict
+/// only; `cpu_only_recipe_stages_render_through_full_cpu_reference` proves the
+/// fallback pixels.
+#[test]
+fn cpu_only_recipe_stages_are_gated() {
+    let red_eye = red_eye_recipe();
+    let typed_spot = typed_spot_recipe();
+    let legacy_spot = legacy_spot_recipe();
+    let generative = generative_expand_recipe();
+
+    let cases: Vec<(&str, &EditRecipe)> = vec![
+        ("red_eye", &red_eye),
+        ("spot_removals", &typed_spot),
+        ("spot_removals (legacy extras)", &legacy_spot),
+        ("generative_edit", &generative),
+    ];
+
+    for (expected_reason, recipe) in &cases {
+        let reasons = unsupported_gpu_stages(recipe);
+        assert!(
+            reasons.iter().any(|r| r.contains(expected_reason)),
+            "`{expected_reason}` must be reported as CPU-only, got {reasons:?}"
+        );
+    }
+
+    // The full recipe (every CPU-only stage at once) still reports all of them.
+    let all = EditRecipe {
+        red_eye: red_eye.red_eye.clone(),
+        spot_removals: typed_spot.spot_removals.clone(),
+        generative_edit: generative.generative_edit.clone(),
+        extras: legacy_spot.extras.clone(),
+        ..Default::default()
+    };
+    let reasons = unsupported_gpu_stages(&all);
+    for expected in [
+        "red_eye",
+        "spot_removals",
+        "spot_removals (legacy extras)",
+        "generative_edit",
+    ] {
+        assert!(
+            reasons.iter().any(|r| r.contains(expected)),
+            "compound recipe must keep `{expected}`: {reasons:?}"
+        );
+    }
+}
+
+/// A solid red frame so the Red-Eye correction is unambiguously pixel-effective.
+fn red_frame(width: u32, height: u32) -> ImageFrame {
+    ImageFrame::new(
+        width,
+        height,
+        [200u8, 40, 40, 255].repeat((width * height) as usize),
+    )
+    .expect("red frame")
+}
+
+/// Blocker-1 resolution: `render_with_gpu`'s fallback is the **full**
+/// `lumina_core::render_frame` chain. For CPU-routed, reference-renderable
+/// recipes the fallback pixels must be byte-identical to `render_frame`
+/// (including a generative canvas that *changes the frame dimensions*); for a
+/// recipe the reference rejects (isolated typed spot), the fallback must reject
+/// it too — never silently drop it.
+#[test]
+fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped full-reference check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+
+    let frame = gradient_frame(48, 48);
+    let red = red_frame(48, 48);
+
+    // Renderable CPU-routed recipes: fallback == full render_frame oracle.
+    let renderable: Vec<(&str, &ImageFrame, EditRecipe)> = vec![
+        ("red_eye", &red, red_eye_recipe()),
+        ("legacy_spot", &frame, legacy_spot_recipe()),
+        ("generative_expand", &frame, generative_expand_recipe()),
+    ];
+    for (name, source, recipe) in renderable {
+        let oracle = render_frame(
+            source,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{name}: CPU reference failed: {e}"))
+        .frame;
+        let gpu = ctx
+            .render_with_gpu(source, &recipe)
+            .unwrap_or_else(|e| panic!("{name}: fallback render failed: {e}"));
+        assert_eq!(
+            (gpu.width, gpu.height),
+            (oracle.width, oracle.height),
+            "{name}: fallback must match the reference frame dimensions"
+        );
+        assert_eq!(
+            max_abs_diff(&oracle.pixels, &gpu.pixels),
+            0,
+            "{name}: fallback must be byte-identical to the full CPU reference"
+        );
+    }
+
+    // A recipe the reference rejects must be rejected loudly, not dropped.
+    let typed = typed_spot_recipe();
+    assert!(
+        render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &typed,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .is_err(),
+        "isolated typed spot must be a hard CPU error"
+    );
+    assert!(
+        ctx.render_with_gpu(&frame, &typed).is_err(),
+        "fallback must propagate the CPU hard error instead of dropping the stage"
+    );
+}
+
+/// `render_to_vram` cannot CPU-route without a readback, so it must refuse a
+/// recipe with unsupported stages (no divergent pixels in the VRAM output).
+#[test]
+fn vram_path_refuses_unsupported_recipes() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped VRAM refusal check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let frame = gradient_frame(16, 16);
+    ctx.ensure_vram(16, 16).expect("vram state");
+    let recipe = EditRecipe {
+        effects: Some(Effects::default()),
+        ..Default::default()
+    };
+    assert!(
+        unsupported_gpu_stages(&recipe)
+            .iter()
+            .any(|r| r.contains("effects")),
+        "effects must be reported"
+    );
+    assert!(
+        ctx.render_to_vram(&frame, &recipe).is_err(),
+        "VRAM path must refuse an unsupported recipe instead of writing divergent pixels"
+    );
+}
+
+/// An *empty* legacy `extras["spot_removals"]` array is an explicit no-op in
+/// core (`reject_unsupported_spot_modes_extras` iterates it, `spots_from_recipe`
+/// yields none); it must not flag the GPU route.
+#[test]
+fn empty_legacy_spot_removals_do_not_flag() {
+    let mut recipe = EditRecipe::default();
+    recipe
+        .extras
+        .insert("spot_removals".into(), serde_json::json!([]));
+    let reasons = unsupported_gpu_stages(&recipe);
+    assert!(
+        reasons.is_empty(),
+        "an empty legacy spot list is identity, got {reasons:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// "Nicht-GPU-taugliche Rezepte" inventory (GPU-RENDER-PARITY-1 follow-up)
+// ---------------------------------------------------------------------------
+
+fn source_action(id: &str) -> SourceActionSpec {
+    SourceActionSpec {
+        version: SOURCE_ACTION_VERSION,
+        kind: SourceActionKind::DustRemoval,
+        artifact: SourceActionArtifactRef {
+            id: id.into(),
+            relative_path: format!("{id}.lumina.zdata"),
+            checksum: "unused".into(),
+        },
+    }
+}
+
+fn source_actions(count: usize) -> EditRecipe {
+    EditRecipe {
+        source_actions: (0..count)
+            .map(|i| source_action(&format!("sa-{i}")))
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// Nails down the complete set of recipe configurations that still CPU-route
+/// after GPU-RENDER-PARITY-1. Every branch of
+/// [`unsupported_gpu_stages_with_context`] must be represented by at least one
+/// minimal example whose expected reason substring is asserted, so a future
+/// change that silently drops a gate branch fails this test.
+///
+/// Reason classes and their minimal trigger (the reason string is the one the
+/// gate emits):
+/// - `effects` — `recipe.effects = Some(..)` (vignette/grain).
+/// - `noise_reduction` — `recipe.noise_reduction = Some(..)`.
+/// - `sharpening` — `recipe.sharpening = Some(..)`.
+/// - `geometry` — `recipe.geometry = Some(..)`.
+/// - `lens_correction` — `recipe.lens_correction = Some(..)`.
+/// - `perspective` — `recipe.perspective = Some(..)`.
+/// - `lens_blur` — `lens_blur.enabled && blur_amount != 0`.
+/// - `source_actions` — non-empty actions and `source_actions_bound = false`.
+/// - `exceed the GPU stage slot limit` — bound actions with `len > MAX_SOURCE_ACTIONS`.
+/// - `camera_white_balance (As-Shot context)` — context WB `Some`.
+/// - `red_eye` — `recipe.red_eye = Some(..)`.
+/// - `spot_removals` — typed `recipe.spot_removals` non-empty.
+/// - `spot_removals (legacy extras)` — non-empty `extras["spot_removals"]`.
+/// - `generative_edit` — `recipe.generative_edit = Some(..)`.
+/// - `adjustment \`clarity_v2\` not implemented on GPU` — a key outside
+///   [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] with no neutral value (all schema keys
+///   are now GPU-supported, so this is the unknown-key class).
+#[test]
+fn cpu_routing_inventory_is_complete() {
+    let effects = EditRecipe {
+        effects: Some(Effects::default()),
+        ..Default::default()
+    };
+    let noise = EditRecipe {
+        noise_reduction: Some(NoiseReduction {
+            version: 1,
+            luminance: 0.5,
+            color: 0.0,
+        }),
+        ..Default::default()
+    };
+    let sharpening = EditRecipe {
+        sharpening: Some(Sharpening {
+            version: 1,
+            amount: 1.0,
+            radius: 1.0,
+            detail: 0.5,
+            masking: 0.0,
+        }),
+        ..Default::default()
+    };
+    let geometry = EditRecipe {
+        geometry: Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        }),
+        ..Default::default()
+    };
+    let lens = EditRecipe {
+        lens_correction: Some(LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(0.1),
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        }),
+        ..Default::default()
+    };
+    let perspective = EditRecipe {
+        perspective: Some(Perspective {
+            version: 1,
+            vertical: 0.1,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        }),
+        ..Default::default()
+    };
+    let lens_blur = EditRecipe {
+        lens_blur: Some(LensBlur {
+            version: 1,
+            enabled: true,
+            focus_rect: FocusRect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            focal_near: 0.0,
+            focal_far: 1.0,
+            blur_amount: 0.5,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
+        }),
+        ..Default::default()
+    };
+    let unknown_key = EditRecipe {
+        adjustments: BTreeMap::from([("clarity_v2".into(), 0.5)]),
+        ..Default::default()
+    };
+
+    let wb = [1.9f32, 1.0, 1.4, 1.0];
+
+    let cases: Vec<(&str, Vec<String>)> = vec![
+        ("effects", unsupported_gpu_stages(&effects)),
+        ("noise_reduction", unsupported_gpu_stages(&noise)),
+        ("sharpening", unsupported_gpu_stages(&sharpening)),
+        ("geometry", unsupported_gpu_stages(&geometry)),
+        ("lens_correction", unsupported_gpu_stages(&lens)),
+        ("perspective", unsupported_gpu_stages(&perspective)),
+        ("lens_blur", unsupported_gpu_stages(&lens_blur)),
+        (
+            "source_actions",
+            unsupported_gpu_stages_for(&source_actions(1), false),
+        ),
+        (
+            "exceed the GPU stage slot limit",
+            unsupported_gpu_stages_for(&source_actions(MAX_SOURCE_ACTIONS + 1), true),
+        ),
+        (
+            "camera_white_balance (As-Shot context)",
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb)),
+        ),
+        ("red_eye", unsupported_gpu_stages(&red_eye_recipe())),
+        (
+            "spot_removals",
+            unsupported_gpu_stages(&typed_spot_recipe()),
+        ),
+        (
+            "spot_removals (legacy extras)",
+            unsupported_gpu_stages(&legacy_spot_recipe()),
+        ),
+        (
+            "generative_edit",
+            unsupported_gpu_stages(&generative_expand_recipe()),
+        ),
+        (
+            "adjustment `clarity_v2` not implemented on GPU",
+            unsupported_gpu_stages(&unknown_key),
+        ),
+    ];
+
+    for (expected, reasons) in &cases {
+        assert!(
+            reasons.iter().any(|r| r.contains(expected)),
+            "inventory entry `{expected}` is no longer emitted by the gate: {reasons:?}"
+        );
+    }
+
+    // Neutral/disabled configurations must stay GPU-eligible (R2-GPU-05-style
+    // neutrality preserved) — these are the examples the inventory excludes.
+    let disabled_lens_blur = EditRecipe {
+        lens_blur: Some(LensBlur {
+            version: 1,
+            enabled: false,
+            focus_rect: FocusRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            focal_near: 0.0,
+            focal_far: 1.0,
+            blur_amount: 0.0,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
+        }),
+        ..Default::default()
+    };
+    assert!(unsupported_gpu_stages(&disabled_lens_blur).is_empty());
+    assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
+    assert!(unsupported_gpu_stages_for(&source_actions(1), true).is_empty());
+    assert!(unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty());
+}
