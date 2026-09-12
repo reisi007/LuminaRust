@@ -1658,8 +1658,9 @@ fn library_survey() {
 //
 // Pattern per test (68215fd/7fd528b/dd73806/182dfc1): deterministic seeds
 // through the public API, non-vacuous model guard + on-screen assert, cursor
-// parked outside the frame, then `snapshot`. No production code is touched;
-// existing goldens are not rebaselined.
+// parked outside the frame, then `snapshot`. The mask-matte follow-up
+// required a production fix (retained overlay texture) plus a rebaseline of
+// `develop_overlay_mask.png`; no other golden was rebaselined.
 //
 // The overlays themselves are Painter content (invisible to AccessKit, like
 // the G-11 pins documented on `visible_edit_pins`), so the on-screen assert
@@ -1667,11 +1668,12 @@ fn library_survey() {
 // model guard proves the overlay state is armed. Every preview loads a real
 // source and renders it (`load_sample` synchronously, `open_file` pumped to
 // `preview_generation() >= 1`, placeholder label asserted absent) — no
-// empty-preview goldens. Snapshot-visible are the painter primitives (pin
-// circle, crop/lens strokes, observed); texture blits (preview image, mask
-// tint) are snapshot-invisible in this headless environment (measured, see
-// `assert_preview_loaded`) — the mask golden therefore pins the armed state
-// plus the panel, and the DoD §6 Vision check confirms each layout.
+// empty-preview goldens. Snapshot-visible are both the painter primitives
+// (pin circle, crop/lens strokes, observed) AND the texture blits: the
+// `library_loupe` golden proves texture pixels are captured, and the mask
+// matte is asserted directly by `assert_mask_overlay_visible` below. The mask
+// golden therefore pins the armed state, the panel layout and the matte
+// pixels; the DoD §6 Vision check confirms each layout.
 //
 // Disk discipline: `commit_spot_heal` + `create_mask` + `set_pin_visibility`
 // are pure session state (`mark_dirty` only, the debounced commit renders
@@ -1711,14 +1713,16 @@ fn assert_pos_near(actual: eframe::egui::Pos2, expected: eframe::egui::Pos2) {
 /// (`preview_generation() >= 1`) and the empty-state placeholder is absent
 /// (its label is `Str::NoImage`: "Drop an image here or load a path").
 ///
-/// Headless trait (measured, not assumed): texture blits are
-/// snapshot-invisible in this environment — the CPU preview frame holds
-/// real pixels (probed: 4x3, mean channel sum 334) while the golden center
-/// stays flat black, exactly like every pre-existing golden
-/// (`develop_basic` etc.). Painter primitives (pin circles, rect strokes)
-/// ARE captured. The mask tint shares the texture-blit path, so its golden
-/// pins the armed overlay state (guards below) plus the Masking panel; the
-/// DoD §6 Vision check confirms the layout.
+/// Headless trait (corrected, KITTEST-COVERAGE-OVERLAYS-1): texture blits
+/// **are** captured in this environment — the `library_loupe` golden paints
+/// real thumbnail textures, and the sample preview's own 4x3 pixels are
+/// present in the Develop goldens (a handful of native-size texels; the CPU
+/// `Image` widget draws the texture at its exact size rather than the fitted
+/// pane). Painter primitives (pin circles, rect strokes) are captured too.
+/// The mask matte is a texture blit whose golden was previously blank only
+/// because `draw_mask_overlay` dropped its per-frame texture handle before the
+/// paint; that production bug is fixed and `assert_mask_overlay_visible`
+/// now asserts the matte pixels directly.
 fn assert_preview_loaded(harness: &mut Harness<'_, LuminaApp>) {
     assert!(
         harness.state_mut().preview_generation() >= 1,
@@ -1730,6 +1734,48 @@ fn assert_preview_loaded(harness: &mut Harness<'_, LuminaApp>) {
             .next()
             .is_none(),
         "empty-state placeholder must be gone (source loaded)"
+    );
+}
+
+/// Non-vacuous pixel guard for the mask matte (`KITTEST-COVERAGE-OVERLAYS-1`):
+/// renders the current frame and asserts that red-dominant matte pixels are
+/// present in quantity and extent. Before the `draw_mask_overlay` lifetime fix
+/// the matte texture was freed in the same frame it was uploaded, so the tint
+/// never reached the framebuffer and the preview area contained only the
+/// sample image's single native-size red texel (roughly a handful of pixels).
+///
+/// Deliberately NOT a fixed pane coordinate / exact count: the matte spans the
+/// fitted full-frame rect (hundreds of points in each dimension), so we assert
+/// a lower-bound on the *order of magnitude* (`>= 5_000` pixels) plus a large
+/// bounding box. Panel changes shift the constant ~600-pixel "Overlay color"
+/// red swatch but can never produce a thousands-scale, several-hundred-point
+/// wide red region — only the matte can. `r > g + 20 && r > b + 20` isolates
+/// the `[255, 0, 0]` tint from the near-neutral UI while tolerating the
+/// translucent composite over the preview pixels.
+fn assert_mask_overlay_visible(harness: &mut Harness<'_, LuminaApp>) {
+    let rendered = harness.render().expect("kittest renders the frame");
+    let (width, height) = rendered.dimensions();
+    let mut red_dominant = 0usize;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (width, height, 0u32, 0u32);
+    for (x, y, pixel) in rendered.enumerate_pixels() {
+        let [r, g, b, _a] = pixel.0;
+        if r > g.saturating_add(20) && r > b.saturating_add(20) {
+            red_dominant += 1;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    assert!(
+        red_dominant >= 5_000,
+        "mask matte must paint a thousands-scale red-dominant area, got {red_dominant} pixels"
+    );
+    let bbox_w = max_x - min_x;
+    let bbox_h = max_y - min_y;
+    assert!(
+        bbox_w >= 200 && bbox_h >= 200,
+        "mask matte must span the fitted preview rect, got a {bbox_w}x{bbox_h} red bounding box"
     );
 }
 
@@ -1780,10 +1826,10 @@ fn develop_overlay_mask() {
     // identity but does not arm a re-render, leaving a stale frame (and a
     // stale status). `set_zoom_mode(Fit)` is display-neutral (already Fit)
     // and re-arms the render through public API, so the guards below prove
-    // the post-seed state instead of the pre-seed frame. (The tint itself
-    // travels the texture-blit path — snapshot-invisible like the preview
-    // image, see `assert_preview_loaded` — so this golden pins the armed
-    // overlay state plus the Masking panel, not red pixels.)
+    // the post-seed state instead of the pre-seed frame. (The matte is a
+    // retained texture blit that IS captured — see `assert_mask_overlay_visible`
+    // — so this golden pins red matte pixels, the armed overlay state and the
+    // Masking panel.)
     let ready_gen = harness.state_mut().preview_generation();
     harness.state_mut().set_zoom_mode(ZoomMode::Fit);
     harness.run();
@@ -1816,12 +1862,17 @@ fn develop_overlay_mask() {
         "Show switch + Always mode + visible selection must allow the overlay"
     );
     // On-screen assert: the Masking panel scrolled to its entry row, proving
-    // the scrolled layout (the matte travels the texture-blit path —
-    // snapshot-invisible like the preview image, see above).
+    // the scrolled layout.
     expand_and_scroll_to(&mut harness, SECTION_MASKING, "New Mask");
     assert_label_on_screen(&mut harness, "New Mask");
     harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
     harness.run_steps(2);
+    // Non-vacuous pixel assert on exactly the frame that is snapshotted below:
+    // the matte is a texture blit (captured in this environment,
+    // KITTEST-COVERAGE-OVERLAYS-1) and must paint a thousands-scale red-dominant
+    // area over the fitted preview rect — the earlier lifetime bug left the
+    // preview blank (only the sample's single native-size red texel).
+    assert_mask_overlay_visible(&mut harness);
     harness.snapshot("develop_overlay_mask");
 }
 
@@ -1876,8 +1927,8 @@ fn develop_overlay_pins() {
     // Non-vacuous guards: the seeded spot really re-rendered (no stale
     // frame), the source is loaded (no placeholder) — plus the pin model
     // above. The pin circle is a painter primitive (snapshot-visible,
-    // observed in this golden); the preview image itself travels the
-    // snapshot-invisible texture path (see `assert_preview_loaded`).
+    // observed in this golden); the preview texture blit is captured as well
+    // (see `assert_preview_loaded`).
     assert!(
         harness.state_mut().preview_generation() > 1,
         "seeded spot must re-render past the load frame"

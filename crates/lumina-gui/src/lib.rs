@@ -1428,6 +1428,16 @@ pub struct LuminaApp {
     /// and re-creating the texture on every repaint (mousemoves over panels
     /// used to pay a full-frame memcpy + upload per frame).
     texture_identity: Option<(u64, bool, [usize; 2])>,
+    /// KITTEST-COVERAGE-OVERLAYS-1: retained texture for the CPU mask-overlay
+    /// matte painted by [`Self::draw_mask_overlay`]. Previously the matte was
+    /// uploaded with a per-frame `load_texture` into a local handle that was
+    /// dropped at the end of the same frame; egui then queued the texture `set`
+    /// and its `free` in one `TexturesDelta`, the backend processed `set` before
+    /// `free`, and the paint sampled an already-freed texture → the overlay was
+    /// invisible. Keeping the handle alive (exactly like [`Self::texture`] and
+    /// the navigator/thumbnail textures) means no per-frame alloc/free and the
+    /// matte actually reaches the screen.
+    mask_overlay_texture: Option<egui::TextureHandle>,
     /// GUI-NAV-RECT-1: overview texture of the FULL source for the navigator
     /// viewport (never the ROI-cropped preview texture) + its cache key
     /// `(path, full_w, full_h)`. Rebuilt only on source change.
@@ -2408,6 +2418,8 @@ impl LuminaApp {
             texture: None,
             // R2-GUIMOD-02: no CPU pixels uploaded yet (see `texture_identity`).
             texture_identity: None,
+            // KITTEST-COVERAGE-OVERLAYS-1: overlay matte uploaded lazily.
+            mask_overlay_texture: None,
             navigator_texture: None,
             navigator_texture_key: None,
             navigator_overview: None,
@@ -12638,11 +12650,27 @@ impl LuminaApp {
             [plane.width as usize, plane.height as usize],
             &pixels,
         );
-        let texture =
-            ui.ctx()
-                .load_texture("lumina-mask-overlay", image, egui::TextureOptions::NEAREST);
+        // KITTEST-COVERAGE-OVERLAYS-1: keep the overlay texture alive across
+        // frames (`self.mask_overlay_texture`). A per-frame `load_texture` into
+        // a local handle dropped the texture at the end of this same frame: egui
+        // emitted `set` and `free` in one `TexturesDelta`, the backend freed it
+        // before painting, and the matte was invisible in the golden (and on
+        // screen under a real backend). Re-using the retained handle via `set`
+        // avoids the per-frame alloc/free and matches the retained preview/
+        // navigator/thumbnail textures.
+        let texture_id = if let Some(handle) = self.mask_overlay_texture.as_mut() {
+            handle.set(image, egui::TextureOptions::NEAREST);
+            handle.id()
+        } else {
+            let handle =
+                ui.ctx()
+                    .load_texture("lumina-mask-overlay", image, egui::TextureOptions::NEAREST);
+            let id = handle.id();
+            self.mask_overlay_texture = Some(handle);
+            id
+        };
         ui.painter().image(
-            texture.id(),
+            texture_id,
             full_rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
