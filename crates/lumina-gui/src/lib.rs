@@ -16006,8 +16006,22 @@ impl LuminaApp {
             LibraryView::Grid => {}
         }
         if raw_indices.is_empty() {
-            ui.heading(Str::Library.t());
-            ui.label(Str::ReadyForImage.t());
+            // UX-SLICE-1 (P5): centered empty state with a deterministic painted
+            // icon, honest body text and a CTA. The CTA reuses the existing
+            // folder-open path (`set_directory` re-lists the entered folder);
+            // there is deliberately no new native folder-picker dialog scope.
+            ui.vertical_centered(|ui| {
+                ui.add_space(48.0);
+                paint_library_empty_icon(ui);
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(Str::LibraryEmptyTitle.t()).heading());
+                ui.label(Str::ReadyForImage.t());
+                ui.add_space(8.0);
+                if ui.button(Str::OpenFolder.t()).clicked() {
+                    let directory = self.directory.clone();
+                    self.set_directory(directory);
+                }
+            });
             return;
         }
         let thumb = self.library_thumb_size;
@@ -16095,44 +16109,8 @@ impl LuminaApp {
                                     // edits go through the rating section or
                                     // the 1-5/6-9/P/X/U keys). Unrated +
                                     // unflagged + unlabeled cells stay clean.
-                                    if entry.rating > 0
-                                        || entry.flag != lumina_sidecar::Flag::Unflagged
-                                        || entry.color_label > 0
-                                    {
-                                        let mut badge = match entry.flag {
-                                            lumina_sidecar::Flag::Pick => {
-                                                format!("{} P", stars_for_rating(entry.rating))
-                                            }
-                                            lumina_sidecar::Flag::Reject => {
-                                                format!("{} X", stars_for_rating(entry.rating))
-                                            }
-                                            lumina_sidecar::Flag::Unflagged => {
-                                                stars_for_rating(entry.rating)
-                                            }
-                                        };
-                                        if entry.color_label > 0 {
-                                            badge.push_str(&format!(
-                                                " ●{}",
-                                                color_label_name(entry.color_label)
-                                            ));
-                                        }
-                                        let badge_pos = rect.left_bottom() + egui::vec2(4.0, -16.0);
-                                        ui.painter().rect_filled(
-                                            egui::Rect::from_min_size(
-                                                badge_pos - egui::vec2(2.0, 2.0),
-                                                egui::vec2(118.0, 16.0),
-                                            ),
-                                            2.0,
-                                            LIBRARY_BADGE_BG,
-                                        );
-                                        ui.painter().text(
-                                            badge_pos,
-                                            egui::Align2::LEFT_TOP,
-                                            badge,
-                                            egui::FontId::monospace(11.0),
-                                            egui::Color32::WHITE,
-                                        );
-                                    }
+                                    // UX-SLICE-1: shared with the filmstrip.
+                                    paint_entry_badge(ui, rect, &entry);
                                     // F-100 Library: relative-subfolder badge of
                                     // the recursive aggregation, painted over
                                     // the cell's top edge (display-only, like
@@ -16766,8 +16744,40 @@ impl LuminaApp {
     /// lives in the Develop panel's Masking section; here the user picks which
     /// source copy to work on and can duplicate it.
     fn draw_filmstrip(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.heading(Str::Filmstrip.t());
-        ui.label(Str::FilmstripHint.t());
+        // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
+        // filmstrip never shows jpg/png/webp/raster entries (those remain
+        // browseable in the Library file-browser via `is_supported_image`).
+        // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
+        let raw_indices: Vec<usize> = self.raw_entry_indices();
+        let count = raw_indices.len();
+        // UX-SLICE-1 (UXG-09): one shared strip component for Library /
+        // Develop / Export with an "n of N" counter in the header. `n` is the
+        // number of strip entries currently selected; thumbnails come from the
+        // same `ThumbnailManager` the Library grid uses.
+        ui.horizontal(|ui| {
+            ui.heading(Str::Filmstrip.t());
+            if count > 0 {
+                let selected = raw_indices
+                    .iter()
+                    .filter(|&&index| {
+                        self.filmstrip_selection
+                            .contains(&self.entries[index].path.display().to_string())
+                    })
+                    .count();
+                let counter = Str::FilmstripCounter
+                    .t()
+                    .replacen("{}", &selected.to_string(), 1)
+                    .replacen("{}", &count.to_string(), 1);
+                ui.label(egui::RichText::new(counter).small());
+            }
+        });
+        // UX-SLICE-1: an empty strip keeps an honest empty text instead of the
+        // misleading "click a thumbnail" hint or a fake placeholder thumb.
+        ui.label(if count == 0 {
+            Str::FilmstripEmpty.t()
+        } else {
+            Str::FilmstripHint.t()
+        });
         // GUI-FILMSTRIP-SYNC-1: selection actions (Lightroom Sync Settings /
         // Match Total Exposures). They apply to the multi-selection below and
         // live here — not in the Develop footer — so they stay reachable in
@@ -16793,12 +16803,6 @@ impl LuminaApp {
                 self.apply_previous_to_selection();
             }
         });
-        // RAW-only: the Develop/Lightroom preview pipeline is RAW-first, so the
-        // filmstrip never shows jpg/png/webp/raster entries (those remain
-        // browseable in the Library file-browser via `is_supported_image`).
-        // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
-        let raw_indices: Vec<usize> = self.raw_entry_indices();
-        let count = raw_indices.len();
         // GUI-SCROLL-200-1: fixed-size cells let us lay out only the visible
         // window (+ a small buffer). Off-screen cells are never allocated,
         // painted or probed for thumbnails on this frame.
@@ -16875,6 +16879,10 @@ impl LuminaApp {
                                     egui::StrokeKind::Outside,
                                 );
                             }
+                            // UX-SLICE-1 (UXG-09): small rating/flag/color
+                            // badge per cell — same `FileBrowserEntry` data and
+                            // presentation as the Library grid (shared helper).
+                            paint_entry_badge(ui, rect, &entry);
                             if resp.clicked() {
                                 // Cmd/Ctrl-Click toggles, Shift-Click extends
                                 // the range from the anchor; a plain click
@@ -17073,19 +17081,16 @@ impl LuminaApp {
         });
         self.update_texture(ctx);
         self.draw_preview(ui);
-        if let Some(key) = &self.render_key {
-            ui.label(format!(
-                "{}: {}",
-                Str::RenderStateCurrent.t(),
-                &key.digest()[..12]
-            ));
-        } else {
-            ui.colored_label(egui::Color32::YELLOW, Str::RenderStateStale.t());
-        }
-        // GUI-PREVIEW-NAV-1: the draft state is always visible next to the
-        // zoom readout, never only implied by soft pixels.
+        // UX-SLICE-1 (UXG-07): the render hash moved to the app status line
+        // (header, see `draw_status_line`); the canvas edge now carries only
+        // the color-coded state badges. The states themselves are unchanged:
+        // an in-flight draft render is "Draft", a missing `render_key` is
+        // "Stale"/pending (never a silent fallback).
         if self.preview_is_draft {
-            ui.colored_label(egui::Color32::YELLOW, Str::Draft.t());
+            ui.colored_label(RENDER_STATE_DRAFT_COLOR, Str::Draft.t());
+        }
+        if self.render_key.is_none() {
+            ui.colored_label(RENDER_STATE_STALE_COLOR, Str::RenderStateStale.t());
         }
         // Welle 2 view-state badges: crop mode (`R`), B&W treatment (`V`)
         // and the clipping overlay (`J`) advertise their state in the
@@ -17693,6 +17698,77 @@ const FOLDER_BADGE_MAX_CHARS: usize = 17;
 /// text needs AA contrast — pinned by `library_badge_contrast_meets_aa`.
 /// Shared by the path badge and the rating badge (same chip style).
 const LIBRARY_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(0x42, 0x42, 0x42);
+
+/// UX-SLICE-1 (UXG-07): color-coded render-state badges at the preview edge
+/// (the hash text lives in the app status line, drawn in `LuminaApp`'s `ui`).
+/// Amber = an in-flight low-res draft; red-orange = stale/pending (no
+/// `render_key` yet).
+const RENDER_STATE_DRAFT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE6, 0xB4, 0x32);
+const RENDER_STATE_STALE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x3C);
+
+/// UX-SLICE-1 (P5): deterministic Library empty-state icon (a framed picture
+/// with a sun and a mountain). Painted with primitives instead of an emoji so
+/// no system font coverage can shift the golden.
+fn paint_library_empty_icon(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(72.0, 54.0), egui::Sense::hover());
+    let stroke = ui.visuals().weak_text_color();
+    let line = egui::Stroke::new(1.5, stroke);
+    ui.painter()
+        .rect_stroke(rect, 4.0, line, egui::StrokeKind::Inside);
+    ui.painter()
+        .circle_filled(rect.left_top() + egui::vec2(18.0, 16.0), 4.0, stroke);
+    let mountain = vec![
+        rect.left_bottom() + egui::vec2(6.0, -6.0),
+        rect.center_bottom() + egui::vec2(2.0, -24.0),
+        rect.right_bottom() + egui::vec2(-6.0, -6.0),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(
+        mountain,
+        stroke,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// UX-SLICE-1 (UXG-09): the LR-01 rating/flag/color-label badge text for an
+/// entry, or `None` when the cell stays clean (unrated, unflagged and
+/// unlabeled). Pure and unit-testable; shared by the Library grid and the
+/// filmstrip so both views present the same `FileBrowserEntry` data.
+fn entry_badge_text(entry: &FileBrowserEntry) -> Option<String> {
+    if entry.rating == 0 && entry.flag == lumina_sidecar::Flag::Unflagged && entry.color_label == 0
+    {
+        return None;
+    }
+    let mut badge = match entry.flag {
+        lumina_sidecar::Flag::Pick => format!("{} P", stars_for_rating(entry.rating)),
+        lumina_sidecar::Flag::Reject => format!("{} X", stars_for_rating(entry.rating)),
+        lumina_sidecar::Flag::Unflagged => stars_for_rating(entry.rating),
+    };
+    if entry.color_label > 0 {
+        badge.push_str(&format!(" ●{}", color_label_name(entry.color_label)));
+    }
+    Some(badge)
+}
+
+/// UX-SLICE-1 (UXG-09): paint [`entry_badge_text`] over the bottom-left edge
+/// of `rect` (Library grid + filmstrip share this presentation).
+fn paint_entry_badge(ui: &egui::Ui, rect: egui::Rect, entry: &FileBrowserEntry) {
+    let Some(badge) = entry_badge_text(entry) else {
+        return;
+    };
+    let badge_pos = rect.left_bottom() + egui::vec2(4.0, -16.0);
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(badge_pos - egui::vec2(2.0, 2.0), egui::vec2(118.0, 16.0)),
+        2.0,
+        LIBRARY_BADGE_BG,
+    );
+    ui.painter().text(
+        badge_pos,
+        egui::Align2::LEFT_TOP,
+        badge,
+        egui::FontId::monospace(11.0),
+        egui::Color32::WHITE,
+    );
+}
 
 /// Display text for the folder badge: the full badge when it fits, otherwise
 /// middle-truncated with `…` (`head…tail`) so the painted text never
@@ -18367,6 +18443,17 @@ impl eframe::App for LuminaApp {
                 ui.heading("Lumina");
                 ui.separator();
                 ui.label(&self.status);
+                // UX-SLICE-1 (UXG-07): the render hash moved from the canvas
+                // edge into the app status line, rendered small.
+                if let Some(key) = &self.render_key {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(
+                            Str::RenderStateCurrent.format_arg(&key.digest()[..12]),
+                        )
+                        .small(),
+                    );
+                }
             });
             if let Some(error) = &self.error {
                 ui.colored_label(egui::Color32::RED, error);
@@ -18436,9 +18523,18 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| match self.active_module {
                     Module::Develop => self.draw_develop_panel(ui),
                     Module::Library => {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.draw_library_metadata_panel(ui);
-                        });
+                        // UX-SLICE-1 (Layout-Bruch): a vertical `ScrollArea`
+                        // shrinks horizontally to its content by default, so on
+                        // the first frame the resizable panel frame anchored to
+                        // the wrong edge and left a transparent/white strip to
+                        // its right. `auto_shrink([false, _])` makes the scroll
+                        // area claim the panel width, so the panel fills its
+                        // `default_size` on every frame.
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                self.draw_library_metadata_panel(ui);
+                            });
                     }
                     Module::Export => {
                         self.draw_export_panel(ui);
@@ -19179,6 +19275,23 @@ mod tests {
         let non_numeric =
             BTreeMap::from([("color_label".to_string(), serde_json::Value::from("red"))]);
         assert_eq!(color_label_of(&non_numeric), 0);
+    }
+    /// UX-SLICE-1 (UXG-09): the filmstrip/grid badge text is composed once and
+    /// stays empty for a clean cell; rating, flag and color label all surface.
+    /// (Painted badges are primitives, so this pins the data path headless.)
+    #[test]
+    fn entry_badge_text_covers_rating_flag_label() {
+        let mut entry = raw_entry(std::path::Path::new("/tmp"), "IMG_0001.ARW");
+        assert_eq!(entry_badge_text(&entry), None, "clean cell has no badge");
+        entry.rating = 3;
+        assert_eq!(entry_badge_text(&entry).as_deref(), Some("★★★☆☆"));
+        entry.flag = lumina_sidecar::Flag::Pick;
+        assert_eq!(entry_badge_text(&entry).as_deref(), Some("★★★☆☆ P"));
+        entry.flag = lumina_sidecar::Flag::Reject;
+        assert_eq!(entry_badge_text(&entry).as_deref(), Some("★★★☆☆ X"));
+        entry.flag = lumina_sidecar::Flag::Unflagged;
+        entry.color_label = 2;
+        assert_eq!(entry_badge_text(&entry).as_deref(), Some("★★★☆☆ ●Yellow"));
     }
     #[test]
     fn recipe_change_and_render() {

@@ -593,6 +593,83 @@ fn filmstrip_is_single_row_horizontal() {
     }
 }
 
+/// UX-SLICE-1 (UXG-09): the shared filmstrip header shows an "n of N" counter
+/// driven by the strip selection. Headless state assertion (no golden): the
+/// counter text is a real accesskit label.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn filmstrip_counter_reflects_selection() {
+    let mut harness = build_harness();
+    let paths = setup_library_views(&mut harness);
+    // Exactly the first entry selected: 1 of 3.
+    harness
+        .state_mut()
+        .select_filmstrip_path(paths[0].clone(), false, false);
+    harness.run_steps(3);
+    assert!(
+        harness.query_all_by_label("1 of 3").next().is_some(),
+        "one selected strip entry must render the 1-of-N counter"
+    );
+    // Toggle-add the second entry: 2 of 3.
+    harness
+        .state_mut()
+        .select_filmstrip_path(paths[1].clone(), true, false);
+    harness.run_steps(3);
+    assert!(
+        harness.query_all_by_label("2 of 3").next().is_some(),
+        "two selected strip entries must render the 2-of-3 counter"
+    );
+}
+
+/// UX-SLICE-1 (P5): the Library empty state is centered (heading text + CTA)
+/// and the CTA reuses the existing folder-open path (`set_directory`), i.e. it
+/// is clickable and leaves a still-empty directory in the empty state.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_empty_state_cta() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    harness.run();
+    assert!(
+        harness.query_all_by_label("No images").next().is_some(),
+        "empty state must show its title"
+    );
+    let clicked = harness
+        .query_all_by_label("Open Folder")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(clicked, "empty-state CTA must be present and clickable");
+    harness.run();
+    assert!(
+        harness.query_all_by_label("No images").next().is_some(),
+        "re-listing the still-empty fixture must keep the empty state"
+    );
+}
+
+/// UX-SLICE-1 (UXG-07): the render hash moved from the canvas edge into the
+/// app status line; the small status label is a real accesskit node.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn render_hash_moves_to_status_line() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    harness.run();
+    harness.run();
+    assert!(
+        harness
+            .query_all_by_label_contains("Render state current:")
+            .next()
+            .is_some(),
+        "render hash must be exposed in the app status line"
+    );
+}
+
 /// Changing an adjustment (`set_adjustment`) must invalidate the preview and
 /// produce a *new* render, i.e. bump `preview_generation` — even outside a
 /// pointer drag (the debounced full render path).
@@ -763,6 +840,18 @@ fn ensure_library_badges_fixture() {
         "tests/fixtures/library_badges/sub/nested/deep.png",
     ] {
         let _ = std::fs::remove_file(stale);
+    }
+    // The grid's thumbnail probe creates a gitignored `.lumina/` preview cache
+    // inside the fixture tree; left behind it would appear as an extra folder
+    // row on the *next* run and make this golden order-dependent. Removing it
+    // makes every run start from the committed file set (fresh checkout and
+    // re-run render identically).
+    for cache in [
+        "tests/fixtures/library_badges/.lumina",
+        "tests/fixtures/library_badges/sub/.lumina",
+        "tests/fixtures/library_badges/sub/nested/.lumina",
+    ] {
+        let _ = std::fs::remove_dir_all(cache);
     }
     for path in [
         "tests/fixtures/library_badges/top.arw",

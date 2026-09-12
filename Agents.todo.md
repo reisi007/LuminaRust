@@ -78,9 +78,9 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-04:
-21 offene Tasks (Checkbox-Zählung dieser Datei; der frühere Stand „28“
-entsprach nicht der Checkbox-Zahl) — Block A: 17, Block B: 1, Block C: 3.
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
+23 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 19,
+Block B: 1, Block C: 3.
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -119,6 +119,9 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
 | 1.0 | GUI-PREVIEW-SCALE-1 | G-10 | Preview-Skalierung |
 | 1.0 | KITTEST-COVERAGE-STATES-1 | alle G | Toast-Error-Export-States |
+| 1.0 | UX-SLICE-1 | G-09/G-10 | UX-Polish-Slice-1 |
+| 1.0 | UX-SLICE-2 | G-09/G-10 | UX-Polish-Follow-ups |
+| 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -152,6 +155,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
+- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
 - [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
@@ -159,6 +163,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] UX-SLICE-2 (Release: 1.0)** UX-Polish-Follow-ups aus UX-SLICE-1-Verifizierung (F1–F6, niedrig/mittel): F1 Stale-Hash bei 0 Bildern (render_key-Clear/Gate); F2 „Open Folder"-CTA verspricht zu viel (ehrliches Label oder Picker-Scope entscheiden); F3 Empty-State nur in Grid (Loupe/Compare/Survey + Navigator-Hint vereinheitlichen); F4 Badge-Painting ohne Pixel-Beleg (Golden mit bewerteten Fixtures); F5 schärfere Asserts (Hash-Abwesenheit am Canvas, CTA-Verdrahtung); F6 Traceability-Labels (P1–P5/UXG-Mapper). Abnahme: wie Slice-1-Gates + Vision-Check. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig

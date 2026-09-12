@@ -89,6 +89,9 @@ Sidecars vollständig wiederherstellbar sein.
   Schnellvorschau (F-101)
 - [`platform/capability-matrix.md`](platform/capability-matrix.md):
   Capability-Matrix native CLI / Desktop (Browser ENTFERNT 2026-09-04)
+- [`platform/lightroom-ux-parity.md`](platform/lightroom-ux-parity.md):
+  1:1-Klon-Ziel für die GUI (Gap-Inventory UXG/UXD, Zielbild-Slices,
+  offene SOLL-Entscheide)
 - [`platform/wasm-limits.md`](platform/wasm-limits.md): ENTFERNT 2026-09-04
   (historisch; F-069–F-071 entfallen)
 

@@ -264,6 +264,11 @@ pub enum Str {
     RenderStateStale,
     RenderStateCurrent,
     FilmstripHint,
+    /// UX-SLICE-1 (UXG-09): "n of N" counter in the filmstrip header. Two
+    /// `{}` placeholders: selected strip entries, total strip entries.
+    FilmstripCounter,
+    /// UX-SLICE-1 (UXG-09): honest empty-strip text (never a fake thumbnail).
+    FilmstripEmpty,
     PickWhiteBalanceHint,
 
     // File-browser status shorthand
@@ -276,6 +281,11 @@ pub enum Str {
     // every user-visible string from the new masking/export code routes
     // through one of these keys instead of a free-form German literal.
     ReadyForImage,
+    /// UX-SLICE-1 (P5): Library empty-state title (replaces the bare
+    /// `Library` heading that duplicated the module-bar label) and the CTA
+    /// hooked onto the existing folder-open path.
+    LibraryEmptyTitle,
+    OpenFolder,
     PresetNameEmpty,
     NoSidecarLoaded,
     VirtualCopyNotFound,
@@ -613,7 +623,7 @@ impl Str {
             Str::Export => "Export",
             Str::LibraryShortcut => "Library ({})",
             Str::DevelopShortcut => "Develop ({})",
-            Str::ExportTarget => "Export to",
+            Str::ExportTarget => "Destination",
             Str::ExportFormatLabel => "Format",
             Str::ExportQualityLabel => "Quality",
             Str::ExportChoose => "Choose…",
@@ -844,15 +854,19 @@ impl Str {
             Str::RenderApply => "Render / Apply",
             Str::SaveRecipe => "Save Recipe / Sidecar",
             Str::NotAvailable => "Not available",
-            Str::RenderStateStale => "Render state stale / pending",
-            Str::RenderStateCurrent => "Render state current",
+            Str::RenderStateStale => "Stale",
+            Str::RenderStateCurrent => "Render state current: {}",
             Str::FilmstripHint => "Click a thumbnail to open it",
+            Str::FilmstripCounter => "{} of {}",
+            Str::FilmstripEmpty => "No images in this folder",
             Str::PickWhiteBalanceHint => "Click the preview to pick white balance",
             Str::StatusConflict => "Conflict",
             Str::StatusOffline => "Offline",
             Str::StatusWithout => "No sidecar",
 
             Str::ReadyForImage => "Ready for a PNG, JPEG or WebP",
+            Str::LibraryEmptyTitle => "No images",
+            Str::OpenFolder => "Open Folder",
             Str::PresetNameEmpty => "Preset name must not be empty",
             Str::NoSidecarLoaded => "No sidecar loaded",
             Str::VirtualCopyNotFound => "Virtual copy not found",
