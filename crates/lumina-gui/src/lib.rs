@@ -523,6 +523,26 @@ pub fn library_move_index(current: usize, delta: isize, count: usize) -> usize {
     current.saturating_add_signed(delta).min(count - 1)
 }
 
+/// Move one file to `target`, tolerating a cross-filesystem move: `rename`
+/// fails with `CrossesDevices` (EXDEV) when source and target live on
+/// different volumes, so fall back to copy + remove. Loud on error; a failed
+/// source removal cleans up the copied target again (the source still exists,
+/// so no data is lost).
+fn move_file_cross_volume(source: &Path, target: &Path) -> std::io::Result<()> {
+    match std::fs::rename(source, target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            std::fs::copy(source, target)?;
+            if let Err(remove_error) = std::fs::remove_file(source) {
+                let _ = std::fs::remove_file(target);
+                return Err(remove_error);
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Import/export module shortcut (Welle 3, LR-13 light):
 /// `Cmd/Ctrl+Shift+I` jumps to Library (import lives there),
 /// `Cmd/Ctrl+Shift+E` jumps to Export. The shortcuts only switch the module
@@ -4537,9 +4557,18 @@ impl LuminaApp {
                 }
             }
         }
-        std::fs::rename(image, &target)
+        let moved_loaded = Path::new(self.path.trim()) == image;
+        // REVIEW-GUI-MOVE-1: flush an armed (uncommitted) edit to the sidecar
+        // at the *current* path before the bundle moves, so the edit travels
+        // with the image instead of being written to the old location later.
+        // Only the loaded image has an armed edit to flush.
+        if moved_loaded {
+            self.flush_pending_edit();
+        }
+        move_file_cross_volume(image, &target)
             .map_err(|error| GuiError::Io(format!("cannot move `{}`: {error}", image.display())))?;
         info!("moved image: {} -> {}", image.display(), target.display());
+        let mut companion_error: Option<String> = None;
         for companion in [
             lumina_sidecar::sidecar_path_for(image),
             zdata_path_for(image),
@@ -4550,7 +4579,7 @@ impl LuminaApp {
                     .map(|name| name.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let companion_target = dest_dir.join(&companion_name);
-                match std::fs::rename(&companion, &companion_target) {
+                match move_file_cross_volume(&companion, &companion_target) {
                     Ok(()) => info!(
                         "moved sidecar companion: {} -> {}",
                         companion.display(),
@@ -4559,15 +4588,35 @@ impl LuminaApp {
                     Err(error) => {
                         self.status = Str::CompanionMoveFailedPattern
                             .format_arg(&format!("{companion_name}: {error}"));
-                        return Err(GuiError::Io(format!(
+                        companion_error = Some(format!(
                             "moved `{}` to `{}` but companion `{}` failed: {error}",
                             image.display(),
                             target.display(),
                             companion.display()
-                        )));
+                        ));
+                        break;
                     }
                 }
             }
+        }
+        // REVIEW-GUI-MOVE-1: when the loaded image itself moved, re-point the
+        // session at the new path (and its sidecar revision) so the next
+        // debounced save/refresh targets the moved bundle, never the old
+        // location (which would orphan a sidecar / hit a CAS conflict). This
+        // runs even when a companion move failed — the image is already at the
+        // target, so the old path must not stay writable.
+        if moved_loaded {
+            self.path = target.display().to_string();
+            self.sidecar_revision =
+                lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&target))
+                    .ok()
+                    .and_then(|document| lumina_sidecar::document_revision(&document).ok());
+            if let Some(parent) = target.parent() {
+                self.directory = parent.display().to_string();
+            }
+        }
+        if let Some(message) = companion_error {
+            return Err(GuiError::Io(message));
         }
         self.status = Str::ImageMovedPattern.format_arg(&format!(
             "{} → {}",
@@ -4588,10 +4637,22 @@ impl LuminaApp {
                 image.display()
             )));
         }
+        let deleted_loaded = Path::new(self.path.trim()) == image;
         std::fs::remove_file(image).map_err(|error| {
             GuiError::Io(format!("cannot delete `{}`: {error}", image.display()))
         })?;
         info!("deleted image: {}", image.display());
+        // REVIEW-GUI-MOVE-1: the loaded source is gone — drop any armed edit
+        // and clear the path/revision so no later (debounced) save can
+        // recreate an orphan sidecar at the deleted location. Done before the
+        // companion loop: the image file is already removed, so a companion
+        // failure must not leave the old path writable.
+        if deleted_loaded {
+            self.pending_slider_commit = None;
+            self.pending_history_step = None;
+            self.path.clear();
+            self.sidecar_revision = None;
+        }
         for companion in [
             lumina_sidecar::sidecar_path_for(image),
             zdata_path_for(image),
@@ -28421,9 +28482,74 @@ mod tests {
         assert!(sidecar.is_file());
         app.delete_image_with_sidecars(&gone).unwrap();
         assert!(!gone.exists());
+        assert!(
+            app.path.trim().is_empty(),
+            "deleting the loaded image clears the session path (no orphan save)"
+        );
+        assert!(app.sidecar_revision.is_none());
         assert!(!sidecar.exists(), "companions must go with the image");
         assert!(kept.is_file(), "siblings must survive");
         assert!(app.delete_image_with_sidecars(&gone).is_err());
+    }
+
+    /// REVIEW-GUI-MOVE-1: the discriminating negative for the delete cleanup.
+    /// The image is loaded **without** a sidecar (`sidecar_revision == None`),
+    /// so if the session path were not cleared, the follow-up save would use
+    /// `expected = None` and create an orphan sidecar at the deleted location.
+    #[test]
+    fn g09_delete_unsaved_image_cannot_recreate_orphan_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let photo = root.path().join("photo.png");
+        save_png(&photo);
+        let sidecar = lumina_sidecar::sidecar_path_for(&photo);
+        let mut app = new_app();
+        open_and_decode(&mut app, photo.display().to_string());
+        assert!(
+            app.sidecar_revision.is_none(),
+            "no sidecar exists before the delete"
+        );
+        assert!(!sidecar.exists());
+        app.delete_image_with_sidecars(&photo).unwrap();
+        assert!(app.path.trim().is_empty(), "session path cleared");
+        app.save_sidecar();
+        assert!(
+            !sidecar.exists(),
+            "a save after delete must not recreate an orphan sidecar"
+        );
+    }
+
+    /// REVIEW-GUI-MOVE-1: moving the loaded image re-points `self.path` (and
+    /// its CAS revision) at the moved bundle so the next save cannot orphan a
+    /// sidecar at the old location.
+    #[test]
+    fn g09_move_image_repoints_loaded_session() {
+        let root = tempfile::tempdir().unwrap();
+        let src_dir = root.path().join("src");
+        let dst_dir = root.path().join("dst");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::create_dir(&dst_dir).unwrap();
+        let source = src_dir.join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.save_sidecar();
+        assert!(lumina_sidecar::sidecar_path_for(&source).is_file());
+        let target = app.move_image_to_folder(&source, &dst_dir).unwrap();
+        assert!(!source.exists());
+        assert_eq!(target, dst_dir.join("photo.png"));
+        assert!(
+            lumina_sidecar::sidecar_path_for(&target).is_file(),
+            "the sidecar travels with the image"
+        );
+        assert_eq!(
+            app.path,
+            target.display().to_string(),
+            "loaded path follows the move"
+        );
+        assert!(
+            app.sidecar_revision.is_some(),
+            "CAS anchor is the moved sidecar's revision"
+        );
     }
 
     #[test]

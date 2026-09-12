@@ -588,18 +588,27 @@ Zweit-Mechanismus.
   `delete_image_with_sidecars` (Bild + beide Begleiter; fehlende Begleiter
   sind kein Fehler), `delete_empty_folder` (nur leere Verzeichnisse, laut
   sonst). Jede Aktion loggt `info!` je Pfad, meldet Fehler laut (Status +
-  `GuiError`, nie still) und listet danach das Verzeichnis neu. Das
-  Verschieben auf Benutzerwunsch ist eine ausdrückliche Datei-Operation und
-  keine Pipeline-Überschreibung: Die Nicht-Destruktivitäts-Regel (kein
-  Render/Export ersetzt je ein Original) bleibt unberührt. Persistierte
-  Daten enthalten nie absolute Pfade (Sidecar-Relativitäts-Regel).
+  `GuiError`, nie still) und listet danach das Verzeichnis neu.
+  Volumen-übergreifende Moves (z. B. internes → externes Laufwerk) nutzen
+  Copy+Remove als Fallback, wenn `rename` mit `EXDEV` scheitert. Wird das
+  **geladene** Bild verschoben, flusht ein offener Edit zuerst ans alte
+  Sidecar und die Session zeigt danach auf das verschobene Bundle (Pfad +
+  Sidecar-Revision + Verzeichnis); wird es gelöscht, werden offener Edit,
+  Pfad und Revision verworfen, sodass kein späterer Save ein verwaistes
+  Sidecar am alten Ort erzeugen kann. Das Verschieben auf Benutzerwunsch
+  ist eine ausdrückliche Datei-Operation und keine Pipeline-Überschreibung:
+  Die Nicht-Destruktivitäts-Regel (kein Render/Export ersetzt je ein
+  Original) bleibt unberührt. Persistierte Daten enthalten nie absolute
+  Pfade (Sidecar-Relativitäts-Regel).
 - **CLI:** `lumina relocate --from <bild> --to <bild> [--json]` verschiebt
   ein Bild **mit** seinen Sidecar-Begleitern (`.lumina.json`,
   `.lumina.zdata`, sofern vorhanden) an den Zielpfad. Verweigert laut ein
   existierendes Ziel und eine fehlende Quelle (Exit 1, kein Halb-Zustand:
   Begleiter werden erst nach erfolgreichem Bild-Move versetzt; ein
   fehlgeschlagener Begleiter-Move meldet laut, das Bild liegt dann bereits
-  am Ziel — kein stiller Verlust). Nach dem Move verifiziert `inspect`
+  am Ziel — kein stiller Verlust; in diesem Halb-Zustand wird die
+  Verzeichnisliste nicht neu aufgebaut). Volumen-übergreifende Moves nutzen
+  Copy+Remove als Fallback bei `EXDEV`. Nach dem Move verifiziert `inspect`
   den Roundtrip (`valid`). Exit-Codes wie Bestand: `0` Erfolg, `1`
   Laufzeitfehler, `2` Benutzungsfehler (clap).
 - **Status (LRPAR-G09-LIB):** umgesetzt — `LibraryView` (Grid/Loupe/
@@ -777,7 +786,9 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
   `--set-distraction k=v,...`, `--detect-objects/--detect-apply`,
   `--regenerate-variant`; Roundtrip über `save_sidecar`/`load_sidecar`,
   laute Fehler (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller
-  Fallback, keine absoluten Pfade).
+  Fallback, keine absoluten Pfade). `--clear` entfernt alle Spots und
+  widerspricht `--add-heuristic`/`--detect-apply`/`--regenerate-variant`
+  (lauter Fehler, kein stilles Verwerfen des Adders).
 
 ### Lens Blur G-05 (LRPAR-G05-LENSBLUR, Release 1.0)
 
@@ -803,7 +814,9 @@ kollabierbare Untergruppe „Lens Blur“, kein zweiter Renderpfad):
   x,y,w,h`, `--set-depth-artifact PATH:SHA256`, `--clear-depth-artifact`,
   `--clear`; Roundtrip über `save_sidecar`/`load_sidecar`, laute Fehler
   (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller Fallback,
-  keine absoluten Pfade).
+  keine absoluten Pfade). `--clear` entfernt die ganze Stufe und
+  widerspricht jedem anderen Mutations-Flag (lauter Fehler statt stillem
+  Kurzschluss).
 - **Status (LRPAR-G05-LENSBLUR):** umgesetzt — CLI-Befehl, Optics-Panel
   (Lens-Blur-Untergruppe mit Statuszeile), Fokus-Overlay im Preview und
   headless E2E-Tests (Setter → Datei → Reload); fehlendes Tiefenartefakt
@@ -851,7 +864,9 @@ explizit **nicht** Teil dieses Slices (1.5, LRPAR-G06-UPRIGHT-15).
   `--clear-geometry`, `--lensfun-status` (EXIF→Profil-Auflösung, laut mit
   Grund bei Fehlschlag); Roundtrip über `save_sidecar`/`load_sidecar`, laute
   Fehler (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller
-  Fallback, keine absoluten Pfade).
+  Fallback, keine absoluten Pfade). `--list` ist die reine Lese-Ansicht
+  (Default ohne Mutations-Flag) und widerspricht jedem Mutations-Flag
+  (lauter Fehler statt stillem Ignorieren).
 - **Status (LRPAR-G06-GEO):** umgesetzt — Schema (bestand, additiv v2),
   Core-Stufen (keine zweite Pipeline, Reihenfolge
   Lens→Perspektive→Crop→Rotation→Spiegelung), TCA via Lensfun, CLI-Befehl,

@@ -3797,6 +3797,26 @@ fn previous(args: PreviousArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Move one file to `target`, tolerating a cross-filesystem move: `rename`
+/// fails with `CrossesDevices` (EXDEV) when source and target live on
+/// different volumes, so fall back to copy + remove. Loud on error; a failed
+/// source removal cleans up the copied target again (the source still exists,
+/// so no data is lost).
+fn move_file_cross_volume(source: &Path, target: &Path) -> std::io::Result<()> {
+    match fs::rename(source, target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            fs::copy(source, target)?;
+            if let Err(remove_error) = fs::remove_file(source) {
+                let _ = fs::remove_file(target);
+                return Err(remove_error);
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// G-09 Library-Parität (LRPAR-G09-LIB): move one image with its sidecar
 /// companions (`.lumina.json`, `.lumina.zdata` when present) to `--to`.
 /// Companion targets are derived from the TARGET image path
@@ -3845,7 +3865,7 @@ fn relocate(args: RelocateArgs) -> Result<(), CliError> {
             )));
         }
     }
-    fs::rename(&args.from, &args.to).map_err(|error| io_error(&args.from, error))?;
+    move_file_cross_volume(&args.from, &args.to).map_err(|error| io_error(&args.from, error))?;
     info!(
         "relocate: image `{}` -> `{}`",
         args.from.display(),
@@ -3853,7 +3873,7 @@ fn relocate(args: RelocateArgs) -> Result<(), CliError> {
     );
     for (source, target) in &moves {
         if source.is_file() {
-            fs::rename(source, target).map_err(|error| {
+            move_file_cross_volume(source, target).map_err(|error| {
                 CliError::Message(format!(
                     "relocate: image moved to `{}` but companion `{}` failed: {error}",
                     args.to.display(),
@@ -3938,6 +3958,15 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
     if args.set_visualize_threshold.is_some() && args.clear_visualize {
         return Err(CliError::Message(
             "--set-visualize-threshold and --clear-visualize are mutually exclusive".into(),
+        ));
+    }
+    // `--clear` removes every spot after the adders ran, so combining it with
+    // an adder is a contradiction (the requested edit would be discarded).
+    if args.clear && (args.add_heuristic || args.detect_apply || args.regenerate_variant.is_some())
+    {
+        return Err(CliError::Message(
+            "--clear removes every spot and contradicts --add-heuristic/--detect-apply/--regenerate-variant"
+                .into(),
         ));
     }
     let wants_mutation = args.add_heuristic
@@ -4373,6 +4402,24 @@ fn lens_blur(args: LensBlurArgs) -> Result<(), CliError> {
     if args.set_depth_artifact.is_some() && args.clear_depth_artifact {
         return Err(CliError::Message(
             "--set-depth-artifact and --clear-depth-artifact are mutually exclusive".into(),
+        ));
+    }
+    // `--clear` removes the whole stage and short-circuits every other setter
+    // below, so combining it with one is a contradiction, not a silent no-op.
+    if args.clear
+        && (args.enable
+            || args.disable
+            || args.set_amount.is_some()
+            || args.set_focal_near.is_some()
+            || args.set_focal_far.is_some()
+            || args.set_bokeh.is_some()
+            || args.set_focus_rect.is_some()
+            || args.set_depth_artifact.is_some()
+            || args.clear_depth_artifact)
+    {
+        return Err(CliError::Message(
+            "--clear removes the whole lens-blur stage and contradicts every other mutation flag"
+                .into(),
         ));
     }
     let wants_mutation = args.enable
@@ -5266,6 +5313,13 @@ fn geometry(args: GeometryArgs) -> Result<(), CliError> {
     if args.lensfun_status && wants_mutation {
         return Err(CliError::Message(
             "--lensfun-status is read-only; pass no mutation flags with it".into(),
+        ));
+    }
+    // `--list` is the read-only view (the default when nothing mutates);
+    // combined with a mutation flag it would silently do the wrong thing.
+    if args.list && wants_mutation {
+        return Err(CliError::Message(
+            "--list is read-only; pass no mutation flags with it".into(),
         ));
     }
     // A clear and a set of the SAME stage contradict each other (loud, no
@@ -9665,6 +9719,22 @@ mod tests {
 
     /// LRPAR-G09-LIB: `relocate` moves the image with its sidecar
     /// companion; the recipe roundtrips and `inspect` stays valid.
+    /// The cross-volume helper must move a file with no residue in the
+    /// same-volume (rename) path. The `CrossesDevices` fallback needs two
+    /// filesystems and is exercised manually, not unit-testable here.
+    #[test]
+    fn move_file_cross_volume_moves_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("a.bin");
+        let target = directory.path().join("b.bin");
+        fs::write(&source, b"payload").unwrap();
+        move_file_cross_volume(&source, &target).unwrap();
+        assert!(!source.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"payload");
+        // A missing source stays a loud error.
+        assert!(move_file_cross_volume(&source, &target).is_err());
+    }
+
     #[test]
     fn relocate_moves_image_with_sidecar_and_roundtrips() {
         let directory = tempfile::tempdir().unwrap();
@@ -10043,6 +10113,24 @@ mod tests {
             clear_depth_artifact: false,
             clear: false,
         }
+    }
+
+    /// G-05: `--clear` short-circuits the setters, so combining it with one
+    /// must fail loudly instead of silently dropping the requested edit.
+    #[test]
+    fn lens_blur_clear_rejects_companion_mutation() {
+        let mut clear = lens_blur_base_args(PathBuf::from("unused.png"));
+        clear.clear = true;
+        clear.set_amount = Some(0.8);
+        let error = lens_blur(clear).unwrap_err().to_string();
+        assert!(
+            error.contains("--clear removes the whole lens-blur stage"),
+            "{error}"
+        );
+        let mut clear = lens_blur_base_args(PathBuf::from("unused.png"));
+        clear.clear = true;
+        clear.enable = true;
+        assert!(lens_blur(clear).is_err());
     }
 
     /// G-05: set fields, list (read-only), clear — with sidecar roundtrip and
@@ -10518,6 +10606,17 @@ mod tests {
         }
     }
 
+    /// G-06: `--list` is the read-only view; combined with a mutation flag it
+    /// must fail loudly instead of being ignored.
+    #[test]
+    fn geometry_list_rejects_mutation() {
+        let mut args = geometry_base_args(PathBuf::from("unused.png"));
+        args.list = true;
+        args.set_rotation = Some(10.0);
+        let error = geometry(args).unwrap_err().to_string();
+        assert!(error.contains("--list is read-only"), "{error}");
+    }
+
     /// G-06: set crop/straighten/mirror/lens/perspective, list (read-only),
     /// clear — with sidecar roundtrip, exactly one history entry per
     /// mutating call, and an untouched original.
@@ -10911,6 +11010,17 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    /// G-04: `--clear` runs after the adders and would discard their result,
+    /// so combining it with one must fail loudly.
+    #[test]
+    fn spot_clear_rejects_adder() {
+        let mut args = spot_base_args(PathBuf::from("unused.png"));
+        args.clear = true;
+        args.add_heuristic = true;
+        let error = spot(args).unwrap_err().to_string();
+        assert!(error.contains("--clear removes every spot"), "{error}");
     }
 
     #[test]

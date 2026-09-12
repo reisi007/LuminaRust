@@ -2,8 +2,10 @@
 //!
 //! Layout per dataset: `0x1C record dataset u16-BE-length bytes`.
 //! `1:90` (CodedCharacterSet, UTF-8) is always written first; record-2
-//! datasets follow in ascending dataset order (deterministic). Empty fields
-//! are omitted, never written empty. `date_created` is stored as `YYYYMMDD`.
+//! datasets follow in the deterministic `REGISTRY` order (not strictly
+//! ascending: `date_created` 2:55 comes after the higher-numbered registry
+//! fields), then the repeatable keywords 2:25. Empty fields are omitted,
+//! never written empty. `date_created` is stored as `YYYYMMDD`.
 
 use crate::error::IptcError;
 use crate::registry::{IptcMetadata, MAX_KEYWORDS, REGISTRY};
