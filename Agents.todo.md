@@ -158,7 +158,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] GUI-PREVIEW-SCALE-1 (Release: 1.0)** CPU-Preview-Skalierung an GPU-Pfad angleichen (Nebenbefund aus KITTEST-COVERAGE-OVERLAYS-1-Verifizierung): `draw_preview` malt via `ui.put(rect, Image::from_texture)` in nativer Texelgröße, während Overlays (Mask/Crop/Pins/Lens-Blur) auf das gefittete `full_rect` mappen — CPU-Fallback und GPU-Pfad (`ui.painter().image(present_id, rect, …)`) divergieren sichtbar. Abnahme: Preview füllt das gefittete Rect auf beiden Pfaden identisch, betroffene Develop-Goldens rebaselined, DoD-§6-Vision-Check, kittest-Gates grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 

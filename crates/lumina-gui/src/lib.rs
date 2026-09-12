@@ -12320,7 +12320,26 @@ impl LuminaApp {
                     egui::Color32::WHITE,
                 );
             } else {
-                ui.put(rect, egui::Image::from_texture(&texture));
+                // GUI-PREVIEW-SCALE-1: draw the CPU texture through the painter
+                // with the same fitted `rect` and full UVs as the GPU-present
+                // path above. `ui.put(rect, Image::from_texture(..))` left the
+                // image at its native texel size in points: `Image::new`
+                // derives `ImageFit::Exact(tex.size)` for a texture source and
+                // `Ui::put` only supplies `max_rect`, so `Exact` ignored the
+                // available size. The CPU fallback therefore drew tiny (e.g.
+                // the 4x3 sample) while the overlays mapped the fitted
+                // `full_rect` — diverging visibly from the GPU path, which
+                // already paints via `painter().image`. A direct painter blit
+                // keeps zoom/pan/ROI (`preview_roi`, `preview_render_src`)
+                // consistent: `rect` is the ROI-crop/draft-adjusted fit rect on
+                // both paths and the texture is already the crop, so full UVs
+                // map it 1:1.
+                ui.painter().image(
+                    texture.id(),
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
             }
 
             // WB eyedropper needs the source-coordinate mapping, which is part
@@ -22941,6 +22960,83 @@ mod tests {
             app.preview_pan,
             egui::Vec2::ZERO,
             "pan must be neutralized in Fit"
+        );
+    }
+
+    /// GUI-PREVIEW-SCALE-1: the CPU preview must fill the fitted `rect` exactly
+    /// like the GPU-present path, not paint at the texture's native texel size.
+    /// `Image::new` derives `ImageFit::Exact(tex.size)` for a texture source and
+    /// `Ui::put` only supplies `max_rect`, so the old
+    /// `ui.put(rect, Image::from_texture(..))` drew the 4x3 sample as a 4x3
+    /// quad while the overlays mapped the fitted `full_rect`. Assert the
+    /// painted preview shape spans the fit (the 4:3 source fills the 800x600
+    /// pane's constraining axis) instead of the 4x3 native size; the old code
+    /// fails every bound below.
+    #[test]
+    fn cpu_preview_blit_fills_fitted_rect() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        assert_eq!(app.image_dims().unwrap(), (4, 3), "sample is 4x3");
+        let preview = ctx.load_texture(
+            "preview",
+            egui::ColorImage::filled([4, 3], egui::Color32::GRAY),
+            egui::TextureOptions::LINEAR,
+        );
+        let preview_id = preview.id();
+        app.texture = Some(preview);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+        // `painter().image` emits a textured `Shape::Mesh`; the alternative
+        // `.fit_to_exact_size(rect.size())` (and the old native-size `Image`
+        // widget) emits a textured `Shape::Rect`. Union the bounds of whichever
+        // textured shape carries the preview texture id, so the assertion pins
+        // the fitted geometry, not the painting primitive.
+        let painted = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == preview_id => {
+                    Some(mesh.calc_bounds())
+                }
+                egui::Shape::Rect(rect_shape) if rect_shape.fill_texture_id() == preview_id => {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .fold(egui::Rect::NOTHING, |acc, rect| acc.union(rect));
+        assert!(
+            !painted.is_negative(),
+            "the preview texture must be painted, got {painted:?}"
+        );
+        assert!(
+            painted.width() > 100.0 && painted.height() > 100.0,
+            "CPU preview must be drawn at the fitted size, got {painted:?} (native-texel-size regression)"
+        );
+        let (w, h) = (painted.width(), painted.height());
+        assert!(
+            (w / h - 4.0 / 3.0).abs() < 0.02,
+            "fitted preview must preserve the 4:3 source aspect, got {w}x{h}"
+        );
+        assert!(
+            (painted.center().x - screen.center().x).abs() < 1.0
+                && (painted.center().y - screen.center().y).abs() < 1.0,
+            "fitted preview must be centred in the pane, got {painted:?}"
+        );
+        assert!(
+            painted.height() > 550.0,
+            "the constraining axis must nearly fill the 600px pane, got {painted:?}"
         );
     }
 
