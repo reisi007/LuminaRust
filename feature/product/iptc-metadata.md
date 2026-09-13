@@ -197,6 +197,42 @@ laut); Exit-Codes 0/≠ 0 mit klarer stderr-Meldung.
 - `lumina meta preset list [dir]` / `show <name|pfad>` /
   `apply <preset> --target <pfade…> [--var name=wert]…`.
 - `lumina meta sync --source <datei> --target <dateien…> --fields <id,id,…>`.
+- `lumina meta copy <quelle> [--fields <id,…>] [--out <clipboard-datei>]`
+  (META-COPYPASTE-1) — kopiert die ausgewählten **nichtleeren** Draft-Felder
+  (Registry-IDs) plus `keywords` in eine **explizite Clipboard-Datei**.
+  `--fields` ist optional und validiert wie `sync` (unbekannte ID oder leerer
+  Eintrag = lauter Fehler, Exit 1, nichts geschrieben); ohne Angabe werden
+  **alle** im Quellentwurf vorhandenen nichtleeren Draft-Felder und die
+  nichtleeren Keywords kopiert. Copy mutiert **nie** ein Sidecar und legt
+  keinen impliziten Shared-State an: nur nichtleere Felder werden aufgezeichnet,
+  in der Quelle fehlende selektierte Felder werden weggelassen (Copy ist keine
+  Konvergenzoperation) und die Anzahl wird laut berichtet.
+  **Clipboard-Format** (`--out`, Default s. u.): `{ "format":
+  "lumina-meta-clipboard", "version": 1, "source": "<dateiname>",
+  "fields": { "<id>": "<wert>", … }, "keywords": [ … ] }` — `source` ist nur
+  der Dateiname (nie ein Pfad), `fields` enthält ausschließlich Registry-IDs,
+  `keywords` ist ein eigenes Feld. **Default-Pfad** ohne `--out`:
+  `<OS-Temp>/lumina-meta-clipboard.json` (`std::env::temp_dir()`); bewusst
+  OS-Temp und kein CWD-Dotfile, damit der explizite, ephemere Handoff nicht
+  versehentlich mitversioniert oder als impliziter CWD-Shared-State
+  missverstanden wird.
+  Leere Quelle → Clipboard wird geschrieben und laut als `empty` gemeldet
+  (Exit 0); der Inhalt ist bewusst nicht als potenzielles Löschen kodierbar.
+- `lumina meta paste [<clipboard-datei>] --target <pfade…> [--fields <id,…>]`
+  (META-COPYPASTE-1) — schreibt die Clipboard-Felder über den normalen
+  Commit-Pfad je Ziel (CAS, atomar, genau ein Historie-Eintrag
+  `origin = "cli"`). Paste ist **rein additiv/überschreibend: nur
+  Clipboard-Felder werden gesetzt, kein anderes Feld wird gelöscht** (bewusst
+  **keine** `sync`-Mirror-Semantik); ein selektiertes `keywords` ersetzt die
+  Zielliste als Ganzes. `--fields` ist optional und muss eine Teilmenge der im
+  Clipboard gespeicherten IDs sein (unbekannte oder nicht enthaltene IDs =
+  lauter Fehler, Exit 1, nichts geschrieben); ohne Angabe werden alle
+  Clipboard-Felder angewendet. Ohne `<clipboard-datei>` wird derselbe
+  Default-Pfad wie bei `copy` gelesen. Report `updated`/`unchanged`/`failed`
+  je Ziel (Exit 0/3; Fehler brechen die Serie nie ab), fehlende oder ungültige
+  Clipboard-Datei, leerer Feldsatz und fehlende Ziele = lauter Fehler (Exit 1
+  bzw. clap 2), nichts geschrieben. Originale bleiben byte-identisch; das
+  GUI-Session-Clipboard (§10) bleibt unberührt und wird nicht persistiert.
 - Export-Flags: `--write-metadata` bei `export`, `process`, `batch`.
 
 ## 9. MCP-Schnittstelle (F-101-Erweiterung)
