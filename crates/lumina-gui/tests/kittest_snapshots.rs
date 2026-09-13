@@ -539,31 +539,19 @@ fn temp_raw_dir(count: usize) -> tempfile::TempDir {
     dir
 }
 
-/// The filmstrip is the bottom `Panel::bottom`, so its cells live in the lower
-/// band of the window. Each chip is an egui clickable area that surfaces in the
-/// accesskit tree as `Role::Unknown` with the full cell rect (`CELL_W x CELL_H`
-/// = 140x110). The row assertion verifies that all laid-out cells share (nearly)
-/// one y and advance strictly to the right — a single horizontal row, no
-/// wrapping/stacking.
-#[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
-fn filmstrip_is_single_row_horizontal() {
-    let dir = temp_raw_dir(20);
-    let mut harness = build_harness();
-    harness
-        .state_mut()
-        .set_directory(dir.path().display().to_string());
-    harness.state_mut().set_module(Module::Develop);
-    // The app keeps requesting repaints while thumbnail jobs are scheduled, so
-    // `run()` would exceed max_steps; run a fixed number of frames instead.
-    harness.run_steps(3);
-
-    // Collect filmstrip cells: Unknown-role nodes sized like a cell (~110 tall)
-    // in the bottom band (y > 500 of a 720-high window). GUI-VIEW-2: the
-    // navigator rail is open by default and shows its own 120x90 thumbnail
-    // column on the left — those nodes match the band filter too, so require
-    // the 140-wide filmstrip cell geometry to keep this a filmstrip-only
-    // single-row assertion.
+/// Collect the visible filmstrip cells and assert that they form exactly one
+/// horizontal row.
+///
+/// Each chip is an egui clickable area that surfaces in the accesskit tree as
+/// `Role::Unknown` with the full cell rect (`CELL_W x CELL_H` = 140x110) in the
+/// bottom band (`y > 500` of the 720-high window). GUI-VIEW-2: the navigator
+/// rail is open by default and shows its own 120x90 thumbnail column on the
+/// left — those nodes match the band filter too, so require the 140-wide
+/// filmstrip cell geometry to keep this a filmstrip-only assertion. The row
+/// check verifies all laid-out cells share (nearly) one y and advance strictly
+/// to the right — no wrapping/stacking. Returns the sorted chips so callers can
+/// add their own count/selection guards.
+fn assert_filmstrip_single_row(harness: &mut Harness<'_, LuminaApp>) -> Vec<eframe::egui::Rect> {
     let mut chips: Vec<eframe::egui::Rect> = harness
         .query_all_by(|n| n.role() == eframe::egui::accesskit::Role::Unknown)
         .filter(|n| n.accesskit_node().bounding_box().is_some())
@@ -591,6 +579,24 @@ fn filmstrip_is_single_row_horizontal() {
             );
         }
     }
+    chips
+}
+
+/// The filmstrip is the bottom `Panel::bottom`; this pins the single-row
+/// geometry for a 20-dummy strip (KITTEST-COVERAGE-STATES-1).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn filmstrip_is_single_row_horizontal() {
+    let dir = temp_raw_dir(20);
+    let mut harness = build_harness();
+    harness
+        .state_mut()
+        .set_directory(dir.path().display().to_string());
+    harness.state_mut().set_module(Module::Develop);
+    // The app keeps requesting repaints while thumbnail jobs are scheduled, so
+    // `run()` would exceed max_steps; run a fixed number of frames instead.
+    harness.run_steps(3);
+    assert_filmstrip_single_row(&mut harness);
 }
 
 /// UX-SLICE-1 (UXG-09): the shared filmstrip header shows an "n of N" counter
@@ -2576,4 +2582,241 @@ fn navigator_open_closed_matrix() {
     harness.run();
     assert_label_on_screen(&mut harness, "‹");
     assert_label_on_screen(&mut harness, "Navigator");
+}
+
+// ---------------------------------------------------------------------------
+// KITTEST-COVERAGE-STATES-1: UI states pixel-visible per kittest golden —
+// toast (info), error popup dialog, empty states, missing-sidecar hint, the
+// metadata panel's own copy/paste system and the 20-dummy filmstrip.
+//
+// Pattern per test (KITTEST-COVERAGE-*): deterministic seeds through the
+// public API, a non-vacuous model/label guard + on-screen assert, then
+// `snapshot`. No existing golden is rebaselined.
+// ---------------------------------------------------------------------------
+
+/// Info toast (`show_toast`): the transient overlay owns the preview-ready
+/// signal. `show_toast` is shown at an egui-time far above the headless clock
+/// so it stays visible when the frame is read back (same trick as the
+/// agent-harness `toast_overlap` probe).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn toast_info() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    use_library_fixture(&mut harness);
+    load_sample(&mut harness);
+    harness
+        .state_mut()
+        .show_toast("Preview ready".to_string(), 1000.0);
+    harness.run();
+    harness.run();
+    // Non-vacuous model guard: the toast state machine is armed.
+    assert!(
+        harness.state_mut().toast_visible(1000.0),
+        "info toast must be visible after show_toast"
+    );
+    // The overlay Area is exposed to AccessKit; when it is, guard the pixels.
+    if harness.query_all_by_label("Preview ready").next().is_some() {
+        assert_label_on_screen(&mut harness, "Preview ready");
+        assert_label_on_screen(&mut harness, "Dismiss");
+    }
+    harness.snapshot("toast_info");
+}
+
+/// Error popup dialog: `show_error` surfaces a failure as a floating dialog
+/// (and logs it at `error!`). Triggered through the Export panel's Export
+/// button with the default empty destination → the fixed code literal
+/// "Choose an export target first" (machine-independent golden text).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn error_dialog() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Export);
+    load_sample(&mut harness);
+    harness.run();
+    // Two Button-role "Export" nodes exist (module bar + run button); the run
+    // button is the one in the right panel.
+    let clicked = harness
+        .query_all_by_label("Export")
+        .find(|node| {
+            node.accesskit_node().role() == eframe::egui::accesskit::Role::Button
+                && node.rect().min.x > 600.0
+        })
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(clicked, "export run button not found in headed harness");
+    harness.run();
+    harness.run();
+    // Non-vacuous model guard: the failure reached the loud path.
+    assert!(
+        harness.state_mut().error().is_some(),
+        "empty destination must raise the loud export error"
+    );
+    assert_eq!(harness.state_mut().status(), "Error");
+    // Dialog content is on-screen, not just in the tree.
+    assert_label_on_screen(&mut harness, "Close");
+    assert_label_on_screen(&mut harness, "Choose an export target first");
+    harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
+    harness.run_steps(2);
+    harness.snapshot("error_dialog");
+}
+
+/// Empty Develop state (no image loaded): the centered preview placeholder and
+/// the honest empty filmstrip text — the counterpart to `library_empty`.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_empty() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    harness.run();
+    // Non-vacuous guards: both empty-state texts must actually be on-screen.
+    assert_label_on_screen(&mut harness, "Drop an image here or load a path");
+    assert_label_on_screen(&mut harness, "No images in this folder");
+    harness.snapshot("develop_empty");
+}
+
+/// Missing-sidecar hint: the Develop History section without a loaded document
+/// shows "No sidecar loaded". `load_bytes` leaves `document` empty, so no seed
+/// is needed (the existing `develop_section_history` golden seeds one).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_history_no_sidecar() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    // Only History open (a plain collapsing header outside the eight F-100
+    // sections); scroll its content into view.
+    open_collapsing_and_scroll_to(&mut harness, "History", "No sidecar loaded");
+    // Non-vacuous guard: the hint must actually be on-screen.
+    assert_label_on_screen(&mut harness, "No sidecar loaded");
+    harness.snapshot("develop_history_no_sidecar");
+}
+
+/// Export-panel variant: JPEG selected via the format setter (PNG is the
+/// default) — the PNG-only "Quality applies to JPEG / WebP only" hint goes
+/// away and the quality slider is live. No metadata flag exists in the GUI
+/// (metadata is a Library concern); the Library metadata copy/paste state is
+/// pinned separately.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn export_module_jpeg() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Export);
+    harness.state_mut().set_export_format(ImageFileFormat::Jpeg);
+    load_sample(&mut harness);
+    harness.run();
+    harness.run();
+    // Non-vacuous guard: the PNG-only quality hint is gone (JPEG selected),
+    // while the quality control itself stays visible.
+    assert!(
+        harness
+            .query_all_by_label("Quality applies to JPEG / WebP only")
+            .next()
+            .is_none(),
+        "JPEG must drop the PNG-only quality hint"
+    );
+    assert_label_on_screen(&mut harness, "Quality");
+    harness.snapshot("export_module_jpeg");
+}
+
+/// Library metadata panel's own copy/paste system: a draft with entered values,
+/// copied through the panel's Copy button (status "Metadata copied (2 field(s))")
+/// and the Paste affordance pixel-visible. Uses a real path so the commit lands
+/// in a tempdir only; `open_file_and_restore_fixture` keeps tmp prefixes out of
+/// the golden.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_metadata_copy_paste() {
+    let (tmp, photo) = photo_png_fixture();
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    open_file_and_restore_fixture(&mut harness, &photo, |app| app.preview_generation() >= 1);
+    assert_no_tmp_leak(&mut harness, tmp.path());
+    harness
+        .state_mut()
+        .set_metadata_buffer("title", "Startschuss".to_string())
+        .expect("set title buffer");
+    harness
+        .state_mut()
+        .set_metadata_buffer("city", "Berlin".to_string())
+        .expect("set city buffer");
+    assert!(
+        harness
+            .state_mut()
+            .commit_metadata_draft()
+            .expect("commit metadata draft"),
+        "entered metadata must persist (sidecar write)"
+    );
+    // Layout frame + expand the draft editor (there is no library_metadata
+    // helper that opens it after a real-path load).
+    harness.run();
+    harness.run();
+    let opened = harness
+        .query_all_by_label("Metadata draft")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(opened, "Metadata draft section not found in headed harness");
+    harness.run();
+    // Copy through the panel's own copy/paste system.
+    let copied = harness
+        .query_all_by_label("Copy metadata")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(copied, "Copy metadata button not found in headed harness");
+    harness.run();
+    // Non-vacuous guards: the clipboard captured both entered fields and the
+    // status proves the copy ran.
+    assert!(
+        harness.state_mut().status().contains("Metadata copied"),
+        "copy must announce the copied fields, got {:?}",
+        harness.state_mut().status()
+    );
+    harness.run();
+    // Both clipboard buttons sit in the draft editor's action row, on-screen
+    // without scrolling (scrolling would clip the panel's "Metadata" heading).
+    assert_label_on_screen(&mut harness, "Copy metadata");
+    assert_label_on_screen(&mut harness, "Paste metadata");
+    assert_label_on_screen(&mut harness, "Title");
+    harness.snapshot("library_metadata_copy_paste");
+}
+
+/// Filmstrip with 20 dummy RAWs: the single-row geometry (asserted, see
+/// `assert_filmstrip_single_row`) plus a pixel golden. The bundled sample is
+/// loaded first so the F-100 auto-load never decodes an invalid dummy (which
+/// would raise the error dialog); the strip still lists all 20 RAW cells.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn filmstrip_twenty_dummies() {
+    let dir = temp_raw_dir(20);
+    let mut harness = build_harness();
+    // Load a valid source first: suppresses the RAW auto-load (which would
+    // fail loudly on the sentinel bytes) and gives the preview real pixels.
+    load_sample(&mut harness);
+    harness
+        .state_mut()
+        .set_directory(dir.path().display().to_string());
+    harness.state_mut().set_module(Module::Develop);
+    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
+    harness.run_steps(3);
+    // Single-row geometry for all visible cells.
+    let chips = assert_filmstrip_single_row(&mut harness);
+    assert!(
+        chips.len() >= 2,
+        "20-dummy strip must lay out several cells, got {chips:?}"
+    );
+    // Non-vacuous guard: the strip knows all 20 entries (selection resolved to
+    // the first entry, so the header shows "1 of 20").
+    assert_contains_on_screen(&mut harness, "of 20");
+    harness.snapshot("filmstrip_twenty_dummies");
 }

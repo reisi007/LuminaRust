@@ -235,6 +235,16 @@ Session, keine Session-Mutation). Normative Details zusätzlich in
 - **„Auf Auswahl synchronisieren“**: Feld-Checkboxen (Default: alle Draft-
   Felder + Keywords), Report (applied/failed) + Statuszeile + `info!` je
   Datei (Muster: Stapel in `metadata.md` §4).
+- **„Copy metadata“ / „Paste metadata“ (Session-Clipboard, User-Entscheid
+  2026-09-13):** Copy puffert die nichtleeren Draft-Felder (inkl. ungespeicherter
+  Eingaben) in ein sitzungslokales Clipboard (nicht persistiert, Sidecar-first);
+  Paste schreibt nur die Clipboard-Felder über den normalen Commit-Pfad (CAS,
+  atomar, `origin = "gui"`, Historie) und löscht keine anderen Felder. Paste
+  ohne Clipboard schlägt laut fehl. Statuszeile + `info!`-Log je Aktion.
+- **Kein Metadaten-Flag im GUI-Export-Panel (SOLL-Klärung 2026-09-13):**
+  Metadaten bleiben eine Library-Funktion; das Export-Bake-In ist CLI/MCP-only
+  (§7, Opt-in). Die Export-Varianten im GUI unterscheiden sich nur durch
+  Format/Qualität.
 - Jede Mutation über denselben Sidecar-Pfad wie CLI (CAS, atomar, laute
   Fehler); keine zweite Metadaten-Logik im GUI.
 

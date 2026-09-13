@@ -1466,6 +1466,11 @@ pub struct LuminaApp {
     preview_generation: u64,
     status: String,
     error: Option<String>,
+    /// KITTEST-COVERAGE-STATES-1: whether the current `error` should be shown
+    /// as the popup dialog (explicit user-action failure) or only as the
+    /// header banner (background decode/listing failure). Reset by
+    /// [`LuminaApp::show_error_banner`], set by [`LuminaApp::show_error`].
+    error_dialog: bool,
     render_key: Option<RenderKey>,
     tone_analysis: Option<lumina_core::ToneAnalysis>,
     /// 256-bin luminance histogram of the full-frame render (GUI-HISTOGRAM-FULL-1,
@@ -1850,6 +1855,11 @@ pub struct LuminaApp {
     selected_meta_preset: String,
     meta_preset_dialog: Option<MetaPresetDialog>,
     meta_sync_fields: BTreeMap<String, bool>,
+    /// KITTEST-COVERAGE-STATES-1: session clipboard for the metadata panel's
+    /// own copy/paste system (separate from the Develop settings clipboard).
+    /// Holds the non-empty draft field values copied from an image; `None`
+    /// until the first copy. Session-only — never persisted (Sidecar-first).
+    meta_clipboard: Option<BTreeMap<String, String>>,
     /// LRPAR-G15-IPTC-S8: cached embedded IPTC of the loaded image
     /// (read-only display). Keyed by `(path, length, mtime)` so the panel
     /// never re-reads the file per frame; `Err` text is the loud
@@ -2379,6 +2389,14 @@ impl LuminaApp {
         self.active_module
     }
 
+    /// KITTEST-COVERAGE-STATES-1: set the Export panel's output format. Pure
+    /// display/panel state (the combo's own handler performs the same
+    /// assignment); never a recipe or sidecar write.
+    pub fn set_export_format(&mut self, format: ImageFileFormat) {
+        trace!("GUI interaction: set_export_format {:?}", format);
+        self.export_format = format;
+    }
+
     pub fn new(_ctx: egui::Context) -> Self {
         // PERF-FILMSTRIP: spin up the dedicated thumbnail thread pool. The pool
         // size is the available parallelism clamped to [2, 8] (M5 Pro reports 12
@@ -2440,6 +2458,7 @@ impl LuminaApp {
             preview_generation: 0,
             status: Str::ReadyForImage.t().into(),
             error: None,
+            error_dialog: false,
             render_key: None,
             tone_analysis: None,
             preview_histogram: None,
@@ -2597,6 +2616,7 @@ impl LuminaApp {
             selected_meta_preset: String::new(),
             meta_preset_dialog: None,
             meta_sync_fields: default_meta_sync_fields(),
+            meta_clipboard: None,
             meta_embedded_cache: None,
             history_selected: None,
             decode_rx: None,
@@ -5493,6 +5513,52 @@ impl LuminaApp {
             self.status = Str::MetadataDraftSavedPattern.format_arg(&rev.to_string());
         }
         Ok(true)
+    }
+
+    /// KITTEST-COVERAGE-STATES-1: copy the current draft buffer values
+    /// (non-empty fields, as shown in the editor — including unsaved
+    /// keystrokes) into the metadata panel's own session clipboard. Pure
+    /// session state: never touches the sidecar. Returns the field count.
+    pub fn copy_metadata_draft(&mut self) -> Result<usize, GuiError> {
+        self.ensure_document_loaded()?;
+        self.ensure_meta_buffers();
+        let copied: BTreeMap<String, String> = METADATA_FIELD_IDS
+            .iter()
+            .filter_map(|id| {
+                let value = self.meta_buffers.get(*id).cloned().unwrap_or_default();
+                (!value.trim().is_empty()).then(|| ((*id).to_string(), value))
+            })
+            .collect();
+        let count = copied.len();
+        self.meta_clipboard = Some(copied);
+        info!("metadata copy for {} ({count} field(s))", self.path.trim());
+        self.status = Str::MetadataCopiedPattern.format_arg(&count.to_string());
+        Ok(count)
+    }
+
+    /// KITTEST-COVERAGE-STATES-1: paste the metadata clipboard onto the loaded
+    /// image through the same commit path as a manual draft edit (origin
+    /// `gui`, CAS + atomar). The pasted values are written into the editor
+    /// buffers first so the panel shows them. Loud without a prior copy —
+    /// never a silent no-op.
+    pub fn paste_metadata_draft(&mut self) -> Result<bool, GuiError> {
+        let clipboard = self
+            .meta_clipboard
+            .clone()
+            .ok_or_else(|| GuiError::Io(Str::MetadataNothingToPaste.t().to_string()))?;
+        self.ensure_document_loaded()?;
+        self.ensure_meta_buffers();
+        for (field, value) in &clipboard {
+            self.meta_buffers.insert(field.clone(), value.clone());
+        }
+        self.meta_buffers_dirty = true;
+        let changed = self.commit_metadata_draft()?;
+        info!(
+            "metadata paste for {} ({} field(s), changed: {changed})",
+            self.path.trim(),
+            clipboard.len()
+        );
+        Ok(changed)
     }
 
     /// Clear draft fields (and/or `keywords`) on the loaded image, mirroring
@@ -10934,10 +11000,57 @@ impl LuminaApp {
         format!("{copy_id}/{mask_id}")
     }
 
+    /// Surface a user-visible failure loudly (DoD §4): the message goes to the
+    /// log at `error!` level, the status line switches to "Error" and the
+    /// message is shown both in the header and in the error popup dialog
+    /// (KITTEST-COVERAGE-STATES-1). Explicit user-action failures pop the
+    /// dialog; background failures use [`Self::show_error_banner`].
     fn show_error(&mut self, error: impl ToString) {
         let message = error.to_string();
+        error!("{message}");
         self.status = Str::Error.t().into();
         self.error = Some(message);
+        self.error_dialog = true;
+    }
+
+    /// Background/automatic failures (decode, listing) stay a header banner +
+    /// log without stealing focus with a dialog; the loud signal is not lost
+    /// (status + `self.error` + `error!`), only the modal surface is skipped.
+    fn show_error_banner(&mut self, error: impl ToString) {
+        let message = error.to_string();
+        error!("{message}");
+        self.status = Str::Error.t().into();
+        self.error = Some(message);
+        self.error_dialog = false;
+    }
+
+    /// KITTEST-COVERAGE-STATES-1: the error popup dialog. Drawn as a floating
+    /// window from `update` (like the toast and the meta-preset dialog) so an
+    /// explicit-action failure is visible as a dialog and in the log — not only
+    /// as a header tint. `self.error` is the message source; the Close button
+    /// closes the dialog (the header banner stays until the next success).
+    fn draw_error_dialog(&mut self, ctx: &egui::Context) {
+        if !self.error_dialog {
+            return;
+        }
+        let Some(message) = self.error.clone() else {
+            self.error_dialog = false;
+            return;
+        };
+        let mut close = false;
+        egui::Window::new(Str::Error.t())
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -80.0))
+            .show(ctx, |ui| {
+                ui.label(&message);
+                if ui.button(Str::ErrorDialogClose.t()).clicked() {
+                    close = true;
+                }
+            });
+        if close {
+            self.error_dialog = false;
+        }
     }
 
     /// The texture upload is driven by the preview-area path.
@@ -11424,9 +11537,12 @@ impl LuminaApp {
                 // new path — original/document/recipe still belong to the
                 // previously loaded image, so writes would otherwise produce a
                 // phantom sidecar under a path that never loaded. Surface the
-                // failure visibly instead.
+                // failure visibly instead. Background decode failures stay a
+                // header banner + log (KITTEST-COVERAGE-STATES-1: the popup
+                // dialog is reserved for explicit user actions, so browsing a
+                // folder of corrupt files cannot stack dialogs).
                 error!("background decode failed for {path}: {message}");
-                self.show_error(GuiError::Io(format!("{path}: {message}")));
+                self.show_error_banner(GuiError::Io(format!("{path}: {message}")));
             }
         }
     }
@@ -12033,11 +12149,22 @@ impl LuminaApp {
         // keeps its natural width at the panel edge and the field takes the
         // rest. An unbounded edit claimed the full row and pushed the button
         // past the panel edge (kittest `export_module` golden).
+        //
+        // KITTEST-COVERAGE-STATES-1: the `right_to_left(Align::Center)` layout
+        // must live inside a `ui.horizontal` row. Without it the layout used
+        // the whole remaining panel height as its cross axis and vertically
+        // centred the row, pushing Format / Quality / Export below the fold
+        // (confirmed: the quality label laid out at y=722..784 of a 720px
+        // viewport). The `horizontal` wrapper constrains the cross axis to the
+        // row, so the destination field sits directly under its label and all
+        // controls stay pixel-visible.
         let mut choose_clicked = false;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            choose_clicked = ui.button(Str::ExportChoose.t()).clicked();
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.text_edit_singleline(&mut self.export_path);
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                choose_clicked = ui.button(Str::ExportChoose.t()).clicked();
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.text_edit_singleline(&mut self.export_path);
+                });
             });
         });
         if choose_clicked {
@@ -15516,6 +15643,18 @@ impl LuminaApp {
                         self.show_error(error);
                     }
                 }
+                // KITTEST-COVERAGE-STATES-1: metadata panel's own clipboard
+                // (separate from the Develop settings copy/paste).
+                if ui.button(Str::MetadataCopyDraft.t()).clicked() {
+                    if let Err(error) = self.copy_metadata_draft() {
+                        self.show_error(error);
+                    }
+                }
+                if ui.button(Str::MetadataPasteDraft.t()).clicked() {
+                    if let Err(error) = self.paste_metadata_draft() {
+                        self.show_error(error);
+                    }
+                }
             });
         });
     }
@@ -18637,6 +18776,9 @@ impl eframe::App for LuminaApp {
         // taking layout width.
         self.update_toast(&ctx);
         self.draw_toast(&ctx);
+        // KITTEST-COVERAGE-STATES-1: error popup dialog (own floating window,
+        // Close dismisses). Drawn with the other floating overlays.
+        self.draw_error_dialog(&ctx);
         // LRPAR-G15-IPTC-S8: dynamic-preset prompt dialog (floating window,
         // Cancel discards without touching any sidecar).
         self.draw_meta_preset_dialog(&ctx);
@@ -31559,6 +31701,71 @@ mod tests {
         let document =
             lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source)).unwrap();
         assert_eq!(document.metadata.history.len(), 1);
+    }
+
+    /// KITTEST-COVERAGE-STATES-1: the metadata panel's own copy/paste system —
+    /// copy the draft of one image, paste it onto another, and prove the
+    /// result persisted through the sidecar (Edit → Commit → Datei → Reload).
+    #[test]
+    fn iptc_gui_metadata_copy_paste_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.png");
+        let target = directory.path().join("target.png");
+        save_png(&source);
+        save_png(&target);
+        // Source: enter + commit a draft, then copy it.
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_metadata_buffer("title", "Startschuss".into())
+            .unwrap();
+        app.set_metadata_buffer("city", "Berlin".into()).unwrap();
+        assert!(app.commit_metadata_draft().unwrap());
+        assert_eq!(app.copy_metadata_draft().unwrap(), 2);
+        assert!(app.status().contains("Metadata copied"));
+        // Paste onto the target (open switches the loaded path).
+        open_and_decode_switch(&mut app, &target.display().to_string());
+        assert!(app.paste_metadata_draft().unwrap());
+        // Datei: target's sidecar carries the pasted draft + a gui history entry.
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&target)).unwrap();
+        assert_eq!(document.metadata.get("title"), Some("Startschuss"));
+        assert_eq!(document.metadata.get("city"), Some("Berlin"));
+        assert_eq!(document.metadata.history.len(), 1);
+        assert_eq!(document.metadata.history[0].origin, "gui");
+        assert_eq!(
+            document.metadata.history[0].changed,
+            vec!["city".to_string(), "title".to_string()]
+        );
+        // Reload: the pasted draft is restored. The clipboard is session-only
+        // (never persisted), so the reopened app has none — paste is loud.
+        let mut reopened = new_app();
+        open_and_decode(&mut reopened, target.display().to_string());
+        assert_eq!(
+            reopened.metadata_draft().get("city").map(String::as_str),
+            Some("Berlin")
+        );
+        assert!(reopened
+            .paste_metadata_draft()
+            .unwrap_err()
+            .to_string()
+            .contains("copy metadata"));
+    }
+
+    /// KITTEST-COVERAGE-STATES-1: paste without a prior copy is loud (never a
+    /// silent no-op) and copies the current image's unsaved buffer edits.
+    #[test]
+    fn iptc_gui_metadata_copy_paste_loud_without_clipboard() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let error = app.paste_metadata_draft().unwrap_err().to_string();
+        assert!(error.contains("copy metadata"), "loud paste error: {error}");
+        // Unsaved buffer edits are what Copy captures (panel shows them).
+        app.set_metadata_buffer("headline", "Vor Ort".into())
+            .unwrap();
+        assert_eq!(app.copy_metadata_draft().unwrap(), 1);
     }
 
     #[test]

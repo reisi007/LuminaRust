@@ -409,6 +409,13 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 - Oben befinden sich die Modul-Leiste mit den Lightroom-Entsprechungen
   **Bibliothek**, **Entwickeln** und **Exportieren** (Library, Develop,
   Export).
+- **Fehlermeldungen und Toasts (F-100, User-Entscheid 2026-09-13):**
+  Info-Toasts (4 s + ✕-Dismiss) für abgeschlossene Aktionen; explizite
+  User-Aktionen mit Fehler öffnen zusätzlich einen modalen Fehler-Dialog
+  (Titel + Nachricht + Close) und loggen `error!`; Hintergrund-Fehler
+  (z. B. Decode) bleiben Banner + `error!`-Log und öffnen nie einen Dialog
+  (sonst würde jede Library-Sentinel den Dialog auslösen). Fehler-Toasts als
+  eigene Klasse gibt es nicht — der Dialog ersetzt sie.
 - **Startverhalten (F-100, User-Vorgabe 2026-09-04):**
   - Enthält das geöffnete Verzeichnis mindestens ein unterstütztes Bild und
     ist nichts geladen/ausgewählt, wird das erste Bild (Grid-Sortierung)

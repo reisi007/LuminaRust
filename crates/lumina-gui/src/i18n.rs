@@ -306,6 +306,8 @@ pub enum Str {
     ChangePending,
     PreviewCurrent,
     Error,
+    /// KITTEST-COVERAGE-STATES-1: close button of the error popup dialog.
+    ErrorDialogClose,
     AutoToneStale,
     SaveNeedsLocalPath,
     SidecarSaved,
@@ -604,6 +606,12 @@ pub enum Str {
     MetadataNoSidecarPattern,
     MetadataPresetBatchPattern,
     MetadataNoPresetDir,
+    // KITTEST-COVERAGE-STATES-1: Library metadata clipboard (own copy/paste
+    // system, separate from the Develop settings clipboard).
+    MetadataCopyDraft,
+    MetadataPasteDraft,
+    MetadataCopiedPattern,
+    MetadataNothingToPaste,
 }
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
@@ -891,6 +899,7 @@ impl Str {
             Str::ChangePending => "Change pending",
             Str::PreviewCurrent => "Preview current",
             Str::Error => "Error",
+            Str::ErrorDialogClose => "Close",
             Str::AutoToneStale => "Auto-Tone stale; recalculation required",
             Str::SaveNeedsLocalPath => {
                 "To save, the image must be loaded via a local path"
@@ -1176,6 +1185,12 @@ impl Str {
             Str::MetadataPresetBatchPattern => "Meta preset {} applied to {} image(s)",
             Str::MetadataNoPresetDir => {
                 "Meta presets unavailable: the config directory could not be determined"
+            }
+            Str::MetadataCopyDraft => "Copy metadata",
+            Str::MetadataPasteDraft => "Paste metadata",
+            Str::MetadataCopiedPattern => "Metadata copied ({} field(s))",
+            Str::MetadataNothingToPaste => {
+                "Nothing to paste: copy metadata from an image first"
             }
         }
     }
