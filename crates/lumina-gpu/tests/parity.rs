@@ -537,6 +537,53 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
+        (
+            // GPU-RENDER-PARITY-1 stage 3 (G-14): a red-eye correction rendered
+            // by the dedicated pass (after Sharpening, before Effects).
+            "red_eye_single_region",
+            red_eye_recipe(),
+        ),
+        (
+            // Red-eye stacked after Sharpening and before Effects — the exact
+            // oracle slot.
+            "red_eye_after_detail",
+            EditRecipe {
+                sharpening: Some(Sharpening {
+                    version: 1,
+                    amount: 1.0,
+                    radius: 1.2,
+                    detail: 0.5,
+                    masking: 0.3,
+                }),
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: 0.2,
+                        midpoint: 0.5,
+                        roundness: 1.0,
+                        feather: 0.5,
+                    }),
+                    grain: None,
+                }),
+                ..red_eye_recipe()
+            },
+        ),
+        (
+            // GPU-RENDER-PARITY-1 stage-2 follow-up: the schema maximum radius
+            // (10.0) with an active edge mask (`masking > 0`) exercises the
+            // full 91-tap kernel and the readback gradient pass.
+            "sharpening_radius_max_masked",
+            EditRecipe {
+                sharpening: Some(Sharpening {
+                    version: 1,
+                    amount: 1.0,
+                    radius: 10.0,
+                    detail: 0.5,
+                    masking: 0.6,
+                }),
+                ..Default::default()
+            },
+        ),
     ]
 }
 
@@ -583,6 +630,15 @@ fn equivalence_for(name: &str) -> Equivalence {
         | "sharpening_unmasked"
         | "sharpening_masked" => Equivalence::Bounded(1),
         "detail_stage_stack" => Equivalence::Bounded(2),
+        // GPU-RENDER-PARITY-1 stage 3 (G-14): the red-eye pass is a direct port
+        // (per-pixel + region-local); `hypot`-vs-`sqrt` rounding at the disc
+        // edge can flip a single code. The stacked recipe adds the detail
+        // residual.
+        "red_eye_single_region" => Equivalence::Bounded(1),
+        "red_eye_after_detail" => Equivalence::Bounded(2),
+        // Stage-2 follow-up: maximum-radius sharpening is the same kernel as
+        // `sharpening_masked`, just wider (still one rounding-tie code).
+        "sharpening_radius_max_masked" => Equivalence::Bounded(1),
         other => panic!("no measured equivalence bound declared for recipe `{other}`"),
     }
 }
@@ -716,6 +772,276 @@ fn implemented_stages_match_cpu_oracle() {
     assert!(
         failures.is_empty(),
         "post-tone GPU stages exceeded their per-stage declared equivalence: {failures:?}"
+    );
+}
+
+/// GPU-RENDER-PARITY-1 stage 3 (G-14): the red-eye pass must be pixel-effective
+/// and match the CPU oracle on a frame whose redness actually triggers the
+/// correction (the gradient/noise frames barely exercise it).
+#[test]
+fn implemented_red_eye_matches_cpu_oracle() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped red-eye parity check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+
+    let recipes: [(&str, EditRecipe); 2] = [
+        ("single_region", red_eye_recipe()),
+        (
+            "two_regions_overlap",
+            EditRecipe {
+                red_eye: Some(RedEyeCorrection {
+                    version: 1,
+                    regions: vec![
+                        RedEyeRegion {
+                            id: "re-1".into(),
+                            x: 0.4,
+                            y: 0.5,
+                            radius: 0.4,
+                            desaturate: 0.9,
+                            darken: 0.5,
+                        },
+                        RedEyeRegion {
+                            id: "re-2".into(),
+                            x: 0.6,
+                            y: 0.5,
+                            radius: 0.4,
+                            desaturate: 0.3,
+                            darken: 0.8,
+                        },
+                    ],
+                }),
+                ..Default::default()
+            },
+        ),
+    ];
+    let frames: [(&str, ImageFrame); 2] = [
+        ("red_solid_64x64", red_frame(64, 64)),
+        ("red_gradient_48x64", {
+            let mut pixels = Vec::with_capacity(48 * 64 * 4);
+            for y in 0..64u32 {
+                for x in 0..48u32 {
+                    let r = (120 + x * 120 / 47) as u8;
+                    let g = (y * 80 / 63) as u8;
+                    let b = 30;
+                    pixels.extend_from_slice(&[r, g, b, 255]);
+                }
+            }
+            ImageFrame::new(48, 64, pixels).expect("red gradient")
+        }),
+    ];
+
+    let mut failures = Vec::new();
+    for (name, recipe) in &recipes {
+        assert!(
+            unsupported_gpu_stages(recipe).is_empty(),
+            "red-eye `{name}` must be GPU-eligible"
+        );
+        for (frame_name, frame) in &frames {
+            let cpu = render_frame(
+                frame,
+                &RenderContext {
+                    recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: None,
+                    depth: None,
+                },
+            )
+            .expect("CPU oracle render")
+            .frame;
+            let gpu = ctx
+                .render_with_gpu(frame, recipe)
+                .unwrap_or_else(|error| panic!("{frame_name}/{name}: GPU render: {error}"));
+            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+            let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+            eprintln!(
+                "red_eye[{frame_name}/{name}]: maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}"
+            );
+            // Measured: byte-identical on the solid/gradient single-region
+            // frames and one ±1 code on the overlapping-region gradient
+            // (`hypot` vs. `sqrt` rounding at the disc edge). Asserted at the
+            // documented stage bound.
+            if diff > 1 || psnr < MIN_PSNR_DB || bias.abs() > MAX_ABS_MEAN_SIGNED_ERROR {
+                failures.push(format!(
+                    "{frame_name}/{name}: red-eye exceeded the declared bound \
+                     maxAbsDiff <= 1 / PSNR >= {MIN_PSNR_DB} dB / \
+                     |meanSignedErr| <= {MAX_ABS_MEAN_SIGNED_ERROR}: got \
+                     maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "red-eye parity: {failures:?}");
+}
+
+/// R2-MCP-01: a decoder As-Shot WB context keeps CPU-routing, and the CPU-routed
+/// GPU render must be byte-identical to the CPU oracle (both validate the gains
+/// without re-applying them, so the context is pixel-neutral today). Stage-3
+/// GPU-eligibility for valid contexts is a reported SOLL conflict because it
+/// changes the CLI/MCP routing contract (out of this crate's write scope).
+#[test]
+fn as_shot_wb_context_routes_to_cpu_identity() {
+    let recipe = EditRecipe {
+        adjustments: BTreeMap::from([("exposure".into(), 0.3)]),
+        ..Default::default()
+    };
+    let wb = [1.9f32, 1.0, 1.4, 1.0];
+
+    assert!(
+        unsupported_gpu_stages_with_context(&recipe, false, Some(&wb))
+            .iter()
+            .any(|r| r.contains("camera_white_balance")),
+        "an As-Shot WB context must keep CPU-routing"
+    );
+
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped WB parity check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let frame = gradient_frame(48, 48);
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: Some(wb),
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("wb_context: maxAbsDiff={diff}");
+    assert_eq!(
+        diff, 0,
+        "a CPU-routed As-Shot WB context must match the full CPU reference"
+    );
+}
+
+/// GPU-RENDER-PARITY-1 stage-2 follow-up: a schema-invalid sharpening radius
+/// (> 10.0) must be **rejected**, not silently clamped to the 91-tap kernel.
+/// The gate deliberately does *not* classify it as a stage gap: the GPU entry
+/// rejects it directly (`validate_gpu_recipe`), mirroring the CPU oracle's
+/// `InvalidAdjustment`.
+#[test]
+fn sharpening_radius_out_of_schema_is_rejected_not_clamped() {
+    let recipe = EditRecipe {
+        sharpening: Some(Sharpening {
+            version: 1,
+            amount: 1.0,
+            radius: 12.0,
+            detail: 0.5,
+            masking: 0.0,
+        }),
+        ..Default::default()
+    };
+
+    // The CPU oracle rejects it loudly.
+    assert!(
+        render_frame(
+            &gradient_frame(16, 16),
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .is_err(),
+        "out-of-schema radius must be a hard CPU error"
+    );
+    // It is a rejection, not an unimplemented stage: no routing reason.
+    assert!(
+        unsupported_gpu_stages(&recipe).is_empty(),
+        "an out-of-schema radius is not a GPU stage gap"
+    );
+
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped radius rejection check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let frame = gradient_frame(16, 16);
+    let err = ctx
+        .render_with_gpu(&frame, &recipe)
+        .expect_err("GPU must reject the out-of-schema radius");
+    assert!(
+        format!("{err}").contains("outside the schema range"),
+        "unexpected error: {err}"
+    );
+    ctx.ensure_vram(16, 16).expect("vram state");
+    let err = ctx
+        .render_to_vram(&frame, &recipe)
+        .expect_err("VRAM path must reject the out-of-schema radius");
+    assert!(
+        format!("{err}").contains("outside the schema range"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Schema-foreign adjustment keys have no GPU meaning and no neutral value:
+/// the GPU entry must surface the CPU oracle's `UnsupportedAdjustment` (a clean
+/// rejection), not silently drop the key.
+#[test]
+fn schema_foreign_adjustment_key_is_rejected() {
+    let recipe = EditRecipe {
+        adjustments: BTreeMap::from([("definitely_not_a_key".into(), 0.5)]),
+        ..Default::default()
+    };
+    assert!(
+        unsupported_gpu_stages(&recipe)
+            .iter()
+            .any(|r| r.contains("definitely_not_a_key")),
+        "unknown key must be reported"
+    );
+
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped unknown-key check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let err = ctx
+        .render_with_gpu(&gradient_frame(16, 16), &recipe)
+        .expect_err("unknown key must be rejected, not dropped");
+    assert!(
+        format!("{err}").contains("UnsupportedAdjustment")
+            || format!("{err}").contains("not supported")
+            || format!("{err}").contains("unsupported"),
+        "unexpected error: {err}"
     );
 }
 
@@ -857,6 +1183,47 @@ fn vram_path_applies_post_stages() {
     }
 }
 
+/// GPU-RENDER-PARITY-1 stage 3: the readback-free VRAM path must also run the
+/// red-eye pass (it shares `render_post_stages` with the streaming path).
+#[test]
+fn vram_path_applies_red_eye() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped VRAM red-eye check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    const W: u32 = 32;
+    const H: u32 = 32;
+    let frame = red_frame(W, H);
+    let recipe = red_eye_recipe();
+    assert!(unsupported_gpu_stages(&recipe).is_empty());
+    ctx.ensure_vram(W, H).expect("vram state");
+    ctx.render_to_vram(&frame, &recipe).expect("vram render");
+    let gpu = ctx.readback_output_frame().expect("vram readback");
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("vram[red_eye]: maxAbsDiff={diff}");
+    assert_eq!(diff, 0, "VRAM red-eye pass must match the CPU oracle");
+}
+
 /// A recipe that still uses an unimplemented stage stays CPU-routed and yields
 /// CPU-identical pixels; this guards the "no third state" rule.
 #[test]
@@ -986,21 +1353,24 @@ fn generative_expand_recipe() -> EditRecipe {
     }
 }
 
-/// GPU-RENDER-PARITY-1 follow-up (gate completeness): Red-Eye, typed
-/// `spot_removals`, legacy `extras["spot_removals"]` and `generative_edit` are
-/// applied/validated by the CPU reference but not implemented on the GPU, so
-/// every one must be reported as CPU-only. This test asserts the gate verdict
-/// only; `cpu_only_recipe_stages_render_through_full_cpu_reference` proves the
+/// GPU-RENDER-PARITY-1 stage 3 (gate completeness): typed `spot_removals`,
+/// legacy `extras["spot_removals"]`, `generative_edit` and an **invalid**
+/// red-eye correction are applied/validated by the CPU reference but not
+/// implemented (or not safely implementable) on the GPU, so every one must be
+/// reported as CPU-only. A valid red-eye correction is now GPU-rendered and
+/// therefore must NOT be flagged (asserted below and by the parity harness);
+/// this test asserts the gate verdict only, and
+/// `cpu_only_recipe_stages_render_through_full_cpu_reference` proves the
 /// fallback pixels.
 #[test]
 fn cpu_only_recipe_stages_are_gated() {
-    let red_eye = red_eye_recipe();
     let typed_spot = typed_spot_recipe();
     let legacy_spot = legacy_spot_recipe();
     let generative = generative_expand_recipe();
+    let invalid_red_eye = invalid_red_eye_recipe();
 
     let cases: Vec<(&str, &EditRecipe)> = vec![
-        ("red_eye", &red_eye),
+        ("red_eye", &invalid_red_eye),
         ("spot_removals", &typed_spot),
         ("spot_removals (legacy extras)", &legacy_spot),
         ("generative_edit", &generative),
@@ -1014,9 +1384,15 @@ fn cpu_only_recipe_stages_are_gated() {
         );
     }
 
+    // A valid red-eye correction is renderable on the GPU.
+    assert!(
+        unsupported_gpu_stages(&red_eye_recipe()).is_empty(),
+        "a valid red-eye correction must be GPU-eligible"
+    );
+
     // The full recipe (every CPU-only stage at once) still reports all of them.
     let all = EditRecipe {
-        red_eye: red_eye.red_eye.clone(),
+        red_eye: invalid_red_eye.red_eye.clone(),
         spot_removals: typed_spot.spot_removals.clone(),
         generative_edit: generative.generative_edit.clone(),
         extras: legacy_spot.extras.clone(),
@@ -1033,6 +1409,25 @@ fn cpu_only_recipe_stages_are_gated() {
             reasons.iter().any(|r| r.contains(expected)),
             "compound recipe must keep `{expected}`: {reasons:?}"
         );
+    }
+}
+
+/// An invalid red-eye correction (out-of-range desaturation) that the CPU
+/// oracle rejects loudly: the GPU gate must keep it CPU-routed.
+fn invalid_red_eye_recipe() -> EditRecipe {
+    EditRecipe {
+        red_eye: Some(RedEyeCorrection {
+            version: 1,
+            regions: vec![RedEyeRegion {
+                id: "re-1".into(),
+                x: 0.5,
+                y: 0.5,
+                radius: 0.3,
+                desaturate: 1.5,
+                darken: 0.3,
+            }],
+        }),
+        ..Default::default()
     }
 }
 
@@ -1067,11 +1462,9 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
     }
 
     let frame = gradient_frame(48, 48);
-    let red = red_frame(48, 48);
 
     // Renderable CPU-routed recipes: fallback == full render_frame oracle.
     let renderable: Vec<(&str, &ImageFrame, EditRecipe)> = vec![
-        ("red_eye", &red, red_eye_recipe()),
         ("legacy_spot", &frame, legacy_spot_recipe()),
         ("generative_expand", &frame, generative_expand_recipe()),
     ];
@@ -1124,6 +1517,29 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
     assert!(
         ctx.render_with_gpu(&frame, &typed).is_err(),
         "fallback must propagate the CPU hard error instead of dropping the stage"
+    );
+
+    // An invalid red-eye correction stays CPU-routed so the oracle's loud
+    // rejection is preserved (the GPU pass never silently renders it).
+    let invalid_red_eye = invalid_red_eye_recipe();
+    assert!(
+        render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &invalid_red_eye,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .is_err(),
+        "out-of-range red-eye must be a hard CPU error"
+    );
+    assert!(
+        ctx.render_with_gpu(&frame, &invalid_red_eye).is_err(),
+        "fallback must propagate the invalid red-eye rejection"
     );
 }
 
@@ -1216,7 +1632,8 @@ fn source_actions(count: usize) -> EditRecipe {
 /// Stage 2 additionally **proves the implemented detail classes are
 /// GPU-eligible**: non-neutral Effects (vignette + grain), Noise Reduction and
 /// Sharpening must all yield an empty reason list (the pixel parity itself is
-/// asserted by `implemented_stages_match_cpu_oracle`).
+/// asserted by `implemented_stages_match_cpu_oracle`). Stage 3 does the same for
+/// a valid red-eye correction.
 ///
 /// Reason classes and their minimal trigger (the reason string is the one the
 /// gate emits):
@@ -1227,7 +1644,8 @@ fn source_actions(count: usize) -> EditRecipe {
 /// - `source_actions` — non-empty actions and `source_actions_bound = false`.
 /// - `exceed the GPU stage slot limit` — bound actions with `len > MAX_SOURCE_ACTIONS`.
 /// - `camera_white_balance (As-Shot context)` — context WB `Some`.
-/// - `red_eye` — `recipe.red_eye = Some(..)`.
+/// - `red_eye` — an **invalid** `recipe.red_eye` (out-of-range/NaN); a valid
+///   correction is GPU-rendered.
 /// - `spot_removals` — typed `recipe.spot_removals` non-empty.
 /// - `spot_removals (legacy extras)` — non-empty `extras["spot_removals"]`.
 /// - `generative_edit` — `recipe.generative_edit = Some(..)`.
@@ -1286,6 +1704,14 @@ fn cpu_routing_inventory_is_complete() {
             "implemented stage `{name}` must be GPU-eligible, got {reasons:?}"
         );
     }
+
+    // Stage 3: a valid red-eye correction is GPU-eligible; an invalid one must
+    // stay flagged. (A decoder As-Shot WB context still CPU-routes — see the
+    // SOLL conflict reported with GPU-RENDER-PARITY-1 stage 3.)
+    assert!(
+        unsupported_gpu_stages(&red_eye_recipe()).is_empty(),
+        "valid red-eye must be GPU-eligible"
+    );
 
     let geometry = EditRecipe {
         geometry: Some(Geometry {
@@ -1367,7 +1793,7 @@ fn cpu_routing_inventory_is_complete() {
             "camera_white_balance (As-Shot context)",
             unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb)),
         ),
-        ("red_eye", unsupported_gpu_stages(&red_eye_recipe())),
+        ("red_eye", unsupported_gpu_stages(&invalid_red_eye_recipe())),
         (
             "spot_removals",
             unsupported_gpu_stages(&typed_spot_recipe()),

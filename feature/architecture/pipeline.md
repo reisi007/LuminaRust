@@ -1245,15 +1245,18 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
 - **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
   (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
   Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →
-  Vignette → Grain, in exakter Oracle-Reihenfolge) laufen auf GPU mit
-  CPU-Oracle-Parität — byte-identisch wo 0 gemessen, sonst maxAbsDiff ≤ 1
-  (≤ 2 für voll gestapelte Rezepte), PSNR ≥ 48 dB, Bias ≤ 0.05. Rest Stufe 3
-  (geometry/lens/perspective/lens_blur/red_eye/spots/generative/Camera-WB,
-  SourceAction-Artefakte) bleibt laut CPU-geroutet bzw. VRAM-verweigert;
-  lebendes Inventar: `cpu_routing_inventory_is_complete`. Offene Follow-ups:
-  Radius-Klemme statt Ablehnung bei schema-ungültigem Radius > 10,
-  `effective_scale=1.0`-Annahme absichern, Parity-Recipe am Schema-Maximum
-  (radius 10.0).
+  Vignette → Grain, in exakter Oracle-Reihenfolge) + Red-Eye (G-14, in
+  Oracle-Reihenfolge nach Sharpening, inkl. VRAM-Pfad; ungültige Werte bleiben
+  laut CPU-geroutet) laufen auf GPU mit CPU-Oracle-Parität — byte-identisch wo
+  0 gemessen, sonst maxAbsDiff ≤ 1 (≤ 2 für voll gestapelte Rezepte),
+  PSNR ≥ 48 dB, Bias ≤ 0.05. Erledigte Follow-ups: Radius>10-Ablehnung an
+  beiden Eintrittspunkten, `GPU_EFFECTIVE_SCALE` zentral, Parity-Recipe
+  radius 10 + Masking, schema-fremde Keys laut abgelehnt. Rest (Ziel: kein
+  CPU-only-Zweig, User-Entscheid 2026-09-13): geometry/lens/perspective/
+  lens_blur/spot/generative/Camera-WB/SourceAction-Slots; lebendes Inventar:
+  `cpu_routing_inventory_is_complete`. Offene Nebenbefunde: CLI-Test mit
+  staler Vibrance-Assertion (seit Stufe 1 rot), Camera-WB braucht
+  Cross-Crate-Welle (CLI/MCP-Vertrag).
 - **Present-Pfad:** `eframe` nutzt jetzt den **wgpu**-Renderer;
   `GpuContext::from_parts` teilt sich Renderer-Device/Queue, sodass die
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`

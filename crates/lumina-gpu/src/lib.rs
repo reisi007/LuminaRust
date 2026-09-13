@@ -21,7 +21,8 @@
 //! pipeline runs the [`stages`] post-tone chain in the CPU oracle's order:
 //! Presence (Texture/Clarity box DoG + Dehaze), the per-pixel color pass
 //! (Curves → HSL → Point Color → vibrance/saturation → Color Grading), then the
-//! stage-2 detail chain (Noise Reduction → Sharpening → vignette → grain).
+//! stage-2 detail chain (Noise Reduction → Sharpening → Red-Eye → vignette →
+//! grain).
 //!
 //! The equivalence is **per stage**, asserted by `tests/parity.rs` at the
 //! bound each recipe enforces: Point Color, Color Grading,
@@ -39,9 +40,9 @@
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
 //! lists any recipe stage the pipeline cannot yet render (Geometry, Lens
 //! Correction, Perspective, Lens Blur, unbound SourceActions, As-Shot WB
-//! context, Red-Eye, spot removals, generative edit, non-schema adjustment keys,
-//! the source-action slot limit, …). On every entry point the outcome is loud
-//! and pixel-safe:
+//! context, invalid red-eye, spot removals, generative edit, non-schema
+//! adjustment keys, the source-action slot limit, …). On every entry point the
+//! outcome is loud and pixel-safe:
 //!
 //! - [`GpuContext::render_with_gpu`] routes such a recipe to the free
 //!   `render_cpu`, which runs the **full** `lumina_core::render_frame` chain
@@ -202,8 +203,8 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///
 /// Rendered by the GPU ([`stages`], GPU-RENDER-PARITY-1) and therefore **not**
 /// flagged: Curves, HSL, Point Color, vibrance/saturation, Color Grading,
-/// Presence (Texture / Clarity / Dehaze) and — since stage 2 — Noise Reduction,
-/// Sharpening and Effects (vignette + grain).
+/// Presence (Texture / Clarity / Dehaze), Noise Reduction, Sharpening and
+/// Effects (vignette + grain) (stage 2) plus Red-Eye (stage 3).
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
@@ -214,10 +215,13 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// - Geometry / Lens Correction / Perspective / Lens Blur;
 /// - non-empty SourceActions **unless** GPU source-action artifacts are bound
 ///   (see [`unsupported_gpu_stages_with_context`]);
-/// - Red-Eye (`red_eye`), typed `spot_removals`, non-empty legacy
-///   `extras["spot_removals"]` and `generative_edit` — stages the CPU
-///   reference applies/validates but the GPU does not implement (R2 follow-up:
-///   GPUs must not silently drop them or the related CPU hard error).
+/// - typed `spot_removals`, non-empty legacy `extras["spot_removals"]` and
+///   `generative_edit` — stages the CPU reference applies/validates but the GPU
+///   does not implement (R2 follow-up: GPUs must not silently drop them or the
+///   related CPU hard error);
+/// - an **invalid** `red_eye` (out-of-range/NaN/duplicate id): a schema-valid
+///   correction is GPU-rendered, but invalid values stay CPU-routed so the
+///   oracle's loud rejection is preserved.
 ///
 /// This predicate sees only the recipe. Render-context state the GPU stage
 /// cannot reproduce — decoder As-Shot white balance above all (R2-MCP-01) — is
@@ -298,18 +302,26 @@ pub fn unsupported_gpu_stages_with_context(
         }
     }
     // GPU-RENDER-PARITY-1 follow-up (gate completeness): the CPU reference
-    // applies/validates these recipe stages (`apply_red_eye` in core,
-    // `apply_spot_heals_from_recipe` and `apply_generative_expand` in
-    // `render_frame_from_base`), but the GPU pipeline has no notion of them.
-    // Presence must therefore route to the CPU — otherwise the GPU path would
-    // silently drop red-eye correction / spot healing / generative expansion,
-    // and for a typed-but-unhealable spot the CPU hard `InvalidAdjustment`
-    // would be dropped too. The two spot views are checked independently: the
-    // typed `spot_removals` field (unhealable without the extras geometry) and
-    // the geometry-carrying `extras["spot_removals"]` array. An *empty*
-    // extras array is an explicit no-op in core and does not flag.
-    if recipe.red_eye.is_some() {
-        reasons.push("red_eye".into());
+    // applies/validates these recipe stages (`apply_spot_heals_from_recipe` and
+    // `apply_generative_expand` in `render_frame_from_base`), but the GPU
+    // pipeline has no notion of them. Presence must therefore route to the CPU —
+    // otherwise the GPU path would silently drop spot healing / generative
+    // expansion, and for a typed-but-unhealable spot the CPU hard
+    // `InvalidAdjustment` would be dropped too. The two spot views are checked
+    // independently: the typed `spot_removals` field (unhealable without the
+    // extras geometry) and the geometry-carrying `extras["spot_removals"]`
+    // array. An *empty* extras array is an explicit no-op in core and does not
+    // flag.
+    // GPU-RENDER-PARITY-1 stage 3: Red-Eye (G-14) is now rendered by the
+    // dedicated [stages::RedEyeParams] pass (inserted after Sharpening, before
+    // Effects), so a schema-valid correction no longer routes to the CPU. An
+    // invalid correction (out-of-range/NaN/duplicate id) must keep routing
+    // there: the CPU oracle rejects it loudly, and a GPU pass without that
+    // validation would silently render divergent pixels instead of erroring.
+    if let Some(red_eye) = recipe.red_eye.as_ref() {
+        if !red_eye_is_valid(red_eye) {
+            reasons.push("red_eye (invalid)".into());
+        }
     }
     if !recipe.spot_removals.is_empty() {
         reasons.push("spot_removals".into());
@@ -333,10 +345,70 @@ pub fn unsupported_gpu_stages_with_context(
             MAX_SOURCE_ACTIONS
         ));
     }
+    // R2-MCP-01: a decoder As-Shot white balance context always CPU-routes.
+    // `lumina-core` validates those gains but does not re-apply them to pixels
+    // (the decoder already did), so valid contexts happen to be pixel-neutral —
+    // but the context is part of the CPU reference contract, including its
+    // validation: invalid gains abort the CPU render while a GPU path without
+    // that notion would silently ignore them. Making a valid context
+    // GPU-eligible would require updating the CLI/MCP routing contract
+    // (`gpu_routing_reasons_flag_wb_context_and_respect_neutral_sliders`,
+    // `lumina-mcp` docs), which is outside this crate's write scope
+    // (GPU-RENDER-PARITY-1 stage-3 SOLL conflict; reported, not decided here).
     if camera_white_balance.is_some() {
         reasons.push("camera_white_balance (As-Shot context)".into());
     }
     reasons
+}
+
+/// Whether a `red_eye` correction is schema-valid per the CPU oracle's
+/// `validate_nested_adjustments` (G-14). Invalid corrections keep CPU-routing so
+/// the oracle's loud rejection is preserved; only valid ones are GPU-eligible.
+fn red_eye_is_valid(r: &lumina_sidecar::RedEyeCorrection) -> bool {
+    if r.version != 1 || r.regions.len() > lumina_sidecar::RED_EYE_MAX_REGIONS {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for region in &r.regions {
+        if region.id.is_empty() || !seen.insert(region.id.as_str()) {
+            return false;
+        }
+        for value in [region.x, region.y, region.desaturate, region.darken] {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return false;
+            }
+        }
+        if !region.radius.is_finite() || region.radius <= 0.0 || region.radius > 1.0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Recipes the GPU adjustment pipeline would render with silently clamped
+/// values are rejected here up front (GPU-RENDER-PARITY-1 stage-2 follow-up).
+///
+/// `apply_recipe_with_scale_and_white_balance` validates the sharpening radius
+/// against the schema range `0.1..=10.0` and rejects an out-of-range value.
+/// The GPU kernel builder would instead clamp the tap radius
+/// (`stages::sharpen_kernel`) and render a subtly different image, so the GPU
+/// path must reject the same recipes loudly rather than clamp them (Agents.md:
+/// no silent fallback). The check runs whenever `sharpening` is present,
+/// mirroring the oracle's `validate_nested_adjustments` (which validates even
+/// when `amount == 0`).
+#[cfg(feature = "gpu")]
+fn validate_gpu_recipe(recipe: &EditRecipe) -> Result<(), GpuError> {
+    if let Some(sharpening) = recipe.sharpening.as_ref() {
+        let radius = sharpening.radius;
+        if !radius.is_finite() || !(0.1..=10.0).contains(&radius) {
+            return Err(GpuError::RenderFailed(format!(
+                "sharpening.radius {radius} is outside the schema range 0.1..=10.0; \
+                 the GPU sharpening pass refuses to silently clamp it (the CPU \
+                 reference rejects it with InvalidAdjustment)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The identity ("no visible change") value of an adjustment key.
@@ -923,7 +995,7 @@ impl GpuContext {
     /// Pass order mirrors `apply_recipe_with_scale_and_white_balance` exactly:
     /// `Presence Texture DoG → Presence Clarity DoG → Dehaze → color
     /// (curves → HSL → Point Color → vibrance/saturation → Color Grading)
-    /// → Noise Reduction → Sharpening → vignette → grain`.
+    /// → Noise Reduction → Sharpening → Red-Eye → vignette → grain`.
     /// Each pass is a self-contained fullscreen draw into a ping-pong scratch
     /// texture; the last pass writes `output`. Dehaze (dark-channel percentile)
     /// and Sharpening (gradient maximum) are the only passes that need a host
@@ -972,6 +1044,17 @@ impl GpuContext {
         {
             writes.push(PostWrite::Sharpen(Box::new(
                 stages::SharpenParams::from_sharpening(sharpening),
+            )));
+        }
+        // G-14: red-eye runs after sharpening and before effects, exactly like
+        // `apply_recipe` (grain then applies uniformly over corrected pupils).
+        if let Some(red_eye) = recipe
+            .red_eye
+            .as_ref()
+            .filter(|r| stages::RedEyeParams::needs_stage(r))
+        {
+            writes.push(PostWrite::RedEye(Box::new(
+                stages::RedEyeParams::from_red_eye(red_eye),
             )));
         }
         if let Some(effects) = recipe.effects.as_ref() {
@@ -1144,6 +1227,16 @@ impl GpuContext {
                             });
                     stages::write_sharpen_params(&resources.queue, &post.sharpen_params, params);
                     self.encode_sharpening(resources, post, (width, height), params, current, dst)?;
+                }
+                PostWrite::RedEye(params) => {
+                    stages::write_red_eye_params(&resources.queue, &post.red_eye_params, params);
+                    let bind = stages::create_red_eye_bind_group(
+                        &resources.device,
+                        &post.red_eye_layout,
+                        &post.red_eye_params,
+                        current,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.red_eye_pipeline, &bind, dst);
                 }
             }
             current = dst;
@@ -1572,6 +1665,7 @@ impl GpuContext {
         // artifacts* is therefore rejected loudly (no divergent pixels are ever
         // written). With bound artifacts, `source_actions` is no longer
         // "unsupported" — the dedicated GPU stage composites them.
+        validate_gpu_recipe(recipe)?;
         let sa_bound = self
             .matching_source_actions(frame.width, frame.height)
             .is_some();
@@ -2218,6 +2312,7 @@ impl GpuContext {
         // different pixels — with one exception: when source-action artifacts
         // are bound and match the frame, the dedicated GPU source-action stage
         // composites them and `source_actions` is no longer unsupported.
+        validate_gpu_recipe(recipe)?;
         let sa_bound = self
             .matching_source_actions(frame.width, frame.height)
             .is_some();
@@ -2796,6 +2891,9 @@ struct PostPipelineState {
     sharpen_gradient_layout: wgpu::BindGroupLayout,
     sharpen_params: wgpu::Buffer,
     sharpen_maxg: wgpu::Buffer,
+    red_eye_pipeline: wgpu::RenderPipeline,
+    red_eye_layout: wgpu::BindGroupLayout,
+    red_eye_params: wgpu::Buffer,
 }
 
 /// Build all post-tone pipelines targeting [`shaders::RGBA8_FORMAT`].
@@ -2833,6 +2931,9 @@ fn build_post_pipelines(device: &wgpu::Device) -> Result<PostPipelineState, GpuE
         sharpen_gradient_layout: stages::create_sharpen_gradient_bind_group_layout(device),
         sharpen_params: stages::create_sharpen_params_buffer(device),
         sharpen_maxg: stages::create_sharpen_maxg_buffer(device),
+        red_eye_pipeline: stages::create_red_eye_pipeline(device, format)?,
+        red_eye_layout: stages::create_red_eye_bind_group_layout(device),
+        red_eye_params: stages::create_red_eye_params_buffer(device),
     })
 }
 
@@ -2852,6 +2953,8 @@ enum PostWrite {
     /// Sharpening (multi-pass separable Gaussian unsharp mask).
     /// Boxed: the kernel block is large (clippy::large_enum_variant).
     Sharpen(Box<stages::SharpenParams>),
+    /// Red-eye correction (G-14): per-pixel region-local desaturation/darkening.
+    RedEye(Box<stages::RedEyeParams>),
     /// Effects vignette.
     Vignette(stages::VignetteParams),
     /// Effects grain.
@@ -2880,7 +2983,11 @@ fn post_stages_needed(recipe: &EditRecipe) -> bool {
         fx.vignette.as_ref().is_some_and(|v| v.amount != 0.0)
             || fx.grain.as_ref().is_some_and(|g| g.amount != 0.0)
     });
-    presence || stages::ColorParams::needs_stage(recipe) || noise || sharpen || effects
+    let red_eye = recipe
+        .red_eye
+        .as_ref()
+        .is_some_and(stages::RedEyeParams::needs_stage);
+    presence || stages::ColorParams::needs_stage(recipe) || noise || sharpen || red_eye || effects
 }
 
 /// Encode one fullscreen-triangle draw into `dst` with `pipeline`/`bind_group`.
