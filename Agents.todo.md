@@ -79,7 +79,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-17 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 13,
+18 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 14,
 Block B: 1, Block C: 3 (Stand 2026-09-13).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
@@ -126,6 +126,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
 | 1.0 | META-COPYPASTE-1 | G-15 | Meta-Copy/Paste + CLI-Parität |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
+| fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
 | 1.5 | LRPAR-G14-REDEYE-15 | G-14 | Rote Augen |
@@ -169,6 +170,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] KITTEST-PARITY-PATHS-1 (Release: 1.0)** Pfad-Parity-Framework (User-Input manueller Test): gleiche Szene über CPU- und GPU-Pfad rendern, beide Frames snapshotten, Parität per Toleranz assertieren (F-043-Maßstab) PLUS absolute Geometrie-Checks (Preview füllt Fit-Rect, Overlays auf Foto — Parität allein fängt beidseitig gleiche Fehler nicht). Abnahme: Matrix-Test grün auf Metal, SKIP-Verdict ohne Adapter (nie still grün), DoD §6. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] KITTEST-COVERAGE-STATES-2 (Release: 1.0)** Follow-ups aus STATES-1-Verifizierung (BESTANDEN): Hintergrund-Decode-Fehler öffnet keinen Dialog (Test fehlt — `failed_decode_keeps_previous_path` prüft nur `error()`); Doppel-`error!` im Hintergrund-Pfad bereinigen; Dialog-`Close` per `info!` loggen (DoD §4); Metadata-Panel-Breite (+33 px → Center-Reflow bei 1024 px prüfen); Toast überlagert Histogramm-Header (vorbestehend, niedrig). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
+- [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - [ ] **[PRIO: mittel] META-COPYPASTE-1 (Release: 1.0)** Metadaten Copy/Paste + CLI-Parität (User-Entscheid 2026-09-13). Stand: GUI-Session-Clipboard + Copy/Paste-Buttons via KITTEST-COVERAGE-STATES-1 (verifiziert BESTANDEN, SOLL §10 + F-100-Dialog nachgezogen), Presets via G15-IPTC (SOLL `feature/product/iptc-metadata.md` §5). Rest: CLI `meta copy`/`meta paste` (Clipboard-Datei, Paste über Commit-Pfad mit `origin`), SOLL-Doku `iptc-metadata.md` §10 (Session-Clipboard, nicht persistiert, Sidecar-first) + F-100-Fehler-Dialog-Abgrenzung (Dialog nur explizite Aktionen, Hintergrundfehler Banner+Log). Abnahme: CLI-E2E + GUI-headless + Golden, kein stiller Fallback. Crates: `lumina-cli`, `lumina-gui` (GUI-Anteil erst nach KITTEST-Verifizierung).
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
