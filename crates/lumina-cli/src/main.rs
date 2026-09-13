@@ -7829,18 +7829,29 @@ mod tests {
         };
         assert!(gpu_routing_reasons(&touched_reset, &reset_ctx).is_empty());
 
-        // … while non-neutral values keep flagging.
-        let non_neutral = EditRecipe {
-            adjustments: BTreeMap::from([("vibrance".to_string(), 0.25)]),
+        // … while a recipe stage the GPU genuinely cannot render keeps forcing
+        // the CPU route. Every schema adjustment key is GPU-rendered now
+        // (GPU-RENDER-PARITY-1: tone + detail + Red-Eye), so the honest,
+        // permanent probe here is the unknown-key class: a key outside the
+        // recipe schema has no neutral default, the CPU reference rejects it
+        // outright and no GPU stage could ever accept it — unlike
+        // geometry/lens_correction/perspective/lens_blur/spot_removals/
+        // generative_edit (all queued for GPU parity in GPU-RENDER-PARITY-1,
+        // so they would go stale again). The same class is pinned by
+        // `cpu_routing_inventory_is_complete` in `lumina-gpu`.
+        let unsupported = EditRecipe {
+            adjustments: BTreeMap::from([("clarity_v2".to_string(), 0.5)]),
             ..Default::default()
         };
-        let non_neutral_ctx = RenderContext {
-            recipe: &non_neutral,
+        let unsupported_ctx = RenderContext {
+            recipe: &unsupported,
             ..reset_ctx
         };
-        let reasons = gpu_routing_reasons(&non_neutral, &non_neutral_ctx);
+        let reasons = gpu_routing_reasons(&unsupported, &unsupported_ctx);
         assert!(
-            reasons.iter().any(|r| r.contains("vibrance")),
+            reasons
+                .iter()
+                .any(|r| r.contains("clarity_v2") && r.contains("not implemented on GPU")),
             "{reasons:?}"
         );
 
