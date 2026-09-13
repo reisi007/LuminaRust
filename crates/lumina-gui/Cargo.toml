@@ -51,6 +51,10 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3"
+# UX-SLICE-2 (F4): the rated-badge fixture writes a conflict-free sidecar
+# (matching BLAKE3 content hash) so the golden pins badges, not a conflict
+# state. Same crate/version as the normal dependency above.
+blake3 = "1"
 # F-103-N9: headless UI snapshot regression tests via egui_kittest.
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
 # PREVIEW-CACHE-FEATURE (F-074): Criterion bench for the hybrid neighbor preview

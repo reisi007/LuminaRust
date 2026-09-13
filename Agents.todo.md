@@ -120,7 +120,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | GUI-PREVIEW-SCALE-1 | G-10 | Preview-Skalierung |
 | 1.0 | KITTEST-COVERAGE-STATES-1 | alle G | Toast-Error-Export-States |
 | 1.0 | UX-SLICE-1 | G-09/G-10 | UX-Polish-Slice-1 |
-| 1.0 | UX-SLICE-2 | G-09/G-10 | UX-Polish-Follow-ups |
+| 1.0 | UX-SLICE-3 | G-09/G-10 | UX-Polish-Follow-ups-2 |
 | 1.0 | CROP-MAXRECT-1 | G-06 | Default-Crop-MaxRect |
 | 1.0 | KITTEST-PARITY-PATHS-1 | G-10 | Pfad-Parity-Framework |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
@@ -171,7 +171,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] CROP-MAXRECT-1 (Release: 1.0)** Default-Crop ist das Maximum-Rectangle mit Constrain-to-Image (User-Entscheid 2026-09-12): Nach Lens-/Perspektiv-Korrektur keine transparenten Ränder ohne expliziten Crop — der Default-Crop umschließt maximalen Inhalt. Abnahme: Core-Geometrie + CLI/GUI-headless mit Golden (transparenter Keil → Default-Crop enthält nur Inhalt), kein stiller Beschnitt jenseits der Regel. Crates: `lumina-core`, `lumina-gui`.
 - [ ] **[PRIO: mittel] KITTEST-PARITY-PATHS-1 (Release: 1.0)** Pfad-Parity-Framework (User-Input manueller Test): gleiche Szene über CPU- und GPU-Pfad rendern, beide Frames snapshotten, Parität per Toleranz assertieren (F-043-Maßstab) PLUS absolute Geometrie-Checks (Preview füllt Fit-Rect, Overlays auf Foto — Parität allein fängt beidseitig gleiche Fehler nicht). Abnahme: Matrix-Test grün auf Metal, SKIP-Verdict ohne Adapter (nie still grün), DoD §6. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
-- [ ] **[PRIO: mittel] UX-SLICE-2 (Release: 1.0)** UX-Polish-Follow-ups aus UX-SLICE-1-Verifizierung (F1–F6, niedrig/mittel): F1 Stale-Hash bei 0 Bildern (render_key-Clear/Gate); F2 „Open Folder"-CTA verspricht zu viel (ehrliches Label oder Picker-Scope entscheiden); F3 Empty-State nur in Grid (Loupe/Compare/Survey + Navigator-Hint vereinheitlichen); F4 Badge-Painting ohne Pixel-Beleg (Golden mit bewerteten Fixtures); F5 schärfere Asserts (Hash-Abwesenheit am Canvas, CTA-Verdrahtung); F6 Traceability-Labels (P1–P5/UXG-Mapper). Abnahme: wie Slice-1-Gates + Vision-Check. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] UX-SLICE-3 (Release: 1.0)** UX-Polish-Follow-ups aus UX-SLICE-2-Verifizierung (BESTANDEN, 2 nicht-blockierende Befunde): (a, mittel) F1-Hash-Gate ans gefilterte Raster angleichen — Gate nutzt `entries` ungefiltert, Empty-State `filtered_library_order()`, bei 0 Filter-Treffern kehrt der Widerspruch zurück (+ sachlich falscher Kommentar „matching the empty state's subject"); (b, niedrig) F4-Fixture-Kommentar „no decode runs during the golden" bereinigen (deterministischer LibRaw-Fehlerbanner im Golden, Muster wie `library_loupe.png`, kein Regress). Abnahme: kittest + lib-Test grün, Golden unverändert oder ehrlich rebaselined. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig

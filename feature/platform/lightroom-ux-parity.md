@@ -80,6 +80,47 @@ G-09-Scope-Anhebung (Catalog/Import/Loupe-Render), F-100-Reihenfolge
 (Calibration, Color-Split, Optics vor Effects), History-Schema (Labels),
 Pin-Semantik (Auswahl/Delete/`/`), Panel-Dynamik-Zielbild, Softproof-Anchor.
 
+## UX-SLICE-2 — Polish-Follow-ups (2026-09-13)
+
+Fortsetzung von UX-SLICE-1; die Punkte F1–F6 stammen aus dessen
+Verifizierung. SOLL-Entscheide, die vor der Implementierung festgehalten
+wurden:
+
+- **F1 — Render-Hash bei 0 Bildern (Gate):** Der Hash in der Statuszeile
+  beschreibt den geladenen Render. Das Library-Raster ist RAW-only; eine
+  geladene Nicht-RAW-Datei hat dort keine Repräsentation. Der Hash wird daher
+  im Modul Library nicht gezeigt, solange das RAW-Raster leer ist (kein
+  Widerspruch zwischen „No images“ und einem Render-Hash); in Develop/Export
+  und bei nicht-leerem Raster bleibt er sichtbar. `render_key` wird bewusst
+  **nicht** gelöscht (der geladene Render bleibt gültig) — reines Anzeige-Gate.
+- **F2 — „Open Folder“-CTA (Picker-Scope):** Der CTA öffnet den nativen
+  Ordner-Picker (`rfd::FileDialog::pick_folder`) und setzt das gewählte
+  Verzeichnis. `rfd` ist bereits GUI-Dependency und erfährt keine neue
+  Capability; das Label „Open Folder“ ist damit ehrlich. Ein abgebrochener
+  Dialog ist ein bewusster No-op (kein Status, kein Fehler). Für headless Tests
+  ist der Picker injizierbar (Session-State, nie persistiert).
+- **F3 — ein Empty-State für alle Library-Ansichten:** Grid, Loupe, Compare und
+  Survey zeigen denselben zentrierten Empty-State (Icon + Titel + Body + CTA);
+  der Navigator-Rail zeigt bei 0 Einträgen den ehrlichen Hinweis
+  „No images in this folder“ statt „Click a thumbnail to open it“.
+- **F4 — Badge-Painting pixel-belegt:** eigener Golden mit bewerteten,
+  geflaggten und gelabelten Fixtures (Grid **und** Filmstreifen) plus
+  Pixel-Assert auf `LIBRARY_BADGE_BG`; kein stiller Fallback.
+- **F5 — schärfere Asserts:** Hash-Abwesenheit am Canvas (genau ein
+  Hash-Knoten, im Header) und CTA-Verdrahtung über den injizierten Picker.
+- **F6 — Traceability:** Mapping P1–P5 ↔ UXG ↔ Code-Anker (Tabelle unten);
+  Code-Kommentare referenzieren die kanonischen IDs.
+
+### UX-SLICE-1 Traceability (P1–P5 / UXG-Mapper)
+
+| P | UX-SLICE-1-Punkt | UXG | Code-Anker |
+| --- | --- | --- | --- |
+| P1 | Filmstrip-Komponente vereinheitlicht (Thumbs, n-von-N, Badges, ehrlicher Empty-Text) | UXG-09 | `draw_filmstrip`, `paint_entry_badge` |
+| P2 | Render-Hash von Canvas in Statuszeile; Draft/Stale als Rand-Badges | UXG-07 | `update`-Header, `draw_preview` |
+| P3 | Export-Ziel-Label eindeutig (`Destination` statt Doppel-Label) | — (Vision) | Export-Panel (`ExportTarget`) |
+| P4 | Weißer Randstreifen neben dem Metadata-Panel behoben (`auto_shrink`) | — (Vision) | rechtes Panel in `update` |
+| P5 | Library-Empty-State mit deterministischem Icon + CTA | — (Vision) | `draw_library_empty_state` |
+
 ## Abnahme (je Slice)
 
 DoD §6 Vision-Review der geänderten Layouts + kittest-Goldens (neu/geändert)

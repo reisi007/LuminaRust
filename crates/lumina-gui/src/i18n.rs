@@ -623,6 +623,8 @@ impl Str {
             Str::Export => "Export",
             Str::LibraryShortcut => "Library ({})",
             Str::DevelopShortcut => "Develop ({})",
+            // UX-SLICE-1 (mapper P3): the export destination label is unique
+            // ("Destination") instead of the duplicate "Export to"/"Export".
             Str::ExportTarget => "Destination",
             Str::ExportFormatLabel => "Format",
             Str::ExportQualityLabel => "Quality",

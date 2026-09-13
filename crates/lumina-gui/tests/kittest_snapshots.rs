@@ -24,9 +24,9 @@ use egui_kittest::{kittest::Queryable, Harness};
 use lumina_core::cache::{disk::DiskFolderCache, PreviewKind};
 use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_gui::{
-    LibraryView, LuminaApp, Module, PinVisibility, ZoomMode, SECTION_COLOR, SECTION_COUNT,
-    SECTION_DETAIL, SECTION_EFFECTS, SECTION_GEOMETRY, SECTION_MASKING, SECTION_OPTICS,
-    SECTION_TONE_CURVE,
+    LibraryView, LuminaApp, Module, PinVisibility, ZoomMode, LIBRARY_BADGE_BG, SECTION_COLOR,
+    SECTION_COUNT, SECTION_DETAIL, SECTION_EFFECTS, SECTION_GEOMETRY, SECTION_MASKING,
+    SECTION_OPTICS, SECTION_TONE_CURVE,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -621,19 +621,30 @@ fn filmstrip_counter_reflects_selection() {
     );
 }
 
-/// UX-SLICE-1 (P5): the Library empty state is centered (heading text + CTA)
-/// and the CTA reuses the existing folder-open path (`set_directory`), i.e. it
-/// is clickable and leaves a still-empty directory in the empty state.
+/// UX-SLICE-2 (F2/F5): the empty-state CTA is genuinely wired to the native
+/// folder picker (injected headless — no display server), not the old no-op
+/// re-list of the current directory. A picked folder with a RAW entry proves
+/// the CTA leaves the empty state and adopts the picked path.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
-fn library_empty_state_cta() {
+fn library_empty_state_cta_picks_folder() {
+    let picked = tempfile::tempdir().expect("picked temp dir");
+    std::fs::write(picked.path().join("picked.arw"), b"lumina-raw-fixture")
+        .expect("write picked raw sentinel");
+    std::fs::create_dir_all(picked.path().join("sub")).expect("create picked subdir");
+    let picked_path = picked.path().display().to_string();
+
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
     use_library_fixture(&mut harness);
+    let injected = picked_path.clone();
+    harness
+        .state_mut()
+        .set_folder_picker(move || Some(PathBuf::from(injected.clone())));
     harness.run();
     assert!(
         harness.query_all_by_label("No images").next().is_some(),
-        "empty state must show its title"
+        "empty state must show its title before the CTA is used"
     );
     let clicked = harness
         .query_all_by_label("Open Folder")
@@ -644,15 +655,86 @@ fn library_empty_state_cta() {
         })
         .unwrap_or(false);
     assert!(clicked, "empty-state CTA must be present and clickable");
-    harness.run();
+    // Fixed frames (not `run()`): the picked sentinel starts a background
+    // decode whose repaint requests would exceed `run`'s step budget.
+    harness.run_steps(5);
+    assert_eq!(
+        harness.state_mut().directory(),
+        picked_path,
+        "CTA must adopt the folder returned by the picker (no-op re-list is not wiring)"
+    );
     assert!(
-        harness.query_all_by_label("No images").next().is_some(),
-        "re-listing the still-empty fixture must keep the empty state"
+        !harness.state_mut().entries().is_empty(),
+        "the picked folder's RAW entry must be listed"
+    );
+    assert!(
+        harness.query_all_by_label("No images").next().is_none(),
+        "a non-empty picked folder must leave the empty state"
     );
 }
 
-/// UX-SLICE-1 (UXG-07): the render hash moved from the canvas edge into the
-/// app status line; the small status label is a real accesskit node.
+/// UX-SLICE-2 (F2): a cancelled folder dialog is a deliberate no-op — the
+/// directory and the empty state stay exactly as they were.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_empty_state_cta_cancel_is_noop() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    harness.state_mut().set_folder_picker(|| None);
+    harness.run();
+    let before = harness.state_mut().directory().to_owned();
+    let clicked = harness
+        .query_all_by_label("Open Folder")
+        .next()
+        .map(|node| {
+            node.click();
+            true
+        })
+        .unwrap_or(false);
+    assert!(clicked, "empty-state CTA must be present and clickable");
+    harness.run();
+    assert_eq!(
+        harness.state_mut().directory(),
+        before,
+        "a cancelled dialog must not change the directory"
+    );
+    assert!(
+        harness.query_all_by_label("No images").next().is_some(),
+        "a cancelled dialog must keep the empty state"
+    );
+}
+
+/// UX-SLICE-2 (F3): Loupe/Compare/Survey use the same shared empty state as
+/// the Grid (title + "Open Folder" CTA) instead of their former heading-only
+/// text, so no view can drift into a divergent empty presentation.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn non_grid_library_views_share_the_empty_state() {
+    for view in [
+        LibraryView::Loupe,
+        LibraryView::Compare,
+        LibraryView::Survey,
+    ] {
+        let mut harness = build_harness();
+        harness.state_mut().set_module(Module::Library);
+        use_library_fixture(&mut harness);
+        harness.state_mut().set_library_view(view);
+        harness.run_steps(2);
+        assert!(
+            harness.query_all_by_label("No images").next().is_some(),
+            "{view:?} must show the shared empty-state title"
+        );
+        assert!(
+            harness.query_all_by_label("Open Folder").next().is_some(),
+            "{view:?} must show the shared empty-state CTA"
+        );
+    }
+}
+
+/// UX-SLICE-2 (F5): the render hash exists **exactly once** and in the top
+/// status line — the old canvas-edge copy is gone (a second node or a
+/// lower-half rect would mean the canvas text came back).
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn render_hash_moves_to_status_line() {
@@ -661,12 +743,62 @@ fn render_hash_moves_to_status_line() {
     load_sample(&mut harness);
     harness.run();
     harness.run();
+    let nodes: Vec<_> = harness
+        .query_all_by_label_contains("Render state current:")
+        .collect();
+    assert_eq!(
+        nodes.len(),
+        1,
+        "the render hash must exist exactly once (status line), not also at the canvas"
+    );
+    let rect = nodes[0].rect();
+    assert!(
+        rect.max.y < 60.0,
+        "the render hash must sit in the top status line, got {rect:?}"
+    );
+}
+
+/// UX-SLICE-2 (F1): the header render hash is hidden in the Library module
+/// while the RAW grid is empty (a loaded non-RAW image has no Library
+/// representation), so it can never contradict the "No images" empty state.
+/// The underlying `render_key` stays valid; the hash returns with Develop.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_empty_suppresses_render_hash() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    use_library_fixture(&mut harness);
+    load_sample(&mut harness);
+    harness.run();
+    harness.run();
+    assert!(
+        harness.state_mut().render_key().is_some(),
+        "the sample must have a current render"
+    );
+    assert!(
+        !harness.state_mut().render_hash_visible(),
+        "F1 gate must hide the hash while the RAW grid is empty"
+    );
+    assert!(
+        harness
+            .query_all_by_label_contains("Render state current:")
+            .next()
+            .is_none(),
+        "no render hash may be painted above the Library empty state"
+    );
+    // Same render, other module: the hash is meaningful again.
+    harness.state_mut().set_module(Module::Develop);
+    harness.run();
+    assert!(
+        harness.state_mut().render_hash_visible(),
+        "Develop must keep the render hash for the loaded image"
+    );
     assert!(
         harness
             .query_all_by_label_contains("Render state current:")
             .next()
             .is_some(),
-        "render hash must be exposed in the app status line"
+        "the render hash must be visible again in Develop"
     );
 }
 
@@ -893,6 +1025,150 @@ fn library_subfolder_badges() {
     // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
     harness.run_steps(3);
     harness.snapshot("library_subfolder_badges");
+}
+
+// ---------------------------------------------------------------------------
+// UX-SLICE-2 (F4): the LR-01 rating/flag/color-label badge is painted by the
+// shared `paint_entry_badge` helper. The pre-existing "badge" fixtures are all
+// unrated, so no badge was ever painted; this fixture carries exactly one
+// rated/picked/red, one rejected/blue and one unrated/green entry (badge text
+// asserted through the public `FileBrowserEntry::badge_text` accessor) and the
+// golden plus an exact-`LIBRARY_BADGE_BG` pixel count prove the chip pixels.
+// ---------------------------------------------------------------------------
+
+const LIBRARY_RATED_FIXTURE_DIR: &str = "tests/fixtures/library_rated";
+
+/// (Re-)write a deterministic, conflict-free rated fixture: three RAW
+/// sentinels whose sidecars carry the default copy's rating/flag/label, each
+/// with a seeded Standard preview (same `DiskFolderCache` pattern as
+/// `ensure_library_views_fixture`). The seeded cache makes the `.lumina/` node
+/// present before the first frame, so the folder tree and the thumbnail pixels
+/// are stable (a cold cache would create `.lumina/` asynchronously and the
+/// golden would flip between runs). The sidecar content hash matches the
+/// sentinel bytes (`source_status` => `Unchanged`), so the golden pins the
+/// badges, never a conflict state. Idempotent.
+fn ensure_library_rated_fixture() {
+    use lumina_sidecar::{DecodeFingerprint, Flag, GeometryFingerprint, SidecarDocument};
+    let root = Path::new(LIBRARY_RATED_FIXTURE_DIR);
+    std::fs::create_dir_all(root).expect("create rated fixture dir");
+    // Fresh cache directory before re-seeding, so every run starts from the
+    // same committed file set (no stale preview entries).
+    let _ = std::fs::remove_dir_all(root.join(".lumina"));
+    let bytes = b"lumina-raw-fixture";
+    let content_hash = format!("blake3:{}", blake3::hash(bytes).to_hex());
+    for (name, rating, flag, label, base) in [
+        ("rated.arw", 5u8, Flag::Pick, 1u64, [200, 60, 50]),
+        ("rejected.arw", 2, Flag::Reject, 4, [60, 170, 80]),
+        ("labeled.arw", 0, Flag::Unflagged, 3, [70, 110, 200]),
+    ] {
+        std::fs::write(root.join(name), bytes).expect("write rated fixture");
+        // Seed the exact Standard preview `ensure_thumbnail` probes
+        // (`vc-original`), so the cells paint real pixels instead of the
+        // LibRaw-failure placeholder and no decode runs during the golden.
+        let png = library_views_preview_png(base);
+        let cache = DiskFolderCache::for_image(root.join(name)).expect("rated fixture cache");
+        assert!(
+            cache
+                .store_preview(name, "vc-original", PreviewKind::Standard, &png)
+                .expect("seed rated preview"),
+            "Standard previews must be enabled for {name}"
+        );
+        let identity = lumina_sidecar::SourceIdentity {
+            relative_name: name.to_owned(),
+            content_hash: content_hash.clone(),
+            byte_length: bytes.len() as u64,
+            modified_at: None,
+            raw_format: "ARW".to_owned(),
+            orientation: 1,
+            decode_fingerprint: DecodeFingerprint {
+                decoder: "kittest".to_owned(),
+                version: "1".to_owned(),
+                parameters: BTreeMap::new(),
+                extras: BTreeMap::new(),
+            },
+            geometry_fingerprint: GeometryFingerprint {
+                width: 2,
+                height: 2,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: BTreeMap::new(),
+            },
+            extras: BTreeMap::new(),
+        };
+        let mut document = SidecarDocument::new(identity, "raster-mvp-1");
+        document.virtual_copies[0].rating = rating;
+        document.virtual_copies[0].flag = flag;
+        document.virtual_copies[0]
+            .extras
+            .insert("color_label".to_owned(), serde_json::Value::from(label));
+        let sidecar = lumina_sidecar::sidecar_path_for(&root.join(name));
+        lumina_sidecar::save_sidecar(&sidecar, &document).expect("seed rated sidecar");
+    }
+}
+
+/// Non-vacuous pixel guard for the F4 badge golden: count framebuffer pixels
+/// equal to the shared chip fill [`LIBRARY_BADGE_BG`]. The fill is not part of
+/// the theme palette and this flat fixture has no folder badges, so the only
+/// source is `paint_entry_badge`. One 118x16 chip is ~1.9k raw pixels (minus
+/// the glyphs); Grid + filmstrip together paint six, so `>= 2_000` is a
+/// conservative lower bound that a clean (unrated) fixture cannot reach.
+fn assert_badge_chips_painted(harness: &mut Harness<'_, LuminaApp>) {
+    let rendered = harness.render().expect("kittest renders the frame");
+    let (r, g, b) = (
+        LIBRARY_BADGE_BG.r(),
+        LIBRARY_BADGE_BG.g(),
+        LIBRARY_BADGE_BG.b(),
+    );
+    let count = rendered
+        .pixels()
+        .filter(|pixel| {
+            let [pr, pg, pb, _a] = pixel.0;
+            pr == r && pg == g && pb == b
+        })
+        .count();
+    assert!(
+        count >= 2_000,
+        "rated cells must paint the shared badge chip fill; got {count} exact-`LIBRARY_BADGE_BG` pixels"
+    );
+}
+
+/// UX-SLICE-2 (F4): rated/flagged/labeled Library fixture — Grid cells and
+/// filmstrip cells both paint the LR-01 badge, proven by the golden plus the
+/// exact-fill pixel count. Badge text is asserted through the public accessor.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_rated_badges() {
+    ensure_library_rated_fixture();
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    harness
+        .state_mut()
+        .set_directory(LIBRARY_RATED_FIXTURE_DIR.to_owned());
+    // `set_directory` lists flat; the grid's shared order is RAW-only.
+    harness.state_mut().list_directory();
+    let mut badges: Vec<String> = harness
+        .state_mut()
+        .entries()
+        .iter()
+        .filter_map(|entry| entry.badge_text())
+        .collect();
+    badges.sort();
+    assert_eq!(
+        badges,
+        vec![
+            "★★★★★ P ●Red".to_owned(),
+            "★★☆☆☆ X ●Blue".to_owned(),
+            "☆☆☆☆☆ ●Green".to_owned(),
+        ],
+        "rated fixture must carry the three distinct badges (rating/flag/label)"
+    );
+    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
+    harness.run_steps(3);
+    // Non-vacuous pixel assert on the frame that is snapshotted below: a
+    // mis-seeded (clean) fixture paints no chip fill and cannot reach the
+    // threshold.
+    assert_badge_chips_painted(&mut harness);
+    harness.snapshot("library_rated_badges");
 }
 
 // ---------------------------------------------------------------------------

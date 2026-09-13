@@ -1777,6 +1777,11 @@ pub struct LuminaApp {
     /// Library module: depth-limited RAW file count per folder node
     /// (display only; computed once per folder).
     folder_raw_counts: BTreeMap<String, usize>,
+    /// UX-SLICE-2 (F2): injectable native folder-picker seam. `None`
+    /// (production) opens the real `rfd` dialog; headless tests install a
+    /// closure (no display server) so the empty-state CTA wiring can be
+    /// asserted end to end. Session state, never persisted.
+    folder_picker: Option<Box<dyn FnMut() -> Option<PathBuf>>>,
     /// Library module: current thumbnail cell size (px) for the center grid,
     /// driven by a toolbar slider (Lightroom-like resizable library thumbs).
     library_thumb_size: f32,
@@ -2268,6 +2273,14 @@ impl FileBrowserEntry {
     pub fn thumb_key(&self) -> &str {
         &self.thumb_key
     }
+
+    /// UX-SLICE-2 (F4): the LR-01 rating/flag/color-label badge text painted
+    /// over this cell (Library grid + filmstrip), or `None` for a clean cell.
+    /// Read-only access so the pixel golden's non-vacuous guard can assert the
+    /// rated fixture really carries badges before the snapshot.
+    pub fn badge_text(&self) -> Option<String> {
+        entry_badge_text(self)
+    }
 }
 
 /// PERF-GUI-7: result of a background RAW/raster decode. Carries the decoded
@@ -2560,6 +2573,7 @@ impl LuminaApp {
             open_folders: BTreeSet::new(),
             folder_children: BTreeMap::new(),
             folder_raw_counts: BTreeMap::new(),
+            folder_picker: None,
             library_thumb_size: 132.0,
             library_cols: 4,
             keyword_input: String::new(),
@@ -2740,6 +2754,30 @@ impl LuminaApp {
     /// wiring and headless tests; mirrors [`Self::set_directory`]).
     pub fn directory(&self) -> &str {
         &self.directory
+    }
+
+    /// UX-SLICE-2 (F2): install a deterministic folder-picker seam for headless
+    /// tests (a real `rfd` dialog needs a display server). Production leaves
+    /// this unset and [`Self::open_folder`] opens the native dialog.
+    pub fn set_folder_picker(&mut self, picker: impl FnMut() -> Option<PathBuf> + 'static) {
+        self.folder_picker = Some(Box::new(picker));
+    }
+
+    /// UX-SLICE-2 (F2): the truthful "Open Folder" action — pick a directory
+    /// through the native dialog (or the injected test seam) and re-list it.
+    /// A cancelled dialog is a deliberate no-op: the previous directory and its
+    /// state stay untouched, and no status/error is fabricated.
+    pub fn open_folder(&mut self) {
+        let picked = match self.folder_picker.as_mut() {
+            Some(picker) => picker(),
+            None => rfd::FileDialog::new().pick_folder(),
+        };
+        let Some(folder) = picked else {
+            trace!("GUI interaction: open folder cancelled");
+            return;
+        };
+        info!("open folder: {}", folder.display());
+        self.set_directory(folder.display().to_string());
     }
 
     /// Recursive aggregation (F-100 Library): images of the chosen folder
@@ -3144,6 +3182,27 @@ impl LuminaApp {
     }
     pub fn render_key(&self) -> Option<&RenderKey> {
         self.render_key.as_ref()
+    }
+
+    /// UX-SLICE-2 (F1): whether the header render hash is meaningful right now.
+    /// The Library grid is RAW-only, so a loaded non-RAW image has no Library
+    /// representation; a hash above the "No images" empty state would
+    /// contradict it. The hash is therefore hidden in Library while no RAW
+    /// entry is listed; Develop/Export and a non-empty grid keep it. The
+    /// underlying `render_key` is never cleared — this is a pure display gate
+    /// (the loaded render stays valid).
+    pub fn render_hash_visible(&self) -> bool {
+        if self.render_key.is_none() {
+            return false;
+        }
+        !(self.active_module == Module::Library && !self.library_has_raw_entries())
+    }
+
+    /// Allocation-free "the Library RAW grid is empty" predicate (F1 gate).
+    /// Keys on the RAW listing, not the transient `\` filter: "0 Bilder" is
+    /// defined by the listing, matching the empty state's subject.
+    fn library_has_raw_entries(&self) -> bool {
+        self.entries.iter().any(|entry| is_raw_name(&entry.name))
     }
 
     /// PERF-GUI-1: number of cached base-stage frames (diagnostics/tests).
@@ -15915,6 +15974,23 @@ impl LuminaApp {
         });
     }
 
+    /// UX-SLICE-2 (F3): the single Library empty state, shared by Grid, Loupe,
+    /// Compare and Survey. Deterministic painted icon, honest body text and
+    /// the F2 "Open Folder" CTA (native folder picker via [`Self::open_folder`]).
+    fn draw_library_empty_state(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(48.0);
+            paint_library_empty_icon(ui);
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(Str::LibraryEmptyTitle.t()).heading());
+            ui.label(Str::ReadyForImage.t());
+            ui.add_space(8.0);
+            if ui.button(Str::OpenFolder.t()).clicked() {
+                self.open_folder();
+            }
+        });
+    }
+
     /// Lightroom-like Library grid view (center): RAW files of the current
     /// directory rendered through the shared ThumbnailManager pipeline (no
     /// duplicate generation). Double-click opens a file and switches to
@@ -15986,6 +16062,14 @@ impl LuminaApp {
         // order narrowed by the active collection view and the `\` query),
         // so painting and keyboard navigation always see the same list.
         let raw_indices: Vec<usize> = self.filtered_library_order();
+        // UX-SLICE-2 (F3): one shared empty state for every Library view —
+        // Grid, Loupe, Compare and Survey. The check runs before the view
+        // branch so the non-grid views can no longer render a second,
+        // divergent empty text (`Heading + ReadyForImage` vs. icon + CTA).
+        if raw_indices.is_empty() {
+            self.draw_library_empty_state(ui);
+            return;
+        }
         // G-09: non-grid views branch here; the grid body below (and its
         // kittest goldens) stays pixel-identical for `LibraryView::Grid`.
         match self.library_view {
@@ -16004,25 +16088,6 @@ impl LuminaApp {
                 return;
             }
             LibraryView::Grid => {}
-        }
-        if raw_indices.is_empty() {
-            // UX-SLICE-1 (P5): centered empty state with a deterministic painted
-            // icon, honest body text and a CTA. The CTA reuses the existing
-            // folder-open path (`set_directory` re-lists the entered folder);
-            // there is deliberately no new native folder-picker dialog scope.
-            ui.vertical_centered(|ui| {
-                ui.add_space(48.0);
-                paint_library_empty_icon(ui);
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(Str::LibraryEmptyTitle.t()).heading());
-                ui.label(Str::ReadyForImage.t());
-                ui.add_space(8.0);
-                if ui.button(Str::OpenFolder.t()).clicked() {
-                    let directory = self.directory.clone();
-                    self.set_directory(directory);
-                }
-            });
-            return;
         }
         let thumb = self.library_thumb_size;
         const CELL_INNER_PAD: f32 = 8.0;
@@ -16184,11 +16249,8 @@ impl LuminaApp {
         ui: &mut egui::Ui,
         raw_indices: &[usize],
     ) {
-        if raw_indices.is_empty() {
-            ui.heading(Str::Library.t());
-            ui.label(Str::ReadyForImage.t());
-            return;
-        }
+        // UX-SLICE-2 (F3): the empty listing is handled once, before the view
+        // branch in `draw_library_grid` — no per-view duplicate empty state.
         let active = raw_indices
             .iter()
             .find(|&&index| self.entries[index].path.display().to_string() == self.path)
@@ -16243,11 +16305,8 @@ impl LuminaApp {
         ui: &mut egui::Ui,
         raw_indices: &[usize],
     ) {
-        if raw_indices.is_empty() {
-            ui.heading(Str::Library.t());
-            ui.label(Str::ReadyForImage.t());
-            return;
-        }
+        // UX-SLICE-2 (F3): the empty listing is handled once, before the view
+        // branch in `draw_library_grid` — no per-view duplicate empty state.
         let active = raw_indices
             .iter()
             .find(|&&index| self.entries[index].path.display().to_string() == self.path)
@@ -16306,11 +16365,8 @@ impl LuminaApp {
         ui: &mut egui::Ui,
         raw_indices: &[usize],
     ) {
-        if raw_indices.is_empty() {
-            ui.heading(Str::Library.t());
-            ui.label(Str::ReadyForImage.t());
-            return;
-        }
+        // UX-SLICE-2 (F3): the empty listing is handled once, before the view
+        // branch in `draw_library_grid` — no per-view duplicate empty state.
         let selected: Vec<usize> = raw_indices
             .iter()
             .copied()
@@ -16750,8 +16806,8 @@ impl LuminaApp {
         // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
         let raw_indices: Vec<usize> = self.raw_entry_indices();
         let count = raw_indices.len();
-        // UX-SLICE-1 (UXG-09): one shared strip component for Library /
-        // Develop / Export with an "n of N" counter in the header. `n` is the
+        // UX-SLICE-1 (UXG-09, mapper P1): one shared strip component for
+        // Library / Develop / Export with an "n of N" counter in the header. `n` is the
         // number of strip entries currently selected; thumbnails come from the
         // same `ThumbnailManager` the Library grid uses.
         ui.horizontal(|ui| {
@@ -17362,7 +17418,6 @@ impl LuminaApp {
         ui.separator();
         self.draw_navigator_viewport(ctx, ui);
         ui.separator();
-        ui.label(Str::FilmstripHint.t());
         // RAW-only: mirror the filmstrip filter so the left navigator rail shows
         // only RAW entries (jpg/png/webp are excluded from the Develop preview).
         // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
@@ -17370,6 +17425,14 @@ impl LuminaApp {
         // entry, only the visible window is laid out and scheduled.
         let raw_indices: Vec<usize> = self.raw_entry_indices();
         let count = raw_indices.len();
+        // UX-SLICE-2 (F3): honest empty hint — the same text as the filmstrip
+        // ("No images in this folder") instead of "Click a thumbnail to open it"
+        // when the rail carries no entries.
+        ui.label(if count == 0 {
+            Str::FilmstripEmpty.t()
+        } else {
+            Str::FilmstripHint.t()
+        });
         const CELL_W: f32 = 120.0;
         const CELL_H: f32 = 90.0;
         let active_path = self.path.clone();
@@ -17697,7 +17760,9 @@ const FOLDER_BADGE_MAX_CHARS: usize = 17;
 /// chip melted into the image ("dark on dark") while the white 11px monospace
 /// text needs AA contrast — pinned by `library_badge_contrast_meets_aa`.
 /// Shared by the path badge and the rating badge (same chip style).
-const LIBRARY_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(0x42, 0x42, 0x42);
+/// UX-SLICE-2 (F4): public so the rated-badge pixel golden asserts against the
+/// exact painted fill instead of a duplicated literal.
+pub const LIBRARY_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(0x42, 0x42, 0x42);
 
 /// UX-SLICE-1 (UXG-07): color-coded render-state badges at the preview edge
 /// (the hash text lives in the app status line, drawn in `LuminaApp`'s `ui`).
@@ -18443,16 +18508,20 @@ impl eframe::App for LuminaApp {
                 ui.heading("Lumina");
                 ui.separator();
                 ui.label(&self.status);
-                // UX-SLICE-1 (UXG-07): the render hash moved from the canvas
-                // edge into the app status line, rendered small.
-                if let Some(key) = &self.render_key {
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new(
-                            Str::RenderStateCurrent.format_arg(&key.digest()[..12]),
-                        )
-                        .small(),
-                    );
+                // UX-SLICE-1 (UXG-07, mapper P2): the render hash moved from the
+                // canvas edge into the app status line, rendered small.
+                // UX-SLICE-2 (F1): the hash is gated by `render_hash_visible`
+                // so it never contradicts the Library empty state.
+                if self.render_hash_visible() {
+                    if let Some(key) = &self.render_key {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(
+                                Str::RenderStateCurrent.format_arg(&key.digest()[..12]),
+                            )
+                            .small(),
+                        );
+                    }
                 }
             });
             if let Some(error) = &self.error {
@@ -18523,7 +18592,7 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| match self.active_module {
                     Module::Develop => self.draw_develop_panel(ui),
                     Module::Library => {
-                        // UX-SLICE-1 (Layout-Bruch): a vertical `ScrollArea`
+                        // UX-SLICE-1 (Layout-Bruch, mapper P4): a vertical `ScrollArea`
                         // shrinks horizontally to its content by default, so on
                         // the first frame the resizable panel frame anchored to
                         // the wrong edge and left a transparent/white strip to
@@ -20665,6 +20734,44 @@ mod tests {
         app.render().unwrap();
         assert!(app.render_key().is_some());
         assert_eq!(app.tone_analysis().unwrap().sample_count, 2);
+    }
+
+    /// UX-SLICE-2 (F1): the header hash gate. With a current render it is
+    /// hidden only in the Library module while the RAW listing is empty; a
+    /// listed RAW entry or any other module keeps it. `render_key` itself is
+    /// never cleared by the gate.
+    #[test]
+    fn render_hash_gate_hides_hash_in_empty_library_only() {
+        let mut app = new_app();
+        assert!(!app.render_hash_visible(), "no render implies no hash");
+        app.load_bytes(png(), "test.png").unwrap();
+        assert!(app.render_key().is_some(), "load renders synchronously");
+        assert!(
+            app.render_hash_visible(),
+            "Develop (default) keeps the hash"
+        );
+        // Library with an empty listing: the gate hides the hash.
+        let empty = tempfile::tempdir().unwrap();
+        app.active_module = Module::Library;
+        app.set_directory(empty.path().display().to_string());
+        assert!(app.entries().is_empty());
+        assert!(
+            !app.render_hash_visible(),
+            "an empty RAW listing must hide the hash"
+        );
+        // Listing a RAW entry makes the grid non-empty: the hash returns.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("img.arw"), b"lumina-raw-fixture").unwrap();
+        app.set_directory(dir.path().display().to_string());
+        assert!(!app.entries().is_empty());
+        assert!(
+            app.render_hash_visible(),
+            "a listed RAW entry keeps the hash visible"
+        );
+        assert!(
+            app.render_key().is_some(),
+            "the gate must never clear the underlying render_key"
+        );
     }
 
     // ---- PERF-GUI-1: staged base cache (hit/miss, stepwise invalidation,
