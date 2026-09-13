@@ -79,7 +79,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-16 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 12,
+17 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 13,
 Block B: 1, Block C: 3 (Stand 2026-09-13).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
@@ -124,6 +124,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | KITTEST-PARITY-PATHS-1 | G-10 | Pfad-Parity-Framework |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
+| 1.0 | META-COPYPASTE-1 | G-15 | Meta-Copy/Paste + CLI-Parität |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -157,7 +158,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Stand: Stufe 1 (Ton) + Stufe 2 (Detail) + Red-Eye + Gate-Vollständigkeit verifiziert BESTANDEN. Ziel 2026-09-13 (User-Entscheid): KEIN CPU-only-Zweig — jede gültige Rezept-Konfiguration läuft auf GPU (CPU bleibt Referenz + No-Adapter-Fallback, kein GPU-only). Rest: geometry/lens_correction/perspective/lens_blur/spot_removals/generative_edit/Camera-WB-GPU-Freigabe (Cross-Crate-Welle CLI/MCP)/SourceAction-Slots/volle Nested-Range-Validierung am GPU-Eintritt. Nebenbefunde: CLI-Test stale Vibrance-Assertion (rot seit Stufe 1), Perf-Pooling. Lebendes Inventar: `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`) — jede Reason-Klasse konstruiert + geflaggt. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
+- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Stand: Stufe 1 (Ton) + Stufe 2 (Detail) + Red-Eye + Spot-Heal + SourceAction-Batching + volle Eintritts-Validierung verifiziert BESTANDEN. Ziel 2026-09-13 (User-Entscheid): KEIN CPU-only-Zweig — JEDE gültige Rezept-Konfiguration läuft auf GPU (CPU bleibt Referenz + No-Adapter-Fallback, kein GPU-only). NOCH OFFEN (Final-Welle läuft/folgt): geometry/lens_correction/perspective/lens_blur/generative_edit/Camera-WB-GPU-Freigabe (Cross-Crate-Welle CLI/MCP). Nebenbefunde: CLI-Test stale Vibrance-Assertion (Fix verifiziert, Commit folgt), Perf-Pooling. Lebendes Inventar: `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`) — jede Reason-Klasse konstruiert + geflaggt. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
 - [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
@@ -168,6 +169,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] CROP-MAXRECT-1 (Release: 1.0)** Default-Crop ist das Maximum-Rectangle mit Constrain-to-Image (User-Entscheid 2026-09-12): Nach Lens-/Perspektiv-Korrektur keine transparenten Ränder ohne expliziten Crop — der Default-Crop umschließt maximalen Inhalt. Abnahme: Core-Geometrie + CLI/GUI-headless mit Golden (transparenter Keil → Default-Crop enthält nur Inhalt), kein stiller Beschnitt jenseits der Regel. Crates: `lumina-core`, `lumina-gui`.
 - [ ] **[PRIO: mittel] KITTEST-PARITY-PATHS-1 (Release: 1.0)** Pfad-Parity-Framework (User-Input manueller Test): gleiche Szene über CPU- und GPU-Pfad rendern, beide Frames snapshotten, Parität per Toleranz assertieren (F-043-Maßstab) PLUS absolute Geometrie-Checks (Preview füllt Fit-Rect, Overlays auf Foto — Parität allein fängt beidseitig gleiche Fehler nicht). Abnahme: Matrix-Test grün auf Metal, SKIP-Verdict ohne Adapter (nie still grün), DoD §6. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
+- [ ] **[PRIO: mittel] META-COPYPASTE-1 (Release: 1.0)** Metadaten Copy/Paste + CLI-Parität (User-Entscheid 2026-09-13). Stand: GUI-Session-Clipboard + Copy/Paste-Buttons via KITTEST-COVERAGE-STATES-1 (Verifizierung ausstehend), Presets via G15-IPTC (SOLL `feature/product/iptc-metadata.md` §5). Rest: CLI `meta copy`/`meta paste` (Clipboard-Datei, Paste über Commit-Pfad mit `origin`), SOLL-Doku `iptc-metadata.md` §10 (Session-Clipboard, nicht persistiert, Sidecar-first) + F-100-Fehler-Dialog-Abgrenzung (Dialog nur explizite Aktionen, Hintergrundfehler Banner+Log). Abnahme: CLI-E2E + GUI-headless + Golden, kein stiller Fallback. Crates: `lumina-cli`, `lumina-gui` (GUI-Anteil erst nach KITTEST-Verifizierung).
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig

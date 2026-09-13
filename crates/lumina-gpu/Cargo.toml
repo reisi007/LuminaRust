@@ -15,6 +15,11 @@ lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
 # Logging for the bootstrap stubs (no-op unless a logger is installed).
 log = "0.4"
+# Runtime validation of legacy `extras["spot_removals"]` JSON geometry at the
+# GPU entry (validate.rs), parsed with the same `serde_json::Value` type the
+# sidecar recipe stores it in. Already a `lumina-sidecar` dependency resolved in
+# the workspace lockfile.
+serde_json = "1"
 # GPU backend dependencies. Optional + feature-gated so a
 # `--no-default-features` build stays dependency-light for headless CI.
 wgpu = { version = "30", optional = true }
@@ -34,7 +39,3 @@ gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 # of the CPU and GPU render outputs. Already resolved in the workspace lockfile
 # (consumed by lumina-core/cli/gui), so this adds no new transitive dependency.
 blake3 = "1"
-# Used by the parity/routing tests to build legacy `extras["spot_removals"]`
-# values. Already a `lumina-sidecar` dependency resolved in the workspace
-# lockfile, so this adds no new transitive dependency.
-serde_json = "1"

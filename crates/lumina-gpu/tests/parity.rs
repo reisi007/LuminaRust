@@ -23,7 +23,7 @@
 //! failed (matching `golden.rs`); the validator assertions still run.
 #![cfg(feature = "gpu")]
 
-use lumina_core::{render_frame, ImageFrame, RenderContext};
+use lumina_core::{render_frame, ImageFrame, MaskPlane, RenderContext, SourceActionArtifact};
 use lumina_gpu::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
     GpuContext, MAX_SOURCE_ACTIONS,
@@ -584,7 +584,126 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
+        (
+            // GPU-RENDER-PARITY-1 follow-up end-state probe: every GPU-eligible
+            // stage class at once — tone + curves/HSL/Point Color/Color Grading
+            // + Presence + Noise Reduction/Sharpening + Red-Eye + Effects +
+            // legacy spot-heal geometry. The gate must stay empty; the stacked
+            // pixel parity is gated below.
+            "fully_stacked_eligible",
+            fully_stacked_eligible_recipe(),
+        ),
     ]
+}
+
+/// GPU-RENDER-PARITY-1 follow-up end-state probe: a single recipe that sets
+/// every GPU-eligible stage class. Used to assert the routing gate is empty and
+/// that the accumulated parity stays within the documented tolerance.
+fn fully_stacked_eligible_recipe() -> EditRecipe {
+    let mut recipe = EditRecipe {
+        adjustments: BTreeMap::from([
+            ("exposure".into(), 0.3),
+            ("contrast".into(), 0.1),
+            ("highlights".into(), -0.2),
+            ("shadows".into(), 0.15),
+            ("whites".into(), 0.1),
+            ("blacks".into(), -0.1),
+            ("wb_temperature".into(), 5600.0),
+            ("wb_tint".into(), 0.05),
+            ("vibrance".into(), 0.3),
+            ("saturation".into(), -0.1),
+        ]),
+        curves: Some(Curves {
+            version: 1,
+            master: curve(&[(0.0, 0.0), (0.4, 0.35), (0.7, 0.78), (1.0, 1.0)]),
+            channels: CurveChannels {
+                red: Some(curve(&[(0.0, 0.0), (0.5, 0.55), (1.0, 1.0)])),
+                green: None,
+                blue: Some(curve(&[(0.0, 0.0), (0.5, 0.48), (1.0, 1.0)])),
+            },
+        }),
+        hsl: Some(HslAdjustments {
+            version: 1,
+            blue: Some(hsl(0.15, 0.1, 0.0)),
+            orange: Some(hsl(-0.1, 0.05, 0.0)),
+            ..Default::default()
+        }),
+        point_color: Some(PointColor {
+            version: 1,
+            entries: vec![entry("pc-1", 200.0, 70.0, 0.2, -0.1, 0.05)],
+        }),
+        color_grading: Some(ColorGrading {
+            version: 1,
+            shadows: range(210.0, 0.2, -0.05),
+            midtones: ColorGradingRange::neutral(),
+            highlights: range(50.0, 0.15, 0.05),
+            balance: 0.1,
+            blending: 0.55,
+        }),
+        presence: Some(Presence {
+            version: 1,
+            texture: 0.3,
+            clarity: 0.2,
+            dehaze: 0.2,
+        }),
+        noise_reduction: Some(NoiseReduction {
+            version: 1,
+            luminance: 0.3,
+            color: 0.2,
+        }),
+        sharpening: Some(Sharpening {
+            version: 1,
+            amount: 0.8,
+            radius: 1.2,
+            detail: 0.5,
+            masking: 0.3,
+        }),
+        red_eye: Some(RedEyeCorrection {
+            version: 1,
+            regions: vec![RedEyeRegion {
+                id: "re-1".into(),
+                x: 0.45,
+                y: 0.5,
+                radius: 0.2,
+                desaturate: 0.5,
+                darken: 0.2,
+            }],
+        }),
+        effects: Some(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: 0.25,
+                midpoint: 0.5,
+                roundness: 1.0,
+                feather: 0.5,
+            }),
+            grain: Some(Grain {
+                version: 1,
+                amount: 0.2,
+                size: 0.4,
+                roughness: 0.5,
+                seed: 2026,
+            }),
+        }),
+        ..Default::default()
+    };
+    recipe.extras.insert(
+        "spot_removals".into(),
+        serde_json::json!([{
+            "id": "spot-1",
+            "version": 1,
+            "mode": "heuristic",
+            "center_x": 0.4,
+            "center_y": 0.45,
+            "radius": 7.0,
+            "feather": 0.5,
+            "offset_dx": 0.25,
+            "offset_dy": 0.1,
+            "opacity": 0.9,
+            "status": "valid"
+        }]),
+    );
+    recipe
 }
 
 /// The strongest CPU↔GPU equivalence **measured** for each recipe on this
@@ -639,6 +758,10 @@ fn equivalence_for(name: &str) -> Equivalence {
         // Stage-2 follow-up: maximum-radius sharpening is the same kernel as
         // `sharpening_masked`, just wider (still one rounding-tie code).
         "sharpening_radius_max_masked" => Equivalence::Bounded(1),
+        // GPU-RENDER-PARITY-1 follow-up end-state: every eligible stage class
+        // stacked; the per-stage FMA/rounding residuals accumulate on the noise
+        // frame. Bound set from the measured MAX frames run (see test output).
+        "fully_stacked_eligible" => Equivalence::Bounded(4),
         other => panic!("no measured equivalence bound declared for recipe `{other}`"),
     }
 }
@@ -994,7 +1117,7 @@ fn sharpening_radius_out_of_schema_is_rejected_not_clamped() {
         .render_with_gpu(&frame, &recipe)
         .expect_err("GPU must reject the out-of-schema radius");
     assert!(
-        format!("{err}").contains("outside the schema range"),
+        format!("{err}").contains("sharpening.radius"),
         "unexpected error: {err}"
     );
     ctx.ensure_vram(16, 16).expect("vram state");
@@ -1002,7 +1125,7 @@ fn sharpening_radius_out_of_schema_is_rejected_not_clamped() {
         .render_to_vram(&frame, &recipe)
         .expect_err("VRAM path must reject the out-of-schema radius");
     assert!(
-        format!("{err}").contains("outside the schema range"),
+        format!("{err}").contains("sharpening.radius"),
         "unexpected error: {err}"
     );
 }
@@ -1353,26 +1476,23 @@ fn generative_expand_recipe() -> EditRecipe {
     }
 }
 
-/// GPU-RENDER-PARITY-1 stage 3 (gate completeness): typed `spot_removals`,
-/// legacy `extras["spot_removals"]`, `generative_edit` and an **invalid**
-/// red-eye correction are applied/validated by the CPU reference but not
-/// implemented (or not safely implementable) on the GPU, so every one must be
-/// reported as CPU-only. A valid red-eye correction is now GPU-rendered and
-/// therefore must NOT be flagged (asserted below and by the parity harness);
-/// this test asserts the gate verdict only, and
-/// `cpu_only_recipe_stages_render_through_full_cpu_reference` proves the
-/// fallback pixels.
+/// GPU-RENDER-PARITY-1 follow-up (gate completeness): `generative_edit` and an
+/// **invalid** red-eye correction are the remaining recipe stages that are
+/// applied/validated by the CPU reference but not implemented on the GPU, so
+/// every one must be reported as CPU-only. A valid red-eye correction and the
+/// legacy `extras["spot_removals"]` heal geometry are now GPU-rendered and
+/// therefore must NOT be flagged; a typed geometry-free mirror shadow is
+/// tolerated exactly like the CPU oracle when the extras geometry is present,
+/// and an isolated typed entry is a **hard error on both backends** (asserted by
+/// `typed_spot_without_extras_is_a_hard_error_on_both_backends`) instead of a
+/// routing reason.
 #[test]
 fn cpu_only_recipe_stages_are_gated() {
-    let typed_spot = typed_spot_recipe();
-    let legacy_spot = legacy_spot_recipe();
     let generative = generative_expand_recipe();
     let invalid_red_eye = invalid_red_eye_recipe();
 
     let cases: Vec<(&str, &EditRecipe)> = vec![
         ("red_eye", &invalid_red_eye),
-        ("spot_removals", &typed_spot),
-        ("spot_removals (legacy extras)", &legacy_spot),
         ("generative_edit", &generative),
     ];
 
@@ -1384,32 +1504,87 @@ fn cpu_only_recipe_stages_are_gated() {
         );
     }
 
-    // A valid red-eye correction is renderable on the GPU.
+    // GPU-eligible now: a valid red-eye correction, legacy spot geometry, and a
+    // geometry-free typed mirror shadow paired with that extras geometry.
     assert!(
         unsupported_gpu_stages(&red_eye_recipe()).is_empty(),
         "a valid red-eye correction must be GPU-eligible"
     );
+    assert!(
+        unsupported_gpu_stages(&legacy_spot_recipe()).is_empty(),
+        "legacy spot geometry must be GPU-eligible"
+    );
+    let mut shadow = legacy_spot_recipe();
+    shadow.spot_removals = typed_spot_recipe().spot_removals;
+    assert!(
+        unsupported_gpu_stages(&shadow).is_empty(),
+        "a geometry-free typed shadow with extras geometry must be GPU-eligible"
+    );
 
-    // The full recipe (every CPU-only stage at once) still reports all of them.
+    // The compound recipe (every remaining CPU-only stage at once) still reports
+    // both of them.
     let all = EditRecipe {
         red_eye: invalid_red_eye.red_eye.clone(),
-        spot_removals: typed_spot.spot_removals.clone(),
         generative_edit: generative.generative_edit.clone(),
-        extras: legacy_spot.extras.clone(),
         ..Default::default()
     };
     let reasons = unsupported_gpu_stages(&all);
-    for expected in [
-        "red_eye",
-        "spot_removals",
-        "spot_removals (legacy extras)",
-        "generative_edit",
-    ] {
+    for expected in ["red_eye", "generative_edit"] {
         assert!(
             reasons.iter().any(|r| r.contains(expected)),
             "compound recipe must keep `{expected}`: {reasons:?}"
         );
     }
+}
+
+/// GPU-RENDER-PARITY-1 follow-up: a typed `spot_removals` entry without the
+/// extras heal geometry is unrenderable on both backends. The GPU entry must
+/// reject it loudly (not silently drop the spot, and not route to the CPU to
+/// hide the divergence), and it must not appear as a GPU stage gap.
+#[test]
+fn typed_spot_without_extras_is_a_hard_error_on_both_backends() {
+    let recipe = typed_spot_recipe();
+    let frame = gradient_frame(16, 16);
+    // Not a routing reason: the GPU validates and errors itself.
+    assert!(
+        unsupported_gpu_stages(&recipe).is_empty(),
+        "an isolated typed spot is a validation error, not a stage gap"
+    );
+    // The CPU reference rejects it loudly.
+    assert!(
+        render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .is_err(),
+        "isolated typed spot must be a hard CPU error"
+    );
+
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped typed-spot error check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let err = ctx
+        .render_with_gpu(&frame, &recipe)
+        .expect_err("GPU must reject an isolated typed spot");
+    assert!(
+        format!("{err}").contains("spot_heal"),
+        "unexpected error: {err}"
+    );
 }
 
 /// An invalid red-eye correction (out-of-range desaturation) that the CPU
@@ -1442,11 +1617,12 @@ fn red_frame(width: u32, height: u32) -> ImageFrame {
 }
 
 /// Blocker-1 resolution: `render_with_gpu`'s fallback is the **full**
-/// `lumina_core::render_frame` chain. For CPU-routed, reference-renderable
-/// recipes the fallback pixels must be byte-identical to `render_frame`
-/// (including a generative canvas that *changes the frame dimensions*); for a
-/// recipe the reference rejects (isolated typed spot), the fallback must reject
-/// it too — never silently drop it.
+/// `lumina_core::render_frame` chain. `generative_edit` is still CPU-routed and
+/// its fallback pixels must be byte-identical to `render_frame` (including a
+/// generative canvas that *changes the frame dimensions*); the legacy spot
+/// geometry is now GPU-rendered and must match the oracle byte-for-byte through
+/// the GPU spot pass. For a recipe the reference rejects (isolated typed spot),
+/// the GPU entry must reject it too — never silently drop it.
 #[test]
 fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
     let ctx = match GpuContext::new() {
@@ -1463,7 +1639,9 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
 
     let frame = gradient_frame(48, 48);
 
-    // Renderable CPU-routed recipes: fallback == full render_frame oracle.
+    // Renderable recipes: legacy spots go through the GPU spot pass, the
+    // generative canvas through the full CPU fallback — both must equal the
+    // full `render_frame` oracle (dimensions and bytes).
     let renderable: Vec<(&str, &ImageFrame, EditRecipe)> = vec![
         ("legacy_spot", &frame, legacy_spot_recipe()),
         ("generative_expand", &frame, generative_expand_recipe()),
@@ -1642,16 +1820,20 @@ fn source_actions(count: usize) -> EditRecipe {
 /// - `perspective` — `recipe.perspective = Some(..)`.
 /// - `lens_blur` — `lens_blur.enabled && blur_amount != 0`.
 /// - `source_actions` — non-empty actions and `source_actions_bound = false`.
-/// - `exceed the GPU stage slot limit` — bound actions with `len > MAX_SOURCE_ACTIONS`.
 /// - `camera_white_balance (As-Shot context)` — context WB `Some`.
 /// - `red_eye` — an **invalid** `recipe.red_eye` (out-of-range/NaN); a valid
 ///   correction is GPU-rendered.
-/// - `spot_removals` — typed `recipe.spot_removals` non-empty.
-/// - `spot_removals (legacy extras)` — non-empty `extras["spot_removals"]`.
-/// - `generative_edit` — `recipe.generative_edit = Some(..)`.
+/// - `generative_edit` — `recipe.generative_edit = Some(..)` (its sequential
+///   BFS fill is not yet ported).
 /// - `adjustment \`clarity_v2\` not implemented on GPU` — a key outside
 ///   [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] with no neutral value (all schema keys
 ///   are now GPU-supported, so this is the unknown-key class).
+///
+/// GPU-RENDER-PARITY-1 follow-up (items 5 + 7): legacy spot geometry, a typed
+/// geometry-free mirror shadow, and **any number** of bound source actions
+/// (batched in groups of [`MAX_SOURCE_ACTIONS`]) are GPU-eligible; their parity
+/// is asserted by the oracle harness and `source_action_batch` tests, not by a
+/// gate reason.
 #[test]
 fn cpu_routing_inventory_is_complete() {
     // GPU-RENDER-PARITY-1 stage 2 detail stages: implemented, so these must NOT
@@ -1786,22 +1968,10 @@ fn cpu_routing_inventory_is_complete() {
             unsupported_gpu_stages_for(&source_actions(1), false),
         ),
         (
-            "exceed the GPU stage slot limit",
-            unsupported_gpu_stages_for(&source_actions(MAX_SOURCE_ACTIONS + 1), true),
-        ),
-        (
             "camera_white_balance (As-Shot context)",
             unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb)),
         ),
         ("red_eye", unsupported_gpu_stages(&invalid_red_eye_recipe())),
-        (
-            "spot_removals",
-            unsupported_gpu_stages(&typed_spot_recipe()),
-        ),
-        (
-            "spot_removals (legacy extras)",
-            unsupported_gpu_stages(&legacy_spot_recipe()),
-        ),
         (
             "generative_edit",
             unsupported_gpu_stages(&generative_expand_recipe()),
@@ -1818,6 +1988,24 @@ fn cpu_routing_inventory_is_complete() {
             "inventory entry `{expected}` is no longer emitted by the gate: {reasons:?}"
         );
     }
+
+    // GPU-RENDER-PARITY-1 follow-up: every class that used to be flagged here is
+    // now GPU-eligible for valid recipes — legacy spot geometry, a typed
+    // geometry-free mirror shadow, and any number of bound source actions.
+    assert!(
+        unsupported_gpu_stages(&legacy_spot_recipe()).is_empty(),
+        "legacy spot geometry is GPU-rendered"
+    );
+    let mut shadow = legacy_spot_recipe();
+    shadow.spot_removals = typed_spot_recipe().spot_removals;
+    assert!(
+        unsupported_gpu_stages(&shadow).is_empty(),
+        "a typed shadow with extras geometry is GPU-eligible"
+    );
+    assert!(
+        unsupported_gpu_stages_for(&source_actions(MAX_SOURCE_ACTIONS + 3), true).is_empty(),
+        "source actions above the per-pass slot count are batched on the GPU"
+    );
 
     // Neutral/disabled configurations must stay GPU-eligible (R2-GPU-05-style
     // neutrality preserved) — these are the examples the inventory excludes.
@@ -1843,4 +2031,203 @@ fn cpu_routing_inventory_is_complete() {
     assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
     assert!(unsupported_gpu_stages_for(&source_actions(1), true).is_empty());
     assert!(unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// GPU-RENDER-PARITY-1 follow-up: source-action batching (item 7) and the
+// legacy spot-heal pass (item 5).
+// ---------------------------------------------------------------------------
+
+/// Build `count` full-frame source-action artifacts. Each artifact replaces a
+/// distinct overlapping rectangle (region coverage `u16::MAX`) with a solid
+/// colour; the overlap makes the batch order observable.
+fn source_action_artifacts(width: u32, height: u32, count: usize) -> Vec<SourceActionArtifact> {
+    (0..count)
+        .map(|index| {
+            let mut values = vec![0u16; (width * height) as usize];
+            let x0 = (index as u32 * 2) % width.max(1);
+            let y0 = (index as u32 * 3) % height.max(1);
+            for y in y0..(y0 + height / 2).min(height) {
+                for x in x0..(x0 + width / 2).min(width) {
+                    values[(y * width + x) as usize] = u16::MAX;
+                }
+            }
+            let replacement = [
+                (index as u8).wrapping_mul(37),
+                (index as u8).wrapping_mul(53),
+                (index as u8).wrapping_mul(97),
+                255u8,
+            ]
+            .repeat((width * height) as usize);
+            SourceActionArtifact {
+                region: MaskPlane {
+                    width,
+                    height,
+                    values,
+                },
+                replacement: ImageFrame::new(width, height, replacement).expect("replacement"),
+            }
+        })
+        .collect()
+}
+
+/// Item 7: more artifacts than the per-pass slot count must composite on the
+/// GPU in batches and match the CPU oracle byte-for-byte (the previous gate
+/// CPU-routed these).
+#[test]
+fn source_action_batch_matches_oracle() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped source-action batch check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    const W: u32 = 32;
+    const H: u32 = 32;
+    let frame = gradient_frame(W, H);
+    let count = MAX_SOURCE_ACTIONS + 3;
+    let artifacts = source_action_artifacts(W, H, count);
+    let recipe = source_actions(count);
+    assert!(
+        unsupported_gpu_stages_for(&recipe, true).is_empty(),
+        "batched source actions must be GPU-eligible"
+    );
+
+    let mut ctx = ctx;
+    ctx.set_source_action_artifacts(&artifacts)
+        .expect("bind artifacts");
+
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &artifacts,
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    let gpu = ctx
+        .render_with_gpu(&frame, &recipe)
+        .expect("GPU render with batched source actions");
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("source_action_batch[{count}]: maxAbsDiff={diff}");
+    assert_eq!(
+        diff, 0,
+        "batched source-action compositing must match the CPU oracle"
+    );
+}
+
+/// Item 5: legacy spot-heal geometry rendered by the GPU spot pass must match
+/// `apply_spot_heals` byte-for-byte, including feathered and overlapping spots.
+#[test]
+fn legacy_spot_heal_matches_cpu_oracle() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped spot-heal check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let mut recipe = EditRecipe::default();
+    recipe.extras.insert(
+        "spot_removals".into(),
+        serde_json::json!([
+            {
+                "id": "spot-1",
+                "version": 1,
+                "mode": "heuristic",
+                "center_x": 0.3,
+                "center_y": 0.4,
+                "radius": 6.0,
+                "feather": 0.5,
+                "offset_dx": 0.3,
+                "offset_dy": 0.1,
+                "opacity": 1.0,
+                "status": "valid"
+            },
+            {
+                "id": "spot-2",
+                "version": 1,
+                "mode": "heuristic",
+                "center_x": 0.35,
+                "center_y": 0.45,
+                "radius": 9.0,
+                "feather": 0.0,
+                "offset_dx": -0.2,
+                "offset_dy": 0.25,
+                "opacity": 0.6,
+                "status": "valid"
+            }
+        ]),
+    );
+    assert!(unsupported_gpu_stages(&recipe).is_empty());
+
+    let frames: Vec<(&str, ImageFrame)> = vec![
+        ("gradient_48x48", gradient_frame(48, 48)),
+        ("noise_48x48", noise_frame(48, 48, 0x51C0_FFEE)),
+    ];
+    let mut failures = Vec::new();
+    for (name, frame) in &frames {
+        let cpu = render_frame(
+            frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .expect("CPU oracle render")
+        .frame;
+        let gpu = ctx
+            .render_with_gpu(frame, &recipe)
+            .unwrap_or_else(|error| panic!("{name}: GPU spot render: {error}"));
+        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+        eprintln!("spot_heal[{name}]: maxAbsDiff={diff}");
+        if diff != 0 {
+            failures.push(format!("{name}: maxAbsDiff={diff}"));
+        }
+    }
+
+    // The readback-free VRAM path shares the spot-heal pass; assert it there too.
+    let frame = gradient_frame(48, 48);
+    ctx.ensure_vram(48, 48).expect("vram state");
+    ctx.render_to_vram(&frame, &recipe).expect("vram render");
+    let gpu = ctx.readback_output_frame().expect("vram readback");
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("spot_heal[vram_48x48]: maxAbsDiff={diff}");
+    assert_eq!(diff, 0, "VRAM spot-heal pass must match the CPU oracle");
+
+    assert!(
+        failures.is_empty(),
+        "spot-heal GPU pass diverged from the CPU oracle: {failures:?}"
+    );
 }

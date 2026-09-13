@@ -40,9 +40,9 @@
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
 //! lists any recipe stage the pipeline cannot yet render (Geometry, Lens
 //! Correction, Perspective, Lens Blur, unbound SourceActions, As-Shot WB
-//! context, invalid red-eye, spot removals, generative edit, non-schema
-//! adjustment keys, the source-action slot limit, …). On every entry point the
-//! outcome is loud and pixel-safe:
+//! context, invalid red-eye, generative edit, non-schema adjustment keys, …) and
+//! [`validate_gpu_recipe`] rejects every schema-invalid recipe with the CPU
+//! oracle's own error. On every entry point the outcome is loud and pixel-safe:
 //!
 //! - [`GpuContext::render_with_gpu`] routes such a recipe to the free
 //!   `render_cpu`, which runs the **full** `lumina_core::render_frame` chain
@@ -56,6 +56,14 @@
 //! reported here — there is no third state. Context the recipe-only API does not
 //! carry (decoder As-Shot WB, mask layers, Lensfun correctors, depth planes)
 //! remains the caller's responsibility ([`unsupported_gpu_stages_with_context`]).
+//!
+//! **GPU-RENDER-PARITY-1 follow-up.** Two former CPU-only classes are gone:
+//! the legacy `extras["spot_removals"]` heal geometry is rendered by the
+//! [`stages`] spot-heal pass (with the typed geometry-free shadow tolerated and
+//! an isolated typed entry a hard error on both backends), and the
+//! source-action stage composites **any** number of bound artifacts in batches
+//! of `MAX_SOURCE_ACTIONS`. Geometry/Lens Correction/Perspective/Lens Blur and
+//! `generative_edit` remain CPU-routed (see [`unsupported_gpu_stages`]).
 //!
 //! [`unsupported_gpu_stages_with_context`] extends that verdict with the
 //! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
@@ -75,6 +83,11 @@ use lumina_core::render::SourceActionArtifact;
 use lumina_core::ImageFrame;
 use lumina_sidecar::EditRecipe;
 use thiserror::Error;
+
+// Full schema validation at the GPU entry (GPU-RENDER-PARITY-1 follow-up).
+// Feature-independent: it only depends on `lumina-core`/`lumina-sidecar`, so a
+// pure-CPU (`--no-default-features`) build can validate too.
+mod validate;
 
 // Shader + tiling modules are scaffolded (empty) so parallel subagents can fill
 // them in without touching this file. They are GPU-specific, hence gated.
@@ -175,12 +188,15 @@ const GPU_SUPPORTED_ADJUSTMENT_KEYS: [&str; 10] = [
 ];
 
 /// Maximum number of source-action artifacts the GPU source-action stage can
-/// composite in one pass. WGSL cannot index texture bindings dynamically, so
-/// the shader unrolls exactly this many slot pairs guarded by a uniform count.
-/// Recipes referencing more actions than this route to the CPU pipeline.
+/// composite in a single pass. WGSL cannot index texture bindings dynamically,
+/// so the shader unrolls exactly this many slot pairs guarded by a uniform
+/// count.
 ///
-/// Lives outside the `gpu` feature gate so the recipe-support validator
-/// ([`unsupported_gpu_stages_for`]) can reference it in pure-CPU builds too.
+/// This is a **per-pass batch size**, not a recipe limit (GPU-RENDER-PARITY-1
+/// item 7): [`GpuContext::render_with_gpu`]/[`GpuContext::render_to_vram`]
+/// composite any number of bound artifacts in sequential batches of this size,
+/// each sampling the previous batch's output. A recipe with `source_actions` is
+/// only flagged when **no** matching artifacts are bound.
 ///
 /// **Why 7:** wgpu's default `max_sampled_textures_per_shader_stage` limit is
 /// 16. The stage needs 1 base texture + `2 × N` artifact textures; `N = 7`
@@ -192,19 +208,23 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///
 /// An empty result means the GPU path produces pixels within the per-stage
 /// equivalence declared in `tests/parity.rs`: Point Color, Color Grading,
-/// neutral vibrance/saturation and Presence Clarity/positive Dehaze are
-/// byte-identical; Curves, HSL, non-neutral vibrance/saturation and Presence
-/// Texture/stacked Presence are bounded at maxAbsDiff ≤ 1 (≤ 2 for a fully
-/// stacked recipe) with `PSNR ≥ 48 dB` and `|mean signed error| ≤ 0.05`. A
-/// non-empty result means running the GPU path would **silently drop** those
-/// stages and produce different pixels than every CPU build — callers must
-/// route such renders to the CPU pipeline instead (Agents.md: no silent
-/// fallbacks).
+/// neutral vibrance/saturation, Presence Clarity/positive Dehaze, Effects
+/// (vignette/grain), the legacy spot-heal geometry and the source-action
+/// compositing are byte-identical; Curves, HSL, non-neutral
+/// vibrance/saturation and Presence Texture/stacked Presence are bounded at
+/// maxAbsDiff ≤ 1 (≤ 2 for a fully stacked recipe) with `PSNR ≥ 48 dB` and
+/// `|mean signed error| ≤ 0.05`. A non-empty result means running the GPU path
+/// would **silently drop** those stages and produce different pixels than every
+/// CPU build — callers must route such renders to the CPU pipeline instead
+/// (Agents.md: no silent fallbacks). Schema-invalid recipes are not "unsupported
+/// stages": [`validate_gpu_recipe`] rejects them at the GPU entry with the CPU
+/// oracle's own error.
 ///
 /// Rendered by the GPU ([`stages`], GPU-RENDER-PARITY-1) and therefore **not**
 /// flagged: Curves, HSL, Point Color, vibrance/saturation, Color Grading,
-/// Presence (Texture / Clarity / Dehaze), Noise Reduction, Sharpening and
-/// Effects (vignette + grain) (stage 2) plus Red-Eye (stage 3).
+/// Presence (Texture / Clarity / Dehaze), Noise Reduction, Sharpening, Effects
+/// (vignette + grain), Red-Eye, the legacy spot-heal geometry and source-action
+/// compositing (batched).
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
@@ -213,12 +233,11 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   stage is pixel-identical to not having the key, so it must not block the
 ///   GPU route; keys outside the schema have no neutral value and always flag);
 /// - Geometry / Lens Correction / Perspective / Lens Blur;
-/// - non-empty SourceActions **unless** GPU source-action artifacts are bound
-///   (see [`unsupported_gpu_stages_with_context`]);
-/// - typed `spot_removals`, non-empty legacy `extras["spot_removals"]` and
-///   `generative_edit` — stages the CPU reference applies/validates but the GPU
-///   does not implement (R2 follow-up: GPUs must not silently drop them or the
-///   related CPU hard error);
+/// - non-empty SourceActions **unless** matching GPU source-action artifacts are
+///   bound (see [`unsupported_gpu_stages_with_context`]);
+/// - `generative_edit` — the CPU reference expands the canvas, but its
+///   `fill_transparent_heuristic` is a sequential global BFS that is not yet
+///   ported to the GPU;
 /// - an **invalid** `red_eye` (out-of-range/NaN/duplicate id): a schema-valid
 ///   correction is GPU-rendered, but invalid values stay CPU-routed so the
 ///   oracle's loud rejection is preserved.
@@ -303,15 +322,14 @@ pub fn unsupported_gpu_stages_with_context(
     }
     // GPU-RENDER-PARITY-1 follow-up (gate completeness): the CPU reference
     // applies/validates these recipe stages (`apply_spot_heals_from_recipe` and
-    // `apply_generative_expand` in `render_frame_from_base`), but the GPU
-    // pipeline has no notion of them. Presence must therefore route to the CPU —
-    // otherwise the GPU path would silently drop spot healing / generative
-    // expansion, and for a typed-but-unhealable spot the CPU hard
-    // `InvalidAdjustment` would be dropped too. The two spot views are checked
-    // independently: the typed `spot_removals` field (unhealable without the
-    // extras geometry) and the geometry-carrying `extras["spot_removals"]`
-    // array. An *empty* extras array is an explicit no-op in core and does not
-    // flag.
+    // `apply_generative_expand` in `render_frame_from_base`). The legacy
+    // `extras["spot_removals"]` heal geometry is now rendered by the dedicated
+    // GPU spot stage and validated at the entry ([`validate_gpu_recipe`]), so it
+    // no longer flags; a typed geometry-free `spot_removals` mirror shadow is
+    // tolerated exactly like the CPU oracle, and an isolated typed/generative
+    // entry is a hard error on **both** backends. `generative_edit` stays
+    // CPU-routed: its `fill_transparent_heuristic` is a sequential global BFS
+    // (see `validate`/lib.rs docs), not yet ported.
     // GPU-RENDER-PARITY-1 stage 3: Red-Eye (G-14) is now rendered by the
     // dedicated [stages::RedEyeParams] pass (inserted after Sharpening, before
     // Effects), so a schema-valid correction no longer routes to the CPU. An
@@ -323,28 +341,13 @@ pub fn unsupported_gpu_stages_with_context(
             reasons.push("red_eye (invalid)".into());
         }
     }
-    if !recipe.spot_removals.is_empty() {
-        reasons.push("spot_removals".into());
-    }
-    if let Some(value) = recipe.extras.get("spot_removals") {
-        let empty_array = value.as_array().is_some_and(|entries| entries.is_empty());
-        if !empty_array {
-            reasons.push("spot_removals (legacy extras)".into());
-        }
-    }
     if recipe.generative_edit.is_some() {
         reasons.push("generative_edit".into());
     }
-    // More actions referenced than the unrolled shader slots can composite:
-    // the surplus would be dropped silently, so the whole recipe stays
-    // CPU-routed even when artifacts are bound.
-    if source_actions_bound && recipe.source_actions.len() > MAX_SOURCE_ACTIONS {
-        reasons.push(format!(
-            "source_actions ({}/{} exceed the GPU stage slot limit)",
-            recipe.source_actions.len(),
-            MAX_SOURCE_ACTIONS
-        ));
-    }
+    // GPU-RENDER-PARITY-1 follow-up (item 7): the former `MAX_SOURCE_ACTIONS`
+    // slot-limit reason is gone. The source-action stage now composites in
+    // batches of `MAX_SOURCE_ACTIONS` (ping-pong), so any number of bound
+    // artifacts is GPU-eligible exactly like the CPU reference.
     // R2-MCP-01: a decoder As-Shot white balance context always CPU-routes.
     // `lumina-core` validates those gains but does not re-apply them to pixels
     // (the decoder already did), so valid contexts happen to be pixel-neutral —
@@ -388,28 +391,15 @@ fn red_eye_is_valid(r: &lumina_sidecar::RedEyeCorrection) -> bool {
 /// Recipes the GPU adjustment pipeline would render with silently clamped
 /// values are rejected here up front (GPU-RENDER-PARITY-1 stage-2 follow-up).
 ///
-/// `apply_recipe_with_scale_and_white_balance` validates the sharpening radius
-/// against the schema range `0.1..=10.0` and rejects an out-of-range value.
-/// The GPU kernel builder would instead clamp the tap radius
-/// (`stages::sharpen_kernel`) and render a subtly different image, so the GPU
-/// path must reject the same recipes loudly rather than clamp them (Agents.md:
-/// no silent fallback). The check runs whenever `sharpening` is present,
-/// mirroring the oracle's `validate_nested_adjustments` (which validates even
-/// when `amount == 0`).
-#[cfg(feature = "gpu")]
-fn validate_gpu_recipe(recipe: &EditRecipe) -> Result<(), GpuError> {
-    if let Some(sharpening) = recipe.sharpening.as_ref() {
-        let radius = sharpening.radius;
-        if !radius.is_finite() || !(0.1..=10.0).contains(&radius) {
-            return Err(GpuError::RenderFailed(format!(
-                "sharpening.radius {radius} is outside the schema range 0.1..=10.0; \
-                 the GPU sharpening pass refuses to silently clamp it (the CPU \
-                 reference rejects it with InvalidAdjustment)"
-            )));
-        }
-    }
-    Ok(())
-}
+/// Superseded by the full [`validate::validate_gpu_recipe`] port (GPU-RENDER-
+/// PARITY-1 follow-up, item 8): every schema range the CPU reference validates —
+/// top-level adjustment keys, nested curve/HSL/point-color/presence/grading,
+/// noise reduction, sharpening (all four fields), red-eye, effects, lens,
+/// perspective, geometry, lens blur, generative edit and the spot modes — is now
+/// checked at the GPU entry and returns the **same** [`lumina_core::CoreError`]
+/// the oracle produces. The old sharpening-radius-only check is kept as a
+/// documented alias so external callers keep compiling.
+pub use validate::validate_gpu_recipe;
 
 /// The identity ("no visible change") value of an adjustment key.
 ///
@@ -549,6 +539,10 @@ pub struct GpuContext {
     /// first render that runs with bound artifacts; `None` otherwise.
     #[cfg(feature = "gpu")]
     sa_pipeline: std::sync::Mutex<Option<SourceActionPipelineState>>,
+    /// Compiled spot-heal stage pipeline (GPU-RENDER-PARITY-1 follow-up). Built
+    /// lazily on the first render whose recipe carries legacy spot geometry.
+    #[cfg(feature = "gpu")]
+    spot_pipeline: std::sync::Mutex<Option<SpotPipelineState>>,
     /// Compiled GPU-RENDER-PARITY-1 post-tone pipelines (per-pixel color,
     /// Presence DoG, dark channel, Dehaze). Built lazily on the first render
     /// whose recipe uses one of those stages.
@@ -884,6 +878,7 @@ impl GpuContext {
             resources,
             pipeline: std::sync::Mutex::new(None),
             sa_pipeline: std::sync::Mutex::new(None),
+            spot_pipeline: std::sync::Mutex::new(None),
             post_pipeline: std::sync::Mutex::new(None),
             vram: std::sync::Mutex::new(VramPool::new()),
             source_actions: None,
@@ -965,10 +960,29 @@ impl GpuContext {
                     &resources.device,
                     shaders::RGBA8_FORMAT,
                 )?,
-                uniform_buffer: shaders::create_source_action_uniform_buffer(&resources.device),
                 bind_group_layout: shaders::create_source_action_bind_group_layout(
                     &resources.device,
                 ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Lazily build the spot-heal stage pipeline from `&self`
+    /// (GPU-RENDER-PARITY-1 follow-up). Only invoked on renders that actually
+    /// carry legacy spot geometry.
+    fn ensure_spot_pipeline(&self) -> Result<(), GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Ok(());
+        };
+        let mut guard = self.spot_pipeline.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(SpotPipelineState {
+                pipeline: stages::create_spot_heal_pipeline(
+                    &resources.device,
+                    shaders::RGBA8_FORMAT,
+                )?,
+                bind_group_layout: stages::create_spot_heal_bind_group_layout(&resources.device),
             });
         }
         Ok(())
@@ -1742,15 +1756,15 @@ impl GpuContext {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("lumina-gpu-vram-encode"),
             });
-        // GPU-STAGE-1: when source-action artifacts are bound for this frame,
-        // the dedicated stage composites them into an intermediate texture in
-        // the same encoder; the tone pass samples *that* result. Without bound
-        // artifacts the tone pass reads the uploaded frame directly.
-        let artifacts = self.matching_source_actions(frame.width, frame.height);
-        // Deferred-init locals so the tone bind can reference either input.
-        let sa_intermediate: wgpu::Texture;
-        let sa_intermediate_view: wgpu::TextureView;
-        let tone_input_view: &wgpu::TextureView = if let Some(artifacts) = artifacts {
+        // GPU-STAGE-1 / item 7: when source-action artifacts are bound for this
+        // frame, the dedicated stage composites them (batched) into intermediate
+        // textures in the same encoder, then the spot-heal pass; the tone pass
+        // samples the result. Without bound artifacts the tone pass reads the
+        // uploaded frame directly.
+        let sa_batches: Option<SourceActionBatches> = if self
+            .matching_source_actions(frame.width, frame.height)
+            .is_some()
+        {
             self.ensure_source_action_pipeline()?;
             let sa_guard = self.sa_pipeline.lock().unwrap();
             let Some(sa) = sa_guard.as_ref() else {
@@ -1758,71 +1772,56 @@ impl GpuContext {
                     "source-action pipeline not built".into(),
                 ));
             };
-            let sa_uniforms = shaders::SourceActionUniforms {
-                count: artifacts.len() as u32,
-                _pad: [0; 3],
-            };
-            shaders::write_source_action_uniforms(
-                &resources.queue,
-                &sa.uniform_buffer,
-                &sa_uniforms,
-            );
-            // R2-GPU-03: reuse the cached region/replacement textures uploaded
-            // in `set_source_action_artifacts` instead of re-creating + re-
-            // uploading them every render tick.
+            // R2-GPU-03: reuse the cached region/replacement textures
+            // uploaded in `set_source_action_artifacts` instead of
+            // re-creating + re-uploading them every render tick.
             let sa_cache = self
                 .sa_textures
                 .as_ref()
                 .expect("source-action textures are cached when artifacts are bound");
-            let mut region_views = Vec::with_capacity(artifacts.len());
-            let mut replacement_views = Vec::with_capacity(artifacts.len());
-            for (_, rview, _, rvview) in sa_cache.iter() {
-                region_views.push(rview);
-                replacement_views.push(rvview);
-            }
-            let region_refs: Vec<&wgpu::TextureView> = region_views.clone();
-            let replacement_refs: Vec<&wgpu::TextureView> = replacement_views.clone();
-            let sa_bind = shaders::create_source_action_bind_group(
-                &resources.device,
-                &sa.bind_group_layout,
-                &sa.uniform_buffer,
+            Some(encode_source_action_batches(
+                resources,
+                sa,
+                sa_cache,
                 input_view,
-                &region_refs,
-                &replacement_refs,
-                artifacts.len() as u32,
-            );
-            sa_intermediate = shaders::create_output_texture(
+                frame.width,
+                frame.height,
+                &mut enc,
+            )?)
+        } else {
+            None
+        };
+        let sa_view: &wgpu::TextureView = match sa_batches.as_ref() {
+            Some(batches) => batches.final_view(),
+            None => input_view,
+        };
+        // Spot heal: legacy `extras["spot_removals"]` geometry, before the tone
+        // pass (mirrors `apply_spot_heals_from_recipe`).
+        let spots = lumina_core::spots_from_recipe(recipe);
+        let spot_texture: Option<wgpu::Texture> = if spots.is_empty() {
+            None
+        } else {
+            Some(shaders::create_output_texture(
                 &resources.device,
                 frame.width,
                 frame.height,
-                "lumina-gpu-vram-sa-out",
-            );
-            sa_intermediate_view =
-                sa_intermediate.create_view(&wgpu::TextureViewDescriptor::default());
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("lumina-gpu-vram-sourceaction"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &sa_intermediate_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&sa.pipeline);
-                pass.set_bind_group(0, &sa_bind, &[]);
-                pass.draw(0..3, 0..1);
+                "lumina-gpu-vram-spot-out",
+            ))
+        };
+        let spot_view_owned: Option<wgpu::TextureView> = spot_texture
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let tone_input_view: &wgpu::TextureView = match spot_view_owned.as_ref() {
+            Some(spot_view) => {
+                self.ensure_spot_pipeline()?;
+                let spot_guard = self.spot_pipeline.lock().unwrap();
+                let Some(spot) = spot_guard.as_ref() else {
+                    return Err(GpuError::RenderFailed("spot pipeline not built".into()));
+                };
+                encode_spot_heal(resources, spot, &spots, sa_view, spot_view, &mut enc);
+                spot_view
             }
-            &sa_intermediate_view
-        } else {
-            input_view
+            None => sa_view,
         };
         let tone_bind = shaders::create_color_tone_bind_group(
             &resources.device,
@@ -2259,10 +2258,12 @@ impl GpuContext {
     ///
     /// **Recipe validation (REVIEW-GPU-DIVERGENCE-1).** The tone shader runs
     /// white balance plus the seven tone sliders; the [`stages`] post-tone
-    /// chain then runs Presence and the per-pixel color stages. When
-    /// [`unsupported_gpu_stages`] reports any remaining unsupported stage
-    /// (Geometry, Lens Correction, Perspective, Lens Blur, SourceActions,
-    /// Red-Eye, spot removals, generative edit, …), the render is **explicitly
+    /// chain then runs Presence and the per-pixel color stages; the source-action
+    /// and legacy spot-heal stages run before the tone pass. A schema-invalid
+    /// recipe is rejected up front by [`validate_gpu_recipe`] with the CPU
+    /// oracle's own error. When [`unsupported_gpu_stages`] reports any remaining
+    /// unsupported stage (Geometry, Lens Correction, Perspective, Lens Blur,
+    /// unbound SourceActions, generative edit, …), the render is **explicitly
     /// routed to the `render_cpu`
     /// fallback** rather than silently GPU-rendering with the stage dropped. The
     /// routing decision is logged once per unique reason set.
@@ -2433,13 +2434,12 @@ impl GpuContext {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("lumina-gpu-encode"),
                 });
-        // GPU-STAGE-1: composite bound source-action artifacts into an
-        // intermediate target first; the tone pass then samples that result.
-        let sa_intermediate: wgpu::Texture;
-        let sa_intermediate_view: wgpu::TextureView;
-        let tone_input_view: &wgpu::TextureView = match self.matching_source_actions(width, height)
-        {
-            Some(artifacts) => {
+        // GPU-STAGE-1 / GPU-RENDER-PARITY-1 item 7: composite bound
+        // source-action artifacts into an intermediate target first, in batches
+        // of `MAX_SOURCE_ACTIONS`; then the spot-heal pass; the tone pass
+        // samples the result.
+        let sa_batches: Option<SourceActionBatches> =
+            if self.matching_source_actions(width, height).is_some() {
                 self.ensure_source_action_pipeline()?;
                 let sa_guard = self.sa_pipeline.lock().unwrap();
                 let Some(sa) = sa_guard.as_ref() else {
@@ -2447,15 +2447,6 @@ impl GpuContext {
                         "source-action pipeline not built".into(),
                     ));
                 };
-                let sa_uniforms = shaders::SourceActionUniforms {
-                    count: artifacts.len() as u32,
-                    _pad: [0; 3],
-                };
-                shaders::write_source_action_uniforms(
-                    &resources.queue,
-                    &sa.uniform_buffer,
-                    &sa_uniforms,
-                );
                 // R2-GPU-03: reuse the cached region/replacement textures
                 // uploaded in `set_source_action_artifacts` instead of
                 // re-creating + re-uploading them every render call.
@@ -2463,55 +2454,50 @@ impl GpuContext {
                     .sa_textures
                     .as_ref()
                     .expect("source-action textures are cached when artifacts are bound");
-                let mut region_views = Vec::with_capacity(artifacts.len());
-                let mut replacement_views = Vec::with_capacity(artifacts.len());
-                for (_, rview, _, rvview) in sa_cache.iter() {
-                    region_views.push(rview);
-                    replacement_views.push(rvview);
-                }
-                let region_refs: Vec<&wgpu::TextureView> = region_views.clone();
-                let replacement_refs: Vec<&wgpu::TextureView> = replacement_views.clone();
-                let sa_bind = shaders::create_source_action_bind_group(
-                    &resources.device,
-                    &sa.bind_group_layout,
-                    &sa.uniform_buffer,
+                Some(encode_source_action_batches(
+                    resources,
+                    sa,
+                    sa_cache,
                     &input_view,
-                    &region_refs,
-                    &replacement_refs,
-                    artifacts.len() as u32,
-                );
-                sa_intermediate = shaders::create_output_texture(
-                    &resources.device,
                     width,
                     height,
-                    "lumina-gpu-sa-out",
-                );
-                sa_intermediate_view =
-                    sa_intermediate.create_view(&wgpu::TextureViewDescriptor::default());
-                {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("lumina-gpu-sourceaction"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &sa_intermediate_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    pass.set_pipeline(&sa.pipeline);
-                    pass.set_bind_group(0, &sa_bind, &[]);
-                    pass.draw(0..3, 0..1);
-                }
-                &sa_intermediate_view
-            }
+                    &mut encoder,
+                )?)
+            } else {
+                None
+            };
+        let sa_view: &wgpu::TextureView = match sa_batches.as_ref() {
+            Some(batches) => batches.final_view(),
             None => &input_view,
+        };
+        // Spot heal (GPU-RENDER-PARITY-1 follow-up): the legacy
+        // `extras["spot_removals"]` geometry is applied before the tone pass,
+        // exactly like `apply_spot_heals_from_recipe` in `render_frame_from_base`.
+        let spots = lumina_core::spots_from_recipe(recipe);
+        let spot_texture: Option<wgpu::Texture> = if spots.is_empty() {
+            None
+        } else {
+            Some(shaders::create_output_texture(
+                &resources.device,
+                width,
+                height,
+                "lumina-gpu-spot-out",
+            ))
+        };
+        let spot_view_owned: Option<wgpu::TextureView> = spot_texture
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let tone_input_view: &wgpu::TextureView = match spot_view_owned.as_ref() {
+            Some(spot_view) => {
+                self.ensure_spot_pipeline()?;
+                let spot_guard = self.spot_pipeline.lock().unwrap();
+                let Some(spot) = spot_guard.as_ref() else {
+                    return Err(GpuError::RenderFailed("spot pipeline not built".into()));
+                };
+                encode_spot_heal(resources, spot, &spots, sa_view, spot_view, &mut encoder);
+                spot_view
+            }
+            None => sa_view,
         };
         let tone_bind = shaders::create_color_tone_bind_group(
             &resources.device,
@@ -2843,8 +2829,17 @@ struct PipelineState {
 #[cfg(feature = "gpu")]
 struct SourceActionPipelineState {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+/// Compiled spot-heal stage pipeline (GPU-RENDER-PARITY-1 follow-up).
+///
+/// The parameter storage buffer is sized per recipe (the spot count is
+/// unbounded), so only the pipeline + layout are cached here; the bind group is
+/// rebuilt per render from the recipe's spot list.
+#[cfg(feature = "gpu")]
+struct SpotPipelineState {
+    pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -3017,6 +3012,123 @@ fn encode_fullscreen_pass(
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
     pass.draw(0..3, 0..1);
+}
+
+/// Result of the batched source-action stage: the scratch textures that hold the
+/// per-batch outputs and the index of the final one the tone/spot pass samples.
+#[cfg(feature = "gpu")]
+struct SourceActionBatches {
+    textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    final_index: usize,
+}
+
+#[cfg(feature = "gpu")]
+impl SourceActionBatches {
+    fn final_view(&self) -> &wgpu::TextureView {
+        &self.textures[self.final_index].1
+    }
+}
+
+/// Encode the (possibly batched) source-action composites into `encoder`.
+///
+/// WGSL cannot index texture bindings dynamically, so the stage unrolls
+/// `MAX_SOURCE_ACTIONS` slot pairs per pass. More artifacts are composited in
+/// sequential batches, each sampling the previous batch's output — matching the
+/// oracle's sequential `apply_source_actions` order (later artifacts win on
+/// overlap) without the former hard slot limit (GPU-RENDER-PARITY-1 item 7).
+#[cfg(feature = "gpu")]
+#[allow(clippy::type_complexity)]
+fn encode_source_action_batches(
+    resources: &GpuResources,
+    sa: &SourceActionPipelineState,
+    cached: &[(
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+    )],
+    input_view: &wgpu::TextureView,
+    width: u32,
+    height: u32,
+    encoder: &mut wgpu::CommandEncoder,
+) -> Result<SourceActionBatches, GpuError> {
+    let total = cached.len();
+    let batch_count = total.div_ceil(MAX_SOURCE_ACTIONS);
+    let mut textures = Vec::with_capacity(batch_count);
+    for index in 0..batch_count {
+        let texture = shaders::create_output_texture(
+            &resources.device,
+            width,
+            height,
+            &format!("lumina-gpu-sa-batch-{index}"),
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        textures.push((texture, view));
+    }
+    let mut current: &wgpu::TextureView = input_view;
+    for (batch, (_, dst_view)) in textures.iter().enumerate() {
+        let start = batch * MAX_SOURCE_ACTIONS;
+        let end = (start + MAX_SOURCE_ACTIONS).min(total);
+        let count = end - start;
+        // A dedicated uniform buffer per batch: multiple batches share one
+        // encoder, so a shared buffer would make a later `write_buffer`
+        // retroactively change an earlier draw.
+        let uniforms = shaders::create_source_action_uniform_buffer(&resources.device);
+        shaders::write_source_action_uniforms(
+            &resources.queue,
+            &uniforms,
+            &shaders::SourceActionUniforms {
+                count: count as u32,
+                _pad: [0; 3],
+            },
+        );
+        let region_views: Vec<&wgpu::TextureView> =
+            cached[start..end].iter().map(|entry| &entry.1).collect();
+        let replacement_views: Vec<&wgpu::TextureView> =
+            cached[start..end].iter().map(|entry| &entry.3).collect();
+        let bind = shaders::create_source_action_bind_group(
+            &resources.device,
+            &sa.bind_group_layout,
+            &uniforms,
+            current,
+            &region_views,
+            &replacement_views,
+            count as u32,
+        );
+        encode_fullscreen_pass(encoder, &sa.pipeline, &bind, dst_view);
+        current = dst_view;
+    }
+    Ok(SourceActionBatches {
+        final_index: batch_count - 1,
+        textures,
+    })
+}
+
+/// Encode the spot-heal pass (GPU-RENDER-PARITY-1 follow-up) into `encoder`,
+/// sampling `input_view` and writing `dst`.
+///
+/// `spots` are the validated legacy heal entries; the caller only invokes this
+/// when the list is non-empty (an empty list is the oracle's identity).
+#[cfg(feature = "gpu")]
+fn encode_spot_heal(
+    resources: &GpuResources,
+    spot: &SpotPipelineState,
+    spots: &[lumina_core::SpotHeuristic],
+    input_view: &wgpu::TextureView,
+    dst: &wgpu::TextureView,
+    encoder: &mut wgpu::CommandEncoder,
+) {
+    let params = stages::create_spot_heal_buffer(&resources.device, spots.len());
+    resources
+        .queue
+        .write_buffer(&params, 0, &stages::spot_heal_params_bytes(spots));
+    let bind = stages::create_spot_heal_bind_group(
+        &resources.device,
+        &spot.bind_group_layout,
+        &params,
+        input_view,
+    );
+    encode_fullscreen_pass(encoder, &spot.pipeline, &bind, dst);
 }
 
 /// Pooled resources for a single [`GpuContext::render_with_gpu`] size bucket

@@ -1251,12 +1251,15 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   0 gemessen, sonst maxAbsDiff ≤ 1 (≤ 2 für voll gestapelte Rezepte),
   PSNR ≥ 48 dB, Bias ≤ 0.05. Erledigte Follow-ups: Radius>10-Ablehnung an
   beiden Eintrittspunkten, `GPU_EFFECTIVE_SCALE` zentral, Parity-Recipe
-  radius 10 + Masking, schema-fremde Keys laut abgelehnt. Rest (Ziel: kein
-  CPU-only-Zweig, User-Entscheid 2026-09-13): geometry/lens/perspective/
-  lens_blur/spot/generative/Camera-WB/SourceAction-Slots; lebendes Inventar:
+  radius 10 + Masking, schema-fremde Keys laut abgelehnt. Erledigt (Teilwelle,
+  BESTANDEN): Spot-Heal-Pass (Legacy, beide Pfade, byte-identisch),
+  SourceAction-Batching (>7, byte-identisch), volle Nested-Range-Validierung
+  am GPU-Eintritt (`validate.rs`, Error-Parität inkl. typed-/generative-Spots).
+  Rest (Ziel: kein CPU-only-Zweig, User-Entscheid 2026-09-13):
+  geometry/perspective/lens_correction/lens_blur/generative_edit/Camera-WB
+  (Cross-Crate-Welle CLI/MCP); lebendes Inventar:
   `cpu_routing_inventory_is_complete`. Offene Nebenbefunde: CLI-Test mit
-  staler Vibrance-Assertion (seit Stufe 1 rot), Camera-WB braucht
-  Cross-Crate-Welle (CLI/MCP-Vertrag).
+  staler Vibrance-Assertion (seit Stufe 1 rot, Fix in Arbeit), Perf-Pooling.
 - **Present-Pfad:** `eframe` nutzt jetzt den **wgpu**-Renderer;
   `GpuContext::from_parts` teilt sich Renderer-Device/Queue, sodass die
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`
