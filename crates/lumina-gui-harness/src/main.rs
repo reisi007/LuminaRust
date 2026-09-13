@@ -206,10 +206,23 @@ end tell
 
     fn enigo_new() -> Result<enigo::Enigo, String> {
         use enigo::Settings;
-        // Give the OS a moment to process each synthetic key/button event so the
-        // GUI reliably sees the final state (one long enough delay per action).
+        // Enigo 0.6 removed `Settings::mac_delay` — the configurable per-event
+        // macOS keyboard delay that 0.2 exposed (default 20 ms, which this
+        // harness raised to 80 ms; mouse actions were never delayed). 0.6's
+        // `Settings` offers no replacement field: `update_wait_time`
+        // (enigo/src/macos/macos_impl.rs) only accumulates an event budget
+        // that is slept out in `Drop`, so there is no per-event sleep in
+        // normal operation anymore.
+        //
+        // There is no delay to set explicitly here, so the old 80 ms
+        // per-key-event delay effectively becomes 0 ms of enigo-internal
+        // pacing. This does not change the harness timing: every synthetic
+        // action is already surrounded by explicit `sleep(...)` calls
+        // (`click_at`, `drag`) that exceed the old delay, and the `G`/`D`
+        // key taps are followed by a 2 s `sleep` before the state is
+        // checked, so the GUI reliably observes the final state either way.
+        // Documented deliberately rather than silently dropped.
         let settings = Settings {
-            mac_delay: 80,
             release_keys_when_dropped: true,
             ..Default::default()
         };

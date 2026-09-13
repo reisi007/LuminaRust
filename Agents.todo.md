@@ -79,8 +79,8 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-18 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 14,
-Block B: 1, Block C: 3 (Stand 2026-09-13; neu: HARNESS-ENIGO-06).
+17 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 13,
+Block B: 1, Block C: 3 (Stand 2026-09-13).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -125,7 +125,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | KITTEST-PARITY-PATHS-1 | G-10 | Pfad-Parity-Framework |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
-| 1.0 | HARNESS-ENIGO-06 | alle G | Enigo-0.6-Harness |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -164,7 +163,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] HARNESS-ENIGO-06 (Release: 1.0)** `lumina-gui-harness` an Enigo 0.6 migrieren (Dependabot #2, 2026-09-07): `Settings::mac_delay` existiert in 0.6 nicht mehr → `cargo check -p lumina-gui-harness` ist am Mac rot (CI bleibt grün, da Linux-Container das macOS-cfg nicht trifft). Scope: Enigo-0.6-Settings-API übernehmen (Delay-Handling prüfen), kein Downgrade auf 0.2. Abnahme: `cargo check --workspace --all-targets` am Mac grün, CI grün. Crate: `lumina-gui-harness`.
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.
