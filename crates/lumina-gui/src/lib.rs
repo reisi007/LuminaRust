@@ -1772,6 +1772,21 @@ pub struct LuminaApp {
     preview_src_h: f32,
     /// Effective on-screen scale (screen px per source px) for the zoom readout.
     preview_effective_scale: f32,
+    /// KITTEST-PARITY-PATHS-1: on-screen rect of the preview image quad as
+    /// painted by the last [`Self::draw_preview`] — the same `rect` both present
+    /// paths (CPU texture / GPU VRAM user texture) blit into. Pure geometry
+    /// readout for the path-parity framework; never painted as text/badge.
+    /// `None` before the first painted frame and while the empty state shows.
+    preview_screen_rect: Option<egui::Rect>,
+    /// KITTEST-PARITY-PATHS-1: the pane rect the preview was fitted into for the
+    /// last painted frame (companion of [`Self::preview_screen_rect`]).
+    preview_pane_rect: Option<egui::Rect>,
+    /// KITTEST-PARITY-PATHS-1: the full-source overlay rect (`full_rect`) the
+    /// last [`Self::draw_preview`] mapped every overlay (mask matte, pins,
+    /// lens-blur focus, crop) onto. At Fit with no ROI this equals the painted
+    /// preview rect; storing it lets the framework assert absolutely that
+    /// overlays land on the photo instead of only comparing CPU↔GPU parity.
+    overlay_full_rect: Option<egui::Rect>,
     /// Whether the left thumbnail navigator rail is open.
     navigator_open: bool,
     /// Library module: expanded folder-tree nodes, keyed by absolute path.
@@ -2584,6 +2599,9 @@ impl LuminaApp {
             preview_src_w: 1.0,
             preview_src_h: 1.0,
             preview_effective_scale: 1.0,
+            preview_screen_rect: None,
+            preview_pane_rect: None,
+            overlay_full_rect: None,
             // GUI-VIEW-2 (N6): the navigator rail (overview + viewport
             // rectangle, F-100) is visible by default — Lightroom-like — and
             // stays collapsible via the preview toolbar toggle. Default-hidden
@@ -3191,6 +3209,31 @@ impl LuminaApp {
     /// measured as if it were the final render.
     pub fn preview_is_draft(&self) -> bool {
         self.preview_is_draft
+    }
+    /// KITTEST-PARITY-PATHS-1: the on-screen rect the preview image was last
+    /// painted into, or `None` before the first painted frame / while the empty
+    /// state is shown. The rect is identical for the CPU-texture and the
+    /// GPU-VRAM present path (both blit the same `rect`), so it is the absolute
+    /// geometry anchor the path-parity framework asserts against. Pure readout:
+    /// it is never rendered as text or a badge.
+    #[must_use]
+    pub fn preview_screen_rect(&self) -> Option<egui::Rect> {
+        self.preview_screen_rect
+    }
+    /// KITTEST-PARITY-PATHS-1: the pane rect the preview was fitted into for the
+    /// last painted frame (companion of [`Self::preview_screen_rect`]).
+    #[must_use]
+    pub fn preview_pane_rect(&self) -> Option<egui::Rect> {
+        self.preview_pane_rect
+    }
+    /// KITTEST-PARITY-PATHS-1: the full-source rect the last painted frame
+    /// mapped its overlays (mask matte, edit pins, lens-blur focus, crop) onto.
+    /// At Fit with no ROI it equals [`Self::preview_screen_rect`]; the absolute
+    /// overlay-on-photo check compares the two so a both-paths-wrong placement
+    /// (which CPU↔GPU parity alone cannot catch) still fails.
+    #[must_use]
+    pub fn overlay_full_rect(&self) -> Option<egui::Rect> {
+        self.overlay_full_rect
     }
     /// R2-GUIMOD-04a: timings of the last instrumented drag tick, if any.
     pub fn last_drag_tick(&self) -> Option<DragTickTimings> {
@@ -9291,8 +9334,9 @@ impl LuminaApp {
 
     /// Set one sharpening field (`amount`/`radius`/`detail`/`masking`) and
     /// record the save commit (GUI-SLIDER-SAVE-1). Unknown names are ignored
-    /// loudly.
-    fn set_sharpening_value(&mut self, field: &str, value: f64) {
+    /// loudly. Public for the headless KITTEST-PARITY-PATHS-1 matrix, which
+    /// needs a Detail-scope recipe built through the same setter the panel uses.
+    pub fn set_sharpening_value(&mut self, field: &str, value: f64) {
         let mut sh = self.recipe.sharpening.unwrap_or(Sharpening {
             version: 1,
             amount: 0.0,
@@ -9315,8 +9359,10 @@ impl LuminaApp {
     }
 
     /// Set one noise-reduction field (`luminance`/`color`) and record the save
-    /// commit (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly.
-    fn set_noise_reduction_value(&mut self, field: &str, value: f64) {
+    /// commit (GUI-SLIDER-SAVE-1). Unknown names are ignored loudly. Public for
+    /// the headless KITTEST-PARITY-PATHS-1 matrix, which needs a Detail-scope
+    /// recipe built through the same setter the panel uses.
+    pub fn set_noise_reduction_value(&mut self, field: &str, value: f64) {
         let mut nr = self.recipe.noise_reduction.unwrap_or(NoiseReduction {
             version: 1,
             luminance: 0.0,
@@ -11169,6 +11215,88 @@ impl LuminaApp {
         Some((id, [dims.0 as usize, dims.1 as usize]))
     }
 
+    /// KITTEST-PARITY-PATHS-1: whether a usable GPU adapter is bound. The
+    /// path-parity framework reports an explicit SKIP verdict when this is
+    /// `false` — a missing adapter never counts as a silently green parity
+    /// check (same policy as the `lumina-gpu` oracle tests).
+    #[cfg(feature = "gpu")]
+    #[must_use]
+    pub fn gpu_adapter_available(&self) -> bool {
+        self.gpu
+            .as_ref()
+            .is_some_and(lumina_gpu::GpuContext::is_available)
+    }
+
+    /// KITTEST-PARITY-PATHS-1: render the current draft (or full) source through
+    /// the interactive VRAM path and read the result back as an [`ImageFrame`]
+    /// — the GPU-path counterpart of the CPU [`Self::preview`] frame for the
+    /// CPU↔GPU parity assertion. Diagnostics only: the preview texture, the
+    /// recipe and the sidecar are untouched. `Ok(None)` when no usable adapter
+    /// is bound (the caller then prints the SKIP verdict — never a substituted
+    /// CPU frame passed off as a GPU result).
+    #[cfg(feature = "gpu")]
+    pub fn render_gpu_readback_frame(&self) -> Result<Option<ImageFrame>, GuiError> {
+        let Some(gpu) = self.gpu.as_ref() else {
+            return Ok(None);
+        };
+        if !gpu.is_available() {
+            return Ok(None);
+        }
+        let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
+            return Ok(None);
+        };
+        gpu.render_to_vram(source, &self.recipe)
+            .map_err(|error| GuiError::Io(format!("gpu parity readback: {error}")))?;
+        let frame = gpu
+            .readback_output_frame()
+            .map_err(|error| GuiError::Io(format!("gpu parity readback: {error}")))?;
+        Ok(Some(frame.to_image_frame()))
+    }
+
+    /// KITTEST-PARITY-PATHS-1: pixel size of the GPU-presented preview for the
+    /// frame painted last, or `None` when the CPU present path was used. The
+    /// parity framework asserts the GPU matrix cell really presented from VRAM
+    /// (`Some`) and the CPU cell really did not (`None`) — so a silent GPU→CPU
+    /// fallback can never be mislabelled as a passing GPU golden.
+    #[cfg(feature = "gpu")]
+    #[must_use]
+    pub fn gpu_present_frame_size(&self) -> Option<[usize; 2]> {
+        self.gpu_present_frame.map(|(_, size)| size)
+    }
+
+    /// KITTEST-PARITY-PATHS-1: run the interactive VRAM tone/detail pass on the
+    /// current draft (or full) source and mark the VRAM result fresh, so the
+    /// next frame's present path draws the GPU pixels exactly like the
+    /// pointer-drag hot path (`render_draft_tick`). Returns `true` when a usable
+    /// adapter rendered the VRAM result; `false` (with `vram_fresh` left
+    /// `false`) when no adapter is bound — never a silent CPU substitution.
+    #[cfg(feature = "gpu")]
+    pub fn prime_gpu_present(&mut self) -> bool {
+        let rendered = {
+            let Some(gpu) = self.gpu.as_ref() else {
+                return false;
+            };
+            if !gpu.is_available() {
+                return false;
+            }
+            let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
+                return false;
+            };
+            gpu.render_to_vram(source, &self.recipe)
+        };
+        match rendered {
+            Ok(()) => {
+                self.vram_fresh = true;
+                true
+            }
+            Err(error) => {
+                warn!("gpu parity prime failed: {error}");
+                self.vram_fresh = false;
+                false
+            }
+        }
+    }
+
     /// R2-GUIMOD-01: does the VRAM content describe the pixels currently
     /// displayed? For a **full-quality** preview only exact dimension equality
     /// proves that preview and VRAM tone result show the same crop of the same
@@ -12237,6 +12365,12 @@ impl LuminaApp {
         // the same geometry math. The CPU handle stays the fallback and is
         // always present once any CPU render ran (warm-up before the very first
         // render still shows the empty-state label).
+        // KITTEST-PARITY-PATHS-1: the geometry readouts describe exactly the
+        // frame being painted; clear them so the empty state never reports a
+        // stale rect from a previous preview.
+        self.preview_screen_rect = None;
+        self.preview_pane_rect = None;
+        self.overlay_full_rect = None;
         if let Some(texture) = self.texture.clone() {
             #[cfg(feature = "gpu")]
             let gpu_present = self.gpu_present_frame;
@@ -12487,6 +12621,10 @@ impl LuminaApp {
             };
             let rect = egui::Rect::from_center_size(center, draw);
             self.preview_effective_scale = scale;
+            // KITTEST-PARITY-PATHS-1: record the painted preview quad and the
+            // pane it was fitted into (path-independent geometry anchor).
+            self.preview_screen_rect = Some(rect);
+            self.preview_pane_rect = Some(pane);
 
             // GUI-VIEW-2 (Overlap): the zoomed image rect can extend beyond
             // the pane (toolbar/filmstrip/panel territory) — constrain all
@@ -12574,6 +12712,9 @@ impl LuminaApp {
                     from_min,
                     egui::vec2(full_w as f32 * scale, full_h as f32 * scale),
                 );
+                // KITTEST-PARITY-PATHS-1: the overlay canvas the painter helpers
+                // below (and the crop/focus/pin mapping) actually use.
+                self.overlay_full_rect = Some(full_rect);
                 self.draw_mask_overlay(ui, full_rect);
                 self.draw_edit_pins(ui, full_rect);
                 self.draw_lens_blur_overlay(ui, full_rect);
@@ -23426,6 +23567,68 @@ mod tests {
         assert!(
             painted.height() > 550.0,
             "the constraining axis must nearly fill the 600px pane, got {painted:?}"
+        );
+    }
+
+    /// KITTEST-PARITY-PATHS-1: the geometry readouts describe the painted CPU
+    /// frame headlessly (no GPU): the preview fills the constraining pane axis
+    /// at its source aspect and the overlay canvas coincides with the photo
+    /// rect at Fit. This is the adapter-free anchor behind the parity
+    /// framework's absolute checks (the GPU matrix itself is `#[ignore]`d).
+    #[test]
+    fn preview_geometry_readouts_fill_fit_and_anchor_overlays() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        // 2x1 source: unambiguous single constraining axis in an 800x600 pane.
+        app.load_bytes(png(), "geometry.png").unwrap();
+        app.render().unwrap();
+        let preview = ctx.load_texture(
+            "preview",
+            egui::ColorImage::filled([2, 1], egui::Color32::GRAY),
+            egui::TextureOptions::LINEAR,
+        );
+        app.texture = Some(preview);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+
+        let rect = app.preview_screen_rect().expect("preview was painted");
+        let pane = app.preview_pane_rect().expect("preview pane was laid out");
+        let overlay = app
+            .overlay_full_rect()
+            .expect("overlay canvas was laid out");
+        // Source aspect preserved and centred in the pane.
+        let aspect = rect.width() / rect.height();
+        assert!(
+            (aspect - 2.0).abs() < 0.02,
+            "preview must preserve the 2:1 source aspect, got {rect:?}"
+        );
+        assert!(
+            rect.width() <= pane.width() + 1.0 && rect.height() <= pane.height() + 1.0,
+            "preview {rect:?} must fit inside the pane {pane:?}"
+        );
+        assert!(
+            (rect.width() - pane.width()).abs() < 1.0,
+            "the 2:1 source must fill the pane width (constraining axis), got {rect:?} in {pane:?}"
+        );
+        assert!(
+            (rect.center() - pane.center()).length() < 1.0,
+            "preview must be centred in the pane"
+        );
+        // Overlays are mapped onto the full photo rect; at Fit it equals the
+        // painted preview quad (overlays on the photo, not beside it).
+        assert!(
+            (overlay.min - rect.min).length() < 1.0 && (overlay.max - rect.max).length() < 1.0,
+            "overlay canvas {overlay:?} must coincide with the painted photo {rect:?}"
         );
     }
 

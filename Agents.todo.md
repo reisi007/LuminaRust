@@ -121,7 +121,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | KITTEST-COVERAGE-STATES-2 | alle G | States-Follow-ups |
 | 1.0 | UX-SLICE-1 | G-09/G-10 | UX-Polish-Slice-1 |
 | 1.0 | CROP-MAXRECT-1 | G-06 | Default-Crop-MaxRect |
-| 1.0 | KITTEST-PARITY-PATHS-1 | G-10 | Pfad-Parity-Framework |
+| 1.0 | PARITY-PATHS-2 | G-10 | Parity-Schaerfung |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
 | 1.0 | META-COPYPASTE-2 | G-15 | Meta-CLI-Follow-ups |
@@ -167,7 +167,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] CROP-MAXRECT-1 (Release: 1.0)** Default-Crop ist das Maximum-Rectangle mit Constrain-to-Image (User-Entscheid 2026-09-12): Nach Lens-/Perspektiv-Korrektur keine transparenten Ränder ohne expliziten Crop — der Default-Crop umschließt maximalen Inhalt. Abnahme: Core-Geometrie + CLI/GUI-headless mit Golden (transparenter Keil → Default-Crop enthält nur Inhalt), kein stiller Beschnitt jenseits der Regel. Crates: `lumina-core`, `lumina-gui`.
-- [ ] **[PRIO: mittel] KITTEST-PARITY-PATHS-1 (Release: 1.0)** Pfad-Parity-Framework (User-Input manueller Test): gleiche Szene über CPU- und GPU-Pfad rendern, beide Frames snapshotten, Parität per Toleranz assertieren (F-043-Maßstab) PLUS absolute Geometrie-Checks (Preview füllt Fit-Rect, Overlays auf Foto — Parität allein fängt beidseitig gleiche Fehler nicht). Abnahme: Matrix-Test grün auf Metal, SKIP-Verdict ohne Adapter (nie still grün), DoD §6. Crate: `lumina-gui`.
+- [ ] **[PRIO: niedrig] PARITY-PATHS-2 (Release: 1.0)** Follow-ups aus PARITY-PATHS-Verifizierung (BESTANDEN, Vision 3/3): Bounds auf `diff==0` verschärfen wo 0 gemessen (neutral/detail, derzeit Bounded 1/2); SKIP-Zweig real auf adapterloser Maschine ausführen (hier nur Code-Review, Metal vorhanden). Abnahme: kittest grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] KITTEST-COVERAGE-STATES-2 (Release: 1.0)** Follow-ups aus STATES-1-Verifizierung (BESTANDEN): Hintergrund-Decode-Fehler öffnet keinen Dialog (Test fehlt — `failed_decode_keeps_previous_path` prüft nur `error()`); Doppel-`error!` im Hintergrund-Pfad bereinigen; Dialog-`Close` per `info!` loggen (DoD §4); Metadata-Panel-Breite (+33 px → Center-Reflow bei 1024 px prüfen); Toast überlagert Histogramm-Header (vorbestehend, niedrig). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
