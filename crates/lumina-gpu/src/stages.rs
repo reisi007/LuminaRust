@@ -1285,6 +1285,1202 @@ fn build_simple_pipeline(
     )
 }
 
+// ---------------------------------------------------------------------------
+// GPU-RENDER-PARITY-1 stage 2: Noise Reduction, Sharpening and Effects
+// (vignette + grain). Every shader mirrors the exact CPU-oracle math in
+// `lumina-core::apply_noise_reduction` / `apply_sharpening` / `apply_vignette`
+// / `apply_grain` (the same `u8`-quantized byte domain and the same operation
+// order), so the GPU route stays pixel-equivalent to `render_frame`.
+// ---------------------------------------------------------------------------
+
+/// `apply_noise_reduction` (F-096): 5x5 bilateral luminance filter plus a
+/// chroma filter, strengths blending the source with the filtered value.
+/// Both-shared uniform block (16 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct NoiseParams {
+    /// Luminance filter strength (`0..=1`; `0` is identity).
+    pub luminance: f32,
+    /// Chroma filter strength (`0..=1`; `0` is identity).
+    pub color: f32,
+    pub _pad: [u32; 2],
+}
+
+impl NoiseParams {
+    /// Build from a recipe's `noise_reduction`. The caller must only enqueue
+    /// the pass when `luminance != 0 || color != 0` (the oracle's early return).
+    pub fn from_recipe(n: &lumina_sidecar::NoiseReduction) -> Self {
+        Self {
+            luminance: n.luminance,
+            color: n.color,
+            _pad: [0; 2],
+        }
+    }
+
+    /// Whether the oracle would run the filter (neither strength is identity).
+    pub fn needs_stage(n: &lumina_sidecar::NoiseReduction) -> bool {
+        n.luminance != 0.0 || n.color != 0.0
+    }
+}
+
+/// WGSL for the Noise Reduction pass. Operates in the byte domain
+/// (`round(texel * 255)`), accumulates the 5x5 window in the oracle's
+/// row-major order and rounds the result back to `u8`.
+pub const NOISE_STAGE_SRC: &str = concat!(
+    r#"
+struct NoiseParams {
+  luminance : f32,
+  color : f32,
+  pad0 : u32,
+  pad1 : u32,
+};
+@group(0) @binding(0) var<uniform> params : NoiseParams;
+@group(0) @binding(1) var input_tex : texture_2d<f32>;
+"#,
+    common_src!(),
+    r#"
+fn lum_byte(p : vec4<f32>) -> f32 {
+  return 0.2126 * roundi(p.r * 255.0)
+    + 0.7152 * roundi(p.g * 255.0)
+    + 0.0722 * roundi(p.b * 255.0);
+}
+
+fn byte255(x : f32) -> f32 {
+  return clamp(roundi(x), 0.0, 255.0) / 255.0;
+}
+
+@fragment
+fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> {
+  let dims = textureDimensions(input_tex);
+  let w = i32(dims.x);
+  let h = i32(dims.y);
+  let coord = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
+  let src = textureLoad(input_tex, vec2<u32>(coord), 0);
+  let r_b = roundi(src.r * 255.0);
+  let g_b = roundi(src.g * 255.0);
+  let b_b = roundi(src.b * 255.0);
+  let base_y = lum_byte(src);
+  var ly : f32 = 0.0;
+  var cy_r : f32 = 0.0;
+  var cy_b : f32 = 0.0;
+  var sum : f32 = 0.0;
+  var csum : f32 = 0.0;
+  for (var dy = -2; dy <= 2; dy = dy + 1) {
+    for (var dx = -2; dx <= 2; dx = dx + 1) {
+      let xx = clamp(coord.x + dx, 0, w - 1);
+      let yy = clamp(coord.y + dy, 0, h - 1);
+      let p = textureLoad(input_tex, vec2<u32>(u32(xx), u32(yy)), 0);
+      let yj = lum_byte(p);
+      let d2 = f32(dx * dx + dy * dy);
+      let spatial = exp(-d2 / (2.0 * 1.5 * 1.5));
+      let diff = base_y - yj;
+      let lum = exp(-(diff * diff) / (2.0 * 0.12 * 255.0 * 0.12 * 255.0));
+      let weight = spatial * lum;
+      ly = ly + weight * yj;
+      sum = sum + weight;
+      let cw = exp(-d2 / (2.0 * 2.0 * 2.0));
+      csum = csum + cw;
+      cy_r = cy_r + cw * (roundi(p.r * 255.0) - yj);
+      cy_b = cy_b + cw * (roundi(p.b * 255.0) - yj);
+    }
+  }
+  let filtered_y = ly / sum;
+  let yv = base_y * (1.0 - params.luminance) + filtered_y * params.luminance;
+  let cr = (r_b - base_y) * (1.0 - params.color) + (cy_r / csum) * params.color;
+  let cb = (b_b - base_y) * (1.0 - params.color) + (cy_b / csum) * params.color;
+  let cg = g_b - base_y;
+  return vec4<f32>(
+    byte255(yv + cr),
+    byte255(yv + cg),
+    byte255(yv + cb),
+    src.a
+  );
+}
+"#
+);
+
+/// Bind group layout for [`NOISE_STAGE_SRC`]: uniform (0) + input (1).
+pub fn create_noise_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-noise-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Build the Noise Reduction render pipeline for `target_format`.
+pub fn create_noise_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> Result<wgpu::RenderPipeline, super::GpuError> {
+    build_simple_pipeline(
+        device,
+        "noise",
+        NOISE_STAGE_SRC,
+        &create_noise_bind_group_layout(device),
+        target_format,
+    )
+}
+
+pub fn create_noise_params_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-noise-params"),
+        size: std::mem::size_of::<NoiseParams>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn write_noise_params(queue: &wgpu::Queue, buffer: &wgpu::Buffer, params: &NoiseParams) {
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(params));
+}
+
+pub fn create_noise_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    input_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-noise-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(input_view),
+            },
+        ],
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Effects: vignette (F-097).
+// ---------------------------------------------------------------------------
+
+/// `apply_vignette` uniform block. The (pixel-independent) radial constants are
+/// derived on the host with the *same* `f32` arithmetic as the oracle's first
+/// pass, so the shader's per-pixel normalized radius is bit-identical and no
+/// global GPU reduction/readback is needed.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VignetteParams {
+    pub amount: f32,
+    pub midpoint: f32,
+    /// `0.15 + feather * 0.7`.
+    pub feather_width: f32,
+    /// Minimum normalized radius over the frame (`apply_vignette`'s `r_min`).
+    pub r_min: f32,
+    /// `max(r_max - r_min, 1e-6)`.
+    pub denom: f32,
+    /// `max(1 - midpoint, 1e-6)`.
+    pub t_denom: f32,
+    pub cx: f32,
+    pub cy: f32,
+    pub half_w: f32,
+    pub half_h: f32,
+    pub ry_scale: f32,
+    pub _pad: u32,
+}
+
+impl VignetteParams {
+    /// Build from a recipe's `effects.vignette` for a `width`×`height` frame.
+    /// The caller must only enqueue the pass when `amount != 0` (the oracle's
+    /// early return).
+    pub fn from_vignette(v: &lumina_sidecar::Vignette, width: u32, height: u32) -> Self {
+        let (r_min, r_max) = vignette_radius_bounds(width, height, v.roundness);
+        Self {
+            amount: v.amount,
+            midpoint: v.midpoint,
+            feather_width: 0.15 + v.feather * 0.7,
+            r_min,
+            denom: (r_max - r_min).max(1e-6),
+            t_denom: (1.0 - v.midpoint).max(1e-6),
+            cx: (width - 1) as f32 / 2.0,
+            cy: (height - 1) as f32 / 2.0,
+            half_w: ((width - 1) as f32 / 2.0).max(1.0),
+            half_h: ((height - 1) as f32 / 2.0).max(1.0),
+            ry_scale: 1.0 + (1.0 - v.roundness) * 0.5,
+            _pad: 0,
+        }
+    }
+}
+
+/// The oracle's `r_min`/`r_max` over the per-pixel normalized radius, computed
+/// with the exact same `f32` operations as `apply_vignette`'s first pass.
+pub fn vignette_radius_bounds(width: u32, height: u32, roundness: f32) -> (f32, f32) {
+    let w = width as usize;
+    let h = height as usize;
+    let cx = (width - 1) as f32 / 2.0;
+    let cy = (height - 1) as f32 / 2.0;
+    let half_w = ((width - 1) as f32 / 2.0).max(1.0);
+    let half_h = ((height - 1) as f32 / 2.0).max(1.0);
+    let ry_scale = 1.0 + (1.0 - roundness) * 0.5;
+    let mut r_min = f32::MAX;
+    let mut r_max = 0.0f32;
+    for y in 0..h {
+        for x in 0..w {
+            let dx = (x as f32 - cx) / half_w;
+            let dy = (y as f32 - cy) / half_h * ry_scale;
+            let r = (dx * dx + dy * dy).sqrt();
+            r_min = r_min.min(r);
+            r_max = r_max.max(r);
+        }
+    }
+    (r_min, r_max)
+}
+
+/// WGSL for the vignette pass (`apply_vignette`). RGB only; alpha untouched.
+pub const VIGNETTE_STAGE_SRC: &str = concat!(
+    r#"
+struct VignetteParams {
+  amount : f32,
+  midpoint : f32,
+  feather_width : f32,
+  r_min : f32,
+  denom : f32,
+  t_denom : f32,
+  cx : f32,
+  cy : f32,
+  half_w : f32,
+  half_h : f32,
+  ry_scale : f32,
+  pad0 : u32,
+};
+@group(0) @binding(0) var<uniform> params : VignetteParams;
+@group(0) @binding(1) var input_tex : texture_2d<f32>;
+"#,
+    common_src!(),
+    r#"
+@fragment
+fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> {
+  let coord = vec2<u32>(frag_coord.xy);
+  let src = textureLoad(input_tex, coord, 0);
+  let dx = (f32(coord.x) - params.cx) / params.half_w;
+  let dy = (f32(coord.y) - params.cy) / params.half_h * params.ry_scale;
+  let r = sqrt(dx * dx + dy * dy);
+  let rn = (r - params.r_min) / params.denom;
+  let t = clamp((rn - params.midpoint) / params.t_denom, 0.0, 1.0);
+  let edge0 = 0.5 - params.feather_width / 2.0;
+  let edge1 = 0.5 + params.feather_width / 2.0;
+  let s = clamp((t - edge0) / (edge1 - edge0), 0.0, 1.0);
+  let falloff = s * s * (3.0 - 2.0 * s);
+  let factor = 1.0 - params.amount * falloff;
+  return vec4<f32>(
+    clamp(roundi(roundi(src.r * 255.0) * factor), 0.0, 255.0) / 255.0,
+    clamp(roundi(roundi(src.g * 255.0) * factor), 0.0, 255.0) / 255.0,
+    clamp(roundi(roundi(src.b * 255.0) * factor), 0.0, 255.0) / 255.0,
+    src.a
+  );
+}
+"#
+);
+
+pub fn create_vignette_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-vignette-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+pub fn create_vignette_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> Result<wgpu::RenderPipeline, super::GpuError> {
+    build_simple_pipeline(
+        device,
+        "vignette",
+        VIGNETTE_STAGE_SRC,
+        &create_vignette_bind_group_layout(device),
+        target_format,
+    )
+}
+
+pub fn create_vignette_params_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-vignette-params"),
+        size: std::mem::size_of::<VignetteParams>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn write_vignette_params(queue: &wgpu::Queue, buffer: &wgpu::Buffer, params: &VignetteParams) {
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(params));
+}
+
+pub fn create_vignette_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    input_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-vignette-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(input_view),
+            },
+        ],
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Effects: grain (F-097).
+// ---------------------------------------------------------------------------
+
+/// `apply_grain` uniform block. `seed32` and `cell` are precomputed on the host
+/// with the oracle's exact integer arithmetic (`grain_hash` over the u64 seed
+/// folded with the frame dimensions), so the shader only runs the per-cell hash.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GrainParams {
+    /// `grain_hash(seed_state as u32)` after folding `seed`/`width`/`height`.
+    pub seed32: u32,
+    /// Spatial cell size in pixels (`1 + round(size * 7)`, min 1).
+    pub cell: u32,
+    pub amount: f32,
+    pub roughness: f32,
+}
+
+impl GrainParams {
+    /// Build from a recipe's `effects.grain` for a `width`×`height` frame. The
+    /// caller must only enqueue the pass when `amount != 0` (early return).
+    pub fn from_grain(g: &lumina_sidecar::Grain, width: u32, height: u32) -> Self {
+        Self {
+            seed32: grain_effective_seed(g.seed, width, height),
+            cell: (1 + (g.size * 7.0).round() as usize).max(1) as u32,
+            amount: g.amount,
+            roughness: g.roughness,
+        }
+    }
+}
+
+/// `grain_hash` (`lumina-core`) ported to the host: the dimension-aware seed
+/// folding. Kept identical so the GPU grain is deterministic and seed-exact.
+fn grain_effective_seed(seed: u64, width: u32, height: u32) -> u32 {
+    fn grain_hash(mut z: u32) -> u32 {
+        z = z.wrapping_add(0x9e37_79b9);
+        z = (z ^ (z >> 16)).wrapping_mul(0x85eb_ca6b);
+        z = (z ^ (z >> 13)).wrapping_mul(0xc2b2_ae35);
+        z ^= z >> 16;
+        z
+    }
+    let mut seed_state = seed;
+    seed_state = seed_state.wrapping_add((width as u64) << 32);
+    seed_state = seed_state.wrapping_add(height as u64);
+    seed_state ^= seed_state >> 32;
+    seed_state = seed_state.wrapping_mul(0x9e37_79b9);
+    grain_hash(seed_state as u32)
+}
+
+/// WGSL for the grain pass (`apply_grain`). The `grain_hash` integer sequence is
+/// ported operation-for-operation onto wrapping `u32` arithmetic, so the delta
+/// is exact and the SAME value is added to R/G/B (channel-coupled).
+pub const GRAIN_STAGE_SRC: &str = concat!(
+    r#"
+struct GrainParams {
+  seed32 : u32,
+  cell : u32,
+  amount : f32,
+  roughness : f32,
+};
+@group(0) @binding(0) var<uniform> params : GrainParams;
+@group(0) @binding(1) var input_tex : texture_2d<f32>;
+"#,
+    common_src!(),
+    r#"
+fn grain_hash(z_in : u32) -> u32 {
+  var z = z_in;
+  z = z + 0x9e3779b9u;
+  z = (z ^ (z >> 16u)) * 0x85ebca6bu;
+  z = (z ^ (z >> 13u)) * 0xc2b2ae35u;
+  z = z ^ (z >> 16u);
+  return z;
+}
+
+fn grain_noise(cx : u32, cy : u32, seed : u32) -> f32 {
+  let n = grain_hash(cx + seed) ^ grain_hash(cy * 0x85ebca6bu);
+  return (f32(grain_hash(n)) / f32(0xFFFFFFFFu)) * 2.0 - 1.0;
+}
+
+@fragment
+fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> {
+  let coord = vec2<u32>(frag_coord.xy);
+  let cx = coord.x / params.cell;
+  let cy = coord.y / params.cell;
+  let raw = grain_noise(cx, cy, params.seed32);
+  var sum : f32 = 0.0;
+  for (var dy = -1; dy <= 1; dy = dy + 1) {
+    for (var dx = -1; dx <= 1; dx = dx + 1) {
+      let ncx = u32(max(i32(cx) + dx, 0));
+      let ncy = u32(max(i32(cy) + dy, 0));
+      sum = sum + grain_noise(ncx, ncy, params.seed32);
+    }
+  }
+  let low = sum / 9.0;
+  // Separate the multiply/add so a contracted FMA cannot shift `value` by one
+  // ulp and flip a `round()` tie in the delta below (the oracle does not FMA).
+  let low_weight = 1.0 - params.roughness;
+  let low_term = low * low_weight;
+  let raw_term = raw * params.roughness;
+  let value = low_term + raw_term;
+  let delta = i32(roundi(value * params.amount * 40.0));
+  let src = textureLoad(input_tex, coord, 0);
+  return vec4<f32>(
+    f32(clamp(i32(roundi(src.r * 255.0)) + delta, 0i, 255i)) / 255.0,
+    f32(clamp(i32(roundi(src.g * 255.0)) + delta, 0i, 255i)) / 255.0,
+    f32(clamp(i32(roundi(src.b * 255.0)) + delta, 0i, 255i)) / 255.0,
+    src.a
+  );
+}
+"#
+);
+
+pub fn create_grain_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-grain-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+pub fn create_grain_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> Result<wgpu::RenderPipeline, super::GpuError> {
+    build_simple_pipeline(
+        device,
+        "grain",
+        GRAIN_STAGE_SRC,
+        &create_grain_bind_group_layout(device),
+        target_format,
+    )
+}
+
+pub fn create_grain_params_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-grain-params"),
+        size: std::mem::size_of::<GrainParams>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn write_grain_params(queue: &wgpu::Queue, buffer: &wgpu::Buffer, params: &GrainParams) {
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(params));
+}
+
+pub fn create_grain_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    input_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-grain-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(input_view),
+            },
+        ],
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Sharpening (F-095): separable Gaussian luminance unsharp mask.
+//
+// `apply_sharpening` computes, per pixel, `lum - fine` and `lum - coarse` where
+// `fine`/`coarse` are separable three-sigma Gaussian blurs of the Rec.709
+// luminance. The GPU chain mirrors that in three passes:
+//
+// 1. a horizontal blur pass per radius, writing the intermediate `tmp` rows
+//    into an `R32Float` texture (exact `f32` storage);
+// 2. a compute pass reducing the luminance-gradient maximum (`maxg`) into a
+//    single `atomicMax` cell, read back once (like Dehaze's airlight — the one
+//    host round-trip this stage needs);
+// 3. an apply pass doing the vertical blur on the fly and the oracle's ratio.
+//
+// The Gaussian kernels are precomputed on the host with the oracle's exact
+// `exp`/normalization, so only FMA-vs-separate-rounding remains as residual.
+// ---------------------------------------------------------------------------
+
+/// Maximum taps per Gaussian kernel: radius 10 (schema max) at `effective_scale
+/// = 1.0` (the only scale `render_frame`/`render_with_gpu` use) gives
+/// `sigma = 10 * 1.5 = 15`, `r = ceil(3 * sigma) = 45`, i.e. 91 taps.
+pub const MAX_SHARPEN_TAPS: usize = 91;
+
+/// Storage-buffer layout for the sharpening passes. `kernels[0..91]` is the
+/// fine kernel, `kernels[91..182]` the coarse one.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SharpenParams {
+    pub amount: f32,
+    pub detail: f32,
+    pub masking: f32,
+    pub _pad0: u32,
+    pub fine_radius: u32,
+    pub coarse_radius: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+    /// Fine kernel in `0..MAX_SHARPEN_TAPS`, coarse in `MAX_SHARPEN_TAPS..`.
+    pub kernels: [f32; 2 * MAX_SHARPEN_TAPS],
+}
+
+impl SharpenParams {
+    /// Build from a recipe's `sharpening` (`effective_scale = 1.0`, matching
+    /// `render_frame`). The caller must only enqueue the passes when `amount !=
+    /// 0` (the oracle's early return).
+    pub fn from_sharpening(s: &lumina_sidecar::Sharpening) -> Self {
+        let mut params = Self::zeroed();
+        params.amount = s.amount;
+        params.detail = s.detail;
+        params.masking = s.masking;
+        let (fine_radius, fine) = sharpen_kernel((s.radius * 0.5).max(0.5));
+        let (coarse_radius, coarse) = sharpen_kernel((s.radius * 1.5).max(0.5));
+        params.fine_radius = fine_radius;
+        params.coarse_radius = coarse_radius;
+        params.kernels[..fine.len()].copy_from_slice(&fine);
+        params.kernels[MAX_SHARPEN_TAPS..MAX_SHARPEN_TAPS + coarse.len()].copy_from_slice(&coarse);
+        params
+    }
+
+    /// Whether the oracle would run the sharpener (`amount != 0`).
+    pub fn needs_stage(s: &lumina_sidecar::Sharpening) -> bool {
+        s.amount != 0.0
+    }
+}
+
+/// Normalized Gaussian kernel for `sigma` (`apply_sharpening`'s `blur`):
+/// `r = ceil(3*sigma)`, `exp(-k²/(2σ²))` for `k in -r..=r`, normalized by the
+/// `f32` sum — operation-for-operation identical to the oracle.
+fn sharpen_kernel(sigma: f32) -> (u32, Vec<f32>) {
+    let r = (sigma * 3.0).ceil() as i32;
+    let r = r.clamp(0, (MAX_SHARPEN_TAPS as i32 - 1) / 2);
+    let mut kernel = Vec::with_capacity((2 * r + 1) as usize);
+    for k in -r..=r {
+        kernel.push(((-(k * k) as f32) / (2.0 * sigma * sigma)).exp());
+    }
+    let z: f32 = kernel.iter().sum();
+    for value in &mut kernel {
+        *value /= z;
+    }
+    (r as u32, kernel)
+}
+
+/// Tiny uniform selecting the kernel half + radius for one horizontal pass.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SharpenBlurSelect {
+    /// 0 for the fine kernel, [`MAX_SHARPEN_TAPS`] for the coarse one.
+    pub base: u32,
+    pub radius: u32,
+    pub _pad: [u32; 2],
+}
+
+/// Uniform carrying the reduced gradient maximum for the apply pass.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SharpenMaxg {
+    pub maxg: f32,
+    pub _pad: [u32; 3],
+}
+
+/// WGSL for one horizontal Gaussian blur pass of the luminance.
+pub const SHARPEN_BLUR_SRC: &str = concat!(
+    r#"
+struct SharpenParams {
+  amount : f32,
+  detail : f32,
+  masking : f32,
+  pad0 : u32,
+  fine_radius : u32,
+  coarse_radius : u32,
+  pad1 : u32,
+  pad2 : u32,
+  kernels : array<f32, 182>,
+};
+struct BlurSelect {
+  base : u32,
+  radius : u32,
+  pad0 : u32,
+  pad1 : u32,
+};
+@group(0) @binding(0) var<storage, read> params : SharpenParams;
+@group(0) @binding(1) var input_tex : texture_2d<f32>;
+@group(0) @binding(2) var<uniform> blur_sel : BlurSelect;
+"#,
+    common_src!(),
+    r#"
+@fragment
+fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) f32 {
+  let dims = textureDimensions(input_tex);
+  let coord = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
+  let r = i32(blur_sel.radius);
+  var sum : f32 = 0.0;
+  for (var k = -r; k <= r; k = k + 1) {
+    let xx = clamp(coord.x + k, 0, i32(dims.x) - 1);
+    let c = textureLoad(input_tex, vec2<u32>(u32(xx), u32(coord.y)), 0);
+    let lum = 0.2126 * roundi(c.r * 255.0)
+      + 0.7152 * roundi(c.g * 255.0)
+      + 0.0722 * roundi(c.b * 255.0);
+    sum = sum + params.kernels[blur_sel.base + u32(k + r)] * lum;
+  }
+  return sum;
+}
+"#
+);
+
+/// WGSL compute pass reducing the Rec.709 luminance-gradient maximum
+/// (`apply_sharpening`'s `maxg`) into an `atomicMax` cell. `grad >= 0`, so the
+/// `u32` bit pattern orders identically to the `f32` value.
+pub const SHARPEN_GRADIENT_SRC: &str = concat!(
+    r#"
+@group(0) @binding(0) var input_tex : texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> max_grad : atomic<u32>;
+"#,
+    common_src!(),
+    r#"
+fn lum_at(c : vec2<u32>) -> f32 {
+  let p = textureLoad(input_tex, c, 0);
+  return 0.2126 * roundi(p.r * 255.0)
+    + 0.7152 * roundi(p.g * 255.0)
+    + 0.0722 * roundi(p.b * 255.0);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) gid : vec3<u32>) {
+  let dims = textureDimensions(input_tex);
+  if (gid.x >= dims.x || gid.y >= dims.y) {
+    return;
+  }
+  let x = i32(gid.x);
+  let y = i32(gid.y);
+  let w = i32(dims.x);
+  let h = i32(dims.y);
+  let gx = lum_at(vec2<u32>(u32(min(x + 1, w - 1)), gid.y))
+    - lum_at(vec2<u32>(u32(max(x - 1, 0)), gid.y));
+  let gy = lum_at(vec2<u32>(gid.x, u32(min(y + 1, h - 1))))
+    - lum_at(vec2<u32>(gid.x, u32(max(y - 1, 0))));
+  let grad = abs(gx) + abs(gy);
+  atomicMax(&max_grad, bitcast<u32>(grad));
+}
+"#
+);
+
+/// WGSL for the sharpening apply pass: vertical blur on the fly, gradient from
+/// the source luminance and the oracle's `ratio` application.
+pub const SHARPEN_APPLY_SRC: &str = concat!(
+    r#"
+struct SharpenParams {
+  amount : f32,
+  detail : f32,
+  masking : f32,
+  pad0 : u32,
+  fine_radius : u32,
+  coarse_radius : u32,
+  pad1 : u32,
+  pad2 : u32,
+  kernels : array<f32, 182>,
+};
+struct SharpenMaxg {
+  maxg : f32,
+  pad0 : u32,
+  pad1 : u32,
+  pad2 : u32,
+};
+const MAX_TAPS : u32 = 91u;
+@group(0) @binding(0) var<storage, read> params : SharpenParams;
+@group(0) @binding(1) var input_tex : texture_2d<f32>;
+@group(0) @binding(2) var fine_tex : texture_2d<f32>;
+@group(0) @binding(3) var coarse_tex : texture_2d<f32>;
+@group(0) @binding(4) var<uniform> maxg_params : SharpenMaxg;
+"#,
+    common_src!(),
+    r#"
+fn lum_at(c : vec2<u32>) -> f32 {
+  let p = textureLoad(input_tex, c, 0);
+  return 0.2126 * roundi(p.r * 255.0)
+    + 0.7152 * roundi(p.g * 255.0)
+    + 0.0722 * roundi(p.b * 255.0);
+}
+
+fn byte255(x : f32) -> f32 {
+  return clamp(roundi(x), 0.0, 255.0) / 255.0;
+}
+
+@fragment
+fn fs_main(@builtin(position) frag_coord : vec4<f32>) -> @location(0) vec4<f32> {
+  let dims = textureDimensions(input_tex);
+  let w = i32(dims.x);
+  let h = i32(dims.y);
+  let coord = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
+  let coord_u = vec2<u32>(frag_coord.xy);
+  let c0 = textureLoad(input_tex, coord_u, 0);
+  let lum0 = lum_at(coord_u);
+  var fine_v : f32 = 0.0;
+  let rf = i32(params.fine_radius);
+  for (var k = -rf; k <= rf; k = k + 1) {
+    let yy = clamp(coord.y + k, 0, h - 1);
+    fine_v = fine_v
+      + params.kernels[u32(k + rf)]
+        * textureLoad(fine_tex, vec2<u32>(coord_u.x, u32(yy)), 0).r;
+  }
+  var coarse_v : f32 = 0.0;
+  let rc = i32(params.coarse_radius);
+  for (var k = -rc; k <= rc; k = k + 1) {
+    let yy = clamp(coord.y + k, 0, h - 1);
+    coarse_v = coarse_v
+      + params.kernels[MAX_TAPS + u32(k + rc)]
+        * textureLoad(coarse_tex, vec2<u32>(coord_u.x, u32(yy)), 0).r;
+  }
+  let gx = lum_at(vec2<u32>(u32(min(coord.x + 1, w - 1)), coord_u.y))
+    - lum_at(vec2<u32>(u32(max(coord.x - 1, 0)), coord_u.y));
+  let gy = lum_at(vec2<u32>(coord_u.x, u32(min(coord.y + 1, h - 1))))
+    - lum_at(vec2<u32>(coord_u.x, u32(max(coord.y - 1, 0))));
+  let gradient = abs(gx) + abs(gy);
+  var edge : f32 = 0.0;
+  if (maxg_params.maxg > 0.0) {
+    edge = clamp(gradient / maxg_params.maxg, 0.0, 1.0);
+  }
+  let amount = params.amount
+    * ((1.0 - params.masking) + params.masking * edge);
+  let d = params.detail * (lum0 - fine_v)
+    + (1.0 - params.detail) * (lum0 - coarse_v);
+  let ny = clamp(lum0 + amount * d, 0.0, 255.0);
+  var ratio : f32 = 0.0;
+  if (lum0 > 1e-6) {
+    ratio = ny / lum0;
+  }
+  return vec4<f32>(
+    byte255(roundi(c0.r * 255.0) * ratio),
+    byte255(roundi(c0.g * 255.0) * ratio),
+    byte255(roundi(c0.b * 255.0) * ratio),
+    c0.a
+  );
+}
+"#
+);
+
+/// Scalar (`R32Float`) intermediate format for the separable blur passes.
+pub const SHARPEN_SCALAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+
+/// Create an `R32Float` render/read texture for a blur intermediate.
+pub fn create_sharpen_scalar_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        view_formats: &[],
+        format: SHARPEN_SCALAR_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    })
+}
+
+/// Bind group layout for [`SHARPEN_BLUR_SRC`]: storage (0) + input (1) + uniform (2).
+pub fn create_sharpen_blur_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-sharpen-blur-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Bind group layout for [`SHARPEN_APPLY_SRC`].
+pub fn create_sharpen_apply_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-sharpen-apply-bgl"),
+        entries: &[
+            storage_entry(0, true),
+            texture_entry(1, true),
+            texture_entry(2, false),
+            texture_entry(3, false),
+            uniform_entry(4),
+        ],
+    })
+}
+
+/// Bind group layout for [`SHARPEN_GRADIENT_SRC`] (compute): input (0) +
+/// read-write atomic storage (1).
+pub fn create_sharpen_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lumina-gpu-sharpen-gradient-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+pub fn create_sharpen_blur_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> Result<wgpu::RenderPipeline, super::GpuError> {
+    build_simple_pipeline(
+        device,
+        "sharpen-blur",
+        SHARPEN_BLUR_SRC,
+        &create_sharpen_blur_bind_group_layout(device),
+        target_format,
+    )
+}
+
+pub fn create_sharpen_apply_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> Result<wgpu::RenderPipeline, super::GpuError> {
+    build_simple_pipeline(
+        device,
+        "sharpen-apply",
+        SHARPEN_APPLY_SRC,
+        &create_sharpen_apply_bind_group_layout(device),
+        target_format,
+    )
+}
+
+/// Build the sharpening gradient-reduction compute pipeline.
+pub fn create_sharpen_gradient_pipeline(
+    device: &wgpu::Device,
+) -> Result<wgpu::ComputePipeline, super::GpuError> {
+    let layout = create_sharpen_gradient_bind_group_layout(device);
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lumina-gpu-sharpen-gradient-pl"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lumina-gpu-sharpen-gradient-shader"),
+        source: wgpu::ShaderSource::Wgsl(SHARPEN_GRADIENT_SRC.into()),
+    });
+    Ok(
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("lumina-gpu-sharpen-gradient-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        }),
+    )
+}
+
+pub fn create_sharpen_params_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-sharpen-params"),
+        size: std::mem::size_of::<SharpenParams>() as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn write_sharpen_params(queue: &wgpu::Queue, buffer: &wgpu::Buffer, params: &SharpenParams) {
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(params));
+}
+
+pub fn create_sharpen_blur_select_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-sharpen-blur-select"),
+        size: std::mem::size_of::<SharpenBlurSelect>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn write_sharpen_blur_select(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    select: &SharpenBlurSelect,
+) {
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(select));
+}
+
+pub fn create_sharpen_maxg_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-sharpen-maxg"),
+        size: std::mem::size_of::<SharpenMaxg>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn write_sharpen_maxg(queue: &wgpu::Queue, buffer: &wgpu::Buffer, maxg: f32) {
+    let params = SharpenMaxg { maxg, _pad: [0; 3] };
+    queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
+}
+
+/// Create the 4-byte read-write storage cell the gradient reduction
+/// `atomicMax`es into. `COPY_SRC` lets the caller copy it into a map buffer.
+pub fn create_sharpen_gradient_cell(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-sharpen-max-cell"),
+        size: 4,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn create_sharpen_blur_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    input_view: &wgpu::TextureView,
+    select_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-sharpen-blur-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(input_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: select_buffer.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+pub fn create_sharpen_apply_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    input_view: &wgpu::TextureView,
+    fine_view: &wgpu::TextureView,
+    coarse_view: &wgpu::TextureView,
+    maxg_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-sharpen-apply-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(input_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(fine_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(coarse_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: maxg_buffer.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+pub fn create_sharpen_gradient_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    input_view: &wgpu::TextureView,
+    max_cell: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lumina-gpu-sharpen-gradient-bindgroup"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(input_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: max_cell.as_entire_binding(),
+            },
+        ],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,5 +2582,124 @@ mod tests {
         assert_eq!(DogParams::clarity(0.0).radius, 8);
         assert_eq!(DogParams::clarity(1.0).radius, 8 + 24);
         assert_eq!(DogParams::clarity(-0.5).radius, 8 + 12);
+    }
+
+    /// GPU-RENDER-PARITY-1 stage 2: the storage struct must match the WGSL
+    /// `array<f32, 182>` layout exactly (32-byte scalar header, then the fine
+    /// kernel at offset 0 and the coarse kernel at offset `MAX_SHARPEN_TAPS`).
+    #[test]
+    fn sharpen_params_layout_matches_wgsl() {
+        assert_eq!(std::mem::size_of::<SharpenParams>(), 32 + 2 * 91 * 4);
+        assert_eq!(std::mem::offset_of!(SharpenParams, kernels), 32);
+    }
+
+    /// The schema's `radius` maximum (10.0) at `effective_scale = 1.0` yields
+    /// the largest supported kernel: `sigma = 15`, `r = 45`, 91 taps.
+    #[test]
+    fn sharpen_kernel_radius_matches_oracle_bounds() {
+        // `(radius * 1.5).max(0.5)` at radius = 10.
+        let (r, kernel) = sharpen_kernel((10.0f32 * 1.5).max(0.5));
+        assert_eq!(r, 45);
+        assert_eq!(kernel.len(), MAX_SHARPEN_TAPS);
+        // The kernel is normalized.
+        let sum: f32 = kernel.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5, "kernel sum {sum}");
+
+        // Smallest radius still produces a usable kernel (sigma >= 0.5 → r=2).
+        let (r, _) = sharpen_kernel((0.1f32 * 0.5).max(0.5));
+        assert_eq!(r, 2);
+    }
+
+    /// Vignette radius bounds reproduce the oracle's `r_min`/`r_max` for a
+    /// symmetric frame; the centre pixel always maps to radius 0.
+    #[test]
+    fn vignette_radius_bounds_are_symmetric_and_centre_zero() {
+        let (r_min, r_max) = vignette_radius_bounds(5, 5, 1.0);
+        assert_eq!(r_min, 0.0, "centre pixel must be radius 0");
+        assert!(r_max > 0.0);
+        // Circular roundness=1: corner radius ≈ sqrt(2).
+        let expected = (2.0f32 * (2.0f32 / 2.0).powi(2)).sqrt();
+        assert!((r_max - expected).abs() < 1e-6, "{r_max} vs {expected}");
+    }
+
+    /// Grain seed folding mirrors `apply_grain`: deterministic, dimension- and
+    /// seed-sensitive.
+    #[test]
+    fn grain_effective_seed_is_deterministic_and_sensitive() {
+        assert_eq!(
+            grain_effective_seed(7, 64, 64),
+            grain_effective_seed(7, 64, 64)
+        );
+        assert_ne!(
+            grain_effective_seed(7, 64, 64),
+            grain_effective_seed(8, 64, 64)
+        );
+        assert_ne!(
+            grain_effective_seed(7, 64, 64),
+            grain_effective_seed(7, 32, 64)
+        );
+    }
+
+    /// Presence/identity gates match the oracle's early returns exactly, so a
+    /// present-but-neutral stage is a no-op on the GPU (byte identity).
+    #[test]
+    fn detail_stage_identity_gates_match_oracle() {
+        use lumina_sidecar::{Grain, NoiseReduction, Sharpening, Vignette};
+        let zero_nr = NoiseReduction {
+            version: 1,
+            luminance: 0.0,
+            color: 0.0,
+        };
+        assert!(!NoiseParams::needs_stage(&zero_nr));
+        assert!(NoiseParams::needs_stage(&NoiseReduction {
+            luminance: 0.2,
+            ..zero_nr
+        }));
+
+        let zero_sharp = Sharpening {
+            version: 1,
+            amount: 0.0,
+            radius: 1.0,
+            detail: 0.5,
+            masking: 0.0,
+        };
+        assert!(!SharpenParams::needs_stage(&zero_sharp));
+        assert!(SharpenParams::needs_stage(&Sharpening {
+            amount: 1.0,
+            ..zero_sharp
+        }));
+
+        // Effects: the caller gates on the individual amounts (the oracle
+        // early-returns per effect, not per container).
+        assert_eq!(
+            VignetteParams::from_vignette(
+                &Vignette {
+                    version: 1,
+                    amount: 0.0,
+                    midpoint: 0.5,
+                    roundness: 1.0,
+                    feather: 0.5,
+                },
+                8,
+                8
+            )
+            .amount,
+            0.0
+        );
+        assert_eq!(
+            GrainParams::from_grain(
+                &Grain {
+                    version: 1,
+                    amount: 0.0,
+                    size: 0.0,
+                    roughness: 0.5,
+                    seed: 0,
+                },
+                8,
+                8
+            )
+            .amount,
+            0.0
+        );
     }
 }

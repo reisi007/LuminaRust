@@ -30,10 +30,11 @@ use lumina_gpu::{
 };
 use lumina_sidecar::{
     BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves, EditRecipe,
-    Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, HslAdjustments, HslChannel,
-    LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry, Presence,
-    RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SpotRemoval, SpotRemovalMode, SOURCE_ACTION_VERSION,
+    Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
+    HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry,
+    Presence, RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef,
+    SourceActionKind, SourceActionSpec, SpotRemoval, SpotRemovalMode, Vignette,
+    SOURCE_ACTION_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -387,6 +388,155 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
+        // --- GPU-RENDER-PARITY-1 stage 2: detail stages ---
+        (
+            "effects_vignette",
+            EditRecipe {
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: -0.5,
+                        midpoint: 0.5,
+                        roundness: 1.0,
+                        feather: 0.5,
+                    }),
+                    grain: None,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "effects_grain",
+            EditRecipe {
+                effects: Some(Effects {
+                    vignette: None,
+                    grain: Some(Grain {
+                        version: 1,
+                        amount: 0.5,
+                        size: 0.3,
+                        roughness: 0.5,
+                        seed: 0x0BAD_F00D_1234,
+                    }),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "effects_vignette_grain",
+            EditRecipe {
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: 0.4,
+                        midpoint: 0.4,
+                        roundness: 0.5,
+                        feather: 0.7,
+                    }),
+                    grain: Some(Grain {
+                        version: 1,
+                        amount: 0.35,
+                        size: 0.6,
+                        roughness: 0.8,
+                        seed: 7,
+                    }),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "noise_reduction_luminance",
+            EditRecipe {
+                noise_reduction: Some(NoiseReduction {
+                    version: 1,
+                    luminance: 0.6,
+                    color: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "noise_reduction_color",
+            EditRecipe {
+                noise_reduction: Some(NoiseReduction {
+                    version: 1,
+                    luminance: 0.0,
+                    color: 0.7,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "noise_reduction_full",
+            EditRecipe {
+                noise_reduction: Some(NoiseReduction {
+                    version: 1,
+                    luminance: 0.5,
+                    color: 0.5,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "sharpening_unmasked",
+            EditRecipe {
+                sharpening: Some(Sharpening {
+                    version: 1,
+                    amount: 1.2,
+                    radius: 1.0,
+                    detail: 0.5,
+                    masking: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "sharpening_masked",
+            EditRecipe {
+                sharpening: Some(Sharpening {
+                    version: 1,
+                    amount: 1.5,
+                    radius: 1.5,
+                    detail: 0.7,
+                    masking: 0.6,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "detail_stage_stack",
+            EditRecipe {
+                adjustments: BTreeMap::from([("exposure".into(), 0.2)]),
+                noise_reduction: Some(NoiseReduction {
+                    version: 1,
+                    luminance: 0.4,
+                    color: 0.3,
+                }),
+                sharpening: Some(Sharpening {
+                    version: 1,
+                    amount: 1.0,
+                    radius: 1.2,
+                    detail: 0.6,
+                    masking: 0.4,
+                }),
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: 0.3,
+                        midpoint: 0.5,
+                        roundness: 1.0,
+                        feather: 0.5,
+                    }),
+                    grain: Some(Grain {
+                        version: 1,
+                        amount: 0.25,
+                        size: 0.4,
+                        roughness: 0.5,
+                        seed: 42,
+                    }),
+                }),
+                ..Default::default()
+            },
+        ),
     ]
 }
 
@@ -419,6 +569,20 @@ fn equivalence_for(name: &str) -> Equivalence {
         // Stacks tone + Presence + every color stage; two ±1 codes coincide on
         // one pixel of the gradient frame.
         "combined_tone_color_presence" => Equivalence::Bounded(2),
+        // --- GPU-RENDER-PARITY-1 stage 2: detail stages ---
+        // Vignette and grain are `f32`-exact ports of the oracle and asserted
+        // byte-identical on their own; stacking both can flip one `round()` tie
+        // in the grain delta (GPU FMA vs. the oracle's separate multiply/add),
+        // so the combined recipe is bounded at one code. Noise Reduction /
+        // Sharpening carry the same `exp`/FMA residual.
+        "effects_vignette" | "effects_grain" => Equivalence::ByteIdentical,
+        "effects_vignette_grain" => Equivalence::Bounded(1),
+        "noise_reduction_luminance"
+        | "noise_reduction_color"
+        | "noise_reduction_full"
+        | "sharpening_unmasked"
+        | "sharpening_masked" => Equivalence::Bounded(1),
+        "detail_stage_stack" => Equivalence::Bounded(2),
         other => panic!("no measured equivalence bound declared for recipe `{other}`"),
     }
 }
@@ -575,7 +739,7 @@ fn vram_path_applies_post_stages() {
     const W: u32 = 32;
     const H: u32 = 32;
     let frame = gradient_frame(W, H);
-    let recipes: [(&str, EditRecipe, Equivalence); 3] = [
+    let recipes: [(&str, EditRecipe, Equivalence); 4] = [
         (
             "curves",
             EditRecipe {
@@ -618,6 +782,44 @@ fn vram_path_applies_post_stages() {
             },
             // Color Grading measured byte-identical.
             Equivalence::ByteIdentical,
+        ),
+        (
+            // GPU-RENDER-PARITY-1 stage 2: the detail chain (Noise Reduction →
+            // Sharpening → vignette → grain) runs in the readback-free VRAM path
+            // through the same `render_post_stages` seam.
+            "detail_stage_stack",
+            EditRecipe {
+                noise_reduction: Some(NoiseReduction {
+                    version: 1,
+                    luminance: 0.4,
+                    color: 0.3,
+                }),
+                sharpening: Some(Sharpening {
+                    version: 1,
+                    amount: 1.0,
+                    radius: 1.2,
+                    detail: 0.6,
+                    masking: 0.4,
+                }),
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: 0.3,
+                        midpoint: 0.5,
+                        roundness: 1.0,
+                        feather: 0.5,
+                    }),
+                    grain: Some(Grain {
+                        version: 1,
+                        amount: 0.25,
+                        size: 0.4,
+                        roughness: 0.5,
+                        seed: 42,
+                    }),
+                }),
+                ..Default::default()
+            },
+            Equivalence::Bounded(2),
         ),
     ];
     ctx.ensure_vram(W, H).expect("vram state");
@@ -668,11 +870,20 @@ fn unimplemented_stages_still_route_to_cpu() {
     };
     let frame = gradient_frame(48, 48);
     let recipe = EditRecipe {
-        effects: Some(Effects::default()),
+        geometry: Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        }),
         ..Default::default()
     };
     let reasons = unsupported_gpu_stages(&recipe);
-    assert!(reasons.iter().any(|r| r.contains("effects")), "{reasons:?}");
+    assert!(
+        reasons.iter().any(|r| r.contains("geometry")),
+        "{reasons:?}"
+    );
     if !ctx.is_available() {
         eprintln!("{SKIP_MESSAGE} - validator-only assertion");
         return;
@@ -934,14 +1145,20 @@ fn vram_path_refuses_unsupported_recipes() {
     let frame = gradient_frame(16, 16);
     ctx.ensure_vram(16, 16).expect("vram state");
     let recipe = EditRecipe {
-        effects: Some(Effects::default()),
+        geometry: Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        }),
         ..Default::default()
     };
     assert!(
         unsupported_gpu_stages(&recipe)
             .iter()
-            .any(|r| r.contains("effects")),
-        "effects must be reported"
+            .any(|r| r.contains("geometry")),
+        "geometry must be reported"
     );
     assert!(
         ctx.render_to_vram(&frame, &recipe).is_err(),
@@ -996,11 +1213,13 @@ fn source_actions(count: usize) -> EditRecipe {
 /// minimal example whose expected reason substring is asserted, so a future
 /// change that silently drops a gate branch fails this test.
 ///
+/// Stage 2 additionally **proves the implemented detail classes are
+/// GPU-eligible**: non-neutral Effects (vignette + grain), Noise Reduction and
+/// Sharpening must all yield an empty reason list (the pixel parity itself is
+/// asserted by `implemented_stages_match_cpu_oracle`).
+///
 /// Reason classes and their minimal trigger (the reason string is the one the
 /// gate emits):
-/// - `effects` — `recipe.effects = Some(..)` (vignette/grain).
-/// - `noise_reduction` — `recipe.noise_reduction = Some(..)`.
-/// - `sharpening` — `recipe.sharpening = Some(..)`.
 /// - `geometry` — `recipe.geometry = Some(..)`.
 /// - `lens_correction` — `recipe.lens_correction = Some(..)`.
 /// - `perspective` — `recipe.perspective = Some(..)`.
@@ -1017,15 +1236,32 @@ fn source_actions(count: usize) -> EditRecipe {
 ///   are now GPU-supported, so this is the unknown-key class).
 #[test]
 fn cpu_routing_inventory_is_complete() {
+    // GPU-RENDER-PARITY-1 stage 2 detail stages: implemented, so these must NOT
+    // be flagged (byte-exactness/parity is proven by the oracle test).
     let effects = EditRecipe {
-        effects: Some(Effects::default()),
+        effects: Some(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: -0.4,
+                midpoint: 0.6,
+                roundness: 1.0,
+                feather: 0.5,
+            }),
+            grain: Some(Grain {
+                version: 1,
+                amount: 0.3,
+                size: 0.4,
+                roughness: 0.5,
+                seed: 42,
+            }),
+        }),
         ..Default::default()
     };
     let noise = EditRecipe {
         noise_reduction: Some(NoiseReduction {
             version: 1,
             luminance: 0.5,
-            color: 0.0,
+            color: 0.3,
         }),
         ..Default::default()
     };
@@ -1035,10 +1271,22 @@ fn cpu_routing_inventory_is_complete() {
             amount: 1.0,
             radius: 1.0,
             detail: 0.5,
-            masking: 0.0,
+            masking: 0.4,
         }),
         ..Default::default()
     };
+    for (name, recipe) in [
+        ("effects", &effects),
+        ("noise_reduction", &noise),
+        ("sharpening", &sharpening),
+    ] {
+        let reasons = unsupported_gpu_stages(recipe);
+        assert!(
+            reasons.is_empty(),
+            "implemented stage `{name}` must be GPU-eligible, got {reasons:?}"
+        );
+    }
+
     let geometry = EditRecipe {
         geometry: Some(Geometry {
             version: 1,
@@ -1103,9 +1351,6 @@ fn cpu_routing_inventory_is_complete() {
     let wb = [1.9f32, 1.0, 1.4, 1.0];
 
     let cases: Vec<(&str, Vec<String>)> = vec![
-        ("effects", unsupported_gpu_stages(&effects)),
-        ("noise_reduction", unsupported_gpu_stages(&noise)),
-        ("sharpening", unsupported_gpu_stages(&sharpening)),
         ("geometry", unsupported_gpu_stages(&geometry)),
         ("lens_correction", unsupported_gpu_stages(&lens)),
         ("perspective", unsupported_gpu_stages(&perspective)),

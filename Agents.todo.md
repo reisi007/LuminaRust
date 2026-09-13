@@ -79,8 +79,8 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-17 offene Tasks (Checkbox-Zählung dieser Datei; die älteren Stände waren
-zu hoch gegriffen) — Block A: 13, Block B: 1, Block C: 3.
+18 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 14,
+Block B: 1, Block C: 3 (Stand 2026-09-13; neu: HARNESS-ENIGO-06).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -125,6 +125,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | KITTEST-PARITY-PATHS-1 | G-10 | Pfad-Parity-Framework |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.0 | GPU-RENDER-PARITY-1 | G-10 | GPU-Parität |
+| 1.0 | HARNESS-ENIGO-06 | alle G | Enigo-0.6-Harness |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -158,11 +159,12 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Stand: Stufe 1 (Ton-Domäne) + Gate-Vollständigkeit (red_eye/spot/generative melden, volle `render_frame`-Fallback-Kette, VRAM-Verweigerung) verifiziert BESTANDEN. Rest: Stufe 2 (effects/NR/sharpening), Stufe 3 (geometry/lens/perspective/lens_blur/red_eye/spots/generative/Camera-WB), Perf-Pooling (Scratch-/Dark-Texturen, Dehaze-Readback). Lebendes Inventar: `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`) — jede Reason-Klasse konstruiert + geflaggt. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
+- [ ] **[PRIO: hoch] GPU-RENDER-PARITY-1 (Release: 1.0)** Volle GPU-Parität (User-Entscheid 2026-09-12, Agents.md Änderungsregeln): alle Renderstufen in `lumina-gpu` implementieren, sodass kein Rezept mehr wegen `unsupported_gpu_stages_for` auf CPU zurückfällt — CPU-Routing aus diesem Grund ist ein Fail, kein Zustand. Stand: Stufe 1 (Ton-Domäne) + Stufe 2 (effects/NR/sharpening) + Gate-Vollständigkeit (red_eye/spot/generative melden, volle `render_frame`-Fallback-Kette, VRAM-Verweigerung) verifiziert BESTANDEN. Rest: Stufe 3 (geometry/lens/perspective/lens_blur/red_eye/spots/generative/Camera-WB/SourceAction-Artefakte), Perf-Pooling (Scratch-/Dark-Texturen, Dehaze-Readback, Sharpening-O(r)-Taps) + Follow-ups (Radius>10-Klemme laut machen, `effective_scale=1.0`-Annahme absichern, Parity-Recipe radius 10.0). Lebendes Inventar: `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`) — jede Reason-Klasse konstruiert + geflaggt. Scope: Stufen in `lumina-gpu` (+ Tests), GUI-Integration danach; Parität je Stufe per CPU-Oracle-Test (byte-identisch oder dokumentierte Toleranz). Abnahme: leere Unsupported-Liste für Standardrezepte, GPU-Gates lokal grün (Metal), kein GPU-only-Weg (CPU-Referenz bleibt). Crate: `lumina-gpu`.
 - [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
 
+- [ ] **[PRIO: mittel] HARNESS-ENIGO-06 (Release: 1.0)** `lumina-gui-harness` an Enigo 0.6 migrieren (Dependabot #2, 2026-09-07): `Settings::mac_delay` existiert in 0.6 nicht mehr → `cargo check -p lumina-gui-harness` ist am Mac rot (CI bleibt grün, da Linux-Container das macOS-cfg nicht trifft). Scope: Enigo-0.6-Settings-API übernehmen (Delay-Handling prüfen), kein Downgrade auf 0.2. Abnahme: `cargo check --workspace --all-targets` am Mac grün, CI grün. Crate: `lumina-gui-harness`.
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] KITTEST-COVERAGE-STATES-1 (Release: 1.0)** UI-Zustände pixel-sichtbar: Toast (Info/Error), Empty-/Missing-Sidecar-Hinweise, Export-Panel mit/ohne Metadaten-Flag, Filmstrip mit 20 Dummies (Single-Row-Geometrie bereits assertet, jetzt Golden dazu). Abnahme: Toast/Error/Empty/Export-Varianten je pixel-sichtbar + Vision-Check per DoD §6. Crate: `lumina-gui`.

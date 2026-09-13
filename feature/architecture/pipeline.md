@@ -1242,6 +1242,18 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   sichtbar; Masken modulieren CPU-seitig noch keine Pixel (dokumentierte
   F-042-Grenze), daher existiert dafür derzeit keine Pixel-Gleichheit zu
   verifizieren.
+- **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
+  (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
+  Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →
+  Vignette → Grain, in exakter Oracle-Reihenfolge) laufen auf GPU mit
+  CPU-Oracle-Parität — byte-identisch wo 0 gemessen, sonst maxAbsDiff ≤ 1
+  (≤ 2 für voll gestapelte Rezepte), PSNR ≥ 48 dB, Bias ≤ 0.05. Rest Stufe 3
+  (geometry/lens/perspective/lens_blur/red_eye/spots/generative/Camera-WB,
+  SourceAction-Artefakte) bleibt laut CPU-geroutet bzw. VRAM-verweigert;
+  lebendes Inventar: `cpu_routing_inventory_is_complete`. Offene Follow-ups:
+  Radius-Klemme statt Ablehnung bei schema-ungültigem Radius > 10,
+  `effective_scale=1.0`-Annahme absichern, Parity-Recipe am Schema-Maximum
+  (radius 10.0).
 - **Present-Pfad:** `eframe` nutzt jetzt den **wgpu**-Renderer;
   `GpuContext::from_parts` teilt sich Renderer-Device/Queue, sodass die
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`

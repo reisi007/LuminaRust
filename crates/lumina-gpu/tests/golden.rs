@@ -119,11 +119,11 @@ fn noise_frame(width: u32, height: u32, seed: u64) -> ImageFrame {
 ///
 /// Since GPU-RENDER-PARITY-1 the tone basket (default/exposure/contrast/WB) and
 /// the curves/HSL/presence/vibrance recipes all render on the GPU and are gated
-/// on the ≤1-code / ≥45 dB tolerance below. The basket also deliberately keeps
-/// recipes whose stages the GPU still does not implement (effects, unbound
-/// source actions): `render_with_gpu` must route those to the CPU pipeline
-/// instead of silently dropping the stage — the routing test below pins this
-/// byte-exactly.
+/// on the ≤1-code / ≥45 dB tolerance below; stage 2 adds the effects/vignette
+/// recipe to that GPU-gated basket. The basket also deliberately keeps a recipe
+/// whose stage the GPU still does not implement (unbound source actions):
+/// `render_with_gpu` must route it to the CPU pipeline instead of silently
+/// dropping the stage — the routing test below pins this byte-exactly.
 fn recipes() -> Vec<(&'static str, EditRecipe)> {
     vec![
         ("default", EditRecipe::default()),
@@ -151,9 +151,10 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
-        // --- unsupported by the GPU tone stage (must CPU-route) ---
+        // --- GPU-rendered since GPU-RENDER-PARITY-1 (color/presence) and
+        //     stage 2 (effects); gated on the tolerance below ---
         (
-            "vibrance_saturation_unsupported",
+            "vibrance_saturation",
             EditRecipe {
                 adjustments: BTreeMap::from([
                     ("vibrance".into(), 0.3),
@@ -163,7 +164,7 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
             },
         ),
         (
-            "curves_s_master_unsupported",
+            "curves_s_master",
             EditRecipe {
                 curves: Some(Curves {
                     version: 1,
@@ -187,7 +188,7 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
             },
         ),
         (
-            "hsl_red_shift_unsupported",
+            "hsl_red_shift",
             EditRecipe {
                 hsl: Some(HslAdjustments {
                     version: 1,
@@ -202,7 +203,7 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
             },
         ),
         (
-            "presence_clarity_unsupported",
+            "presence_clarity",
             EditRecipe {
                 presence: Some(Presence {
                     version: 1,
@@ -214,7 +215,7 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
             },
         ),
         (
-            "vignette_effects_unsupported",
+            "effects_vignette",
             EditRecipe {
                 effects: Some(Effects {
                     vignette: Some(Vignette {
@@ -248,11 +249,11 @@ fn recipes() -> Vec<(&'static str, EditRecipe)> {
 }
 
 /// The subset of [`recipes`] the GPU pipeline still cannot render (validator
-/// must flag each of them). Since GPU-RENDER-PARITY-1 curves, HSL, Presence and
-/// vibrance/saturation are rendered on the GPU, so only Effects and unbound
-/// SourceActions remain CPU-routed here.
+/// must flag each of them). Since GPU-RENDER-PARITY-1 (curves, HSL, Presence,
+/// vibrance/saturation) and stage 2 (effects), only unbound SourceActions
+/// remain CPU-routed in this basket.
 fn unsupported_recipe_names() -> &'static [&'static str] {
-    &["vignette_effects_unsupported", "source_actions_unsupported"]
+    &["source_actions_unsupported"]
 }
 
 // ---------------------------------------------------------------------------
@@ -581,12 +582,35 @@ fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
     })
     .is_empty());
 
+    // GPU-RENDER-PARITY-1 stage 2: the detail stages are GPU-supported and
+    // must not be flagged, including at non-neutral values.
+    assert!(unsupported_gpu_stages(&EditRecipe {
+        effects: Some(Effects {
+            vignette: Some(Vignette {
+                version: 1,
+                amount: -0.3,
+                midpoint: 0.5,
+                roundness: 1.0,
+                feather: 0.5,
+            }),
+            grain: None,
+        }),
+        ..Default::default()
+    })
+    .is_empty());
+
     // Each still-unsupported stage is flagged with a recognisable reason.
     let cases: Vec<(&str, EditRecipe)> = vec![
         (
-            "effects",
+            "geometry",
             EditRecipe {
-                effects: Some(Effects::default()),
+                geometry: Some(lumina_sidecar::Geometry {
+                    version: 1,
+                    crop: None,
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
                 ..Default::default()
             },
         ),

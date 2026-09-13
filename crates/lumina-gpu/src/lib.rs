@@ -19,25 +19,29 @@
 //!
 //! **Adjustment stages (GPU-RENDER-PARITY-1).** After the tone/WB pass the
 //! pipeline runs the [`stages`] post-tone chain in the CPU oracle's order:
-//! Presence (Texture/Clarity box DoG + Dehaze), then the per-pixel color pass
-//! (Curves → HSL → Point Color → vibrance/saturation → Color Grading).
+//! Presence (Texture/Clarity box DoG + Dehaze), the per-pixel color pass
+//! (Curves → HSL → Point Color → vibrance/saturation → Color Grading), then the
+//! stage-2 detail chain (Noise Reduction → Sharpening → vignette → grain).
 //!
 //! The equivalence is **per stage**, asserted by `tests/parity.rs` at the
-//! strongest property observed on this backend: Point Color, Color Grading,
-//! neutral vibrance/saturation, Presence Clarity and positive Dehaze are
-//! byte-identical to the oracle; Curves, HSL, non-neutral vibrance/saturation
-//! and Presence Texture/stacked Presence are bounded at maxAbsDiff ≤ 1; a
-//! recipe that stacks tone + Presence + all color stages is bounded at ≤ 2 with
-//! a mean signed error ≤ 0.05 (no systematic bias). The residual comes from the
-//! oracle evaluating the curves ratio in `f64` (the GPU is `f32`) and from the
-//! Metal backend rounding one ulp differently at a `round()` tie.
+//! bound each recipe enforces: Point Color, Color Grading,
+//! neutral vibrance/saturation, Presence Clarity and positive Dehaze,
+//! vignette and grain are byte-identical to the oracle (measured 0 on Metal);
+//! Curves, HSL, non-neutral vibrance/saturation,
+//! Presence Texture, Noise Reduction, Sharpening, a vignette+grain stack and
+//! the stacked detail/color recipes are bounded at
+//! maxAbsDiff ≤ 1 (≤ 2 for the fully stacked recipes) with a mean signed
+//! error ≤ 0.05 (no systematic bias). The residual comes from the oracle
+//! evaluating the curves ratio in `f64` (the GPU is `f32`), from `exp`/FMA
+//! rounding in the bilateral/Gaussian kernels, and from the Metal backend
+//! rounding one ulp differently at a `round()` tie.
 //!
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
-//! lists any recipe stage the pipeline cannot yet render (Effects, Sharpening,
-//! Noise Reduction, Geometry, Lens Correction, Perspective, Lens Blur, unbound
-//! SourceActions, As-Shot WB context, Red-Eye, spot removals, generative edit,
-//! non-schema adjustment keys, the source-action slot limit, …). On every
-//! entry point the outcome is loud and pixel-safe:
+//! lists any recipe stage the pipeline cannot yet render (Geometry, Lens
+//! Correction, Perspective, Lens Blur, unbound SourceActions, As-Shot WB
+//! context, Red-Eye, spot removals, generative edit, non-schema adjustment keys,
+//! the source-action slot limit, …). On every entry point the outcome is loud
+//! and pixel-safe:
 //!
 //! - [`GpuContext::render_with_gpu`] routes such a recipe to the free
 //!   `render_cpu`, which runs the **full** `lumina_core::render_frame` chain
@@ -197,8 +201,9 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// fallbacks).
 ///
 /// Rendered by the GPU ([`stages`], GPU-RENDER-PARITY-1) and therefore **not**
-/// flagged: Curves, HSL, Point Color, vibrance/saturation, Color Grading and
-/// Presence (Texture / Clarity / Dehaze).
+/// flagged: Curves, HSL, Point Color, vibrance/saturation, Color Grading,
+/// Presence (Texture / Clarity / Dehaze) and — since stage 2 — Noise Reduction,
+/// Sharpening and Effects (vignette + grain).
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
@@ -206,7 +211,6 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   their neutral default back into the recipe map; at that value the CPU
 ///   stage is pixel-identical to not having the key, so it must not block the
 ///   GPU route; keys outside the schema have no neutral value and always flag);
-/// - Noise Reduction, Sharpening, Effects (vignette/grain);
 /// - Geometry / Lens Correction / Perspective / Lens Blur;
 /// - non-empty SourceActions **unless** GPU source-action artifacts are bound
 ///   (see [`unsupported_gpu_stages_with_context`]);
@@ -268,13 +272,12 @@ pub fn unsupported_gpu_stages_with_context(
         reasons.push(format!("adjustment `{key}` not implemented on GPU"));
     }
     // GPU-RENDER-PARITY-1: curves, HSL, Point Color, Presence (Texture /
-    // Clarity / Dehaze), vibrance/saturation and Color Grading are all rendered
-    // by the [`stages`] post-tone passes, so they no longer route to the CPU.
-    // The stages below remain CPU-routed until their own parity tests land.
+    // Clarity / Dehaze), vibrance/saturation and Color Grading are rendered by
+    // the [`stages`] post-tone passes; stage 2 adds Noise Reduction, Sharpening
+    // and Effects (vignette + grain) to that set — so none of them route to the
+    // CPU anymore. The stages below remain CPU-routed until their own parity
+    // tests land.
     for (active, name) in [
-        (recipe.noise_reduction.is_some(), "noise_reduction"),
-        (recipe.sharpening.is_some(), "sharpening"),
-        (recipe.effects.is_some(), "effects"),
         (
             recipe
                 .lens_blur
@@ -917,14 +920,16 @@ impl GpuContext {
     /// ends up holding the pixel the CPU oracle would produce for `recipe`
     /// after the tone pass.
     ///
-    /// Pass order mirrors `apply_recipe` exactly:
+    /// Pass order mirrors `apply_recipe_with_scale_and_white_balance` exactly:
     /// `Presence Texture DoG → Presence Clarity DoG → Dehaze → color
-    /// (curves → HSL → Point Color → vibrance/saturation → Color Grading)`.
+    /// (curves → HSL → Point Color → vibrance/saturation → Color Grading)
+    /// → Noise Reduction → Sharpening → vignette → grain`.
     /// Each pass is a self-contained fullscreen draw into a ping-pong scratch
-    /// texture; the last pass writes `output`. Only the Dehaze pass needs a
-    /// host round-trip (the deterministic dark-channel percentile), so that one
-    /// pass pair is split across two submissions — every other pass shares one
-    /// encoder. No-op when the recipe uses none of these stages.
+    /// texture; the last pass writes `output`. Dehaze (dark-channel percentile)
+    /// and Sharpening (gradient maximum) are the only passes that need a host
+    /// round-trip, so those pass groups are split across submissions — every
+    /// other pass shares one encoder. No-op when the recipe uses none of these
+    /// stages.
     fn render_post_stages(
         &self,
         resources: &GpuResources,
@@ -951,6 +956,35 @@ impl GpuContext {
             writes.push(PostWrite::Color(Box::new(
                 stages::ColorParams::from_recipe(recipe),
             )));
+        }
+        // GPU-RENDER-PARITY-1 stage 2: detail stages in the oracle's order.
+        if let Some(noise) = recipe
+            .noise_reduction
+            .as_ref()
+            .filter(|n| stages::NoiseParams::needs_stage(n))
+        {
+            writes.push(PostWrite::Noise(stages::NoiseParams::from_recipe(noise)));
+        }
+        if let Some(sharpening) = recipe
+            .sharpening
+            .as_ref()
+            .filter(|s| stages::SharpenParams::needs_stage(s))
+        {
+            writes.push(PostWrite::Sharpen(Box::new(
+                stages::SharpenParams::from_sharpening(sharpening),
+            )));
+        }
+        if let Some(effects) = recipe.effects.as_ref() {
+            if let Some(vignette) = effects.vignette.as_ref().filter(|v| v.amount != 0.0) {
+                writes.push(PostWrite::Vignette(stages::VignetteParams::from_vignette(
+                    vignette, width, height,
+                )));
+            }
+            if let Some(grain) = effects.grain.as_ref().filter(|g| g.amount != 0.0) {
+                writes.push(PostWrite::Grain(stages::GrainParams::from_grain(
+                    grain, width, height,
+                )));
+            }
         }
         if writes.is_empty() {
             return Ok(());
@@ -1066,6 +1100,51 @@ impl GpuContext {
                     );
                     encode_fullscreen_pass(&mut encoder, &post.color_pipeline, &bind, dst);
                 }
+                PostWrite::Noise(params) => {
+                    stages::write_noise_params(&resources.queue, &post.noise_params, params);
+                    let bind = stages::create_noise_bind_group(
+                        &resources.device,
+                        &post.noise_layout,
+                        &post.noise_params,
+                        current,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.noise_pipeline, &bind, dst);
+                }
+                PostWrite::Vignette(params) => {
+                    stages::write_vignette_params(&resources.queue, &post.vignette_params, params);
+                    let bind = stages::create_vignette_bind_group(
+                        &resources.device,
+                        &post.vignette_layout,
+                        &post.vignette_params,
+                        current,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.vignette_pipeline, &bind, dst);
+                }
+                PostWrite::Grain(params) => {
+                    stages::write_grain_params(&resources.queue, &post.grain_params, params);
+                    let bind = stages::create_grain_bind_group(
+                        &resources.device,
+                        &post.grain_layout,
+                        &post.grain_params,
+                        current,
+                    );
+                    encode_fullscreen_pass(&mut encoder, &post.grain_pipeline, &bind, dst);
+                }
+                PostWrite::Sharpen(params) => {
+                    // Sharpening needs the gradient maximum on the host before
+                    // its apply pass. Flush the encoder built so far (every
+                    // preceding pass) and run the self-contained multi-pass
+                    // chain; continue afterwards in a fresh encoder.
+                    resources.queue.submit(Some(encoder.finish()));
+                    encoder =
+                        resources
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("lumina-gpu-post-sharpen"),
+                            });
+                    stages::write_sharpen_params(&resources.queue, &post.sharpen_params, params);
+                    self.encode_sharpening(resources, post, (width, height), params, current, dst)?;
+                }
             }
             current = dst;
             if !is_last {
@@ -1145,6 +1224,162 @@ impl GpuContext {
         drop(mapped);
         staging.unmap();
         Ok(stages::dehaze_airlight(&dark_bytes))
+    }
+
+    /// Encode the multi-pass sharpening stage (GPU-RENDER-PARITY-1 stage 2)
+    /// for the color texture `input_view`, writing the final pixels into `dst`.
+    ///
+    /// Two horizontal Gaussian blur passes produce the separable `tmp` rows for
+    /// the fine/coarse radii; when `masking != 0` a compute pass reduces the
+    /// luminance-gradient maximum (`maxg`) into a single cell that is read back
+    /// (the one host round-trip) — otherwise `maxg` is irrelevant and the
+    /// readback is skipped. The apply pass then performs the vertical blur on
+    /// the fly and the oracle's ratio, exactly like `apply_sharpening`.
+    fn encode_sharpening(
+        &self,
+        resources: &GpuResources,
+        post: &PostPipelineState,
+        size: (u32, u32),
+        params: &stages::SharpenParams,
+        input_view: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
+    ) -> Result<(), GpuError> {
+        let (width, height) = size;
+        let fine = stages::create_sharpen_scalar_texture(
+            &resources.device,
+            width,
+            height,
+            "lumina-gpu-sharpen-fine",
+        );
+        let fine_view = fine.create_view(&wgpu::TextureViewDescriptor::default());
+        let coarse = stages::create_sharpen_scalar_texture(
+            &resources.device,
+            width,
+            height,
+            "lumina-gpu-sharpen-coarse",
+        );
+        let coarse_view = coarse.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let max_cell = stages::create_sharpen_gradient_cell(&resources.device);
+        resources
+            .queue
+            .write_buffer(&max_cell, 0, &0u32.to_le_bytes());
+        let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lumina-gpu-sharpen-maxg-readback"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder =
+            resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumina-gpu-sharpen-pre"),
+                });
+        // Horizontal fine kernel (base 0). A dedicated uniform buffer per pass:
+        // the two blur passes share one encoder, so a shared buffer would make
+        // the second `write_buffer` retroactively change the first draw.
+        let select_fine = stages::create_sharpen_blur_select_buffer(&resources.device);
+        stages::write_sharpen_blur_select(
+            &resources.queue,
+            &select_fine,
+            &stages::SharpenBlurSelect {
+                base: 0,
+                radius: params.fine_radius,
+                _pad: [0; 2],
+            },
+        );
+        let bind_fine = stages::create_sharpen_blur_bind_group(
+            &resources.device,
+            &post.sharpen_blur_layout,
+            &post.sharpen_params,
+            input_view,
+            &select_fine,
+        );
+        encode_fullscreen_pass(
+            &mut encoder,
+            &post.sharpen_blur_pipeline,
+            &bind_fine,
+            &fine_view,
+        );
+        // Horizontal coarse kernel (second half of the storage array).
+        let select_coarse = stages::create_sharpen_blur_select_buffer(&resources.device);
+        stages::write_sharpen_blur_select(
+            &resources.queue,
+            &select_coarse,
+            &stages::SharpenBlurSelect {
+                base: stages::MAX_SHARPEN_TAPS as u32,
+                radius: params.coarse_radius,
+                _pad: [0; 2],
+            },
+        );
+        let bind_coarse = stages::create_sharpen_blur_bind_group(
+            &resources.device,
+            &post.sharpen_blur_layout,
+            &post.sharpen_params,
+            input_view,
+            &select_coarse,
+        );
+        encode_fullscreen_pass(
+            &mut encoder,
+            &post.sharpen_blur_pipeline,
+            &bind_coarse,
+            &coarse_view,
+        );
+
+        if params.masking != 0.0 {
+            // The `masking` edge term needs the global gradient maximum; reduce
+            // it on the GPU and read the single cell back.
+            let bind_gradient = stages::create_sharpen_gradient_bind_group(
+                &resources.device,
+                &post.sharpen_gradient_layout,
+                input_view,
+                &max_cell,
+            );
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("lumina-gpu-sharpen-gradient"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&post.sharpen_gradient_pipeline);
+                pass.set_bind_group(0, &bind_gradient, &[]);
+                pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+            }
+            encoder.copy_buffer_to_buffer(&max_cell, 0, &staging, 0, 4);
+            resources.queue.submit(Some(encoder.finish()));
+            let maxg = readback_gradient_max(resources, &staging)?;
+            stages::write_sharpen_maxg(&resources.queue, &post.sharpen_maxg, maxg);
+        } else {
+            // `masking == 0` makes the edge term irrelevant; skip the reduction
+            // and its readback.
+            resources.queue.submit(Some(encoder.finish()));
+            stages::write_sharpen_maxg(&resources.queue, &post.sharpen_maxg, 1.0);
+        }
+
+        let mut apply_encoder =
+            resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumina-gpu-sharpen-apply"),
+                });
+        let bind_apply = stages::create_sharpen_apply_bind_group(
+            &resources.device,
+            &post.sharpen_apply_layout,
+            &post.sharpen_params,
+            input_view,
+            &fine_view,
+            &coarse_view,
+            &post.sharpen_maxg,
+        );
+        encode_fullscreen_pass(
+            &mut apply_encoder,
+            &post.sharpen_apply_pipeline,
+            &bind_apply,
+            dst,
+        );
+        resources.queue.submit(Some(apply_encoder.finish()));
+        Ok(())
     }
 
     /// Bind the source-action artifacts the GPU source-action stage composites
@@ -1932,9 +2167,9 @@ impl GpuContext {
     /// white balance plus the seven tone sliders; the [`stages`] post-tone
     /// chain then runs Presence and the per-pixel color stages. When
     /// [`unsupported_gpu_stages`] reports any remaining unsupported stage
-    /// (Noise Reduction, Sharpening, Effects, Geometry, Lens Correction,
-    /// Perspective, Lens Blur, SourceActions, Red-Eye, spot removals,
-    /// generative edit, …), the render is **explicitly routed to the `render_cpu`
+    /// (Geometry, Lens Correction, Perspective, Lens Blur, SourceActions,
+    /// Red-Eye, spot removals, generative edit, …), the render is **explicitly
+    /// routed to the `render_cpu`
     /// fallback** rather than silently GPU-rendering with the stage dropped. The
     /// routing decision is logged once per unique reason set.
     ///
@@ -2433,6 +2668,35 @@ fn render_cpu(frame: &ImageFrame, recipe: &EditRecipe) -> Result<Frame, GpuError
     Ok(Frame::from_image_frame(output.frame))
 }
 
+/// Map a 4-byte `MAP_READ` staging buffer and reinterpret its `u32` payload as
+/// the sharpening gradient maximum (`f32::from_bits`). Used by
+/// [`GpuContext::encode_sharpening`] after its `atomicMax` reduction.
+#[cfg(feature = "gpu")]
+fn readback_gradient_max(
+    resources: &GpuResources,
+    staging: &wgpu::Buffer,
+) -> Result<f32, GpuError> {
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
+    resources
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
+    rx.recv()
+        .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
+        .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
+    let mapped = slice
+        .get_mapped_range()
+        .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
+    let bits = u32::from_le_bytes([mapped[0], mapped[1], mapped[2], mapped[3]]);
+    drop(mapped);
+    staging.unmap();
+    Ok(f32::from_bits(bits))
+}
+
 // ---------------------------------------------------------------------------
 // GPU backend init (only compiled under the `gpu` feature).
 // ---------------------------------------------------------------------------
@@ -2489,14 +2753,16 @@ struct SourceActionPipelineState {
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
-/// Compiled GPU-RENDER-PARITY-1 post-tone pipelines (GPU-RENDER-PARITY-1).
+/// Compiled GPU-RENDER-PARITY-1 post-tone pipelines.
 ///
-/// Groups the four fullscreen adjustment passes that run *after* the tone pass
-/// in the CPU oracle's order: the per-pixel color pass (curves → HSL → Point
-/// Color → vibrance/saturation → Color Grading), the box Difference-of-
-/// Gaussians used for Presence Texture/Clarity, the dark-channel pass, and the
-/// Dehaze apply pass. Built once and reused; only the bind groups (which
-/// reference per-frame input textures) are rebuilt per pass.
+/// Groups the fullscreen adjustment passes that run *after* the tone pass in
+/// the CPU oracle's order: the per-pixel color pass (curves → HSL → Point Color
+/// → vibrance/saturation → Color Grading), the box Difference-of-Gaussians used
+/// for Presence Texture/Clarity, the dark-channel pass, the Dehaze apply pass
+/// and — since stage 2 — Noise Reduction, Sharpening (blur/apply + gradient
+/// reduction compute) and the Effects (vignette/grain). Built once and reused;
+/// only the bind groups (which reference per-frame input textures) are rebuilt
+/// per pass.
 #[cfg(feature = "gpu")]
 struct PostPipelineState {
     color_pipeline: wgpu::RenderPipeline,
@@ -2513,6 +2779,23 @@ struct PostPipelineState {
     dehaze_pipeline: wgpu::RenderPipeline,
     dehaze_layout: wgpu::BindGroupLayout,
     dehaze_params: wgpu::Buffer,
+    noise_pipeline: wgpu::RenderPipeline,
+    noise_layout: wgpu::BindGroupLayout,
+    noise_params: wgpu::Buffer,
+    vignette_pipeline: wgpu::RenderPipeline,
+    vignette_layout: wgpu::BindGroupLayout,
+    vignette_params: wgpu::Buffer,
+    grain_pipeline: wgpu::RenderPipeline,
+    grain_layout: wgpu::BindGroupLayout,
+    grain_params: wgpu::Buffer,
+    sharpen_blur_pipeline: wgpu::RenderPipeline,
+    sharpen_blur_layout: wgpu::BindGroupLayout,
+    sharpen_apply_pipeline: wgpu::RenderPipeline,
+    sharpen_apply_layout: wgpu::BindGroupLayout,
+    sharpen_gradient_pipeline: wgpu::ComputePipeline,
+    sharpen_gradient_layout: wgpu::BindGroupLayout,
+    sharpen_params: wgpu::Buffer,
+    sharpen_maxg: wgpu::Buffer,
 }
 
 /// Build all post-tone pipelines targeting [`shaders::RGBA8_FORMAT`].
@@ -2530,6 +2813,26 @@ fn build_post_pipelines(device: &wgpu::Device) -> Result<PostPipelineState, GpuE
         dehaze_pipeline: stages::create_dehaze_pipeline(device, format)?,
         dehaze_layout: stages::create_dehaze_bind_group_layout(device),
         dehaze_params: stages::create_dehaze_params_buffer(device),
+        noise_pipeline: stages::create_noise_pipeline(device, format)?,
+        noise_layout: stages::create_noise_bind_group_layout(device),
+        noise_params: stages::create_noise_params_buffer(device),
+        vignette_pipeline: stages::create_vignette_pipeline(device, format)?,
+        vignette_layout: stages::create_vignette_bind_group_layout(device),
+        vignette_params: stages::create_vignette_params_buffer(device),
+        grain_pipeline: stages::create_grain_pipeline(device, format)?,
+        grain_layout: stages::create_grain_bind_group_layout(device),
+        grain_params: stages::create_grain_params_buffer(device),
+        sharpen_blur_pipeline: stages::create_sharpen_blur_pipeline(
+            device,
+            stages::SHARPEN_SCALAR_FORMAT,
+        )?,
+        sharpen_blur_layout: stages::create_sharpen_blur_bind_group_layout(device),
+        sharpen_apply_pipeline: stages::create_sharpen_apply_pipeline(device, format)?,
+        sharpen_apply_layout: stages::create_sharpen_apply_bind_group_layout(device),
+        sharpen_gradient_pipeline: stages::create_sharpen_gradient_pipeline(device)?,
+        sharpen_gradient_layout: stages::create_sharpen_gradient_bind_group_layout(device),
+        sharpen_params: stages::create_sharpen_params_buffer(device),
+        sharpen_maxg: stages::create_sharpen_maxg_buffer(device),
     })
 }
 
@@ -2544,17 +2847,40 @@ enum PostWrite {
     /// Boxed: the fixed-capacity parameter block is far larger than the other
     /// variants (clippy::large_enum_variant).
     Color(Box<stages::ColorParams>),
+    /// Noise Reduction (5x5 bilateral luminance + chroma).
+    Noise(stages::NoiseParams),
+    /// Sharpening (multi-pass separable Gaussian unsharp mask).
+    /// Boxed: the kernel block is large (clippy::large_enum_variant).
+    Sharpen(Box<stages::SharpenParams>),
+    /// Effects vignette.
+    Vignette(stages::VignetteParams),
+    /// Effects grain.
+    Grain(stages::GrainParams),
 }
 
 /// Whether the recipe uses any post-tone adjustment stage the GPU renders in
 /// [`GpuContext::render_post_stages`]. The tone target is chosen from this so a
 /// recipe that needs no post pass keeps rendering straight into the output.
+/// Each arm mirrors the corresponding `PostWrite` enqueue exactly, so the
+/// chosen tone target can never diverge from the passes that run.
 #[cfg(feature = "gpu")]
 fn post_stages_needed(recipe: &EditRecipe) -> bool {
     let presence = recipe.presence.is_some_and(|presence| {
         presence.texture != 0.0 || presence.clarity != 0.0 || presence.dehaze != 0.0
     });
-    presence || stages::ColorParams::needs_stage(recipe)
+    let noise = recipe
+        .noise_reduction
+        .as_ref()
+        .is_some_and(stages::NoiseParams::needs_stage);
+    let sharpen = recipe
+        .sharpening
+        .as_ref()
+        .is_some_and(stages::SharpenParams::needs_stage);
+    let effects = recipe.effects.as_ref().is_some_and(|fx| {
+        fx.vignette.as_ref().is_some_and(|v| v.amount != 0.0)
+            || fx.grain.as_ref().is_some_and(|g| g.amount != 0.0)
+    });
+    presence || stages::ColorParams::needs_stage(recipe) || noise || sharpen || effects
 }
 
 /// Encode one fullscreen-triangle draw into `dst` with `pipeline`/`bind_group`.
@@ -3255,10 +3581,19 @@ mod routing_gate_tests {
 
     /// Invariant: the value-neutrality change (R2-GPU-05) must not weaken any
     /// other stage check — nested objects and flat stage markers still route.
+    /// GPU-RENDER-PARITY-1 stage 2 moved Effects into the GPU pipeline, so the
+    /// still-unsupported nested stages (`geometry`/`perspective`) carry this
+    /// assertion, and effects is asserted unflagged.
     #[test]
     fn non_adjustment_stage_checks_unchanged() {
         let recipe = EditRecipe {
-            effects: Some(lumina_sidecar::Effects::default()),
+            geometry: Some(lumina_sidecar::Geometry {
+                version: 1,
+                crop: None,
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }),
             perspective: Some(Perspective {
                 version: 1,
                 vertical: 0.0,
@@ -3272,7 +3607,14 @@ mod routing_gate_tests {
             ..Default::default()
         };
         let reasons = unsupported_gpu_stages(&recipe);
-        assert!(reasons.contains(&"effects".to_string()), "{reasons:?}");
+        assert!(reasons.contains(&"geometry".to_string()), "{reasons:?}");
         assert!(reasons.contains(&"perspective".to_string()), "{reasons:?}");
+
+        // Effects (vignette/grain) is fully GPU-supported now.
+        let effects = EditRecipe {
+            effects: Some(lumina_sidecar::Effects::default()),
+            ..Default::default()
+        };
+        assert!(unsupported_gpu_stages(&effects).is_empty());
     }
 }
