@@ -3187,22 +3187,20 @@ impl LuminaApp {
     /// UX-SLICE-2 (F1): whether the header render hash is meaningful right now.
     /// The Library grid is RAW-only, so a loaded non-RAW image has no Library
     /// representation; a hash above the "No images" empty state would
-    /// contradict it. The hash is therefore hidden in Library while no RAW
-    /// entry is listed; Develop/Export and a non-empty grid keep it. The
-    /// underlying `render_key` is never cleared — this is a pure display gate
-    /// (the loaded render stays valid).
+    /// contradict it. The hash is therefore hidden in Library exactly while the
+    /// visible raster is empty. UX-SLICE-3 (F1 follow-up): "empty" is the same
+    /// predicate the empty state itself uses ([`Self::filtered_library_order`]
+    /// — RAW-only display order narrowed by the active collection view and the
+    /// `\` query), so a zero-match filter hides the hash just like an empty
+    /// listing; keying on the unfiltered `entries` previously let the hash
+    /// reappear above the filtered empty state. Develop/Export and any
+    /// non-empty raster keep it. The underlying `render_key` is never cleared
+    /// — this is a pure display gate (the loaded render stays valid).
     pub fn render_hash_visible(&self) -> bool {
         if self.render_key.is_none() {
             return false;
         }
-        !(self.active_module == Module::Library && !self.library_has_raw_entries())
-    }
-
-    /// Allocation-free "the Library RAW grid is empty" predicate (F1 gate).
-    /// Keys on the RAW listing, not the transient `\` filter: "0 Bilder" is
-    /// defined by the listing, matching the empty state's subject.
-    fn library_has_raw_entries(&self) -> bool {
-        self.entries.iter().any(|entry| is_raw_name(&entry.name))
+        !(self.active_module == Module::Library && self.filtered_library_order().is_empty())
     }
 
     /// PERF-GUI-1: number of cached base-stage frames (diagnostics/tests).
@@ -20737,9 +20735,12 @@ mod tests {
     }
 
     /// UX-SLICE-2 (F1): the header hash gate. With a current render it is
-    /// hidden only in the Library module while the RAW listing is empty; a
-    /// listed RAW entry or any other module keeps it. `render_key` itself is
-    /// never cleared by the gate.
+    /// hidden only in the Library module while the visible raster is empty; a
+    /// non-empty raster, any other module or an absent render fails the gate
+    /// the other way. UX-SLICE-3 (F1 follow-up): "empty" must be the empty
+    /// state's own predicate ([`LuminaApp::filtered_library_order`]) — a
+    /// zero-match `\` filter hides the hash even though the RAW listing is
+    /// non-empty. `render_key` itself is never cleared by the gate.
     #[test]
     fn render_hash_gate_hides_hash_in_empty_library_only() {
         let mut app = new_app();
@@ -20750,7 +20751,7 @@ mod tests {
             app.render_hash_visible(),
             "Develop (default) keeps the hash"
         );
-        // Library with an empty listing: the gate hides the hash.
+        // Unfiltered empty: Library with no listing entries at all.
         let empty = tempfile::tempdir().unwrap();
         app.active_module = Module::Library;
         app.set_directory(empty.path().display().to_string());
@@ -20759,7 +20760,8 @@ mod tests {
             !app.render_hash_visible(),
             "an empty RAW listing must hide the hash"
         );
-        // Listing a RAW entry makes the grid non-empty: the hash returns.
+        // Listing a RAW entry makes the (unfiltered) raster non-empty: the
+        // hash returns.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("img.arw"), b"lumina-raw-fixture").unwrap();
         app.set_directory(dir.path().display().to_string());
@@ -20767,6 +20769,31 @@ mod tests {
         assert!(
             app.render_hash_visible(),
             "a listed RAW entry keeps the hash visible"
+        );
+        // Filtered empty (UX-SLICE-3): entries exist but the `\` query matches
+        // nothing, so the shared empty state shows and the gate must agree —
+        // no hash above "No images".
+        app.set_library_filter("definitely-no-match");
+        assert!(
+            app.filtered_library_order().is_empty(),
+            "the filter must produce a zero-match raster"
+        );
+        assert!(
+            !app.render_hash_visible(),
+            "a zero-match filter must hide the hash despite listed entries"
+        );
+        // A matching filter restores the visible raster and the hash.
+        app.set_library_filter("img");
+        assert!(!app.filtered_library_order().is_empty());
+        assert!(
+            app.render_hash_visible(),
+            "a matching filter keeps the hash visible"
+        );
+        // Clearing the filter keeps it.
+        app.set_library_filter("");
+        assert!(
+            app.render_hash_visible(),
+            "clearing the filter keeps the hash visible"
         );
         assert!(
             app.render_key().is_some(),

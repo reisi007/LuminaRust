@@ -86,12 +86,14 @@ Fortsetzung von UX-SLICE-1; die Punkte F1–F6 stammen aus dessen
 Verifizierung. SOLL-Entscheide, die vor der Implementierung festgehalten
 wurden:
 
-- **F1 — Render-Hash bei 0 Bildern (Gate):** Der Hash in der Statuszeile
+- **F1 — Render-Hash bei 0 Bildern (Gate, UX-SLICE-3 präzisiert):** Der Hash in der Statuszeile
   beschreibt den geladenen Render. Das Library-Raster ist RAW-only; eine
   geladene Nicht-RAW-Datei hat dort keine Repräsentation. Der Hash wird daher
-  im Modul Library nicht gezeigt, solange das RAW-Raster leer ist (kein
-  Widerspruch zwischen „No images“ und einem Render-Hash); in Develop/Export
-  und bei nicht-leerem Raster bleibt er sichtbar. `render_key` wird bewusst
+  im Modul Library nicht gezeigt, solange das **gefilterte** RAW-Raster leer ist
+  (`filtered_library_order()` — dasselbe Prädikat wie der Empty-State; ein
+  Filter mit 0 Treffern zählt als leer, kein Widerspruch zwischen „No images“
+  und einem Render-Hash); in Develop/Export und bei nicht-leerem Raster bleibt
+  er sichtbar. `render_key` wird bewusst
   **nicht** gelöscht (der geladene Render bleibt gültig) — reines Anzeige-Gate.
 - **F2 — „Open Folder“-CTA (Picker-Scope):** Der CTA öffnet den nativen
   Ordner-Picker (`rfd::FileDialog::pick_folder`) und setzt das gewählte

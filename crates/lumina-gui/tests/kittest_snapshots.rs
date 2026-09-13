@@ -759,9 +759,11 @@ fn render_hash_moves_to_status_line() {
 }
 
 /// UX-SLICE-2 (F1): the header render hash is hidden in the Library module
-/// while the RAW grid is empty (a loaded non-RAW image has no Library
-/// representation), so it can never contradict the "No images" empty state.
-/// The underlying `render_key` stays valid; the hash returns with Develop.
+/// while the grid empty state is shown, so it can never contradict "No
+/// images". UX-SLICE-3 (F1 follow-up): the gate tracks the *filtered* raster
+/// the empty state itself uses — a `\` query with zero matches hides the hash
+/// even though RAW entries are listed, and clearing it restores both. The
+/// underlying `render_key` stays valid; the hash returns with Develop.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_empty_suppresses_render_hash() {
@@ -775,6 +777,7 @@ fn library_empty_suppresses_render_hash() {
         harness.state_mut().render_key().is_some(),
         "the sample must have a current render"
     );
+    // Unfiltered empty: the fixture directory has no RAW entries.
     assert!(
         !harness.state_mut().render_hash_visible(),
         "F1 gate must hide the hash while the RAW grid is empty"
@@ -785,6 +788,54 @@ fn library_empty_suppresses_render_hash() {
             .next()
             .is_none(),
         "no render hash may be painted above the Library empty state"
+    );
+    // Filtered empty (UX-SLICE-3): a RAW grid exists, but the `\` query
+    // matches none, so the same shared empty state is shown and the gate must
+    // hide the hash just like the unfiltered case.
+    ensure_library_views_fixture();
+    harness
+        .state_mut()
+        .set_directory(LIBRARY_VIEWS_FIXTURE_DIR.to_owned());
+    // `set_directory` lists flat; mirror the views tests' recursive listing.
+    harness.state_mut().list_directory();
+    harness.state_mut().set_library_filter("no-such-entry");
+    harness.run();
+    assert!(
+        harness.state_mut().render_key().is_some(),
+        "the gate must be judged against a current render, not an absent one"
+    );
+    assert!(
+        harness.state_mut().filtered_library_order().is_empty(),
+        "the `\\` filter must yield a zero-match raster for this guard"
+    );
+    assert!(
+        !harness.state_mut().render_hash_visible(),
+        "a zero-match filter must hide the hash despite listed RAW entries"
+    );
+    assert!(
+        harness
+            .query_all_by_label_contains("Render state current:")
+            .next()
+            .is_none(),
+        "no render hash may be painted above the filtered empty state"
+    );
+    // Clearing the filter restores the non-empty raster and the hash.
+    harness.state_mut().set_library_filter("");
+    harness.run();
+    assert!(
+        !harness.state_mut().filtered_library_order().is_empty(),
+        "clearing the filter must restore the listed raster"
+    );
+    assert!(
+        harness.state_mut().render_hash_visible(),
+        "a non-empty filtered raster must keep the render hash"
+    );
+    assert!(
+        harness
+            .query_all_by_label_contains("Render state current:")
+            .next()
+            .is_some(),
+        "the render hash must be visible again on the non-empty raster"
     );
     // Same render, other module: the hash is meaningful again.
     harness.state_mut().set_module(Module::Develop);
@@ -1063,8 +1114,15 @@ fn ensure_library_rated_fixture() {
     ] {
         std::fs::write(root.join(name), bytes).expect("write rated fixture");
         // Seed the exact Standard preview `ensure_thumbnail` probes
-        // (`vc-original`), so the cells paint real pixels instead of the
-        // LibRaw-failure placeholder and no decode runs during the golden.
+        // (`vc-original`), so the Grid cells and the filmstrip paint the
+        // seeded pixels instead of the decode-failure placeholder. A decode
+        // *does* run during the golden: the F-100 start behavior auto-loads
+        // the first RAW (`labeled.arw`), whose sentinel bytes fail
+        // deterministically in LibRaw, so the golden also pins the
+        // deterministic LibRaw "opening input failed" banner in the status
+        // line — exactly like `library_loupe.png` and the
+        // `library_badges` fixture. A LibRaw message change needs a golden
+        // refresh; the badge chip pixels remain the regression signal.
         let png = library_views_preview_png(base);
         let cache = DiskFolderCache::for_image(root.join(name)).expect("rated fixture cache");
         assert!(
