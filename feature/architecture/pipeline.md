@@ -1263,7 +1263,10 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   SourceAction-Batching (>7, byte-identisch), volle Nested-Range-Validierung
   am GPU-Eintritt (`validate.rs`, Error-Parität inkl. typed-/generative-Spots).
   Rest (Ziel: kein CPU-only-Zweig, User-Entscheid 2026-09-13):
-  generative_edit
+  generative_edit (bewusste, dokumentierte Ausnahme bis ONNX, User-Entscheid
+  2026-09-14: Heuristik-BFS nicht paritätserhaltend portierbar, laute
+  CPU-Route, kein stiller Fallback; Details in
+  `feature/product/generative-expand.md`)
   (Cross-Crate-Welle CLI/MCP); lebendes Inventar:
   `cpu_routing_inventory_is_complete`. Erledigt (Teilwelle,
   BESTANDEN, Commit 2026-09-14): Geometrie-Welle inkl. GUI-LENSFUN-GATE-1

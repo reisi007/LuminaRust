@@ -46,6 +46,19 @@ Agents.md „AI-Masken").
 
 ## Ist-Stand
 
+**Stand 2026-09-14 (GENERATIVE-WELLE, User-Entscheid):** `generative_edit` ist
+die einzige verbleibende laute CPU-Route und bleibt das bis zur
+ONNX-Integration — als bewusste, dokumentierte Ausnahme (kein stiller
+Fallback): Der Heuristik-BFS (`fill_transparent_heuristic`,
+`lumina-core/src/generative.rs:23-107`) ist nicht paritätserhaltend
+GPU-portierbar (globaler Hash-Sort + FIFO-Tie-Break; datenparallele
+Approximation weicht um maxAbsDiff 255 / ~9 dB ab, F-043 verlangt ≤1–2 /
+≥48 dB; unabhängig verifiziert BESTANDEN). User-Bedingungen: (1) der
+einmalige Expand ist ok, darf aber NICHT bei jedem Rendering neu laufen —
+Ergebnis cachen/wiederverwenden (→ GEN-EXPAND-CACHE-1); (2) ONNX-Pfad ASAP
+nachziehen (→ GEN-ONNX-1), danach entfällt der BFS-Platzhalter zugunsten von
+Artefakt-Compositing (GPU-portierbar).
+
 **Stand 2026-09-03 (GEN-FILL-03 BESTANDEN verifiziert 2026-09-03, c7aede7+9cc8f45+0d3033d):** `keep_generative_content` (`null→true` Default, `effective_keep`, `keep_true` Canvas bleibt, `keep_false` materialisiert `canvas=crop_rect` `source_offset-crop_offset` Translation, verkürzt Canvas, validiert, `recipe_hash` ändert sich, `resolve_canvas_for_recipe` keep true→clone false→`materialize_canvas_for_crop` inkl. `Aspect`/`Free` normiert `round/clamp`, `materialize_with_source` OOB→`InvalidAdjustment` kein stiller Fallback, `validate_with_source` `output>source` + Bounds), `lumina-core::generative` (`effective_keep`, `materialize_canvas_for_crop`, `resolve_canvas_for_recipe`, `recipe_hash`), `lumina-sidecar` `GenerativeEdit`/`GenerativeCanvas` `validate`, `lumina-core` `pub mod generative` re-export, 15 generative Tests (`305p` `core`, `86p` `sidecar`, `155p` `gui`), `clippy -D warnings`/`fmt`/`wasm` grün, kein Datenverlust still.
 
 **Stand 2026-09-04 (GUI-DOUBLE-EXPAND-FIX 98b0be6, GEN-PIPELINE-DECOUPLE b80eb62):** Single-Expand — Core rendert `GenerativeEdit(expand)` intern (`Lens→Fill→Perspective→Expand→Crop`, `render_frame_from_base`, Fehler → `InvalidAdjustment` laut); GUI-Post-Render-Checker-`apply_generative_expand` (Preview/Export) ersatzlos gestrichen (war doppelte Pipeline-Implementierung), Preview/Export nutzen den Core-Frame direkt. GUI-Tests 174p (Preview/Export Single-Expand 8→12 inner byte-identisch, Expand-ohne-Canvas laut). Heuristischer Fill, noch kein ONNX-Modell (`pending-integration`), `zdata`-Persistenz kind=2 + Rezept-Link vorhanden (GEN-ZDATA-PERSIST 1e0ccbd, GEN-ZDATA-LINK-1 69dad91), Core-`recipe_hash`/`RenderKey`-Einbezug der Link-Felder = Follow-up.
