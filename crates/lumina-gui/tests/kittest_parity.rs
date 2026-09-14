@@ -762,6 +762,16 @@ fn lensfun_corrector_cell_presents_cpu_and_refuses_vram() {
         "GUI-LENSFUN-GATE-1: the active corrector must force the CPU present route \
          (VRAM must not be presented)"
     );
+    // GUI-LENSFUN-GATE-2: the silent-looking CPU route must carry the visible
+    // badge naming the precise reason — here the caller-owned Lensfun corrector.
+    let badge = harness
+        .state()
+        .gpu_routing_fallback_badge()
+        .expect("GUI-LENSFUN-GATE-2: the CPU route must carry a visible badge");
+    assert!(
+        badge.contains("Lensfun corrector"),
+        "the badge must name the precise Lensfun reason, got {badge:?}"
+    );
     assert_eq!(
         harness
             .state()

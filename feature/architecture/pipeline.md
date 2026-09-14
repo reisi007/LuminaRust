@@ -1301,7 +1301,16 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Crop routen seit CROP-MAXRECT-1 laut auf CPU (Reason `geometry (default
   content crop)` — datenabhängiges MaxRect); dimensionändernde Rezepte werden
   vom VRAM-Pfad laut verweigert; bei aktivem Lensfun-Corrector routet das
-  GUI-Gate (CLI-Reason-Mirror) laut auf CPU);
+  GUI-Gate (CLI-Reason-Mirror) laut auf CPU). Erledigt (Teilwelle,
+  BESTANDEN, Commit 2026-09-14): LENSFUN-GATE-2 — Badge nennt präzisen Grund
+  (`format_routing_fallback_reason`: Headline + [Gründe], inkl. Lensfun-Reason
+  und `geometry (default content crop)`; Gründe memoized statt bool);
+  Lensfun-Routing an angezeigten Render gebunden (`displayed_lensfun_active`:
+  Snapshot in `render_from` vor Zoom/Navigator/Export-Slot-Clobber, Gate liest
+  Snapshot, kein Flapping, Reset bei Quellwechsel/Neighbor-Adopt).
+  Bekannte Grenze (LENSFUN-GATE-3): reiner dimension-changing
+  Present-Refusal (nur `render_to_vram` scheitert, Gate leer) hat weiter keinen
+  Badge; Badge-Tail kann am Panel-Rand clippen (kein Wrap).
   (2) >45-MP-Zoom nutzt weiterhin Volltextur-Pooling statt 512²-Tile-Cache
   (M2); (3) der Present-Pfad ist headless nicht automatisiert testbar und
   braucht den nächsten manuellen GUI-Test (Block C).
