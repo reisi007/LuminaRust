@@ -1404,24 +1404,34 @@ fn implemented_red_eye_matches_cpu_oracle() {
     assert!(failures.is_empty(), "red-eye parity: {failures:?}");
 }
 
-/// R2-MCP-01: a decoder As-Shot WB context keeps CPU-routing, and the CPU-routed
-/// GPU render must be byte-identical to the CPU oracle (both validate the gains
-/// without re-applying them, so the context is pixel-neutral today). Stage-3
-/// GPU-eligibility for valid contexts is a reported SOLL conflict because it
-/// changes the CLI/MCP routing contract (out of this crate's write scope).
+/// CAMERA-WB-WELLE (R2-MCP-01): a valid decoder As-Shot WB context is now an
+/// explicit GPU input the caller binds via `GpuContext::set_camera_white_balance`;
+/// the gains are validated with the oracle's own error but never re-applied
+/// (matching `lumina-core`), so the GPU render stays byte-identical to the CPU
+/// oracle for a tone-only recipe. Invalid gains are rejected at the bind and
+/// still flagged by the routing gate so unbound callers reach the oracle's
+/// loud rejection.
 #[test]
-fn as_shot_wb_context_routes_to_cpu_identity() {
+fn as_shot_wb_context_is_carried_and_validated() {
     let recipe = EditRecipe {
         adjustments: BTreeMap::from([("exposure".into(), 0.3)]),
         ..Default::default()
     };
     let wb = [1.9f32, 1.0, 1.4, 1.0];
 
+    // A valid context is no longer a routing reason …
     assert!(
-        unsupported_gpu_stages_with_context(&recipe, false, Some(&wb))
+        unsupported_gpu_stages_with_context(&recipe, false, Some(&wb)).is_empty(),
+        "a valid As-Shot context must be GPU-eligible"
+    );
+    // … an invalid one still is.
+    let invalid_reasons =
+        unsupported_gpu_stages_with_context(&recipe, false, Some(&[0.0, 1.0, 1.0, 1.0]));
+    assert!(
+        invalid_reasons
             .iter()
             .any(|r| r.contains("camera_white_balance")),
-        "an As-Shot WB context must keep CPU-routing"
+        "{invalid_reasons:?}"
     );
 
     let ctx = match GpuContext::new() {
@@ -1431,6 +1441,16 @@ fn as_shot_wb_context_routes_to_cpu_identity() {
             return;
         }
     };
+    // The bind validates exactly like the oracle and never stores bad gains.
+    assert!(
+        ctx.set_camera_white_balance(Some([0.0, 1.0, 1.0, 1.0]))
+            .is_err(),
+        "invalid As-Shot gains must be rejected at the GPU entry"
+    );
+    assert_eq!(ctx.camera_white_balance(), None);
+    ctx.set_camera_white_balance(Some(wb))
+        .expect("valid As-Shot gains bind");
+
     if !ctx.is_available() {
         eprintln!("{SKIP_MESSAGE}");
         return;
@@ -1454,8 +1474,140 @@ fn as_shot_wb_context_routes_to_cpu_identity() {
     eprintln!("wb_context: maxAbsDiff={diff}");
     assert_eq!(
         diff, 0,
-        "a CPU-routed As-Shot WB context must match the full CPU reference"
+        "a carried (validated, not re-applied) As-Shot context must match the CPU reference"
     );
+}
+
+/// CAMERA-WB-WELLE oracle parity: decoder As-Shot gains (identity and
+/// non-identity) crossed with every recipe white-balance combination. The GPU
+/// entry carries the gains, so each render must match the CPU oracle within the
+/// standard tone bound, and binding the gains must not change the GPU pixels at
+/// all (they are validation state — `lumina-core` never re-applies them, and
+/// neither may the shader).
+#[test]
+fn as_shot_wb_gains_match_cpu_oracle_across_recipe_wb() {
+    let recipes: Vec<(&str, EditRecipe)> = vec![
+        ("default", EditRecipe::default()),
+        (
+            "exposure",
+            EditRecipe {
+                adjustments: BTreeMap::from([("exposure".into(), 0.4)]),
+                ..Default::default()
+            },
+        ),
+        (
+            "wb_temperature",
+            EditRecipe {
+                adjustments: BTreeMap::from([("wb_temperature".into(), 5600.0)]),
+                ..Default::default()
+            },
+        ),
+        (
+            "wb_tint",
+            EditRecipe {
+                adjustments: BTreeMap::from([("wb_tint".into(), -0.3)]),
+                ..Default::default()
+            },
+        ),
+        (
+            "wb_both",
+            EditRecipe {
+                adjustments: BTreeMap::from([
+                    ("wb_temperature".into(), 7200.0),
+                    ("wb_tint".into(), 0.2),
+                ]),
+                ..Default::default()
+            },
+        ),
+        (
+            "wb_exposure_contrast",
+            EditRecipe {
+                adjustments: BTreeMap::from([
+                    ("wb_temperature".into(), 5800.0),
+                    ("wb_tint".into(), 0.05),
+                    ("exposure".into(), -0.3),
+                    ("contrast".into(), 0.2),
+                ]),
+                ..Default::default()
+            },
+        ),
+    ];
+    let gains_cases: [(&str, [f32; 4]); 3] = [
+        ("identity", [1.0, 1.0, 1.0, 1.0]),
+        ("as_shot", [1.9, 1.0, 1.4, 1.0]),
+        ("daylight", [0.8, 1.0, 1.25, 1.0]),
+    ];
+
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped WB parity check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+
+    let frame = gradient_frame(64, 64);
+    let mut failures: Vec<String> = Vec::new();
+    for (recipe_name, recipe) in &recipes {
+        assert!(
+            unsupported_gpu_stages(recipe).is_empty(),
+            "{recipe_name} must stay GPU-eligible"
+        );
+        for (gains_name, gains) in gains_cases {
+            ctx.set_camera_white_balance(Some(gains))
+                .expect("identity/non-identity As-Shot gains are valid");
+            let cpu = render_frame(
+                &frame,
+                &RenderContext {
+                    recipe,
+                    camera_white_balance: Some(gains),
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: None,
+                    depth: None,
+                },
+            )
+            .expect("CPU oracle render")
+            .frame;
+            let gpu = ctx
+                .render_with_gpu(&frame, recipe)
+                .unwrap_or_else(|error| panic!("{recipe_name}/{gains_name}: GPU render: {error}"));
+            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+            let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+            eprintln!(
+                "as_shot_wb[{recipe_name}/{gains_name}]: maxAbsDiff={diff} psnr={psnr:.2} \
+                 bias={bias:+.4}"
+            );
+            if diff > 1 || psnr < MIN_PSNR_DB || bias.abs() > MAX_ABS_MEAN_SIGNED_ERROR {
+                failures.push(format!(
+                    "{recipe_name}/{gains_name}: exceeded the standard tone bound \
+                     maxAbsDiff <= 1 / PSNR >= {MIN_PSNR_DB} dB / \
+                     |meanSignedErr| <= {MAX_ABS_MEAN_SIGNED_ERROR}: got \
+                     maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}"
+                ));
+            }
+
+            // The gains are validation state: binding them must not move a
+            // single GPU pixel (no double white balance on the decoder's work).
+            ctx.set_camera_white_balance(None)
+                .expect("clearing As-Shot context");
+            let gpu_unbound = ctx
+                .render_with_gpu(&frame, recipe)
+                .unwrap_or_else(|error| panic!("{recipe_name}/{gains_name}: GPU render: {error}"));
+            if gpu.pixels != gpu_unbound.pixels {
+                failures.push(format!(
+                    "{recipe_name}/{gains_name}: binding As-Shot gains changed GPU pixels \
+                     (they must be validated, never re-applied)"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "As-Shot WB parity: {failures:?}");
 }
 
 /// GPU-RENDER-PARITY-1 stage-2 follow-up: a schema-invalid sharpening radius
@@ -2558,7 +2710,9 @@ fn source_actions(count: usize) -> EditRecipe {
 /// Reason classes and their minimal trigger (the reason string is the one the
 /// gate emits):
 /// - `source_actions` — non-empty actions and `source_actions_bound = false`.
-/// - `camera_white_balance (As-Shot context)` — context WB `Some`.
+/// - `camera_white_balance (invalid As-Shot gains)` — an invalid context gain
+///   (`inf`/`nan`/non-positive); a valid context is now GPU-carried and
+///   therefore *not* a reason.
 /// - `red_eye` — an **invalid** `recipe.red_eye` (out-of-range/NaN); a valid
 ///   correction is GPU-rendered.
 /// - `generative_edit` — `recipe.generative_edit = Some(..)` (its sequential
@@ -2637,8 +2791,9 @@ fn cpu_routing_inventory_is_complete() {
     }
 
     // Stage 3: a valid red-eye correction is GPU-eligible; an invalid one must
-    // stay flagged. (A decoder As-Shot WB context still CPU-routes — see the
-    // SOLL conflict reported with GPU-RENDER-PARITY-1 stage 3.)
+    // stay flagged. (CAMERA-WB-WELLE: a valid As-Shot WB context is now
+    // GPU-carried too; only invalid gains stay flagged — see the inventory
+    // cases below.)
     assert!(
         unsupported_gpu_stages(&red_eye_recipe()).is_empty(),
         "valid red-eye must be GPU-eligible"
@@ -2705,7 +2860,7 @@ fn cpu_routing_inventory_is_complete() {
         ..Default::default()
     };
 
-    let wb = [1.9f32, 1.0, 1.4, 1.0];
+    let wb = [0.0f32, 1.0, 1.0, 1.0];
 
     let cases: Vec<(&str, Vec<String>)> = vec![
         (
@@ -2713,7 +2868,7 @@ fn cpu_routing_inventory_is_complete() {
             unsupported_gpu_stages_for(&source_actions(1), false),
         ),
         (
-            "camera_white_balance (As-Shot context)",
+            "camera_white_balance (invalid As-Shot gains)",
             unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb)),
         ),
         ("red_eye", unsupported_gpu_stages(&invalid_red_eye_recipe())),
@@ -2805,6 +2960,14 @@ fn cpu_routing_inventory_is_complete() {
     assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
     assert!(unsupported_gpu_stages_for(&source_actions(1), true).is_empty());
     assert!(unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty());
+    // CAMERA-WB-WELLE: a *valid* As-Shot context is GPU-carried, so it must not
+    // be flagged (its parity is asserted by `as_shot_wb_gains_match_cpu_oracle_across_recipe_wb`).
+    assert!(unsupported_gpu_stages_with_context(
+        &EditRecipe::default(),
+        false,
+        Some(&[1.9, 1.0, 1.4, 1.0])
+    )
+    .is_empty());
 }
 
 // ---------------------------------------------------------------------------

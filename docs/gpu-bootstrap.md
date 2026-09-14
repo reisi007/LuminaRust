@@ -256,8 +256,12 @@ Therefore:
 
 Not a divergence today: `RenderContext::camera_white_balance` is validated but
 never re-applied to pixels in `lumina-core` (the decoder has already applied
-the As-Shot gains), so it triggers no routing. If core semantics change, the
-validator must grow a corresponding check.
+the As-Shot gains). Since 2026-09-14 the GPU entry carries and validates the
+context identically (`GpuContext::set_camera_white_balance`, bound by CLI/MCP/
+GUI); valid gains trigger no routing, invalid gains route loudly
+(`camera_white_balance (invalid As-Shot gains)`). If core semantics change
+(pixel-active As-Shot), the shader must consume the gains and the gate status
+must be re-evaluated.
 
 ### Dedicated GPU stages (GPU-STAGE-1)
 

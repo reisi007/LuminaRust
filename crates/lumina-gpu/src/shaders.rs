@@ -13,6 +13,15 @@ use lumina_sidecar::EditRecipe;
 /// + `bytemuck::{Pod, Zeroable}` so it can be uploaded directly into a
 /// `wgpu::Buffer` bound as a uniform. Padded to 64 bytes (16 × f32) to satisfy
 /// uniform-buffer alignment.
+///
+/// **CAMERA-WB-WELLE (R2-MCP-01):** the decoder As-Shot white balance is
+/// deliberately **not** a field here. It is validated at the GPU entry
+/// (`GpuContext::set_camera_white_balance`) and never re-applied, because the
+/// CPU oracle validates but does not re-apply the gains either (the decoder
+/// already multiplied them into the decoded frame; see
+/// `lumina_core::apply_recipe_with_white_balance`). Adding a gains field and
+/// multiplying in the shader would double-apply As-Shot and diverge from the
+/// oracle.
 #[allow(clippy::doc_lazy_continuation)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]

@@ -328,11 +328,13 @@ pub fn render_copy(
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
 /// otherwise the full platform-neutral CPU pipeline. Mirrors the `lumina-cli`
 /// routing through the shared decision function (R2-MCP-01): recipes with
-/// GPU-unsupported stages **and** renders carrying the decoder As-Shot
-/// white-balance context route explicitly to the CPU pipeline — logged once
-/// per reason set, so identical source + sidecar produce identical pixels
-/// across feature sets. The GPU is an accelerator, never a semantic change
-/// (Agents.md: no silent fallbacks).
+/// GPU-unsupported stages **and** renders carrying an **invalid** decoder
+/// As-Shot white-balance context route explicitly to the CPU pipeline — logged
+/// once per reason set — while a valid context is carried into the GPU entry
+/// via [`GpuContext::set_camera_white_balance`] (validated there with the
+/// oracle's error, never re-applied), so identical source + sidecar produce
+/// identical pixels across feature sets. The GPU is an accelerator, never a
+/// semantic change (Agents.md: no silent fallbacks).
 #[cfg(feature = "gpu")]
 fn render_best_effort(
     ctx: Option<&GpuContext>,
@@ -342,8 +344,8 @@ fn render_best_effort(
 ) -> Result<ImageFrame, McpError> {
     // Consult the shared routing gate BEFORE entering the GPU path. Recipe
     // stages alone would also be caught inside `render_with_gpu`; checking
-    // here additionally covers the render-context half (As-Shot WB) and keeps
-    // CLI/MCP byte-for-byte on the same decision function.
+    // here additionally covers the render-context half (an **invalid** As-Shot
+    // WB) and keeps CLI/MCP byte-for-byte on the same decision function.
     let mut reasons =
         unsupported_gpu_stages_with_context(recipe, false, camera_white_balance.as_ref());
     // Invalid adjustment values have no GPU meaning and must CPU-route so the
@@ -362,10 +364,33 @@ fn render_best_effort(
         }
     }
     match ctx {
-        Some(ctx) if ctx.is_available() && reasons.is_empty() => ctx
-            .render_with_gpu(frame, recipe)
-            .map(|rendered| rendered.to_image_frame())
-            .map_err(|error| McpError::Render(error.to_string())),
+        Some(ctx) if ctx.is_available() && reasons.is_empty() => {
+            // CAMERA-WB-WELLE: carry the decoder As-Shot context into the GPU
+            // entry (like the Lensfun corrector / depth plane). The bind
+            // validates the gains with the oracle's own error and never stores
+            // invalid values; a rejection falls back to the CPU reference
+            // loudly (the gate already flags invalid contexts, so this is the
+            // belt-and-braces entry check — never a silent drop).
+            if let Err(error) = ctx.set_camera_white_balance(camera_white_balance) {
+                log_cpu_routing_once(&[format!("camera_white_balance ({error})")], "mcp render");
+                return render_frame(
+                    frame,
+                    &RenderContext {
+                        recipe,
+                        camera_white_balance,
+                        source_actions: &[],
+                        masks: None,
+                        lensfun: None,
+                        depth: None,
+                    },
+                )
+                .map(|output| output.frame)
+                .map_err(map_core_error);
+            }
+            ctx.render_with_gpu(frame, recipe)
+                .map(|rendered| rendered.to_image_frame())
+                .map_err(|error| McpError::Render(error.to_string()))
+        }
         _ => {
             if !reasons.is_empty() {
                 log_cpu_routing_once(&reasons, "mcp render");
@@ -621,10 +646,11 @@ mod routing_tests {
         assert_eq!(routed.pixels, cpu_oracle(&frame, &recipe, Some(wb)).pixels);
     }
 
-    /// R2-MCP-01: invalid As-Shot gains must fail loudly through the routing
-    /// choke point. Before the fix a bound adapter silently ignored the whole
-    /// context; now it always CPU-routes into core's validation, which rejects
-    /// non-positive gains before any pixel mutation.
+    /// R2-MCP-01 (CAMERA-WB-WELLE): invalid As-Shot gains must fail loudly
+    /// through the routing choke point. The shared gate flags the invalid
+    /// context and routes it to core's validation, which rejects non-positive
+    /// gains before any pixel mutation; the GPU entry's own bind validation is a
+    /// second, independent guard.
     #[test]
     fn invalid_as_shot_gains_fail_loudly_on_every_backend() {
         let frame = gradient_frame(8, 8);
@@ -649,11 +675,12 @@ mod routing_tests {
         );
     }
 
-    /// R2-MCP-01 end-to-end: with an adapter available, carrying a valid
-    /// As-Shot context produces exactly the CPU-oracle pixels (the render is
-    /// CPU-routed instead of dropping the context on the GPU).
+    /// R2-MCP-01 end-to-end (CAMERA-WB-WELLE): with an adapter available, a
+    /// **valid** As-Shot context is carried into the GPU entry (validated there,
+    /// never re-applied) and produces exactly the CPU-oracle pixels — the gains
+    /// are pixel-neutral on both backends.
     #[test]
-    fn wb_context_reroutes_to_cpu_reference_pixels() {
+    fn wb_context_is_carried_into_the_gpu_path_and_matches_cpu() {
         let frame = gradient_frame(16, 16);
         let wb = [1.6f32, 1.0, 1.25, 1.0];
         let recipe = EditRecipe::default();
@@ -668,10 +695,10 @@ mod routing_tests {
             return;
         }
         let routed = render_best_effort(Some(&ctx), &frame, &recipe, Some(wb))
-            .expect("WB-context render must succeed via the CPU route");
+            .expect("WB-context render must succeed");
         assert_eq!(
             routed.pixels, expected.pixels,
-            "As-Shot context must render through the CPU reference pipeline"
+            "a carried As-Shot context must match the CPU reference pixels"
         );
     }
 }

@@ -74,7 +74,11 @@ bereits auf den Frame angewendet hat (keine Doppel-Anwendung); mit WB-Schlüssel
 gilt unverändert die deterministische sRGB-Näherung. CLI (`process_selected`)
 und GUI (`LuminaApp::load_bytes`/`render`) reichen
 `RawMetadata.camera_white_balance` durch; `apply_recipe` delegiert weiterhin
-ohne Kontext. Verbleibende Grenze: Die Auto-WB-Nutzung des Kontexts folgt mit
+ohne Kontext. GPU (seit 2026-09-14, BESTANDEN): valider As-Shot-Kontext ist
+GPU-fähig — Caller binden ihn per `GpuContext::set_camera_white_balance`
+(CLI/MCP/GUI tun das), der GPU-Eintritt validiert Oracle-identisch; nur
+invalide Gains routen laut auf CPU
+(`camera_white_balance (invalid As-Shot gains)`). Verbleibende Grenze: Die Auto-WB-Nutzung des Kontexts folgt mit
 F-042, ein linearer Weißabgleichspfad später.
 
 ## Ziel
@@ -1259,7 +1263,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   SourceAction-Batching (>7, byte-identisch), volle Nested-Range-Validierung
   am GPU-Eintritt (`validate.rs`, Error-Parität inkl. typed-/generative-Spots).
   Rest (Ziel: kein CPU-only-Zweig, User-Entscheid 2026-09-13):
-  lens_blur/generative_edit/Camera-WB
+  generative_edit
   (Cross-Crate-Welle CLI/MCP); lebendes Inventar:
   `cpu_routing_inventory_is_complete`. Erledigt (Teilwelle,
   BESTANDEN, Commit 2026-09-14): Geometrie-Welle inkl. GUI-LENSFUN-GATE-1

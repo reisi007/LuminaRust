@@ -39,8 +39,8 @@
 //!
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
 //! lists any recipe stage the pipeline cannot yet render (unbound
-//! SourceActions, As-Shot WB context, invalid red-eye, generative edit,
-//! non-schema adjustment keys, …) and
+//! SourceActions, invalid red-eye, generative edit, non-schema adjustment
+//! keys, …) and
 //! [`validate_gpu_recipe`] rejects every schema-invalid recipe with the CPU
 //! oracle's own error. On every entry point the outcome is loud and pixel-safe:
 //!
@@ -54,8 +54,11 @@
 //!
 //! Both log once per reason set, and a stage is either fully parity-tested or
 //! reported here — there is no third state. Context the recipe-only API does not
-//! carry (decoder As-Shot WB, mask layers, Lensfun correctors, depth planes)
-//! remains the caller's responsibility ([`unsupported_gpu_stages_with_context`]).
+//! carry (mask layers, Lensfun correctors, depth planes) remains the caller's
+//! responsibility ([`unsupported_gpu_stages_with_context`]); the decoder
+//! As-Shot white balance is now an explicit caller-bound GPU input
+//! ([`GpuContext::set_camera_white_balance`]) and therefore no longer a routing
+//! reason for valid gains.
 //!
 //! **GPU-RENDER-PARITY-1 follow-up.** Two former CPU-only classes are gone:
 //! the legacy `extras["spot_removals"]` heal geometry is rendered by the
@@ -64,13 +67,25 @@
 //! source-action stage composites **any** number of bound artifacts in batches
 //! of `MAX_SOURCE_ACTIONS`.
 //!
+//! **CAMERA-WB-WELLE (R2-MCP-01).** The decoder's As-Shot white balance
+//! (`RenderContext::camera_white_balance`) is carried as an explicit,
+//! caller-bound GPU input like the Lensfun corrector / depth plane: the caller
+//! binds the gains via [`GpuContext::set_camera_white_balance`] and both GPU
+//! entry points validate them with the oracle's own error. The gains are never
+//! re-applied in the shader — matching `lumina_core`, which validates them
+//! before deriving the recipe white balance but leaves the already-decoder-
+//! applied frame untouched — so a valid As-Shot context is pixel-neutral and
+//! the former presence-based CPU-routing reason is gone. An invalid context
+//! (`inf`/`nan`/non-positive) is still flagged so unbound callers keep the
+//! oracle's loud rejection.
+//!
 //! **GPU-RENDER-PARITY-1 geometry wave.** Geometry (crop → rotation → mirror),
 //! the manual lens correction (distortion + vignette + CA) and perspective are
 //! rendered by the [`geometry`] passes in the CPU oracle's order
 //! (`lens → perspective → CA → crop → rotation → mirror`) and reproduce the
 //! oracle's **output dimensions** exactly. A Lensfun corrector is still
 //! render-context state the recipe-only API does not carry — the caller owns
-//! that decision just like the As-Shot WB and mask layers (the CLI/MCP routing
+//! that decision just like the mask layers (the CLI/MCP routing
 //! mirrors gate on it). The readback-free VRAM present texture is source-sized,
 //! so [`GpuContext::render_to_vram`] renders dimension-**preserving** geometry
 //! (lens, identity crop/rotation) into the resident output and refuses a
@@ -89,8 +104,8 @@
 //!
 //! [`unsupported_gpu_stages_with_context`] extends that verdict with the
 //! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
-//! must honor — most notably the decoder's As-Shot white balance (R2-MCP-01),
-//! which the shader has no notion of.
+//! must honor — an unbound/invalid As-Shot white balance (R2-MCP-01), mask
+//! layers and an active Lensfun corrector.
 //!
 //! The public API is therefore stable and always
 //! returns a [`Frame`], which keeps the CPU and GPU return types identical for
@@ -277,9 +292,11 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   oracle's loud rejection is preserved.
 ///
 /// This predicate sees only the recipe. Render-context state the GPU stage
-/// cannot reproduce — decoder As-Shot white balance above all (R2-MCP-01) — is
-/// covered by [`unsupported_gpu_stages_with_context`], which the routing
-/// mirrors in `lumina-cli`/`lumina-mcp` consult before entering the GPU path.
+/// cannot reproduce — mask layers, an active Lensfun corrector, an unbound
+/// external depth plane — is covered by [`unsupported_gpu_stages_with_context`],
+/// which the routing mirrors in `lumina-cli`/`lumina-mcp` consult before
+/// entering the GPU path. A decoder As-Shot white balance is now GPU-carryable
+/// (see below), so a valid one is no longer a reason.
 pub fn unsupported_gpu_stages(recipe: &EditRecipe) -> Vec<String> {
     unsupported_gpu_stages_with_context(recipe, false, None)
 }
@@ -299,16 +316,18 @@ pub fn unsupported_gpu_stages_for(recipe: &EditRecipe, source_actions_bound: boo
 /// [`unsupported_gpu_stages_for`] plus the render-context features the GPU
 /// pipeline cannot reproduce at all.
 ///
-/// R2-MCP-01: a render carrying a decoder As-Shot white balance
-/// (`RenderContext::camera_white_balance`) always CPU-routes until the shader
-/// becomes WB-context-capable. Today `lumina-core` validates those gains but
-/// does not re-apply them to pixels (the decoder already did), so valid
-/// contexts happen to be pixel-neutral — but the context is part of the CPU
-/// reference contract, including its validation: invalid gains abort the CPU
-/// render while a GPU path without that notion would silently ignore them.
-/// Routing on presence keeps identical source + sidecar producing identical
-/// pixels across feature sets and cannot regress into silent divergence if WB
-/// ever becomes pixel-active in core.
+/// CAMERA-WB-WELLE (R2-MCP-01): a decoder As-Shot white balance
+/// (`RenderContext::camera_white_balance`) is now an explicit GPU input the
+/// caller binds via [`GpuContext::set_camera_white_balance`] (like the Lensfun
+/// corrector / depth plane), so a **valid** context is GPU-eligible and the
+/// former presence-based reason is gone. `lumina-core` derives its white
+/// balance from the recipe keys and validates the As-Shot gains *before* that
+/// derivation without ever re-applying them (the decoder already multiplied
+/// them in), so the GPU tone stage matches exactly: it validates the bound
+/// context and never adds the gains to its pixel math. An **invalid** context
+/// (`inf`/`nan`/non-positive) stays flagged so a caller that does not bind it
+/// still CPU-routes into the oracle's loud rejection rather than silently
+/// ignoring it.
 pub fn unsupported_gpu_stages_with_context(
     recipe: &EditRecipe,
     source_actions_bound: bool,
@@ -375,18 +394,19 @@ pub fn unsupported_gpu_stages_with_context(
     // slot-limit reason is gone. The source-action stage now composites in
     // batches of `MAX_SOURCE_ACTIONS` (ping-pong), so any number of bound
     // artifacts is GPU-eligible exactly like the CPU reference.
-    // R2-MCP-01: a decoder As-Shot white balance context always CPU-routes.
-    // `lumina-core` validates those gains but does not re-apply them to pixels
-    // (the decoder already did), so valid contexts happen to be pixel-neutral —
-    // but the context is part of the CPU reference contract, including its
-    // validation: invalid gains abort the CPU render while a GPU path without
-    // that notion would silently ignore them. Making a valid context
-    // GPU-eligible would require updating the CLI/MCP routing contract
-    // (`gpu_routing_reasons_flag_wb_context_and_respect_neutral_sliders`,
-    // `lumina-mcp` docs), which is outside this crate's write scope
-    // (GPU-RENDER-PARITY-1 stage-3 SOLL conflict; reported, not decided here).
-    if camera_white_balance.is_some() {
-        reasons.push("camera_white_balance (As-Shot context)".into());
+    // CAMERA-WB-WELLE (R2-MCP-01): a **valid** decoder As-Shot white balance is
+    // no longer a routing reason. The GPU path carries the context explicitly
+    // (the caller binds it via [`GpuContext::set_camera_white_balance`], like
+    // the Lensfun corrector / depth plane) and reproduces the oracle's contract:
+    // `lumina-core` validates those gains and does **not** re-apply them (the
+    // decoder already did), so valid gains are pixel-neutral on both backends
+    // and never enter the shader math. An **invalid** context stays flagged: a
+    // caller that never binds it would otherwise let the shader silently ignore
+    // non-finite/non-positive gains that abort the CPU reference.
+    if let Some(gains) = camera_white_balance {
+        if !camera_white_balance_gains_valid(gains) {
+            reasons.push("camera_white_balance (invalid As-Shot gains)".into());
+        }
     }
     reasons
 }
@@ -413,6 +433,32 @@ fn red_eye_is_valid(r: &lumina_sidecar::RedEyeCorrection) -> bool {
         }
     }
     true
+}
+
+/// Whether decoder As-Shot gains are valid per the CPU oracle's check in
+/// `apply_recipe_with_white_balance`: all four values finite and strictly
+/// positive. Invalid gains abort the CPU render before any pixel mutation, so
+/// the GPU gate must not let them slip through to a shader that has no notion
+/// of them.
+fn camera_white_balance_gains_valid(gains: &[f32; 4]) -> bool {
+    gains.iter().all(|gain| gain.is_finite() && *gain > 0.0)
+}
+
+/// [`camera_white_balance_gains_valid`] with the oracle's exact
+/// [`lumina_core::CoreError::InvalidAdjustment`] for the first offending gain
+/// (same iteration order, same bounds: `f32::MIN_POSITIVE..=f64::MAX`).
+fn validate_camera_white_balance_gains(gains: &[f32; 4]) -> Result<(), GpuError> {
+    for gain in gains {
+        if !gain.is_finite() || *gain <= 0.0 {
+            return Err(GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
+                name: "camera_white_balance".into(),
+                value: f64::from(*gain),
+                minimum: f32::MIN_POSITIVE as f64,
+                maximum: f64::MAX,
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// Recipes the GPU adjustment pipeline would render with silently clamped
@@ -647,6 +693,20 @@ pub struct GpuContext {
     /// path avoids entirely.
     #[cfg(feature = "gpu")]
     rwgpu_cache: std::sync::Mutex<std::collections::HashMap<(u32, u32), RenderWithGpuResources>>,
+    /// Caller-bound decoder As-Shot white balance (`RawMetadata.camera_white_balance`,
+    /// cam_mul), set via [`GpuContext::set_camera_white_balance`] and shared by
+    /// the adapter and no-adapter CPU-fallback paths.
+    ///
+    /// The GPU tone stage consumes the already-As-Shot-applied decoded frame
+    /// exactly like the CPU oracle (which validates the gains but never
+    /// re-applies them — see `lumina_core::apply_recipe_with_white_balance`), so
+    /// this field is *validation* state, not a pixel multiplier: binding the
+    /// context makes the GPU entry reject non-finite/non-positive gains with the
+    /// oracle's own error instead of silently ignoring them. Kept ungated so the
+    /// no-`gpu`-feature context validates identically. Interior mutability
+    /// (`Mutex`, like the pipeline) lets the CLI/MCP/GUI bind through `&self` on
+    /// their immutable render paths.
+    camera_white_balance: std::sync::Mutex<Option<[f32; 4]>>,
 }
 
 /// A caller-supplied external depth plane for `recipe.lens_blur.depth_artifact`
@@ -970,6 +1030,7 @@ impl GpuContext {
             recipe: None,
             #[cfg(feature = "gpu")]
             rwgpu_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            camera_white_balance: std::sync::Mutex::new(None),
         }
     }
 
@@ -2039,6 +2100,12 @@ impl GpuContext {
     /// (manual lens correction) is rendered into the resident output and matches
     /// the CPU oracle.
     pub fn render_to_vram(&self, frame: &ImageFrame, recipe: &EditRecipe) -> Result<(), GpuError> {
+        // CAMERA-WB-WELLE (R2-MCP-01): the VRAM path cannot CPU-route without a
+        // readback, so it must validate the caller-bound As-Shot context itself
+        // (the setter already rejects invalid gains; this is the entry-level
+        // guarantee) instead of letting a shader that has no notion of them
+        // silently ignore an invalid context.
+        self.validate_bound_camera_white_balance()?;
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: the VRAM hot path cannot
         // CPU-route without a readback (that would defeat its purpose). A
         // recipe whose stages are unsupported *given the currently bound
@@ -2776,17 +2843,19 @@ impl GpuContext {
     /// healing, every adjustment stage (including Red-Eye), the decoupled
     /// geometry stages (lens/fill/perspective/crop) and generative expand — so
     /// a CPU-routed render is the complete reference, not a partial
-    /// `apply_recipe`. Context the recipe-only API does not carry (decoder
-    /// As-Shot white balance, mask layers, Lensfun correctors, depth planes)
-    /// stays the caller's responsibility (see
-    /// [`unsupported_gpu_stages_with_context`]).
+    /// `apply_recipe`. Context the recipe-only API does not carry (mask layers,
+    /// Lensfun correctors) stays the caller's responsibility (see
+    /// [`unsupported_gpu_stages_with_context`]); the decoder As-Shot white
+    /// balance and the external depth plane are carried through when the caller
+    /// bound them via [`GpuContext::set_camera_white_balance`] /
+    /// [`GpuContext::set_depth_plane`].
     ///
-    /// This method only sees the recipe. Render-context state — decoder As-Shot
-    /// white balance, mask layers, Lensfun correctors — cannot be expressed
-    /// here, so callers carrying such context must consult
+    /// This method only sees the recipe. Mask layers and an active Lensfun
+    /// corrector cannot be expressed here, so callers carrying them must consult
     /// [`unsupported_gpu_stages_with_context`] (plus their own context checks)
     /// *before* calling this method; the CLI/MCP routing mirrors do exactly
-    /// that (R2-MCP-01).
+    /// that (R2-MCP-01). The bound As-Shot context is validated here
+    /// ([`GpuContext::set_camera_white_balance`]) with the oracle's own error.
     ///
     /// When no adapter is bound (or the `gpu` feature is disabled downstream) it
     /// likewise uses the `render_cpu` fallback, so the public API always returns
@@ -2800,11 +2869,19 @@ impl GpuContext {
         frame: &ImageFrame,
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
+        // CAMERA-WB-WELLE (R2-MCP-01): validate the caller-bound As-Shot context
+        // exactly like the CPU oracle (invalid gains abort before any pixel) and
+        // thread it into every CPU-fallback render so a routed render keeps the
+        // complete context contract. Valid gains are pixel-neutral on both
+        // backends (the decoder already applied them).
+        self.validate_bound_camera_white_balance()?;
+        let camera_white_balance = self.camera_white_balance();
         let Some(resources) = self.resources.as_ref() else {
             return render_cpu(
                 frame,
                 recipe,
                 self.depth_plane.as_ref().map(|plane| &plane.plane),
+                camera_white_balance,
             );
         };
         // R2-GPU-06: a lost device must not panic — degrade to the CPU oracle.
@@ -2817,6 +2894,7 @@ impl GpuContext {
                 frame,
                 recipe,
                 self.depth_plane.as_ref().map(|plane| &plane.plane),
+                camera_white_balance,
             );
         }
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: never let the GPU path drop
@@ -2835,6 +2913,7 @@ impl GpuContext {
                 frame,
                 recipe,
                 self.depth_plane.as_ref().map(|plane| &plane.plane),
+                camera_white_balance,
             );
         }
         self.ensure_pipeline()?;
@@ -2844,6 +2923,7 @@ impl GpuContext {
                 frame,
                 recipe,
                 self.depth_plane.as_ref().map(|plane| &plane.plane),
+                camera_white_balance,
             );
         };
 
@@ -3299,9 +3379,60 @@ impl GpuContext {
                 frame,
                 recipe,
                 self.depth_plane.as_ref().map(|plane| &plane.plane),
+                self.camera_white_balance(),
             ),
             None => Ok(Frame::from_image_frame(frame.clone())),
         }
+    }
+}
+
+/// Caller-bound As-Shot white-balance context (R2-MCP-01 / CAMERA-WB-WELLE).
+///
+/// Available in every build so the no-adapter CPU-fallback path validates
+/// identically. This is the explicit GPU input for
+/// `RenderContext::camera_white_balance`: the caller owns obtaining the decoder
+/// gains (CLI/MCP from `RawMetadata::camera_white_balance`, GUI from the decode
+/// path) and binds them here, exactly like the Lensfun corrector / depth plane.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+impl GpuContext {
+    /// Bind (or clear with `None`) the decoder's As-Shot white-balance gains.
+    ///
+    /// `lumina-core` validates `RenderContext::camera_white_balance` before any
+    /// pixel mutation and then does **not** re-apply the gains (the decoder
+    /// already multiplied them in; see `apply_recipe_with_white_balance`). The
+    /// GPU tone stage honours exactly that contract: binding the context makes
+    /// [`Self::render_with_gpu`]/[`Self::render_to_vram`] reproduce the oracle's
+    /// *validation* (As-Shot is validated **before** the recipe white balance is
+    /// derived/applied), while the gains stay out of the shader's pixel math so
+    /// the As-Shot-applied decoded frame is never double-graded.
+    ///
+    /// `Some(gains)` requires all four values finite and strictly positive;
+    /// otherwise the oracle's own [`lumina_core::CoreError::InvalidAdjustment`]
+    /// is returned and **no** state changes (no silent clamping). Binding a
+    /// valid context is pixel-neutral in both backends, so the GPU route stays
+    /// byte-compatible with the CPU reference.
+    pub fn set_camera_white_balance(&self, gains: Option<[f32; 4]>) -> Result<(), GpuError> {
+        if let Some(gains) = gains.as_ref() {
+            validate_camera_white_balance_gains(gains)?;
+        }
+        *self.camera_white_balance.lock().unwrap() = gains;
+        Ok(())
+    }
+
+    /// The currently bound As-Shot gains, if any (`None` = no context).
+    pub fn camera_white_balance(&self) -> Option<[f32; 4]> {
+        *self.camera_white_balance.lock().unwrap()
+    }
+
+    /// Re-validate the bound context at a render entry (defense in depth: the
+    /// setter already rejects invalid gains, so this can only fire if a future
+    /// path writes the field directly). Returns the oracle's own error.
+    #[cfg(feature = "gpu")]
+    fn validate_bound_camera_white_balance(&self) -> Result<(), GpuError> {
+        if let Some(gains) = self.camera_white_balance() {
+            validate_camera_white_balance_gains(&gains)?;
+        }
+        Ok(())
     }
 }
 
@@ -3310,7 +3441,9 @@ impl GpuContext {
     /// Create a CPU-only context (the `gpu` feature is disabled, so no adapter
     /// is ever bound). Rendering always uses the CPU fallback.
     pub fn new() -> Result<Self, GpuError> {
-        Ok(Self {})
+        Ok(Self {
+            camera_white_balance: std::sync::Mutex::new(None),
+        })
     }
 
     /// Always `false` without the `gpu` feature.
@@ -3330,7 +3463,7 @@ impl GpuContext {
         frame: &ImageFrame,
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
-        render_cpu(frame, recipe, None)
+        render_cpu(frame, recipe, None, self.camera_white_balance())
     }
 
     pub fn perf_log_enabled() -> bool {
@@ -3367,23 +3500,26 @@ impl GpuContext {
 /// reference for every recipe-driven stage the GPU reports as unsupported
 /// (Agents.md: CPU bleibt vollständige Referenz; kein stiller Fallback).
 ///
-/// Render-context inputs the recipe-only GPU API does not carry (decoder
-/// As-Shot white balance, mask layers, Lensfun correctors) are `None`/empty
-/// here; a caller that owns them must re-gate on
-/// [`unsupported_gpu_stages_with_context`] and run its own full-chain render.
-/// The G-05 external depth plane *is* carried through when bound via
-/// [`GpuContext::set_depth_plane`], so the CPU fallback renders a referenced
-/// depth artifact identically instead of erroring on a dropped plane.
+/// Render-context inputs the recipe-only GPU API does not carry (mask layers,
+/// Lensfun correctors) are `None`/empty here; a caller that owns them must
+/// re-gate on [`unsupported_gpu_stages_with_context`] and run its own
+/// full-chain render. The G-05 external depth plane *is* carried through when
+/// bound via [`GpuContext::set_depth_plane`], so the CPU fallback renders a
+/// referenced depth artifact identically instead of erroring on a dropped
+/// plane. Since CAMERA-WB-WELLE the decoder As-Shot white balance is carried
+/// through as well (bound via [`GpuContext::set_camera_white_balance`]), so a
+/// CPU-routed render validates and renders the same context the GPU entry saw.
 fn render_cpu(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     depth: Option<&lumina_core::DepthPlane>,
+    camera_white_balance: Option<[f32; 4]>,
 ) -> Result<Frame, GpuError> {
     let output = lumina_core::render_frame(
         frame,
         &lumina_core::RenderContext {
             recipe,
-            camera_white_balance: None,
+            camera_white_balance,
             source_actions: &[],
             masks: None,
             lensfun: None,
@@ -4528,36 +4664,51 @@ mod routing_gate_tests {
         assert_eq!(adjustment_neutral_value("not_a_key"), None);
     }
 
-    /// R2-MCP-01: carrying a decoder As-Shot WB context produces exactly one
-    /// CPU-routing reason; without one it stays absent. The reason stacks with
-    /// recipe-level reasons instead of replacing them, and the legacy
-    /// predicates delegate with no context.
+    /// CAMERA-WB-WELLE (R2-MCP-01): a **valid** decoder As-Shot WB context is
+    /// GPU-eligible (the caller binds it via `set_camera_white_balance`); an
+    /// **invalid** context still produces exactly one CPU-routing reason. The
+    /// reason stacks with recipe-level reasons instead of replacing them, and
+    /// the legacy predicates delegate with no context.
     #[test]
-    fn context_wb_routes_to_cpu() {
+    fn context_wb_valid_is_gpu_eligible_invalid_routes_to_cpu() {
         let wb: [f32; 4] = [1.8999, 1.0, 1.3953, 1.0];
-        let with_ctx =
-            unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb));
-        assert_eq!(
-            with_ctx,
-            vec!["camera_white_balance (As-Shot context)".to_string()]
+        // Valid gains are pixel-neutral on both backends and the GPU carries
+        // them explicitly → no reason.
+        assert!(
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&wb))
+                .is_empty()
         );
-
-        // Source-action binding does not change the WB verdict …
-        assert_eq!(
-            unsupported_gpu_stages_with_context(&EditRecipe::default(), true, Some(&wb)),
-            with_ctx
+        // Source-action binding does not change the WB verdict.
+        assert!(
+            unsupported_gpu_stages_with_context(&EditRecipe::default(), true, Some(&wb)).is_empty()
         );
-        // … and absence keeps the gate empty for a supported recipe.
+        // Absence keeps the gate empty for a supported recipe.
         assert!(
             unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty()
         );
 
-        // WB stacks with recipe reasons instead of replacing them. (A key
-        // outside the schema has no neutral value and stays CPU-routed.)
+        // Invalid gains (non-finite / non-positive) stay flagged so an unbound
+        // caller still reaches the oracle's loud rejection.
+        for bad in [
+            [0.0f32, 1.0, 1.0, 1.0],
+            [1.0, f32::NAN, 1.0, 1.0],
+            [1.0, 1.0, f32::INFINITY, 1.0],
+        ] {
+            let reasons =
+                unsupported_gpu_stages_with_context(&EditRecipe::default(), false, Some(&bad));
+            assert_eq!(
+                reasons,
+                vec!["camera_white_balance (invalid As-Shot gains)".to_string()],
+                "{bad:?}"
+            );
+        }
+
+        // An invalid WB stacks with recipe reasons instead of replacing them.
+        // (A key outside the schema has no neutral value and stays CPU-routed.)
         let mixed = unsupported_gpu_stages_with_context(
             &recipe_with_adjustments(&[("unknown_stage", 0.3)]),
             false,
-            Some(&wb),
+            Some(&[0.0, 1.0, 1.0, 1.0]),
         );
         assert_eq!(mixed.len(), 2, "{mixed:?}");
         assert!(
@@ -4580,6 +4731,47 @@ mod routing_gate_tests {
             unsupported_gpu_stages_for(&vibrance_recipe, true),
             unsupported_gpu_stages_with_context(&vibrance_recipe, true, None)
         );
+    }
+
+    /// CAMERA-WB-WELLE: the explicit As-Shot bind validates with the oracle's
+    /// exact error and leaves the previous binding untouched on rejection.
+    #[test]
+    fn set_camera_white_balance_validates_like_the_oracle() {
+        let ctx = GpuContext::new().expect("context creation never fails hard");
+        assert_eq!(ctx.camera_white_balance(), None);
+
+        ctx.set_camera_white_balance(Some([1.9, 1.0, 1.4, 1.0]))
+            .expect("valid gains bind");
+        assert_eq!(ctx.camera_white_balance(), Some([1.9, 1.0, 1.4, 1.0]));
+
+        for bad in [
+            [0.0f32, 1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0, 1.0],
+            [f32::NAN, 1.0, 1.0, 1.0],
+            [f32::INFINITY, 1.0, 1.0, 1.0],
+        ] {
+            let error = ctx
+                .set_camera_white_balance(Some(bad))
+                .expect_err("invalid gains must be rejected loudly");
+            assert!(
+                matches!(
+                    error,
+                    GpuError::Core(lumina_core::CoreError::InvalidAdjustment { ref name, .. })
+                        if name == "camera_white_balance"
+                ),
+                "{bad:?}: {error:?}"
+            );
+            // Rejection changes nothing: the previous valid binding survives.
+            assert_eq!(
+                ctx.camera_white_balance(),
+                Some([1.9, 1.0, 1.4, 1.0]),
+                "{bad:?}"
+            );
+        }
+
+        ctx.set_camera_white_balance(None)
+            .expect("clearing always succeeds");
+        assert_eq!(ctx.camera_white_balance(), None);
     }
 
     /// Invariant: the value-neutrality change (R2-GPU-05) must not weaken any

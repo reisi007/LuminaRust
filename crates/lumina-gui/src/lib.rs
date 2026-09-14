@@ -2081,6 +2081,15 @@ pub fn attach_wgpu_render_state(
         // point without any extra init cost when it is never used.
         app.gpu = lumina_gpu::GpuContext::new().ok();
     }
+    // CAMERA-WB-WELLE (R2-MCP-01): a source may already be loaded when the
+    // context is attached (or created standalone), so re-bind the current
+    // decoder As-Shot context. Invalid metadata is sanitized to `None` on
+    // decode, so a rejection here is logged loudly, never silently dropped.
+    if let Some(gpu) = app.gpu.as_ref() {
+        if let Err(error) = gpu.set_camera_white_balance(app.camera_white_balance) {
+            log::warn!("GPU As-Shot white-balance bind rejected at attach: {error}");
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -8689,6 +8698,19 @@ impl LuminaApp {
         self.raw_orientation = orientation;
         self.camera_white_balance = camera_white_balance;
         self.loaded_lens_identity = lens_identity;
+        // CAMERA-WB-WELLE (R2-MCP-01): the decoder As-Shot context is an
+        // explicit GPU input; bind it on the context (like the Lensfun
+        // corrector / depth plane) so the VRAM path validates it with the
+        // oracle's error instead of silently ignoring it. This is validation
+        // state only — the gains are never re-applied (the decoder already
+        // multiplied them in). The decode path above sanitizes invalid metadata
+        // to `None`, so a rejection here is a programming error, logged loudly.
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = self.gpu.as_ref() {
+            if let Err(error) = gpu.set_camera_white_balance(camera_white_balance) {
+                warn!("GPU As-Shot white-balance bind rejected: {error}");
+            }
+        }
         #[cfg(feature = "lensfun")]
         {
             self.lensfun_cache = None;
@@ -26533,83 +26555,100 @@ mod tests {
         assert!(!app.vram_fresh);
     }
 
-    // ---- GUI-GPU-01 / T06: camera_white_balance forces CPU route (no silent fallback) ----
+    // ---- CAMERA-WB-WELLE: a valid As-Shot context is GPU-carried, invalid still flags ----
     #[test]
     #[cfg(feature = "gpu")]
-    fn camera_white_balance_forces_gpu_fallback() {
-        // Pure function: any present WB context is flagged as unsupported.
+    fn camera_white_balance_is_carried_not_a_fallback() {
+        // Pure function: a valid context is not flagged (the GPU carries it);
+        // an invalid one still is.
         let recipe = EditRecipe::default();
         let wb: [f32; 4] = [1.7, 1.0, 1.3, 1.0];
-        let reasons_with =
-            lumina_gpu::unsupported_gpu_stages_with_context(&recipe, false, Some(&wb));
         assert!(
-            reasons_with
-                .iter()
-                .any(|r| r.contains("camera_white_balance")),
-            "GUI-GPU-01: present WB must be listed as unsupported, got {reasons_with:?}"
+            lumina_gpu::unsupported_gpu_stages_with_context(&recipe, false, Some(&wb)).is_empty(),
+            "CAMERA-WB-WELLE: a valid As-Shot context must be GPU-eligible"
+        );
+        assert!(
+            lumina_gpu::unsupported_gpu_stages_with_context(
+                &recipe,
+                false,
+                Some(&[0.0, 1.0, 1.0, 1.0])
+            )
+            .iter()
+            .any(|r| r.contains("camera_white_balance")),
+            "CAMERA-WB-WELLE: invalid As-Shot gains must stay flagged"
         );
         let reasons_without = lumina_gpu::unsupported_gpu_stages_with_context(&recipe, false, None);
         assert!(
             !reasons_without
                 .iter()
                 .any(|r| r.contains("camera_white_balance")),
-            "GUI-GPU-01: absent WB must not flag camera_white_balance"
+            "absent WB must not flag camera_white_balance"
         );
 
-        // App-level memoized gate respects WB presence.
+        // App-level memoized gate: a valid WB context stays GPU-eligible.
         let mut app = new_app();
         app.load_bytes(png(), "wb.png").unwrap();
         app.render().unwrap();
         app.camera_white_balance = None;
-        // Need fresh render key with WB=None already set; render again to key with None.
         app.render().unwrap();
-        let fresh_key_none = app.render_key.clone();
-        assert!(fresh_key_none.is_some());
-        // With no WB, unsupported check is false for default recipe.
-        app.camera_white_balance = None;
+        assert!(app.render_key.is_some());
         assert!(
             !app.recipe_has_unsupported_gpu_stages(),
-            "GUI-GPU-01: default recipe without WB must be GPU-eligible"
+            "default recipe without WB must be GPU-eligible"
         );
-        // Setting WB without new render keeps old key (memo still None-WB), but fresh
-        // check would include WB. To make WB affect gate, bump key via re-render.
         app.camera_white_balance = Some(wb);
-        // Render key hasn't changed yet, so memo still keyed to None-WB; the
-        // next call must bypass memo (None-key) and compute fresh? Actually
-        // gate checks cached_wb == current wb, so mismatch forces recompute.
-        assert!(
-            app.recipe_has_unsupported_gpu_stages(),
-            "GUI-GPU-01: same render key with now-present WB must be flagged"
-        );
-        // Visible fallback reason only when a GPU context is available; headless
-        // tests have no adapter (gpu is None) so fallback is None even when WB
-        // forces CPU route — the important invariant is the stage gate itself.
-        if app.gpu.is_some() {
-            let fallback = app.routing_fallback_reason();
-            assert!(
-                fallback.is_some_and(|s| s.contains("CPU")
-                    || s.contains("unsupported")
-                    || s.contains("Fallback")),
-                "GUI-GPU-01: routing fallback must be visible when WB present and GPU available"
-            );
-        } else {
-            // No GPU context in headless harness: fallback stays None, but the
-            // gate verdict must still be unsupported.
-            assert!(
-                app.routing_fallback_reason().is_none(),
-                "GUI-GPU-01: no GPU context => no fallback even with WB"
-            );
-        }
-        // Clear WB again and verify gate restores eligibility.
-        app.camera_white_balance = None;
         assert!(
             !app.recipe_has_unsupported_gpu_stages(),
-            "GUI-GPU-01: clearing WB must restore GPU eligibility"
+            "a valid WB context must stay GPU-eligible (carried, not a fallback)"
         );
         assert!(
             app.routing_fallback_reason().is_none(),
-            "GUI-GPU-01: no fallback when WB cleared"
+            "no fallback when a valid WB context is carried"
         );
+
+        // An invalid context (not producible from the decode path, which
+        // sanitizes) is still a routing reason.
+        app.camera_white_balance = Some([0.0, 1.0, 1.0, 1.0]);
+        assert!(
+            app.recipe_has_unsupported_gpu_stages(),
+            "invalid WB gains must flag the CPU route"
+        );
+
+        // Clearing WB restores the trivially eligible state.
+        app.camera_white_balance = None;
+        assert!(
+            !app.recipe_has_unsupported_gpu_stages(),
+            "clearing WB must keep GPU eligibility"
+        );
+        assert!(app.routing_fallback_reason().is_none());
+    }
+
+    /// CAMERA-WB-WELLE: the GUI binds the decode-path As-Shot context on the
+    /// GPU context (when one exists) through the same single-source funnel as a
+    /// loaded RAW. Without a bound adapter (headless) the bind is a no-op on
+    /// pixels but still must not panic, and an invalid value must be rejected
+    /// loudly rather than stored.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn decoded_as_shot_context_is_bound_on_the_gpu_context() {
+        let mut app = new_app();
+        // No GPU context in the headless harness: load must still succeed.
+        app.load_bytes(png(), "wb-bind.png").unwrap();
+        assert_eq!(app.camera_white_balance, None);
+
+        // The entry-level validation contract the GUI relies on.
+        let ctx = lumina_gpu::GpuContext::new().ok();
+        if let Some(ctx) = ctx {
+            assert!(ctx
+                .set_camera_white_balance(Some([1.7, 1.0, 1.3, 1.0]))
+                .is_ok());
+            assert_eq!(ctx.camera_white_balance(), Some([1.7, 1.0, 1.3, 1.0]));
+            assert!(ctx
+                .set_camera_white_balance(Some([0.0, 1.0, 1.0, 1.0]))
+                .is_err());
+            // The rejected bind must not overwrite the previous valid context.
+            assert_eq!(ctx.camera_white_balance(), Some([1.7, 1.0, 1.3, 1.0]));
+        }
     }
 
     // ---- GUI-LENSFUN-GATE-1: an active Lensfun corrector forces the CPU route ----
