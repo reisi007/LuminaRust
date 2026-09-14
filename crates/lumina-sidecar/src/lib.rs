@@ -252,6 +252,11 @@ pub struct GenerativeArtifactRef {
     pub extras: Extras,
 }
 
+/// GEN-EXPAND-CACHE-1: `extras` key of the generative identity digest stored on
+/// a [`GenerativeArtifactRef`]. Additive (absent = legacy/unverifiable), no
+/// schema bump.
+pub const GENERATIVE_IDENTITY_KEY: &str = "generative_identity";
+
 impl GenerativeArtifactRef {
     /// View this link as a plain [`ArtifactReference`] so [`artifact_status`]
     /// (including its eager `Available`/`Missing`/`Corrupt` verification)
@@ -267,6 +272,29 @@ impl GenerativeArtifactRef {
             data_version: self.data_version.clone(),
             extras: self.extras.clone(),
         }
+    }
+
+    /// GEN-EXPAND-CACHE-1: attaches the generative identity digest (the exact
+    /// `GenerativeCacheKey::digest()` of the run that produced this canvas) so a
+    /// later render can prove the persisted record still matches the current
+    /// source/recipe/seed/canvas. Stored in the additive `extras` map — no
+    /// schema bump, unknown-field roundtrip preserved.
+    #[must_use]
+    pub fn with_identity(mut self, identity: impl Into<String>) -> Self {
+        self.extras.insert(
+            GENERATIVE_IDENTITY_KEY.to_owned(),
+            Value::String(identity.into()),
+        );
+        self
+    }
+
+    /// The stored identity digest, or `None` for a legacy link written before
+    /// identity pinning. A missing identity is treated as unverifiable/stale by
+    /// [`generative_artifact_status`] when a current identity is expected —
+    /// never silently accepted.
+    #[must_use]
+    pub fn identity(&self) -> Option<&str> {
+        self.extras.get(GENERATIVE_IDENTITY_KEY)?.as_str()
     }
 
     /// Eager bundle status for this link: `Available` only if the referenced
@@ -3152,6 +3180,52 @@ fn starts_with_zdata_magic(path: &Path) -> bool {
         return false;
     };
     file.read_exact(&mut magic).is_ok() && magic == ZDATA_MAGIC
+}
+
+/// GEN-EXPAND-CACHE-1: combined status of a persisted generative artifact.
+///
+/// Unlike the generic [`ArtifactStatus`] this also verifies the stored
+/// generative identity against the current one. A record generated for a
+/// different source/recipe/seed/canvas (or a legacy record without a pinned
+/// identity) is reported as [`GenerativeArtifactStatus::Stale`] instead of
+/// `Available` — the caller must never serve it silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerativeArtifactStatus {
+    /// Bundle record exists, passed every checksum check and its pinned
+    /// identity matches the current generative identity.
+    Available,
+    /// The bundle file does not exist (or is not a regular file).
+    Missing,
+    /// The bundle exists but is unusable (bad magic/version/checksum).
+    Corrupt,
+    /// The bundle is intact but was produced for a different generative
+    /// identity (or carries no verifiable identity at all).
+    Stale,
+}
+
+/// GEN-EXPAND-CACHE-1: identity-verified status of a generative bundle link.
+///
+/// `current_identity` is the digest of the generative operation the caller is
+/// about to render (for the core cache this is the
+/// `GenerativeCacheKey::digest()` of the current source/recipe/seed/canvas).
+/// The function never returns `Available` for a mismatching or unverifiable
+/// identity, so a stale persisted canvas can never be served silently.
+pub fn generative_artifact_status(
+    bundle_root: &Path,
+    link: &GenerativeArtifactRef,
+    current_identity: &str,
+) -> GenerativeArtifactStatus {
+    match link.artifact_status(bundle_root) {
+        ArtifactStatus::Missing => GenerativeArtifactStatus::Missing,
+        ArtifactStatus::Corrupt => GenerativeArtifactStatus::Corrupt,
+        ArtifactStatus::Available => {
+            if link.identity() == Some(current_identity) {
+                GenerativeArtifactStatus::Available
+            } else {
+                GenerativeArtifactStatus::Stale
+            }
+        }
+    }
 }
 
 pub fn xmp_supported() -> bool {
@@ -7266,6 +7340,106 @@ mod tests {
         assert_eq!(
             spot_link.artifact_status(directory.path()),
             ArtifactStatus::Missing
+        );
+    }
+
+    // GEN-EXPAND-CACHE-1: the generative identity is additive in `extras` and
+    // must roundtrip without an explicit schema field.
+    #[test]
+    fn generative_identity_roundtrips_through_json() {
+        let link = GenerativeArtifactRef {
+            id: "gen-canvas-1".into(),
+            relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: "blake3:abc".into(),
+            width: 2,
+            height: 2,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        };
+        // A link written before identity pinning carries none.
+        assert!(link.identity().is_none());
+        let legacy: GenerativeArtifactRef =
+            serde_json::from_str(&serde_json::to_string(&link).unwrap()).unwrap();
+        assert!(legacy.identity().is_none(), "no identity is invented");
+        assert_eq!(legacy, link);
+
+        // A pinned link roundtrips the identity verbatim.
+        let pinned = link.clone().with_identity("gen:key-1");
+        assert_eq!(pinned.identity(), Some("gen:key-1"));
+        let back: GenerativeArtifactRef =
+            serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back, pinned);
+        assert_eq!(back.identity(), Some("gen:key-1"));
+    }
+
+    // GEN-EXPAND-CACHE-1: a persisted canvas may only be served when its pinned
+    // identity still matches the current generative identity; otherwise it is
+    // `Stale` (loud), never silently used.
+    #[cfg(feature = "zdata")]
+    #[test]
+    fn generative_artifact_status_is_identity_verified() {
+        use crate::GenerativeCanvasArtifact;
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("IMG_0001.ARW.lumina.zdata");
+        let canvas = GenerativeCanvasArtifact {
+            id: "gen-canvas-1".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 1, 2, 3, 255,
+            ],
+        };
+        let container = ZDataContainer::new(vec![])
+            .unwrap()
+            .add_generative_canvas(canvas.clone())
+            .unwrap();
+        save_zdata(&bundle, &container).unwrap();
+        let link = GenerativeArtifactRef {
+            id: canvas.id.clone(),
+            relative_path: "IMG_0001.ARW.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: canvas.checksum(),
+            width: canvas.width,
+            height: canvas.height,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        }
+        .with_identity("identity-A");
+
+        // Matching identity + intact bundle = Available.
+        assert_eq!(
+            generative_artifact_status(directory.path(), &link, "identity-A"),
+            GenerativeArtifactStatus::Available
+        );
+        // Recipe/seed/canvas changed => different identity => Stale.
+        assert_eq!(
+            generative_artifact_status(directory.path(), &link, "identity-B"),
+            GenerativeArtifactStatus::Stale
+        );
+        // Legacy link without a pinned identity can never be proven current.
+        let legacy = {
+            let mut l = link.clone();
+            l.extras.remove(GENERATIVE_IDENTITY_KEY);
+            l
+        };
+        assert_eq!(
+            generative_artifact_status(directory.path(), &legacy, "identity-A"),
+            GenerativeArtifactStatus::Stale
+        );
+        // Missing bundle stays Missing regardless of identity.
+        std::fs::remove_file(&bundle).unwrap();
+        assert_eq!(
+            generative_artifact_status(directory.path(), &link, "identity-A"),
+            GenerativeArtifactStatus::Missing
+        );
+        // Corrupt bundle stays Corrupt.
+        std::fs::write(&bundle, b"definitely not zdata").unwrap();
+        assert_eq!(
+            generative_artifact_status(directory.path(), &link, "identity-A"),
+            GenerativeArtifactStatus::Corrupt
         );
     }
 

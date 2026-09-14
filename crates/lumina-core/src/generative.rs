@@ -3,6 +3,10 @@
 //! Generative canvas + keep_generative_content logic (GEN-FILL-03).
 //! Plus GEN-FILL-01 heuristic auto-fill for transparent pixels after lens correction.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use log::trace;
 use lumina_sidecar::{Crop, GenerativeCanvas, GenerativeEdit};
 
 use crate::{CoreError, ImageFrame};
@@ -14,6 +18,364 @@ pub fn has_transparent_pixels(frame: &ImageFrame) -> bool {
         .0
         .iter()
         .any(|px| px[3] < 255 || (px[0] == 0 && px[1] == 0 && px[2] == 0))
+}
+
+// ---------------------------------------------------------------------------
+// GEN-EXPAND-CACHE-1: persistent-free expand/auto-fill result cache.
+//
+// The heuristic fill (`fill_transparent_heuristic`) is a sequential global BFS
+// that dominates the render cost of the generative stage. The user condition
+// (2026-09-14) is explicit: the one-time expand is fine, but it must not run on
+// every rendering. This cache reuses a completed BFS result for an identical
+// generative identity.
+//
+// Identity (analogous to the AI-mask identity in `Agents.md`) is *complete*: it
+// is the digest of the exact BFS input frame (which already folds in source
+// content, decode context and the full geometry/lens/perspective context)
+// combined with the role discriminator, the `seed` and the target `canvas`.
+// Any change to source, decode, recipe, seed or canvas therefore produces a
+// different key => a miss => a loud recomputation. A stale result can never be
+// served silently: there is no timestamp/partial-match lookup, only exact
+// identity equality.
+//
+// The cache is deliberately RAM-only and process-local (per thread). It is a
+// pure performance layer, fully deletable and rebuildable from source+recipe:
+// no new on-disk format is invented. The already existing `.lumina.zdata`
+// `kind = 2` record (with its recipe link) remains the durable artifact format;
+// its identity verification lives in `lumina-sidecar` (see
+// `generative_artifact_status`).
+// ---------------------------------------------------------------------------
+
+/// Which generative operation a cached result belongs to. Auto-fill and expand
+/// share the same BFS but must never serve each other's result, even if the
+/// input digest and seed were identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerativeRole {
+    /// `auto_fill_transparent`: fills transparent pixels after lens correction.
+    AutoFillTransparent,
+    /// `expand_beyond_image`: composites the source into a larger canvas and
+    /// fills the expanded border.
+    Expand,
+}
+
+impl GenerativeRole {
+    fn tag(self) -> u8 {
+        match self {
+            Self::AutoFillTransparent => 1,
+            Self::Expand => 2,
+        }
+    }
+}
+
+/// Complete identity of one BFS run. Two keys with equal [`Self::digest`] are
+/// guaranteed to describe the exact same BFS input and parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerativeCacheKey {
+    pub role: GenerativeRole,
+    pub seed: u64,
+    /// Target canvas `(output_width, output_height, source_offset_x,
+    /// source_offset_y)` for [`GenerativeRole::Expand`]; `None` for auto-fill.
+    pub canvas: Option<(u32, u32, i32, i32)>,
+    /// BLAKE3 digest of the exact input frame the BFS consumes (dimensions +
+    /// RGBA8 pixels).
+    pub input_digest: String,
+}
+
+impl GenerativeCacheKey {
+    /// Identity of an auto-fill run over `frame` with `seed`.
+    #[must_use]
+    pub fn auto_fill(frame: &ImageFrame, seed: u64) -> Self {
+        Self {
+            role: GenerativeRole::AutoFillTransparent,
+            seed,
+            canvas: None,
+            input_digest: generative_input_digest(frame),
+        }
+    }
+
+    /// Identity of an expand run that composites `frame` into `canvas` with
+    /// `seed`.
+    #[must_use]
+    pub fn expand(frame: &ImageFrame, canvas: &GenerativeCanvas, seed: u64) -> Self {
+        Self {
+            role: GenerativeRole::Expand,
+            seed,
+            canvas: Some((
+                canvas.output_width,
+                canvas.output_height,
+                canvas.source_offset_x,
+                canvas.source_offset_y,
+            )),
+            input_digest: generative_input_digest(frame),
+        }
+    }
+
+    /// Stable cache digest; every identity component participates.
+    #[must_use]
+    pub fn digest(&self) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"generative-cache");
+        hasher.update(&[self.role.tag()]);
+        hasher.update(&self.seed.to_le_bytes());
+        match self.canvas {
+            None => {
+                hasher.update(&[0]);
+            }
+            Some((w, h, ox, oy)) => {
+                hasher.update(&[1]);
+                hasher.update(&w.to_le_bytes());
+                hasher.update(&h.to_le_bytes());
+                hasher.update(&ox.to_le_bytes());
+                hasher.update(&oy.to_le_bytes());
+            }
+        }
+        hasher.update(self.input_digest.as_bytes());
+        hasher.finalize().to_hex().to_string()
+    }
+}
+
+/// BLAKE3 digest of the exact BFS input frame. Folding the pixels in makes the
+/// cache identity independent of *how* the frame was produced (source decode,
+/// lensfun/manual lens, perspective): identical pixels always share a result,
+/// different pixels always miss.
+#[must_use]
+pub fn generative_input_digest(frame: &ImageFrame) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"generative-input");
+    hasher.update(&frame.width.to_le_bytes());
+    hasher.update(&frame.height.to_le_bytes());
+    hasher.update(&frame.pixels);
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Observability counters for the generative cache. `bfs_runs` counts every
+/// actual `fill_transparent_heuristic` invocation (cache miss); a second render
+/// with identical identity leaves it unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GenerativeCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub bfs_runs: u64,
+    pub entries: usize,
+    pub used_bytes: usize,
+}
+
+#[derive(Debug)]
+struct GenerativeCacheSlot {
+    frame: ImageFrame,
+    stamp: u64,
+}
+
+/// Byte-budgeted LRU cache mapping [`GenerativeCacheKey`] digests to completed
+/// BFS results. Clone-on-read so callers can mutate the returned frame without
+/// poisoning the cached result.
+#[derive(Debug)]
+pub struct GenerativeCache {
+    entries: HashMap<String, GenerativeCacheSlot>,
+    max_bytes: usize,
+    used_bytes: usize,
+    clock: u64,
+    stats: GenerativeCacheStats,
+}
+
+impl Default for GenerativeCache {
+    fn default() -> Self {
+        // Multiple full-resolution canvases (~180 MB for 45 MP RGBA8) fit; the
+        // LRU evicts beyond that. A single frame larger than the budget is
+        // refused (`insert` returns `false`) and the render continues correctly
+        // without it — a documented capacity limit, not a silent fallback.
+        Self::new(1_500_000_000)
+    }
+}
+
+impl GenerativeCache {
+    #[must_use]
+    pub fn new(max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_bytes,
+            used_bytes: 0,
+            clock: 0,
+            stats: GenerativeCacheStats::default(),
+        }
+    }
+
+    /// Exact-identity lookup. A miss (including any identity mismatch) is
+    /// counted and returns `None`; a stale result can never be returned.
+    pub fn get(&mut self, key: &GenerativeCacheKey) -> Option<ImageFrame> {
+        let digest = key.digest();
+        let Some(slot) = self.entries.get_mut(&digest) else {
+            self.stats.misses += 1;
+            // DoD §4 hot path: `trace!` only (guard prevents formatting when off).
+            trace!(
+                "generative cache MISS role={:?} seed={} canvas={:?} key={} misses={}",
+                key.role,
+                key.seed,
+                key.canvas,
+                digest,
+                self.stats.misses
+            );
+            return None;
+        };
+        self.clock += 1;
+        slot.stamp = self.clock;
+        self.stats.hits += 1;
+        trace!(
+            "generative cache HIT role={:?} seed={} canvas={:?} key={} hits={}",
+            key.role,
+            key.seed,
+            key.canvas,
+            digest,
+            self.stats.hits
+        );
+        Some(slot.frame.clone())
+    }
+
+    /// Inserts (or replaces) a result, evicting least-recently-used entries
+    /// until the budget fits. Returns `false` — without storing anything — when
+    /// the frame alone exceeds the configured budget.
+    pub fn insert(&mut self, key: &GenerativeCacheKey, frame: ImageFrame) -> bool {
+        let bytes = frame.pixels.len();
+        if bytes > self.max_bytes {
+            return false;
+        }
+        let digest = key.digest();
+        if let Some(previous) = self.entries.remove(&digest) {
+            self.used_bytes -= previous.frame.pixels.len();
+        }
+        self.clock += 1;
+        while self.used_bytes + bytes > self.max_bytes {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, slot)| slot.stamp)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(evicted) = self.entries.remove(&oldest) {
+                self.used_bytes -= evicted.frame.pixels.len();
+            }
+        }
+        self.used_bytes += bytes;
+        trace!(
+            "generative cache INSERT role={:?} key={} bytes={} entries={} used_bytes={}/{}",
+            key.role,
+            digest,
+            bytes,
+            self.entries.len() + 1,
+            self.used_bytes,
+            self.max_bytes
+        );
+        self.entries.insert(
+            digest,
+            GenerativeCacheSlot {
+                frame,
+                stamp: self.clock,
+            },
+        );
+        true
+    }
+
+    /// Records one actual BFS execution (cache miss path).
+    pub fn note_bfs_run(&mut self) {
+        self.stats.bfs_runs += 1;
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> GenerativeCacheStats {
+        GenerativeCacheStats {
+            entries: self.entries.len(),
+            used_bytes: self.used_bytes,
+            ..self.stats
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.used_bytes = 0;
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[must_use]
+    pub fn used_bytes(&self) -> usize {
+        self.used_bytes
+    }
+}
+
+thread_local! {
+    /// Process-local (per-thread) cache used by the shared render pipeline.
+    /// Every UI/CLI render on a given thread reuses the previous expand/auto-fill
+    /// result; worker threads own their own instance (pure performance layer).
+    static GENERATIVE_CACHE: RefCell<GenerativeCache> =
+        RefCell::new(GenerativeCache::default());
+}
+
+/// Drops every entry of the current thread's render cache (e.g. on a source or
+/// document switch). Counters are preserved for observability.
+pub fn clear_generative_cache() {
+    GENERATIVE_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Observability snapshot of the current thread's render cache.
+#[must_use]
+pub fn generative_cache_stats() -> GenerativeCacheStats {
+    GENERATIVE_CACHE.with(|cache| cache.borrow().stats())
+}
+
+/// Outcome of [`fill_transparent_cached`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FillOutcome {
+    /// Whether any transparent pixel was filled.
+    pub filled: bool,
+    /// Whether the result was served from the cache (no BFS executed).
+    pub cache_hit: bool,
+}
+
+/// Cached auto-fill: returns the cached result for an identical identity
+/// without running the BFS; otherwise runs the BFS, caches the result and
+/// returns it.
+pub fn fill_transparent_cached(
+    cache: &mut GenerativeCache,
+    frame: &mut ImageFrame,
+    seed: u64,
+) -> FillOutcome {
+    let key = GenerativeCacheKey::auto_fill(frame, seed);
+    if let Some(cached) = cache.get(&key) {
+        *frame = cached;
+        return FillOutcome {
+            filled: true,
+            cache_hit: true,
+        };
+    }
+    cache.note_bfs_run();
+    trace!(
+        "generative cache BFS run role={:?} seed={} frame={}x{} key={}",
+        key.role,
+        key.seed,
+        frame.width,
+        frame.height,
+        key.digest()
+    );
+    let filled = fill_transparent_heuristic(frame, seed);
+    if filled {
+        cache.insert(&key, frame.clone());
+    }
+    FillOutcome {
+        filled,
+        cache_hit: false,
+    }
+}
+
+/// Auto-fill through the current thread's render cache. This is the path the
+/// shared pipeline ([`ImageFrame::apply_auto_fill_transparent`]) uses.
+pub fn fill_transparent_cached_global(frame: &mut ImageFrame, seed: u64) -> bool {
+    GENERATIVE_CACHE
+        .with(|cache| fill_transparent_cached(&mut cache.borrow_mut(), frame, seed).filled)
 }
 
 /// Heuristic fill: transparent pixels (`alpha < 255`) are replaced by the
@@ -197,8 +559,21 @@ pub fn resolve_canvas_for_recipe(
     }
 }
 
-/// GEN-FILL-02 stub: expand canvas heuristically (no model). Validates canvas bounds.
+/// GEN-FILL-02 stub: expand canvas heuristically (no model). Validates canvas
+/// bounds. Uses the current thread's [`GenerativeCache`] so a repeated render of
+/// the identical identity does not run the BFS again (GEN-EXPAND-CACHE-1).
 pub fn apply_generative_expand(
+    frame: &ImageFrame,
+    recipe: &lumina_sidecar::EditRecipe,
+) -> Result<ImageFrame, CoreError> {
+    GENERATIVE_CACHE
+        .with(|cache| apply_generative_expand_cached(&mut cache.borrow_mut(), frame, recipe))
+}
+
+/// Expand through an explicit cache. Deterministic (no thread-local state), so
+/// callers that own a cache and tests can prove hit/miss behaviour exactly.
+pub fn apply_generative_expand_cached(
+    cache: &mut GenerativeCache,
     frame: &ImageFrame,
     recipe: &lumina_sidecar::EditRecipe,
 ) -> Result<ImageFrame, CoreError> {
@@ -216,6 +591,33 @@ pub fn apply_generative_expand(
             maximum: 1.0,
         });
     };
+    validate_expand_canvas(frame, canvas)?;
+    let seed = ge.seed.unwrap_or(0);
+    let key = GenerativeCacheKey::expand(frame, canvas, seed);
+    if let Some(cached) = cache.get(&key) {
+        return Ok(cached);
+    }
+    cache.note_bfs_run();
+    trace!(
+        "generative cache BFS run role={:?} seed={} frame={}x{} canvas={}x{} offset=({},{}) key={}",
+        key.role,
+        key.seed,
+        frame.width,
+        frame.height,
+        canvas.output_width,
+        canvas.output_height,
+        canvas.source_offset_x,
+        canvas.source_offset_y,
+        key.digest()
+    );
+    let out = build_expanded_canvas(frame, canvas, seed);
+    cache.insert(&key, out.clone());
+    Ok(out)
+}
+
+/// Validates the expand canvas against the current frame. Fails loudly
+/// (`InvalidAdjustment`) instead of silently rendering an unexpanded frame.
+fn validate_expand_canvas(frame: &ImageFrame, canvas: &GenerativeCanvas) -> Result<(), CoreError> {
     canvas
         .validate()
         .map_err(|_| CoreError::InvalidAdjustment {
@@ -245,6 +647,13 @@ pub fn apply_generative_expand(
             maximum: 1.0,
         });
     }
+    Ok(())
+}
+
+/// The actual expand: composite the source into the larger canvas, mark the
+/// border transparent and run the heuristic fill. Pure function of
+/// `(frame, canvas, seed)`; the caller wraps it in the cache.
+fn build_expanded_canvas(frame: &ImageFrame, canvas: &GenerativeCanvas, seed: u64) -> ImageFrame {
     let mut out = ImageFrame::new(
         canvas.output_width,
         canvas.output_height,
@@ -275,9 +684,8 @@ pub fn apply_generative_expand(
             }
         }
     }
-    let seed = ge.seed.unwrap_or(0);
     fill_transparent_heuristic(&mut out, seed);
-    Ok(out)
+    out
 }
 
 fn crop_rect_on_canvas(
@@ -637,5 +1045,193 @@ mod tests {
             .to_hex()
             .to_string();
         assert_ne!(ha, hb);
+    }
+
+    // ---- GEN-EXPAND-CACHE-1: BFS result cache (hit / miss / identity) ----
+
+    /// Opaque 4x4 frame with distinct pixels so the BFS has real neighbours.
+    fn expand_frame() -> crate::ImageFrame {
+        let mut pixels = Vec::with_capacity(4 * 4 * 4);
+        for i in 0..16u8 {
+            pixels.extend_from_slice(&[i.wrapping_mul(7), i.wrapping_mul(3), i, 255]);
+        }
+        crate::ImageFrame::new(4, 4, pixels).unwrap()
+    }
+
+    /// Transparent 3x3 frame with one opaque centre pixel.
+    fn auto_fill_frame() -> crate::ImageFrame {
+        let mut pixels = vec![0u8; 3 * 3 * 4];
+        let c = 4 * 4;
+        pixels[c] = 100;
+        pixels[c + 1] = 150;
+        pixels[c + 2] = 200;
+        pixels[c + 3] = 255;
+        crate::ImageFrame::new(3, 3, pixels).unwrap()
+    }
+
+    fn expand_recipe(seed: u64, canvas: GenerativeCanvas) -> lumina_sidecar::EditRecipe {
+        let mut recipe = lumina_sidecar::EditRecipe::default();
+        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
+            version: 1,
+            canvas: Some(canvas),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: Some(seed),
+            prompt: None,
+            extras: Default::default(),
+        });
+        recipe
+    }
+
+    #[test]
+    fn expand_cache_serves_second_render_without_bfs() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let frame = expand_frame();
+        let recipe = expand_recipe(0, canvas(6, 6, 1, 1));
+
+        let first = apply_generative_expand_cached(&mut cache, &frame, &recipe).unwrap();
+        assert_eq!(cache.stats().bfs_runs, 1);
+        assert_eq!(cache.stats().misses, 1);
+        assert_eq!(cache.stats().hits, 0);
+
+        let second = apply_generative_expand_cached(&mut cache, &frame, &recipe).unwrap();
+        assert_eq!(
+            first.pixels, second.pixels,
+            "cached result is byte-identical"
+        );
+        assert_eq!((second.width, second.height), (6, 6));
+        assert_eq!(cache.stats().bfs_runs, 1, "second render must not run BFS");
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn expand_cache_misses_on_seed_change() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let frame = expand_frame();
+        apply_generative_expand_cached(&mut cache, &frame, &expand_recipe(0, canvas(6, 6, 1, 1)))
+            .unwrap();
+        apply_generative_expand_cached(&mut cache, &frame, &expand_recipe(7, canvas(6, 6, 1, 1)))
+            .unwrap();
+        assert_eq!(cache.stats().bfs_runs, 2, "a seed change is a loud miss");
+        assert_eq!(cache.stats().hits, 0);
+    }
+
+    #[test]
+    fn expand_cache_misses_on_canvas_change() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let frame = expand_frame();
+        apply_generative_expand_cached(&mut cache, &frame, &expand_recipe(0, canvas(6, 6, 1, 1)))
+            .unwrap();
+        apply_generative_expand_cached(&mut cache, &frame, &expand_recipe(0, canvas(6, 6, 0, 0)))
+            .unwrap();
+        assert_eq!(cache.stats().bfs_runs, 2, "a canvas change is a loud miss");
+    }
+
+    #[test]
+    fn expand_cache_misses_on_source_change() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let recipe = expand_recipe(0, canvas(6, 6, 1, 1));
+        let mut other = expand_frame();
+        other.pixels[0] ^= 0xFF;
+        apply_generative_expand_cached(&mut cache, &expand_frame(), &recipe).unwrap();
+        apply_generative_expand_cached(&mut cache, &other, &recipe).unwrap();
+        assert_eq!(
+            cache.stats().bfs_runs,
+            2,
+            "changed source pixels are a loud miss"
+        );
+    }
+
+    #[test]
+    fn auto_fill_cache_serves_second_render_without_bfs() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let mut first = auto_fill_frame();
+        let outcome = fill_transparent_cached(&mut cache, &mut first, 5);
+        assert!(outcome.filled);
+        assert!(!outcome.cache_hit);
+        assert_eq!(cache.stats().bfs_runs, 1);
+        assert!(!has_transparent_pixels(&first));
+
+        let mut second = auto_fill_frame();
+        let outcome = fill_transparent_cached(&mut cache, &mut second, 5);
+        assert!(outcome.filled);
+        assert!(outcome.cache_hit, "second render is a cache hit");
+        assert_eq!(first.pixels, second.pixels);
+        assert_eq!(cache.stats().bfs_runs, 1, "second render must not run BFS");
+    }
+
+    #[test]
+    fn auto_fill_cache_misses_on_seed_change_without_serving_stale() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let mut a = auto_fill_frame();
+        fill_transparent_cached(&mut cache, &mut a, 1);
+        let mut b = auto_fill_frame();
+        let outcome = fill_transparent_cached(&mut cache, &mut b, 2);
+        assert!(
+            !outcome.cache_hit,
+            "seed change never serves the stale result"
+        );
+        assert_eq!(cache.stats().bfs_runs, 2);
+    }
+
+    #[test]
+    fn cache_key_digest_separates_role_seed_and_canvas() {
+        let frame = expand_frame();
+        let base = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 1, 1), 0);
+        let seed = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 1, 1), 1);
+        let canvas_changed = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 0, 0), 0);
+        let auto = GenerativeCacheKey::auto_fill(&frame, 0);
+        assert_ne!(base.digest(), seed.digest());
+        assert_ne!(base.digest(), canvas_changed.digest());
+        assert_ne!(base.digest(), auto.digest(), "roles never alias");
+        assert_eq!(base.digest(), base.clone().digest(), "stable digest");
+    }
+
+    #[test]
+    fn expand_cache_is_bounded_and_clearable() {
+        let mut cache = GenerativeCache::new(10_000_000);
+        let recipe = expand_recipe(0, canvas(6, 6, 1, 1));
+        apply_generative_expand_cached(&mut cache, &expand_frame(), &recipe).unwrap();
+        assert!(!cache.is_empty());
+        assert!(cache.used_bytes() > 0);
+        cache.clear();
+        assert!(cache.is_empty());
+        assert_eq!(cache.used_bytes(), 0);
+    }
+
+    #[test]
+    fn global_render_paths_reuse_the_thread_cache() {
+        // Auto-fill via the shared pipeline method.
+        clear_generative_cache();
+        let before = generative_cache_stats().bfs_runs;
+        let mut a = auto_fill_frame();
+        assert!(a.apply_auto_fill_transparent(true, 9));
+        let after_first = generative_cache_stats().bfs_runs;
+        assert_eq!(after_first, before + 1);
+        let mut b = auto_fill_frame();
+        assert!(b.apply_auto_fill_transparent(true, 9));
+        assert_eq!(
+            generative_cache_stats().bfs_runs,
+            after_first,
+            "second identical auto-fill must not run BFS"
+        );
+        assert_eq!(a.pixels, b.pixels);
+
+        // Expand via the public entry point.
+        clear_generative_cache();
+        let before = generative_cache_stats().bfs_runs;
+        let recipe = expand_recipe(0, canvas(6, 6, 1, 1));
+        let first = apply_generative_expand(&expand_frame(), &recipe).unwrap();
+        let after_first = generative_cache_stats().bfs_runs;
+        assert_eq!(after_first, before + 1);
+        let second = apply_generative_expand(&expand_frame(), &recipe).unwrap();
+        assert_eq!(
+            generative_cache_stats().bfs_runs,
+            after_first,
+            "second identical expand must not run BFS"
+        );
+        assert_eq!(first.pixels, second.pixels);
     }
 }

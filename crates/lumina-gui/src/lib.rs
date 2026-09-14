@@ -27751,6 +27751,35 @@ mod tests {
     }
 
     #[test]
+    fn generative_expand_preview_reuses_cache_without_bfs() {
+        // GEN-EXPAND-CACHE-1: the GUI preview/export share the core pipeline and
+        // therefore the same thread-local expand cache. A second identical render
+        // must reuse the already-produced result instead of running the
+        // heuristic BFS again.
+        let (png, _frame) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png, "expand-cache-test.png").unwrap();
+        lumina_core::clear_generative_cache();
+        let before = lumina_core::generative_cache_stats().bfs_runs;
+        app.set_expand_beyond_image(true).unwrap();
+        let after_first = lumina_core::generative_cache_stats().bfs_runs;
+        assert_eq!(after_first, before + 1, "first expand runs the BFS once");
+        let first_preview = app.preview().unwrap().clone();
+
+        app.render_full([800, 600], None).unwrap();
+        assert_eq!(
+            lumina_core::generative_cache_stats().bfs_runs,
+            after_first,
+            "second identical GUI render must reuse the cached expand (no BFS)"
+        );
+        assert_eq!(
+            app.preview().unwrap().pixels,
+            first_preview.pixels,
+            "cached reuse is byte-identical to the first render"
+        );
+    }
+
+    #[test]
     fn generative_expand_without_canvas_fails_loudly() {
         // Expand without a canvas is a hard error — never a silent unexpanded
         // render (kein stiller Fallback).

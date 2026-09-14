@@ -34,9 +34,13 @@ pub use cache::{
     StaleTracker,
 };
 pub use generative::{
-    effective_keep as effective_keep_generative, fill_transparent_heuristic, generative_canvas,
-    generative_edit, has_transparent_pixels, materialize_canvas_for_crop,
-    materialize_canvas_for_crop_with_source, resolve_canvas_for_recipe,
+    apply_generative_expand_cached, clear_generative_cache,
+    effective_keep as effective_keep_generative, fill_transparent_cached,
+    fill_transparent_cached_global, fill_transparent_heuristic, generative_cache_stats,
+    generative_canvas, generative_edit, generative_input_digest, has_transparent_pixels,
+    materialize_canvas_for_crop, materialize_canvas_for_crop_with_source,
+    resolve_canvas_for_recipe, FillOutcome, GenerativeCache, GenerativeCacheKey,
+    GenerativeCacheStats, GenerativeRole,
 };
 pub use histogram::LuminanceHistogram;
 pub use lens_blur::{apply_lens_blur, lens_blur_status, validate_lens_blur, DepthPlane};
@@ -622,7 +626,7 @@ impl ImageFrame {
         if !crate::generative::has_transparent_pixels(self) {
             return false;
         }
-        crate::generative::fill_transparent_heuristic(self, seed)
+        crate::generative::fill_transparent_cached_global(self, seed)
     }
 
     /// GEN-FILL-01: full geometry with auto-fill insertion (Lens → Fill → Perspective → Crop).

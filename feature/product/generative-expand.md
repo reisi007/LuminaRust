@@ -59,6 +59,17 @@ Ergebnis cachen/wiederverwenden (→ GEN-EXPAND-CACHE-1); (2) ONNX-Pfad ASAP
 nachziehen (→ GEN-ONNX-1), danach entfällt der BFS-Platzhalter zugunsten von
 Artefakt-Compositing (GPU-portierbar).
 
+**Stand 2026-09-14 (GEN-EXPAND-CACHE-1 BESTANDEN):** RAM-Cache erfüllt die
+User-Bedingung — Zweit-Render ohne BFS (thread-lokales LRU, Key aus Rolle +
+Seed + Canvas + BLAKE3-Pixel-Digest, exakte Identität, stale nie serviert,
+`trace!`-Logging; 9 Core- + 1 GUI-Test). Scope-Entscheid (verifiziert
+akzeptiert): die durable `zdata`-Verdrahtung (Identität schreiben +
+persistiertes Canvas in den Render zurückspeisen) kommt mit GEN-ONNX-1, wo
+Artefakt-Compositing den BFS ersetzt — die `GenerativeArtifactRef`-Identität
+(`extras["generative_identity"]`, additiv) und `generative_artifact_status`
+(`Available` nur bei Identität, sonst `Stale`/`Missing`/`Corrupt`) liegen
+dafür bereit.
+
 **Stand 2026-09-03 (GEN-FILL-03 BESTANDEN verifiziert 2026-09-03, c7aede7+9cc8f45+0d3033d):** `keep_generative_content` (`null→true` Default, `effective_keep`, `keep_true` Canvas bleibt, `keep_false` materialisiert `canvas=crop_rect` `source_offset-crop_offset` Translation, verkürzt Canvas, validiert, `recipe_hash` ändert sich, `resolve_canvas_for_recipe` keep true→clone false→`materialize_canvas_for_crop` inkl. `Aspect`/`Free` normiert `round/clamp`, `materialize_with_source` OOB→`InvalidAdjustment` kein stiller Fallback, `validate_with_source` `output>source` + Bounds), `lumina-core::generative` (`effective_keep`, `materialize_canvas_for_crop`, `resolve_canvas_for_recipe`, `recipe_hash`), `lumina-sidecar` `GenerativeEdit`/`GenerativeCanvas` `validate`, `lumina-core` `pub mod generative` re-export, 15 generative Tests (`305p` `core`, `86p` `sidecar`, `155p` `gui`), `clippy -D warnings`/`fmt`/`wasm` grün, kein Datenverlust still.
 
 **Stand 2026-09-04 (GUI-DOUBLE-EXPAND-FIX 98b0be6, GEN-PIPELINE-DECOUPLE b80eb62):** Single-Expand — Core rendert `GenerativeEdit(expand)` intern (`Lens→Fill→Perspective→Expand→Crop`, `render_frame_from_base`, Fehler → `InvalidAdjustment` laut); GUI-Post-Render-Checker-`apply_generative_expand` (Preview/Export) ersatzlos gestrichen (war doppelte Pipeline-Implementierung), Preview/Export nutzen den Core-Frame direkt. GUI-Tests 174p (Preview/Export Single-Expand 8→12 inner byte-identisch, Expand-ohne-Canvas laut). Heuristischer Fill, noch kein ONNX-Modell (`pending-integration`), `zdata`-Persistenz kind=2 + Rezept-Link vorhanden (GEN-ZDATA-PERSIST 1e0ccbd, GEN-ZDATA-LINK-1 69dad91), Core-`recipe_hash`/`RenderKey`-Einbezug der Link-Felder = Follow-up.
@@ -73,6 +84,9 @@ Modellgewichte weiterhin `pending-integration`). Dieses Dokument ist das
 normative SOLL für die spätere Umsetzung (Feldbestand `GenerativeEdit`, Canvas >100% Expand, Pipeline Decode→SourceActions→GenerativeEdit→Lens→Perspective→Crop, `.lumina.zdata` `kind=generative_canvas` atomar, Identität/Veraltung analog AI-Masken, kein stiller Fallback, Capability lokal vs Cloud, Lizenz F-078 — unabhängig verifiziert BESTANDEN, kein Code). Die Implementierung erfolgt später in
 `lumina-onnx` (Modellverwaltung, Inferenz) und `lumina-core` (Pipeline-Stufe)
 sowie `lumina-sidecar` (Schema, Validierung, Migration) nach GUI-STAGE-1.
+Dazu gehört die durable `zdata`-Verdrahtung aus GEN-EXPAND-CACHE-1
+(Scope-Entscheid 2026-09-14: persistiertes Canvas per Identität in den Render
+zurückspeisen, Caller-Auflösungs-Hook — Core bleibt I/O-frei).
 Bis dahin wird **kein Crate-Code** angelegt.
 
 ## Normative Invarianten
