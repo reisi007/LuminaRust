@@ -568,3 +568,233 @@ fn meta_copy_paste_reject_missing_source_and_missing_targets() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
 }
+
+/// META-COPYPASTE-2 Bundleschutz: `--out` darf weder das Original noch dessen
+/// Lumina-Bundle (`.lumina.json`/`.lumina.zdata`) überschreiben. Beide Fälle
+/// scheitern laut (Exit 1), Quelle und Bundle bleiben byte-identisch, nichts
+/// wird geschrieben.
+#[test]
+fn meta_copy_out_guard_protects_original_and_bundle() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_png(&directory, "quelle.png");
+    import(&source);
+    draft_set(&source, &["title=Startschuss"]);
+    let original_before = fs::read(&source).unwrap();
+    let sidecar = sidecar_path_for(&source);
+    let sidecar_before = sidecar_bytes(&source);
+    let zdata = lumina_sidecar::zdata_path_for(&source);
+    let zdata_before = fs::read(&zdata).ok();
+
+    // `--out` = Original: derselbe Pfad, Verweigerung mit Exit 1.
+    let result = copy(&source, &source, None);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("same path"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(fs::read(&source).unwrap(), original_before);
+
+    // `--out` = `.lumina.json`: Bundleschutz über den Export-Guard.
+    let result = copy(&source, &sidecar, None);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("would overwrite the Lumina sidecar"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(sidecar_bytes(&source), sidecar_before);
+    assert_eq!(fs::read(&source).unwrap(), original_before);
+
+    // `--out` = `.lumina.zdata`: ebenfalls geschützt.
+    let result = copy(&source, &zdata, None);
+    assert_eq!(result.status.code(), Some(1));
+    assert_eq!(fs::read(&zdata).ok(), zdata_before);
+}
+
+/// META-COPYPASTE-2: ein abgebrochener Clipboard-Write (ungültiges/truncated
+/// JSON, geteiltes Format) und eine fremde `version` schlagen laut fehl
+/// (Exit 1); die Ziele bleiben byte-identisch.
+#[test]
+fn meta_paste_rejects_truncated_and_version_mismatched_clipboard() {
+    let directory = tempfile::tempdir().unwrap();
+    let target = write_png(&directory, "ziel.png");
+    import(&target);
+    draft_set(&target, &["title=Behalten"]);
+    let before = sidecar_bytes(&target);
+
+    // Truncated JSON: der Write ist mitten im geteilten JSON abgebrochen.
+    let truncated = directory.path().join("truncated.json");
+    fs::write(
+        &truncated,
+        r#"{"format":"lumina-meta-clipboard","version":1,"fields":{"title":"Start"#,
+    )
+    .unwrap();
+    let result = paste(&truncated, &[&target], None);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("invalid metadata clipboard"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(sidecar_bytes(&target), before);
+
+    // Fremde Version: laut, kein stiller Fallback auf Version 1.
+    let mismatch = directory.path().join("version-2.json");
+    fs::write(
+        &mismatch,
+        r#"{"format":"lumina-meta-clipboard","version":2,"fields":{"title":"Startschuss"}}"#,
+    )
+    .unwrap();
+    let result = paste(&mismatch, &[&target], None);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("unsupported metadata clipboard version"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(sidecar_bytes(&target), before);
+}
+
+/// META-COPYPASTE-2: handgefertigte Clipboard-Dateien mit Keyword-Verstößen
+/// (Whitespace, leer, Überlänge, zu viele Einträge) werden laut abgelehnt
+/// (Exit 1), nie still normalisiert; die Ziele bleiben byte-identisch.
+#[test]
+fn meta_paste_rejects_handcrafted_keyword_violations() {
+    let directory = tempfile::tempdir().unwrap();
+    let target = write_png(&directory, "ziel.png");
+    import(&target);
+    draft_set(&target, &["title=Behalten", "keywords=alt"]);
+    let before = sidecar_bytes(&target);
+
+    let cases: [(&str, serde_json::Value, &str); 4] = [
+        (
+            "leading-whitespace.json",
+            serde_json::json!({
+                "format": "lumina-meta-clipboard",
+                "version": 1,
+                "keywords": [" fest"]
+            }),
+            "leading/trailing whitespace",
+        ),
+        (
+            "empty-keyword.json",
+            serde_json::json!({
+                "format": "lumina-meta-clipboard",
+                "version": 1,
+                "keywords": [""]
+            }),
+            "leading/trailing whitespace",
+        ),
+        (
+            "long-keyword.json",
+            serde_json::json!({
+                "format": "lumina-meta-clipboard",
+                "version": 1,
+                "keywords": ["x".repeat(129)]
+            }),
+            "exceeds limit",
+        ),
+        (
+            "too-many-keywords.json",
+            serde_json::json!({
+                "format": "lumina-meta-clipboard",
+                "version": 1,
+                "keywords": vec!["fest"; 513]
+            }),
+            "keyword list exceeds limit",
+        ),
+    ];
+
+    for (name, value, needle) in cases {
+        let path = directory.path().join(name);
+        fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let result = paste(&path, &[&target], None);
+        assert_eq!(
+            result.status.code(),
+            Some(1),
+            "case `{name}` stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(needle),
+            "case `{name}` stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            sidecar_bytes(&target),
+            before,
+            "case `{name}` must not touch the target"
+        );
+    }
+}
+
+/// META-COPYPASTE-2: leere `--fields`-Elemente (z. B. `--fields ,title`) sind
+/// laute Fehler (Exit 1) — bei `copy` und `paste`, bevor etwas geschrieben
+/// wird. Handgefertigtes Clipboard für den Paste-Fall.
+#[test]
+fn meta_copy_paste_reject_empty_field_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_png(&directory, "quelle.png");
+    let target = write_png(&directory, "ziel.png");
+    let clipboard = directory.path().join("clipboard.json");
+    import(&source);
+    import(&target);
+    draft_set(&source, &["title=Startschuss"]);
+    let sidecar_before = sidecar_bytes(&source);
+
+    let result = copy(&source, &clipboard, Some(",title"));
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("empty metadata field ID"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!clipboard.exists(), "no clipboard on rejection");
+    assert_eq!(sidecar_bytes(&source), sidecar_before);
+
+    fs::write(
+        &clipboard,
+        r#"{"format":"lumina-meta-clipboard","version":1,"fields":{"title":"X"}}"#,
+    )
+    .unwrap();
+    let target_before = sidecar_bytes(&target);
+    let result = paste(&clipboard, &[&target], Some("title,"));
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("empty metadata field ID"),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(sidecar_bytes(&target), target_before);
+}

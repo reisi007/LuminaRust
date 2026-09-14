@@ -3669,6 +3669,11 @@ fn meta_copy(args: MetaCopyArgs) -> Result<(), CliError> {
     let context = format!("meta copy for `{}`", args.path.display());
     let selection = parse_meta_fields(&args.fields, &context)?;
     let (_, document) = require_sidecar(&args.path)?;
+    let out = args.out.clone().unwrap_or_else(default_meta_clipboard_path);
+    // META-COPYPASTE-2: the clipboard file must never clobber the original
+    // source or its Lumina bundle (`<input>.lumina.json`/`.lumina.zdata`,
+    // including hard links) — same non-destructive guard as the export paths.
+    reject_protected_output(&args.path, &out)?;
     let source = args
         .path
         .file_name()
@@ -3700,7 +3705,6 @@ fn meta_copy(args: MetaCopyArgs) -> Result<(), CliError> {
         fields,
         keywords,
     };
-    let out = args.out.unwrap_or_else(default_meta_clipboard_path);
     let json = serde_json::to_string_pretty(&clipboard).map_err(|error| {
         CliError::Message(format!("cannot serialize metadata clipboard: {error}"))
     })?;
@@ -8074,6 +8078,77 @@ mod tests {
         )
         .unwrap();
         assert!(load_meta_clipboard(&path).is_err());
+    }
+
+    /// META-COPYPASTE-2: die defensiven Validierungszweige von
+    /// `load_meta_clipboard` (truncated JSON, fremde Version, Keyword-Whitespace/
+    /// -Leere/-Überlänge/-Anzahl) und `parse_meta_fields` (leere IDs) sind
+    /// laut — kein stiller Fallback, keine Normalisierung.
+    #[test]
+    fn meta_clipboard_rejects_defensive_violations() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard.json");
+        let write = |raw: &str| fs::write(&path, raw).unwrap();
+        let assert_rejects = |needle: &str| {
+            let error = load_meta_clipboard(&path).unwrap_err().to_string();
+            assert!(error.contains(needle), "expected `{needle}` in `{error}`");
+        };
+
+        // Truncated JSON (abgebrochener Write des geteilten Formats).
+        write(r#"{"format":"lumina-meta-clipboard","version":1,"fields":{"title":"Start"#);
+        assert_rejects("invalid metadata clipboard");
+
+        // Fremde Version statt stillem Fallback.
+        write(r#"{"format":"lumina-meta-clipboard","version":2,"fields":{"title":"X"}}"#);
+        assert_rejects("unsupported metadata clipboard version 2");
+
+        // Unbekannte Feld-ID im Clipboard.
+        write(r#"{"format":"lumina-meta-clipboard","version":1,"fields":{"nope":"X"}}"#);
+        assert_rejects("unknown metadata field `nope`");
+
+        // Keyword mit führendem Whitespace.
+        write(r#"{"format":"lumina-meta-clipboard","version":1,"keywords":[" fest"]}"#);
+        assert_rejects("leading/trailing whitespace");
+
+        // Leeres Keyword.
+        write(r#"{"format":"lumina-meta-clipboard","version":1,"keywords":[""]}"#);
+        assert_rejects("leading/trailing whitespace");
+
+        // Keyword-Überlänge.
+        let long = "x".repeat(MAX_KEYWORD_CHARS + 1);
+        write(&format!(
+            r#"{{"format":"lumina-meta-clipboard","version":1,"keywords":["{long}"]}}"#
+        ));
+        assert_rejects("exceeds limit");
+
+        // Keyword-Anzahl.
+        let many = serde_json::json!({
+            "format": "lumina-meta-clipboard",
+            "version": 1,
+            "keywords": vec!["fest"; MAX_KEYWORDS_PER_DOCUMENT + 1]
+        });
+        write(&serde_json::to_string(&many).unwrap());
+        assert_rejects("keyword list exceeds limit");
+
+        // Leere `--fields`-Elemente werden vor jedem Lesezugriff abgelehnt.
+        let empty = vec!["".to_string()];
+        assert!(parse_meta_fields(&empty, "meta copy").is_err());
+        let mixed = vec!["title".to_string(), String::new()];
+        assert!(parse_meta_fields(&mixed, "meta paste").is_err());
+        // Nichtleere, bekannte IDs bleiben gültig und werden dedupliziert.
+        let ok = parse_meta_fields(
+            &[
+                "title".to_string(),
+                "title".to_string(),
+                "keywords".to_string(),
+            ],
+            "meta copy",
+        )
+        .unwrap();
+        assert_eq!(
+            ok,
+            BTreeSet::from(["keywords".to_string(), "title".to_string()])
+        );
     }
 
     /// META-COPYPASTE-1: the default clipboard lives in the OS temp directory

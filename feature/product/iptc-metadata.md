@@ -218,6 +218,11 @@ laut); Exit-Codes 0/≠ 0 mit klarer stderr-Meldung.
   missverstanden wird.
   Leere Quelle → Clipboard wird geschrieben und laut als `empty` gemeldet
   (Exit 0); der Inhalt ist bewusst nicht als potenzielles Löschen kodierbar.
+  `--out`-Bundleschutz (META-COPYPASTE-2): `--out` darf nie das Original,
+  dessen `.lumina.json`/`.lumina.zdata` oder einen Hardlink aufs Original
+  treffen (`reject_protected_output` wie Export, Exit 1, nichts geschrieben).
+  Bekannte Grenze: Hardlink aufs Bundle wird nur per Pfad erkannt (→ Task
+  CLI-GUARD-HARDLINK-1).
 - `lumina meta paste [<clipboard-datei>] --target <pfade…> [--fields <id,…>]`
   (META-COPYPASTE-1) — schreibt die Clipboard-Felder über den normalen
   Commit-Pfad je Ziel (CAS, atomar, genau ein Historie-Eintrag

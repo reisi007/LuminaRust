@@ -128,6 +128,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | GEN-EXPAND-CACHE-1 | G-07 | Expand-Caching |
 | 1.5 | GEN-ONNX-1 | G-07 | Generativ-ONNX |
 | 1.0 | META-COPYPASTE-2 | G-15 | Meta-CLI-Follow-ups |
+| 1.0 | CLI-GUARD-HARDLINK-1 | G-15 | Guard-Hardlink-Bundle |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
@@ -176,7 +177,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] KITTEST-COVERAGE-STATES-2 (Release: 1.0)** Follow-ups aus STATES-1-Verifizierung (BESTANDEN): Hintergrund-Decode-Fehler öffnet keinen Dialog (Test fehlt — `failed_decode_keeps_previous_path` prüft nur `error()`); Doppel-`error!` im Hintergrund-Pfad bereinigen; Dialog-`Close` per `info!` loggen (DoD §4); Metadata-Panel-Breite (+33 px → Center-Reflow bei 1024 px prüfen); Toast überlagert Histogramm-Header (vorbestehend, niedrig). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
-- [ ] **[PRIO: niedrig] META-COPYPASTE-2 (Release: 1.0)** Follow-ups aus META-CLI-Verifizierung (BESTANDEN): `meta copy --out` Bundleschutz (Original/`.lumina.json` nicht überschreibbar + Test, Präzedenz Export-Guards); Testanker Truncated-JSON/`version`-Mismatch (strukturell laut, aber ungetestet); defensive Validierungszweige (leere `--fields`-Elemente, Keyword-Limits). Abnahme: CLI-Tests grün. Crate: `lumina-cli`.
+- [ ] **[PRIO: niedrig] CLI-GUARD-HARDLINK-1 (Release: 1.0)** Follow-up aus META-COPYPASTE-2-Verifizierung (BESTANDEN, F1 vorbestehend/geteilt): `reject_protected_output` erkennt Hardlinks aufs Bundle (`.lumina.json`/`.lumina.zdata`) nicht (nur Pfad-Vergleich; `(dev,inode)` nur Input↔Output) — Hardlink aufs Sidecar wird mit Clipboard-JSON überschrieben (Exit 0). Fix in der geteilten Guard-Funktion (gilt auch für Export/`process`) + E2E-Test. Abnahme: CLI-Tests grün. Crate: `lumina-cli`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig
