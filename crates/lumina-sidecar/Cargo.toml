@@ -11,7 +11,7 @@ thiserror = "2"
 tempfile = "3"
 blake3 = "1"
 # `zstd` is the `.lumina.zdata` payload codec.
-zstd = { version = "0.13", optional = true }
+zstd = { version = "0.14", optional = true }
 
 [features]
 default = []
