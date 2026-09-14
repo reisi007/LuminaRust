@@ -27321,6 +27321,77 @@ mod tests {
         );
     }
 
+    // ---- CROP-MAXRECT-1: default maximum-content crop through the GUI path ----
+
+    /// CROP-MAXRECT-1: the GUI preview uses the shared core render entry point,
+    /// so the maximum-content default crop applies without a second GUI rule.
+    /// Without a correction the preview is the identity full frame; after a
+    /// perspective correction it contains only content and matches the core
+    /// render byte-for-byte.
+    #[test]
+    fn crop_maxrect_default_applies_through_gui_preview() {
+        use lumina_core::ImageFrame as CoreFrame;
+        let (w, h) = (32u32, 24u32);
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = if (x + y) % 2 == 0 { 40 } else { 210 };
+                pixels.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let frame = CoreFrame::new(w, h, pixels).unwrap();
+        let png = frame.encode(lumina_core::ImageFileFormat::Png).unwrap();
+        let mut app = new_app();
+        app.load_bytes(png, "maxrect-32x24.png").unwrap();
+
+        // No correction: identity full frame (no crop without a reason).
+        app.render().unwrap();
+        let identity = app.preview().unwrap().clone();
+        assert_eq!((identity.width, identity.height), (w, h));
+        assert!(!identity
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|px| px[3] < 255));
+
+        // A perspective keystone introduces transparent wedges. The GUI setter
+        // arms the same recipe field the render reads.
+        app.set_perspective_value("vertical", 0.6);
+        app.render().unwrap();
+        let preview = app.preview().unwrap().clone();
+        assert!(
+            !preview
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|px| px[3] < 255),
+            "GUI preview must contain only content after perspective correction"
+        );
+        assert!(
+            preview.width <= w && preview.height <= h,
+            "default crop must stay constrained to the image"
+        );
+
+        // One code path: the preview is byte-identical to the core render.
+        let core = lumina_core::render_frame(
+            &frame,
+            &lumina_core::RenderContext {
+                recipe: &app.recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .unwrap()
+        .frame;
+        assert_eq!((preview.width, preview.height), (core.width, core.height));
+        assert_eq!(preview.pixels, core.pixels);
+    }
+
     // ---- GEN-FILL-02: Manueller Expand per Checkbox default „auf Bild beschneiden" ----
 
     #[test]

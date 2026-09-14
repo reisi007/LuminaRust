@@ -363,6 +363,26 @@ fn check_typed_spot_entry(
     }
 }
 
+/// CROP-MAXRECT-1: whether the crop stage should fall back to the
+/// maximum-content default. Only an active lens/perspective correction can
+/// introduce transparent wedges, so without one the crop default stays the
+/// identity full frame — "no crop without a reason". Auto-fill / generative
+/// expand may fill the wedges again; because the default is content-based a
+/// fully filled frame yields the identity by itself, so no special case is
+/// needed here.
+fn default_crop_active(context: &RenderContext<'_>) -> bool {
+    let lens = context.recipe.lens_correction.is_some();
+    let perspective = context.recipe.perspective.is_some();
+    #[cfg(feature = "lensfun")]
+    {
+        lens || perspective || context.lensfun.is_some()
+    }
+    #[cfg(not(feature = "lensfun"))]
+    {
+        lens || perspective
+    }
+}
+
 /// PERF-GUI-1: continues a render from an already-prepared base frame.
 ///
 /// Executes exactly the same stages in the same order as [`render_frame`]
@@ -419,7 +439,10 @@ pub fn render_frame_from_base(
     {
         base = crate::generative::apply_generative_expand(&base, context.recipe)?;
     }
-    base.apply_crop_stage(context.recipe.geometry.as_ref())?;
+    base.apply_crop_stage(
+        context.recipe.geometry.as_ref(),
+        default_crop_active(context),
+    )?;
     work.geometry_passes += 1;
 
     // G-05 Lens Blur: sub-stage of `Crop`, after crop/rotation/mirroring and
@@ -2858,7 +2881,9 @@ mod tests {
             )
             .unwrap();
         manual = crate::generative::apply_generative_expand(&manual, &recipe).unwrap();
-        manual.apply_crop_stage(recipe.geometry.as_ref()).unwrap();
+        manual
+            .apply_crop_stage(recipe.geometry.as_ref(), false)
+            .unwrap();
         assert_eq!(output.frame.pixels, manual.pixels);
     }
 
@@ -2947,6 +2972,21 @@ mod tests {
         };
         let mut recipe = EditRecipe {
             perspective: Some(perspective),
+            // CROP-MAXRECT-1: an explicit full-frame crop neutralizes the new
+            // maximum-content default so this test isolates the fill/perspective
+            // ordering (its actual subject) from the crop stage.
+            geometry: Some(lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }),
             ..Default::default()
         };
         recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {

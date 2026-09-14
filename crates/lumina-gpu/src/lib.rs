@@ -91,6 +91,20 @@
 //! (lens, identity crop/rotation) into the resident output and refuses a
 //! dimension-changing chain loudly (the caller uses the exact CPU present path).
 //!
+//! **GPU-MAXRECT-WELLE (CROP-MAXRECT-1).** When a lens or perspective
+//! correction is active and no explicit crop is set, the CPU oracle applies its
+//! content-based **maximum-content-rect default crop**
+//! ([`lumina_core::maximum_content_rect`]) *before* rotation/mirroring. The
+//! resulting rectangle depends on the resampled alpha channel (which output
+//! pixels fall outside the source), so the recipe-only [`geometry`] plan cannot
+//! predict it up front: the transparent wedge of a keystone/pincushion
+//! correction (and the frame shrink it implies) is only known after the
+//! resample. Such recipes are therefore **CPU-routed loudly** through
+//! [`unsupported_gpu_stages_with_context`] (`geometry (default content crop)`)
+//! and refused by [`GpuContext::render_to_vram`] — never rendered with silently
+//! different dimensions/pixels. An explicit `geometry.crop` is always
+//! authoritative and keeps the recipe GPU-eligible.
+//!
 //! **GPU-RENDER-PARITY-1 lens-blur wave.** G-05 Lens Blur runs as the
 //! sub-stage of Crop (after geometry, before masks/output) in the `lens_blur`
 //! pass: the deterministic focus-rect heuristic or, when
@@ -289,7 +303,15 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   ported to the GPU;
 /// - an **invalid** `red_eye` (out-of-range/NaN/duplicate id): a schema-valid
 ///   correction is GPU-rendered, but invalid values stay CPU-routed so the
-///   oracle's loud rejection is preserved.
+///   oracle's loud rejection is preserved;
+/// - a **default content crop** (`geometry (default content crop)`): a lens or
+///   perspective correction is active and `geometry.crop` is `None`, so the CPU
+///   oracle would crop to the maximum-content rectangle before
+///   rotation/mirroring. That rectangle depends on the post-resample alpha and
+///   cannot be planned from the recipe alone (see the module docs); such
+///   recipes route to the CPU loudly instead of rendering an uncropped,
+///   wrong-sized frame. An explicit `geometry.crop` is authoritative and keeps
+///   the recipe GPU-eligible.
 ///
 /// This predicate sees only the recipe. Render-context state the GPU stage
 /// cannot reproduce — mask layers, an active Lensfun corrector, an unbound
@@ -354,7 +376,9 @@ pub fn unsupported_gpu_stages_with_context(
     // CPU anymore.
     // GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror),
     // manual lens correction (distortion/vignette + CA) and perspective are
-    // rendered by the [`geometry`] passes and no longer route to the CPU.
+    // rendered by the [`geometry`] passes and no longer route to the CPU —
+    // except when a lens/perspective correction would activate the
+    // content-based default crop, which is handled below (GPU-MAXRECT-WELLE).
     // GPU-RENDER-PARITY-1 lens-blur wave: heuristic and external-depth lens
     // blur are rendered by the [`lens_blur`] pass, so the former `lens_blur`
     // reason is gone. An external `depth_artifact` is render-context state the
@@ -408,7 +432,37 @@ pub fn unsupported_gpu_stages_with_context(
             reasons.push("camera_white_balance (invalid As-Shot gains)".into());
         }
     }
+    // CROP-MAXRECT-1 / GPU-MAXRECT-WELLE: a lens/perspective correction without
+    // an explicit crop activates the CPU oracle's content-based default crop
+    // (`render.rs::default_crop_active`). Its rectangle is derived from the
+    // resampled alpha channel, so the recipe-only GPU geometry plan cannot
+    // reproduce its (possibly smaller) output dimensions — the transparent
+    // wedge only exists after the resample. Route such recipes to the CPU
+    // loudly rather than present an uncropped, differently-sized frame.
+    if default_content_crop_active(recipe) {
+        reasons.push("geometry (default content crop)".into());
+    }
     reasons
+}
+
+/// Whether the CPU oracle would apply its content-based default crop for
+/// `recipe` (`render.rs::default_crop_active` combined with
+/// `apply_crop_stage`'s `geometry.crop` precedence): a lens or perspective
+/// correction is present and the user set **no** explicit crop.
+///
+/// This mirrors the oracle's recipe-level trigger exactly (a present — even
+/// neutral — correction counts, matching `default_crop_active`; the oracle
+/// still runs `default_content_crop` on the resulting frame). The result of
+/// that crop is pixel-dependent (the resampled alpha), so it is never predicted
+/// here; the caller routes the whole recipe to the exact CPU reference instead.
+fn default_content_crop_active(recipe: &EditRecipe) -> bool {
+    let correction_active = recipe.lens_correction.is_some() || recipe.perspective.is_some();
+    let explicit_crop = recipe
+        .geometry
+        .as_ref()
+        .and_then(|geometry| geometry.crop.as_ref())
+        .is_some();
+    correction_active && !explicit_crop
 }
 
 /// Whether a `red_eye` correction is schema-valid per the CPU oracle's
@@ -2097,8 +2151,16 @@ impl GpuContext {
     /// chain that changes the output dimensions (crop/rotation/perspective) is
     /// also refused loudly ([`warn_vram_dimension_change_once`]); the caller
     /// then uses the exact CPU present path. Dimension-preserving geometry
-    /// (manual lens correction) is rendered into the resident output and matches
-    /// the CPU oracle.
+    /// (mirror/identity rotation) is rendered into the resident output and
+    /// matches the CPU oracle.
+    ///
+    /// **Default content crop (GPU-MAXRECT-WELLE).** A lens/perspective
+    /// correction without an explicit crop activates the CPU oracle's
+    /// content-based default crop, whose (possibly smaller) dimensions depend on
+    /// the resampled alpha. The readback-free path cannot plan it, so
+    /// [`unsupported_gpu_stages_for`] flags those recipes and this entry refuses
+    /// them before any write (the module-level `geometry (default content crop)`
+    /// reason). The GUI then presents the exact CPU reference.
     pub fn render_to_vram(&self, frame: &ImageFrame, recipe: &EditRecipe) -> Result<(), GpuError> {
         // CAMERA-WB-WELLE (R2-MCP-01): the VRAM path cannot CPU-route without a
         // readback, so it must validate the caller-bound As-Shot context itself
@@ -4778,7 +4840,9 @@ mod routing_gate_tests {
     /// other stage check — nested objects and flat stage markers still route.
     /// GPU-RENDER-PARITY-1 geometry and lens-blur waves moved geometry/
     /// perspective/manual lens correction and G-05 lens blur into the GPU
-    /// pipeline, so those are asserted unflagged; the still-unsupported nested
+    /// pipeline **with an explicit crop**; GPU-MAXRECT-WELLE keeps an
+    /// uncropped lens/perspective correction CPU-routed (content default crop),
+    /// so that case is asserted to flag here. The still-unsupported nested
     /// stages are covered by `tests/parity.rs`'s routing inventory.
     #[test]
     fn non_adjustment_stage_checks_unchanged() {
@@ -4805,7 +4869,8 @@ mod routing_gate_tests {
             "G-05 lens blur is GPU-rendered since the lens-blur wave"
         );
 
-        // Geometry/perspective are GPU-rendered now (the geometry wave).
+        // Geometry is GPU-rendered now (the geometry wave). It stays eligible
+        // without a lens/perspective correction.
         let geometry = EditRecipe {
             geometry: Some(lumina_sidecar::Geometry {
                 version: 1,
@@ -4814,9 +4879,31 @@ mod routing_gate_tests {
                 mirror_horizontal: false,
                 mirror_vertical: false,
             }),
+            ..Default::default()
+        };
+        assert!(
+            unsupported_gpu_stages(&geometry).is_empty(),
+            "geometry without a correction is GPU-rendered"
+        );
+
+        // A perspective correction **with an explicit crop** is GPU-rendered
+        // (the crop is authoritative).
+        let perspective_cropped = EditRecipe {
+            geometry: Some(lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.1,
+                    y: 0.1,
+                    width: 0.8,
+                    height: 0.8,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }),
             perspective: Some(Perspective {
                 version: 1,
-                vertical: 0.0,
+                vertical: 0.2,
                 horizontal: 0.0,
                 rotation: 0.0,
                 scale: 1.0,
@@ -4827,8 +4914,32 @@ mod routing_gate_tests {
             ..Default::default()
         };
         assert!(
-            unsupported_gpu_stages(&geometry).is_empty(),
-            "geometry/perspective are GPU-rendered"
+            unsupported_gpu_stages(&perspective_cropped).is_empty(),
+            "perspective with an explicit crop is GPU-rendered"
+        );
+
+        // A lens/perspective correction **without** a crop activates the
+        // content-based default crop, whose dimensions depend on the resampled
+        // alpha — it is CPU-routed loudly (GPU-MAXRECT-WELLE).
+        let perspective_uncropped = EditRecipe {
+            perspective: Some(Perspective {
+                version: 1,
+                vertical: 0.2,
+                horizontal: 0.0,
+                rotation: 0.0,
+                scale: 1.0,
+                aspect_ratio: 1.0,
+                shift_x: 0.0,
+                shift_y: 0.0,
+            }),
+            ..Default::default()
+        };
+        let reasons = unsupported_gpu_stages(&perspective_uncropped);
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.contains("geometry (default content crop)")),
+            "an uncropped perspective must flag the default content crop: {reasons:?}"
         );
 
         // Effects (vignette/grain) is fully GPU-supported now.

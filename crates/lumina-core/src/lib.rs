@@ -9,6 +9,7 @@ use std::io::Cursor;
 use thiserror::Error;
 
 pub mod cache;
+pub mod crop_max_rect;
 pub mod generative;
 pub mod histogram;
 pub mod lens_blur;
@@ -33,6 +34,7 @@ pub use cache::{
     CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
     StaleTracker,
 };
+pub use crop_max_rect::{maximum_content_rect, PixelRect, CONTENT_ALPHA_MIN};
 pub use generative::{
     apply_generative_expand_cached, clear_generative_cache,
     effective_keep as effective_keep_generative, fill_transparent_cached,
@@ -514,7 +516,14 @@ impl ImageFrame {
                 apply_ca(self, l);
             }
         }
-        self.apply_crop_stage(geometry)
+        // CROP-MAXRECT-1: a lens/perspective correction can introduce
+        // transparent wedges; the default crop then excludes them. Without an
+        // active correction the crop stage stays the identity full frame.
+        #[cfg(feature = "lensfun")]
+        let corrected = lens.is_some() || perspective.is_some() || lensfun.is_some();
+        #[cfg(not(feature = "lensfun"))]
+        let corrected = lens.is_some() || perspective.is_some();
+        self.apply_crop_stage(geometry, corrected)
     }
 
     /// GEN-PIPELINE-DECOUPLE: apply crop stage only (crop → rotation →
@@ -527,27 +536,53 @@ impl ImageFrame {
     /// order `Lens → Fill → Perspective → Expand → Crop`. [`Self::apply_geometry`]
     /// and [`Self::apply_geometry_with_auto_fill`] delegate to these stages so
     /// the legacy 5-in-1 entry points stay byte-identical.
+    ///
+    /// CROP-MAXRECT-1: `use_content_default` selects the default when the
+    /// recipe carries no explicit crop. `false` keeps the historical identity
+    /// full frame; `true` uses the largest all-content rectangle
+    /// ([`crate::crop_max_rect::maximum_content_rect`]) so lens/perspective
+    /// transparent wedges are excluded without an explicit user crop. An
+    /// explicit crop is always authoritative and is never adjusted.
     pub fn apply_crop_stage(
         &mut self,
         geometry: Option<&lumina_sidecar::Geometry>,
+        use_content_default: bool,
     ) -> Result<(), CoreError> {
+        // Resolve the target rectangle first. Validation runs before any pixel
+        // mutation, matching the previous early-error contract.
+        let (x, y, w, h) = match geometry {
+            Some(geometry) => {
+                if geometry.version != 1
+                    || !geometry.rotation_degrees.is_finite()
+                    || !(-180.0..=180.0).contains(&geometry.rotation_degrees)
+                {
+                    return Err(CoreError::InvalidAdjustment {
+                        name: "geometry.version/rotation".into(),
+                        value: geometry.rotation_degrees as f64,
+                        minimum: -180.0,
+                        maximum: 180.0,
+                    });
+                }
+                match geometry.crop.as_ref() {
+                    // An explicit user crop stays untouched — the maximum-rect
+                    // default never overrides an authored rectangle.
+                    Some(crop) => crop_rect(self.width, self.height, Some(crop))?,
+                    None if use_content_default => default_content_crop(self),
+                    None => (0, 0, self.width, self.height),
+                }
+            }
+            None if use_content_default => default_content_crop(self),
+            None => return Ok(()),
+        };
+        // Only materialize a cropped copy when the rectangle is not already the
+        // full frame (identity keeps the historic zero-copy behavior).
+        if (x, y, w, h) != (0, 0, self.width, self.height) {
+            *self = crop_frame(self, x, y, w, h)?;
+        }
         let Some(geometry) = geometry else {
             return Ok(());
         };
-        if geometry.version != 1
-            || !geometry.rotation_degrees.is_finite()
-            || !(-180.0..=180.0).contains(&geometry.rotation_degrees)
-        {
-            return Err(CoreError::InvalidAdjustment {
-                name: "geometry.version/rotation".into(),
-                value: geometry.rotation_degrees as f64,
-                minimum: -180.0,
-                maximum: 180.0,
-            });
-        }
-        let (x, y, w, h) = crop_rect(self.width, self.height, geometry.crop.as_ref())?;
-        let cropped = crop_frame(self, x, y, w, h)?;
-        let mut transformed = rotate_frame(&cropped, geometry.rotation_degrees);
+        let mut transformed = rotate_frame(self, geometry.rotation_degrees);
         if geometry.mirror_horizontal {
             flip_horizontal(&mut transformed);
         }
@@ -653,7 +688,13 @@ impl ImageFrame {
         {
             self.apply_perspective_stage(lens, perspective)?;
         }
-        self.apply_crop_stage(geometry)
+        // CROP-MAXRECT-1: auto-fill can remove the wedges again; the default
+        // crop is content-based, so a fully filled frame stays the identity.
+        #[cfg(feature = "lensfun")]
+        let corrected = lens.is_some() || perspective.is_some() || lensfun.is_some();
+        #[cfg(not(feature = "lensfun"))]
+        let corrected = lens.is_some() || perspective.is_some();
+        self.apply_crop_stage(geometry, corrected)
     }
 
     pub fn measurement_domain(
@@ -665,6 +706,15 @@ impl ImageFrame {
 
     /// Computes dimensions in the same order as rendering: lens (same bounds),
     /// perspective (projected-corner bounding box), crop, rotation, mirror.
+    ///
+    /// CROP-MAXRECT-1 note: this predicts dimensions from geometry parameters
+    /// only. It does **not** include the content-based maximum-rectangle
+    /// default crop applied by the render when no explicit crop is set (that
+    /// rectangle depends on the actual pixels after lens/perspective, which
+    /// this dimensions-only API cannot see). When `geometry.crop` is `None`
+    /// and a lens/perspective correction is active, the rendered frame can
+    /// therefore be smaller than the reported domain. Pass an explicit
+    /// `geometry.crop` to get a domain that matches the render.
     pub fn measurement_domain_with_perspective(
         &self,
         geometry: Option<&lumina_sidecar::Geometry>,
@@ -1723,6 +1773,14 @@ fn crop_frame(frame: &ImageFrame, x: u32, y: u32, w: u32, h: u32) -> Result<Imag
         out[dst..dst + w as usize * 4].copy_from_slice(&frame.pixels[src..src + w as usize * 4]);
     }
     ImageFrame::new(w, h, out)
+}
+
+/// CROP-MAXRECT-1: the largest all-content rectangle of `frame`, or the full
+/// frame when it has no content at all (degenerate all-transparent frame). The
+/// full-frame fallback is the documented identity of the default crop — it
+/// never collapses to an empty rectangle.
+fn default_content_crop(frame: &ImageFrame) -> (u32, u32, u32, u32) {
+    crate::crop_max_rect::maximum_content_rect(frame).unwrap_or((0, 0, frame.width, frame.height))
 }
 fn rotate_dimensions(w: u32, h: u32, degrees: f32) -> (u32, u32) {
     let quarter_turn = degrees.rem_euclid(180.0).abs() < 1e-4;
@@ -4500,8 +4558,7 @@ mod tests {
         p.shift_x = 0.5;
         p.shift_y = -0.25;
         shifted
-            .apply_geometry(
-                None,
+            .apply_perspective_stage(
                 None,
                 Some(&p),
                 #[cfg(feature = "lensfun")]
@@ -4515,8 +4572,7 @@ mod tests {
         p = test_perspective();
         p.rotation = 1.0;
         rotated
-            .apply_geometry(
-                None,
+            .apply_perspective_stage(
                 None,
                 Some(&p),
                 #[cfg(feature = "lensfun")]
@@ -4531,8 +4587,7 @@ mod tests {
             p.vertical = vertical;
             p.horizontal = horizontal;
             directional
-                .apply_geometry(
-                    None,
+                .apply_perspective_stage(
                     None,
                     Some(&p),
                     #[cfg(feature = "lensfun")]
@@ -4732,7 +4787,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        staged.apply_crop_stage(Some(&geometry)).unwrap();
+        staged.apply_crop_stage(Some(&geometry), false).unwrap();
         assert_eq!(legacy.pixels, staged.pixels);
         assert_eq!((legacy.width, legacy.height), (8, 8));
         assert_eq!((staged.width, staged.height), (8, 8));
@@ -4796,7 +4851,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        manual.apply_crop_stage(Some(&geometry)).unwrap();
+        manual.apply_crop_stage(Some(&geometry), true).unwrap();
         assert_eq!(legacy.pixels, manual.pixels);
         assert_eq!((legacy.width, legacy.height), (4, 4));
     }
@@ -4804,7 +4859,7 @@ mod tests {
     #[test]
     fn crop_stage_rejects_invalid_geometry() {
         let mut frame = ImageFrame::new(4, 4, vec![1u8; 4 * 4 * 4]).unwrap();
-        assert!(frame.apply_crop_stage(None).is_ok());
+        assert!(frame.apply_crop_stage(None, false).is_ok());
         assert_eq!(frame.pixels, vec![1u8; 4 * 4 * 4]);
         for bad in [
             lumina_sidecar::Geometry {
@@ -4829,8 +4884,316 @@ mod tests {
                 mirror_vertical: false,
             },
         ] {
-            assert!(frame.apply_crop_stage(Some(&bad)).is_err());
+            assert!(frame.apply_crop_stage(Some(&bad), false).is_err());
         }
+    }
+
+    // ---- CROP-MAXRECT-1: default maximum-content crop ----
+
+    /// Opaque source frame with a deterministic, non-constant pattern.
+    fn maxrect_source(width: u32, height: u32) -> ImageFrame {
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let v = ((x * 13 + y * 29) % 256) as u8;
+                pixels.extend_from_slice(&[v, 255 - v, v / 2, 255]);
+            }
+        }
+        ImageFrame::new(width, height, pixels).unwrap()
+    }
+
+    fn has_transparent_alpha(frame: &ImageFrame) -> bool {
+        frame.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255)
+    }
+
+    fn wedge_perspective() -> lumina_sidecar::Perspective {
+        lumina_sidecar::Perspective {
+            version: 1,
+            // A strong vertical keystone guarantees transparent wedges at the
+            // top/bottom of the projected bounding box.
+            vertical: 0.6,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        }
+    }
+
+    #[test]
+    fn default_crop_after_perspective_excludes_transparent_wedges() {
+        let mut frame = maxrect_source(40, 30);
+        frame
+            .apply_perspective_stage(
+                None,
+                Some(&wedge_perspective()),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
+        let canvas = (frame.width, frame.height);
+        assert!(
+            has_transparent_alpha(&frame),
+            "perspective must introduce transparent wedges"
+        );
+        let uncropped = frame.clone();
+
+        frame.apply_crop_stage(None, true).unwrap();
+        assert!(
+            !has_transparent_alpha(&frame),
+            "the default crop must contain only content"
+        );
+        assert!(
+            (frame.width, frame.height) != canvas,
+            "a wedge must shrink the frame"
+        );
+        assert!(frame.width <= canvas.0 && frame.height <= canvas.1);
+
+        // Exact rect: the default crop is byte-identical to cropping the
+        // uncropped geometry result at the computed maximum-content rectangle.
+        let (x, y, w, h) = maximum_content_rect(&uncropped).expect("content rect");
+        let expected = crop_frame(&uncropped, x, y, w, h).unwrap();
+        assert_eq!(
+            (frame.width, frame.height, frame.pixels),
+            (expected.width, expected.height, expected.pixels)
+        );
+    }
+
+    #[test]
+    fn explicit_crop_is_untouched_by_default_maxrect() {
+        let mut frame = maxrect_source(40, 30);
+        frame
+            .apply_perspective_stage(
+                None,
+                Some(&wedge_perspective()),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
+        // A free crop that deliberately keeps the full (transparent) canvas.
+        let geometry = lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Free {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        };
+        let mut with_default = frame.clone();
+        with_default
+            .apply_crop_stage(Some(&geometry), true)
+            .unwrap();
+        let mut without_default = frame.clone();
+        without_default
+            .apply_crop_stage(Some(&geometry), false)
+            .unwrap();
+        assert_eq!(with_default.pixels, without_default.pixels);
+        assert_eq!(
+            (with_default.width, with_default.height),
+            (without_default.width, without_default.height)
+        );
+        // The authored crop wins: it keeps the transparent wedge.
+        assert!(has_transparent_alpha(&with_default));
+    }
+
+    #[test]
+    fn default_crop_without_correction_is_identity() {
+        // Fully opaque source, no lens/perspective: the render is byte-identical
+        // and keeps its dimensions.
+        let source = maxrect_source(24, 16);
+        let recipe = EditRecipe::default();
+        let context = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let out = render_frame(&source, &context).unwrap().frame;
+        assert_eq!((out.width, out.height), (24, 16));
+        assert_eq!(out.pixels, source.pixels);
+
+        // A source whose *own* transparent border is not a geometry wedge is
+        // never cropped without a correction: no crop without a reason.
+        let mut bordered = maxrect_source(24, 16);
+        for x in 0..24 {
+            bordered.pixels[x * 4 + 3] = 0;
+        }
+        let out2 = render_frame(&bordered, &context).unwrap().frame;
+        assert_eq!((out2.width, out2.height), (24, 16));
+        assert_eq!(out2.pixels, bordered.pixels);
+        assert!(has_transparent_alpha(&out2));
+    }
+
+    #[test]
+    fn render_default_crop_after_lens_is_content_only() {
+        // k1 < 0 maps the output corners outside the source (transparent
+        // wedge); the default crop must then keep only content. k1 > 0 leaves
+        // the corners inside the source — no wedge, so the default stays the
+        // identity full frame.
+        let source = maxrect_source(64, 48);
+        let lens = |k1: f32| lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(k1),
+            distortion_k2: Some(0.0),
+            distortion_k3: Some(0.0),
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        let full_crop = lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Free {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            }),
+            rotation_degrees: 0.0,
+            mirror_horizontal: false,
+            mirror_vertical: false,
+        };
+
+        // Wedge case: the default crop keeps only content and matches the
+        // explicit maximum-content rectangle byte-for-byte.
+        let wedge_recipe = EditRecipe {
+            lens_correction: Some(lens(-0.5)),
+            ..Default::default()
+        };
+        let context = RenderContext {
+            recipe: &wedge_recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let cropped = render_frame(&source, &context).unwrap().frame;
+        assert!(
+            !has_transparent_alpha(&cropped),
+            "the shared render entry point must exclude lens wedges by default"
+        );
+        assert!(
+            cropped.width < 64 && cropped.height < 48,
+            "a negative-k1 lens wedge must shrink the frame"
+        );
+        let uncropped_recipe = EditRecipe {
+            lens_correction: Some(lens(-0.5)),
+            geometry: Some(full_crop),
+            ..Default::default()
+        };
+        let uncropped_context = RenderContext {
+            recipe: &uncropped_recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let uncropped = render_frame(&source, &uncropped_context).unwrap().frame;
+        assert_eq!((uncropped.width, uncropped.height), (64, 48));
+        assert!(has_transparent_alpha(&uncropped));
+        let (x, y, w, h) = maximum_content_rect(&uncropped).expect("content rect");
+        let expected = crop_frame(&uncropped, x, y, w, h).unwrap();
+        assert_eq!(
+            (cropped.width, cropped.height, cropped.pixels),
+            (expected.width, expected.height, expected.pixels)
+        );
+
+        // No-wedge lens: a correction that introduces no transparent edge is
+        // not cropped (no crop without a reason).
+        let flat_recipe = EditRecipe {
+            lens_correction: Some(lens(0.5)),
+            ..Default::default()
+        };
+        let flat_context = RenderContext {
+            recipe: &flat_recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let flat = render_frame(&source, &flat_context).unwrap().frame;
+        assert_eq!((flat.width, flat.height), (64, 48));
+    }
+
+    #[test]
+    fn auto_filled_lens_render_keeps_full_frame_without_silent_crop() {
+        // Auto-fill removes the wedges; because the default crop is
+        // content-based it must then keep the full (filled) frame instead of
+        // cropping away freshly generated content.
+        let source = maxrect_source(64, 48);
+        let lens = lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(-0.5),
+            distortion_k2: Some(0.0),
+            distortion_k3: Some(0.0),
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        };
+        let recipe = |auto_fill: bool| EditRecipe {
+            lens_correction: Some(lens.clone()),
+            generative_edit: Some(lumina_sidecar::GenerativeEdit {
+                version: 1,
+                canvas: None,
+                artifact: None,
+                keep_generative_content: None,
+                auto_fill_transparent: Some(auto_fill),
+                expand_beyond_image: None,
+                seed: Some(7),
+                prompt: None,
+                extras: Default::default(),
+            }),
+            ..Default::default()
+        };
+
+        // Control: without auto-fill the transparent wedge is cropped.
+        let plain_recipe = recipe(false);
+        let plain_context = RenderContext {
+            recipe: &plain_recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let plain = render_frame(&source, &plain_context).unwrap().frame;
+        assert!(
+            plain.width < 64 && plain.height < 48,
+            "control without auto-fill must crop the lens wedge"
+        );
+
+        // Auto-filled: no transparent pixel remains, so nothing is cropped.
+        let filled_recipe = recipe(true);
+        let filled_context = RenderContext {
+            recipe: &filled_recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let filled = render_frame(&source, &filled_context).unwrap().frame;
+        assert!(!has_transparent_alpha(&filled));
+        assert_eq!(
+            (filled.width, filled.height),
+            (64, 48),
+            "a fully filled frame must not be silently cropped"
+        );
     }
 
     #[test]
@@ -6491,11 +6854,18 @@ mod tests {
             let src = gradient_frame(257, 200);
             let mut row_path = src.clone();
             let mut per_pixel = src;
-            // Public pipeline entry: geometry identity + empty manual lens +
-            // row-path corrector (same route the pipeline takes, F-098-N1).
+            // Public pipeline entry: explicit full-frame crop (neutralizes the
+            // CROP-MAXRECT-1 content default so this test isolates the lens
+            // row-path bit-identity) + empty manual lens + row-path corrector
+            // (same route the pipeline takes, F-098-N1).
             let geometry = Some(&lumina_sidecar::Geometry {
                 version: 1,
-                crop: None,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                }),
                 rotation_degrees: 0.0,
                 mirror_horizontal: false,
                 mirror_vertical: false,

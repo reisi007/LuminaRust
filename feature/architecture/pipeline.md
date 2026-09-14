@@ -584,8 +584,18 @@ Outputprofil/Export. Geometrieparameter, `version` und resultierende
 `output_dimensions` gehören zum RenderKey: Decode, Auto-Analyse und Masken
 bleiben bei reiner Geometrieänderung cachebar, Preview/Export werden
 invalidiert. Abnahme: Presets, normiertes Rechteck, Drehung/Spiegelung,
-RenderKey-Trennung und F-041-Messbereich. MVP-Grenze: kein Auto-Crop; abhängig
-von F-029, F-039, F-041, F-098 und F-099.
+RenderKey-Trennung und F-041-Messbereich. Default-Crop (CROP-MAXRECT-1,
+User-Entscheid 2026-09-12, ersetzt die alte „kein Auto-Crop"-Grenze): ohne
+expliziten Crop und bei aktiver Lens-/Perspektiv-Korrektur (inkl. Corrector)
+ist der Default das flächenmaximale achsparallele Inhaltsrechteck
+(Maximum-Rectangle beliebigen Seitenverhältnisses, Constrain-to-Image,
+Alpha > 0); ohne Korrektur Identität; expliziter Crop gewinnt immer;
+degeneriert/leer → voller Frame (nie leerer Crop). Bewusste Grenze:
+Nicht-90°-Rotation erzeugt weiterhin transparente Ecken (Default greift vor
+Rotation). Abhängig von F-029, F-039, F-041, F-098 und F-099. GPU-Route
+(2026-09-14): Lens/Perspective ohne expliziten Crop routen laut auf CPU
+(Reason `geometry (default content crop)`, datenabhängiges MaxRect nicht
+rezept-planbar); mit explizitem Crop GPU-fähig.
 
 **Straighten + Aspect-Parität (G-06, LRPAR-G06-GEO, MVP/1.0):** Der
 Straighten-Winkel (Gerade-Ausrichten, Lightroom „Angle") ist kein eigenes
@@ -1267,7 +1277,9 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   2026-09-14: Heuristik-BFS nicht paritätserhaltend portierbar, laute
   CPU-Route, kein stiller Fallback; Details in
   `feature/product/generative-expand.md`)
-  (Cross-Crate-Welle CLI/MCP); lebendes Inventar:
+  sowie `geometry (default content crop)` (CROP-MAXRECT-1, 2026-09-14:
+  datenabhängiges MaxRect ohne expliziten Crop laut CPU-geroutet);
+  lebendes Inventar:
   `cpu_routing_inventory_is_complete`. Erledigt (Teilwelle,
   BESTANDEN, Commit 2026-09-14): Geometrie-Welle inkl. GUI-LENSFUN-GATE-1
   (Details siehe Restrisiken); offene Nebenbefunde: Perf-Pooling,
@@ -1283,10 +1295,13 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
 - **Restrisiken:** (1) Rezepte mit nicht implementierten GPU-Stufen werden
   vom VRAM-Pfad vor jedem Write verweigert (Warnung) — Present fällt dort
   auf den exakten CPU-Pfad zurück, divergente Pixel werden nie geschrieben
-  (seit 2026-09-14 inkl. Geometrie: manuelles Lens/Perspective/Crop/Rotation/
-  Mirror laufen auf GPU mit Oracle-Parität und exakten Output-Maßen;
-  dimensionändernde Rezepte werden vom VRAM-Pfad laut verweigert; bei aktivem
-  Lensfun-Corrector routet das GUI-Gate (CLI-Reason-Mirror) laut auf CPU);
+  (seit 2026-09-14 inkl. Geometrie: explizites Crop/Rotation/Mirror sowie
+  keilloses manuelles Lens/Perspective mit explizitem Crop laufen auf GPU mit
+  Oracle-Parität und exakten Output-Maßen; Lens/Perspective OHNE expliziten
+  Crop routen seit CROP-MAXRECT-1 laut auf CPU (Reason `geometry (default
+  content crop)` — datenabhängiges MaxRect); dimensionändernde Rezepte werden
+  vom VRAM-Pfad laut verweigert; bei aktivem Lensfun-Corrector routet das
+  GUI-Gate (CLI-Reason-Mirror) laut auf CPU);
   (2) >45-MP-Zoom nutzt weiterhin Volltextur-Pooling statt 512²-Tile-Cache
   (M2); (3) der Present-Pfad ist headless nicht automatisiert testbar und
   braucht den nächsten manuellen GUI-Test (Block C).

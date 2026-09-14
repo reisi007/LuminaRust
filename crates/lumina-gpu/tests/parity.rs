@@ -648,6 +648,8 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
             fully_stacked_eligible_recipe(),
         ),
         // --- GPU-RENDER-PARITY-1 geometry wave: lens/perspective/crop ---
+        // (A lens/perspective correction **without** an explicit crop is
+        // CPU-routed by GPU-MAXRECT-WELLE; see `default_content_crop_recipes`.)
         (
             "geometry_crop_free",
             EditRecipe {
@@ -721,57 +723,6 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
                     rotation_degrees: 0.0,
                     mirror_horizontal: true,
                     mirror_vertical: true,
-                }),
-                ..Default::default()
-            },
-        ),
-        ("lens_correction_manual", manual_lens_recipe()),
-        (
-            "lens_correction_wide_light",
-            EditRecipe {
-                lens_correction: Some(LensCorrection {
-                    version: 1,
-                    profile: Some("wide-light".into()),
-                    distortion_k1: None,
-                    distortion_k2: None,
-                    distortion_k3: None,
-                    vignette_c0: None,
-                    vignette_c1: None,
-                    vignette_c2: None,
-                    ca_red: None,
-                    ca_blue: None,
-                }),
-                ..Default::default()
-            },
-        ),
-        (
-            "perspective_vertical",
-            EditRecipe {
-                perspective: Some(Perspective {
-                    version: 1,
-                    vertical: 0.25,
-                    horizontal: 0.0,
-                    rotation: 0.0,
-                    scale: 1.0,
-                    aspect_ratio: 1.0,
-                    shift_x: 0.0,
-                    shift_y: 0.0,
-                }),
-                ..Default::default()
-            },
-        ),
-        (
-            "perspective_full",
-            EditRecipe {
-                perspective: Some(Perspective {
-                    version: 1,
-                    vertical: 0.2,
-                    horizontal: -0.15,
-                    rotation: 0.1,
-                    scale: 1.15,
-                    aspect_ratio: 1.1,
-                    shift_x: 0.05,
-                    shift_y: -0.03,
                 }),
                 ..Default::default()
             },
@@ -951,6 +902,97 @@ fn manual_lens_recipe() -> EditRecipe {
     }
 }
 
+/// A manual lens correction whose radial map pushes the sampled source
+/// coordinate *outward* (`k1 < 0`, pincushion), so the resampled frame keeps
+/// transparent edges — the canonical "lens wedge" that makes the CPU oracle's
+/// content-based default crop non-identity (CROP-MAXRECT-1).
+fn lens_wedge_recipe() -> EditRecipe {
+    EditRecipe {
+        lens_correction: Some(LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(-0.08),
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        }),
+        ..Default::default()
+    }
+}
+
+/// GPU-MAXRECT-WELLE: recipes that activate the CPU oracle's content-based
+/// default crop (a lens/perspective correction without an explicit
+/// `geometry.crop`). The resulting rectangle is derived from the resampled
+/// alpha channel, so the recipe-only GPU geometry plan cannot predict its
+/// (possibly smaller) output dimensions. These recipes are therefore routed to
+/// the CPU loudly (gate reason `geometry (default content crop)`) instead of
+/// rendering an uncropped, differently-sized frame.
+///
+/// Note the two non-wedge lens recipes: their default crop is the identity, but
+/// the recipe-only gate cannot prove that without the resampled alpha, so it
+/// conservatively routes them too. `lens_wedge`/`perspective_*` make the
+/// divergence real and keep this test non-vacuous.
+fn default_content_crop_recipes() -> Vec<(&'static str, EditRecipe)> {
+    vec![
+        ("lens_correction_manual", manual_lens_recipe()),
+        (
+            "lens_correction_wide_light",
+            EditRecipe {
+                lens_correction: Some(LensCorrection {
+                    version: 1,
+                    profile: Some("wide-light".into()),
+                    distortion_k1: None,
+                    distortion_k2: None,
+                    distortion_k3: None,
+                    vignette_c0: None,
+                    vignette_c1: None,
+                    vignette_c2: None,
+                    ca_red: None,
+                    ca_blue: None,
+                }),
+                ..Default::default()
+            },
+        ),
+        ("lens_wedge", lens_wedge_recipe()),
+        (
+            "perspective_vertical",
+            EditRecipe {
+                perspective: Some(Perspective {
+                    version: 1,
+                    vertical: 0.25,
+                    horizontal: 0.0,
+                    rotation: 0.0,
+                    scale: 1.0,
+                    aspect_ratio: 1.0,
+                    shift_x: 0.0,
+                    shift_y: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "perspective_full",
+            EditRecipe {
+                perspective: Some(Perspective {
+                    version: 1,
+                    vertical: 0.2,
+                    horizontal: -0.15,
+                    rotation: 0.1,
+                    scale: 1.15,
+                    aspect_ratio: 1.1,
+                    shift_x: 0.05,
+                    shift_y: -0.03,
+                }),
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
 /// GPU-RENDER-PARITY-1 follow-up end-state probe: a single recipe that sets
 /// every GPU-eligible stage class. Used to assert the routing gate is empty and
 /// that the accumulated parity stays within the documented tolerance.
@@ -1127,13 +1169,9 @@ fn equivalence_for(name: &str) -> Equivalence {
         | "geometry_crop_aspect"
         | "geometry_rotate_90"
         | "geometry_mirror_both" => Equivalence::ByteIdentical,
-        "geometry_rotate_arbitrary"
-        | "lens_correction_manual"
-        | "lens_correction_wide_light"
-        | "perspective_vertical"
-        | "perspective_full" => Equivalence::Bounded(1),
-        "geometry_full_stack" => Equivalence::Bounded(1),
-        "geometry_after_post_stages" => Equivalence::Bounded(1),
+        "geometry_rotate_arbitrary" | "geometry_full_stack" | "geometry_after_post_stages" => {
+            Equivalence::Bounded(1)
+        }
         // --- GPU-RENDER-PARITY-1 lens-blur wave ---
         // The convolution itself is exact integer accumulation; only the final
         // `f32` lerp differs from the oracle's `f64` (the heuristic weight math
@@ -1293,6 +1331,97 @@ fn implemented_stages_match_cpu_oracle() {
         failures.is_empty(),
         "post-tone GPU stages exceeded their per-stage declared equivalence: {failures:?}"
     );
+}
+
+/// GPU-MAXRECT-WELLE (CROP-MAXRECT-1): a lens/perspective correction without an
+/// explicit crop activates the CPU oracle's content-based default crop. The
+/// recipe-only GPU plan cannot predict the (resampled-alpha-dependent)
+/// rectangle, so the gate flags the recipe (`geometry (default content crop)`)
+/// and `render_with_gpu` routes it to the CPU — the output dimensions and pixels
+/// must be identical to the oracle. `lens_wedge` and the two `perspective_*`
+/// recipes prove the default crop really fired (the oracle frame is smaller than
+/// the uncropped geometry dimensions); the non-wedge lens recipes document the
+/// conservative route (identity crop, still CPU-routed rather than risk a
+/// mispredicted rectangle).
+#[test]
+fn default_content_crop_routes_to_cpu_with_parity() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped default-crop check");
+            return;
+        }
+    };
+    let frames: [(&str, ImageFrame); 2] = [
+        ("gradient_64x64", gradient_frame(64, 64)),
+        ("noise_64x64", noise_frame(64, 64, 0x0BAD_F00D_1234_5678)),
+    ];
+    // Recipes whose default crop is genuinely non-identity on these frames.
+    let shrinks = ["lens_wedge", "perspective_vertical", "perspective_full"];
+
+    for (name, recipe) in default_content_crop_recipes() {
+        let reasons = unsupported_gpu_stages(&recipe);
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.contains("geometry (default content crop)")),
+            "{name} must be flagged with the default-crop reason, got {reasons:?}"
+        );
+        for (frame_name, frame) in &frames {
+            let cpu = render_frame(
+                frame,
+                &RenderContext {
+                    recipe: &recipe,
+                    camera_white_balance: None,
+                    source_actions: &[],
+                    masks: None,
+                    lensfun: None,
+                    depth: None,
+                },
+            )
+            .expect("CPU oracle render")
+            .frame;
+            // The uncropped geometry dimensions (these recipes carry no explicit
+            // crop and no rotation): when the default crop fires, the oracle
+            // frame is strictly smaller than this.
+            let uncropped = frame
+                .measurement_domain_with_perspective(
+                    recipe.geometry.as_ref(),
+                    recipe.lens_correction.as_ref(),
+                    recipe.perspective.as_ref(),
+                )
+                .expect("uncropped measurement domain");
+            let cpu_area = cpu.width * cpu.height;
+            let uncropped_area = uncropped.output_width * uncropped.output_height;
+            if shrinks.contains(&name) {
+                assert!(
+                    cpu_area < uncropped_area,
+                    "{frame_name}/{name}: the default content crop must shrink the \
+                     oracle frame ({cpu_area} !< {uncropped_area})"
+                );
+            }
+            if !ctx.is_available() {
+                continue;
+            }
+            let gpu = ctx
+                .render_with_gpu(frame, &recipe)
+                .unwrap_or_else(|error| panic!("{frame_name}/{name}: GPU render: {error}"));
+            assert_eq!(
+                (cpu.width, cpu.height),
+                (gpu.width, gpu.height),
+                "{frame_name}/{name}: the CPU-routed default crop must match the oracle",
+            );
+            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+            eprintln!(
+                "default_crop[{frame_name}/{name}]: {}x{} (uncropped {}x{}) maxAbsDiff={diff}",
+                cpu.width, cpu.height, uncropped.output_width, uncropped.output_height
+            );
+            assert_eq!(
+                diff, 0,
+                "{frame_name}/{name}: a default-content-crop render must be byte-identical"
+            );
+        }
+    }
 }
 
 /// GPU-RENDER-PARITY-1 stage 3 (G-14): the red-eye pass must be pixel-effective
@@ -2293,11 +2422,15 @@ fn vram_path_refuses_unsupported_recipes() {
     );
 }
 
-/// GPU-RENDER-PARITY-1 geometry wave: the readback-free VRAM present texture is
-/// source-sized, so a geometry chain that **changes the output dimensions**
-/// (crop/rotation/perspective) must be refused loudly — the caller then uses the
-/// exact CPU present path. Geometry that preserves the dimensions (lens) is
-/// rendered into the resident output and must match the CPU oracle.
+/// GPU-RENDER-PARITY-1 geometry wave / GPU-MAXRECT-WELLE: the readback-free
+/// VRAM present texture is source-sized, so a geometry chain that **changes the
+/// output dimensions** (crop/rotation/perspective) must be refused loudly — the
+/// caller then uses the exact CPU present path. The same applies to a
+/// lens/perspective correction without an explicit crop, whose content-based
+/// default crop is derived from the resampled alpha and cannot be planned
+/// readback-free (gate reason `geometry (default content crop)`).
+/// Dimension-preserving, default-crop-inactive geometry (mirroring) is rendered
+/// into the resident output and must match the CPU oracle.
 #[test]
 fn vram_geometry_dimension_change_is_refused_loudly() {
     let ctx = match GpuContext::new() {
@@ -2342,17 +2475,43 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
         "VRAM must refuse dimension-changing geometry loudly"
     );
 
-    // Dimension-preserving geometry (manual lens) renders into the resident
-    // output and matches the oracle.
+    // GPU-MAXRECT-WELLE: a lens correction without an explicit crop activates
+    // the content-based default crop. The VRAM path cannot plan it readback-free,
+    // so the gate flags the recipe and the present path refuses (the GUI then
+    // falls back to the exact CPU present path) — no divergent pixels are ever
+    // written into the source-sized resident output.
     let lens = manual_lens_recipe();
-    assert!(unsupported_gpu_stages(&lens).is_empty());
-    ctx.render_to_vram(&frame, &lens)
+    assert!(
+        unsupported_gpu_stages(&lens)
+            .iter()
+            .any(|reason| reason.contains("geometry (default content crop)")),
+        "a lens correction without an explicit crop must be flagged"
+    );
+    assert!(
+        ctx.render_to_vram(&frame, &lens).is_err(),
+        "VRAM must refuse a recipe with an unpredictable default content crop"
+    );
+
+    // Dimension-preserving, default-crop-inactive geometry (mirror) renders into
+    // the resident output and matches the oracle byte-for-byte.
+    let mirror = EditRecipe {
+        geometry: Some(Geometry {
+            version: 1,
+            crop: None,
+            rotation_degrees: 0.0,
+            mirror_horizontal: true,
+            mirror_vertical: false,
+        }),
+        ..Default::default()
+    };
+    assert!(unsupported_gpu_stages(&mirror).is_empty());
+    ctx.render_to_vram(&frame, &mirror)
         .expect("dimension-preserving geometry renders in VRAM");
     let gpu = ctx.readback_output_frame().expect("vram readback");
     let cpu = render_frame(
         &frame,
         &RenderContext {
-            recipe: &lens,
+            recipe: &mirror,
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
@@ -2368,29 +2527,29 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
         "VRAM geometry must keep the source dimensions"
     );
     let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-    eprintln!("vram_geometry[lens]: maxAbsDiff={diff}");
-    assert!(
-        diff <= 1,
-        "VRAM lens pass must match the CPU oracle within one code, got {diff}"
+    eprintln!("vram_geometry[mirror]: maxAbsDiff={diff}");
+    assert_eq!(
+        diff, 0,
+        "VRAM mirror pass must match the CPU oracle byte-for-byte, got {diff}"
     );
 
     // Dimension-preserving geometry stacked *after* post-tone stages exercises
     // the VRAM `needs_post && geometry` wiring (post lands in a transient,
     // geometry then writes the resident output).
-    let mut lens_post = manual_lens_recipe();
-    lens_post.curves = Some(Curves {
+    let mut mirror_post = mirror.clone();
+    mirror_post.curves = Some(Curves {
         version: 1,
         master: curve(&[(0.0, 0.0), (0.5, 0.42), (1.0, 1.0)]),
         channels: CurveChannels::default(),
     });
-    assert!(unsupported_gpu_stages(&lens_post).is_empty());
-    ctx.render_to_vram(&frame, &lens_post)
+    assert!(unsupported_gpu_stages(&mirror_post).is_empty());
+    ctx.render_to_vram(&frame, &mirror_post)
         .expect("post + dimension-preserving geometry renders in VRAM");
     let gpu = ctx.readback_output_frame().expect("vram readback");
     let cpu = render_frame(
         &frame,
         &RenderContext {
-            recipe: &lens_post,
+            recipe: &mirror_post,
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
@@ -2402,10 +2561,10 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
     .frame;
     assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
     let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-    eprintln!("vram_geometry[lens+curves]: maxAbsDiff={diff}");
+    eprintln!("vram_geometry[mirror+curves]: maxAbsDiff={diff}");
     assert!(
         diff <= 1,
-        "VRAM post + lens chain must match the CPU oracle within one code, got {diff}"
+        "VRAM post + mirror chain must match the CPU oracle within one code, got {diff}"
     );
 }
 
@@ -2576,11 +2735,18 @@ fn vram_path_applies_lens_blur() {
     let frame = gradient_frame(W, H);
     ctx.ensure_vram(W, H).expect("vram state");
 
-    // `after_lens_geometry` exercises the geometry→lens-blur ping-pong: the
-    // dimension-preserving lens pass must write a transient, not the resident
-    // output the blur then overwrites.
-    let mut after_lens_geometry = lens_blur_recipe(0.5, 0.0, 0.05, BokehShape::Round);
-    after_lens_geometry.lens_correction = manual_lens_recipe().lens_correction;
+    // `after_mirror_geometry` exercises the geometry→lens-blur ping-pong: the
+    // dimension-preserving, default-crop-inactive mirror pass must write a
+    // transient, not the resident output the blur then overwrites. (A manual
+    // lens without an explicit crop is CPU-routed since GPU-MAXRECT-WELLE.)
+    let mut after_mirror_geometry = lens_blur_recipe(0.5, 0.0, 0.05, BokehShape::Round);
+    after_mirror_geometry.geometry = Some(Geometry {
+        version: 1,
+        crop: None,
+        rotation_degrees: 0.0,
+        mirror_horizontal: true,
+        mirror_vertical: false,
+    });
 
     let recipes: [(&str, EditRecipe, Equivalence); 3] = [
         (
@@ -2594,8 +2760,8 @@ fn vram_path_applies_lens_blur() {
             Equivalence::Bounded(1),
         ),
         (
-            "after_lens_geometry",
-            after_lens_geometry,
+            "after_mirror_geometry",
+            after_mirror_geometry,
             Equivalence::Bounded(1),
         ),
     ];
@@ -2720,11 +2886,21 @@ fn source_actions(count: usize) -> EditRecipe {
 /// - `adjustment \`clarity_v2\` not implemented on GPU` — a key outside
 ///   [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] with no neutral value (all schema keys
 ///   are now GPU-supported, so this is the unknown-key class).
+/// - `geometry (default content crop)` — a lens/perspective correction is
+///   present and `geometry.crop` is `None`, so the CPU oracle applies its
+///   content-based maximum-content-rect crop before rotation/mirroring. That
+///   rectangle depends on the resampled alpha, so the recipe-only GPU plan
+///   cannot reproduce its (possibly smaller) output dimensions
+///   (GPU-MAXRECT-WELLE / CROP-MAXRECT-1).
 ///
-/// GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror), the
-/// manual lens correction and perspective are GPU-eligible for valid recipes
-/// (their pixel/dimension parity is asserted by
-/// `implemented_stages_match_cpu_oracle`), so they are **not** gate reasons.
+/// GPU-RENDER-PARITY-1 geometry wave / GPU-MAXRECT-WELLE: geometry
+/// (crop/rotation/mirror), the manual lens correction and perspective are
+/// GPU-eligible for valid recipes **with an explicit crop** (their
+/// pixel/dimension parity is asserted by `implemented_stages_match_cpu_oracle`),
+/// so they are not gate reasons. The one geometry case that still flags is a
+/// lens/perspective correction **without** an explicit crop: it activates the
+/// content-based default crop (see `default_content_crop_recipes` and
+/// `default_content_crop_routes_to_cpu_with_parity`).
 ///
 /// GPU-RENDER-PARITY-1 lens-blur wave: G-05 lens blur is GPU-eligible for valid
 /// recipes (heuristic **and** external depth, the latter requiring a bound
@@ -2880,6 +3056,16 @@ fn cpu_routing_inventory_is_complete() {
             "adjustment `clarity_v2` not implemented on GPU",
             unsupported_gpu_stages(&unknown_key),
         ),
+        // GPU-MAXRECT-WELLE / CROP-MAXRECT-1: a lens/perspective correction
+        // without an explicit crop activates the content-based default crop.
+        (
+            "geometry (default content crop)",
+            unsupported_gpu_stages(&lens),
+        ),
+        (
+            "geometry (default content crop)",
+            unsupported_gpu_stages(&perspective),
+        ),
     ];
 
     for (expected, reasons) in &cases {
@@ -2889,21 +3075,36 @@ fn cpu_routing_inventory_is_complete() {
         );
     }
 
-    // GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror), the
-    // manual lens correction and perspective are rendered by the GPU
-    // `geometry` passes, so a valid recipe must no longer be flagged. The
-    // pixel/dimension parity is asserted by `geometry_stages_match_cpu_oracle`.
-    for (name, recipe) in [
-        ("geometry", &geometry),
-        ("lens_correction", &lens),
-        ("perspective", &perspective),
-    ] {
-        let reasons = unsupported_gpu_stages(recipe);
-        assert!(
-            reasons.is_empty(),
-            "implemented geometry stage `{name}` must be GPU-eligible, got {reasons:?}"
-        );
-    }
+    // GPU-RENDER-PARITY-1 geometry wave / GPU-MAXRECT-WELLE: geometry
+    // (crop/rotation/mirror) without a correction is rendered by the GPU
+    // `geometry` passes and must stay GPU-eligible; a correction **with** an
+    // explicit crop is authoritative and likewise stays eligible. A correction
+    // **without** an explicit crop is the flagged default-crop class asserted in
+    // the inventory cases above. The pixel/dimension parity is asserted by
+    // `implemented_stages_match_cpu_oracle` (explicit crop) and
+    // `default_content_crop_routes_to_cpu_with_parity` (loud CPU route).
+    let geometry_reasons = unsupported_gpu_stages(&geometry);
+    assert!(
+        geometry_reasons.is_empty(),
+        "geometry without a correction must be GPU-eligible, got {geometry_reasons:?}"
+    );
+    let mut lens_cropped = lens.clone();
+    lens_cropped.geometry = Some(Geometry {
+        version: 1,
+        crop: Some(Crop::Free {
+            x: 0.1,
+            y: 0.1,
+            width: 0.8,
+            height: 0.8,
+        }),
+        rotation_degrees: 0.0,
+        mirror_horizontal: false,
+        mirror_vertical: false,
+    });
+    assert!(
+        unsupported_gpu_stages(&lens_cropped).is_empty(),
+        "a lens correction with an explicit crop must stay GPU-eligible"
+    );
 
     // GPU-RENDER-PARITY-1 lens-blur wave: G-05 is GPU-rendered (heuristic and
     // external depth — the latter requires a bound plane, which the recipe-only
