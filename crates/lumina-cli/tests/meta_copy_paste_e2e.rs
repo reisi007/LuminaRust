@@ -622,6 +622,61 @@ fn meta_copy_out_guard_protects_original_and_bundle() {
     assert_eq!(fs::read(&zdata).ok(), zdata_before);
 }
 
+/// CLI-GUARD-HARDLINK-1 (Follow-up META-COPYPASTE-2): der Bundleschutz erkennt
+/// auch Hardlinks aufs Bundle. Ein `--out`, das ein Hardlink auf das Sidecar
+/// (bzw. `.lumina.zdata`) ist, wird über `(dev, inode)` verweigert (Exit 1);
+/// das Bundle bleibt byte-identisch, nichts wird geschrieben.
+#[test]
+#[cfg(unix)]
+fn meta_copy_out_guard_rejects_hardlinks_to_bundle() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_png(&directory, "quelle.png");
+    import(&source);
+    draft_set(&source, &["title=Startschuss"]);
+    let sidecar = sidecar_path_for(&source);
+    let sidecar_before = sidecar_bytes(&source);
+
+    // Hardlink aufs Sidecar unter fremdem Namen: der Pfadvergleich sieht nur
+    // zwei verschiedene Directory-Einträge, `(dev, inode)` muss den Alias
+    // erkennen und den Write verweigern.
+    let sidecar_alias = directory.path().join("bundle-alias.json");
+    fs::hard_link(&sidecar, &sidecar_alias).unwrap();
+    let result = copy(&source, &sidecar_alias, None);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("hard link"), "stderr: {stderr}");
+    assert!(stderr.contains("sidecar"), "stderr: {stderr}");
+    assert_eq!(
+        sidecar_bytes(&source),
+        sidecar_before,
+        "a rejected hard-link write must leave the sidecar byte-identical"
+    );
+
+    // Dasselbe für einen Hardlink auf `.lumina.zdata`.
+    let zdata = lumina_sidecar::zdata_path_for(&source);
+    fs::write(&zdata, b"zdata-payload").unwrap();
+    let zdata_before = fs::read(&zdata).unwrap();
+    let zdata_alias = directory.path().join("zdata-alias.bin");
+    fs::hard_link(&zdata, &zdata_alias).unwrap();
+    let result = copy(&source, &zdata_alias, None);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("hard link"), "stderr: {stderr}");
+    assert!(stderr.contains("bundle"), "stderr: {stderr}");
+    assert_eq!(fs::read(&zdata).unwrap(), zdata_before);
+    assert_eq!(sidecar_bytes(&source), sidecar_before);
+}
+
 /// META-COPYPASTE-2: ein abgebrochener Clipboard-Write (ungültiges/truncated
 /// JSON, geteiltes Format) und eine fremde `version` schlagen laut fehl
 /// (Exit 1); die Ziele bleiben byte-identisch.

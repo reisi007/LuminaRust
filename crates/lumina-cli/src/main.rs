@@ -7916,6 +7916,16 @@ fn reject_protected_output(input: &Path, output: &Path) -> Result<(), CliError> 
                 target.display()
             )));
         }
+        // Hard-link alias: the same bundle file under a different directory
+        // entry. Canonicalization cannot see it, so `(dev, inode)` identity is
+        // checked in addition (CLI-GUARD-HARDLINK-1).
+        if paths_are_same_file(&target, output).map_err(|error| io_error(&target, error))? {
+            return Err(CliError::Message(format!(
+                "output `{}` is a hard link to the Lumina {kind} `{}`; refusing to overwrite the bundle (non-destructive guarantee)",
+                output.display(),
+                target.display()
+            )));
+        }
     }
     if paths_are_same_file(input, output).map_err(|error| io_error(input, error))? {
         return Err(CliError::Message(format!(
@@ -10171,6 +10181,23 @@ mod tests {
             fs::hard_link(&input, &hardlink).unwrap();
             let error = reject_protected_output(&input, &hardlink).unwrap_err();
             assert!(error.to_string().contains("hard link"));
+
+            // CLI-GUARD-HARDLINK-1: hard links to the bundle are caught by
+            // `(dev, inode)` identity, not only by path equality. The sidecar
+            // already exists above; the zdata is materialized for the check.
+            let sidecar_hardlink = directory.path().join("sidecar-hardlink.json");
+            fs::hard_link(sidecar_path_for(&input), &sidecar_hardlink).unwrap();
+            let error = reject_protected_output(&input, &sidecar_hardlink).unwrap_err();
+            assert!(error.to_string().contains("hard link"), "error: {error}");
+            assert!(error.to_string().contains("sidecar"), "error: {error}");
+
+            let zdata = lumina_sidecar::zdata_path_for(&input);
+            fs::write(&zdata, b"zdata").unwrap();
+            let zdata_hardlink = directory.path().join("zdata-hardlink.bin");
+            fs::hard_link(&zdata, &zdata_hardlink).unwrap();
+            let error = reject_protected_output(&input, &zdata_hardlink).unwrap_err();
+            assert!(error.to_string().contains("hard link"), "error: {error}");
+            assert!(error.to_string().contains("bundle"), "error: {error}");
         }
     }
 
