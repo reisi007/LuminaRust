@@ -738,38 +738,43 @@ fn non_grid_library_views_share_the_empty_state() {
     }
 }
 
-/// UX-SLICE-2 (F5): the render hash exists **exactly once** and in the top
-/// status line — the old canvas-edge copy is gone (a second node or a
-/// lower-half rect would mean the canvas text came back).
+/// GUI-DEBUG-SWEEP-1: the internal render hash is **no longer painted** as
+/// header text (it was the last debug value in the header). It stays available
+/// as a tooltip on the status line via `render_hash_tooltip`, which keeps the
+/// exact gate `render_hash_visible` used. No heading/tooltip means the internal
+/// key can never be part of the end-user header again.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
-fn render_hash_moves_to_status_line() {
+fn render_hash_is_tooltip_only() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
     load_sample(&mut harness);
     harness.run();
     harness.run();
-    let nodes: Vec<_> = harness
-        .query_all_by_label_contains("Render state current:")
-        .collect();
-    assert_eq!(
-        nodes.len(),
-        1,
-        "the render hash must exist exactly once (status line), not also at the canvas"
-    );
-    let rect = nodes[0].rect();
     assert!(
-        rect.max.y < 60.0,
-        "the render hash must sit in the top status line, got {rect:?}"
+        harness.state_mut().render_hash_visible(),
+        "a loaded Develop image must have a meaningful hash"
+    );
+    assert!(
+        harness.state_mut().render_hash_tooltip().is_some(),
+        "the hash must remain reachable as a status-line tooltip"
+    );
+    assert!(
+        harness
+            .query_all_by_label_contains("Render state current:")
+            .next()
+            .is_none(),
+        "the render hash must never be painted as visible text"
     );
 }
 
-/// UX-SLICE-2 (F1): the header render hash is hidden in the Library module
-/// while the grid empty state is shown, so it can never contradict "No
-/// images". UX-SLICE-3 (F1 follow-up): the gate tracks the *filtered* raster
-/// the empty state itself uses — a `\` query with zero matches hides the hash
-/// even though RAW entries are listed, and clearing it restores both. The
-/// underlying `render_key` stays valid; the hash returns with Develop.
+/// UX-SLICE-2 (F1) / GUI-DEBUG-SWEEP-1: the render-hash tooltip is suppressed
+/// in the Library module while the grid empty state is shown, so it can never
+/// contradict "No images". UX-SLICE-3 (F1 follow-up): the gate tracks the
+/// *filtered* raster the empty state itself uses — a `\` query with zero
+/// matches suppresses the tooltip even though RAW entries are listed, and
+/// clearing it restores both. The underlying `render_key` stays valid; the
+/// tooltip returns with Develop.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_empty_suppresses_render_hash() {
@@ -787,6 +792,10 @@ fn library_empty_suppresses_render_hash() {
     assert!(
         !harness.state_mut().render_hash_visible(),
         "F1 gate must hide the hash while the RAW grid is empty"
+    );
+    assert!(
+        harness.state_mut().render_hash_tooltip().is_none(),
+        "no render hash tooltip may be offered above the Library empty state"
     );
     assert!(
         harness
@@ -819,6 +828,10 @@ fn library_empty_suppresses_render_hash() {
         "a zero-match filter must hide the hash despite listed RAW entries"
     );
     assert!(
+        harness.state_mut().render_hash_tooltip().is_none(),
+        "a zero-match filter must suppress the render hash tooltip"
+    );
+    assert!(
         harness
             .query_all_by_label_contains("Render state current:")
             .next()
@@ -837,11 +850,15 @@ fn library_empty_suppresses_render_hash() {
         "a non-empty filtered raster must keep the render hash"
     );
     assert!(
+        harness.state_mut().render_hash_tooltip().is_some(),
+        "the render hash tooltip must return on the non-empty raster"
+    );
+    assert!(
         harness
             .query_all_by_label_contains("Render state current:")
             .next()
-            .is_some(),
-        "the render hash must be visible again on the non-empty raster"
+            .is_none(),
+        "the hash must still never be painted as visible text"
     );
     // Same render, other module: the hash is meaningful again.
     harness.state_mut().set_module(Module::Develop);
@@ -851,11 +868,15 @@ fn library_empty_suppresses_render_hash() {
         "Develop must keep the render hash for the loaded image"
     );
     assert!(
+        harness.state_mut().render_hash_tooltip().is_some(),
+        "the render hash tooltip must return in Develop"
+    );
+    assert!(
         harness
             .query_all_by_label_contains("Render state current:")
             .next()
-            .is_some(),
-        "the render hash must be visible again in Develop"
+            .is_none(),
+        "the render hash must never be painted as visible text in Develop"
     );
 }
 

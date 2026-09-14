@@ -79,7 +79,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-18 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 14,
+16 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 12,
 Block B: 1, Block C: 3 (Stand 2026-09-14).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
@@ -111,7 +111,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
 | 1.0 | KITTEST-COVERAGE-STATES-2 | alle G | States-Follow-ups |
-| 1.0 | LENSFUN-GATE-3 | G-10 | Lensfun-Badge-Rest |
+| 1.0 | LENSFUN-GATE-4 | G-10 | Badge-Refusal-Rest |
 | 1.0 | DEPTH-PLUMBING-1 | G-05 | External-Depth-Caller |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.5 | GEN-ONNX-1 | G-07 | Generativ-ONNX |
@@ -157,11 +157,9 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] GEN-ONNX-1 (Release: 1.5)** ONNX-Pfad ASAP (User-Entscheid 2026-09-14 zum Generative-Entscheid): modellbasierter Inpaint/Outpaint via `lumina-onnx` (`generative_canvas`-Artefakt, `pending-integration` auflösen) nach SOLL `feature/product/generative-expand.md`; BFS-Platzhalter entfällt, Render-Stufe wird Artefakt-Compositing (GPU-portierbar, Parität per Oracle). Enthält die durable `zdata`-Verdrahtung aus GEN-EXPAND-CACHE-1 (Scope-Entscheid 2026-09-14: Identität schreiben + persistiertes Canvas per Caller-Hook in den Render zurückspeisen). Abnahme: CLI + GUI-headless + Golden/PSNR, Lizenzen (F-078), kein stiller Fallback. Crates: `lumina-onnx`, `lumina-core`, `lumina-cli`, `lumina-gui`.
 - [ ] **[PRIO: niedrig] DEPTH-PLUMBING-1 (Release: 1.0)** Follow-up aus Lens-Blur-Verifizierung (BESTANDEN): kein Caller (CLI/MCP/GUI) kann eine `DepthPlane` binden (`set_depth_plane` ungenutzt, alle `RenderContext.depth = None`); `depth_artifact`-Rezepte sind für alle Caller unrenderbar (laut, vorbestehend). Entscheidung: Caller-Plumbing (Depth-Datei laden + binden, analog SourceAction-Artefakte) oder bewusst als nicht-MVP in `feature/` dokumentieren. Abnahme: Entscheid dokumentiert + umgesetzt oder begründet verworfen. Crates: `lumina-cli`, `lumina-gui` (+ ggf. `lumina-mcp`).
-- [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] KITTEST-COVERAGE-OVERLAYS-1 (Release: 1.0)** Develop-Overlays + Navigator per kittest pinnen (Te committed c6271c5, Task offen: 4 Overlay-Goldens + Navigator-closed; offene Navigator-Seite pinnt weiter). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
-- [ ] **[PRIO: niedrig] KITTEST-COVERAGE-STATES-2 (Release: 1.0)** Follow-ups aus STATES-1-Verifizierung (BESTANDEN): Hintergrund-Decode-Fehler öffnet keinen Dialog (Test fehlt — `failed_decode_keeps_previous_path` prüft nur `error()`); Doppel-`error!` im Hintergrund-Pfad bereinigen; Dialog-`Close` per `info!` loggen (DoD §4); Metadata-Panel-Breite (+33 px → Center-Reflow bei 1024 px prüfen); Toast überlagert Histogramm-Header (vorbestehend, niedrig). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
+- [ ] **[PRIO: niedrig] LENSFUN-GATE-4 (Release: 1.0)** Residuen aus LENSFUN-GATE-3-Verifizierung (BESTANDEN): `adopt_neighbor_preview_frame` setzt `vram_render_refusal` nicht zurück (transient veralteter Badge möglich); `vram_render_refusal`-Invalidierung ohne Unit-Test; optional Metadata-Panel-Breiten-Gate nach Muster `masking_new_button_fully_inside_panel`. Abnahme: GUI-headless + kittest grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
-- [ ] **[PRIO: niedrig] LENSFUN-GATE-3 (Release: 1.0)** Residuen aus LENSFUN-GATE-2-Verifizierung (BESTANDEN): reiner dimension-changing Present-Refusal (nur `render_to_vram` scheitert, Gate leer) hat keinen Badge (F1, Scope-Entscheid: Badge-Quelle ist Gate, Present-Fehler geht nur ins `warn!`-Log); Badge-Tail clippt am Panel-Rand (kein Wrap, F2); Reset-Pfade (Quellwechsel/Neighbor-Adopt) nur code-belegt, ohne dedizierten Test (F3). Abnahme: GUI-headless + kittest grün. Crate: `lumina-gui`.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig

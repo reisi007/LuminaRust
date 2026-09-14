@@ -576,9 +576,9 @@ pub enum Str {
     MetadataDateHint,
     MetadataSaveDraft,
     MetadataClearDraft,
-    MetadataDraftSavedPattern,
+    MetadataDraftSaved,
     MetadataDraftUnchanged,
-    MetadataDraftClearedPattern,
+    MetadataDraftCleared,
     MetadataEmbeddedSection,
     MetadataEmbeddedUnavailable,
     MetadataEmbeddedUnreadablePattern,
@@ -1150,9 +1150,9 @@ impl Str {
             Str::MetadataDateHint => "YYYY-MM-DD",
             Str::MetadataSaveDraft => "Save draft",
             Str::MetadataClearDraft => "Clear draft",
-            Str::MetadataDraftSavedPattern => "Draft saved (rev {})",
+            Str::MetadataDraftSaved => "Draft saved",
             Str::MetadataDraftUnchanged => "Draft unchanged",
-            Str::MetadataDraftClearedPattern => "Draft cleared (removed: {})",
+            Str::MetadataDraftCleared => "Draft cleared",
             Str::MetadataEmbeddedSection => "Embedded (read-only)",
             Str::MetadataEmbeddedUnavailable => {
                 "Embedded: unavailable (not JPEG / no IIM/XMP)"

@@ -1965,6 +1965,17 @@ pub struct LuminaApp {
     /// as a status badge in the preview HUD; it never affects rendered pixels.
     #[cfg(feature = "gpu")]
     gpu_route_fallback: Option<String>,
+    /// GUI-LENSFUN-GATE-3 (F1): the precise present-refusal reason of the last
+    /// failed [`lumina_gpu::GpuContext::render_to_vram`] attempt. The recipe
+    /// gate ([`Self::gpu_unsupported_stage_reasons`]) does not cover
+    /// dimension-changing geometry (`render_to_vram` refuses it after the gate
+    /// passed) and was therefore the only CPU route without a visible badge.
+    /// When set, [`Self::routing_fallback_reason`] surfaces it as the badge
+    /// **only if** the gate itself is empty. Diagnostic only: never consulted
+    /// for routing/presentation; cleared by any edit (`mark_dirty`/
+    /// `set_adjustment`), a new source, or a successful VRAM render.
+    #[cfg(feature = "gpu")]
+    vram_render_refusal: Option<String>,
     /// GUI-LENSFUN-GATE-2: whether the Lensfun corrector that produced the
     /// **currently displayed** CPU preview changed pixels. Captured in
     /// [`Self::render_from`] at the exact dimensions of that render (see
@@ -2713,6 +2724,9 @@ impl LuminaApp {
             // R2-GUIMOD-06: no routing fallback until a present decision runs.
             gpu_route_fallback: None,
             #[cfg(feature = "gpu")]
+            // GUI-LENSFUN-GATE-3 (F1): no VRAM render was attempted yet.
+            vram_render_refusal: None,
+            #[cfg(feature = "gpu")]
             // GUI-LENSFUN-GATE-2: no displayed render yet, so no active corrector.
             displayed_lensfun_active: false,
             #[cfg(feature = "gpu")]
@@ -3253,6 +3267,14 @@ impl LuminaApp {
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
+    /// KITTEST-COVERAGE-STATES-2 (a): whether the current error is surfaced as
+    /// the blocking popup dialog (explicit user-action failure) rather than only
+    /// the header banner (background decode/listing failure). Read-only
+    /// diagnostic for headless tests; the rendering itself lives in
+    /// [`Self::draw_error_dialog`].
+    pub fn error_dialog_open(&self) -> bool {
+        self.error_dialog
+    }
     pub fn preview(&self) -> Option<&ImageFrame> {
         self.preview.as_ref()
     }
@@ -3317,6 +3339,20 @@ impl LuminaApp {
             return false;
         }
         !(self.active_module == Module::Library && self.filtered_library_order().is_empty())
+    }
+
+    /// GUI-DEBUG-SWEEP-1: the internal render key is no longer painted as
+    /// header text — it is exposed as a tooltip on the app status line. Returns
+    /// the tooltip text when the hash is meaningful (same gate as
+    /// [`Self::render_hash_visible`]), else `None`. Kept as a pure readout so
+    /// the gate stays pinned by tests without hovering.
+    pub fn render_hash_tooltip(&self) -> Option<String> {
+        if !self.render_hash_visible() {
+            return None;
+        }
+        self.render_key
+            .as_ref()
+            .map(|key| Str::RenderStateCurrent.format_arg(&key.digest()[..12]))
     }
 
     /// PERF-GUI-1: number of cached base-stage frames (diagnostics/tests).
@@ -5606,7 +5642,7 @@ impl LuminaApp {
                 "metadata draft for {} updated (rev {rev})",
                 self.path.trim()
             );
-            self.status = Str::MetadataDraftSavedPattern.format_arg(&rev.to_string());
+            self.status = Str::MetadataDraftSaved.t().into();
         }
         Ok(true)
     }
@@ -5718,7 +5754,7 @@ impl LuminaApp {
         self.refresh_entry(&PathBuf::from(self.path.trim()));
         if self.error().is_none() {
             info!("metadata clear for {} removed {removed}", self.path.trim());
-            self.status = Str::MetadataDraftClearedPattern.format_arg(&removed);
+            self.status = Str::MetadataDraftCleared.t().into();
         }
         Ok(true)
     }
@@ -5747,7 +5783,7 @@ impl LuminaApp {
         self.refresh_entry(&PathBuf::from(self.path.trim()));
         if self.error().is_none() {
             info!("metadata clear for {} removed {removed}", self.path.trim());
-            self.status = Str::MetadataDraftClearedPattern.format_arg(&removed);
+            self.status = Str::MetadataDraftCleared.t().into();
         }
         Ok(true)
     }
@@ -8819,6 +8855,9 @@ impl LuminaApp {
             // new recipe/source identity instead of serving a long-gone verdict.
             self.vram_fresh = false;
             self.gpu_stage_gate = None;
+            // GUI-LENSFUN-GATE-3 (F1): no present refusal from the previous
+            // source may leak into the new one.
+            self.vram_render_refusal = None;
             // GUI-LENSFUN-GATE-2: the previous image's displayed-corrector
             // verdict must not leak into the new source's present gate.
             self.displayed_lensfun_active = false;
@@ -8865,6 +8904,9 @@ impl LuminaApp {
         {
             self.vram_fresh = false;
             self.vram_mask_is_evaluated = false;
+            // GUI-LENSFUN-GATE-3 (F1): the recipe changed, so a present refusal
+            // captured for the previous recipe is no longer known to apply.
+            self.vram_render_refusal = None;
         }
     }
 
@@ -10318,10 +10360,18 @@ impl LuminaApp {
                                 // matches the current recipe/source — the
                                 // present path may use it this frame.
                                 self.vram_fresh = true;
+                                // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
+                                // render clears any earlier present refusal.
+                                self.vram_render_refusal = None;
                             }
                             Err(err) => {
                                 warn!("gpu render_to_vram failed: {err}");
                                 self.vram_fresh = false;
+                                // GUI-LENSFUN-GATE-3 (F1): classify the present
+                                // refusal so it can surface as a badge even when
+                                // the recipe gate is empty (dimension-changing
+                                // geometry is refused *after* the gate).
+                                self.vram_render_refusal = Self::classify_vram_refusal(&err);
                             }
                         }
                     }
@@ -11188,8 +11238,19 @@ impl LuminaApp {
                 }
             });
         if close {
-            self.error_dialog = false;
+            self.close_error_dialog();
         }
+    }
+
+    /// KITTEST-COVERAGE-STATES-2 (c): close the error popup dialog. A
+    /// user-visible action (DoD §4) is logged at `info!`; the header banner /
+    /// `self.error` stays until the next success. Split out so the log level
+    /// and state transition are directly reviewable/testable.
+    fn close_error_dialog(&mut self) {
+        if self.error_dialog {
+            info!("error dialog closed");
+        }
+        self.error_dialog = false;
     }
 
     /// The texture upload is driven by the preview-area path.
@@ -11599,6 +11660,13 @@ impl LuminaApp {
     /// so the user can see *why* the CPU route was taken (Agents.md: kein
     /// stiller Fallback). Reuses the memoized verdict, so calling it every frame
     /// is cheap once the render key is stable.
+    ///
+    /// GUI-LENSFUN-GATE-3 (F1): a dimension-changing geometry chain is refused
+    /// by [`lumina_gpu::GpuContext::render_to_vram`] *after* the recipe gate
+    /// passed, so the gate alone left that CPU route badge-less. When the gate
+    /// is empty, the captured present refusal
+    /// ([`Self::vram_render_refusal`]) is used as the reason. Routing and
+    /// pixels are unchanged — this is observability only.
     #[cfg(feature = "gpu")]
     fn routing_fallback_reason(&mut self) -> Option<String> {
         let gpu = self.gpu.as_ref()?;
@@ -11606,7 +11674,44 @@ impl LuminaApp {
             return None;
         }
         let reasons = self.gpu_unsupported_stage_reasons();
+        let reasons = Self::combine_routing_reasons(reasons, self.vram_render_refusal.as_deref());
         Self::format_routing_fallback_reason(&reasons)
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F1): merge the recipe-gate reasons with a captured
+    /// present refusal. The refusal is only appended while the gate itself has
+    /// no reason — a gate reason already explains the CPU route, and a
+    /// dimension-changing refusal is a *post-gate* condition that never
+    /// coincides with a gate reason. Pure so the merge is testable without a
+    /// bound adapter.
+    #[cfg(feature = "gpu")]
+    fn combine_routing_reasons(
+        mut reasons: Vec<String>,
+        present_refusal: Option<&str>,
+    ) -> Vec<String> {
+        if reasons.is_empty() {
+            if let Some(refusal) = present_refusal.filter(|reason| !reason.is_empty()) {
+                reasons.push(refusal.to_string());
+            }
+        }
+        reasons
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F1): classify a failed `render_to_vram` into a
+    /// user-facing present-refusal reason, or `None` for failures already
+    /// covered by the recipe gate / other visible paths. Only the
+    /// dimension-changing output refusal is classified here: it is a documented
+    /// `lumina-gpu` limitation (source-sized present texture) that the
+    /// recipe-only gate cannot express. Other failures (device lost, no
+    /// adapter, invalid recipe) keep their existing loud `warn!`/gate handling.
+    #[cfg(feature = "gpu")]
+    fn classify_vram_refusal(error: &lumina_gpu::GpuError) -> Option<String> {
+        let message = error.to_string();
+        // Mirrors `lumina-gpu`'s documented `warn_vram_dimension_change_once`
+        // reason string; a stable cross-crate contract for this limitation.
+        message.contains("dimension-changing output").then(|| {
+            "geometry (dimension-changing output; the VRAM present texture is source-sized)".into()
+        })
     }
 
     /// The visible badge text for a CPU routing decision: the generic
@@ -11928,8 +12033,13 @@ impl LuminaApp {
                 // header banner + log (KITTEST-COVERAGE-STATES-1: the popup
                 // dialog is reserved for explicit user actions, so browsing a
                 // folder of corrupt files cannot stack dialogs).
-                error!("background decode failed for {path}: {message}");
-                self.show_error_banner(GuiError::Io(format!("{path}: {message}")));
+                // KITTEST-COVERAGE-STATES-2: `show_error_banner` already logs
+                // at `error!`; the previous explicit `error!` here duplicated
+                // the same failure, so the contextual prefix moved into the
+                // single banner message.
+                self.show_error_banner(GuiError::Io(format!(
+                    "background decode failed for {path}: {message}"
+                )));
             }
         }
     }
@@ -12147,13 +12257,17 @@ impl LuminaApp {
         self.toast_until = 0.0;
     }
 
-    /// Fixed toast anchor for a viewport of width `viewport_w`
-    /// (GUI-TOAST-OVERLAP-1): top-right, below the header/module bars and
-    /// clear of the left navigator rail, the Library grid origin and the
-    /// bottom filmstrip. Pure so the no-overlap placement is unit-testable
-    /// headless.
-    fn toast_anchor(viewport_w: f32) -> egui::Pos2 {
-        egui::pos2((viewport_w - 300.0).max(0.0), 64.0)
+    /// Fixed toast anchor for a `viewport` (GUI-TOAST-OVERLAP-1):
+    /// top-center over the preview canvas, just below the preview-area header
+    /// (zoom toolbar). Every chrome row at the top (header, module bar, panel
+    /// headers incl. the histogram header) is occupied, so a toast anchored at
+    /// bar height inevitably covers clickable chrome; the canvas below the
+    /// preview header is the only region without controls. The toast still
+    /// covers photo pixels while visible, but it is transient (4 s timeout +
+    /// ✕ dismiss) and blocks no panel chrome. Pure so the placement is
+    /// unit-testable headless.
+    fn toast_anchor(viewport: egui::Vec2) -> egui::Pos2 {
+        egui::pos2((viewport.x * 0.5 - 150.0).max(0.0), 100.0)
     }
 
     /// Expire the toast past its deadline and keep a visible one alive across
@@ -12179,24 +12293,29 @@ impl LuminaApp {
     /// (GUI-TOAST-OVERLAP-1): an overlay takes no layout width, so it can
     /// neither shift nor cover thumbnails the way the old in-cell badge did.
     /// The ✕ button dismisses it immediately.
+    /// KITTEST-COVERAGE-STATES-2 (e): the toast paints its own popup
+    /// background — since the anchor moved over the preview canvas, bare text
+    /// would be unreadable against bright photo content.
     fn draw_toast(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         if !self.toast_visible(now) {
             return;
         }
         let message = self.toast_message.clone().unwrap_or_default();
-        let viewport_w = ctx.input(|i| i.viewport_rect().width());
+        let viewport = ctx.input(|i| i.viewport_rect().size());
         let mut dismissed = false;
         egui::Area::new(egui::Id::new("lumina-toast"))
-            .fixed_pos(Self::toast_anchor(viewport_w))
+            .fixed_pos(Self::toast_anchor(viewport))
             .order(egui::Order::Foreground)
             .movable(false)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(&message);
-                    if ui.button(Str::ToastDismiss.t()).clicked() {
-                        dismissed = true;
-                    }
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(&message);
+                        if ui.button(Str::ToastDismiss.t()).clicked() {
+                            dismissed = true;
+                        }
+                    });
                 });
             });
         if dismissed {
@@ -13480,10 +13599,9 @@ impl LuminaApp {
             "Mean {:.3}  Median {:.3}",
             analysis.mean, analysis.median
         ));
-        ui.label(format!(
-            "P01 {:.3}  P99 {:.3}  ({} Samples)",
-            analysis.p01, analysis.p99, analysis.sample_count
-        ));
+        // GUI-DEBUG-SWEEP-1: the internal sample count is no longer painted;
+        // the histogram statistics above are the end-user values.
+        ui.label(format!("P01 {:.3}  P99 {:.3}", analysis.p01, analysis.p99));
         // G-10 "Original Photo" compare: while the switch is armed the numbers
         // and curve above already describe the unedited decode; the badge says
         // so and the delta line quantifies edited-vs-original drift.
@@ -13582,6 +13700,9 @@ impl LuminaApp {
         {
             self.vram_fresh = false;
             self.vram_mask_is_evaluated = false;
+            // GUI-LENSFUN-GATE-3 (F1): the recipe changed, so a present refusal
+            // captured for the previous recipe is no longer known to apply.
+            self.vram_render_refusal = None;
         }
     }
 
@@ -16037,7 +16158,12 @@ impl LuminaApp {
                     self.meta_buffers_dirty = true;
                 }
             }
-            ui.horizontal(|ui| {
+            // KITTEST-COVERAGE-STATES-2 (d): `horizontal_wrapped` — four
+            // buttons on one unwrapped row forced the resizable right panel
+            // ~33 px wider than its default (353 px), reflowing the center at
+            // 1024 px. Wrapping keeps every button reachable at the 320 px
+            // default width instead of growing the panel.
+            ui.horizontal_wrapped(|ui| {
                 if ui.button(Str::MetadataSaveDraft.t()).clicked() {
                     if let Err(error) = self.commit_metadata_draft() {
                         self.show_error(error);
@@ -17727,9 +17853,23 @@ impl LuminaApp {
         // `log::warn!`. No-op while `gpu_route_fallback` is `None` (GPU present
         // path usable, or no GPU context bound at all).
         #[cfg(feature = "gpu")]
+        self.draw_routing_fallback_badge(ui);
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F2): paint the GPU→CPU routing fallback badge for
+    /// the frame painted last. The reason list can outgrow the (narrow) panel
+    /// edge; the badge truncates with an ellipsis instead of clipping its tail
+    /// at the panel boundary, while the full reason stays available in the
+    /// tooltip. Extracted from [`Self::draw_preview_area`] so headless layout
+    /// tests can pin the no-overflow contract without a bound adapter.
+    #[cfg(feature = "gpu")]
+    fn draw_routing_fallback_badge(&self, ui: &mut egui::Ui) {
         if let Some(reason) = &self.gpu_route_fallback {
-            ui.colored_label(egui::Color32::YELLOW, reason)
-                .on_hover_text(Str::CpuFallbackTooltip.t().to_string());
+            ui.add(
+                egui::Label::new(egui::RichText::new(reason).color(egui::Color32::YELLOW))
+                    .truncate(),
+            )
+            .on_hover_text(Str::CpuFallbackTooltip.t().to_string());
         }
     }
 
@@ -19053,21 +19193,13 @@ impl eframe::App for LuminaApp {
             ui.horizontal(|ui| {
                 ui.heading("Lumina");
                 ui.separator();
-                ui.label(&self.status);
-                // UX-SLICE-1 (UXG-07, mapper P2): the render hash moved from the
-                // canvas edge into the app status line, rendered small.
-                // UX-SLICE-2 (F1): the hash is gated by `render_hash_visible`
-                // so it never contradicts the Library empty state.
-                if self.render_hash_visible() {
-                    if let Some(key) = &self.render_key {
-                        ui.separator();
-                        ui.label(
-                            egui::RichText::new(
-                                Str::RenderStateCurrent.format_arg(&key.digest()[..12]),
-                            )
-                            .small(),
-                        );
-                    }
+                // GUI-DEBUG-SWEEP-1: the render hash is an internal key and is
+                // no longer painted as header text. It stays available as a
+                // tooltip on the status line (UX-SLICE-1/2's "hash in the
+                // status line" is narrowed to "hash in the status tooltip").
+                let status_response = ui.label(&self.status);
+                if let Some(hash) = self.render_hash_tooltip() {
+                    status_response.on_hover_text(hash);
                 }
             });
             if let Some(error) = &self.error {
@@ -22657,10 +22789,61 @@ mod tests {
             app.error().is_some(),
             "decode failure must be reported visibly"
         );
+        // KITTEST-COVERAGE-STATES-2 (a): a background decode failure is a
+        // header banner, never a blocking popup dialog (browsing a folder of
+        // corrupt files must not stack dialogs). The loud signal is preserved
+        // (status + error text + `error!` log).
+        assert!(
+            !app.error_dialog_open(),
+            "a background decode failure must not open the error dialog"
+        );
+        assert_eq!(
+            app.status(),
+            Str::Error.t(),
+            "the failed decode must flip the status line to Error"
+        );
         assert_eq!(
             app.path, loaded_path,
             "a failed decode must not adopt the new path"
         );
+    }
+
+    /// KITTEST-COVERAGE-STATES-2 (a/c): the two error surfaces are distinct —
+    /// an explicit user-action failure opens the popup dialog, a background
+    /// failure only the header banner — and closing the dialog logs at `info!`
+    /// (DoD §4) while the header/`error` text stays until the next success.
+    #[test]
+    fn error_dialog_vs_banner_and_close() {
+        let mut app = new_app();
+        app.show_error("explicit action failed");
+        assert!(
+            app.error_dialog_open(),
+            "an explicit user-action failure must open the dialog"
+        );
+        assert_eq!(app.status(), Str::Error.t());
+        assert_eq!(app.error(), Some("explicit action failed"));
+
+        app.close_error_dialog();
+        assert!(
+            !app.error_dialog_open(),
+            "Close must dismiss the popup dialog"
+        );
+        assert_eq!(
+            app.error(),
+            Some("explicit action failed"),
+            "the header banner stays until the next success"
+        );
+        // Closing an already-closed dialog is an idempotent no-op.
+        app.close_error_dialog();
+        assert!(!app.error_dialog_open());
+
+        app.show_error_banner("background failure");
+        assert!(
+            !app.error_dialog_open(),
+            "a background failure must not open the dialog"
+        );
+        assert_eq!(app.status(), Str::Error.t());
+        assert_eq!(app.error(), Some("background failure"));
     }
 
     // ---- F-103-N3: Before/After + white-balance eyedropper ----
@@ -27083,6 +27266,145 @@ mod tests {
         assert!(LuminaApp::format_routing_fallback_reason(&[]).is_none());
     }
 
+    /// GUI-LENSFUN-GATE-3 (F1): a dimension-changing geometry chain is refused
+    /// by `render_to_vram` **after** the recipe gate passed, so the gate alone
+    /// left that CPU route without a badge. The refusal is classified into the
+    /// documented `lumina-gpu` reason and, with an empty gate, becomes the
+    /// visible badge — no silent CPU route. Pure classification + merge, so it
+    /// runs without a bound adapter.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn dimension_changing_vram_refusal_earns_a_badge_with_empty_gate() {
+        // Mirrors the real `render_to_vram` error for a crop/rotation chain.
+        let refusal = lumina_gpu::GpuError::RenderFailed(
+            "VRAM path cannot present geometry (dimension-changing output; the VRAM \
+             present texture is source-sized); render it through the full CPU \
+             reference (render_frame) instead"
+                .to_string(),
+        );
+        let reason = LuminaApp::classify_vram_refusal(&refusal)
+            .expect("a dimension-changing refusal must be classified");
+        assert!(
+            reason.contains("dimension-changing output"),
+            "got {reason:?}"
+        );
+
+        // A non-geometry refusal is not misclassified as a visible badge reason
+        // (it keeps its existing gate/warn path).
+        let other = lumina_gpu::GpuError::AdapterUnavailable("device lost".into());
+        assert!(LuminaApp::classify_vram_refusal(&other).is_none());
+
+        // Gate empty + captured refusal → a badge naming the precise reason.
+        let reasons = LuminaApp::combine_routing_reasons(Vec::new(), Some(&reason));
+        assert_eq!(reasons, vec![reason.clone()]);
+        let badge = LuminaApp::format_routing_fallback_reason(&reasons).expect("badge");
+        assert!(badge.contains(Str::CpuFallbackUnsupportedStages.t()));
+        assert!(badge.contains("dimension-changing output"));
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F1): the captured present refusal only fills an
+    /// *empty* gate — a recipe-gate reason already explains the CPU route, and
+    /// the dimension-changing refusal is a post-gate condition that never
+    /// coincides with one. Guards against a duplicated badge tail.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn present_refusal_only_fills_an_empty_gate() {
+        let gate = vec!["lens_correction (Lensfun corrector)".to_string()];
+        let combined = LuminaApp::combine_routing_reasons(
+            gate.clone(),
+            Some("geometry (dimension-changing output)"),
+        );
+        assert_eq!(combined, gate, "a gate reason already explains the route");
+        assert!(LuminaApp::combine_routing_reasons(Vec::new(), None).is_empty());
+        assert!(LuminaApp::combine_routing_reasons(Vec::new(), Some("")).is_empty());
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F2): a long routing badge truncates with an ellipsis
+    /// inside its panel clip instead of clipping its tail at the panel edge.
+    /// Headless layout check (`run_ui`, no GPU adapter needed — the badge text
+    /// is injected directly). The badge is drawn into a narrow (200 px)
+    /// allocation simulating the panel edge: it must stay single-line within
+    /// that width (ellipsis, no wrap-overflow) and inside its clip.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn routing_badge_truncates_instead_of_clipping() {
+        let mut app = new_app();
+        app.gpu_route_fallback = Some(format!(
+            "{} [geometry (dimension-changing output; the VRAM present texture is \
+             source-sized); lens_correction (Lensfun corrector); camera_white_balance \
+             (invalid As-Shot gains)]",
+            Str::CpuFallbackUnsupportedStages.t()
+        ));
+
+        let shapes = headless_shapes(&mut app, |app, ui| {
+            ui.allocate_ui(egui::vec2(200.0, 20.0), |ui| {
+                app.draw_routing_fallback_badge(ui);
+            });
+        });
+
+        let headline = Str::CpuFallbackUnsupportedStages.t();
+        let mut painted = false;
+        for clipped in &shapes {
+            if let egui::Shape::Text(text) = &clipped.shape {
+                if text.galley.text().starts_with(headline) {
+                    painted = true;
+                    let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(
+                        rect.width() <= 201.0,
+                        "badge must respect the narrow allocation (ellipsis, no overflow), got width {}",
+                        rect.width()
+                    );
+                    assert!(
+                        rect.height() <= 22.0,
+                        "badge must stay single-line (ellipsis, no wrap), got height {}",
+                        rect.height()
+                    );
+                    assert!(
+                        clipped.clip_rect.expand(1.0).contains_rect(rect),
+                        "badge {:?} at {rect:?} must be truncated inside its clip {:?}",
+                        text.galley.text(),
+                        clipped.clip_rect
+                    );
+                }
+            }
+        }
+        assert!(painted, "the routing badge must be painted");
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F3): a source switch resets the displayed-corrector
+    /// snapshot, so the previous image's Lensfun verdict can never leak into
+    /// the new source's present gate (previously only code-reviewed).
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn source_switch_resets_displayed_lensfun_snapshot() {
+        let mut app = new_app();
+        app.load_bytes(png(), "lensfun-first.png").unwrap();
+        app.displayed_lensfun_active = true;
+        app.load_bytes(png(), "lensfun-second.png").unwrap();
+        assert!(
+            !app.displayed_lensfun_active,
+            "a source switch must drop the previous displayed-corrector verdict"
+        );
+    }
+
+    /// GUI-LENSFUN-GATE-3 (F3): adopting a cached neighbor frame resets the
+    /// displayed-corrector snapshot — the neighbor pipeline renders with
+    /// `lensfun: None`, so the stand-in carries no correction (previously only
+    /// code-reviewed).
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn neighbor_adopt_resets_displayed_lensfun_snapshot() {
+        let mut app = new_app();
+        app.load_bytes(png(), "lensfun-adopt.png").unwrap();
+        app.displayed_lensfun_active = true;
+        let frame = ImageFrame::new(2, 2, vec![0u8; 2 * 2 * 4]).expect("2x2 frame");
+        app.adopt_neighbor_preview_frame(frame);
+        assert!(
+            !app.displayed_lensfun_active,
+            "an adopted neighbor frame carries no Lensfun correction"
+        );
+    }
+
     // ---- F-103-INTEGRATION-PREVIEW-SIDECAR: headless UI integration ----
 
     fn synthetic_8x8_png() -> (Vec<u8>, ImageFrame) {
@@ -30434,17 +30756,26 @@ mod tests {
         assert!(app.toast_message.is_none());
     }
 
-    /// GUI-TOAST-OVERLAP-1: the toast anchor stays top-right, below the
-    /// header/module bars and clear of the left rail, grid origin and bottom
-    /// filmstrip — it cannot cover thumbnails by construction.
+    /// GUI-TOAST-OVERLAP-1 / KITTEST-COVERAGE-STATES-2 (e): the toast anchor
+    /// sits top-center over the preview canvas, below the preview-area header
+    /// (zoom toolbar) — clear of the left rail, all top bars, the right
+    /// control panel (histogram header) and the bottom filmstrip. It covers
+    /// only photo pixels while visible, and only transiently (4 s + ✕).
     #[test]
     fn toast_anchor_stays_clear_of_thumbnails() {
-        let anchor = LuminaApp::toast_anchor(1280.0);
-        assert_eq!(anchor, egui::pos2(980.0, 64.0));
-        assert!(anchor.x > 900.0, "toast stays in the right third");
-        assert!(anchor.y < 120.0, "toast stays below the header bars");
-        let narrow = LuminaApp::toast_anchor(800.0);
-        assert_eq!(narrow, egui::pos2(500.0, 64.0));
+        let anchor = LuminaApp::toast_anchor(egui::vec2(1280.0, 720.0));
+        assert_eq!(anchor, egui::pos2(490.0, 100.0));
+        assert!(
+            anchor.x > 260.0,
+            "toast stays clear of the left navigator rail"
+        );
+        assert!(
+            anchor.y > 90.0,
+            "toast sits below the preview-area header, never on clickable chrome"
+        );
+        assert!(anchor.y < 200.0, "toast stays near the top of the canvas");
+        let narrow = LuminaApp::toast_anchor(egui::vec2(800.0, 720.0));
+        assert_eq!(narrow, egui::pos2(250.0, 100.0));
         assert!(narrow.x >= 0.0);
     }
 

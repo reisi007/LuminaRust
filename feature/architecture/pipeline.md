@@ -1308,9 +1308,10 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Lensfun-Routing an angezeigten Render gebunden (`displayed_lensfun_active`:
   Snapshot in `render_from` vor Zoom/Navigator/Export-Slot-Clobber, Gate liest
   Snapshot, kein Flapping, Reset bei Quellwechsel/Neighbor-Adopt).
-  Bekannte Grenze (LENSFUN-GATE-3): reiner dimension-changing
-  Present-Refusal (nur `render_to_vram` scheitert, Gate leer) hat weiter keinen
-  Badge; Badge-Tail kann am Panel-Rand clippen (kein Wrap).
+  Bekannte Grenze (LENSFUN-GATE-4): `adopt_neighbor_preview_frame` setzt
+  `displayed_lensfun_active` zurück, aber nicht `vram_render_refusal`
+  (transient veralteter Badge möglich); `vram_render_refusal`-Invalidierung
+  (mark_dirty/load_bytes/Erfolg) ohne dedizierten Unit-Test.
   (2) >45-MP-Zoom nutzt weiterhin Volltextur-Pooling statt 512²-Tile-Cache
   (M2); (3) der Present-Pfad ist headless nicht automatisiert testbar und
   braucht den nächsten manuellen GUI-Test (Block C).
