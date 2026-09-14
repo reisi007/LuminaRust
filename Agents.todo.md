@@ -79,7 +79,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-17 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 13,
+18 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 14,
 Block B: 1, Block C: 3 (Stand 2026-09-14).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
@@ -105,30 +105,16 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 
 | Version | Task-ID | Goal | Stichwort |
 | --- | --- | --- | --- |
-| 1.0 | GUI-STARTUP-FOLLOWUP-1 | G-10/G-11 | Startup-Followups |
-| 1.0 | AGENT-HARNESS-2 | alle G | AccessKit-Semantik |
-| 1.0 | AGENT-HARNESS-3 | G-01/G-07/G-08/G-10 | Green-Path-Matrix |
-| 1.0 | AGENT-HARNESS-4 | G-10 | Bildkorrektheit |
-| 1.0 | LRPAR-G10-VIEWER | G-10 | Viewer/Softproof |
-| 1.0 | LRPAR-G11-OVERLAYS | G-11 | Overlays/Pins |
-| 1.0 | LRPAR-G16-POWER | G-16 | Power-Shortcuts |
 | 1.0 | NAMING-F1 | kein Goal | Produktname |
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
-| 1.0 | GUI-PREVIEW-SCALE-1 | G-10 | Preview-Skalierung |
 | 1.0 | KITTEST-COVERAGE-STATES-2 | alle G | States-Follow-ups |
-| 1.0 | UX-SLICE-1 | G-09/G-10 | UX-Polish-Slice-1 |
-| 1.0 | CROP-MAXRECT-1 | G-06 | Default-Crop-MaxRect |
-| 1.0 | PARITY-PATHS-2 | G-10 | Parity-Schaerfung |
 | 1.0 | LENSFUN-GATE-3 | G-10 | Lensfun-Badge-Rest |
 | 1.0 | DEPTH-PLUMBING-1 | G-05 | External-Depth-Caller |
 | 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
-| 1.0 | GEN-EXPAND-CACHE-1 | G-07 | Expand-Caching |
 | 1.5 | GEN-ONNX-1 | G-07 | Generativ-ONNX |
-| 1.0 | META-COPYPASTE-2 | G-15 | Meta-CLI-Follow-ups |
-| 1.0 | CLI-GUARD-HARDLINK-1 | G-15 | Guard-Hardlink-Bundle |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
@@ -159,7 +145,7 @@ Ziel: UI zum Verwechseln ähnlich zu Lightroom Classic; jedes Feature auf
 CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 `.goal/lighroom screenshots batch 1/Content.md`. Umsetzung je Task via
 `general`-Implementierungs-Agent + unabhängiger `general`-Verifizierungs-Agent
-(Regel oben). 27 Tasks: 4 hoch, 19 mittel, 4 niedrig (Stand 2026-09-04 inkl. Release-Staffel-Entscheiden; Versionszuordnung s. `Releaseplan`).
+(Regel oben). LR-Parität-Batch aus 2026-09-04 (teils erledigt s. Git-Historie; Rest s. Releaseplan/Blöcke).
 
 ### PRIO: hoch
 
@@ -172,6 +158,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: mittel] GEN-ONNX-1 (Release: 1.5)** ONNX-Pfad ASAP (User-Entscheid 2026-09-14 zum Generative-Entscheid): modellbasierter Inpaint/Outpaint via `lumina-onnx` (`generative_canvas`-Artefakt, `pending-integration` auflösen) nach SOLL `feature/product/generative-expand.md`; BFS-Platzhalter entfällt, Render-Stufe wird Artefakt-Compositing (GPU-portierbar, Parität per Oracle). Enthält die durable `zdata`-Verdrahtung aus GEN-EXPAND-CACHE-1 (Scope-Entscheid 2026-09-14: Identität schreiben + persistiertes Canvas per Caller-Hook in den Render zurückspeisen). Abnahme: CLI + GUI-headless + Golden/PSNR, Lizenzen (F-078), kein stiller Fallback. Crates: `lumina-onnx`, `lumina-core`, `lumina-cli`, `lumina-gui`.
 - [ ] **[PRIO: niedrig] DEPTH-PLUMBING-1 (Release: 1.0)** Follow-up aus Lens-Blur-Verifizierung (BESTANDEN): kein Caller (CLI/MCP/GUI) kann eine `DepthPlane` binden (`set_depth_plane` ungenutzt, alle `RenderContext.depth = None`); `depth_artifact`-Rezepte sind für alle Caller unrenderbar (laut, vorbestehend). Entscheidung: Caller-Plumbing (Depth-Datei laden + binden, analog SourceAction-Artefakte) oder bewusst als nicht-MVP in `feature/` dokumentieren. Abnahme: Entscheid dokumentiert + umgesetzt oder begründet verworfen. Crates: `lumina-cli`, `lumina-gui` (+ ggf. `lumina-mcp`).
 - [ ] **[PRIO: niedrig] GUI-DEBUG-SWEEP-1 (Release: 1.0)** Sichtbare Debug-Werte aus Endnutzer-UI entfernen (Endprodukt-Anspruch): Sample-Counts, Generations-/Hash-Texte, Maschinen-Labels aus Canvas/Headern in Statuszeile/Tooltip oder ganz raus — nie als Canvas-/Header-Text. Abnahme: Golden-Diffs + Liste entfernter Stellen. Crate: `lumina-gui`.
+- [ ] **[PRIO: niedrig] KITTEST-COVERAGE-OVERLAYS-1 (Release: 1.0)** Develop-Overlays + Navigator per kittest pinnen (Te committed c6271c5, Task offen: 4 Overlay-Goldens + Navigator-closed; offene Navigator-Seite pinnt weiter). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] KITTEST-COVERAGE-STATES-2 (Release: 1.0)** Follow-ups aus STATES-1-Verifizierung (BESTANDEN): Hintergrund-Decode-Fehler öffnet keinen Dialog (Test fehlt — `failed_decode_keeps_previous_path` prüft nur `error()`); Doppel-`error!` im Hintergrund-Pfad bereinigen; Dialog-`Close` per `info!` loggen (DoD §4); Metadata-Panel-Breite (+33 px → Center-Reflow bei 1024 px prüfen); Toast überlagert Histogramm-Header (vorbestehend, niedrig). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - [ ] **[PRIO: niedrig] LENSFUN-GATE-3 (Release: 1.0)** Residuen aus LENSFUN-GATE-2-Verifizierung (BESTANDEN): reiner dimension-changing Present-Refusal (nur `render_to_vram` scheitert, Gate leer) hat keinen Badge (F1, Scope-Entscheid: Badge-Quelle ist Gate, Present-Fehler geht nur ins `warn!`-Log); Badge-Tail clippt am Panel-Rand (kein Wrap, F2); Reset-Pfade (Quellwechsel/Neighbor-Adopt) nur code-belegt, ohne dedizierten Test (F3). Abnahme: GUI-headless + kittest grün. Crate: `lumina-gui`.
@@ -186,14 +173,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-IMPL-15 (Release: 1.5)** HDR-/Panorama-Merge-Implementierung nach Entscheid `feature/decisions/LRPAR-G13-MERGE-15.md` (Schema → Core `lumina-merge` → DNG-Writer + Re-Import → CLI → GUI → Golden). Abnahme: CLI-Exit-Codes + GUI-headless + Golden-Gates mit Toleranzen.
 
 ### PRIO: niedrig (Block A, nicht-LRPAR)
-
-_(Block A leer — FILMSTRIP-SYNC-1 BESTANDEN 229p + kittest 10/10 + Vision 7/7, Commit folgt; Details Git-Historie)_
-
-_(Block A leer — R2-GUIMOD-04a BESTANDEN 2026-09-04 575f834, WASM-REMOVE BESTANDEN; Details Git-Historie)_
-
-_(weitere ehemals offene hoch-prio Tasks BESTANDEN s. Git-Historie: GUI-AUTOTONE-SAVE-1 204p c29e609a/5e36133, GUI-KIT-01-REFRESH kittest 10/10 a75b42f, CLI-GUI-PARITY-1 Matrix-Doc a75b42f; F-103-INTEGRATION-PREVIEW-SIDECAR 147p 43b1b73; CI-ONNX-RT 953987e/c5e5e06/67690ec)_
-
-_(keine weiteren offenen hoch-prio Tasks — F-103-INTEGRATION-PREVIEW-SIDECAR verifiziert BESTANDEN am 2026-09-02, 147p (144→147 +3), core 277+7, sidecar 86p, clippy/fmt/wasm grün, Commit 43b1b73; CI-ONNX-RT und FOLLOWUP-R2-NIEDRIG-REST verifiziert BESTANDEN am 2026-09-02, siehe Git-Historie 953987e/c5e5e06/67690ec)_
 
 **Phase 6: Persistente AI-Masken**
 
