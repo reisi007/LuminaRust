@@ -1240,7 +1240,7 @@ pub fn dehaze_airlight(dark_bytes: &[u8]) -> f32 {
 }
 
 /// Shared pipeline builder for the simple fullscreen passes.
-fn build_simple_pipeline(
+pub(crate) fn build_simple_pipeline(
     device: &wgpu::Device,
     label: &str,
     shader_src: &str,

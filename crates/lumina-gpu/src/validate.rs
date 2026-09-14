@@ -698,4 +698,125 @@ mod tests {
         );
         validate_gpu_recipe(&recipe).expect("valid legacy spot geometry");
     }
+
+    // ---- GPU-RENDER-PARITY-1 geometry wave: the lens/perspective/geometry
+    // ranges are validated at the GPU entry with the CPU oracle's own errors
+    // (the stages are GPU-rendered now, so no invalid value may reach a shader).
+
+    fn manual_lens(k1: f32) -> lumina_sidecar::LensCorrection {
+        lumina_sidecar::LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(k1),
+            distortion_k2: None,
+            distortion_k3: None,
+            vignette_c0: None,
+            vignette_c1: None,
+            vignette_c2: None,
+            ca_red: None,
+            ca_blue: None,
+        }
+    }
+
+    #[test]
+    fn lens_ranges_are_validated() {
+        validate_gpu_recipe(&EditRecipe {
+            lens_correction: Some(manual_lens(0.5)),
+            ..Default::default()
+        })
+        .expect("in-range distortion is valid");
+        let err = validate_gpu_recipe(&EditRecipe {
+            lens_correction: Some(manual_lens(1.5)),
+            ..Default::default()
+        })
+        .expect_err("distortion_k1 > 1 must be rejected");
+        assert!(format!("{err}").contains("distortion_k1"), "{err}");
+
+        let mut ca = manual_lens(0.0);
+        ca.ca_red = Some(0.2);
+        let err = validate_gpu_recipe(&EditRecipe {
+            lens_correction: Some(ca),
+            ..Default::default()
+        })
+        .expect_err("ca_red > 0.05 must be rejected");
+        assert!(format!("{err}").contains("ca_red"), "{err}");
+    }
+
+    #[test]
+    fn perspective_ranges_are_validated() {
+        let valid = lumina_sidecar::Perspective {
+            version: 1,
+            vertical: 0.2,
+            horizontal: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        };
+        validate_gpu_recipe(&EditRecipe {
+            perspective: Some(valid),
+            ..Default::default()
+        })
+        .expect("in-range perspective is valid");
+
+        let invalid = lumina_sidecar::Perspective {
+            scale: 0.05,
+            ..valid
+        };
+        let err = validate_gpu_recipe(&EditRecipe {
+            perspective: Some(invalid),
+            ..Default::default()
+        })
+        .expect_err("scale < 0.1 must be rejected");
+        assert!(format!("{err}").contains("scale"), "{err}");
+    }
+
+    #[test]
+    fn geometry_ranges_are_validated() {
+        let valid = lumina_sidecar::Geometry {
+            version: 1,
+            crop: Some(lumina_sidecar::Crop::Free {
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.5,
+            }),
+            rotation_degrees: 45.0,
+            mirror_horizontal: true,
+            mirror_vertical: false,
+        };
+        validate_gpu_recipe(&EditRecipe {
+            geometry: Some(valid.clone()),
+            ..Default::default()
+        })
+        .expect("in-range geometry is valid");
+
+        let bad_rotation = lumina_sidecar::Geometry {
+            rotation_degrees: 181.0,
+            ..valid.clone()
+        };
+        let err = validate_gpu_recipe(&EditRecipe {
+            geometry: Some(bad_rotation),
+            ..Default::default()
+        })
+        .expect_err("rotation > 180 must be rejected");
+        assert!(format!("{err}").contains("geometry"), "{err}");
+
+        let bad_crop = lumina_sidecar::Geometry {
+            crop: Some(lumina_sidecar::Crop::Free {
+                x: 0.9,
+                y: 0.0,
+                width: 0.5,
+                height: 0.5,
+            }),
+            ..valid
+        };
+        let err = validate_gpu_recipe(&EditRecipe {
+            geometry: Some(bad_crop),
+            ..Default::default()
+        })
+        .expect_err("a free crop crossing the frame edge must be rejected");
+        assert!(format!("{err}").contains("geometry.crop"), "{err}");
+    }
 }

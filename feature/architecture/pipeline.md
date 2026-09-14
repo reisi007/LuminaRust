@@ -1256,10 +1256,11 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   SourceAction-Batching (>7, byte-identisch), volle Nested-Range-Validierung
   am GPU-Eintritt (`validate.rs`, Error-Parität inkl. typed-/generative-Spots).
   Rest (Ziel: kein CPU-only-Zweig, User-Entscheid 2026-09-13):
-  geometry/perspective/lens_correction/lens_blur/generative_edit/Camera-WB
+  lens_blur/generative_edit/Camera-WB
   (Cross-Crate-Welle CLI/MCP); lebendes Inventar:
-  `cpu_routing_inventory_is_complete`. Offene Nebenbefunde: CLI-Test mit
-  staler Vibrance-Assertion (seit Stufe 1 rot, Fix in Arbeit), Perf-Pooling.
+  `cpu_routing_inventory_is_complete`. Erledigt (Teilwelle,
+  BESTANDEN, Commit 2026-09-14): Geometrie-Welle inkl. GUI-LENSFUN-GATE-1
+  (Details siehe Restrisiken); offene Nebenbefunde: Perf-Pooling,
 - **Present-Pfad:** `eframe` nutzt jetzt den **wgpu**-Renderer;
   `GpuContext::from_parts` teilt sich Renderer-Device/Queue, sodass die
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`
@@ -1271,7 +1272,11 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Erweiterungen sind additiv in `lumina-gpu`/`lumina-gui`.
 - **Restrisiken:** (1) Rezepte mit nicht implementierten GPU-Stufen werden
   vom VRAM-Pfad vor jedem Write verweigert (Warnung) — Present fällt dort
-  auf den exakten CPU-Pfad zurück, divergente Pixel werden nie geschrieben;
+  auf den exakten CPU-Pfad zurück, divergente Pixel werden nie geschrieben
+  (seit 2026-09-14 inkl. Geometrie: manuelles Lens/Perspective/Crop/Rotation/
+  Mirror laufen auf GPU mit Oracle-Parität und exakten Output-Maßen;
+  dimensionändernde Rezepte werden vom VRAM-Pfad laut verweigert; bei aktivem
+  Lensfun-Corrector routet das GUI-Gate (CLI-Reason-Mirror) laut auf CPU);
   (2) >45-MP-Zoom nutzt weiterhin Volltextur-Pooling statt 512²-Tile-Cache
   (M2); (3) der Present-Pfad ist headless nicht automatisiert testbar und
   braucht den nächsten manuellen GUI-Test (Block C).

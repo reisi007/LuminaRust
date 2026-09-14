@@ -29,10 +29,10 @@ use lumina_gpu::{
     GpuContext, MAX_SOURCE_ACTIONS,
 };
 use lumina_sidecar::{
-    BokehShape, ColorGrading, ColorGradingRange, CurveChannels, CurvePoint, Curves, EditRecipe,
-    Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments,
-    HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry,
-    Presence, RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef,
+    AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop, CurveChannels, CurvePoint,
+    Curves, EditRecipe, Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, Grain,
+    HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor,
+    PointColorEntry, Presence, RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef,
     SourceActionKind, SourceActionSpec, SpotRemoval, SpotRemovalMode, Vignette,
     SOURCE_ACTION_VERSION,
 };
@@ -593,7 +593,239 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
             "fully_stacked_eligible",
             fully_stacked_eligible_recipe(),
         ),
+        // --- GPU-RENDER-PARITY-1 geometry wave: lens/perspective/crop ---
+        (
+            "geometry_crop_free",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Free {
+                        x: 0.1,
+                        y: 0.15,
+                        width: 0.7,
+                        height: 0.6,
+                    }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "geometry_crop_aspect",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Aspect {
+                        preset: AspectPreset::OneToOne,
+                    }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "geometry_rotate_90",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: None,
+                    rotation_degrees: 90.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "geometry_rotate_arbitrary",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: None,
+                    rotation_degrees: 17.5,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "geometry_mirror_both",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Free {
+                        x: 0.05,
+                        y: 0.1,
+                        width: 0.8,
+                        height: 0.75,
+                    }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: true,
+                    mirror_vertical: true,
+                }),
+                ..Default::default()
+            },
+        ),
+        ("lens_correction_manual", manual_lens_recipe()),
+        (
+            "lens_correction_wide_light",
+            EditRecipe {
+                lens_correction: Some(LensCorrection {
+                    version: 1,
+                    profile: Some("wide-light".into()),
+                    distortion_k1: None,
+                    distortion_k2: None,
+                    distortion_k3: None,
+                    vignette_c0: None,
+                    vignette_c1: None,
+                    vignette_c2: None,
+                    ca_red: None,
+                    ca_blue: None,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "perspective_vertical",
+            EditRecipe {
+                perspective: Some(Perspective {
+                    version: 1,
+                    vertical: 0.25,
+                    horizontal: 0.0,
+                    rotation: 0.0,
+                    scale: 1.0,
+                    aspect_ratio: 1.0,
+                    shift_x: 0.0,
+                    shift_y: 0.0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "perspective_full",
+            EditRecipe {
+                perspective: Some(Perspective {
+                    version: 1,
+                    vertical: 0.2,
+                    horizontal: -0.15,
+                    rotation: 0.1,
+                    scale: 1.15,
+                    aspect_ratio: 1.1,
+                    shift_x: 0.05,
+                    shift_y: -0.03,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "geometry_full_stack",
+            EditRecipe {
+                adjustments: BTreeMap::from([("exposure".into(), 0.2)]),
+                lens_correction: Some(LensCorrection {
+                    version: 1,
+                    profile: None,
+                    distortion_k1: Some(0.08),
+                    distortion_k2: None,
+                    distortion_k3: None,
+                    vignette_c0: Some(0.95),
+                    vignette_c1: None,
+                    vignette_c2: None,
+                    ca_red: Some(0.004),
+                    ca_blue: Some(-0.004),
+                }),
+                perspective: Some(Perspective {
+                    version: 1,
+                    vertical: 0.15,
+                    horizontal: 0.0,
+                    rotation: 0.0,
+                    scale: 1.0,
+                    aspect_ratio: 1.0,
+                    shift_x: 0.0,
+                    shift_y: 0.0,
+                }),
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Free {
+                        x: 0.1,
+                        y: 0.1,
+                        width: 0.7,
+                        height: 0.7,
+                    }),
+                    rotation_degrees: 8.0,
+                    mirror_horizontal: true,
+                    mirror_vertical: false,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            // Geometry must run *after* the post-tone adjustment chain (the
+            // oracle order is adjustments → lens/perspective/crop). This recipe
+            // exercises the `needs_post && geometry` wiring in both render
+            // paths with a non-neutral curve + effects stack.
+            "geometry_after_post_stages",
+            EditRecipe {
+                adjustments: BTreeMap::from([("exposure".into(), 0.15)]),
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.5, 0.42), (1.0, 1.0)]),
+                    channels: CurveChannels {
+                        red: Some(curve(&[(0.0, 0.0), (0.5, 0.55), (1.0, 1.0)])),
+                        green: None,
+                        blue: None,
+                    },
+                }),
+                effects: Some(Effects {
+                    vignette: Some(Vignette {
+                        version: 1,
+                        amount: 0.3,
+                        midpoint: 0.5,
+                        roundness: 1.0,
+                        feather: 0.5,
+                    }),
+                    grain: None,
+                }),
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Free {
+                        x: 0.15,
+                        y: 0.1,
+                        width: 0.6,
+                        height: 0.7,
+                    }),
+                    rotation_degrees: 11.0,
+                    mirror_horizontal: true,
+                    mirror_vertical: true,
+                }),
+                ..Default::default()
+            },
+        ),
     ]
+}
+
+/// A manual lens-correction recipe (distortion + vignette + CA) driving all
+/// three sub-stages with non-neutral coefficients.
+fn manual_lens_recipe() -> EditRecipe {
+    EditRecipe {
+        lens_correction: Some(LensCorrection {
+            version: 1,
+            profile: None,
+            distortion_k1: Some(0.12),
+            distortion_k2: Some(-0.04),
+            distortion_k3: None,
+            vignette_c0: Some(0.9),
+            vignette_c1: Some(-0.2),
+            vignette_c2: None,
+            ca_red: Some(0.006),
+            ca_blue: Some(-0.006),
+        }),
+        ..Default::default()
+    }
 }
 
 /// GPU-RENDER-PARITY-1 follow-up end-state probe: a single recipe that sets
@@ -762,6 +994,23 @@ fn equivalence_for(name: &str) -> Equivalence {
         // stacked; the per-stage FMA/rounding residuals accumulate on the noise
         // frame. Bound set from the measured MAX frames run (see test output).
         "fully_stacked_eligible" => Equivalence::Bounded(4),
+        // --- GPU-RENDER-PARITY-1 geometry wave ---
+        // Crop and mirror are exact integer sub-rect copies / flips; a
+        // quarter-turn rotation is an exact integer remap. Asserted
+        // byte-identical. Arbitrary rotation, lens and perspective resample in
+        // the same `f32` 0..=255 domain as the oracle and carry at most one
+        // rounding-tie code; the full chain accumulates that per stage.
+        "geometry_crop_free"
+        | "geometry_crop_aspect"
+        | "geometry_rotate_90"
+        | "geometry_mirror_both" => Equivalence::ByteIdentical,
+        "geometry_rotate_arbitrary"
+        | "lens_correction_manual"
+        | "lens_correction_wide_light"
+        | "perspective_vertical"
+        | "perspective_full" => Equivalence::Bounded(1),
+        "geometry_full_stack" => Equivalence::Bounded(1),
+        "geometry_after_post_stages" => Equivalence::Bounded(1),
         other => panic!("no measured equivalence bound declared for recipe `{other}`"),
     }
 }
@@ -862,12 +1111,22 @@ fn implemented_stages_match_cpu_oracle() {
             let gpu = ctx
                 .render_with_gpu(frame, &recipe)
                 .unwrap_or_else(|error| panic!("{frame_name}/{recipe_name}: GPU render: {error}"));
+            // GPU-RENDER-PARITY-1 geometry wave: a dimension-changing geometry
+            // chain must reproduce the oracle's canvas exactly — a silently
+            // different output size must fail here, not be masked by a pixel
+            // compare.
+            assert_eq!(
+                (cpu.width, cpu.height),
+                (gpu.width, gpu.height),
+                "{frame_name}/{recipe_name}: GPU output dimensions must equal the CPU oracle"
+            );
             let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
             let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
             let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
             eprintln!(
-                "parity[{frame_name}/{recipe_name}]: maxAbsDiff={diff} psnr={psnr:.2} dB \
-                 meanSignedErr={bias:+.4}"
+                "parity[{frame_name}/{recipe_name}] {}x{}: maxAbsDiff={diff} psnr={psnr:.2} dB \
+                 meanSignedErr={bias:+.4}",
+                cpu.width, cpu.height
             );
             match equivalence_for(recipe_name) {
                 Equivalence::ByteIdentical => {
@@ -1360,18 +1619,26 @@ fn unimplemented_stages_still_route_to_cpu() {
     };
     let frame = gradient_frame(48, 48);
     let recipe = EditRecipe {
-        geometry: Some(Geometry {
+        lens_blur: Some(LensBlur {
             version: 1,
-            crop: None,
-            rotation_degrees: 0.0,
-            mirror_horizontal: false,
-            mirror_vertical: false,
+            enabled: true,
+            focus_rect: FocusRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            focal_near: 0.0,
+            focal_far: 1.0,
+            blur_amount: 0.5,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
         }),
         ..Default::default()
     };
     let reasons = unsupported_gpu_stages(&recipe);
     assert!(
-        reasons.iter().any(|r| r.contains("geometry")),
+        reasons.iter().any(|r| r.contains("lens_blur")),
         "{reasons:?}"
     );
     if !ctx.is_available() {
@@ -1739,9 +2006,69 @@ fn vram_path_refuses_unsupported_recipes() {
     let frame = gradient_frame(16, 16);
     ctx.ensure_vram(16, 16).expect("vram state");
     let recipe = EditRecipe {
+        lens_blur: Some(LensBlur {
+            version: 1,
+            enabled: true,
+            focus_rect: FocusRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            focal_near: 0.0,
+            focal_far: 1.0,
+            blur_amount: 0.5,
+            bokeh: BokehShape::Round,
+            depth_artifact: None,
+        }),
+        ..Default::default()
+    };
+    assert!(
+        unsupported_gpu_stages(&recipe)
+            .iter()
+            .any(|r| r.contains("lens_blur")),
+        "lens_blur must be reported"
+    );
+    assert!(
+        ctx.render_to_vram(&frame, &recipe).is_err(),
+        "VRAM path must refuse an unsupported recipe instead of writing divergent pixels"
+    );
+}
+
+/// GPU-RENDER-PARITY-1 geometry wave: the readback-free VRAM present texture is
+/// source-sized, so a geometry chain that **changes the output dimensions**
+/// (crop/rotation/perspective) must be refused loudly — the caller then uses the
+/// exact CPU present path. Geometry that preserves the dimensions (lens) is
+/// rendered into the resident output and must match the CPU oracle.
+#[test]
+fn vram_geometry_dimension_change_is_refused_loudly() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped VRAM geometry check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    const W: u32 = 24;
+    const H: u32 = 24;
+    let frame = gradient_frame(W, H);
+    ctx.ensure_vram(W, H).expect("vram state");
+
+    // A crop is GPU-eligible as a recipe, but its output dimensions differ from
+    // the source, so the VRAM present path must refuse it (no silent write).
+    let crop = EditRecipe {
         geometry: Some(Geometry {
             version: 1,
-            crop: None,
+            crop: Some(Crop::Free {
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.5,
+            }),
             rotation_degrees: 0.0,
             mirror_horizontal: false,
             mirror_vertical: false,
@@ -1749,14 +2076,78 @@ fn vram_path_refuses_unsupported_recipes() {
         ..Default::default()
     };
     assert!(
-        unsupported_gpu_stages(&recipe)
-            .iter()
-            .any(|r| r.contains("geometry")),
-        "geometry must be reported"
+        unsupported_gpu_stages(&crop).is_empty(),
+        "a crop recipe is GPU-eligible on the full render path"
     );
     assert!(
-        ctx.render_to_vram(&frame, &recipe).is_err(),
-        "VRAM path must refuse an unsupported recipe instead of writing divergent pixels"
+        ctx.render_to_vram(&frame, &crop).is_err(),
+        "VRAM must refuse dimension-changing geometry loudly"
+    );
+
+    // Dimension-preserving geometry (manual lens) renders into the resident
+    // output and matches the oracle.
+    let lens = manual_lens_recipe();
+    assert!(unsupported_gpu_stages(&lens).is_empty());
+    ctx.render_to_vram(&frame, &lens)
+        .expect("dimension-preserving geometry renders in VRAM");
+    let gpu = ctx.readback_output_frame().expect("vram readback");
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &lens,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    assert_eq!(
+        (cpu.width, cpu.height),
+        (gpu.width, gpu.height),
+        "VRAM geometry must keep the source dimensions"
+    );
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("vram_geometry[lens]: maxAbsDiff={diff}");
+    assert!(
+        diff <= 1,
+        "VRAM lens pass must match the CPU oracle within one code, got {diff}"
+    );
+
+    // Dimension-preserving geometry stacked *after* post-tone stages exercises
+    // the VRAM `needs_post && geometry` wiring (post lands in a transient,
+    // geometry then writes the resident output).
+    let mut lens_post = manual_lens_recipe();
+    lens_post.curves = Some(Curves {
+        version: 1,
+        master: curve(&[(0.0, 0.0), (0.5, 0.42), (1.0, 1.0)]),
+        channels: CurveChannels::default(),
+    });
+    assert!(unsupported_gpu_stages(&lens_post).is_empty());
+    ctx.render_to_vram(&frame, &lens_post)
+        .expect("post + dimension-preserving geometry renders in VRAM");
+    let gpu = ctx.readback_output_frame().expect("vram readback");
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &lens_post,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("vram_geometry[lens+curves]: maxAbsDiff={diff}");
+    assert!(
+        diff <= 1,
+        "VRAM post + lens chain must match the CPU oracle within one code, got {diff}"
     );
 }
 
@@ -1815,9 +2206,6 @@ fn source_actions(count: usize) -> EditRecipe {
 ///
 /// Reason classes and their minimal trigger (the reason string is the one the
 /// gate emits):
-/// - `geometry` — `recipe.geometry = Some(..)`.
-/// - `lens_correction` — `recipe.lens_correction = Some(..)`.
-/// - `perspective` — `recipe.perspective = Some(..)`.
 /// - `lens_blur` — `lens_blur.enabled && blur_amount != 0`.
 /// - `source_actions` — non-empty actions and `source_actions_bound = false`.
 /// - `camera_white_balance (As-Shot context)` — context WB `Some`.
@@ -1828,6 +2216,11 @@ fn source_actions(count: usize) -> EditRecipe {
 /// - `adjustment \`clarity_v2\` not implemented on GPU` — a key outside
 ///   [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] with no neutral value (all schema keys
 ///   are now GPU-supported, so this is the unknown-key class).
+///
+/// GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror), the
+/// manual lens correction and perspective are GPU-eligible for valid recipes
+/// (their pixel/dimension parity is asserted by
+/// `implemented_stages_match_cpu_oracle`), so they are **not** gate reasons.
 ///
 /// GPU-RENDER-PARITY-1 follow-up (items 5 + 7): legacy spot geometry, a typed
 /// geometry-free mirror shadow, and **any number** of bound source actions
@@ -1959,9 +2352,6 @@ fn cpu_routing_inventory_is_complete() {
     let wb = [1.9f32, 1.0, 1.4, 1.0];
 
     let cases: Vec<(&str, Vec<String>)> = vec![
-        ("geometry", unsupported_gpu_stages(&geometry)),
-        ("lens_correction", unsupported_gpu_stages(&lens)),
-        ("perspective", unsupported_gpu_stages(&perspective)),
         ("lens_blur", unsupported_gpu_stages(&lens_blur)),
         (
             "source_actions",
@@ -1986,6 +2376,22 @@ fn cpu_routing_inventory_is_complete() {
         assert!(
             reasons.iter().any(|r| r.contains(expected)),
             "inventory entry `{expected}` is no longer emitted by the gate: {reasons:?}"
+        );
+    }
+
+    // GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror), the
+    // manual lens correction and perspective are rendered by the GPU
+    // `geometry` passes, so a valid recipe must no longer be flagged. The
+    // pixel/dimension parity is asserted by `geometry_stages_match_cpu_oracle`.
+    for (name, recipe) in [
+        ("geometry", &geometry),
+        ("lens_correction", &lens),
+        ("perspective", &perspective),
+    ] {
+        let reasons = unsupported_gpu_stages(recipe);
+        assert!(
+            reasons.is_empty(),
+            "implemented geometry stage `{name}` must be GPU-eligible, got {reasons:?}"
         );
     }
 

@@ -602,14 +602,22 @@ fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
     // Each still-unsupported stage is flagged with a recognisable reason.
     let cases: Vec<(&str, EditRecipe)> = vec![
         (
-            "geometry",
+            "lens_blur",
             EditRecipe {
-                geometry: Some(lumina_sidecar::Geometry {
+                lens_blur: Some(lumina_sidecar::LensBlur {
                     version: 1,
-                    crop: None,
-                    rotation_degrees: 0.0,
-                    mirror_horizontal: false,
-                    mirror_vertical: false,
+                    enabled: true,
+                    focus_rect: lumina_sidecar::FocusRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                    focal_near: 0.0,
+                    focal_far: 1.0,
+                    blur_amount: 0.5,
+                    bokeh: lumina_sidecar::BokehShape::Round,
+                    depth_artifact: None,
                 }),
                 ..Default::default()
             },

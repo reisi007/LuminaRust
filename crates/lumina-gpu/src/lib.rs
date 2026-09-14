@@ -38,9 +38,9 @@
 //! rounding one ulp differently at a `round()` tie.
 //!
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
-//! lists any recipe stage the pipeline cannot yet render (Geometry, Lens
-//! Correction, Perspective, Lens Blur, unbound SourceActions, As-Shot WB
-//! context, invalid red-eye, generative edit, non-schema adjustment keys, …) and
+//! lists any recipe stage the pipeline cannot yet render (Lens Blur, unbound
+//! SourceActions, As-Shot WB context, invalid red-eye, generative edit,
+//! non-schema adjustment keys, …) and
 //! [`validate_gpu_recipe`] rejects every schema-invalid recipe with the CPU
 //! oracle's own error. On every entry point the outcome is loud and pixel-safe:
 //!
@@ -62,8 +62,20 @@
 //! [`stages`] spot-heal pass (with the typed geometry-free shadow tolerated and
 //! an isolated typed entry a hard error on both backends), and the
 //! source-action stage composites **any** number of bound artifacts in batches
-//! of `MAX_SOURCE_ACTIONS`. Geometry/Lens Correction/Perspective/Lens Blur and
-//! `generative_edit` remain CPU-routed (see [`unsupported_gpu_stages`]).
+//! of `MAX_SOURCE_ACTIONS`. Lens Blur and `generative_edit` remain CPU-routed
+//! (see [`unsupported_gpu_stages`]).
+//!
+//! **GPU-RENDER-PARITY-1 geometry wave.** Geometry (crop → rotation → mirror),
+//! the manual lens correction (distortion + vignette + CA) and perspective are
+//! rendered by the [`geometry`] passes in the CPU oracle's order
+//! (`lens → perspective → CA → crop → rotation → mirror`) and reproduce the
+//! oracle's **output dimensions** exactly. A Lensfun corrector is still
+//! render-context state the recipe-only API does not carry — the caller owns
+//! that decision just like the As-Shot WB and mask layers (the CLI/MCP routing
+//! mirrors gate on it). The readback-free VRAM present texture is source-sized,
+//! so [`GpuContext::render_to_vram`] renders dimension-**preserving** geometry
+//! (lens, identity crop/rotation) into the resident output and refuses a
+//! dimension-changing chain loudly (the caller uses the exact CPU present path).
 //!
 //! [`unsupported_gpu_stages_with_context`] extends that verdict with the
 //! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
@@ -98,6 +110,11 @@ pub mod shaders;
 // neighborhood Presence stages (Texture/Clarity DoG + Dehaze).
 #[cfg(feature = "gpu")]
 pub mod stages;
+// GPU geometry stages (GPU-RENDER-PARITY-1, geometry wave): lens correction
+// (distortion/vignette + CA), perspective (homography) and crop/rotation/mirror
+// — including the dimension-changing output the oracle produces.
+#[cfg(feature = "gpu")]
+mod geometry;
 #[cfg(feature = "gpu")]
 pub mod tiling;
 
@@ -220,11 +237,13 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// stages": [`validate_gpu_recipe`] rejects them at the GPU entry with the CPU
 /// oracle's own error.
 ///
-/// Rendered by the GPU ([`stages`], GPU-RENDER-PARITY-1) and therefore **not**
-/// flagged: Curves, HSL, Point Color, vibrance/saturation, Color Grading,
-/// Presence (Texture / Clarity / Dehaze), Noise Reduction, Sharpening, Effects
-/// (vignette + grain), Red-Eye, the legacy spot-heal geometry and source-action
-/// compositing (batched).
+/// Rendered by the GPU ([`stages`]/[`geometry`], GPU-RENDER-PARITY-1) and
+/// therefore **not** flagged: Curves, HSL, Point Color, vibrance/saturation,
+/// Color Grading, Presence (Texture / Clarity / Dehaze), Noise Reduction,
+/// Sharpening, Effects (vignette + grain), Red-Eye, the legacy spot-heal
+/// geometry, source-action compositing (batched), and geometry (crop /
+/// rotation / mirror), the manual lens correction (distortion/vignette/CA) and
+/// perspective.
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
@@ -232,7 +251,7 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   their neutral default back into the recipe map; at that value the CPU
 ///   stage is pixel-identical to not having the key, so it must not block the
 ///   GPU route; keys outside the schema have no neutral value and always flag);
-/// - Geometry / Lens Correction / Perspective / Lens Blur;
+/// - Lens Blur;
 /// - non-empty SourceActions **unless** matching GPU source-action artifacts are
 ///   bound (see [`unsupported_gpu_stages_with_context`]);
 /// - `generative_edit` — the CPU reference expands the canvas, but its
@@ -300,6 +319,13 @@ pub fn unsupported_gpu_stages_with_context(
     // and Effects (vignette + grain) to that set — so none of them route to the
     // CPU anymore. The stages below remain CPU-routed until their own parity
     // tests land.
+    // GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror),
+    // manual lens correction (distortion/vignette + CA) and perspective are
+    // rendered by the [`geometry`] passes and no longer route to the CPU. The
+    // remaining stage below stays CPU-routed until its own parity tests land.
+    // A Lensfun context corrector is not expressible in the recipe-only gate
+    // (the caller owns that context, exactly like the As-Shot WB and mask
+    // layers); the CLI/MCP routing mirrors keep gating on it.
     for (active, name) in [
         (
             recipe
@@ -308,9 +334,6 @@ pub fn unsupported_gpu_stages_with_context(
                 .is_some_and(|b| b.enabled && b.blur_amount != 0.0),
             "lens_blur",
         ),
-        (recipe.geometry.is_some(), "geometry"),
-        (recipe.lens_correction.is_some(), "lens_correction"),
-        (recipe.perspective.is_some(), "perspective"),
         (
             !recipe.source_actions.is_empty() && !source_actions_bound,
             "source_actions",
@@ -509,6 +532,27 @@ fn warn_unsupported_vram_once(reasons: &[String]) {
     }
 }
 
+/// Warns once per reason that the readback-free VRAM present path refuses a
+/// geometry chain whose output dimensions differ from the source (the present
+/// texture is source-sized). No VRAM pixels are written; the caller falls back
+/// to the exact CPU present path (GPU-RENDER-PARITY-1 geometry wave).
+#[cfg(feature = "gpu")]
+fn warn_vram_dimension_change_once(reason: &str) {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static WARNED: Mutex<Option<BTreeSet<String>>> = Mutex::new(None);
+    let mut guard = WARNED.lock().unwrap();
+    if guard
+        .get_or_insert_with(BTreeSet::new)
+        .insert(reason.to_string())
+    {
+        log::warn!(
+            "GPU VRAM preview cannot present {reason}. No VRAM pixels are \
+             written; the caller falls back to the exact CPU reference."
+        );
+    }
+}
+
 /// Logs the GPU init failure loudly once per failure text (REVIEW-GPU-N1).
 ///
 /// Extracted from [`GpuContext::new`] so the "no silent fallback" contract has
@@ -548,6 +592,11 @@ pub struct GpuContext {
     /// whose recipe uses one of those stages.
     #[cfg(feature = "gpu")]
     post_pipeline: std::sync::Mutex<Option<PostPipelineState>>,
+    /// Compiled GPU-RENDER-PARITY-1 geometry pipelines (lens correction,
+    /// perspective, CA, crop, rotation, mirror). Built lazily on the first
+    /// render whose recipe activates one of those stages.
+    #[cfg(feature = "gpu")]
+    geometry_pipeline: std::sync::Mutex<Option<geometry::GeometryPipelineState>>,
     /// VRAM-resident interactive state pool (GPU-60FPS-1 / GUI-WGPU-PRESENT-1):
     /// output + mask textures and overlay uniforms for a small LRU set of
     /// source dimensions, kept resident across frames so slider drags and brush
@@ -880,6 +929,7 @@ impl GpuContext {
             sa_pipeline: std::sync::Mutex::new(None),
             spot_pipeline: std::sync::Mutex::new(None),
             post_pipeline: std::sync::Mutex::new(None),
+            geometry_pipeline: std::sync::Mutex::new(None),
             vram: std::sync::Mutex::new(VramPool::new()),
             source_actions: None,
             #[cfg(feature = "gpu")]
@@ -998,6 +1048,21 @@ impl GpuContext {
                 return Ok(guard);
             };
             *guard = Some(build_post_pipelines(&resources.device)?);
+        }
+        Ok(guard)
+    }
+
+    /// Lazily build the GPU-RENDER-PARITY-1 geometry pipelines (lens,
+    /// perspective, CA, crop, rotation, mirror).
+    fn ensure_geometry_pipelines(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<geometry::GeometryPipelineState>>, GpuError> {
+        let mut guard = self.geometry_pipeline.lock().unwrap();
+        if guard.is_none() {
+            let Some(resources) = self.resources.as_ref() else {
+                return Ok(guard);
+            };
+            *guard = Some(geometry::build_geometry_pipelines(&resources.device)?);
         }
         Ok(guard)
     }
@@ -1259,6 +1324,111 @@ impl GpuContext {
             }
         }
         resources.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Encode the planned geometry pass chain (GPU-RENDER-PARITY-1 geometry
+    /// wave) into `encoder`, sampling `input_view` and writing the final pass
+    /// into `final_view` (whose dimensions must equal `plan.output_dims()`).
+    ///
+    /// Each sub-stage is a self-contained fullscreen pass at its own output
+    /// dimensions; earlier passes land in transient ping-pong textures that the
+    /// next pass samples, mirroring the oracle's per-stage `ImageFrame` chain.
+    fn encode_geometry_chain(
+        &self,
+        resources: &GpuResources,
+        geo: &geometry::GeometryPipelineState,
+        plan: &geometry::GeometryPlan,
+        input_view: &wgpu::TextureView,
+        final_view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), GpuError> {
+        use geometry::GeometryStep;
+        let last = plan.steps.len() - 1;
+        // Pre-allocate every non-final intermediate at its exact pass dims so
+        // the texture references stay stable for the whole loop.
+        let mut intermediates: Vec<wgpu::Texture> = Vec::new();
+        for (index, step) in plan.steps.iter().enumerate() {
+            if index != last {
+                let (width, height) = step.out_dims();
+                intermediates.push(shaders::create_output_texture(
+                    &resources.device,
+                    width,
+                    height,
+                    &format!("lumina-gpu-geometry-intermediate-{index}"),
+                ));
+            }
+        }
+        let intermediate_views: Vec<wgpu::TextureView> = intermediates
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+
+        let mut current: &wgpu::TextureView = input_view;
+        for (index, step) in plan.steps.iter().enumerate() {
+            let dst: &wgpu::TextureView = if index == last {
+                final_view
+            } else {
+                &intermediate_views[index]
+            };
+            match step {
+                GeometryStep::Lens { params, .. } => encode_geometry_pass(
+                    resources,
+                    &geo.layout,
+                    &geo.lens,
+                    params,
+                    current,
+                    dst,
+                    encoder,
+                ),
+                GeometryStep::Perspective { params, .. } => encode_geometry_pass(
+                    resources,
+                    &geo.layout,
+                    &geo.perspective,
+                    params,
+                    current,
+                    dst,
+                    encoder,
+                ),
+                GeometryStep::Ca { params, .. } => encode_geometry_pass(
+                    resources,
+                    &geo.layout,
+                    &geo.ca,
+                    params,
+                    current,
+                    dst,
+                    encoder,
+                ),
+                GeometryStep::Crop { params, .. } => encode_geometry_pass(
+                    resources,
+                    &geo.layout,
+                    &geo.crop,
+                    params,
+                    current,
+                    dst,
+                    encoder,
+                ),
+                GeometryStep::Rotate { params, .. } => encode_geometry_pass(
+                    resources,
+                    &geo.layout,
+                    &geo.rotate,
+                    params,
+                    current,
+                    dst,
+                    encoder,
+                ),
+                GeometryStep::Mirror { params, .. } => encode_geometry_pass(
+                    resources,
+                    &geo.layout,
+                    &geo.mirror,
+                    params,
+                    current,
+                    dst,
+                    encoder,
+                ),
+            }
+            current = dst;
+        }
         Ok(())
     }
 
@@ -1672,6 +1842,13 @@ impl GpuContext {
     /// instead of writing divergent pixels into the resident output. The caller
     /// must render such a recipe through the full CPU reference instead; the
     /// GUI already drops `vram_fresh` and falls back on this error.
+    ///
+    /// **Geometry.** The resident present texture is source-sized, so a geometry
+    /// chain that changes the output dimensions (crop/rotation/perspective) is
+    /// also refused loudly ([`warn_vram_dimension_change_once`]); the caller
+    /// then uses the exact CPU present path. Dimension-preserving geometry
+    /// (manual lens correction) is rendered into the resident output and matches
+    /// the CPU oracle.
     pub fn render_to_vram(&self, frame: &ImageFrame, recipe: &EditRecipe) -> Result<(), GpuError> {
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: the VRAM hot path cannot
         // CPU-route without a readback (that would defeat its purpose). A
@@ -1690,6 +1867,24 @@ impl GpuContext {
                 "VRAM path refuses a recipe with GPU-unsupported stage(s): {}; \
                  render it through the full CPU reference (render_frame) instead",
                 unsupported.join("; ")
+            )));
+        }
+        // GPU-RENDER-PARITY-1 geometry wave: plan the geometry chain. The
+        // readback-free VRAM present texture is source-sized, so geometry that
+        // changes the output dimensions cannot be presented here yet. That is
+        // an honest, loud limitation — no divergent pixels are ever written and
+        // the caller (GUI) falls back to the exact CPU present path.
+        let geometry_plan = geometry::GeometryPlan::from_recipe(recipe, frame.width, frame.height)?;
+        let vram_geometry = geometry_plan.as_ref().is_some_and(|plan| {
+            plan.output_width == frame.width && plan.output_height == frame.height
+        });
+        if geometry_plan.is_some() && !vram_geometry {
+            let reason =
+                "geometry (dimension-changing output; the VRAM present texture is source-sized)";
+            warn_vram_dimension_change_once(reason);
+            return Err(GpuError::RenderFailed(format!(
+                "VRAM path cannot present {reason}; render it through the full CPU \
+                 reference (render_frame) instead"
             )));
         }
         let Some(resources) = self.resources.as_ref() else {
@@ -1835,7 +2030,7 @@ impl GpuContext {
         // final pixels into the resident VRAM output (which the overlay/present
         // path samples); without post stages the tone pass writes it directly.
         let needs_post = post_stages_needed(recipe);
-        let tone_texture: Option<wgpu::Texture> = if needs_post {
+        let tone_texture: Option<wgpu::Texture> = if needs_post || vram_geometry {
             Some(shaders::create_output_texture(
                 &resources.device,
                 frame.width,
@@ -1850,6 +2045,22 @@ impl GpuContext {
             .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
         let tone_target_view: &wgpu::TextureView =
             tone_view_owned.as_ref().unwrap_or(&v.output_view);
+        // When geometry is active the post chain must not write the resident
+        // output (geometry writes it as its final pass), so it lands in a
+        // transient instead.
+        let post_target: Option<wgpu::Texture> = if vram_geometry && needs_post {
+            Some(shaders::create_output_texture(
+                &resources.device,
+                frame.width,
+                frame.height,
+                "lumina-gpu-vram-post-intermediate",
+            ))
+        } else {
+            None
+        };
+        let post_target_view: Option<wgpu::TextureView> = post_target
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lumina-gpu-vram-tone"),
@@ -1878,14 +2089,47 @@ impl GpuContext {
         }
         resources.queue.submit(Some(enc.finish()));
         if needs_post {
+            let post_dst: &wgpu::TextureView = post_target_view.as_ref().unwrap_or(&v.output_view);
             self.render_post_stages(
                 resources,
                 frame.width,
                 frame.height,
                 recipe,
                 tone_target_view,
-                &v.output_view,
+                post_dst,
             )?;
+        }
+        if let Some(plan) = geometry_plan.as_ref() {
+            // `vram_geometry` holds here (dimension-changing geometry was
+            // refused above), so the final pass can write the resident output.
+            let geo_input: &wgpu::TextureView = if needs_post {
+                post_target_view
+                    .as_ref()
+                    .expect("post target exists when geometry and post stages are active")
+            } else {
+                tone_target_view
+            };
+            let mut geo_enc =
+                resources
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("lumina-gpu-vram-geometry"),
+                    });
+            {
+                let geo_guard = self.ensure_geometry_pipelines()?;
+                let Some(geo) = geo_guard.as_ref() else {
+                    return Err(GpuError::RenderFailed("geometry pipeline not built".into()));
+                };
+                self.encode_geometry_chain(
+                    resources,
+                    geo,
+                    plan,
+                    geo_input,
+                    &v.output_view,
+                    &mut geo_enc,
+                )?;
+            }
+            resources.queue.submit(Some(geo_enc.finish()));
         }
         if let Some(t0) = start {
             log::info!(
@@ -2262,8 +2506,8 @@ impl GpuContext {
     /// and legacy spot-heal stages run before the tone pass. A schema-invalid
     /// recipe is rejected up front by [`validate_gpu_recipe`] with the CPU
     /// oracle's own error. When [`unsupported_gpu_stages`] reports any remaining
-    /// unsupported stage (Geometry, Lens Correction, Perspective, Lens Blur,
-    /// unbound SourceActions, generative edit, …), the render is **explicitly
+    /// unsupported stage (Lens Blur, unbound SourceActions, generative edit, …),
+    /// the render is **explicitly
     /// routed to the `render_cpu`
     /// fallback** rather than silently GPU-rendering with the stage dropped. The
     /// routing decision is logged once per unique reason set.
@@ -2400,6 +2644,11 @@ impl GpuContext {
         let output_texture = &pooled.output;
         let output_view = &pooled.output_view;
         let readback = &pooled.readback;
+
+        // GPU-RENDER-PARITY-1 geometry wave: plan the lens/perspective/CA/crop/
+        // rotation/mirror chain (including its dimension math) before encoding.
+        // A plan error mirrors the CPU oracle's own rejection.
+        let geometry_plan = geometry::GeometryPlan::from_recipe(recipe, width, height)?;
 
         // GPU-RENDER-PARITY-1: recipes that use post-tone stages (Presence,
         // curves/HSL/Point Color/vibrance/saturation/Color Grading) render the
@@ -2549,6 +2798,41 @@ impl GpuContext {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("lumina-gpu-readback-enc"),
                 });
+        }
+        if let Some(plan) = geometry_plan.as_ref() {
+            // GPU-RENDER-PARITY-1 geometry wave: run the lens/perspective/CA/
+            // crop/rotation/mirror chain after the tone/post result. The final
+            // texture carries the oracle's output dimensions, so it is read back
+            // directly (the pooled readback buffer is sized for the source dims).
+            let final_texture = shaders::create_output_texture(
+                &resources.device,
+                plan.output_width,
+                plan.output_height,
+                "lumina-gpu-geometry-out",
+            );
+            let final_view = final_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            {
+                let geo_guard = self.ensure_geometry_pipelines()?;
+                let Some(geo) = geo_guard.as_ref() else {
+                    return Err(GpuError::RenderFailed("geometry pipeline not built".into()));
+                };
+                self.encode_geometry_chain(
+                    resources,
+                    geo,
+                    plan,
+                    output_view,
+                    &final_view,
+                    &mut encoder,
+                )?;
+            }
+            resources.queue.submit(Some(encoder.finish()));
+            drop(cache_guard);
+            return readback_texture(
+                resources,
+                &final_texture,
+                plan.output_width,
+                plan.output_height,
+            );
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -2776,6 +3060,82 @@ fn readback_gradient_max(
     drop(mapped);
     staging.unmap();
     Ok(f32::from_bits(bits))
+}
+
+/// Read an arbitrary RGBA8 texture back into a CPU [`Frame`].
+///
+/// Used by the dimension-changing geometry path (`render_with_gpu`), whose
+/// final texture carries the oracle's output dimensions rather than the pooled
+/// source-sized readback buffer.
+#[cfg(feature = "gpu")]
+fn readback_texture(
+    resources: &GpuResources,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Frame, GpuError> {
+    let bytes_per_row = shaders::aligned_bytes_per_row(width);
+    let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumina-gpu-geometry-readback"),
+        size: (bytes_per_row * height.max(1)) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = resources
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("lumina-gpu-geometry-readback-enc"),
+        });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    resources.queue.submit(Some(encoder.finish()));
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
+    resources
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
+    rx.recv()
+        .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
+        .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
+    let mapped = slice
+        .get_mapped_range()
+        .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
+    let row_bytes = (width * 4) as usize;
+    let mut pixels = Vec::with_capacity(row_bytes * height as usize);
+    for y in 0..height as usize {
+        let start = y * bytes_per_row as usize;
+        pixels.extend_from_slice(&mapped[start..start + row_bytes]);
+    }
+    drop(mapped);
+    staging.unmap();
+    Ok(Frame {
+        width,
+        height,
+        pixels,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -3012,6 +3372,29 @@ fn encode_fullscreen_pass(
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
     pass.draw(0..3, 0..1);
+}
+
+/// Encode one geometry sub-stage pass: allocate a transient uniform buffer for
+/// `params`, bind the (uniform + input texture) pair against `input_view` and
+/// draw into `dst`.
+#[cfg(feature = "gpu")]
+fn encode_geometry_pass<T: bytemuck::Pod>(
+    resources: &GpuResources,
+    layout: &wgpu::BindGroupLayout,
+    pipeline: &wgpu::RenderPipeline,
+    params: &T,
+    input_view: &wgpu::TextureView,
+    dst: &wgpu::TextureView,
+    encoder: &mut wgpu::CommandEncoder,
+) {
+    let buffer = geometry::create_geometry_uniform_buffer(
+        &resources.device,
+        std::mem::size_of::<T>() as u64,
+        "lumina-gpu-geometry-params",
+    );
+    geometry::write_geometry_params(&resources.queue, &buffer, params);
+    let bind = geometry::create_geometry_bind_group(&resources.device, layout, &buffer, input_view);
+    encode_fullscreen_pass(encoder, pipeline, &bind, dst);
 }
 
 /// Result of the batched source-action stage: the scratch textures that hold the
@@ -3800,12 +4183,34 @@ mod routing_gate_tests {
 
     /// Invariant: the value-neutrality change (R2-GPU-05) must not weaken any
     /// other stage check — nested objects and flat stage markers still route.
-    /// GPU-RENDER-PARITY-1 stage 2 moved Effects into the GPU pipeline, so the
-    /// still-unsupported nested stages (`geometry`/`perspective`) carry this
-    /// assertion, and effects is asserted unflagged.
+    /// GPU-RENDER-PARITY-1 geometry wave moved geometry/perspective/manual lens
+    /// correction into the GPU pipeline, so the still-unsupported nested stage
+    /// (`lens_blur`) carries this assertion, and geometry is asserted unflagged.
     #[test]
     fn non_adjustment_stage_checks_unchanged() {
-        let recipe = EditRecipe {
+        let lens_blur = EditRecipe {
+            lens_blur: Some(lumina_sidecar::LensBlur {
+                version: 1,
+                enabled: true,
+                focus_rect: lumina_sidecar::FocusRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                focal_near: 0.0,
+                focal_far: 1.0,
+                blur_amount: 0.5,
+                bokeh: lumina_sidecar::BokehShape::Round,
+                depth_artifact: None,
+            }),
+            ..Default::default()
+        };
+        let reasons = unsupported_gpu_stages(&lens_blur);
+        assert!(reasons.contains(&"lens_blur".to_string()), "{reasons:?}");
+
+        // Geometry/perspective are GPU-rendered now (the geometry wave).
+        let geometry = EditRecipe {
             geometry: Some(lumina_sidecar::Geometry {
                 version: 1,
                 crop: None,
@@ -3825,9 +4230,10 @@ mod routing_gate_tests {
             }),
             ..Default::default()
         };
-        let reasons = unsupported_gpu_stages(&recipe);
-        assert!(reasons.contains(&"geometry".to_string()), "{reasons:?}");
-        assert!(reasons.contains(&"perspective".to_string()), "{reasons:?}");
+        assert!(
+            unsupported_gpu_stages(&geometry).is_empty(),
+            "geometry/perspective are GPU-rendered"
+        );
 
         // Effects (vignette/grain) is fully GPU-supported now.
         let effects = EditRecipe {
