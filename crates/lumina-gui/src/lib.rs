@@ -1965,6 +1965,14 @@ pub struct LuminaApp {
     /// as a status badge in the preview HUD; it never affects rendered pixels.
     #[cfg(feature = "gpu")]
     gpu_route_fallback: Option<String>,
+    /// PARITY-PATHS-2: diagnostic override for the adapter-availability probe
+    /// ([`Self::gpu_adapter_available`]). `Some(false)` lets the parity matrix
+    /// exercise its adapterless SKIP branch on a machine that does have a
+    /// Metal adapter; `None` (default) reports the real GPU context.
+    /// Presentation/routing logic does **not** consult this — it only changes
+    /// the probe the SKIP contract keys on.
+    #[cfg(feature = "gpu")]
+    gpu_adapter_override: Option<bool>,
     /// GUI-SCROLL-200-1: per-frame diagnostic counters for `LUMINA_PERF_LOG=1`.
     /// `frame_thumb_enqueued` counts worker jobs enqueued (or cached previews
     /// loaded) this frame, `frame_thumbs_ready` counts worker results applied.
@@ -2687,6 +2695,9 @@ impl LuminaApp {
             #[cfg(feature = "gpu")]
             // R2-GUIMOD-06: no routing fallback until a present decision runs.
             gpu_route_fallback: None,
+            #[cfg(feature = "gpu")]
+            // PARITY-PATHS-2: report the real adapter state until a test forces it.
+            gpu_adapter_override: None,
             #[cfg(feature = "gpu")]
             brush_mask_plane: None,
             #[cfg(feature = "gpu")]
@@ -11267,12 +11278,57 @@ impl LuminaApp {
     /// path-parity framework reports an explicit SKIP verdict when this is
     /// `false` — a missing adapter never counts as a silently green parity
     /// check (same policy as the `lumina-gpu` oracle tests).
+    ///
+    /// PARITY-PATHS-2: honours the diagnostic override
+    /// ([`Self::set_gpu_adapter_override`]) so the adapterless SKIP branch is
+    /// executable on an adapter-equipped machine.
     #[cfg(feature = "gpu")]
     #[must_use]
     pub fn gpu_adapter_available(&self) -> bool {
+        if let Some(forced) = self.gpu_adapter_override {
+            return forced;
+        }
         self.gpu
             .as_ref()
             .is_some_and(lumina_gpu::GpuContext::is_available)
+    }
+
+    /// PARITY-PATHS-2 test hook: force the verdict of
+    /// [`Self::gpu_adapter_available`] so the parity matrix's adapterless SKIP
+    /// branch is exercised for real on a Metal machine (the verification gap
+    /// noted in the task: the branch could previously only be code-reviewed).
+    /// `Some(false)` simulates a machine without a usable adapter, `Some(true)`
+    /// simulates one with, and `None` restores the real GPU-context probe.
+    /// Diagnostic only — no presentation or render logic reads this field.
+    #[cfg(feature = "gpu")]
+    #[doc(hidden)]
+    pub fn set_gpu_adapter_override(&mut self, available: Option<bool>) {
+        self.gpu_adapter_override = available;
+    }
+
+    /// PARITY-PATHS-2 test hook: bind a caller-owned Lensfun corrector as if
+    /// the EXIF auto-profile cache ([`Self::ensure_lensfun_cache`]) had resolved
+    /// it, so the parity matrix can exercise the active-corrector CPU route
+    /// headlessly without a real EXIF/DB match. The corrector must be built for
+    /// the frame geometry the next render uses (the GUI builds its own
+    /// corrector at exactly the base-frame dimensions). Diagnostic only: like
+    /// the real cache this keeps the DB handle alive for the modifier and marks
+    /// the corrector `active` when it is non-identity, which is what keeps the
+    /// VRAM present route refused.
+    #[cfg(all(feature = "gpu", feature = "lensfun"))]
+    #[doc(hidden)]
+    pub fn bind_test_lensfun_corrector(
+        &mut self,
+        corrector: lumina_lensfun::Corrector,
+        db: lumina_lensfun::LensfunDb,
+    ) {
+        let active = !corrector.is_identity();
+        self.lensfun_cache = Some(CachedLensCorrector {
+            corrector,
+            _db: db,
+            key: (None, None, None, 0, 0, 0, 0),
+            active,
+        });
     }
 
     /// KITTEST-PARITY-PATHS-1: render the current draft (or full) source through

@@ -6,8 +6,10 @@
 //! `crates/lumina-gpu/tests/golden.rs` and `crates/lumina-gpu/tests/parity.rs`
 //! and `docs/gpu-bootstrap.md` §"Equivalence verification"):
 //!
-//! * `maxAbsDiff` per channel ≤ declared bound (1 for tone/colour scenes, 2 for
-//!   the stacked Detail scene),
+//! * `maxAbsDiff` per channel ≤ declared bound (0 where the paths are
+//!   byte-identical — the neutral tone scene and the stacked Detail scene —
+//!   and 1 for the tinted colour scene, whose Presence/HSL chain rounds
+//!   differently),
 //! * `PSNR` (global, MAX=255) ≥ 45 dB,
 //! * `|mean signed error|` ≤ 0.05 (no systematic brightness/colour tilt — a
 //!   bound the plain PSNR can hide).
@@ -67,6 +69,12 @@ const SRC_H: u32 = 120;
 /// One scene of the matrix: a named recipe applied through the public GUI
 /// setters (the same code the panels use) plus its measured per-channel
 /// `maxAbsDiff` bound.
+///
+/// The bound is only as tight as the F-043 measurement supports: scenes where
+/// the CPU oracle and the VRAM path are byte-identical are pinned to `0` (a
+/// single differing code value fails), while a scene with a measured non-zero
+/// difference keeps its measured `1` — tightening it to `0` would be a false
+/// promise, not a stricter check.
 struct Scene {
     name: &'static str,
     apply: fn(&mut LuminaApp),
@@ -78,7 +86,10 @@ fn scenes() -> Vec<Scene> {
         Scene {
             name: "neutral",
             apply: |_app| {},
-            max_abs_diff: 1,
+            // PARITY-PATHS-2: measured byte-identical (maxAbsDiff=0) across
+            // repeated Metal runs — the default recipe carries no tone stage
+            // that rounds, so the bound is tightened from 1 to 0.
+            max_abs_diff: 0,
         },
         Scene {
             name: "tinted",
@@ -88,6 +99,8 @@ fn scenes() -> Vec<Scene> {
                 app.set_adjustment("saturation", 0.15);
                 app.set_presence("clarity", 0.2);
             },
+            // Measured maxAbsDiff=1: the Presence/Vibrance/Saturation chain has
+            // a real CPU↔GPU rounding difference, so the F-043 bound stays 1.
             max_abs_diff: 1,
         },
         Scene {
@@ -97,7 +110,9 @@ fn scenes() -> Vec<Scene> {
                 app.set_sharpening_value("amount", 0.8);
                 app.set_sharpening_value("radius", 0.8);
             },
-            max_abs_diff: 2,
+            // PARITY-PATHS-2: the stage-2 detail chain is exact on both paths
+            // (measured maxAbsDiff=0) — the bound is tightened from 2 to 0.
+            max_abs_diff: 0,
         },
     ]
 }
@@ -463,8 +478,36 @@ fn run_scene(harness: &mut Harness<'_, LuminaApp>, scene: &Scene) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (headless GPU required → `#[ignore]`d, run with `-- --ignored`).
+// Tests
+//
+// The pixel/geometry matrix needs a headless GPU, so the scene runners are
+// `#[ignore]`d and run with `-- --ignored`. The adapterless SKIP contract is
+// additionally covered by an adapter-independent test that runs in the normal
+// suite (`adapter_probe_without_gpu_context_reports_unavailable`).
 // ---------------------------------------------------------------------------
+
+/// PARITY-PATHS-2: outcome of one matrix run, so the adapterless SKIP branch is
+/// directly assertable instead of only observable on stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatrixOutcome {
+    /// An adapter was available and the scenes were actually executed.
+    Ran,
+    /// No adapter: the matrix printed `SKIP_MESSAGE` and ran no scene.
+    Skipped(&'static str),
+}
+
+/// Run the full `scenes × paths` matrix, returning the loud SKIP verdict when
+/// no usable adapter is available (never a silently green run).
+fn run_cpu_gpu_path_parity_matrix(harness: &mut Harness<'_, LuminaApp>) -> MatrixOutcome {
+    if !harness.state_mut().gpu_adapter_available() {
+        eprintln!("{SKIP_MESSAGE} (matrix not executed: no adapter to compare against)");
+        return MatrixOutcome::Skipped(SKIP_MESSAGE);
+    }
+    for scene in scenes() {
+        run_scene(harness, &scene);
+    }
+    MatrixOutcome::Ran
+}
 
 /// Full `scenes × paths` parity matrix. Without a usable adapter the run prints
 /// the explicit SKIP verdict and returns (never a silently green parity check).
@@ -472,13 +515,70 @@ fn run_scene(harness: &mut Harness<'_, LuminaApp>, scene: &Scene) {
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
 fn cpu_gpu_path_parity_matrix() {
     let mut harness = parity_harness();
-    if !harness.state_mut().gpu_adapter_available() {
-        eprintln!("{SKIP_MESSAGE} (matrix not executed: no adapter to compare against)");
-        return;
-    }
-    for scene in scenes() {
-        run_scene(&mut harness, &scene);
-    }
+    let _ = run_cpu_gpu_path_parity_matrix(&mut harness);
+}
+
+/// PARITY-PATHS-2: exercise the adapterless SKIP branch for real on this
+/// adapter-equipped machine through the diagnostic override. The matrix runner
+/// must return the documented loud SKIP verdict — with the same text it prints
+/// to stderr — and must not execute a single scene (no load, no render), so a
+/// missing adapter can never pass as a green matrix.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+fn parity_matrix_skips_loudly_without_adapter() {
+    let mut harness = parity_harness();
+    let real_available = harness.state().gpu_adapter_available();
+
+    harness.state_mut().set_gpu_adapter_override(Some(false));
+    assert!(
+        !harness.state().gpu_adapter_available(),
+        "the adapter override must win over the real Metal probe"
+    );
+    let generation_before = harness.state().preview_generation();
+    let outcome = run_cpu_gpu_path_parity_matrix(&mut harness);
+    assert_eq!(
+        outcome,
+        MatrixOutcome::Skipped(SKIP_MESSAGE),
+        "a missing adapter must yield the loud SKIP verdict, never a green run"
+    );
+    assert_eq!(
+        harness.state().preview_generation(),
+        generation_before,
+        "the SKIP branch must not execute any scene render"
+    );
+
+    harness.state_mut().set_gpu_adapter_override(None);
+    assert_eq!(
+        harness.state().gpu_adapter_available(),
+        real_available,
+        "clearing the override must restore the real adapter probe"
+    );
+}
+
+/// PARITY-PATHS-2 adapter-independent half of the SKIP contract, runnable in
+/// the normal (non-`--ignored`) suite without a GPU: an app that never attached
+/// a wgpu render state binds no adapter, and the override is honoured. This is
+/// the exact predicate the matrix SKIP branch keys on, so GPU-less CI still
+/// covers the loud-skip policy.
+#[test]
+fn adapter_probe_without_gpu_context_reports_unavailable() {
+    let mut app = LuminaApp::new(eframe::egui::Context::default());
+    assert!(
+        !app.gpu_adapter_available(),
+        "a fresh app without an attached wgpu context must report no adapter"
+    );
+    app.set_gpu_adapter_override(Some(true));
+    assert!(
+        app.gpu_adapter_available(),
+        "the override must be able to simulate a present adapter"
+    );
+    app.set_gpu_adapter_override(Some(false));
+    assert!(!app.gpu_adapter_available());
+    app.set_gpu_adapter_override(None);
+    assert!(
+        !app.gpu_adapter_available(),
+        "clearing the override must restore the real (absent) adapter probe"
+    );
 }
 
 /// The geometry half of the framework is assertable through the public API
@@ -511,4 +611,168 @@ fn path_parity_geometry_cpu_draft() {
         assert_absolute_geometry(harness.state(), scene.name);
         assert_preview_pixels_present(&mut harness, scene.name);
     }
+}
+
+// ---------------------------------------------------------------------------
+// PARITY-PATHS-2 cell: active Lensfun corrector → CPU route.
+// ---------------------------------------------------------------------------
+
+/// Minimal version_1 Lensfun fixture database (same shape as the GUI's
+/// `LENSFUN_GATE_FIXTURE_XML` unit test and the `lumina-core` row tests): one
+/// camera + one lens with **vignetting-only** calibration. Embedded so the cell
+/// builds a genuinely non-identity corrector deterministically, without
+/// depending on the system profile DB. Vignetting-only (no distortion) is
+/// deliberate: the corrector is still `!is_identity()` — so the GPU present
+/// gate refuses it — but it does not create transparent wedges, hence no
+/// CROP-MAXRECT default content crop, so the geometry/overlay checks apply
+/// unchanged to the CPU route.
+#[cfg(feature = "lensfun")]
+const LENSFUN_FIXTURE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<lensdatabase>
+    <camera>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Test Body</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+    <lens>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Vignetting 50mm f/2.8</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <vignetting model="pa" focal="50" aperture="2.8" distance="10" k1="-0.08" k2="-0.03" k3="-0.01"/>
+        </calibration>
+    </lens>
+</lensdatabase>
+"#;
+
+/// Build the fixture corrector for the exact `width × height` the render uses
+/// (the GUI's own `ensure_lensfun_cache` builds at the base-frame dimensions,
+/// so a mismatched fixture would not model the real caller contract).
+#[cfg(feature = "lensfun")]
+fn synthetic_lensfun_corrector(
+    directory: &std::path::Path,
+    width: u32,
+    height: u32,
+) -> (lumina_lensfun::Corrector, lumina_lensfun::LensfunDb) {
+    let path = directory.join("lensfun-parity-fixture.xml");
+    std::fs::write(&path, LENSFUN_FIXTURE_XML).expect("write fixture database");
+    let db = lumina_lensfun::LensfunDb::load_file(&path).expect("fixture database must load");
+    let corrector = lumina_lensfun::Corrector::for_camera(
+        &db,
+        "Lumina Test Corp",
+        "Lumina Test Body",
+        None,
+        width,
+        height,
+        50.0,
+        2.8,
+        10.0,
+    )
+    .expect("fixture profile must yield a corrector");
+    (corrector, db)
+}
+
+/// PARITY-PATHS-2: a genuinely active Lensfun corrector (vignetting profile
+/// here) is applied by the CPU reference (EXIF auto-match / TCA in the real
+/// app), while the GUI-LENSFUN-GATE-1 present gate refuses the VRAM route — the
+/// preview stays the exact corrected CPU frame and never shows the uncorrected
+/// tone result. The absolute geometry/overlay checks still hold on that CPU
+/// route (a corrector alone must not change the photo rect / overlay canvas),
+/// and the corrector provably changes pixels against the same scene without it
+/// (non-vacuous cell).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[cfg(feature = "lensfun")]
+fn lensfun_corrector_cell_presents_cpu_and_refuses_vram() {
+    let mut harness = parity_harness();
+    if !harness.state_mut().gpu_adapter_available() {
+        eprintln!("{SKIP_MESSAGE} (lensfun corrector cell not executed: no adapter to refuse)");
+        return;
+    }
+
+    // Baseline: the same source/scene without a corrector (default recipe).
+    {
+        let app = harness.state_mut();
+        app.set_module(Module::Develop);
+        app.load_bytes(scene_source_png(), "parity_source.png")
+            .expect("scene source loads");
+        app.render_draft([1024, 720], None)
+            .expect("corrector-free cpu draft render");
+    }
+    let without_corrector = harness
+        .state()
+        .preview()
+        .expect("corrector-free cpu frame")
+        .clone();
+
+    // Bind a non-identity corrector for the exact base-frame geometry and
+    // re-render the draft: the CPU reference now applies the vignetting
+    // correction.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (corrector, db) = synthetic_lensfun_corrector(directory.path(), SRC_W, SRC_H);
+    assert!(
+        !corrector.is_identity(),
+        "fixture profile must be a real (non-identity) correction"
+    );
+    {
+        let app = harness.state_mut();
+        app.bind_test_lensfun_corrector(corrector, db);
+        app.render_draft([1024, 720], None)
+            .expect("cpu draft render with corrector");
+    }
+    harness.run();
+    harness.run();
+
+    let cpu_frame = harness
+        .state()
+        .preview()
+        .expect("corrected cpu frame")
+        .clone();
+    // Non-vacuous cell: a corrector that silently no-opped would leave the
+    // frame byte-identical to the corrector-free baseline. The vignetting-only
+    // profile keeps the frame geometry unchanged, so this is a pure pixel
+    // difference on the exact CPU route.
+    assert!(
+        max_abs_diff(&without_corrector.pixels, &cpu_frame.pixels) > 0,
+        "the active Lensfun corrector must actually change CPU pixels"
+    );
+    assert_eq!(
+        (cpu_frame.width, cpu_frame.height),
+        (SRC_W, SRC_H),
+        "a vignetting-only corrector must not change the frame geometry"
+    );
+
+    // The visible preview is the CPU draft; the VRAM tone result must be
+    // refused (the corrector is a caller-owned stage the recipe-only GPU gate
+    // cannot express) even after a fresh VRAM render was primed.
+    assert!(
+        harness.state().preview_is_draft(),
+        "the corrected cell must present the interactive CPU draft"
+    );
+    assert!(
+        harness.state_mut().prime_gpu_present(),
+        "an available adapter must still render the VRAM tone result"
+    );
+    harness.run();
+    harness.run();
+    assert!(
+        harness.state().gpu_present_frame_size().is_none(),
+        "GUI-LENSFUN-GATE-1: the active corrector must force the CPU present route \
+         (VRAM must not be presented)"
+    );
+    assert_eq!(
+        harness
+            .state()
+            .preview()
+            .expect("corrected cpu frame")
+            .pixels,
+        cpu_frame.pixels,
+        "the presented preview must stay the corrected CPU frame"
+    );
+
+    assert_absolute_geometry(harness.state(), "lensfun_corrector");
+    assert_preview_pixels_present(&mut harness, "lensfun_corrector");
+    harness.snapshot("parity_paths_lensfun_corrector_cpu");
 }
