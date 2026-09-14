@@ -38,7 +38,7 @@
 //! rounding one ulp differently at a `round()` tie.
 //!
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
-//! lists any recipe stage the pipeline cannot yet render (Lens Blur, unbound
+//! lists any recipe stage the pipeline cannot yet render (unbound
 //! SourceActions, As-Shot WB context, invalid red-eye, generative edit,
 //! non-schema adjustment keys, …) and
 //! [`validate_gpu_recipe`] rejects every schema-invalid recipe with the CPU
@@ -62,8 +62,7 @@
 //! [`stages`] spot-heal pass (with the typed geometry-free shadow tolerated and
 //! an isolated typed entry a hard error on both backends), and the
 //! source-action stage composites **any** number of bound artifacts in batches
-//! of `MAX_SOURCE_ACTIONS`. Lens Blur and `generative_edit` remain CPU-routed
-//! (see [`unsupported_gpu_stages`]).
+//! of `MAX_SOURCE_ACTIONS`.
 //!
 //! **GPU-RENDER-PARITY-1 geometry wave.** Geometry (crop → rotation → mirror),
 //! the manual lens correction (distortion + vignette + CA) and perspective are
@@ -76,6 +75,17 @@
 //! so [`GpuContext::render_to_vram`] renders dimension-**preserving** geometry
 //! (lens, identity crop/rotation) into the resident output and refuses a
 //! dimension-changing chain loudly (the caller uses the exact CPU present path).
+//!
+//! **GPU-RENDER-PARITY-1 lens-blur wave.** G-05 Lens Blur runs as the
+//! sub-stage of Crop (after geometry, before masks/output) in the `lens_blur`
+//! pass: the deterministic focus-rect heuristic or, when
+//! `recipe.lens_blur.depth_artifact` is set, a caller-supplied
+//! [`lumina_core::DepthPlane`] bound via [`GpuContext::set_depth_plane`]. Lens
+//! blur preserves the frame dimensions, so [`GpuContext::render_to_vram`]
+//! renders it into the resident output exactly like the CPU present path. A
+//! referenced depth artifact without a matching bound plane is a **loud
+//! error** (the oracle's missing-artifact abort), never a silent heuristic
+//! fallback.
 //!
 //! [`unsupported_gpu_stages_with_context`] extends that verdict with the
 //! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
@@ -115,6 +125,11 @@ pub mod stages;
 // — including the dimension-changing output the oracle produces.
 #[cfg(feature = "gpu")]
 mod geometry;
+// GPU G-05 lens-blur pass (GPU-RENDER-PARITY-1, lens-blur wave): deterministic
+// depth bokeh (focus-rect heuristic or a caller-supplied external depth plane)
+// as the sub-stage of Crop, after geometry and before masks/output.
+#[cfg(feature = "gpu")]
+mod lens_blur;
 #[cfg(feature = "gpu")]
 pub mod tiling;
 
@@ -237,13 +252,14 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// stages": [`validate_gpu_recipe`] rejects them at the GPU entry with the CPU
 /// oracle's own error.
 ///
-/// Rendered by the GPU ([`stages`]/[`geometry`], GPU-RENDER-PARITY-1) and
-/// therefore **not** flagged: Curves, HSL, Point Color, vibrance/saturation,
-/// Color Grading, Presence (Texture / Clarity / Dehaze), Noise Reduction,
-/// Sharpening, Effects (vignette + grain), Red-Eye, the legacy spot-heal
-/// geometry, source-action compositing (batched), and geometry (crop /
-/// rotation / mirror), the manual lens correction (distortion/vignette/CA) and
-/// perspective.
+/// Rendered by the GPU ([`stages`]/[`geometry`], `lens_blur`,
+/// GPU-RENDER-PARITY-1) and therefore **not** flagged: Curves, HSL, Point
+/// Color, vibrance/saturation, Color Grading, Presence (Texture / Clarity /
+/// Dehaze), Noise Reduction, Sharpening, Effects (vignette + grain), Red-Eye,
+/// the legacy spot-heal geometry, source-action compositing (batched), geometry
+/// (crop / rotation / mirror), the manual lens correction
+/// (distortion/vignette/CA), perspective and Lens Blur (heuristic **and**
+/// external depth — the latter requires the caller to bind the depth plane).
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
@@ -251,7 +267,6 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   their neutral default back into the recipe map; at that value the CPU
 ///   stage is pixel-identical to not having the key, so it must not block the
 ///   GPU route; keys outside the schema have no neutral value and always flag);
-/// - Lens Blur;
 /// - non-empty SourceActions **unless** matching GPU source-action artifacts are
 ///   bound (see [`unsupported_gpu_stages_with_context`]);
 /// - `generative_edit` — the CPU reference expands the canvas, but its
@@ -317,31 +332,20 @@ pub fn unsupported_gpu_stages_with_context(
     // Clarity / Dehaze), vibrance/saturation and Color Grading are rendered by
     // the [`stages`] post-tone passes; stage 2 adds Noise Reduction, Sharpening
     // and Effects (vignette + grain) to that set — so none of them route to the
-    // CPU anymore. The stages below remain CPU-routed until their own parity
-    // tests land.
+    // CPU anymore.
     // GPU-RENDER-PARITY-1 geometry wave: geometry (crop/rotation/mirror),
     // manual lens correction (distortion/vignette + CA) and perspective are
-    // rendered by the [`geometry`] passes and no longer route to the CPU. The
-    // remaining stage below stays CPU-routed until its own parity tests land.
-    // A Lensfun context corrector is not expressible in the recipe-only gate
-    // (the caller owns that context, exactly like the As-Shot WB and mask
-    // layers); the CLI/MCP routing mirrors keep gating on it.
-    for (active, name) in [
-        (
-            recipe
-                .lens_blur
-                .as_ref()
-                .is_some_and(|b| b.enabled && b.blur_amount != 0.0),
-            "lens_blur",
-        ),
-        (
-            !recipe.source_actions.is_empty() && !source_actions_bound,
-            "source_actions",
-        ),
-    ] {
-        if active {
-            reasons.push(name.to_string());
-        }
+    // rendered by the [`geometry`] passes and no longer route to the CPU.
+    // GPU-RENDER-PARITY-1 lens-blur wave: heuristic and external-depth lens
+    // blur are rendered by the [`lens_blur`] pass, so the former `lens_blur`
+    // reason is gone. An external `depth_artifact` is render-context state the
+    // recipe-only gate cannot see (like the Lensfun corrector / As-Shot WB):
+    // the caller binds the plane via [`GpuContext::set_depth_plane`], and a
+    // referenced-but-unbound artifact is a loud render error, never a silent
+    // heuristic fallback. `source_actions` without bound artifacts is the only
+    // recipe-expressible stage that still stays CPU-routed.
+    if !recipe.source_actions.is_empty() && !source_actions_bound {
+        reasons.push("source_actions".to_string());
     }
     // GPU-RENDER-PARITY-1 follow-up (gate completeness): the CPU reference
     // applies/validates these recipe stages (`apply_spot_heals_from_recipe` and
@@ -597,6 +601,17 @@ pub struct GpuContext {
     /// render whose recipe activates one of those stages.
     #[cfg(feature = "gpu")]
     geometry_pipeline: std::sync::Mutex<Option<geometry::GeometryPipelineState>>,
+    /// Compiled G-05 lens-blur pipeline (GPU-RENDER-PARITY-1, lens-blur wave).
+    /// Built lazily on the first render whose recipe activates the stage.
+    #[cfg(feature = "gpu")]
+    lens_blur_pipeline: std::sync::Mutex<Option<lens_blur::LensBlurPipelineState>>,
+    /// Caller-supplied external depth plane for `recipe.lens_blur.depth_artifact`
+    /// (G-05), bound via [`GpuContext::set_depth_plane`]. `None` leaves a
+    /// recipe that references a depth artifact unrenderable on the GPU (it
+    /// errors loudly, matching the CPU oracle's missing-artifact abort) and is
+    /// irrelevant for the focus-rect heuristic.
+    #[cfg(feature = "gpu")]
+    depth_plane: Option<DepthPlaneGpu>,
     /// VRAM-resident interactive state pool (GPU-60FPS-1 / GUI-WGPU-PRESENT-1):
     /// output + mask textures and overlay uniforms for a small LRU set of
     /// source dimensions, kept resident across frames so slider drags and brush
@@ -632,6 +647,22 @@ pub struct GpuContext {
     /// path avoids entirely.
     #[cfg(feature = "gpu")]
     rwgpu_cache: std::sync::Mutex<std::collections::HashMap<(u32, u32), RenderWithGpuResources>>,
+}
+
+/// A caller-supplied external depth plane for `recipe.lens_blur.depth_artifact`
+/// (G-05), uploaded once via [`GpuContext::set_depth_plane`].
+///
+/// The owned [`lumina_core::DepthPlane`] is kept so the CPU fallback
+/// (`render_cpu`) can pass it into the oracle's `RenderContext` too — the
+/// external depth is part of the render contract, not just the GPU pass. The
+/// uploaded `R32Float` texture is only present when an adapter is bound; a
+/// no-adapter context still keeps the values for the CPU reference.
+#[cfg(feature = "gpu")]
+struct DepthPlaneGpu {
+    plane: lumina_core::DepthPlane,
+    #[allow(dead_code)]
+    texture: Option<wgpu::Texture>,
+    view: Option<wgpu::TextureView>,
 }
 
 /// VRAM-resident interactive state for GUI-60FPS-1.
@@ -930,6 +961,8 @@ impl GpuContext {
             spot_pipeline: std::sync::Mutex::new(None),
             post_pipeline: std::sync::Mutex::new(None),
             geometry_pipeline: std::sync::Mutex::new(None),
+            lens_blur_pipeline: std::sync::Mutex::new(None),
+            depth_plane: None,
             vram: std::sync::Mutex::new(VramPool::new()),
             source_actions: None,
             #[cfg(feature = "gpu")]
@@ -1065,6 +1098,162 @@ impl GpuContext {
             *guard = Some(geometry::build_geometry_pipelines(&resources.device)?);
         }
         Ok(guard)
+    }
+
+    /// Lazily build the G-05 lens-blur pipeline (GPU-RENDER-PARITY-1, lens-blur
+    /// wave). Only invoked on renders that actually run the active stage.
+    fn ensure_lens_blur_pipeline(&self) -> Result<(), GpuError> {
+        let Some(resources) = self.resources.as_ref() else {
+            return Ok(());
+        };
+        let mut guard = self.lens_blur_pipeline.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(lens_blur::build_pipeline(
+                &resources.device,
+                &resources.queue,
+            )?);
+        }
+        Ok(())
+    }
+
+    /// Encode the G-05 lens-blur pass (lazily building its pipeline) from
+    /// `input_view` into `dst`. `external_view` is the bound depth plane when
+    /// the recipe references one, else `None` (heuristic; the pipeline's 1×1
+    /// dummy depth is bound instead).
+    fn encode_lens_blur_stage(
+        &self,
+        resources: &GpuResources,
+        blur: &lumina_sidecar::LensBlur,
+        external_view: Option<&wgpu::TextureView>,
+        input_view: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), GpuError> {
+        self.ensure_lens_blur_pipeline()?;
+        let guard = self.lens_blur_pipeline.lock().unwrap();
+        let Some(state) = guard.as_ref() else {
+            return Err(GpuError::RenderFailed(
+                "lens-blur pipeline not built".into(),
+            ));
+        };
+        let depth_view = external_view.unwrap_or(&state.dummy_depth_view);
+        encode_lens_blur(resources, state, blur, depth_view, input_view, dst, encoder);
+        Ok(())
+    }
+
+    /// Bind a caller-supplied external depth plane for
+    /// `recipe.lens_blur.depth_artifact` (G-05), or clear it with `None`.
+    ///
+    /// Validation mirrors `lumina_core::lens_blur::apply_lens_blur`: every value
+    /// must be finite and in `0..=1`, otherwise the bind is rejected with the
+    /// oracle's `InvalidAdjustment` and **no** state changes (no silent
+    /// clamping). The plane must match the **post-geometry** frame dimensions,
+    /// which are only known at render time, so a dimension mismatch is reported
+    /// loudly by the render entry points.
+    ///
+    /// A recipe that references a depth artifact without a matching bound plane
+    /// stays unrenderable on the GPU: the render entry point returns the CPU
+    /// oracle's missing-artifact error instead of silently falling back to the
+    /// focus-rect heuristic. Call [`Self::set_depth_plane`] with `None` to
+    /// release the texture.
+    pub fn set_depth_plane(
+        &mut self,
+        plane: Option<&lumina_core::DepthPlane>,
+    ) -> Result<(), GpuError> {
+        let Some(plane) = plane else {
+            self.depth_plane = None;
+            return Ok(());
+        };
+        for value in &plane.values {
+            if !value.is_finite() || !(0.0..=1.0).contains(value) {
+                return Err(GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
+                    name: "lens_blur.depth_plane.value".into(),
+                    value: f64::from(*value),
+                    minimum: 0.0,
+                    maximum: 1.0,
+                }));
+            }
+        }
+        let (texture, view) = match self.resources.as_ref() {
+            Some(resources) => {
+                let texture = lens_blur::create_depth_texture(
+                    &resources.device,
+                    plane.width,
+                    plane.height,
+                    "lumina-gpu-depth-plane",
+                );
+                resources.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&plane.values),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(plane.width * 4),
+                        rows_per_image: Some(plane.height),
+                    },
+                    wgpu::Extent3d {
+                        width: plane.width,
+                        height: plane.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                (Some(texture), Some(view))
+            }
+            // No adapter: keep the values for the CPU fallback, no texture.
+            None => (None, None),
+        };
+        self.depth_plane = Some(DepthPlaneGpu {
+            plane: plane.clone(),
+            texture,
+            view,
+        });
+        Ok(())
+    }
+
+    /// The post-geometry output dimensions the active render would produce for
+    /// `recipe` (the size the lens-blur pass runs at). Used to validate a bound
+    /// external depth plane against the frame the oracle would blur.
+    fn external_depth_view_for(
+        &self,
+        recipe: &EditRecipe,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<&wgpu::TextureView>, GpuError> {
+        let Some(blur) = recipe
+            .lens_blur
+            .as_ref()
+            .filter(|b| lens_blur::stage_active(b))
+        else {
+            return Ok(None);
+        };
+        if blur.depth_artifact.is_none() {
+            return Ok(None);
+        }
+        let (out_w, out_h) = match geometry::GeometryPlan::from_recipe(recipe, width, height)? {
+            Some(plan) => (plan.output_width, plan.output_height),
+            None => (width, height),
+        };
+        let Some(depth) = self.depth_plane.as_ref() else {
+            return Err(GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
+                name: "lens_blur.depth_artifact".into(),
+                value: -1.0,
+                minimum: 0.0,
+                maximum: 0.0,
+            }));
+        };
+        if depth.plane.width != out_w || depth.plane.height != out_h {
+            return Err(GpuError::Core(lumina_core::CoreError::InvalidMaskPlane {
+                width: depth.plane.width,
+                height: depth.plane.height,
+                length: depth.plane.values.len(),
+            }));
+        }
+        Ok(depth.view.as_ref())
     }
 
     /// Encode the post-tone adjustment chain (GPU-RENDER-PARITY-1) so `output`
@@ -1887,6 +2076,19 @@ impl GpuContext {
                  reference (render_frame) instead"
             )));
         }
+        // GPU-RENDER-PARITY-1 lens-blur wave: G-05 preserves the frame
+        // dimensions, so the resident output can hold it. The external-plane
+        // requirement is resolved *before* any bytes are written (a referenced
+        // but unbound/mismatched depth plane is a loud error — no silent
+        // heuristic). Identity configurations skip the pass entirely.
+        let lens_blur_recipe = recipe
+            .lens_blur
+            .as_ref()
+            .filter(|blur| lens_blur::stage_active(blur));
+        let lens_external_view = self.external_depth_view_for(recipe, frame.width, frame.height)?;
+        let needs_lens_blur = lens_blur_recipe.is_some_and(|blur| {
+            lens_blur::radius_for(blur.blur_amount) > 0 && !lens_blur::has_no_effect(blur)
+        });
         let Some(resources) = self.resources.as_ref() else {
             return Err(GpuError::AdapterUnavailable(
                 "no adapter for vram path".into(),
@@ -2030,7 +2232,10 @@ impl GpuContext {
         // final pixels into the resident VRAM output (which the overlay/present
         // path samples); without post stages the tone pass writes it directly.
         let needs_post = post_stages_needed(recipe);
-        let tone_texture: Option<wgpu::Texture> = if needs_post || vram_geometry {
+        // The lens-blur pass always writes the resident output, so any earlier
+        // stage (tone and/or post) must land in a transient when it is active.
+        let tone_texture: Option<wgpu::Texture> = if needs_post || vram_geometry || needs_lens_blur
+        {
             Some(shaders::create_output_texture(
                 &resources.device,
                 frame.width,
@@ -2045,10 +2250,11 @@ impl GpuContext {
             .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
         let tone_target_view: &wgpu::TextureView =
             tone_view_owned.as_ref().unwrap_or(&v.output_view);
-        // When geometry is active the post chain must not write the resident
-        // output (geometry writes it as its final pass), so it lands in a
+        // When geometry or the lens blur writes the resident output as its
+        // final pass, the post chain must not write it too, so it lands in a
         // transient instead.
-        let post_target: Option<wgpu::Texture> = if vram_geometry && needs_post {
+        let post_target: Option<wgpu::Texture> = if (vram_geometry || needs_lens_blur) && needs_post
+        {
             Some(shaders::create_output_texture(
                 &resources.device,
                 frame.width,
@@ -2099,9 +2305,15 @@ impl GpuContext {
                 post_dst,
             )?;
         }
+        // Kept alive until after the lens-blur pass reads them: when the blur
+        // follows geometry, the geometry chain writes this transient instead of
+        // the resident output.
+        let mut geometry_lens_intermediate: Option<wgpu::Texture> = None;
+        let mut geometry_lens_intermediate_view: Option<wgpu::TextureView> = None;
+        let mut lens_input_view: Option<&wgpu::TextureView> = None;
         if let Some(plan) = geometry_plan.as_ref() {
             // `vram_geometry` holds here (dimension-changing geometry was
-            // refused above), so the final pass can write the resident output.
+            // refused above).
             let geo_input: &wgpu::TextureView = if needs_post {
                 post_target_view
                     .as_ref()
@@ -2109,6 +2321,20 @@ impl GpuContext {
             } else {
                 tone_target_view
             };
+            if needs_lens_blur {
+                let texture = shaders::create_output_texture(
+                    &resources.device,
+                    frame.width,
+                    frame.height,
+                    "lumina-gpu-vram-geometry-intermediate",
+                );
+                geometry_lens_intermediate_view =
+                    Some(texture.create_view(&wgpu::TextureViewDescriptor::default()));
+                geometry_lens_intermediate = Some(texture);
+            }
+            let geo_target: &wgpu::TextureView = geometry_lens_intermediate_view
+                .as_ref()
+                .unwrap_or(&v.output_view);
             let mut geo_enc =
                 resources
                     .device
@@ -2125,11 +2351,43 @@ impl GpuContext {
                     geo,
                     plan,
                     geo_input,
-                    &v.output_view,
+                    geo_target,
                     &mut geo_enc,
                 )?;
             }
             resources.queue.submit(Some(geo_enc.finish()));
+            if needs_lens_blur {
+                lens_input_view = geometry_lens_intermediate_view.as_ref();
+            }
+        } else if needs_lens_blur {
+            lens_input_view = Some(if needs_post {
+                post_target_view
+                    .as_ref()
+                    .expect("post target exists when lens blur and post stages are active")
+            } else {
+                tone_target_view
+            });
+        }
+        if needs_lens_blur {
+            let blur = lens_blur_recipe.expect("pass implies an active recipe");
+            let input = lens_input_view.expect("lens blur input view selected above");
+            let mut blur_enc =
+                resources
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("lumina-gpu-vram-lens-blur"),
+                    });
+            self.encode_lens_blur_stage(
+                resources,
+                blur,
+                lens_external_view,
+                input,
+                &v.output_view,
+                &mut blur_enc,
+            )?;
+            resources.queue.submit(Some(blur_enc.finish()));
+            // The geometry intermediate was only kept alive for the blur pass.
+            drop(geometry_lens_intermediate.take());
         }
         if let Some(t0) = start {
             log::info!(
@@ -2506,11 +2764,12 @@ impl GpuContext {
     /// and legacy spot-heal stages run before the tone pass. A schema-invalid
     /// recipe is rejected up front by [`validate_gpu_recipe`] with the CPU
     /// oracle's own error. When [`unsupported_gpu_stages`] reports any remaining
-    /// unsupported stage (Lens Blur, unbound SourceActions, generative edit, …),
-    /// the render is **explicitly
-    /// routed to the `render_cpu`
-    /// fallback** rather than silently GPU-rendering with the stage dropped. The
-    /// routing decision is logged once per unique reason set.
+    /// unsupported stage (unbound SourceActions, generative edit, …), the render
+    /// is **explicitly routed to the `render_cpu` fallback** rather than
+    /// silently GPU-rendering with the stage dropped. The routing decision is
+    /// logged once per unique reason set. Lens blur is GPU-rendered; a
+    /// referenced external depth artifact without a bound plane is a loud error,
+    /// not a fallback.
     ///
     /// **Complete CPU reference on fallback.** `render_cpu` (this method's
     /// fallback) runs the full `lumina_core::render_frame` chain — spot
@@ -2542,7 +2801,11 @@ impl GpuContext {
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
         let Some(resources) = self.resources.as_ref() else {
-            return render_cpu(frame, recipe);
+            return render_cpu(
+                frame,
+                recipe,
+                self.depth_plane.as_ref().map(|plane| &plane.plane),
+            );
         };
         // R2-GPU-06: a lost device must not panic — degrade to the CPU oracle.
         if resources
@@ -2550,7 +2813,11 @@ impl GpuContext {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             log::warn!("GPU device lost; routing render_with_gpu to CPU");
-            return render_cpu(frame, recipe);
+            return render_cpu(
+                frame,
+                recipe,
+                self.depth_plane.as_ref().map(|plane| &plane.plane),
+            );
         }
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: never let the GPU path drop
         // recipe stages. Route to the CPU oracle loudly instead of rendering
@@ -2564,12 +2831,20 @@ impl GpuContext {
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
             log_cpu_routing_once(&unsupported, "render_with_gpu");
-            return render_cpu(frame, recipe);
+            return render_cpu(
+                frame,
+                recipe,
+                self.depth_plane.as_ref().map(|plane| &plane.plane),
+            );
         }
         self.ensure_pipeline()?;
         let guard = self.pipeline.lock().unwrap();
         let Some(pipeline) = guard.as_ref() else {
-            return render_cpu(frame, recipe);
+            return render_cpu(
+                frame,
+                recipe,
+                self.depth_plane.as_ref().map(|plane| &plane.plane),
+            );
         };
 
         let width = frame.width;
@@ -2649,6 +2924,21 @@ impl GpuContext {
         // rotation/mirror chain (including its dimension math) before encoding.
         // A plan error mirrors the CPU oracle's own rejection.
         let geometry_plan = geometry::GeometryPlan::from_recipe(recipe, width, height)?;
+
+        // GPU-RENDER-PARITY-1 lens-blur wave: the pass runs after geometry at
+        // the oracle's post-crop dimensions. `external_depth_view_for` mirrors
+        // `apply_lens_blur`'s ordering — a referenced depth artifact without a
+        // matching bound plane is a hard error even when the blur would round
+        // to radius 0. The pass itself is skipped for identity configurations
+        // (`radius <= 0` or an empty weight band).
+        let lens_blur_recipe = recipe
+            .lens_blur
+            .as_ref()
+            .filter(|blur| lens_blur::stage_active(blur));
+        let lens_external_view = self.external_depth_view_for(recipe, width, height)?;
+        let lens_blur_pass = lens_blur_recipe.is_some_and(|blur| {
+            lens_blur::radius_for(blur.blur_amount) > 0 && !lens_blur::has_no_effect(blur)
+        });
 
         // GPU-RENDER-PARITY-1: recipes that use post-tone stages (Presence,
         // curves/HSL/Point Color/vibrance/saturation/Color Grading) render the
@@ -2826,6 +3116,42 @@ impl GpuContext {
                 )?;
             }
             resources.queue.submit(Some(encoder.finish()));
+            // G-05 lens blur: a sub-stage of Crop, i.e. after the geometry
+            // chain and before output. It preserves the geometry output's
+            // dimensions, so it runs as one more fullscreen pass and is read
+            // back directly at those dimensions.
+            if lens_blur_pass {
+                let blur = lens_blur_recipe.expect("pass implies an active recipe");
+                let blur_texture = shaders::create_output_texture(
+                    &resources.device,
+                    plan.output_width,
+                    plan.output_height,
+                    "lumina-gpu-lens-blur-out",
+                );
+                let blur_view = blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let mut blur_encoder =
+                    resources
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("lumina-gpu-lens-blur"),
+                        });
+                self.encode_lens_blur_stage(
+                    resources,
+                    blur,
+                    lens_external_view,
+                    &final_view,
+                    &blur_view,
+                    &mut blur_encoder,
+                )?;
+                resources.queue.submit(Some(blur_encoder.finish()));
+                drop(cache_guard);
+                return readback_texture(
+                    resources,
+                    &blur_texture,
+                    plan.output_width,
+                    plan.output_height,
+                );
+            }
             drop(cache_guard);
             return readback_texture(
                 resources,
@@ -2834,9 +3160,32 @@ impl GpuContext {
                 plan.output_height,
             );
         }
+        // No geometry: the tone/post result lives in `output_view`. Run the
+        // lens blur into a fresh texture (its input is `output_view`, so it
+        // cannot write the same texture) and read that back instead.
+        let mut blur_texture: Option<wgpu::Texture> = None;
+        if lens_blur_pass {
+            let blur = lens_blur_recipe.expect("pass implies an active recipe");
+            let texture = shaders::create_output_texture(
+                &resources.device,
+                width,
+                height,
+                "lumina-gpu-lens-blur-out",
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.encode_lens_blur_stage(
+                resources,
+                blur,
+                lens_external_view,
+                output_view,
+                &view,
+                &mut encoder,
+            )?;
+            blur_texture = Some(texture);
+        }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: output_texture,
+                texture: blur_texture.as_ref().unwrap_or(output_texture),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -2946,7 +3295,11 @@ impl GpuContext {
     /// chain (the free `render_cpu`), not just `apply_recipe`.
     fn render_draft_cpu(&self, frame: &ImageFrame) -> Result<Frame, GpuError> {
         match self.recipe.as_ref() {
-            Some(recipe) => render_cpu(frame, recipe),
+            Some(recipe) => render_cpu(
+                frame,
+                recipe,
+                self.depth_plane.as_ref().map(|plane| &plane.plane),
+            ),
             None => Ok(Frame::from_image_frame(frame.clone())),
         }
     }
@@ -2977,7 +3330,7 @@ impl GpuContext {
         frame: &ImageFrame,
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
-        render_cpu(frame, recipe)
+        render_cpu(frame, recipe, None)
     }
 
     pub fn perf_log_enabled() -> bool {
@@ -3015,10 +3368,17 @@ impl GpuContext {
 /// (Agents.md: CPU bleibt vollständige Referenz; kein stiller Fallback).
 ///
 /// Render-context inputs the recipe-only GPU API does not carry (decoder
-/// As-Shot white balance, mask layers, Lensfun correctors, depth planes) are
-/// `None`/empty here; a caller that owns them must re-gate on
+/// As-Shot white balance, mask layers, Lensfun correctors) are `None`/empty
+/// here; a caller that owns them must re-gate on
 /// [`unsupported_gpu_stages_with_context`] and run its own full-chain render.
-fn render_cpu(frame: &ImageFrame, recipe: &EditRecipe) -> Result<Frame, GpuError> {
+/// The G-05 external depth plane *is* carried through when bound via
+/// [`GpuContext::set_depth_plane`], so the CPU fallback renders a referenced
+/// depth artifact identically instead of erroring on a dropped plane.
+fn render_cpu(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    depth: Option<&lumina_core::DepthPlane>,
+) -> Result<Frame, GpuError> {
     let output = lumina_core::render_frame(
         frame,
         &lumina_core::RenderContext {
@@ -3027,7 +3387,7 @@ fn render_cpu(frame: &ImageFrame, recipe: &EditRecipe) -> Result<Frame, GpuError
             source_actions: &[],
             masks: None,
             lensfun: None,
-            depth: None,
+            depth,
         },
     )?;
     Ok(Frame::from_image_frame(output.frame))
@@ -3512,6 +3872,47 @@ fn encode_spot_heal(
         input_view,
     );
     encode_fullscreen_pass(encoder, &spot.pipeline, &bind, dst);
+}
+
+/// Encode the G-05 lens-blur pass (GPU-RENDER-PARITY-1, lens-blur wave) into
+/// `encoder`, sampling `input_view` and writing `dst`.
+///
+/// The caller only invokes this for an active, non-identity stage
+/// (`radius > 0`, at least one non-zero weight) at the **post-geometry** frame
+/// dimensions. `depth_view` is the caller-bound external depth plane when the
+/// recipe references one; the pipeline's 1×1 dummy is passed otherwise (the
+/// shader's `use_external == 0` branch never samples it).
+#[cfg(feature = "gpu")]
+#[allow(clippy::too_many_arguments)]
+fn encode_lens_blur(
+    resources: &GpuResources,
+    state: &lens_blur::LensBlurPipelineState,
+    blur: &lumina_sidecar::LensBlur,
+    depth_view: &wgpu::TextureView,
+    input_view: &wgpu::TextureView,
+    dst: &wgpu::TextureView,
+    encoder: &mut wgpu::CommandEncoder,
+) {
+    let radius = lens_blur::radius_for(blur.blur_amount);
+    let taps = lens_blur::bokeh_kernel(blur.bokeh, radius);
+    let params = lens_blur::LensBlurParams::from_blur(blur, blur.depth_artifact.is_some());
+    let params_buffer = lens_blur::create_params_buffer(&resources.device);
+    resources
+        .queue
+        .write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
+    let taps_buffer = lens_blur::create_taps_buffer(&resources.device, taps.len());
+    resources
+        .queue
+        .write_buffer(&taps_buffer, 0, &lens_blur::taps_bytes(&taps));
+    let bind = lens_blur::create_bind_group(
+        &resources.device,
+        &state.layout,
+        &params_buffer,
+        input_view,
+        depth_view,
+        &taps_buffer,
+    );
+    encode_fullscreen_pass(encoder, &state.pipeline, &bind, dst);
 }
 
 /// Pooled resources for a single [`GpuContext::render_with_gpu`] size bucket
@@ -4183,9 +4584,10 @@ mod routing_gate_tests {
 
     /// Invariant: the value-neutrality change (R2-GPU-05) must not weaken any
     /// other stage check — nested objects and flat stage markers still route.
-    /// GPU-RENDER-PARITY-1 geometry wave moved geometry/perspective/manual lens
-    /// correction into the GPU pipeline, so the still-unsupported nested stage
-    /// (`lens_blur`) carries this assertion, and geometry is asserted unflagged.
+    /// GPU-RENDER-PARITY-1 geometry and lens-blur waves moved geometry/
+    /// perspective/manual lens correction and G-05 lens blur into the GPU
+    /// pipeline, so those are asserted unflagged; the still-unsupported nested
+    /// stages are covered by `tests/parity.rs`'s routing inventory.
     #[test]
     fn non_adjustment_stage_checks_unchanged() {
         let lens_blur = EditRecipe {
@@ -4206,8 +4608,10 @@ mod routing_gate_tests {
             }),
             ..Default::default()
         };
-        let reasons = unsupported_gpu_stages(&lens_blur);
-        assert!(reasons.contains(&"lens_blur".to_string()), "{reasons:?}");
+        assert!(
+            unsupported_gpu_stages(&lens_blur).is_empty(),
+            "G-05 lens blur is GPU-rendered since the lens-blur wave"
+        );
 
         // Geometry/perspective are GPU-rendered now (the geometry wave).
         let geometry = EditRecipe {

@@ -525,8 +525,8 @@ fn unsupported_recipes_route_to_cpu_byte_identically() {
 ///
 /// GPU-RENDER-PARITY-1 moved curves, HSL, Point Color, Presence and
 /// vibrance/saturation into the GPU pipeline, so they are no longer flagged —
-/// including at non-neutral values. Effects, unbound source actions, geometry/
-/// lens/perspective and the remaining neighborhood stages stay CPU-routed.
+/// including at non-neutral values. Effects, unbound source actions and the
+/// remaining neighborhood stages stay CPU-routed.
 #[test]
 fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
     // Supported: tone/WB sliders plus the GPU-RENDER-PARITY-1 color/presence
@@ -599,45 +599,44 @@ fn gpu_support_validator_flags_exactly_the_unsupported_stages() {
     })
     .is_empty());
 
+    // GPU-RENDER-PARITY-1 lens-blur wave: G-05 lens blur is GPU-rendered
+    // (heuristic and external depth), so an active recipe must not be flagged.
+    assert!(unsupported_gpu_stages(&EditRecipe {
+        lens_blur: Some(lumina_sidecar::LensBlur {
+            version: 1,
+            enabled: true,
+            focus_rect: lumina_sidecar::FocusRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            focal_near: 0.0,
+            focal_far: 0.05,
+            blur_amount: 0.5,
+            bokeh: lumina_sidecar::BokehShape::Round,
+            depth_artifact: None,
+        }),
+        ..Default::default()
+    })
+    .is_empty());
+
     // Each still-unsupported stage is flagged with a recognisable reason.
-    let cases: Vec<(&str, EditRecipe)> = vec![
-        (
-            "lens_blur",
-            EditRecipe {
-                lens_blur: Some(lumina_sidecar::LensBlur {
-                    version: 1,
-                    enabled: true,
-                    focus_rect: lumina_sidecar::FocusRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 1.0,
-                        height: 1.0,
-                    },
-                    focal_near: 0.0,
-                    focal_far: 1.0,
-                    blur_amount: 0.5,
-                    bokeh: lumina_sidecar::BokehShape::Round,
-                    depth_artifact: None,
-                }),
-                ..Default::default()
-            },
-        ),
-        (
-            "source_actions",
-            EditRecipe {
-                source_actions: vec![SourceActionSpec {
-                    version: SOURCE_ACTION_VERSION,
-                    kind: SourceActionKind::DustRemoval,
-                    artifact: SourceActionArtifactRef {
-                        id: "r".into(),
-                        relative_path: "b.lumina.zdata".into(),
-                        checksum: "c".into(),
-                    },
-                }],
-                ..Default::default()
-            },
-        ),
-    ];
+    let cases: Vec<(&str, EditRecipe)> = vec![(
+        "source_actions",
+        EditRecipe {
+            source_actions: vec![SourceActionSpec {
+                version: SOURCE_ACTION_VERSION,
+                kind: SourceActionKind::DustRemoval,
+                artifact: SourceActionArtifactRef {
+                    id: "r".into(),
+                    relative_path: "b.lumina.zdata".into(),
+                    checksum: "c".into(),
+                },
+            }],
+            ..Default::default()
+        },
+    )];
     for (expected_reason, recipe) in cases {
         let reasons = unsupported_gpu_stages(&recipe);
         assert!(

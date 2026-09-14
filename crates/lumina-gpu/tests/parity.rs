@@ -23,18 +23,20 @@
 //! failed (matching `golden.rs`); the validator assertions still run.
 #![cfg(feature = "gpu")]
 
-use lumina_core::{render_frame, ImageFrame, MaskPlane, RenderContext, SourceActionArtifact};
+use lumina_core::{
+    render_frame, DepthPlane, ImageFrame, MaskPlane, RenderContext, SourceActionArtifact,
+};
 use lumina_gpu::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
     GpuContext, MAX_SOURCE_ACTIONS,
 };
 use lumina_sidecar::{
     AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop, CurveChannels, CurvePoint,
-    Curves, EditRecipe, Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, Grain,
-    HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor,
-    PointColorEntry, Presence, RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef,
-    SourceActionKind, SourceActionSpec, SpotRemoval, SpotRemovalMode, Vignette,
-    SOURCE_ACTION_VERSION,
+    Curves, DepthArtifactRef, EditRecipe, Effects, FocusRect, GenerativeCanvas, GenerativeEdit,
+    Geometry, Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction,
+    Perspective, PointColor, PointColorEntry, Presence, RedEyeCorrection, RedEyeRegion, Sharpening,
+    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SpotRemoval, SpotRemovalMode,
+    Vignette, SOURCE_ACTION_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -161,6 +163,58 @@ fn range(hue: f32, saturation: f32, luminance: f32) -> ColorGradingRange {
         hue_degrees: hue,
         saturation,
         luminance,
+    }
+}
+
+/// A G-05 lens-blur stage spec (enabled), heuristic unless `depth_artifact` is
+/// set.
+fn lens_blur_spec(
+    amount: f32,
+    near: f32,
+    far: f32,
+    bokeh: BokehShape,
+    depth_artifact: Option<DepthArtifactRef>,
+) -> LensBlur {
+    LensBlur {
+        version: 1,
+        enabled: true,
+        focus_rect: FocusRect {
+            x: 0.2,
+            y: 0.25,
+            width: 0.5,
+            height: 0.4,
+        },
+        focal_near: near,
+        focal_far: far,
+        blur_amount: amount,
+        bokeh,
+        depth_artifact,
+    }
+}
+
+/// A G-05 lens-blur recipe on the focus-rect heuristic (no external depth
+/// artifact).
+fn lens_blur_recipe(amount: f32, near: f32, far: f32, bokeh: BokehShape) -> EditRecipe {
+    EditRecipe {
+        lens_blur: Some(lens_blur_spec(amount, near, far, bokeh, None)),
+        ..Default::default()
+    }
+}
+
+/// A G-05 lens-blur recipe referencing an external depth artifact.
+fn external_depth_lens_blur_recipe() -> EditRecipe {
+    EditRecipe {
+        lens_blur: Some(lens_blur_spec(
+            0.5,
+            0.2,
+            0.7,
+            BokehShape::Round,
+            Some(DepthArtifactRef {
+                relative_path: "depth/map.bin".into(),
+                sha256: "unused".into(),
+            }),
+        )),
+        ..Default::default()
     }
 }
 
@@ -805,6 +859,75 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
+        // --- GPU-RENDER-PARITY-1 lens-blur wave: G-05 depth bokeh ---
+        (
+            "lens_blur_round",
+            lens_blur_recipe(0.5, 0.0, 0.05, BokehShape::Round),
+        ),
+        (
+            "lens_blur_elliptical",
+            lens_blur_recipe(0.6, 0.0, 0.05, BokehShape::Elliptical),
+        ),
+        (
+            "lens_blur_hexagonal",
+            lens_blur_recipe(0.6, 0.0, 0.05, BokehShape::Hexagonal),
+        ),
+        (
+            // A far focus band: the near/far ramps exercise both sides of
+            // `focal_weight` (depth 0 and depth 1 both blur).
+            "lens_blur_focus_far",
+            lens_blur_recipe(0.5, 0.3, 0.6, BokehShape::Round),
+        ),
+        (
+            // Schema-maximum radius (16): the widest tap set the oracle runs.
+            "lens_blur_max_radius",
+            lens_blur_recipe(1.0, 0.0, 0.05, BokehShape::Round),
+        ),
+        (
+            // Identity short circuit (disabled): the gate must stay empty and
+            // the pixels must be byte-identical to the source.
+            "lens_blur_disabled",
+            EditRecipe {
+                lens_blur: Some(LensBlur {
+                    enabled: false,
+                    ..lens_blur_spec(0.5, 0.0, 0.05, BokehShape::Round, None)
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            // Lens blur runs *after* the post-tone color chain (oracle order).
+            "lens_blur_after_post",
+            EditRecipe {
+                curves: Some(Curves {
+                    version: 1,
+                    master: curve(&[(0.0, 0.0), (0.5, 0.4), (1.0, 1.0)]),
+                    channels: CurveChannels::default(),
+                }),
+                ..lens_blur_recipe(0.5, 0.0, 0.05, BokehShape::Round)
+            },
+        ),
+        (
+            // Lens blur is a sub-stage of Crop: it runs after the geometry
+            // chain, so the output dimensions are the cropped ones and the
+            // blur's focus rect is normalized to that canvas.
+            "lens_blur_after_geometry",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Free {
+                        x: 0.1,
+                        y: 0.1,
+                        width: 0.7,
+                        height: 0.7,
+                    }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                ..lens_blur_recipe(0.5, 0.0, 0.05, BokehShape::Round)
+            },
+        ),
     ]
 }
 
@@ -1011,6 +1134,21 @@ fn equivalence_for(name: &str) -> Equivalence {
         | "perspective_full" => Equivalence::Bounded(1),
         "geometry_full_stack" => Equivalence::Bounded(1),
         "geometry_after_post_stages" => Equivalence::Bounded(1),
+        // --- GPU-RENDER-PARITY-1 lens-blur wave ---
+        // The convolution itself is exact integer accumulation; only the final
+        // `f32` lerp differs from the oracle's `f64` (the heuristic weight math
+        // matches operation-for-operation in `f32`), so each recipe carries at
+        // most one rounding-tie code. `geometry` before it is an exact integer
+        // sub-rect copy.
+        "lens_blur_round"
+        | "lens_blur_elliptical"
+        | "lens_blur_hexagonal"
+        | "lens_blur_focus_far"
+        | "lens_blur_max_radius"
+        | "lens_blur_after_post"
+        | "lens_blur_after_geometry" => Equivalence::Bounded(1),
+        // Disabled blur leaves the source bytes untouched.
+        "lens_blur_disabled" => Equivalence::ByteIdentical,
         other => panic!("no measured equivalence bound declared for recipe `{other}`"),
     }
 }
@@ -1607,7 +1745,9 @@ fn vram_path_applies_red_eye() {
 }
 
 /// A recipe that still uses an unimplemented stage stays CPU-routed and yields
-/// CPU-identical pixels; this guards the "no third state" rule.
+/// CPU-identical pixels; this guards the "no third state" rule. `generative_edit`
+/// is the remaining recipe-expressible class (its sequential transparent-fill
+/// BFS is not ported).
 #[test]
 fn unimplemented_stages_still_route_to_cpu() {
     let ctx = match GpuContext::new() {
@@ -1618,27 +1758,10 @@ fn unimplemented_stages_still_route_to_cpu() {
         }
     };
     let frame = gradient_frame(48, 48);
-    let recipe = EditRecipe {
-        lens_blur: Some(LensBlur {
-            version: 1,
-            enabled: true,
-            focus_rect: FocusRect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            focal_near: 0.0,
-            focal_far: 1.0,
-            blur_amount: 0.5,
-            bokeh: BokehShape::Round,
-            depth_artifact: None,
-        }),
-        ..Default::default()
-    };
+    let recipe = generative_expand_recipe();
     let reasons = unsupported_gpu_stages(&recipe);
     assert!(
-        reasons.iter().any(|r| r.contains("lens_blur")),
+        reasons.iter().any(|r| r.contains("generative_edit")),
         "{reasons:?}"
     );
     if !ctx.is_available() {
@@ -2005,29 +2128,12 @@ fn vram_path_refuses_unsupported_recipes() {
     }
     let frame = gradient_frame(16, 16);
     ctx.ensure_vram(16, 16).expect("vram state");
-    let recipe = EditRecipe {
-        lens_blur: Some(LensBlur {
-            version: 1,
-            enabled: true,
-            focus_rect: FocusRect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            focal_near: 0.0,
-            focal_far: 1.0,
-            blur_amount: 0.5,
-            bokeh: BokehShape::Round,
-            depth_artifact: None,
-        }),
-        ..Default::default()
-    };
+    let recipe = generative_expand_recipe();
     assert!(
         unsupported_gpu_stages(&recipe)
             .iter()
-            .any(|r| r.contains("lens_blur")),
-        "lens_blur must be reported"
+            .any(|r| r.contains("generative_edit")),
+        "generative_edit must be reported"
     );
     assert!(
         ctx.render_to_vram(&frame, &recipe).is_err(),
@@ -2168,6 +2274,251 @@ fn empty_legacy_spot_removals_do_not_flag() {
 }
 
 // ---------------------------------------------------------------------------
+// GPU-RENDER-PARITY-1 lens-blur wave: G-05 external depth + VRAM parity
+// ---------------------------------------------------------------------------
+
+/// A deterministic per-pixel depth plane (`0` top-left → `1` bottom-right,
+/// mixed axes) so both ramps of `focal_weight` are exercised.
+fn depth_plane(width: u32, height: u32) -> DepthPlane {
+    let mut values = Vec::with_capacity((width * height) as usize);
+    let dx = (width.max(2) - 1) as f32;
+    let dy = (height.max(2) - 1) as f32;
+    for y in 0..height {
+        for x in 0..width {
+            values.push((x as f32 / dx * 0.7 + y as f32 / dy * 0.3).clamp(0.0, 1.0));
+        }
+    }
+    DepthPlane::new(width, height, values).expect("depth plane")
+}
+
+/// G-05 with a caller-supplied external depth plane: the GPU pass must match
+/// the CPU oracle, and every missing/mismatched plane must fail loudly on both
+/// backends (never a silent heuristic fallback).
+#[test]
+fn lens_blur_external_depth_matches_cpu_oracle() {
+    let mut ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped lens-blur depth check");
+            return;
+        }
+    };
+    let frame = gradient_frame(48, 48);
+    let plane = depth_plane(48, 48);
+    let recipe = external_depth_lens_blur_recipe();
+    assert!(
+        unsupported_gpu_stages(&recipe).is_empty(),
+        "external-depth lens blur is GPU-eligible"
+    );
+
+    // Missing plane: the CPU oracle aborts loudly, and so must the GPU entry
+    // (a silent heuristic render would diverge from the source-of-truth).
+    assert!(
+        render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .is_err(),
+        "the CPU oracle must abort a missing depth artifact"
+    );
+    let gpu_err = ctx
+        .render_with_gpu(&frame, &recipe)
+        .expect_err("GPU must reject a missing depth artifact");
+    assert!(
+        format!("{gpu_err}").contains("lens_blur.depth_artifact"),
+        "unexpected error: {gpu_err}"
+    );
+
+    ctx.set_depth_plane(Some(&plane)).expect("bind depth plane");
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: Some(&plane),
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+
+    if !ctx.is_available() {
+        // CPU-only context: the bound plane flows into the full reference, so
+        // the fallback is still the exact CPU pixels.
+        eprintln!("{SKIP_MESSAGE} - CPU fallback depth assertion only");
+        let gpu = ctx
+            .render_with_gpu(&frame, &recipe)
+            .expect("CPU fallback renders the bound depth plane");
+        assert_eq!(max_abs_diff(&cpu.pixels, &gpu.pixels), 0);
+        return;
+    }
+
+    let gpu = ctx
+        .render_with_gpu(&frame, &recipe)
+        .expect("GPU render with external depth");
+    assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+    let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+    eprintln!("lens_blur_external_depth: maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}");
+    assert!(
+        diff <= 1 && psnr >= MIN_PSNR_DB && bias.abs() <= MAX_ABS_MEAN_SIGNED_ERROR,
+        "external-depth lens blur exceeded the declared bound maxAbsDiff <= 1 / \
+         PSNR >= {MIN_PSNR_DB} dB / |meanSignedErr| <= {MAX_ABS_MEAN_SIGNED_ERROR}: \
+         maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}"
+    );
+
+    // A dimension-mismatched plane is rejected loudly, not resampled.
+    let bad = depth_plane(8, 8);
+    ctx.set_depth_plane(Some(&bad))
+        .expect("bind mismatched plane");
+    assert!(
+        ctx.render_with_gpu(&frame, &recipe).is_err(),
+        "a mismatched depth plane must be rejected loudly"
+    );
+
+    // Out-of-range / non-finite values are rejected at bind time (no partial
+    // state, no silent clamp).
+    let mut invalid = depth_plane(8, 8);
+    invalid.values[0] = 1.5;
+    assert!(
+        ctx.set_depth_plane(Some(&invalid)).is_err(),
+        "an out-of-range depth value must be rejected"
+    );
+    invalid.values[0] = f32::NAN;
+    assert!(
+        ctx.set_depth_plane(Some(&invalid)).is_err(),
+        "a NaN depth value must be rejected"
+    );
+    ctx.set_depth_plane(None).expect("clear depth plane");
+}
+
+/// The readback-free VRAM path renders G-05 lens blur into the resident output
+/// (dimension-preserving, source-sized) and matches the CPU oracle — including
+/// after a dimension-preserving geometry chain and with a bound external depth
+/// plane.
+#[test]
+fn vram_path_applies_lens_blur() {
+    let mut ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped VRAM lens-blur check");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    const W: u32 = 32;
+    const H: u32 = 32;
+    let frame = gradient_frame(W, H);
+    ctx.ensure_vram(W, H).expect("vram state");
+
+    // `after_lens_geometry` exercises the geometry→lens-blur ping-pong: the
+    // dimension-preserving lens pass must write a transient, not the resident
+    // output the blur then overwrites.
+    let mut after_lens_geometry = lens_blur_recipe(0.5, 0.0, 0.05, BokehShape::Round);
+    after_lens_geometry.lens_correction = manual_lens_recipe().lens_correction;
+
+    let recipes: [(&str, EditRecipe, Equivalence); 3] = [
+        (
+            "round",
+            lens_blur_recipe(0.6, 0.0, 0.05, BokehShape::Round),
+            Equivalence::Bounded(1),
+        ),
+        (
+            "hexagonal",
+            lens_blur_recipe(0.6, 0.0, 0.05, BokehShape::Hexagonal),
+            Equivalence::Bounded(1),
+        ),
+        (
+            "after_lens_geometry",
+            after_lens_geometry,
+            Equivalence::Bounded(1),
+        ),
+    ];
+    for (name, recipe, equivalence) in recipes {
+        assert!(
+            unsupported_gpu_stages(&recipe).is_empty(),
+            "lens blur must be GPU-eligible"
+        );
+        ctx.render_to_vram(&frame, &recipe).expect("vram render");
+        let gpu = ctx.readback_output_frame().expect("vram readback");
+        let cpu = render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .expect("CPU oracle render")
+        .frame;
+        assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+        let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+        let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+        eprintln!("vram_lens_blur[{name}]: maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}");
+        match equivalence {
+            Equivalence::ByteIdentical => {
+                assert_eq!(diff, 0, "vram[{name}] must be byte-identical")
+            }
+            Equivalence::Bounded(bound) => assert!(
+                diff <= bound && psnr >= MIN_PSNR_DB && bias.abs() <= MAX_ABS_MEAN_SIGNED_ERROR,
+                "vram[{name}] exceeded declared bound maxAbsDiff <= {bound}: \
+                 maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}"
+            ),
+        }
+    }
+
+    // External depth in VRAM: a referenced artifact without a bound plane must
+    // refuse before any resident write; with the plane bound the pass matches
+    // the oracle.
+    let external = external_depth_lens_blur_recipe();
+    assert!(
+        ctx.render_to_vram(&frame, &external).is_err(),
+        "VRAM must refuse a referenced-but-unbound depth artifact"
+    );
+    let plane = depth_plane(W, H);
+    ctx.set_depth_plane(Some(&plane)).expect("bind plane");
+    ctx.render_to_vram(&frame, &external)
+        .expect("vram render with external depth");
+    let gpu = ctx.readback_output_frame().expect("vram readback");
+    let cpu = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &external,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: Some(&plane),
+        },
+    )
+    .expect("CPU oracle render")
+    .frame;
+    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    eprintln!("vram_lens_blur[external_depth]: maxAbsDiff={diff}");
+    assert!(
+        diff <= 1,
+        "VRAM external-depth lens blur: maxAbsDiff={diff}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // "Nicht-GPU-taugliche Rezepte" inventory (GPU-RENDER-PARITY-1 follow-up)
 // ---------------------------------------------------------------------------
 
@@ -2206,7 +2557,6 @@ fn source_actions(count: usize) -> EditRecipe {
 ///
 /// Reason classes and their minimal trigger (the reason string is the one the
 /// gate emits):
-/// - `lens_blur` — `lens_blur.enabled && blur_amount != 0`.
 /// - `source_actions` — non-empty actions and `source_actions_bound = false`.
 /// - `camera_white_balance (As-Shot context)` — context WB `Some`.
 /// - `red_eye` — an **invalid** `recipe.red_eye` (out-of-range/NaN); a valid
@@ -2221,6 +2571,12 @@ fn source_actions(count: usize) -> EditRecipe {
 /// manual lens correction and perspective are GPU-eligible for valid recipes
 /// (their pixel/dimension parity is asserted by
 /// `implemented_stages_match_cpu_oracle`), so they are **not** gate reasons.
+///
+/// GPU-RENDER-PARITY-1 lens-blur wave: G-05 lens blur is GPU-eligible for valid
+/// recipes (heuristic **and** external depth, the latter requiring a bound
+/// plane), so it is **not** a gate reason either (parity asserted by
+/// `implemented_stages_match_cpu_oracle` and
+/// `lens_blur_external_depth_matches_cpu_oracle`).
 ///
 /// GPU-RENDER-PARITY-1 follow-up (items 5 + 7): legacy spot geometry, a typed
 /// geometry-free mirror shadow, and **any number** of bound source actions
@@ -2352,7 +2708,6 @@ fn cpu_routing_inventory_is_complete() {
     let wb = [1.9f32, 1.0, 1.4, 1.0];
 
     let cases: Vec<(&str, Vec<String>)> = vec![
-        ("lens_blur", unsupported_gpu_stages(&lens_blur)),
         (
             "source_actions",
             unsupported_gpu_stages_for(&source_actions(1), false),
@@ -2394,6 +2749,19 @@ fn cpu_routing_inventory_is_complete() {
             "implemented geometry stage `{name}` must be GPU-eligible, got {reasons:?}"
         );
     }
+
+    // GPU-RENDER-PARITY-1 lens-blur wave: G-05 is GPU-rendered (heuristic and
+    // external depth — the latter requires a bound plane, which the recipe-only
+    // gate cannot see), so an active recipe must no longer be flagged.
+    let lens_blur_reasons = unsupported_gpu_stages(&lens_blur);
+    assert!(
+        lens_blur_reasons.is_empty(),
+        "G-05 lens blur must be GPU-eligible, got {lens_blur_reasons:?}"
+    );
+    assert!(
+        unsupported_gpu_stages(&external_depth_lens_blur_recipe()).is_empty(),
+        "an external-depth lens-blur recipe must be GPU-eligible (caller binds the plane)"
+    );
 
     // GPU-RENDER-PARITY-1 follow-up: every class that used to be flagged here is
     // now GPU-eligible for valid recipes — legacy spot geometry, a typed

@@ -932,8 +932,9 @@ Alle Parameter sind endlich; Verletzungen werden abgelehnt, nicht geclippt.
 Top-Level-Format-Tupel bleibt unverändert; `recipe_hash` enthält das
 serialisierte `lens_blur` (volle Invalidierung von Preview/Export), der
 `mask_recipe_hash` schließt es wie `effects` ein (Pixelwirkung ohne
-Geometrieänderung). GPU-Routen melden `lens_blur` als nicht unterstützte
-Stufe (CPU-Route, laut sichtbar).
+Geometrieänderung). GPU rendert `lens_blur` seit 2026-09-14 (Heuristik und
+externe Depth via `set_depth_plane`; Missing/Mismatch = lauter Fehler,
+kein stiller Fallback).
 
 **Abnahme:** JSON-Roundtrip, Wertebereichs-/Clipping-Tests (`blur_amount`
 0-Identität, RGB-Clipping), Determinismus (zwei Läufe byte-identisch),
@@ -950,8 +951,10 @@ Focal-Order, Focus-Geometrie und portabler Relativpfade);
 `lumina-core::lens_blur` (Heuristik, drei Integer-Kerne, `radius =
 round(amount·16)`, RGB, Alpha unberührt, Missing-Artefakt = harter
 `InvalidAdjustment`) mit Hook in `render_frame_from_base` nach Crop und vor
-Masks (keine zweite Pipeline); `RenderContext::depth` für externe Ebenen;
-GPU routet aktives `lens_blur` laut auf CPU. CLI `lumina lens-blur`
+Masks (keine zweite Pipeline); `RenderContext::depth` für externe Ebenen (GPU-Vertrag: `set_depth_plane`;
+Caller ohne Plane erhalten den lauten Oracle-Fehler);
+GPU rendert aktives `lens_blur` seit 2026-09-14 (Parität byte-identisch bzw.
+maxAbsDiff ≤ 1 nach Post-Stufen). CLI `lumina lens-blur`
 (setzen/lesen/listen/löschen, Exit 0/1/2 wie Bestand); GUI-Sektion in Optics
 (Enable/Amount/Focal/Bokeh/Fokus-Rechteck/Status) + Fokus-Overlay im Preview
 + headless E2E-Tests (Setter → Commit → Datei → Reload, Preview-Änderung,
