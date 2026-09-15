@@ -33515,17 +33515,17 @@ mod tests {
         app.set_reset_sliders_automatically(true);
         assert!(app.reset_sliders_automatically());
         app.set_adjustment("exposure", 1.0);
-        open_and_decode(&mut app, source_b.display().to_string());
+        open_and_decode_switch(&mut app, &source_b.display().to_string());
         assert!(
             !sidecar_a.exists(),
             "armed switch must not save the old image"
         );
         // Disarmed: the pending edit is flushed to the old image's sidecar.
-        open_and_decode(&mut app, source_a.display().to_string());
+        open_and_decode_switch(&mut app, &source_a.display().to_string());
         app.set_reset_sliders_automatically(false);
         assert!(!app.reset_sliders_automatically());
         app.set_adjustment("exposure", 2.0);
-        open_and_decode(&mut app, source_b.display().to_string());
+        open_and_decode_switch(&mut app, &source_b.display().to_string());
         let document = lumina_sidecar::load_sidecar(&sidecar_a).unwrap();
         assert_eq!(
             document.virtual_copies[0]
