@@ -97,6 +97,7 @@ jobs:
       # have no Metal adapter, so this is the documented CPU reference
       # regression (never a GPU-parity claim).
       - name: CLI matrix (CPU regression, JSON report)
+        shell: bash
         run: |
           set -o pipefail
           cargo run --release -p lumina-cli -- matrix --json | tee matrix-report.json
