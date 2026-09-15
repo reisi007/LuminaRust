@@ -81,6 +81,7 @@ const IDENTITY_RECIPE: &str = r#"[
     "goals": ["G-01"],
     "stages": ["decode", "output"],
     "tolerance": "exact",
+    "expected_route": "gpu",
     "recipe": { "adjustments": {} }
   }
 ]"#;
@@ -91,12 +92,53 @@ const TONE_RECIPE: &str = r#"[
     "goals": ["G-01"],
     "stages": ["exposure", "contrast", "highlights", "shadows"],
     "tolerance": "strict",
+    "expected_route": "gpu",
     "recipe": {
       "adjustments": {
         "exposure": 0.4,
         "contrast": 0.2,
         "highlights": -0.2,
         "shadows": 0.25
+      }
+    }
+  }
+]"#;
+
+/// Two recipes with the *same* pixel behaviour but different declared routes:
+/// the lens correction without an explicit crop activates the CPU oracle's
+/// content-based default crop (`geometry (default content crop)`), so the
+/// actual route is CPU on every machine (adapter present or not). Only the
+/// GPU-enabled build has the `--require-gpu` gate, so the fixture is likewise
+/// gated.
+#[cfg(feature = "gpu")]
+const ROUTE_RECIPE: &str = r#"[
+  {
+    "id": "exempt",
+    "goals": ["G-06"],
+    "stages": ["lens_correction"],
+    "tolerance": "standard",
+    "expected_route": { "cpu": "geometry (default content crop)" },
+    "recipe": {
+      "lens_correction": {
+        "version": 1,
+        "profile": "tele-light",
+        "distortion_k1": -0.05,
+        "vignette_c0": -0.1
+      }
+    }
+  },
+  {
+    "id": "unexpected",
+    "goals": ["G-06"],
+    "stages": ["lens_correction"],
+    "tolerance": "standard",
+    "expected_route": "gpu",
+    "recipe": {
+      "lens_correction": {
+        "version": 1,
+        "profile": "tele-light",
+        "distortion_k1": -0.05,
+        "vignette_c0": -0.1
       }
     }
   }
@@ -216,6 +258,7 @@ fn artifact_backed_recipe_is_rejected_loudly() {
     "goals": ["G-05"],
     "stages": ["lens_blur"],
     "tolerance": "robust",
+    "expected_route": "gpu",
     "recipe": {
       "lens_blur": {
         "version": 1,
@@ -270,6 +313,7 @@ fn unknown_recipe_key_is_rejected_loudly() {
     "goals": ["G-06"],
     "stages": ["geometry"],
     "tolerance": "standard",
+    "expected_route": "gpu",
     "recipe": {
       "geometri": { "version": 1, "rotation_degrees": 1.0 }
     }
@@ -281,6 +325,82 @@ fn unknown_recipe_key_is_rejected_loudly() {
     assert!(!run.status.success());
     assert!(
         stderr(&run).contains("unknown top-level key"),
+        "stderr: {}",
+        stderr(&run)
+    );
+}
+
+/// `--require-gpu` (GPU-enabled build): the one documented CPU exemption
+/// (`geometry (default content crop)`) passes, while a pixel-identical recipe
+/// that declares the GPU route fails loudly. The two recipes are identical
+/// except for the declared route, so the gate is the only difference — and the
+/// verdict is deterministic with or without a GPU adapter (the recipe-derived
+/// reason is always present).
+#[cfg(feature = "gpu")]
+#[test]
+fn require_gpu_gate_exempts_documented_cpu_route() {
+    let directory = tempfile::tempdir().unwrap();
+    write_sample_png(&directory);
+    let recipe_set = write_recipe_set(&directory, ROUTE_RECIPE);
+
+    // Baseline first (CPU-pinned) so the goldens exist for the verify runs.
+    let baseline = run_matrix(&recipe_set, &["--update-goldens"]);
+    assert!(baseline.status.success(), "stderr: {}", stderr(&baseline));
+
+    // Only the documented CPU exemption: the gate is green and reports the route.
+    let exempt = run_matrix(
+        &recipe_set,
+        &["--require-gpu", "--recipe", "exempt", "--json"],
+    );
+    assert!(
+        exempt.status.success(),
+        "exempt route must pass\nstdout: {}\nstderr: {}",
+        stdout(&exempt),
+        stderr(&exempt)
+    );
+    assert!(stdout(&exempt).contains("\"route\":\"cpu\""));
+    assert!(stdout(&exempt).contains("geometry (default content crop)"));
+
+    // The same pixels declared as `gpu` must fail loudly.
+    let unexpected = run_matrix(&recipe_set, &["--require-gpu", "--recipe", "unexpected"]);
+    assert!(!unexpected.status.success());
+    let message = stderr(&unexpected);
+    assert!(
+        message.contains("expected the GPU route"),
+        "stderr: {message}"
+    );
+}
+
+/// `--require-gpu` is meaningless in baseline mode: the goldens are deliberately
+/// CPU-pinned, so the combination is rejected before any render.
+#[test]
+fn require_gpu_rejects_baseline_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    write_sample_png(&directory);
+    let recipe_set = write_recipe_set(&directory, IDENTITY_RECIPE);
+
+    let run = run_matrix(&recipe_set, &["--require-gpu", "--update-goldens"]);
+    assert!(!run.status.success());
+    assert!(
+        stderr(&run).contains("cannot be combined with --update-goldens"),
+        "stderr: {}",
+        stderr(&run)
+    );
+}
+
+/// CPU-only build: `--require-gpu` cannot prove a GPU route and fails at the
+/// entry point instead of reporting every recipe as an unexpected CPU route.
+#[cfg(not(feature = "gpu"))]
+#[test]
+fn require_gpu_without_gpu_backend_is_loud() {
+    let directory = tempfile::tempdir().unwrap();
+    write_sample_png(&directory);
+    let recipe_set = write_recipe_set(&directory, IDENTITY_RECIPE);
+
+    let run = run_matrix(&recipe_set, &["--require-gpu"]);
+    assert!(!run.status.success());
+    assert!(
+        stderr(&run).contains("no GPU backend"),
         "stderr: {}",
         stderr(&run)
     );

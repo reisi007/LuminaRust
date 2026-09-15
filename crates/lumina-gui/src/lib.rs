@@ -23,6 +23,12 @@ mod slider;
 mod theme;
 mod viewport;
 
+// LRPAR-MATRIX-RECIPE (Slice 2): the headless GUI matrix runner. Test-only: it
+// drives `LuminaApp` on an egui context against the committed goldens and needs
+// no window/GPU renderer.
+#[cfg(test)]
+mod matrix;
+
 use eframe::egui;
 use lumina_core::cache::disk::DiskFolderCache;
 use lumina_core::cache::PreviewKind;

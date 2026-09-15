@@ -3,10 +3,14 @@
 //!
 //! SOLL: `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix
 //! (LRPAR-MATRIX-RECIPE)". The runner applies the versioned recipe set
-//! (`matrix/recipe-set.v1.json`) to the two committed RAW samples, exports
+//! (`testdata/matrix/recipe-set.v1.json`, resolved at runtime — see
+//! [`default_recipe_set_path`]) to the two committed RAW samples, exports
 //! through the shared render entry point ([`super::render_standard`]) and
 //! verifies the rendered frame against committed goldens with documented PSNR
-//! tolerances. `--update-goldens` writes the goldens explicitly.
+//! tolerances. `--update-goldens` writes the goldens explicitly; `--require-gpu`
+//! fails every recipe whose declared `expected_route` does not match the route
+//! the standard render path actually used (GPU-parity proof with the single
+//! documented, loud CPU exemption).
 //!
 //! This module is orchestration only: the pixels come from
 //! `lumina-core`/`render_standard` (GPU-default, CPU reference otherwise) and
@@ -33,8 +37,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::{
-    decode_input, emit, io_error, render_standard, sanitize_camera_white_balance, CliError,
-    StagedArtifact,
+    decode_input, emit, io_error, render_standard_routed, sanitize_camera_white_balance, CliError,
+    RenderRoute, StagedArtifact,
 };
 
 /// Recipe-set schema version this runner understands.
@@ -42,17 +46,27 @@ const MATRIX_SCHEMA_VERSION: u32 = 1;
 /// Pipeline version the recipe set is authored for; a mismatch is a loud error
 /// (reproducibility over convenience).
 const MATRIX_PIPELINE_VERSION: &str = "raster-mvp-1";
-/// Default recipe set, relative to the crate manifest (dev/CI convenience);
-/// every project folder in the repo is resolved relative to the recipe-set
-/// file, never as an absolute path in persistent data.
-const DEFAULT_RECIPE_SET: &str = "matrix/recipe-set.v1.json";
+/// Environment override for the matrix directory (committed recipe set +
+/// goldens): `LUMINA_MATRIX_DIR=/path/to/testdata/matrix`.
+const MATRIX_DIR_ENV: &str = "LUMINA_MATRIX_DIR";
+/// Environment override for an explicit recipe-set file; wins over
+/// [`MATRIX_DIR_ENV`].
+const MATRIX_RECIPE_SET_ENV: &str = "LUMINA_MATRIX_RECIPE_SET";
+/// Committed matrix location, relative to the workspace root. Shared by the CLI
+/// runner and the GUI headless matrix (Slice 2); every project folder is
+/// resolved relative to the recipe-set file, never as an absolute path in
+/// persistent data.
+const DEFAULT_MATRIX_DIR: &str = "testdata/matrix";
+/// Default recipe-set file name inside the matrix directory.
+const DEFAULT_RECIPE_SET: &str = "recipe-set.v1.json";
 /// Golden sub-directory name inside the recipe-set directory.
 const GOLDEN_DIR: &str = "golden";
 
 #[derive(Debug, Args)]
 pub struct MatrixArgs {
-    /// Versioned recipe set (schema_version 1). Default:
-    /// `<crate>/matrix/recipe-set.v1.json`.
+    /// Versioned recipe set (schema_version 1). Default: env
+    /// `LUMINA_MATRIX_RECIPE_SET`/`LUMINA_MATRIX_DIR`, else the workspace-root
+    /// `testdata/matrix/recipe-set.v1.json`.
     #[arg(long)]
     pub recipe_set: Option<PathBuf>,
     /// Golden directory (default: `<recipe-set-dir>/golden`).
@@ -72,6 +86,14 @@ pub struct MatrixArgs {
     /// Write/refresh the goldens instead of verifying (baseline mode).
     #[arg(long)]
     pub update_goldens: bool,
+    /// GPU-parity proof: fail every recipe whose declared `expected_route` in
+    /// the recipe set does not match the backend the standard render path
+    /// actually used. The one documented CPU route
+    /// (`geometry (default content crop)`) is the only accepted exemption.
+    /// Needs a GPU-enabled build; the baseline mode is CPU-pinned and rejects
+    /// this flag.
+    #[arg(long)]
+    pub require_gpu: bool,
     /// Machine-readable JSON report on stdout (logs stay on stderr).
     #[arg(long)]
     pub json: bool,
@@ -141,8 +163,33 @@ struct RecipeSpec {
     #[serde(default)]
     stages: Vec<String>,
     tolerance: ToleranceClass,
+    /// Backend route this recipe must take. `gpu` or the single documented CPU
+    /// exemption `{ "cpu": "<reason>" }`; verified by `--require-gpu`.
+    expected_route: ExpectedRoute,
     /// `EditRecipe`-compatible JSON (the same shape a virtual copy stores).
     recipe: serde_json::Value,
+}
+
+/// Expected render route declared per recipe. Externally tagged so the recipe
+/// set stays self-documenting: `"gpu"` or `{ "cpu": "<reason>" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExpectedRoute {
+    /// Must render on the GPU (no CPU fallback).
+    Gpu,
+    /// Documented, deliberately loud CPU route; the reason must appear in the
+    /// reasons the standard render path reported (e.g.
+    /// `geometry (default content crop)`).
+    Cpu(String),
+}
+
+impl ExpectedRoute {
+    fn label(&self) -> String {
+        match self {
+            ExpectedRoute::Gpu => "gpu".to_string(),
+            ExpectedRoute::Cpu(reason) => format!("cpu ({reason})"),
+        }
+    }
 }
 
 /// One prepared matrix entry: the source spec plus the parsed recipe.
@@ -164,6 +211,16 @@ struct PairOutcome {
     duration_ms: u128,
     golden: PathBuf,
     output: PathBuf,
+    /// Declared expected route, rendered for the report (always present).
+    expected_route: String,
+    /// Backend the standard render path actually used (`"gpu"`/`"cpu"`);
+    /// `None` in baseline mode (CPU-pinned) or before a successful render.
+    route: Option<&'static str>,
+    /// Loud CPU routing reasons (empty for a GPU render).
+    route_reasons: Vec<String>,
+    /// `--require-gpu` mismatch message; folded into `status`/`message` at the
+    /// end so it never hides a simultaneous PSNR failure.
+    route_error: Option<String>,
     /// Failure reason for the text/JSON report.
     message: Option<String>,
 }
@@ -180,8 +237,26 @@ impl PairOutcome {
 pub fn matrix(args: MatrixArgs) -> Result<(), CliError> {
     let recipe_set_path = match &args.recipe_set {
         Some(path) => path.clone(),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RECIPE_SET),
+        None => default_recipe_set_path()?,
     };
+
+    if args.require_gpu && args.update_goldens {
+        return Err(CliError::Message(
+            "--require-gpu cannot be combined with --update-goldens: baseline goldens are deliberately CPU-pinned (platform-neutral), so no GPU route can be proven in baseline mode"
+                .into(),
+        ));
+    }
+    // A build without the `gpu` feature has no GPU backend at all; the flag
+    // cannot prove parity and must fail loudly instead of reporting every
+    // recipe as an "unexpected CPU route".
+    #[cfg(not(feature = "gpu"))]
+    if args.require_gpu {
+        return Err(CliError::Message(
+            "--require-gpu needs a GPU-enabled build (`--features gpu`); this binary has no GPU backend, so no route can be proven"
+                .into(),
+        ));
+    }
+
     let set = load_recipe_set(&recipe_set_path)?;
     let base_dir = recipe_set_path
         .parent()
@@ -274,6 +349,10 @@ pub fn matrix(args: MatrixArgs) -> Result<(), CliError> {
                 duration_ms: 0,
                 golden: golden.clone(),
                 output: output.clone(),
+                expected_route: entry.spec.expected_route.label(),
+                route: None,
+                route_reasons: Vec::new(),
+                route_error: None,
                 message: None,
             };
 
@@ -296,12 +375,20 @@ pub fn matrix(args: MatrixArgs) -> Result<(), CliError> {
             // within the documented tolerances.
             let rendered = if args.update_goldens {
                 lumina_core::render_frame(&frame, &render_ctx)
+                    .map(|output| {
+                        (
+                            output,
+                            RenderRoute::Cpu {
+                                reasons: Vec::new(),
+                            },
+                        )
+                    })
                     .map_err(|error| CliError::Message(error.to_string()))
             } else {
-                render_standard(&frame, &entry.recipe, &render_ctx)
+                render_standard_routed(&frame, &entry.recipe, &render_ctx)
             };
-            let render_output = match rendered {
-                Ok(output) => output,
+            let (render_output, route) = match rendered {
+                Ok(pair) => pair,
                 Err(error) => {
                     outcome.status = "error";
                     outcome.message = Some(format!("render failed: {error}"));
@@ -310,6 +397,18 @@ pub fn matrix(args: MatrixArgs) -> Result<(), CliError> {
                     continue;
                 }
             };
+
+            outcome.route = Some(route.label());
+            outcome.route_reasons = route.reasons().to_vec();
+            if args.require_gpu {
+                // The route gate is evaluated against the exact decision that
+                // produced these pixels (no re-derivation, no log scraping).
+                if let Err(message) =
+                    check_expected_route(&entry.spec.id, &entry.spec.expected_route, &route)
+                {
+                    outcome.route_error = Some(message);
+                }
+            }
 
             // Export the full-resolution render through the shared encode path
             // (the matrix SOLL says "exportieren"); the golden comparison uses
@@ -434,6 +533,21 @@ pub fn matrix(args: MatrixArgs) -> Result<(), CliError> {
                 }
             }
 
+            // The route-gate verdict is folded in last so a simultaneous PSNR
+            // failure stays visible instead of being overwritten.
+            if let Some(route_error) = outcome.route_error.take() {
+                if outcome.status == "pass" {
+                    outcome.status = "route-fail";
+                    outcome.message = Some(route_error);
+                } else {
+                    let existing = outcome
+                        .message
+                        .take()
+                        .unwrap_or_else(|| "failed".to_string());
+                    outcome.message = Some(format!("{existing}; route: {route_error}"));
+                }
+            }
+
             outcome.duration_ms = pair_started.elapsed().as_millis();
             outcomes.push(outcome);
         }
@@ -551,6 +665,17 @@ fn load_recipe_set(path: &Path) -> Result<RecipeSet, CliError> {
                 recipe.id
             )));
         }
+        // A documented CPU exemption must name its reason; an empty one would
+        // turn the `--require-gpu` gate into a silent pass.
+        if let ExpectedRoute::Cpu(reason) = &recipe.expected_route {
+            if reason.trim().is_empty() {
+                return Err(CliError::Message(format!(
+                    "recipe `{}` in `{}` declares an empty CPU-route reason; a documented CPU exemption must name its reason (e.g. `geometry (default content crop)`)",
+                    recipe.id,
+                    path.display()
+                )));
+            }
+        }
     }
     Ok(set)
 }
@@ -589,6 +714,7 @@ fn prepare_recipes(
                 goals: spec.goals.clone(),
                 stages: spec.stages.clone(),
                 tolerance: spec.tolerance,
+                expected_route: spec.expected_route.clone(),
                 recipe: spec.recipe.clone(),
             },
             recipe,
@@ -670,6 +796,83 @@ fn resolve_relative(base_dir: &Path, relative: &Path) -> PathBuf {
     }
 }
 
+/// Resolves the committed recipe-set path when `--recipe-set` is omitted.
+///
+/// There is no build-host path baked into the binary: `LUMINA_MATRIX_RECIPE_SET`
+/// names an explicit file, `LUMINA_MATRIX_DIR` a matrix directory, and the
+/// fallback walks up from the current directory to the workspace-root
+/// `testdata/matrix/recipe-set.v1.json`. Everything referenced by the set
+/// itself stays relative to the set's directory.
+fn default_recipe_set_path() -> Result<PathBuf, CliError> {
+    if let Some(path) = std::env::var_os(MATRIX_RECIPE_SET_ENV) {
+        return Ok(PathBuf::from(path));
+    }
+    let matrix_dir = match std::env::var_os(MATRIX_DIR_ENV) {
+        Some(dir) => PathBuf::from(dir),
+        None => resolve_default_matrix_dir()?,
+    };
+    Ok(matrix_dir.join(DEFAULT_RECIPE_SET))
+}
+
+/// Walks up from the current directory to the ancestor that owns the committed
+/// `testdata/matrix` recipe set.
+fn resolve_default_matrix_dir() -> Result<PathBuf, CliError> {
+    let cwd = std::env::current_dir().map_err(|error| {
+        CliError::Message(format!(
+            "could not determine the current directory to locate the matrix recipe set: {error}"
+        ))
+    })?;
+    for ancestor in cwd.ancestors() {
+        let candidate = ancestor.join(DEFAULT_MATRIX_DIR);
+        if candidate.join(DEFAULT_RECIPE_SET).is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(CliError::Message(format!(
+        "could not locate the committed matrix recipe set `{DEFAULT_MATRIX_DIR}/{DEFAULT_RECIPE_SET}` at or above `{}`; set {MATRIX_DIR_ENV} (or {MATRIX_RECIPE_SET_ENV}) or pass --recipe-set",
+        cwd.display()
+    )))
+}
+
+/// Verifies the declared `expected_route` against the route the standard render
+/// path actually used. Any mismatch is a loud GPU-parity failure
+/// (`Agents.md`: no silent CPU fallback), including an unavailable adapter or a
+/// CPU route for a different reason than the documented exemption.
+fn check_expected_route(
+    recipe_id: &str,
+    expected: &ExpectedRoute,
+    actual: &RenderRoute,
+) -> Result<(), String> {
+    match expected {
+        ExpectedRoute::Gpu if actual.is_gpu() => Ok(()),
+        ExpectedRoute::Gpu => Err(format!(
+            "recipe `{recipe_id}` expected the GPU route but the standard render path used the CPU{}; a non-exempt CPU route is a GPU-parity failure (no-fallback doctrine)",
+            format_route_reasons(actual.reasons())
+        )),
+        ExpectedRoute::Cpu(reason) if actual.is_gpu() => Err(format!(
+            "recipe `{recipe_id}` declares the documented CPU route `{reason}` but the standard render path used the GPU"
+        )),
+        ExpectedRoute::Cpu(reason) => {
+            if actual.reasons().iter().any(|r| r.contains(reason.as_str())) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "recipe `{recipe_id}` expected the documented CPU route `{reason}` but rendered on the CPU for a different reason{}",
+                    format_route_reasons(actual.reasons())
+                ))
+            }
+        }
+    }
+}
+
+fn format_route_reasons(reasons: &[String]) -> String {
+    if reasons.is_empty() {
+        " (no GPU adapter available)".to_string()
+    } else {
+        format!(" (reasons: {})", reasons.join("; "))
+    }
+}
+
 /// Encodes `frame` as a lossless PNG and atomically publishes it at `target`.
 fn encode_and_stage(frame: &ImageFrame, target: &Path) -> Result<(), CliError> {
     let bytes = frame.encode(ImageFileFormat::Png)?;
@@ -732,12 +935,24 @@ fn report_text(mode: &str, outcomes: &[PairOutcome], total_ms: u128) -> String {
             (None, Some(message)) => message.to_string(),
             (None, None) => "-".to_string(),
         };
+        let route = match pair.route {
+            Some(actual) => {
+                let reasons = if pair.route_reasons.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", pair.route_reasons.join("; "))
+                };
+                format!("route={actual}{reasons} expected={}", pair.expected_route)
+            }
+            None => format!("expected={}", pair.expected_route),
+        };
         text.push_str(&format!(
-            "  [{}] {} / {} ({} ms) {} -> {}\n",
+            "  [{}] {} / {} ({} ms) {} {} -> {}\n",
             pair.status,
             pair.sample,
             pair.recipe,
             pair.duration_ms,
+            route,
             detail,
             pair.output.display()
         ));
@@ -767,6 +982,9 @@ fn report_json(
                 "min_psnr_db": pair.min_psnr_db,
                 "max_abs_diff": pair.max_abs_diff,
                 "duration_ms": pair.duration_ms,
+                "expected_route": pair.expected_route,
+                "route": pair.route,
+                "route_reasons": pair.route_reasons,
                 "golden": pair.golden,
                 "output": pair.output,
                 "message": pair.message,

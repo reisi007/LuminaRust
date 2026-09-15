@@ -76,7 +76,7 @@ RAW über dieselbe Env-Variablen.
 ### 3.3 Golden-Referenzbilder
 
 **Rezept-Matrix-Goldens (LRPAR-MATRIX-RECIPE, Slice 1):** 22 committete PNGs
-unter `crates/lumina-cli/matrix/golden/<sample-id>__<recipe-id>.png`
+unter `testdata/matrix/golden/<sample-id>__<recipe-id>.png`
 (2 Samples × 11 Rezepte, Vergleichsbreite 384 px). Sie werden über den
 gemeinsamen CPU-Referenz-Renderpfad aus den beiden RAW-Fixtures aus §3.2
 erzeugt und deterministisch bilinear herunterskaliert; die Rezeptliste und die

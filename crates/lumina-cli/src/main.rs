@@ -155,8 +155,56 @@ thread_local! {
         const { std::cell::OnceCell::new() };
 }
 
+/// Which backend the standard render entry actually used, with the loud CPU
+/// routing reasons (empty for a GPU render).
+///
+/// The router computes this decision in exactly one place
+/// ([`render_best_effort`]); the LRPAR-MATRIX-RECIPE `--require-gpu` gate
+/// consumes the returned value instead of re-deriving or string-matching a log
+/// line, so a future routing change can never silently disagree with the gate.
+/// The `Gpu` variant only exists in GPU-enabled builds; the accessors below
+/// abstract that away so callers never need `#[cfg]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RenderRoute {
+    #[cfg(feature = "gpu")]
+    Gpu,
+    Cpu {
+        reasons: Vec<String>,
+    },
+}
+
+impl RenderRoute {
+    /// `true` when the render ran on the GPU.
+    pub(crate) fn is_gpu(&self) -> bool {
+        match self {
+            #[cfg(feature = "gpu")]
+            RenderRoute::Gpu => true,
+            RenderRoute::Cpu { .. } => false,
+        }
+    }
+
+    /// Short route label for reports (`"gpu"`/`"cpu"`).
+    pub(crate) fn label(&self) -> &'static str {
+        if self.is_gpu() {
+            "gpu"
+        } else {
+            "cpu"
+        }
+    }
+
+    /// CPU routing reasons (empty for a GPU render).
+    pub(crate) fn reasons(&self) -> &[String] {
+        match self {
+            #[cfg(feature = "gpu")]
+            RenderRoute::Gpu => &[],
+            RenderRoute::Cpu { reasons } => reasons,
+        }
+    }
+}
+
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
-/// otherwise the full platform-neutral CPU pipeline.
+/// otherwise the full platform-neutral CPU pipeline. Returns the actual route
+/// alongside the result so callers can assert parity (see [`RenderRoute`]).
 ///
 /// REVIEW-GPU-DIVERGENCE-1 / CAMERA-WB-WELLE: the GPU path implements the full
 /// adjustment/geometry chain. Before routing to the GPU, the render is validated
@@ -175,7 +223,7 @@ fn render_best_effort(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
-) -> Result<RenderOutput, CliError> {
+) -> Result<(RenderOutput, RenderRoute), CliError> {
     let reasons = gpu_routing_reasons(recipe, render_ctx);
 
     match ctx {
@@ -188,29 +236,32 @@ fn render_best_effort(
             // already flags invalid gains; this branch is the belt-and-braces
             // entry validation and falls back loudly (never silently).
             if let Err(error) = ctx.set_camera_white_balance(render_ctx.camera_white_balance) {
-                lumina_gpu::log_cpu_routing_once(
-                    &[format!("camera_white_balance ({error})")],
-                    "cli render",
-                );
-                return render_frame(frame, render_ctx)
-                    .map_err(|error| CliError::Message(error.to_string()));
+                let reasons = vec![format!("camera_white_balance ({error})")];
+                lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
+                let output = render_frame(frame, render_ctx)
+                    .map_err(|error| CliError::Message(error.to_string()))?;
+                return Ok((output, RenderRoute::Cpu { reasons }));
             }
             let frame = ctx
                 .render_with_gpu(frame, recipe)
                 .map(Frame::to_image_frame)
                 .map_err(|error| CliError::Message(error.to_string()))?;
-            Ok(RenderOutput {
-                frame,
-                mask_layers: Vec::new(),
-                mask_warnings: Vec::new(),
-            })
+            Ok((
+                RenderOutput {
+                    frame,
+                    mask_layers: Vec::new(),
+                    mask_warnings: Vec::new(),
+                },
+                RenderRoute::Gpu,
+            ))
         }
         _ => {
             if !reasons.is_empty() {
                 lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
             }
-            Ok(render_frame(frame, render_ctx)
-                .map_err(|error| CliError::Message(error.to_string()))?)
+            let output = render_frame(frame, render_ctx)
+                .map_err(|error| CliError::Message(error.to_string()))?;
+            Ok((output, RenderRoute::Cpu { reasons }))
         }
     }
 }
@@ -288,15 +339,22 @@ fn lensfun_corrector_active(_render_ctx: &RenderContext<'_>) -> bool {
 }
 
 /// Non-GPU build: only the CPU pipeline exists, so this is a thin alias to
-/// [`render_frame`].
+/// [`render_frame`] returning the (always CPU) route.
 #[cfg(not(feature = "gpu"))]
 fn render_best_effort(
     _ctx: Option<()>,
     frame: &ImageFrame,
     _recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
-) -> Result<RenderOutput, CliError> {
-    render_frame(frame, render_ctx).map_err(|error| CliError::Message(error.to_string()))
+) -> Result<(RenderOutput, RenderRoute), CliError> {
+    let output =
+        render_frame(frame, render_ctx).map_err(|error| CliError::Message(error.to_string()))?;
+    Ok((
+        output,
+        RenderRoute::Cpu {
+            reasons: Vec::new(),
+        },
+    ))
 }
 
 /// The CLI's single standard backend entry point: renders `frame` with the
@@ -310,6 +368,17 @@ fn render_standard(
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
 ) -> Result<RenderOutput, CliError> {
+    render_standard_routed(frame, recipe, render_ctx).map(|(output, _route)| output)
+}
+
+/// [`render_standard`] returning the actual [`RenderRoute`] as well. The
+/// matrix's `--require-gpu` gate uses it to prove GPU parity from the **same**
+/// decision that produced the pixels (never a re-derived or log-scraped guess).
+pub(crate) fn render_standard_routed(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+) -> Result<(RenderOutput, RenderRoute), CliError> {
     #[cfg(feature = "gpu")]
     {
         GPU_CTX.with(|cell| {

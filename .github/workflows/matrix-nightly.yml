@@ -1,0 +1,124 @@
+name: Matrix (nightly)
+
+# LRPAR-MATRIX-RECIPE (Slice 2): the full recipe-matrix regression.
+#
+# Trigger modes (SOLL: feature/quality/conflicts-and-acceptance.md §
+# „Rezept-Matrix", Abschnitt „Modi"):
+#   1. nightly schedule (1x/day) and before releases,
+#   2. opt-in per commit: a `[matrix]` marker in the commit title/body, or a
+#      breaking commit (`type(scope)!:` / `BREAKING CHANGE`),
+#   3. manual `workflow_dispatch`.
+# The pull-request CI stays deliberately lean: this workflow has no
+# `pull_request` trigger at all, so PR checks are unaffected.
+#
+# Honest scope on GitHub-hosted runners: there is no Metal/GPU adapter, so this
+# job proves the **CPU reference regression** (the committed PSNR goldens) only.
+# GPU parity is proven locally with `lumina matrix --require-gpu` (see the SOLL
+# and `Agents.md` § GPU-Tests); this workflow never claims a GPU verdict — the
+# runner would report every `gpu`-expected recipe as an unexpected CPU route.
+on:
+  schedule:
+    # 03:17 UTC daily (off the top of the hour to avoid the scheduler rush).
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  # Used to authenticate the GHCR container pull (same as ci.yml).
+  packages: read
+
+jobs:
+  # For pushes, only the opt-in markers run the matrix; schedule/dispatch always
+  # run. The decision is a pure shell check on the pushed commit message so the
+  # expensive job is skipped without spinning up the container.
+  guard:
+    name: Decide whether to run
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Check trigger markers
+        id: decide
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "push" ]]; then
+            echo "schedule/dispatch -> run"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          subject="$(head -n1 <<< "$HEAD_MESSAGE")"
+          if grep -qF '[matrix]' <<< "$HEAD_MESSAGE" \
+            || grep -qiE 'BREAKING[ -]CHANGE' <<< "$HEAD_MESSAGE" \
+            || grep -qE '^[a-z]+(\([^)]*\))?!:' <<< "$subject"; then
+            echo "opt-in marker found -> run"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no [matrix]/breaking marker -> skip"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  matrix:
+    name: Recipe matrix (CPU regression)
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    # Same pinned-LibRaw image as the main CI (deterministic CR3 dimensions and
+    # golden compatibility; see ci.yml for the version rationale).
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+      # The committed recipe set + goldens at the workspace root.
+      LUMINA_MATRIX_DIR: ${{ github.workspace }}/testdata/matrix
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: matrix-nightly
+
+      # Full-resolution 24 MP renders are too slow in a debug build; the
+      # nightly uses the optimised binary. No `gpu` feature here: GitHub runners
+      # have no Metal adapter, so this is the documented CPU reference
+      # regression (never a GPU-parity claim).
+      - name: CLI matrix (CPU regression, JSON report)
+        run: |
+          set -o pipefail
+          cargo run --release -p lumina-cli -- matrix --json | tee matrix-report.json
+
+      - name: GUI headless matrix (CPU regression)
+        env:
+          LUMINA_MATRIX: '1'
+        run: |
+          cargo test --release -p lumina-gui --lib \
+            matrix::tests::real_matrix_headless -- --ignored --nocapture
+
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: matrix-report
+          path: matrix-report.json
+          if-no-files-found: warn
+
+      # Local GPU-parity proof (not possible on hosted runners). Documented here
+      # so the separation stays explicit in the workflow itself.
+      - name: GPU-parity note
+        run: |
+          echo "::notice::GPU parity is proven locally with 'lumina matrix --require-gpu' (Metal)."
+          echo "::notice::This runner has no GPU, so only the CPU reference regression ran."

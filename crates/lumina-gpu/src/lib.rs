@@ -2733,7 +2733,14 @@ impl GpuContext {
             return Err(GpuError::RenderFailed("vram not ready".into()));
         };
         let (width, height) = (v.width, v.height);
-        let bytes_per_row = shaders::aligned_bytes_per_row(width * 2);
+        // The mask plane is `R16Uint` (2 bytes per texel), so a tight row is
+        // `width * 2` bytes. `aligned_bytes_per_row` already multiplies by the
+        // RGBA8 4 bytes/texel, so its argument is a *4-byte texel count*; the
+        // equivalent for the mask row is `ceil(width * 2 / 4) = ceil(width / 2)`.
+        // Passing `width * 2` (as the old code did) over-allocated 4× — the
+        // same class as the fixed Dehaze dark-channel readback; at 24 MP that
+        // was ≈186 MiB instead of ≈47 MiB of staging.
+        let bytes_per_row = shaders::aligned_bytes_per_row(width.div_ceil(2));
         let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lumina-gpu-mask-readback"),
             size: (bytes_per_row * height.max(1)) as u64,

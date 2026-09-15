@@ -127,9 +127,9 @@
 ## Rezept-Matrix (LRPAR-MATRIX-RECIPE)
 
 **Feature:** F-011 Konflikt- und Releasequalität (Aufgabe LRPAR-MATRIX-RECIPE,
-Dach-Test über die Goals G-01…G-16). **Status:** SOLL; der CLI-Runner (Slice 1)
-ist umgesetzt, der GUI-headless-Anteil und das `.github`-Nightly-Wiring folgen
-in Slice 2.
+Dach-Test über die Goals G-01…G-16). **Status:** umgesetzt (Slice 1: CLI-Runner,
+Slice 2: GUI-headless-Modus, `.github`-Nightly-Wiring, gemeinsamer Ablageort
+`testdata/matrix/`, `--require-gpu`-Routengate, Masken-Readback-Fix).
 
 **Zweck.** Die Rezept-Matrix ist der End-to-End-Dach-Test über alle Goals: Sie
 wendet ein versioniertes Rezept-Set auf die beiden committeten RAW-Samples an,
@@ -148,26 +148,28 @@ Das Rezept-Set referenziert die Samples **relativ zu seiner eigenen Datei**
 (keine absoluten Pfade); Tests und Runner greifen nicht auf das Netzwerk zu.
 
 **Rezept-Set (versioniert, sidecar-kompatibel, relativ portabel).** Datei:
-`crates/lumina-cli/matrix/recipe-set.v1.json` (`schema_version: 1`). Jeder
-Eintrag trägt `id`, `goals`, `stages`, `tolerance` (Toleranzklasse
-`exact`/`strict`/`standard`/`robust`, siehe unten) und ein `recipe`-Objekt in
-exakt der JSON-Form, die eine virtuelle Kopie
+`testdata/matrix/recipe-set.v1.json` (`schema_version: 1`) am Workspace-Root,
+gemeinsamer Ablageort von CLI-Runner und GUI-headless-Matrix. Jeder Eintrag
+trägt `id`, `goals`, `stages`, `tolerance` (Toleranzklasse
+`exact`/`strict`/`standard`/`robust`, siehe unten), `expected_route` (erwartete
+Render-Route, siehe `--require-gpu`) und ein `recipe`-Objekt in exakt der
+JSON-Form, die eine virtuelle Kopie
 im Sidecar unter `recipe` verwendet (`EditRecipe`-Roundtrip). Rezept-IDs und
 Sample-IDs sind innerhalb des Sets eindeutig. Konkrete Rezeptliste:
 
-| Rezept-ID | Abgedeckte Stufen | Goals | Toleranz |
-| --- | --- | --- | --- |
-| `g01-identity` | Decode → Output (Identität) | G-01 | standard |
-| `g01-tone-wb` | globaler Tonwert, WB (`wb_temperature`/`wb_tint`) | G-01 | strict |
-| `g01-presence-color` | Presence (Texture/Clarity/Dehaze), Vibrance/Saturation | G-01 | standard |
-| `g02-curves-hsl` | Gradationskurve (Master + R/G/B), HSL | G-02 | strict |
-| `g02-point-color-grading` | Point Color, Color Grading (inkl. Luminanz/Blending) | G-02 | standard |
-| `g06-geometry` | Crop (Aspect), Rotation, Spiegelung | G-06 | standard |
-| `g06-lens-perspective` | manuelle Objektivkorrektur (Verzeichnung/Vignette/CA), Perspektive | G-06 | standard |
-| `g14-detail` | Rauschreduzierung, Schärfen, Rote Augen | G-14 | standard |
-| `g01-effects` | Vignettierung, Körnung (Seed) | G-01 | robust |
-| `g05-lens-blur` | Lens Blur (heuristischer Fokus-Rahmen, Bokeh) | G-05 | robust |
-| `g04-spot-heal` | Spot-Heal (heuristisch, Extras-Geometrie) | G-04 | robust |
+| Rezept-ID | Abgedeckte Stufen | Goals | Toleranz | `expected_route` |
+| --- | --- | --- | --- | --- |
+| `g01-identity` | Decode → Output (Identität) | G-01 | standard | gpu |
+| `g01-tone-wb` | globaler Tonwert, WB (`wb_temperature`/`wb_tint`) | G-01 | strict | gpu |
+| `g01-presence-color` | Presence (Texture/Clarity/Dehaze), Vibrance/Saturation | G-01 | standard | gpu |
+| `g02-curves-hsl` | Gradationskurve (Master + R/G/B), HSL | G-02 | strict | gpu |
+| `g02-point-color-grading` | Point Color, Color Grading (inkl. Luminanz/Blending) | G-02 | standard | gpu |
+| `g06-geometry` | Crop (Aspect), Rotation, Spiegelung | G-06 | standard | gpu |
+| `g06-lens-perspective` | manuelle Objektivkorrektur (Verzeichnung/Vignette/CA), Perspektive | G-06 | standard | cpu (`geometry (default content crop)`, siehe unten) |
+| `g14-detail` | Rauschreduzierung, Schärfen, Rote Augen | G-14 | standard | gpu |
+| `g01-effects` | Vignettierung, Körnung (Seed) | G-01 | robust | gpu |
+| `g05-lens-blur` | Lens Blur (heuristischer Fokus-Rahmen, Bokeh) | G-05 | robust | gpu |
+| `g04-spot-heal` | Spot-Heal (heuristisch, Extras-Geometrie) | G-04 | robust | gpu |
 
 Jede implementierte Renderstufe der Pipeline ist damit mindestens einmal
 abgedeckt. **Bewusst nicht im Rezept-Set (laut begründet, kein stiller
@@ -225,12 +227,45 @@ Ein **fehlendes Golden ist ein lauter Fehler** (kein stiller Fallback);
 3. **Manuell:** `workflow_dispatch`.
 
 Die PR-CI bleibt bewusst schlank (kein Matrix-Lauf im PR). Das
-`.github`-Wiring ist Slice 2. Der Runner läuft als `lumina matrix` (verify) bzw.
+`.github`-Wiring ist umgesetzt: `.github/workflows/matrix-nightly.yml` läuft per
+Schedule (1×/Tag), `workflow_dispatch` und — per `guard`-Job entschieden — beim
+Push mit `[matrix]`-Marker oder Breaking-Change (`type(scope)!:` /
+`BREAKING CHANGE`). Der Runner läuft als `lumina matrix` (verify) bzw.
 `lumina matrix --update-goldens` (baseline).
 
+**Route-Gate `--require-gpu` (Slice 2).** Jedes Rezept deklariert im Rezept-Set
+seine erwartete Route: `"gpu"` oder die einzige dokumentierte CPU-Ausnahme
+`{ "cpu": "geometry (default content crop)" }` (`g06-lens-perspective`).
+`lumina matrix --require-gpu` vergleicht die deklarierte Route mit der Route,
+die der Standard-Renderpfad **tatsächlich** genommen hat (der Rückgabewert von
+`render_standard`/`render_best_effort`, keine Log-Text-Auswertung): Jede
+nicht-exempte CPU-Route — inklusive „kein GPU-Adapter verfügbar" — ist ein
+lauter Fail (Exit ≠ 0); eine CPU-Ausnahme muss ihren deklarierten Grund
+enthalten, sonst ist auch sie ein Fail. Ein CPU-Build ohne `gpu`-Feature lehnt
+`--require-gpu` am Einstieg laut ab, `--require-gpu --update-goldens` ebenso
+(Baseline ist bewusst CPU-gepinnt). Ehrliche Trennung: Auf Metal beweist
+`--require-gpu` die GPU-Parität lokal; ohne Metal (CI) läuft die Matrix als
+CPU-Referenz-Regression und behauptet **keinen** GPU-Beweis.
+
+**Pfadauflösung (Slice 2).** Das Rezept-Set liegt neutral unter
+`testdata/matrix/` (gemeinsamer Ablageort von CLI und GUI-headless). Der
+CLI-Runner backt keinen Build-Host-Pfad ein: `--recipe-set` gewinnt, sonst
+`LUMINA_MATRIX_RECIPE_SET`, sonst `LUMINA_MATRIX_DIR/recipe-set.v1.json`, sonst
+`testdata/matrix/recipe-set.v1.json` relativ zum nächsten Vorfahren des
+Arbeitsverzeichnisses (Workspace-Root). Alle Sample-/Golden-Pfade bleiben
+relativ zur Rezept-Set-Datei.
+**DoD-§5-Anker (Spez-Aussage → Test):** die Kette ist hermetisch gepinnt in
+`crates/lumina-cli/tests/matrix_paths.rs` —
+`recipe_set_env_wins_over_matrix_dir` (Priorität),
+`matrix_dir_env_uses_default_recipe_set_name` (Default-Dateiname) und
+`ancestor_walk_finds_workspace_testdata_matrix` (Workspace-Root-Walk); die
+Tests setzen die Kind-Env gezielt (`Command::env`/`env_remove`), ohne den
+Prozess-Env-Status zu mutieren.
+
 **Exit-Codes.** `0` = grün; `1` = Matrix-Fehler (fehlendes Golden,
-PSNR-Verletzung, Render-/Exportfehler, ungültiges Rezept-Set); `2` =
-clap-Nutzungsfehler. Jeder Fehler nennt Grund und betroffenes (Sample, Rezept).
+PSNR-Verletzung, `--require-gpu`-Routenverletzung, Render-/Exportfehler,
+ungültiges Rezept-Set); `2` = clap-Nutzungsfehler. Jeder Fehler nennt Grund und
+betroffenes (Sample, Rezept).
 
 **GPU-Parität und CPU-Routen (Slice 1).** Es gilt die No-Fallback-Doktrin aus
 `Agents.md`: GPU-Fehler werden **hart propagiert** (CLI und MCP identisch); ein
@@ -244,6 +279,16 @@ bereits ein) und ist behoben (`aligned_bytes_per_row(width)`, ≈93 MiB bei
 jetzt **auf der GPU** ohne `routed to CPU`-Log (PSNR 102,8 dB
 (landscape) / 91,7 dB (portrait), Δ ≤ 1 LSB, ~0,6 s statt ~36 s CPU).
 
+**GPU-Parität Slice 2 — Masken-Readback.** Dieselbe 4×-Klasse war noch in
+`readback_mask_plane` offen: Die Maske ist `R16Uint` (2 Byte/Texel), und
+`aligned_bytes_per_row` rechnet die 4 Byte/RGBA8-Texel bereits ein. Der alte
+Aufruf `aligned_bytes_per_row(width * 2)` überallokierte daher 4×
+(≈186 MiB statt ≈47 MiB Staging bei 24 MP). Korrigiert auf
+`aligned_bytes_per_row(width.div_ceil(2))` (die R16-Texelzeile entspricht
+`width * 2 / 4` RGBA8-Texeln). Lokal auf Metal verifiziert:
+`cargo test -p lumina-gpu --features gpu` grün, inklusive
+`upload_mask_plane_roundtrip_is_byte_exact` (byte-exakte u16-Domäne).
+
 Darüber hinaus gibt es **genau eine dokumentierte, laute CPU-Route** im
 Rezept-Set: `g06-lens-perspective` (Objektiv-/Perspektivkorrektur ohne
 expliziten Crop) nutzt die in `feature/architecture/pipeline.md` § F-093/GPU
@@ -251,9 +296,8 @@ festgelegte Route `geometry (default content crop)` — das datenabhängige
 Maximum-Rectangle ist rezept-planbar nicht auf der GPU reproduzierbar. Sie ist
 der SOLL-Zustand dieses Rezepts, **keine** pauschale GPU-Paritätszusage: Jede
 weitere CPU-Route (oder ein GPU-Laufzeitfehler) ist ein Fail mit Fix-Pflicht,
-nicht akzeptiert. Messwerte des grünen GPU-Laufs: 22/22 Paare, Gesamtdauer
-~7,0 s, 12 Paare mit endlicher PSNR, Minimum 81,5 dB, maximale Abweichung
-1 LSB (Goldens auf der CPU-Referenz).
+nicht akzeptiert. Das `--require-gpu`-Gate (siehe oben) erzwingt diese Zusage
+nun maschinell über das `expected_route`-Feld des Rezept-Sets.
 
 **Kosten-/Dauer-Pflicht (F-074).** Der Runner berichtet pro (Sample, Rezept)
 die Dauer und die Gesamtdauer (Text und `--json`). Kosten/Dauer der Matrix
@@ -262,11 +306,39 @@ ergänzt F-074 (Ausführungs-/Gesamtkosten pro Rezept-Set), ersetzt aber keine
 Benchmarks und hat kein hartes Laufzeitbudget. Volle Auflösung ist
 kostenpflichtig; Benchmarks bleiben der Ort für Mikro-Messungen.
 
-**GUI-headless-Modus (SOLL, Umsetzung Slice 2).** Dasselbe Rezept-Set wird
-zusätzlich headless über `LuminaApp` (egui Context + tempdir) geladen,
-gerendert und gegen dieselben Goldens geprüft; die GUI verwendet denselben
-Core-Renderpfad (keine zweite Pipeline). Bis dahin deckt der CLI-Runner die
-Rezept-Matrix ab.
+**GUI-headless-Modus (Slice 2, umgesetzt).** Dasselbe Rezept-Set wird
+zusätzlich headless über `LuminaApp` (egui Context, tempdir) geladen, gerendert
+und gegen **dieselben** Goldens geprüft. Der Runner
+(`crates/lumina-gui/src/matrix.rs`, test-only) fährt die App-Pipeline
+(`load_bytes` → Rezept setzen → `render()` → `preview()`), es gibt also keine
+zweite Pipeline und keinen GPU-only-Weg: Die App-Vorschau **ist** der
+gemeinsame CPU-Core-Render (ein hermetischer Test pinnt die Byte-Identität).
+Wie beim CLI-Runner wird bewusst kein Lensfun-Auto-Korrektor gebunden, damit
+die Goldens feature-unabhängig bleiben. Der volle Lauf über beide CR3-Samples
+ist RAW-abhängig und deshalb `#[ignore]`d + env-gated (`LUMINA_MATRIX=1`),
+analog zum CLI-`matrix_e2e`; hermetisch (synthetisches PNG, tempdir) laufen ein
+Byte-Identitäts- und ein Toleranz-Gate-Test im Standard-`cargo test -p
+lumina-gui` ohne GPU. Das `.github`-Nightly fährt den vollen GUI-Lauf als
+CPU-Referenz.
+
+**Messwerte (Slice 2, Ist; macOS, Apple M5 Pro, Metal-Adapter).** Gemessen mit
+dem optimierten Release-Build (`cargo run --release …` bzw.
+`cargo test --release -p lumina-gui`), also demselben Profil wie das
+CI-Nightly; „Dauer" ist die Matrix-Gesamtdauer inkl. Decode und
+Export/Einlesen, kein Benchmark und ohne hartes Budget (siehe
+Kosten-/Dauer-Pflicht):
+
+| Modus | Paare | Gesamtdauer | Ergebnis |
+| --- | --- | --- | --- |
+| CLI verify, GPU (`--require-gpu`) | 22 | 7,7 s | 22/22 grün; 20 GPU + 2 exempte CPU-Routen (`g06-lens-perspective` je Sample, Grund `geometry (default content crop)`); 10× PSNR ∞, sonst ≥ 81,5 dB, Δ ≤ 1 LSB |
+| CLI verify, CPU-Referenz (Nightly-Modus, ohne `gpu`-Feature) | 22 | 107,8 s | 22/22 grün, alle `route=cpu`, 22× PSNR ∞, Δ = 0 (byte-identisch zu den Goldens) |
+| GUI headless (App-Pipeline, CPU-Core) | 22 | 104,5 s | 22/22 grün, 22× PSNR ∞, Δ = 0 (byte-identisch zu denselben Goldens) |
+
+Der Debug-Lauf des GPU-Gates (`--require-gpu`, unoptimiert) dauerte konservativ
+247,7 s (pro Paar ~4,5–23 s; das ist die eingangs dokumentierte
+Slice-1-Referenzklasse). Der GUI-Lauf über die volle Matrix läuft im Nightly in
+Release; lokal ist zusätzlich `LUMINA_MATRIX_RECIPES=<id,…>` als zeitlich
+begrenzter Beweis möglich (Default bleibt der volle Satz).
 
 **Hermetik.** Tests benötigen keinen spontanen Netzwerkzugriff und keine
 absoluten Pfade. Der CR3-Matrix-Lauf ist RAW-/Fixture-abhängig und läuft
@@ -291,8 +363,14 @@ hermetisch mit synthetischen PNG-Samples in einem tempdir getestet.
 - CLI-End-to-End-Tests mit Exit-Codes
 - Rezept-Matrix: Runner-Exit-Codes, PSNR-Toleranz-Gates
   (`exact`/`strict`/`standard`/`robust`), fehlendes Golden laut, ungültiges
-  bzw. artefaktgebundenes Rezept-Set laut abgelehnt, env-gated
-  CR3-End-to-End-Lauf (siehe [Rezept-Matrix](#rezept-matrix-lrpar-matrix-recipe))
+  bzw. artefaktgebundenes Rezept-Set laut abgelehnt, `--require-gpu`-Routengate
+  (exempte CPU-Route passiert, unerwartete CPU-Route laut, Kombination mit
+  `--update-goldens` und CPU-Build laut abgelehnt), env-gated CR3-End-to-End-Lauf
+  (siehe [Rezept-Matrix](#rezept-matrix-lrpar-matrix-recipe))
+- GUI-headless-Matrix: `LuminaApp` (egui Context + tempdir) fährt dasselbe
+  Rezept-Set gegen dieselben Goldens; hermetischer Byte-Identitäts-Test
+  (App-Vorschau == Core-Render) und Toleranz-Gate-Test ohne GPU, env-gated
+  CR3-Voll-Lauf
 - native Build-/Smoke-Tests
 - Performance- und Speicherbenchmarks für RAW, Vorschau, Masken und Batch
 
