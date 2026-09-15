@@ -79,7 +79,7 @@ Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
 Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-16 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 12,
+15 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 11,
 Block B: 1, Block C: 3 (Stand 2026-09-14).
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
@@ -113,7 +113,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | LENSFUN-GATE-4 | G-10 | Badge-Refusal-Rest |
 | 1.0 | DEPTH-PLUMBING-1 | G-05 | External-Depth-Caller |
 | 1.5 | GEN-ONNX-1 | G-07 | Generativ-ONNX |
-| fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -147,7 +146,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend, Slice 1 BESTANDEN)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): Slice 1 (SOLL + CLI-Runner `lumina matrix`, 11 Rezepte × 2 Samples, 22 CPU-Goldens) verifiziert BESTANDEN. Slice 2 offen: GUI-headless-Modus (dieselben Goldens), `.github`-Nightly/`workflow_dispatch`/`[matrix]`-Trigger (PR-CI schlank), Rezept-Set/Goldens an neutralen Ort (`testdata/matrix/`), `--require-gpu` mit erwarteter Route pro Rezept (unerwartete CPU-Route = Fail), Masken-Readback-Überallokation angleichen (`lumina-gpu`), GPU-Beweis ehrlich trennen (ohne Metal = CPU-Regression). Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
 
