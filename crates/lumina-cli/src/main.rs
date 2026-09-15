@@ -67,6 +67,11 @@ use thiserror::Error;
 // LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands
 // (orchestration; alignment/merge/DNG live in `lumina-merge`).
 mod merge;
+// LRPAR-MATRIX-RECIPE (Slice 1): multi-recipe matrix runner over the committed
+// RAW samples (SOLL: `feature/quality/conflicts-and-acceptance.md`
+// § „Rezept-Matrix"). Orchestration only — it renders through the shared
+// `render_standard` entry point and contains no second image processing.
+mod matrix;
 
 /// Minimal stderr logger installed once so the backend-selection `info!` is
 /// actually visible. It only installs when no other logger has been registered
@@ -294,6 +299,32 @@ fn render_best_effort(
     render_frame(frame, render_ctx).map_err(|error| CliError::Message(error.to_string()))
 }
 
+/// The CLI's single standard backend entry point: renders `frame` with the
+/// process-wide backend selection (GPU when an adapter is bound, the
+/// platform-neutral CPU reference otherwise) and logs the CPU route once per
+/// reason set. Both `process_selected` and the LRPAR-MATRIX-RECIPE runner go
+/// through this function so there is exactly one render entry point (no second
+/// pipeline, GPU-default where available).
+fn render_standard(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+) -> Result<RenderOutput, CliError> {
+    #[cfg(feature = "gpu")]
+    {
+        GPU_CTX.with(|cell| {
+            let holder = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
+            let gpu: &Option<GpuContext> = holder;
+            render_best_effort(gpu.as_ref(), frame, recipe, render_ctx)
+        })
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        log_backend("render backend: cpu");
+        render_best_effort(None, frame, recipe, render_ctx)
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "lumina", about = "Non-destructive raster image MVP")]
 struct Cli {
@@ -387,6 +418,11 @@ enum Command {
     /// into one linear DNG (`Cmd/Ctrl+M` GUI action shares the entry
     /// point). See [`merge::MergeArgs`].
     MergePano(merge::MergeArgs),
+    /// LRPAR-MATRIX-RECIPE: apply the versioned recipe set to both committed
+    /// RAW samples, export through the shared render path and verify the
+    /// golden/PSNR tolerances (or write the goldens with `--update-goldens`).
+    /// See `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix".
+    Matrix(matrix::MatrixArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1417,6 +1453,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Relocate(args) => relocate(args),
         Command::MergeHdr(args) => merge::merge_hdr(args),
         Command::MergePano(args) => merge::merge_pano(args),
+        Command::Matrix(args) => matrix::matrix(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -7354,19 +7391,9 @@ fn process_selected(
     };
     // Prefer the GPU when an adapter is bound; otherwise the full CPU pipeline.
     // The chosen backend is logged once at startup (see `init_render_backend`).
-    // The GPU path currently mirrors the CPU recipe-application bootstrap stub;
-    // the complete mask/WB/source-action pipeline runs on the CPU branch.
-    #[cfg(feature = "gpu")]
-    let render_output = GPU_CTX.with(|cell| {
-        let ctx = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
-        let inner: &Option<GpuContext> = ctx;
-        render_best_effort(inner.as_ref(), &frame, &recipe, &render_ctx)
-    })?;
-    #[cfg(not(feature = "gpu"))]
-    let render_output = {
-        log_backend("render backend: cpu");
-        render_best_effort(None, &frame, &recipe, &render_ctx)?
-    };
+    // `render_standard` is the single CLI backend entry point (shared with the
+    // LRPAR-MATRIX-RECIPE runner — no second render path).
+    let render_output = render_standard(&frame, &recipe, &render_ctx)?;
     // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
     for warning in &resolved.warnings {
         eprintln!("warning: {warning}");

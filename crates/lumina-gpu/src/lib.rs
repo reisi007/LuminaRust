@@ -1745,7 +1745,11 @@ impl GpuContext {
         width: u32,
         height: u32,
     ) -> Result<f32, GpuError> {
-        let bytes_per_row = shaders::aligned_bytes_per_row(width * 4);
+        // `aligned_bytes_per_row` already accounts for the 4 bytes per RGBA8
+        // texel; the dark-channel texture is RGBA8, so `aligned(width)` — not
+        // `aligned(width * 4)`, which over-allocated 4× (≈372 MiB at 24 MP) and
+        // exceeded the adapter's 256 MiB `max_buffer_size`.
+        let bytes_per_row = shaders::aligned_bytes_per_row(width);
         let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lumina-gpu-dark-readback"),
             size: (bytes_per_row * height.max(1)) as u64,
@@ -2812,7 +2816,9 @@ impl GpuContext {
             return Err(GpuError::RenderFailed("vram not ready".into()));
         };
         let (width, height) = (v.width, v.height);
-        let bytes_per_row = shaders::aligned_bytes_per_row(width * 4);
+        // `v.output` is RGBA8; `aligned_bytes_per_row` already includes the
+        // 4 bytes per texel (same 4× over-allocation class as the dark readback).
+        let bytes_per_row = shaders::aligned_bytes_per_row(width);
         let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lumina-gpu-output-readback"),
             size: (bytes_per_row * height.max(1)) as u64,

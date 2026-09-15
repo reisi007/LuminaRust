@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "pipeline_version": "raster-mvp-1",
+  "comparison_width": 384,
+  "samples": [
+    { "id": "landscape", "path": "../../../sample-data/raw/aircraft-landscape.cr3" },
+    { "id": "portrait", "path": "../../../sample-data/raw/aircraft-portrait.cr3" }
+  ],
+  "recipes": [
+    {
+      "id": "g01-identity",
+      "goals": ["G-01"],
+      "stages": ["decode", "output"],
+      "tolerance": "standard",
+      "recipe": {
+        "adjustments": {}
+      }
+    },
+    {
+      "id": "g01-tone-wb",
+      "goals": ["G-01"],
+      "stages": ["wb", "exposure", "contrast", "highlights", "shadows", "whites", "blacks"],
+      "tolerance": "strict",
+      "recipe": {
+        "adjustments": {
+          "wb_temperature": 6200.0,
+          "wb_tint": 0.08,
+          "exposure": 0.35,
+          "contrast": 0.2,
+          "highlights": -0.3,
+          "shadows": 0.35,
+          "whites": 0.12,
+          "blacks": -0.15
+        }
+      }
+    },
+    {
+      "id": "g01-presence-color",
+      "goals": ["G-01"],
+      "stages": ["presence.texture", "presence.clarity", "presence.dehaze", "vibrance", "saturation"],
+      "tolerance": "standard",
+      "recipe": {
+        "adjustments": {
+          "presence": { "version": 1, "texture": 0.3, "clarity": 0.25, "dehaze": 0.15 },
+          "vibrance": 0.3,
+          "saturation": 0.1
+        }
+      }
+    },
+    {
+      "id": "g02-curves-hsl",
+      "goals": ["G-02"],
+      "stages": ["curves.master", "curves.channels", "hsl"],
+      "tolerance": "strict",
+      "recipe": {
+        "adjustments": {
+          "curves": {
+            "version": 1,
+            "master": [
+              { "input": 0.0, "output": 0.0 },
+              { "input": 0.25, "output": 0.22 },
+              { "input": 0.75, "output": 0.8 },
+              { "input": 1.0, "output": 1.0 }
+            ],
+            "channels": {
+              "red": [
+                { "input": 0.0, "output": 0.0 },
+                { "input": 1.0, "output": 1.0 }
+              ]
+            }
+          },
+          "hsl": {
+            "version": 1,
+            "orange": { "hue": -0.03, "saturation": 0.15, "luminance": 0.05 },
+            "blue": { "hue": 0.05, "saturation": 0.2, "luminance": -0.05 }
+          }
+        }
+      }
+    },
+    {
+      "id": "g02-point-color-grading",
+      "goals": ["G-02"],
+      "stages": ["point_color", "color_grading"],
+      "tolerance": "standard",
+      "recipe": {
+        "adjustments": {
+          "point_color": {
+            "version": 1,
+            "entries": [
+              {
+                "id": "pc-1",
+                "hue_center": 200.0,
+                "hue_range": 40.0,
+                "hue_shift": 0.05,
+                "saturation_shift": 0.2,
+                "luminance_shift": -0.05
+              }
+            ]
+          },
+          "color_grading": {
+            "version": 1,
+            "shadows": { "hue_degrees": 220.0, "saturation": 0.2, "luminance": -0.05 },
+            "midtones": { "hue_degrees": 40.0, "saturation": 0.1, "luminance": 0.02 },
+            "highlights": { "hue_degrees": 45.0, "saturation": 0.15, "luminance": 0.03 },
+            "balance": 0.1,
+            "blending": 0.6
+          }
+        }
+      }
+    },
+    {
+      "id": "g06-geometry",
+      "goals": ["G-06"],
+      "stages": ["geometry.crop", "geometry.rotation", "geometry.mirror"],
+      "tolerance": "standard",
+      "recipe": {
+        "geometry": {
+          "version": 1,
+          "crop": { "mode": "aspect", "preset": "3:2" },
+          "rotation_degrees": 2.0,
+          "mirror_horizontal": true,
+          "mirror_vertical": false
+        }
+      }
+    },
+    {
+      "id": "g06-lens-perspective",
+      "goals": ["G-06"],
+      "stages": ["lens_correction", "perspective"],
+      "tolerance": "standard",
+      "recipe": {
+        "lens_correction": {
+          "version": 1,
+          "profile": "tele-light",
+          "distortion_k1": -0.02,
+          "vignette_c0": -0.05,
+          "vignette_c1": 0.02,
+          "ca_red": 0.005,
+          "ca_blue": -0.005
+        },
+        "perspective": {
+          "version": 1,
+          "vertical": 0.05,
+          "horizontal": 0.0,
+          "rotation": 0.0,
+          "scale": 1.0,
+          "aspect_ratio": 1.0,
+          "shift_x": 0.0,
+          "shift_y": 0.0
+        }
+      }
+    },
+    {
+      "id": "g14-detail",
+      "goals": ["G-14"],
+      "stages": ["noise_reduction", "sharpening", "red_eye"],
+      "tolerance": "standard",
+      "recipe": {
+        "adjustments": {
+          "noise_reduction": { "version": 1, "luminance": 0.2, "color": 0.3 },
+          "sharpening": { "version": 1, "amount": 0.8, "radius": 1.0, "detail": 0.3, "masking": 0.2 },
+          "red_eye": {
+            "version": 1,
+            "regions": [
+              { "id": "re-1", "x": 0.5, "y": 0.45, "radius": 0.05, "desaturate": 0.8, "darken": 0.5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "g01-effects",
+      "goals": ["G-01"],
+      "stages": ["effects.vignette", "effects.grain"],
+      "tolerance": "robust",
+      "recipe": {
+        "effects": {
+          "vignette": { "version": 1, "amount": 0.3, "midpoint": 0.5, "roundness": 0.0, "feather": 0.5 },
+          "grain": { "version": 1, "amount": 0.2, "size": 0.3, "roughness": 0.4, "seed": 42 }
+        }
+      }
+    },
+    {
+      "id": "g05-lens-blur",
+      "goals": ["G-05"],
+      "stages": ["lens_blur"],
+      "tolerance": "robust",
+      "recipe": {
+        "lens_blur": {
+          "version": 1,
+          "enabled": true,
+          "focus_rect": { "x": 0.3, "y": 0.3, "width": 0.4, "height": 0.4 },
+          "focal_near": 0.0,
+          "focal_far": 0.2,
+          "blur_amount": 0.5,
+          "bokeh": "round"
+        }
+      }
+    },
+    {
+      "id": "g04-spot-heal",
+      "goals": ["G-04"],
+      "stages": ["spot_removals.heuristic"],
+      "tolerance": "robust",
+      "recipe": {
+        "spot_removals": [
+          {
+            "id": "spot-1",
+            "version": 1,
+            "mode": "heuristic",
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "radius": 24.0,
+            "feather": 0.4,
+            "offset_dx": 0.02,
+            "offset_dy": 0.0,
+            "opacity": 0.9,
+            "status": "valid"
+          }
+        ]
+      }
+    }
+  ]
+}

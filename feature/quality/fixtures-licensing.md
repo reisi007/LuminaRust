@@ -75,9 +75,24 @@ RAW über dieselbe Env-Variablen.
 
 ### 3.3 Golden-Referenzbilder
 
-Noch nicht vorhanden (deferred F-043/F-073). Bei Einführung: selbe
-Versionierungs-/Determinismusregeln wie §3.1, explizite Lizenz (bevorzugt
-generiert/CC0).
+**Rezept-Matrix-Goldens (LRPAR-MATRIX-RECIPE, Slice 1):** 22 committete PNGs
+unter `crates/lumina-cli/matrix/golden/<sample-id>__<recipe-id>.png`
+(2 Samples × 11 Rezepte, Vergleichsbreite 384 px). Sie werden über den
+gemeinsamen CPU-Referenz-Renderpfad aus den beiden RAW-Fixtures aus §3.2
+erzeugt und deterministisch bilinear herunterskaliert; die Rezeptliste und die
+PSNR-Toleranzen stehen normativ in
+[`conflicts-and-acceptance.md`](conflicts-and-acceptance.md) § „Rezept-Matrix".
+
+- **Provenance/Lizenz:** Ableitungen der beiden CR3-Fixtures aus §3.2; deren
+  Nutzungs-/Distributionsgewährung (Eigentümer, 2026-08-20, dokumentiert in
+  [`sample-data/raw/README.md`](../../sample-data/raw/README.md), R1 gelöst)
+  deckt Test-, Benchmark- und Referenzzwecke im Rahmen von LuminaRust mit ab.
+  Kein Drittinhalt, keine Modellgewichte, kein Netzwerk-Download.
+- **Versionierung/Determinismus:** Goldens werden ausschließlich über
+  `lumina matrix --update-goldens` neu geschrieben (an die CPU-Referenz
+  gepinnt); eine Golden-Änderung ist eine bewusste Rebaseline und gehört in
+  denselben Commit wie die verursachende Änderung. Verifikation läuft über
+  `lumina matrix` mit den dokumentierten Toleranzen.
 
 ### 3.4 Hash-gepinntes ONNX-Behavior-Fixture (`lumina-onnx`)
 
