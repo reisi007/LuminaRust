@@ -165,6 +165,11 @@ kommen, gilt:
 - **Abgestürzte/fehlerhafte Subagenten neu starten.** Ein Subagent, der mit
   einem Fehler zurückkehrt, wird über seine `sessionID` mit Fortsetzung
   (`continue`) neu gestartet, statt den Kontext neu aufzubauen.
+- **Fortsetzungen begrenzen (User-Regel 2026-09-15).** Pro Aufgabe höchstens
+  **einmal** `continue` auf derselben Session; danach wird frisch neu
+  gestartet (neue `sessionID`, voller Auftragskontext im Prompt). Das gilt für
+  Implementierungs- wie Verifizierungs-Agenten und verhindert
+  Kontext-Drift über lange Rework-Ketten.
 - **Kein Commit durch Subagenten.** Implementierungs-Agenten committen nicht;
   der Build-Agent führt den Commit nach bestandener Verifizierung gebündelt
   aus.
