@@ -110,10 +110,8 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
-| 1.0 | KITTEST-COVERAGE-STATES-2 | alle G | States-Follow-ups |
 | 1.0 | LENSFUN-GATE-4 | G-10 | Badge-Refusal-Rest |
 | 1.0 | DEPTH-PLUMBING-1 | G-05 | External-Depth-Caller |
-| 1.0 | GUI-DEBUG-SWEEP-1 | G-10 | Debug-Sweep |
 | 1.5 | GEN-ONNX-1 | G-07 | Generativ-ONNX |
 | fortlaufend | LRPAR-MATRIX-RECIPE | alle G | Rezept-Matrix |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
@@ -149,7 +147,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): x Rezepte × 2 Sample-Bilder (`sample-data/raw/aircraft-landscape.cr3`, `aircraft-portrait.cr3`) anwenden, exportieren, verifizieren (Golden/PSNR mit dokumentierten Toleranzen). CI-Strategie (User-Entscheid 2026-09-03): PR-CI bleibt schlank; volle Matrix läuft per Nightly-Schedule (1×/Tag) + vor Releases + opt-in per Commit-Marker (`[matrix]` im Titel/Body, `!`- bzw. `BREAKING CHANGE`-Commits triggern mit); manueller `workflow_dispatch`. Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
+- [ ] **[PRIO: hoch] LRPAR-MATRIX-RECIPE (Release: fortlaufend, Slice 1 BESTANDEN)** Rezept-Matrix auf Sample-Bildern (Dach-Task aller G): Slice 1 (SOLL + CLI-Runner `lumina matrix`, 11 Rezepte × 2 Samples, 22 CPU-Goldens) verifiziert BESTANDEN. Slice 2 offen: GUI-headless-Modus (dieselben Goldens), `.github`-Nightly/`workflow_dispatch`/`[matrix]`-Trigger (PR-CI schlank), Rezept-Set/Goldens an neutralen Ort (`testdata/matrix/`), `--require-gpu` mit erwarteter Route pro Rezept (unerwartete CPU-Route = Fail), Masken-Readback-Überallokation angleichen (`lumina-gpu`), GPU-Beweis ehrlich trennen (ohne Metal = CPU-Regression). Der Multi-Rezept-Runner-Support (CLI + GUI-headless) ist Teil der Aufgabe. Abnahme: Matrix läuft in allen drei Modi grün, Kosten/Dauer dokumentiert.
 
 ### PRIO: mittel
 
