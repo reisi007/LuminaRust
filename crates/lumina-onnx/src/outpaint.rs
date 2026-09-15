@@ -110,7 +110,7 @@ impl StubOutpaintBackend {
         self.expand_with_manifest(image, width, height, request, &Self::manifest())
     }
 
-    fn expand_with_manifest(
+    pub(crate) fn expand_with_manifest(
         &self,
         image: &[u8],
         width: u32,

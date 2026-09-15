@@ -39,14 +39,15 @@
 //!
 //! **No silent divergence (REVIEW-GPU-DIVERGENCE-1).** [`unsupported_gpu_stages`]
 //! lists any recipe stage the pipeline cannot yet render (unbound
-//! SourceActions, invalid red-eye, generative edit, non-schema adjustment
+//! SourceActions, invalid red-eye, non-schema adjustment
 //! keys, …) and
 //! [`validate_gpu_recipe`] rejects every schema-invalid recipe with the CPU
 //! oracle's own error. On every entry point the outcome is loud and pixel-safe:
 //!
 //! - [`GpuContext::render_with_gpu`] routes such a recipe to the free
 //!   `render_cpu`, which runs the **full** `lumina_core::render_frame` chain
-//!   (spot healing, all adjustments, geometry, generative expand), so the
+//!   (spot healing, all adjustments, geometry, generative artifact
+//!   compositing), so the
 //!   CPU fallback is the complete reference — not a partial `apply_recipe`.
 //! - [`GpuContext::render_to_vram`] cannot CPU-route without a readback, so it
 //!   **refuses** the recipe with [`GpuError::RenderFailed`] rather than writing
@@ -287,8 +288,12 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// Dehaze), Noise Reduction, Sharpening, Effects (vignette + grain), Red-Eye,
 /// the legacy spot-heal geometry, source-action compositing (batched), geometry
 /// (crop / rotation / mirror), the manual lens correction
-/// (distortion/vignette/CA), perspective and Lens Blur (heuristic **and**
-/// external depth — the latter requires the caller to bind the depth plane).
+/// (distortion/vignette/CA), perspective, Lens Blur (heuristic **and**
+/// external depth — the latter requires the caller to bind the depth plane) and
+/// `generative_edit` since GEN-ONNX-1 Welle 2a (mid-geometry artifact
+/// compositing via [`GpuContext::render_with_gpu_and_generative`]; an
+/// artifact-blind render fails loudly in the geometry plan instead of routing
+/// to the CPU).
 ///
 /// Currently detected as unsupported:
 /// - any adjustment key outside [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] **at a
@@ -298,9 +303,6 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   GPU route; keys outside the schema have no neutral value and always flag);
 /// - non-empty SourceActions **unless** matching GPU source-action artifacts are
 ///   bound (see [`unsupported_gpu_stages_with_context`]);
-/// - `generative_edit` — the CPU reference expands the canvas, but its
-///   `fill_transparent_heuristic` is a sequential global BFS that is not yet
-///   ported to the GPU;
 /// - an **invalid** `red_eye` (out-of-range/NaN/duplicate id): a schema-valid
 ///   correction is GPU-rendered, but invalid values stay CPU-routed so the
 ///   oracle's loud rejection is preserved;
@@ -392,14 +394,22 @@ pub fn unsupported_gpu_stages_with_context(
     }
     // GPU-RENDER-PARITY-1 follow-up (gate completeness): the CPU reference
     // applies/validates these recipe stages (`apply_spot_heals_from_recipe` and
-    // `apply_generative_expand` in `render_frame_from_base`). The legacy
-    // `extras["spot_removals"]` heal geometry is now rendered by the dedicated
-    // GPU spot stage and validated at the entry ([`validate_gpu_recipe`]), so it
-    // no longer flags; a typed geometry-free `spot_removals` mirror shadow is
-    // tolerated exactly like the CPU oracle, and an isolated typed/generative
-    // entry is a hard error on **both** backends. `generative_edit` stays
-    // CPU-routed: its `fill_transparent_heuristic` is a sequential global BFS
-    // (see `validate`/lib.rs docs), not yet ported.
+    // the generative artifact compositing in `render_frame_from_base`). The
+    // legacy `extras["spot_removals"]` heal geometry is now rendered by the
+    // dedicated GPU spot stage and validated at the entry
+    // ([`validate_gpu_recipe`]), so it no longer flags; a typed geometry-free
+    // `spot_removals` mirror shadow is tolerated exactly like the CPU oracle,
+    // and an isolated typed/generative entry is a hard error on **both**
+    // backends.
+    //
+    // GEN-ONNX-1 Welle 2a: `generative_edit` is **no longer a CPU-routing
+    // reason**. The GPU geometry chain injects the caller-supplied
+    // `generative_canvas` at the oracle's mid-geometry positions
+    // ([`GpuContext::render_with_gpu_and_generative`]). The recipe-only gate
+    // cannot see the artifacts, so it does not flag the stage at all; a
+    // recipe-only render (no artifacts) of an active generative edit fails
+    // loudly in the geometry plan (`generative_artifact.missing`) instead of
+    // silently rendering unexpanded — never a blanket CPU route.
     // GPU-RENDER-PARITY-1 stage 3: Red-Eye (G-14) is now rendered by the
     // dedicated [stages::RedEyeParams] pass (inserted after Sharpening, before
     // Effects), so a schema-valid correction no longer routes to the CPU. An
@@ -410,9 +420,6 @@ pub fn unsupported_gpu_stages_with_context(
         if !red_eye_is_valid(red_eye) {
             reasons.push("red_eye (invalid)".into());
         }
-    }
-    if recipe.generative_edit.is_some() {
-        reasons.push("generative_edit".into());
     }
     // GPU-RENDER-PARITY-1 follow-up (item 7): the former `MAX_SOURCE_ACTIONS`
     // slot-limit reason is gone. The source-action stage now composites in
@@ -1330,14 +1337,15 @@ impl GpuContext {
         Ok(())
     }
 
-    /// The post-geometry output dimensions the active render would produce for
-    /// `recipe` (the size the lens-blur pass runs at). Used to validate a bound
-    /// external depth plane against the frame the oracle would blur.
+    /// Validate a bound external depth plane against the frame the oracle would
+    /// blur. `out_width`/`out_height` are the planned post-geometry output
+    /// dimensions the caller computed from the geometry plan (source dims when
+    /// no geometry is active).
     fn external_depth_view_for(
         &self,
         recipe: &EditRecipe,
-        width: u32,
-        height: u32,
+        out_width: u32,
+        out_height: u32,
     ) -> Result<Option<&wgpu::TextureView>, GpuError> {
         let Some(blur) = recipe
             .lens_blur
@@ -1349,10 +1357,6 @@ impl GpuContext {
         if blur.depth_artifact.is_none() {
             return Ok(None);
         }
-        let (out_w, out_h) = match geometry::GeometryPlan::from_recipe(recipe, width, height)? {
-            Some(plan) => (plan.output_width, plan.output_height),
-            None => (width, height),
-        };
         let Some(depth) = self.depth_plane.as_ref() else {
             return Err(GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
                 name: "lens_blur.depth_artifact".into(),
@@ -1361,7 +1365,7 @@ impl GpuContext {
                 maximum: 0.0,
             }));
         };
-        if depth.plane.width != out_w || depth.plane.height != out_h {
+        if depth.plane.width != out_width || depth.plane.height != out_height {
             return Err(GpuError::Core(lumina_core::CoreError::InvalidMaskPlane {
                 width: depth.plane.width,
                 height: depth.plane.height,
@@ -1638,44 +1642,81 @@ impl GpuContext {
     /// Each sub-stage is a self-contained fullscreen pass at its own output
     /// dimensions; earlier passes land in transient ping-pong textures that the
     /// next pass samples, mirroring the oracle's per-stage `ImageFrame` chain.
+    #[allow(clippy::too_many_arguments)]
     fn encode_geometry_chain(
         &self,
         resources: &GpuResources,
         geo: &geometry::GeometryPipelineState,
         plan: &geometry::GeometryPlan,
         input_view: &wgpu::TextureView,
+        final_texture: &wgpu::Texture,
         final_view: &wgpu::TextureView,
+        artifacts: &[Option<UploadedGenerativeArtifact>; 2],
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<(), GpuError> {
         use geometry::GeometryStep;
-        let last = plan.steps.len() - 1;
-        // Pre-allocate every non-final intermediate at its exact pass dims so
-        // the texture references stay stable for the whole loop.
-        let mut intermediates: Vec<wgpu::Texture> = Vec::new();
+        // GEN-ONNX-1 Welle 2a: `Substitute` steps swap the current texture to a
+        // caller-uploaded artifact (no shader pass). When the plan **ends** with
+        // a `Substitute` (trailing), that artifact is the render result: any
+        // earlier real render pass writes an intermediate and the trailing
+        // artifact is copied into `final_view` afterwards. Otherwise the last
+        // real pass writes `final_view` directly.
+        let trailing_substitute = plan.steps.last().is_some_and(GeometryStep::is_substitute);
+        let last_render = plan.steps.iter().rposition(|step| !step.is_substitute());
+        // The pass that writes `final_view`; `None` when a trailing substitute
+        // is the actual result, so the last real pass must go to an
+        // intermediate.
+        let final_pass = if trailing_substitute {
+            None
+        } else {
+            last_render
+        };
+        let mut intermediates: Vec<Option<wgpu::Texture>> = Vec::with_capacity(plan.steps.len());
         for (index, step) in plan.steps.iter().enumerate() {
-            if index != last {
+            if Some(index) != final_pass && !step.is_substitute() {
                 let (width, height) = step.out_dims();
-                intermediates.push(shaders::create_output_texture(
+                intermediates.push(Some(shaders::create_output_texture(
                     &resources.device,
                     width,
                     height,
                     &format!("lumina-gpu-geometry-intermediate-{index}"),
-                ));
+                )));
+            } else {
+                intermediates.push(None);
             }
         }
-        let intermediate_views: Vec<wgpu::TextureView> = intermediates
+        let intermediate_views: Vec<Option<wgpu::TextureView>> = intermediates
             .iter()
-            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .map(|texture| {
+                texture
+                    .as_ref()
+                    .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            })
             .collect();
 
         let mut current: &wgpu::TextureView = input_view;
         for (index, step) in plan.steps.iter().enumerate() {
-            let dst: &wgpu::TextureView = if index == last {
+            if let GeometryStep::Substitute { artifact_index, .. } = step {
+                let artifact = artifacts
+                    .get(*artifact_index)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(|| {
+                        GpuError::RenderFailed(format!(
+                            "generative artifact {artifact_index} was not uploaded for the geometry chain"
+                        ))
+                    })?;
+                current = &artifact.view;
+                continue;
+            }
+            let dst: &wgpu::TextureView = if Some(index) == final_pass {
                 final_view
             } else {
-                &intermediate_views[index]
+                intermediate_views[index]
+                    .as_ref()
+                    .expect("non-final render step is preallocated")
             };
             match step {
+                GeometryStep::Substitute { .. } => unreachable!("handled above"),
                 GeometryStep::Lens { params, .. } => encode_geometry_pass(
                     resources,
                     &geo.layout,
@@ -1732,6 +1773,41 @@ impl GpuContext {
                 ),
             }
             current = dst;
+        }
+
+        if trailing_substitute {
+            // The plan ends with a substitute: the trailing artifact is the
+            // render result (this also covers the substitute-only chain).
+            let Some(GeometryStep::Substitute { artifact_index, .. }) = plan.steps.last() else {
+                return Ok(());
+            };
+            let artifact = artifacts
+                .get(*artifact_index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    GpuError::RenderFailed(format!(
+                        "generative artifact {artifact_index} was not uploaded for the geometry chain"
+                    ))
+                })?;
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &artifact.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: final_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: plan.output_width,
+                    height: plan.output_height,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
         Ok(())
     }
@@ -2218,7 +2294,15 @@ impl GpuContext {
             .lens_blur
             .as_ref()
             .filter(|blur| lens_blur::stage_active(blur));
-        let lens_external_view = self.external_depth_view_for(recipe, frame.width, frame.height)?;
+        let lens_external_view = self.external_depth_view_for(
+            recipe,
+            geometry_plan
+                .as_ref()
+                .map_or(frame.width, |plan| plan.output_width),
+            geometry_plan
+                .as_ref()
+                .map_or(frame.height, |plan| plan.output_height),
+        )?;
         let needs_lens_blur = lens_blur_recipe.is_some_and(|blur| {
             lens_blur::radius_for(blur.blur_amount) > 0 && !lens_blur::has_no_effect(blur)
         });
@@ -2468,6 +2552,8 @@ impl GpuContext {
             let geo_target: &wgpu::TextureView = geometry_lens_intermediate_view
                 .as_ref()
                 .unwrap_or(&v.output_view);
+            let geo_final_texture: &wgpu::Texture =
+                geometry_lens_intermediate.as_ref().unwrap_or(&v.output);
             let mut geo_enc =
                 resources
                     .device
@@ -2484,7 +2570,9 @@ impl GpuContext {
                     geo,
                     plan,
                     geo_input,
+                    geo_final_texture,
                     geo_target,
+                    &[None, None],
                     &mut geo_enc,
                 )?;
             }
@@ -2916,7 +3004,8 @@ impl GpuContext {
     /// **Complete CPU reference on fallback.** `render_cpu` (this method's
     /// fallback) runs the full `lumina_core::render_frame` chain — spot
     /// healing, every adjustment stage (including Red-Eye), the decoupled
-    /// geometry stages (lens/fill/perspective/crop) and generative expand — so
+    /// geometry stages (lens/fill/perspective/crop) and generative artifact
+    /// compositing (which needs a caller-supplied artifact) — so
     /// a CPU-routed render is the complete reference, not a partial
     /// `apply_recipe`. Context the recipe-only API does not carry (mask layers,
     /// Lensfun correctors) stays the caller's responsibility (see
@@ -2944,20 +3033,50 @@ impl GpuContext {
         frame: &ImageFrame,
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
+        self.render_with_gpu_inner(frame, recipe, None)
+    }
+
+    /// GEN-ONNX-1 Welle 2a: [`Self::render_with_gpu`] with the caller-supplied
+    /// generative canvas artifacts.
+    ///
+    /// The artifact-aware entry point injects the composited canvases at the CPU
+    /// oracle's mid-geometry positions (`Lens → [auto-fill] → Perspective → CA →
+    /// [expand] → Crop`) instead of the former blanket CPU route. An active
+    /// `expand` without an artifact, a role/dimension mismatch, or an
+    /// artifact-blind call on an active generative recipe is a loud
+    /// [`GpuError`] — never a silent unexpanded render.
+    pub fn render_with_gpu_and_generative(
+        &self,
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+        generative: &lumina_core::GenerativeCanvasInput<'_>,
+    ) -> Result<Frame, GpuError> {
+        self.render_with_gpu_inner(frame, recipe, Some(generative))
+    }
+
+    fn render_with_gpu_inner(
+        &self,
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+        generative: Option<&lumina_core::GenerativeCanvasInput<'_>>,
+    ) -> Result<Frame, GpuError> {
+        let cpu_fallback = |frame: &ImageFrame| {
+            render_cpu_with_generative(
+                frame,
+                recipe,
+                self.depth_plane.as_ref().map(|plane| &plane.plane),
+                self.camera_white_balance(),
+                generative,
+            )
+        };
         // CAMERA-WB-WELLE (R2-MCP-01): validate the caller-bound As-Shot context
         // exactly like the CPU oracle (invalid gains abort before any pixel) and
         // thread it into every CPU-fallback render so a routed render keeps the
         // complete context contract. Valid gains are pixel-neutral on both
         // backends (the decoder already applied them).
         self.validate_bound_camera_white_balance()?;
-        let camera_white_balance = self.camera_white_balance();
         let Some(resources) = self.resources.as_ref() else {
-            return render_cpu(
-                frame,
-                recipe,
-                self.depth_plane.as_ref().map(|plane| &plane.plane),
-                camera_white_balance,
-            );
+            return cpu_fallback(frame);
         };
         // R2-GPU-06: a lost device must not panic — degrade to the CPU oracle.
         if resources
@@ -2965,12 +3084,7 @@ impl GpuContext {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             log::warn!("GPU device lost; routing render_with_gpu to CPU");
-            return render_cpu(
-                frame,
-                recipe,
-                self.depth_plane.as_ref().map(|plane| &plane.plane),
-                camera_white_balance,
-            );
+            return cpu_fallback(frame);
         }
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: never let the GPU path drop
         // recipe stages. Route to the CPU oracle loudly instead of rendering
@@ -2984,22 +3098,12 @@ impl GpuContext {
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
             log_cpu_routing_once(&unsupported, "render_with_gpu");
-            return render_cpu(
-                frame,
-                recipe,
-                self.depth_plane.as_ref().map(|plane| &plane.plane),
-                camera_white_balance,
-            );
+            return cpu_fallback(frame);
         }
         self.ensure_pipeline()?;
         let guard = self.pipeline.lock().unwrap();
         let Some(pipeline) = guard.as_ref() else {
-            return render_cpu(
-                frame,
-                recipe,
-                self.depth_plane.as_ref().map(|plane| &plane.plane),
-                camera_white_balance,
-            );
+            return cpu_fallback(frame);
         };
 
         let width = frame.width;
@@ -3078,7 +3182,28 @@ impl GpuContext {
         // GPU-RENDER-PARITY-1 geometry wave: plan the lens/perspective/CA/crop/
         // rotation/mirror chain (including its dimension math) before encoding.
         // A plan error mirrors the CPU oracle's own rejection.
-        let geometry_plan = geometry::GeometryPlan::from_recipe(recipe, width, height)?;
+        //
+        // GEN-ONNX-1 Welle 2a: an artifact-aware caller injects the generative
+        // canvas via `Substitute` steps at the oracle's mid-geometry positions.
+        // Without artifacts an active generative role is a loud plan error (no
+        // silent unexpanded render).
+        let plan_input = generative
+            .map(|g| geometry::GenerativePlanInput {
+                auto_fill: g.auto_fill.map(|a| (a.frame.width, a.frame.height)),
+                expand: g.expand.map(|a| (a.frame.width, a.frame.height)),
+            })
+            .unwrap_or_default();
+        let geometry_plan = geometry::GeometryPlan::from_recipe_with(
+            recipe,
+            width,
+            height,
+            &plan_input,
+            generative.is_some(),
+        )?;
+        let (plan_out_width, plan_out_height) =
+            geometry_plan.as_ref().map_or((width, height), |plan| {
+                (plan.output_width, plan.output_height)
+            });
 
         // GPU-RENDER-PARITY-1 lens-blur wave: the pass runs after geometry at
         // the oracle's post-crop dimensions. `external_depth_view_for` mirrors
@@ -3090,7 +3215,8 @@ impl GpuContext {
             .lens_blur
             .as_ref()
             .filter(|blur| lens_blur::stage_active(blur));
-        let lens_external_view = self.external_depth_view_for(recipe, width, height)?;
+        let lens_external_view =
+            self.external_depth_view_for(recipe, plan_out_width, plan_out_height)?;
         let lens_blur_pass = lens_blur_recipe.is_some_and(|blur| {
             lens_blur::radius_for(blur.blur_amount) > 0 && !lens_blur::has_no_effect(blur)
         });
@@ -3244,6 +3370,14 @@ impl GpuContext {
                     label: Some("lumina-gpu-readback-enc"),
                 });
         }
+        // GEN-ONNX-1 Welle 2a: upload the caller's generative canvases once so
+        // the geometry chain can substitute them without a shader pass.
+        let uploaded_artifacts: [Option<UploadedGenerativeArtifact>; 2] = match generative {
+            Some(generative) if geometry_plan.is_some() => {
+                upload_generative_artifacts(resources, generative)?
+            }
+            _ => [None, None],
+        };
         if let Some(plan) = geometry_plan.as_ref() {
             // GPU-RENDER-PARITY-1 geometry wave: run the lens/perspective/CA/
             // crop/rotation/mirror chain after the tone/post result. The final
@@ -3266,7 +3400,9 @@ impl GpuContext {
                     geo,
                     plan,
                     output_view,
+                    &final_texture,
                     &final_view,
+                    &uploaded_artifacts,
                     &mut encoder,
                 )?;
             }
@@ -3541,6 +3677,24 @@ impl GpuContext {
         render_cpu(frame, recipe, None, self.camera_white_balance())
     }
 
+    /// GEN-ONNX-1 Welle 2a: without the `gpu` feature every render is the full
+    /// CPU reference; the generative canvas artifacts are carried through so the
+    /// artifact-aware contract is identical to a GPU build.
+    pub fn render_with_gpu_and_generative(
+        &self,
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+        generative: &lumina_core::GenerativeCanvasInput<'_>,
+    ) -> Result<Frame, GpuError> {
+        render_cpu_with_generative(
+            frame,
+            recipe,
+            None,
+            self.camera_white_balance(),
+            Some(generative),
+        )
+    }
+
     pub fn perf_log_enabled() -> bool {
         false
     }
@@ -3570,7 +3724,8 @@ impl GpuContext {
 ///
 /// Runs the complete `lumina_core::render_frame` chain — spot healing, every
 /// adjustment stage (tone, color, Presence, Red-Eye), the decoupled geometry
-/// stages (lens/fill/perspective/crop) and generative expand — not just
+/// stages (lens/fill/perspective/crop) and generative artifact compositing —
+/// not just
 /// `ImageFrame::apply_recipe`. That keeps the CPU fallback a *complete*
 /// reference for every recipe-driven stage the GPU reports as unsupported
 /// (Agents.md: CPU bleibt vollständige Referenz; kein stiller Fallback).
@@ -3590,7 +3745,20 @@ fn render_cpu(
     depth: Option<&lumina_core::DepthPlane>,
     camera_white_balance: Option<[f32; 4]>,
 ) -> Result<Frame, GpuError> {
-    let output = lumina_core::render_frame(
+    render_cpu_with_generative(frame, recipe, depth, camera_white_balance, None)
+}
+
+/// GEN-ONNX-1 Welle 2a: the CPU reference render with caller-supplied
+/// generative canvas artifacts (used by the GPU fallback paths so a routed
+/// render carries the same generative context).
+fn render_cpu_with_generative(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    depth: Option<&lumina_core::DepthPlane>,
+    camera_white_balance: Option<[f32; 4]>,
+    generative: Option<&lumina_core::GenerativeCanvasInput<'_>>,
+) -> Result<Frame, GpuError> {
+    let output = lumina_core::render_frame_with_generative(
         frame,
         &lumina_core::RenderContext {
             recipe,
@@ -3600,6 +3768,7 @@ fn render_cpu(
             lensfun: None,
             depth,
         },
+        generative.copied().unwrap_or_default(),
     )?;
     Ok(Frame::from_image_frame(output.frame))
 }
@@ -4163,6 +4332,92 @@ struct RenderWithGpuResources {
     /// `input`, so repeated renders of the same source skip the CPU→GPU upload
     /// (R2-GPU-04, mirroring R2-GPU-01).
     input_source_identity: Option<(usize, usize)>,
+}
+
+/// GEN-ONNX-1 Welle 2a: one caller-supplied generative canvas uploaded to VRAM
+/// for the geometry-chain substitution (`Substitute` step).
+#[cfg(feature = "gpu")]
+struct UploadedGenerativeArtifact {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// Upload the caller's generative artifacts (auto-fill at index 0, expand at
+/// index 1) as `Rgba8Unorm` textures, validating role and dimensions. Missing
+/// roles stay `None` so the fixed indices the geometry plan uses are stable.
+#[cfg(feature = "gpu")]
+fn upload_generative_artifacts(
+    resources: &GpuResources,
+    generative: &lumina_core::GenerativeCanvasInput<'_>,
+) -> Result<[Option<UploadedGenerativeArtifact>; 2], GpuError> {
+    use lumina_core::GenerativeRole;
+    let mut slots: [Option<UploadedGenerativeArtifact>; 2] = [None, None];
+    let upload = |artifact: &lumina_core::GenerativeCanvasArtifact,
+                  expected_role: GenerativeRole,
+                  label: &str|
+     -> Result<UploadedGenerativeArtifact, GpuError> {
+        if artifact.role != expected_role {
+            return Err(GpuError::RenderFailed(format!(
+                "{label}: generative artifact role {:?} does not match {expected_role:?}",
+                artifact.role
+            )));
+        }
+        let frame = &artifact.frame;
+        if frame.pixels.len() != (frame.width as usize) * (frame.height as usize) * 4 {
+            return Err(GpuError::RenderFailed(format!(
+                "{label}: generative artifact pixel length does not match {}x{}",
+                frame.width, frame.height
+            )));
+        }
+        let texture = resources.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        resources.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &frame.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(frame.width * 4),
+                rows_per_image: Some(frame.height),
+            },
+            wgpu::Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Ok(UploadedGenerativeArtifact { texture, view })
+    };
+    if let Some(artifact) = generative.auto_fill {
+        slots[0] = Some(upload(
+            artifact,
+            GenerativeRole::AutoFillTransparent,
+            "auto-fill artifact",
+        )?);
+    }
+    if let Some(artifact) = generative.expand {
+        slots[1] = Some(upload(artifact, GenerativeRole::Expand, "expand artifact")?);
+    }
+    Ok(slots)
 }
 
 /// Create one pooled VRAM state: output (RGBA8) + mask (R16Uint) textures

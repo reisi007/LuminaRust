@@ -108,16 +108,23 @@ Die vollständige Pipeline verbleibt im Format `Rgba8Srgb` (sRGB-codiertes
 8-Bit-RGBA). Eine explizite Linearisierung in einen linearen Arbeitsraum
 erfolgt im aktuellen Raster-MVP **nicht**.
 
-> **Hinweis GenerativeEdit / Spot-Remove (GEN-EXPAND-1 / SPOT-REMOVE-1, Doku-first, 2026-09-02):**
+> **Hinweis GenerativeEdit / Spot-Remove (GEN-EXPAND-1 / SPOT-REMOVE-1, Stand 2026-09-15):**
 > Die generative Stufe `GenerativeEdit` (siehe `feature/product/generative-expand.md`) und die Spot-Stufe
-> `SpotHeal` (siehe `feature/product/spot-removal.md`) sind derzeit **nur dokumentiert, nicht implementiert**
-> (kein Code, `Pipeline::default()` unverändert). Ihre normative Ziel-Reihenfolge ist:
+> `SpotHeal` (siehe `feature/product/spot-removal.md`) sind implementiert; `Pipeline::default()`
+> bleibt bewusst die grobe Top-Level-Form, die `GenerativeEdit`-Unterschritte laufen entkoppelt
+> innerhalb der Geometrie. Ihre normative Reihenfolge ist:
 > `Decode → SourceActions → SpotHeal(quick/generative) → LensCorrection(F-098) → GenerativeEdit(auto-fill) → Perspective(F-099) → GenerativeEdit(expand) → Crop(F-093) → Output`,
 > vereinfacht `Lens → GenerativeEdit → Perspective → Crop` bzw. `SpotHeal → Lens → Perspective → Crop`.
 > Auto-Fill Transparent liegt **nach** Lens, manueller Expand (`expand_beyond_image`) **vor** Crop (nach Perspective);
 > `keep_generative_content` steuert, ob Crop das generative Canvas materialisiert. Spot-Generativ (`kind = "spot_heal_generative"`)
-> ist von `generative_canvas` getrennt (eigene Capability `inpaint`/`inpaint_heal`). Bis zur Implementierung bleibt die
-> MVP-Reihenfolge oben verbindlich; ein Widerspruch wird durch dieses Dokument zugunsten der dokumentierten Ziel-Reihenfolge aufgelöst.
+> ist von `generative_canvas` getrennt (eigene Capability `inpaint`/`inpaint_heal`).
+> **GEN-ONNX-1 Welle 2a (2026-09-15):** Die Stufe ist **Artefakt-Compositing** (kein Heuristik-BFS
+> mehr) und läuft auf GPU **und** CPU: Der Producer (`lumina-onnx`) erzeugt das kompositierte
+> `generative_canvas`-Artefakt samt vollständiger Identität (Rolle/Seed/Canvas/Pixel-Digest +
+> Prompt/Negativ-Prompt/Modell-Hash); der Renderer **adoptiert** es per Caller-Hook. GPU:
+> `GpuContext::render_with_gpu_and_generative` fügt an derselben mittigen Position einen
+> `Substitute`-Schritt ein (CPU-Oracle-Parität byte-identisch); ohne Artefakt ist der Render laut,
+> keine pauschale CPU-Route mehr.
 
 ## Arbeitsfarbraum (normativ)
 
@@ -1273,16 +1280,26 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   SourceAction-Batching (>7, byte-identisch), volle Nested-Range-Validierung
   am GPU-Eintritt (`validate.rs`, Error-Parität inkl. typed-/generative-Spots).
   Rest (Ziel: kein CPU-only-Zweig, User-Entscheid 2026-09-13):
-  generative_edit (bewusste, dokumentierte Ausnahme bis ONNX, User-Entscheid
-  2026-09-14: Heuristik-BFS nicht paritätserhaltend portierbar, laute
-  CPU-Route, kein stiller Fallback; Details in
-  `feature/product/generative-expand.md`)
-  sowie `geometry (default content crop)` (CROP-MAXRECT-1, 2026-09-14:
+  `geometry (default content crop)` (CROP-MAXRECT-1, 2026-09-14:
   datenabhängiges MaxRect ohne expliziten Crop laut CPU-geroutet);
   lebendes Inventar:
   `cpu_routing_inventory_is_complete`. Erledigt (Teilwelle,
   BESTANDEN, Commit 2026-09-14): Geometrie-Welle inkl. GUI-LENSFUN-GATE-1
-  (Details siehe Restrisiken); offene Nebenbefunde: Perf-Pooling,
+  (Details siehe Restrisiken); offene Nebenbefunde: Perf-Pooling.
+  Erledigt (Teilwelle, 2026-09-15, GEN-ONNX-1 Welle 2a; Verifikation
+  BESTANDEN, Re-Verifizierung 2026-09-15): `generative_edit` ist **nicht mehr**
+  CPU-geroutet. Der Renderer adoptiert das kompositierte
+  `generative_canvas`-Artefakt per Caller-Hook
+  (`GpuContext::render_with_gpu_and_generative`); die GPU-Geometrie-Kette fügt
+  einen `Substitute`-Schritt an der CPU-Oracle-Position ein
+  (`Lens → [auto-fill] → Perspective → CA → [expand] → Crop`) und ist
+  byte-identisch (`maxAbsDiff == 0`, siehe
+  `generative_canvas_compositing_is_gpu_parity` /
+  `generative_auto_fill_compositing_is_gpu_parity`). Ohne Artefakt ist der
+  Render laut (kein stiller unexpandierter Render, keine pauschale CPU-Route).
+  Der rezept-only VRAM-Pfad (`render_to_vram`) lehnt eine aktive generative
+  Stufe weiter laut ab (kein Injektionspunkt ohne Readback). Details in
+  `feature/product/generative-expand.md`.
 - **Present-Pfad:** `eframe` nutzt jetzt den **wgpu**-Renderer;
   `GpuContext::from_parts` teilt sich Renderer-Device/Queue, sodass die
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`

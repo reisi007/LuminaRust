@@ -34,8 +34,8 @@ pub enum PipelineStage {
 /// cache/RenderKey scope, so splitting them into top-level stages would churn
 /// every `RenderKey`/`stage_digest` consumer without cache benefit. The render
 /// entry points ([`crate::render_frame_from_base`]) implement exactly this
-/// order via `apply_lens_stage` → `apply_auto_fill_transparent` →
-/// `apply_perspective_stage` → `apply_generative_expand` → `apply_crop_stage`.
+/// order via `apply_lens_stage` → `composite_auto_fill` →
+/// `apply_perspective_stage` → `composite_expand` → `apply_crop_stage`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeometryStage {
     LensCorrection,

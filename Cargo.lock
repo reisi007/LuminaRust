@@ -2195,6 +2195,7 @@ dependencies = [
  "lumina-gpu",
  "lumina-iptc",
  "lumina-lensfun",
+ "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",
  "rfd",

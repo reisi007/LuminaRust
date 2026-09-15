@@ -716,6 +716,16 @@ pub(crate) enum GeometryStep {
         out_width: u32,
         out_height: u32,
     },
+    /// GEN-ONNX-1 Welle 2a: substitute the current frame with a caller-uploaded
+    /// generative canvas artifact (no shader pass — a texture swap). Mirrors the
+    /// CPU `composite_auto_fill`/`composite_expand` adoption.
+    Substitute {
+        /// Index into the caller's uploaded artifact views (0 = auto-fill,
+        /// 1 = expand).
+        artifact_index: usize,
+        out_width: u32,
+        out_height: u32,
+    },
     Crop {
         params: CropParams,
         out_width: u32,
@@ -734,6 +744,10 @@ pub(crate) enum GeometryStep {
 }
 
 impl GeometryStep {
+    pub(crate) fn is_substitute(&self) -> bool {
+        matches!(self, GeometryStep::Substitute { .. })
+    }
+
     pub(crate) fn out_dims(&self) -> (u32, u32) {
         match self {
             GeometryStep::Lens {
@@ -747,6 +761,11 @@ impl GeometryStep {
                 ..
             }
             | GeometryStep::Ca {
+                out_width,
+                out_height,
+                ..
+            }
+            | GeometryStep::Substitute {
                 out_width,
                 out_height,
                 ..
@@ -770,6 +789,18 @@ impl GeometryStep {
     }
 }
 
+/// GEN-ONNX-1 Welle 2a: caller-supplied generative canvas artifact dimensions.
+///
+/// `auto_fill`/`expand` are `Some((width, height))` when the artifact-aware
+/// caller wants that role substituted (the CLI passes `auto_fill = None` when
+/// the post-lens frame has no transparent pixels, which is the identity);
+/// `None` means "no substitution". See [`GeometryPlan::from_recipe`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct GenerativePlanInput {
+    pub auto_fill: Option<(u32, u32)>,
+    pub expand: Option<(u32, u32)>,
+}
+
 /// The ordered geometry pass chain plus its final output dimensions.
 pub(crate) struct GeometryPlan {
     pub steps: Vec<GeometryStep>,
@@ -778,18 +809,59 @@ pub(crate) struct GeometryPlan {
 }
 
 impl GeometryPlan {
-    /// Plan the geometry chain for `recipe` at `width`×`height`, mirroring the
-    /// CPU oracle's `apply_lens` → `apply_perspective` → `apply_ca` →
-    /// `apply_crop_stage` order and its dimension math. Returns `Ok(None)` when
-    /// no geometry sub-stage is active (byte-identical identity).
+    /// Plan the geometry chain for a **recipe-only** caller, mirroring
+    /// [`Self::from_recipe_with`]. Without an artifact-aware caller any active
+    /// generative role is a hard error (never a silent unexpanded render).
     pub(crate) fn from_recipe(
         recipe: &lumina_sidecar::EditRecipe,
         width: u32,
         height: u32,
     ) -> Result<Option<Self>, GpuError> {
+        Self::from_recipe_with(
+            recipe,
+            width,
+            height,
+            &GenerativePlanInput::default(),
+            false,
+        )
+    }
+
+    /// Plan the geometry chain for `recipe` at `width`×`height`, mirroring the
+    /// CPU oracle's `apply_lens` → `apply_perspective` → `apply_ca` →
+    /// `apply_crop_stage` order and its dimension math. Returns `Ok(None)` when
+    /// no geometry sub-stage is active (byte-identical identity).
+    ///
+    /// GEN-ONNX-1 Welle 2a: when `artifact_aware` is `true`, the caller has
+    /// supplied (or explicitly declined) the generative canvas artifacts via
+    /// `generative`, so the chain injects a
+    /// [`GeometryStep::Substitute`] at the CPU oracle's mid-geometry positions
+    /// (`Lens → [auto-fill] → Perspective → CA → [expand] → Crop`) and validates
+    /// role/dimensions exactly like `composite_auto_fill`/`composite_expand`. An
+    /// active `expand` without an artifact, or a dimension mismatch, is a loud
+    /// error. When `artifact_aware` is `false`, any active generative role is an
+    /// error (the recipe-only caller cannot supply the artifact).
+    pub(crate) fn from_recipe_with(
+        recipe: &lumina_sidecar::EditRecipe,
+        width: u32,
+        height: u32,
+        generative: &GenerativePlanInput,
+        artifact_aware: bool,
+    ) -> Result<Option<Self>, GpuError> {
         let lens = recipe.lens_correction.as_ref();
         let perspective = recipe.perspective.as_ref().filter(|p| !is_neutral(p));
         let geometry = recipe.geometry.as_ref();
+        let edit = recipe.generative_edit.as_ref();
+        let auto_fill_active = edit.is_some_and(|e| e.auto_fill_transparent.unwrap_or(false));
+        let expand_active = edit.is_some_and(|e| e.effective_expand());
+
+        if !artifact_aware && (auto_fill_active || expand_active) {
+            return Err(invalid(
+                "generative_artifact.missing (GPU entry without artifacts)",
+                0.0,
+                0.0,
+                1.0,
+            ));
+        }
 
         let mut steps: Vec<GeometryStep> = Vec::new();
         let mut cw = width;
@@ -802,6 +874,30 @@ impl GeometryPlan {
                 out_width: cw,
                 out_height: ch,
             });
+        }
+
+        // Auto-fill substitutes the post-lens frame (source-sized) and runs
+        // before perspective, exactly like `composite_auto_fill`.
+        if auto_fill_active {
+            if let Some((aw, ah)) = generative.auto_fill {
+                if (aw, ah) != (cw, ch) {
+                    return Err(invalid(
+                        "generative_artifact.auto_fill.dimensions",
+                        aw as f64,
+                        cw as f64,
+                        cw as f64,
+                    ));
+                }
+                steps.push(GeometryStep::Substitute {
+                    artifact_index: 0,
+                    out_width: aw,
+                    out_height: ah,
+                });
+                cw = aw;
+                ch = ah;
+            }
+            // `auto_fill = None` with the role active is the caller's
+            // "no transparent pixels" identity — no substitution.
         }
 
         if let Some(p) = perspective {
@@ -823,6 +919,44 @@ impl GeometryPlan {
                 out_width: cw,
                 out_height: ch,
             });
+        }
+
+        // Expand substitutes the post-perspective/CA frame with the (larger)
+        // canvas and runs before crop, exactly like `composite_expand`.
+        if expand_active {
+            let canvas = edit
+                .and_then(|e| e.canvas.as_ref())
+                .ok_or_else(|| invalid("generative_expand.canvas", 0.0, 1.0, 1.0))?;
+            let Some((aw, ah)) = generative.expand else {
+                return Err(invalid("generative_artifact.expand.missing", 0.0, 0.0, 1.0));
+            };
+            if (aw, ah) != (canvas.output_width, canvas.output_height) {
+                return Err(invalid(
+                    "generative_artifact.expand.dimensions",
+                    aw as f64,
+                    canvas.output_width as f64,
+                    canvas.output_width as f64,
+                ));
+            }
+            // CPU `validate_expand_canvas`: must grow on at least one edge and
+            // keep the source inside the canvas.
+            if canvas.output_width <= cw && canvas.output_height <= ch {
+                return Err(invalid("generative_expand.canvas", 0.0, 1.0, 1.0));
+            }
+            if canvas.source_offset_x < 0
+                || canvas.source_offset_y < 0
+                || canvas.source_offset_x as u64 + cw as u64 > canvas.output_width as u64
+                || canvas.source_offset_y as u64 + ch as u64 > canvas.output_height as u64
+            {
+                return Err(invalid("generative_expand.bounds", 0.0, 0.0, 1.0));
+            }
+            steps.push(GeometryStep::Substitute {
+                artifact_index: 1,
+                out_width: aw,
+                out_height: ah,
+            });
+            cw = aw;
+            ch = ah;
         }
 
         if let Some(g) = geometry {
@@ -1349,6 +1483,7 @@ mod tests {
                 GeometryStep::Lens { .. } => "lens",
                 GeometryStep::Perspective { .. } => "perspective",
                 GeometryStep::Ca { .. } => "ca",
+                GeometryStep::Substitute { .. } => "substitute",
                 GeometryStep::Crop { .. } => "crop",
                 GeometryStep::Rotate { .. } => "rotate",
                 GeometryStep::Mirror { .. } => "mirror",

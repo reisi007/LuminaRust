@@ -2841,3 +2841,155 @@ fn filmstrip_twenty_dummies() {
     assert_contains_on_screen(&mut harness, "of 20");
     harness.snapshot("filmstrip_twenty_dummies");
 }
+
+// ---------------------------------------------------------------------------
+// GEN-ONNX-1 Welle 2b: Generative Expand / Auto-Fill panel goldens.
+//
+// The visible GUI change of the wave is the `Generative Expand` section: the
+// `Generate` action and the per-role status label (`valid`/`stale`/`missing`/
+// `corrupt`), plus the auto-fill toggle. Pattern per test
+// (KITTEST-COVERAGE-*): deterministic seeds through the public API, a
+// non-vacuous model/label guard + on-screen assert, cursor parked outside the
+// frame, then `snapshot`.
+//
+// The panel is a plain `ui.collapsing("Generative Expand", …)` rendered after
+// the eight F-100 sections (not a `section_open` index), so the existing
+// `open_collapsing_and_scroll_to` helper opens it. The generate action needs a
+// real path to write its `.lumina.zdata` bundle, so those tests load a
+// **committed relative fixture** (`tests/fixtures/generative/…`): the Develop
+// panel renders the loaded path, and a `tempfile::tempdir` prefix would leak
+// nondeterministic pixels into the golden (exactly the `LIBRARY_FIXTURE_DIR`
+// rationale — the path field is on-screen at this scroll position, unlike the
+// existing overlay goldens). The generated sidecar/`.zdata` are gitignored and
+// cleared on every run.
+//
+// Crop-decision (`keep_generative_content`) goldens are intentionally absent:
+// no GUI control exists yet for that field (the wave exposes expand + auto-fill
+// only). The auto-fill wedge case is covered by `generative_auto_fill_panel`.
+// ---------------------------------------------------------------------------
+
+/// Committed relative fixture directory for the generative panel goldens (see
+/// the block comment above for why a tempdir is wrong here).
+const GENERATIVE_FIXTURE_DIR: &str = "tests/fixtures/generative";
+
+/// (Re-)write one deterministic generative-panel fixture and clear its stale
+/// sidecar/`.zdata` from a previous run. Returns the *relative* source path.
+/// Idempotent.
+fn ensure_generative_fixture(name: &str, png: Vec<u8>) -> PathBuf {
+    let root = Path::new(GENERATIVE_FIXTURE_DIR);
+    std::fs::create_dir_all(root).expect("create generative fixture dir");
+    let source = root.join(name);
+    std::fs::write(&source, png).expect("write generative fixture");
+    let _ = std::fs::remove_file(lumina_sidecar::sidecar_path_for(&source));
+    let _ = std::fs::remove_file(lumina_sidecar::zdata_path_for(&source));
+    source
+}
+
+/// The Generative Expand panel in its default (off) state: both toggles off,
+/// the hint visible and no generate/status row (no active role). Non-vacuous
+/// guard: both toggles are on-screen, so the golden cannot pass on a collapsed
+/// header.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn generative_expand_panel_off() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    load_sample(&mut harness);
+    open_collapsing_and_scroll_to(&mut harness, "Generative Expand", "Expand beyond image");
+    assert_label_on_screen(&mut harness, "Expand beyond image");
+    assert_label_on_screen(&mut harness, "Auto-fill transparent pixels (after lens)");
+    // No active role → no generate/status row (the state this golden pins).
+    assert!(
+        harness.query_all_by_label("Generate").next().is_none(),
+        "an inactive generative edit must not show the Generate action"
+    );
+    harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
+    harness.run_steps(2);
+    harness.snapshot("generative_expand_panel_off");
+}
+
+/// The Generative Expand panel after confirming/generating the expand canvas:
+/// the canvas row, the `Generate` action and the `valid` status label are
+/// pixel-visible. Uses a committed relative PNG so the generate action can
+/// persist its sidecar bundle without leaking a tempdir path into the golden;
+/// the non-vacuous guard proves the recipe really generated (`Expand: valid`).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn generative_expand_panel_ready() {
+    let source = ensure_generative_fixture("photo.png", LuminaApp::sample_image_png());
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    open_file_and_restore_fixture(&mut harness, &source, |app| app.preview_generation() >= 1);
+    // Arm the expand role (loud until a canvas exists) and generate the
+    // deterministic fixture canvas + persisted bundle.
+    let _ = harness.state_mut().set_expand_beyond_image(true);
+    harness
+        .state_mut()
+        .generate_generative_canvas()
+        .expect("generate the expand fixture canvas");
+    // Non-vacuous model guard: the recipe is really armed and the canvas
+    // resolved valid — otherwise the golden could pass on an empty panel.
+    assert!(
+        harness
+            .state_mut()
+            .recipe()
+            .generative_edit
+            .as_ref()
+            .is_some_and(|edit| edit.effective_expand()),
+        "the expand role must be armed"
+    );
+    open_collapsing_and_scroll_to(&mut harness, "Generative Expand", "Generate");
+    assert_label_on_screen(&mut harness, "Generate");
+    assert_label_on_screen(&mut harness, "Generative canvas — Expand: valid");
+    harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
+    harness.run_steps(2);
+    harness.snapshot("generative_expand_panel_ready");
+}
+
+/// The auto-fill role after generation: a deterministic source with a
+/// transparent border (the SOLL "Auto-Fill-Keile" case) is healed, and the
+/// panel shows `AutoFillTransparent: valid`. Proves the auto-fill toggle +
+/// generate path is pixel-visible, not just the expand role.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn generative_auto_fill_panel() {
+    // 64x64 with an 8px fully transparent frame: deterministic, no lens model.
+    let mut pixels = Vec::with_capacity(64 * 64 * 4);
+    for y in 0..64 {
+        for x in 0..64 {
+            let alpha = if x < 8 || y < 8 { 0 } else { 255 };
+            pixels.extend_from_slice(&[120, 140, 160, alpha]);
+        }
+    }
+    let frame = ImageFrame::new(64, 64, pixels).expect("fixture frame");
+    let source = ensure_generative_fixture(
+        "auto_fill.png",
+        frame.encode(ImageFileFormat::Png).expect("png encodes"),
+    );
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    open_file_and_restore_fixture(&mut harness, &source, |app| app.preview_generation() >= 1);
+    let _ = harness.state_mut().set_auto_fill_transparent(true);
+    harness
+        .state_mut()
+        .generate_generative_canvas()
+        .expect("generate the auto-fill fixture canvas");
+    assert!(
+        harness
+            .state_mut()
+            .recipe()
+            .generative_edit
+            .as_ref()
+            .is_some_and(|edit| edit.auto_fill_transparent.unwrap_or(false)),
+        "the auto-fill role must be armed"
+    );
+    open_collapsing_and_scroll_to(&mut harness, "Generative Expand", "Generate");
+    assert_label_on_screen(&mut harness, "Generate");
+    assert_label_on_screen(
+        &mut harness,
+        "Generative canvas — AutoFillTransparent: valid",
+    );
+    harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
+    harness.run_steps(2);
+    harness.snapshot("generative_auto_fill_panel");
+}

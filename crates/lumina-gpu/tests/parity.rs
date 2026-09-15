@@ -24,7 +24,9 @@
 #![cfg(feature = "gpu")]
 
 use lumina_core::{
-    render_frame, DepthPlane, ImageFrame, MaskPlane, RenderContext, SourceActionArtifact,
+    render_frame, render_frame_with_generative, DepthPlane, GenerativeCanvasArtifact,
+    GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFrame, MaskPlane,
+    RenderContext, SourceActionArtifact,
 };
 use lumina_gpu::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
@@ -72,6 +74,16 @@ fn gradient_frame(width: u32, height: u32) -> ImageFrame {
         }
     }
     ImageFrame::new(width, height, pixels).expect("synthetic gradient frame")
+}
+
+/// A flat RGBA8 frame (used for generative artifacts where any divergence from
+/// the substituted canvas is obvious).
+fn solid_frame(width: u32, height: u32, rgba: [u8; 4]) -> ImageFrame {
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for _ in 0..width * height {
+        pixels.extend_from_slice(&rgba);
+    }
+    ImageFrame::new(width, height, pixels).expect("synthetic solid frame")
 }
 
 fn noise_frame(width: u32, height: u32, seed: u64) -> ImageFrame {
@@ -2026,11 +2038,11 @@ fn vram_path_applies_red_eye() {
 }
 
 /// A recipe that still uses an unimplemented stage stays CPU-routed and yields
-/// CPU-identical pixels; this guards the "no third state" rule. `generative_edit`
-/// is the remaining recipe-expressible class (its sequential transparent-fill
-/// BFS is not ported).
+/// GEN-ONNX-1 Welle 2a: `generative_edit` is no longer a CPU-routing reason, but
+/// an **artifact-blind** render (recipe-only GPU entry / CPU `render_frame`) must
+/// still refuse loudly instead of rendering unexpanded.
 #[test]
-fn unimplemented_stages_still_route_to_cpu() {
+fn artifact_blind_generative_render_is_loud_not_routed() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -2040,16 +2052,96 @@ fn unimplemented_stages_still_route_to_cpu() {
     };
     let frame = gradient_frame(48, 48);
     let recipe = generative_expand_recipe();
-    let reasons = unsupported_gpu_stages(&recipe);
+    // Welle 2a: no blanket CPU route anymore — the stage is GPU-eligible.
     assert!(
-        reasons.iter().any(|r| r.contains("generative_edit")),
-        "{reasons:?}"
+        unsupported_gpu_stages(&recipe).is_empty(),
+        "generative_edit must not be a routing reason: {:?}",
+        unsupported_gpu_stages(&recipe)
     );
     if !ctx.is_available() {
         eprintln!("{SKIP_MESSAGE} - validator-only assertion");
         return;
     }
-    let cpu = render_frame(
+    // Without an artifact both the CPU oracle and the artifact-blind GPU entry
+    // reject loudly (no silent unexpanded render, no third state).
+    let context = RenderContext {
+        recipe: &recipe,
+        camera_white_balance: None,
+        source_actions: &[],
+        masks: None,
+        lensfun: None,
+        depth: None,
+    };
+    assert!(
+        render_frame(&frame, &context).is_err(),
+        "the CPU oracle must refuse an expand without a composited canvas"
+    );
+    assert!(
+        ctx.render_with_gpu(&frame, &recipe).is_err(),
+        "the artifact-blind GPU entry must refuse an expand without a canvas"
+    );
+    // With the artifact the artifact-aware GPU entry renders successfully.
+    let canvas = lumina_core::generative::apply_generative_expand(&frame, &recipe)
+        .expect("deterministic producer");
+    let artifact = GenerativeCanvasArtifact::new(CoreGenerativeRole::Expand, canvas);
+    let result = ctx.render_with_gpu_and_generative(
+        &frame,
+        &recipe,
+        &GenerativeCanvasInput {
+            auto_fill: None,
+            expand: Some(&artifact),
+        },
+    );
+    assert!(
+        result.is_ok(),
+        "the artifact-aware GPU entry must render an expand with a canvas: {:?}",
+        result.err()
+    );
+}
+
+/// GEN-ONNX-1 Welle 2a GPU parity of the mid-geometry expand compositing: the
+/// chain is `Substitute(expand) → Crop` (an exact integer crop after the
+/// substitution). The compositing itself is a texture swap, so parity is
+/// byte-identical (`maxAbsDiff == 0`), matching the other exact stages.
+#[test]
+fn generative_canvas_compositing_is_gpu_parity() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped compositing parity");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let frame = gradient_frame(48, 48);
+    let mut recipe = generative_expand_recipe();
+    // Force a render pass *after* the substitution so the mid-chain insertion is
+    // exercised (an exact 0.5 crop; the crop pass is a pure integer copy).
+    recipe.geometry = Some(Geometry {
+        version: 1,
+        crop: Some(Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 0.5,
+            height: 0.5,
+        }),
+        rotation_degrees: 0.0,
+        mirror_horizontal: false,
+        mirror_vertical: false,
+    });
+    // Deterministic producer: the exact canvas the render will adopt.
+    let canvas_frame = lumina_core::generative::apply_generative_expand(&frame, &recipe)
+        .expect("deterministic producer");
+    let artifact = GenerativeCanvasArtifact::new(CoreGenerativeRole::Expand, canvas_frame);
+
+    let input = GenerativeCanvasInput {
+        auto_fill: None,
+        expand: Some(&artifact),
+    };
+    let cpu = render_frame_with_generative(
         &frame,
         &RenderContext {
             recipe: &recipe,
@@ -2059,11 +2151,205 @@ fn unimplemented_stages_still_route_to_cpu() {
             lensfun: None,
             depth: None,
         },
+        input,
     )
-    .expect("CPU oracle render")
+    .expect("CPU oracle compositing render")
     .frame;
-    let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
-    assert_eq!(max_abs_diff(&cpu.pixels, &gpu.pixels), 0);
+
+    let gpu = ctx
+        .render_with_gpu_and_generative(&frame, &recipe, &input)
+        .expect("GPU generative render");
+
+    assert_eq!(
+        (cpu.width, cpu.height),
+        (gpu.width, gpu.height),
+        "composited dimensions must match on both backends"
+    );
+    assert_eq!(
+        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        0,
+        "the expand compositing + downstream crop must be GPU-parity"
+    );
+}
+
+/// GEN-ONNX-1 Welle 2a GPU parity of the auto-fill compositing: the plan is a
+/// single `Substitute(auto-fill)` (no other geometry), which exercises the
+/// "only substitutions → copy into the final texture" path. Byte-identical.
+#[test]
+fn generative_auto_fill_compositing_is_gpu_parity() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped auto-fill parity");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    // 32x32 frame with a transparent border wedge.
+    let mut pixels = vec![0u8; 32 * 32 * 4];
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let idx = ((y * 32 + x) * 4) as usize;
+            if x < 4 || y < 4 || x >= 28 || y >= 28 {
+                pixels[idx + 3] = 0;
+            } else {
+                let v = if (x + y) % 2 == 0 { 20 } else { 230 };
+                pixels[idx] = v;
+                pixels[idx + 1] = v;
+                pixels[idx + 2] = v;
+                pixels[idx + 3] = 255;
+            }
+        }
+    }
+    let frame = ImageFrame::new(32, 32, pixels).unwrap();
+    let recipe = EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: Some(11),
+            prompt: None,
+            extras: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
+    // Deterministic producer over the post-lens frame (no lens here).
+    let mut canvas = frame.clone();
+    lumina_core::generative::fill_transparent_heuristic(&mut canvas, 11);
+    let artifact = GenerativeCanvasArtifact::new(CoreGenerativeRole::AutoFillTransparent, canvas);
+    let input = GenerativeCanvasInput {
+        auto_fill: Some(&artifact),
+        expand: None,
+    };
+
+    let cpu = render_frame_with_generative(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+        input,
+    )
+    .expect("CPU oracle auto-fill render")
+    .frame;
+    let gpu = ctx
+        .render_with_gpu_and_generative(&frame, &recipe, &input)
+        .expect("GPU auto-fill render");
+    assert_eq!((cpu.width, cpu.height), (32, 32));
+    assert_eq!(
+        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        0,
+        "the auto-fill compositing must be GPU-parity"
+    );
+}
+
+/// GEN-ONNX-1 Welle 2a BLOCKER fix: a real render pass **before** a trailing
+/// `Substitute` must not discard the artifact. Recipe: a manual lens pass (real
+/// geometry) plus an explicit full-frame crop, then expand (trailing substitute,
+/// no crop step). The CPU oracle discards the lens output (`composite_expand`
+/// replaces the frame); the GPU must return the artifact, not the lens output.
+/// Before the fix this silently returned the lens texture (`Ok`, 4022/4096
+/// bytes divergent).
+#[test]
+fn generative_trailing_substitute_after_render_pass_is_gpu_parity() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped trailing-substitute parity");
+            return;
+        }
+    };
+    if !ctx.is_available() {
+        eprintln!("{SKIP_MESSAGE}");
+        return;
+    }
+    let frame = gradient_frame(48, 48);
+    let mut recipe = generative_expand_recipe();
+    // A real geometry render pass before the trailing substitute…
+    recipe.lens_correction = Some(LensCorrection {
+        version: 1,
+        profile: None,
+        distortion_k1: Some(0.2),
+        distortion_k2: None,
+        distortion_k3: None,
+        vignette_c0: None,
+        vignette_c1: None,
+        vignette_c2: None,
+        ca_red: None,
+        ca_blue: None,
+    });
+    // …and an explicit (authoritative) full-frame crop so no default
+    // content-crop reason applies; the crop is the identity and adds no step.
+    recipe.geometry = Some(Geometry {
+        version: 1,
+        crop: Some(Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }),
+        rotation_degrees: 0.0,
+        mirror_horizontal: false,
+        mirror_vertical: false,
+    });
+    // A flat artifact makes any divergence (lens output vs artifact) obvious.
+    let artifact = GenerativeCanvasArtifact::new(
+        CoreGenerativeRole::Expand,
+        solid_frame(128, 96, [10, 20, 30, 255]),
+    );
+    let input = GenerativeCanvasInput {
+        auto_fill: None,
+        expand: Some(&artifact),
+    };
+
+    let cpu = render_frame_with_generative(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+        input,
+    )
+    .expect("CPU oracle trailing-substitute render")
+    .frame;
+    let gpu = ctx
+        .render_with_gpu_and_generative(&frame, &recipe, &input)
+        .expect("GPU trailing-substitute render");
+
+    assert_eq!(
+        (cpu.width, cpu.height),
+        (128, 96),
+        "the CPU oracle result is the expand canvas"
+    );
+    assert_eq!(
+        (gpu.width, gpu.height),
+        (128, 96),
+        "the GPU must return the trailing artifact, not the lens pass output"
+    );
+    assert_eq!(
+        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        0,
+        "a render pass before a trailing substitute must not be served as the result"
+    );
+    assert_eq!(
+        &gpu.pixels[..4],
+        &[10, 20, 30, 255],
+        "the GPU result is the substituted artifact"
+    );
 }
 
 /// A Red-Eye recipe with a real, pixel-effective region on a red frame.
@@ -2147,25 +2433,34 @@ fn generative_expand_recipe() -> EditRecipe {
     }
 }
 
-/// GPU-RENDER-PARITY-1 follow-up (gate completeness): `generative_edit` and an
-/// **invalid** red-eye correction are the remaining recipe stages that are
-/// applied/validated by the CPU reference but not implemented on the GPU, so
-/// every one must be reported as CPU-only. A valid red-eye correction and the
-/// legacy `extras["spot_removals"]` heal geometry are now GPU-rendered and
-/// therefore must NOT be flagged; a typed geometry-free mirror shadow is
-/// tolerated exactly like the CPU oracle when the extras geometry is present,
-/// and an isolated typed entry is a **hard error on both backends** (asserted by
+/// GEN-ONNX-1: a generative edit with **no active role** is the identity and
+/// needs no artifact, while still being CPU-only-gated as a recipe class.
+fn generative_identity_recipe() -> EditRecipe {
+    let mut recipe = generative_expand_recipe();
+    if let Some(edit) = recipe.generative_edit.as_mut() {
+        edit.canvas = None;
+        edit.expand_beyond_image = None;
+        edit.auto_fill_transparent = None;
+    }
+    recipe
+}
+
+/// GPU-RENDER-PARITY-1 follow-up (gate completeness) + GEN-ONNX-1 Welle 2a: an
+/// **invalid** red-eye correction is the remaining recipe stage that is
+/// validated by the CPU reference but not implemented on the GPU, so it must be
+/// reported as CPU-only. A valid red-eye correction, the legacy
+/// `extras["spot_removals"]` heal geometry and `generative_edit` (mid-geometry
+/// artifact compositing) are GPU-rendered and therefore must NOT be flagged; a
+/// typed geometry-free mirror shadow is tolerated exactly like the CPU oracle
+/// when the extras geometry is present, and an isolated typed entry is a
+/// **hard error on both backends** (asserted by
 /// `typed_spot_without_extras_is_a_hard_error_on_both_backends`) instead of a
 /// routing reason.
 #[test]
 fn cpu_only_recipe_stages_are_gated() {
-    let generative = generative_expand_recipe();
     let invalid_red_eye = invalid_red_eye_recipe();
 
-    let cases: Vec<(&str, &EditRecipe)> = vec![
-        ("red_eye", &invalid_red_eye),
-        ("generative_edit", &generative),
-    ];
+    let cases: Vec<(&str, &EditRecipe)> = vec![("red_eye", &invalid_red_eye)];
 
     for (expected_reason, recipe) in &cases {
         let reasons = unsupported_gpu_stages(recipe);
@@ -2175,8 +2470,9 @@ fn cpu_only_recipe_stages_are_gated() {
         );
     }
 
-    // GPU-eligible now: a valid red-eye correction, legacy spot geometry, and a
-    // geometry-free typed mirror shadow paired with that extras geometry.
+    // GPU-eligible now: a valid red-eye correction, legacy spot geometry, a
+    // geometry-free typed mirror shadow paired with that extras geometry, and
+    // the generative edit (artifact-aware GPU entry).
     assert!(
         unsupported_gpu_stages(&red_eye_recipe()).is_empty(),
         "a valid red-eye correction must be GPU-eligible"
@@ -2191,21 +2487,27 @@ fn cpu_only_recipe_stages_are_gated() {
         unsupported_gpu_stages(&shadow).is_empty(),
         "a geometry-free typed shadow with extras geometry must be GPU-eligible"
     );
+    assert!(
+        unsupported_gpu_stages(&generative_expand_recipe()).is_empty(),
+        "generative_edit must be GPU-eligible via artifact compositing (Welle 2a)"
+    );
 
-    // The compound recipe (every remaining CPU-only stage at once) still reports
-    // both of them.
+    // The compound recipe (invalid red-eye + generative edit) reports only the
+    // genuinely unsupported invalid red-eye now.
     let all = EditRecipe {
         red_eye: invalid_red_eye.red_eye.clone(),
-        generative_edit: generative.generative_edit.clone(),
+        generative_edit: generative_expand_recipe().generative_edit.clone(),
         ..Default::default()
     };
     let reasons = unsupported_gpu_stages(&all);
-    for expected in ["red_eye", "generative_edit"] {
-        assert!(
-            reasons.iter().any(|r| r.contains(expected)),
-            "compound recipe must keep `{expected}`: {reasons:?}"
-        );
-    }
+    assert!(
+        reasons.iter().any(|r| r.contains("red_eye")),
+        "compound recipe must keep `red_eye`: {reasons:?}"
+    );
+    assert!(
+        !reasons.iter().any(|r| r.contains("generative_edit")),
+        "compound recipe must not flag the GPU-capable generative stage: {reasons:?}"
+    );
 }
 
 /// GPU-RENDER-PARITY-1 follow-up: a typed `spot_removals` entry without the
@@ -2288,10 +2590,12 @@ fn red_frame(width: u32, height: u32) -> ImageFrame {
 }
 
 /// Blocker-1 resolution: `render_with_gpu`'s fallback is the **full**
-/// `lumina_core::render_frame` chain. `generative_edit` is still CPU-routed and
-/// its fallback pixels must be byte-identical to `render_frame` (including a
-/// generative canvas that *changes the frame dimensions*); the legacy spot
-/// geometry is now GPU-rendered and must match the oracle byte-for-byte through
+/// `lumina_core::render_frame` chain. The (role-inactive) generative recipe is
+/// CPU-routed as a fallback example and its pixels must be byte-identical to
+/// `render_frame`; an *active* generative edit has no artifact on the CPU
+/// fallback and must be rejected loudly by both backends (GEN-ONNX-1 Welle 2a —
+/// no blanket route, no silent unexpanded render). The legacy spot
+/// geometry is GPU-rendered and must match the oracle byte-for-byte through
 /// the GPU spot pass. For a recipe the reference rejects (isolated typed spot),
 /// the GPU entry must reject it too — never silently drop it.
 #[test]
@@ -2311,11 +2615,11 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
     let frame = gradient_frame(48, 48);
 
     // Renderable recipes: legacy spots go through the GPU spot pass, the
-    // generative canvas through the full CPU fallback — both must equal the
-    // full `render_frame` oracle (dimensions and bytes).
+    // (role-inactive) generative recipe through the full CPU fallback — both
+    // must equal the full `render_frame` oracle (dimensions and bytes).
     let renderable: Vec<(&str, &ImageFrame, EditRecipe)> = vec![
         ("legacy_spot", &frame, legacy_spot_recipe()),
-        ("generative_expand", &frame, generative_expand_recipe()),
+        ("generative_identity", &frame, generative_identity_recipe()),
     ];
     for (name, source, recipe) in renderable {
         let oracle = render_frame(
@@ -2345,6 +2649,29 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
             "{name}: fallback must be byte-identical to the full CPU reference"
         );
     }
+
+    // GEN-ONNX-1: an *active* expand without a composited canvas artifact is
+    // refused loudly by both backends (no silent unexpanded render).
+    let active = generative_expand_recipe();
+    assert!(
+        render_frame(
+            &frame,
+            &RenderContext {
+                recipe: &active,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+        )
+        .is_err(),
+        "an active expand without an artifact must be a hard CPU error"
+    );
+    assert!(
+        ctx.render_with_gpu(&frame, &active).is_err(),
+        "the GPU fallback must refuse an active expand without an artifact"
+    );
 
     // A recipe the reference rejects must be rejected loudly, not dropped.
     let typed = typed_spot_recipe();
@@ -2393,7 +2720,9 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
 }
 
 /// `render_to_vram` cannot CPU-route without a readback, so it must refuse a
-/// recipe with unsupported stages (no divergent pixels in the VRAM output).
+/// recipe it cannot render (no divergent pixels in the VRAM output). GEN-ONNX-1
+/// Welle 2a: an active generative edit is no longer a routing *reason*, but the
+/// artifact-blind VRAM path still refuses it loudly (no artifact injection).
 #[test]
 fn vram_path_refuses_unsupported_recipes() {
     let ctx = match GpuContext::new() {
@@ -2411,14 +2740,13 @@ fn vram_path_refuses_unsupported_recipes() {
     ctx.ensure_vram(16, 16).expect("vram state");
     let recipe = generative_expand_recipe();
     assert!(
-        unsupported_gpu_stages(&recipe)
-            .iter()
-            .any(|r| r.contains("generative_edit")),
-        "generative_edit must be reported"
+        unsupported_gpu_stages(&recipe).is_empty(),
+        "generative_edit must be GPU-eligible (no routing reason) in Welle 2a"
     );
     assert!(
         ctx.render_to_vram(&frame, &recipe).is_err(),
-        "VRAM path must refuse an unsupported recipe instead of writing divergent pixels"
+        "the artifact-blind VRAM path must refuse an active generative recipe instead of \
+         writing divergent (unexpanded) pixels"
     );
 }
 
@@ -2881,8 +3209,9 @@ fn source_actions(count: usize) -> EditRecipe {
 ///   therefore *not* a reason.
 /// - `red_eye` — an **invalid** `recipe.red_eye` (out-of-range/NaN); a valid
 ///   correction is GPU-rendered.
-/// - `generative_edit` — `recipe.generative_edit = Some(..)` (its sequential
-///   BFS fill is not yet ported).
+///   (`generative_edit` is **no longer** a reason since GEN-ONNX-1 Welle 2a: the
+///   artifact-aware entry `render_with_gpu_and_generative` injects the composited
+///   canvas mid-geometry; an artifact-blind render fails loudly in the plan.)
 /// - `adjustment \`clarity_v2\` not implemented on GPU` — a key outside
 ///   [`GPU_SUPPORTED_ADJUSTMENT_KEYS`] with no neutral value (all schema keys
 ///   are now GPU-supported, so this is the unknown-key class).
@@ -3049,10 +3378,6 @@ fn cpu_routing_inventory_is_complete() {
         ),
         ("red_eye", unsupported_gpu_stages(&invalid_red_eye_recipe())),
         (
-            "generative_edit",
-            unsupported_gpu_stages(&generative_expand_recipe()),
-        ),
-        (
             "adjustment `clarity_v2` not implemented on GPU",
             unsupported_gpu_stages(&unknown_key),
         ),
@@ -3074,6 +3399,14 @@ fn cpu_routing_inventory_is_complete() {
             "inventory entry `{expected}` is no longer emitted by the gate: {reasons:?}"
         );
     }
+
+    // GEN-ONNX-1 Welle 2a: `generative_edit` is no longer a routing reason. The
+    // artifact-aware GPU entry injects the composited canvas; a recipe-only
+    // render fails loudly instead of a blanket CPU route.
+    assert!(
+        unsupported_gpu_stages(&generative_expand_recipe()).is_empty(),
+        "generative_edit must be GPU-eligible now (artifact compositing)"
+    );
 
     // GPU-RENDER-PARITY-1 geometry wave / GPU-MAXRECT-WELLE: geometry
     // (crop/rotation/mirror) without a correction is rendered by the GPU

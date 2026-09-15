@@ -17,8 +17,9 @@ mod zdata;
 #[cfg(feature = "zdata")]
 pub use zdata::{
     append_generative_canvas, append_repair_region, append_spot_heal_generative, load_zdata,
-    save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile, RecordKind, RecordSpec,
-    RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer, ZDataError,
+    save_generative_canvas, save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile,
+    RecordKind, RecordSpec, RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer,
+    ZDataError,
 };
 
 // LRPAR-G15-IPTC-S4: file-backed IPTC metadata presets (static + dynamic).
@@ -304,6 +305,35 @@ impl GenerativeArtifactRef {
     /// non-`Available` status as visible, never as a silent fallback.
     pub fn artifact_status(&self, bundle_root: &Path) -> ArtifactStatus {
         artifact_status(bundle_root, &self.as_artifact_reference())
+    }
+
+    /// GEN-ONNX-1: build the portable recipe link for a persisted
+    /// `generative_canvas` record.
+    ///
+    /// `relative_path` is the bundle path relative to the sidecar directory
+    /// (never absolute). The identity digest (the exact operation identity, e.g.
+    /// the core `GenerativeCacheKey::digest()`) is attached via
+    /// [`Self::with_identity`], so a later render can prove availability
+    /// instead of re-generating.
+    #[cfg(feature = "zdata")]
+    #[must_use]
+    pub fn from_generative_canvas(
+        canvas: &crate::GenerativeCanvasArtifact,
+        relative_path: impl Into<String>,
+        identity: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: canvas.id.clone(),
+            relative_path: relative_path.into(),
+            format: "lumina-zdata".into(),
+            checksum: canvas.checksum(),
+            width: canvas.width,
+            height: canvas.height,
+            channels: "rgba8".into(),
+            data_version: "1".into(),
+            extras: Extras::new(),
+        }
+        .with_identity(identity)
     }
 }
 
@@ -928,7 +958,56 @@ impl GenerativeEdit {
     pub fn effective_expand(&self) -> bool {
         self.expand_beyond_image.unwrap_or(false)
     }
+
+    /// GEN-ONNX-1 Welle 2a: the persisted optional negative prompt.
+    ///
+    /// Additive schema field (top-level JSON `"negative_prompt"`). It is stored
+    /// in the flattened [`Self::extras`] map rather than a typed struct field:
+    /// a new field would break every `GenerativeEdit` struct literal outside
+    /// this wave's scope (notably `lumina-gui`, Welle 2b). The JSON shape is
+    /// still the additive top-level field the SOLL documents, and a present
+    /// value that is neither a string nor `null` is rejected loudly by
+    /// [`Self::validate_edit_extras`]/the document validator — never silently
+    /// ignored.
+    #[must_use]
+    pub fn negative_prompt(&self) -> Option<&str> {
+        self.extras
+            .get(GENERATIVE_NEGATIVE_PROMPT_KEY)
+            .and_then(Value::as_str)
+    }
+
+    /// Sets (or clears) the additive negative prompt.
+    pub fn set_negative_prompt(&mut self, value: Option<String>) {
+        match value {
+            Some(value) => {
+                self.extras.insert(
+                    GENERATIVE_NEGATIVE_PROMPT_KEY.to_owned(),
+                    Value::String(value),
+                );
+            }
+            None => {
+                self.extras.remove(GENERATIVE_NEGATIVE_PROMPT_KEY);
+            }
+        }
+    }
+
+    /// Loud validation of the additive extras-backed generative fields.
+    ///
+    /// `negative_prompt` must be a string or `null`; any other type is a hard
+    /// error (F2 lesson: an unknown/mistyped field is never silently ignored).
+    pub fn validate_edit_extras(&self) -> Result<(), SidecarError> {
+        if let Some(value) = self.extras.get(GENERATIVE_NEGATIVE_PROMPT_KEY) {
+            if !value.is_null() && !value.is_string() {
+                return invalid("generative_edit.negative_prompt must be a string or null");
+            }
+        }
+        Ok(())
+    }
 }
+
+/// GEN-ONNX-1 Welle 2a: additive `GenerativeEdit` extras key of the optional
+/// negative prompt (top-level JSON `"negative_prompt"`).
+pub const GENERATIVE_NEGATIVE_PROMPT_KEY: &str = "negative_prompt";
 impl GenerativeCanvas {
     pub fn validate_with_source(
         &self,
@@ -3748,6 +3827,7 @@ impl SidecarDocument {
                 if let Some(canvas) = &ge.canvas {
                     canvas.validate()?;
                 }
+                ge.validate_edit_extras()?;
                 if let Some(link) = &ge.artifact {
                     validate_generative_ref(link)?;
                 }
@@ -7480,6 +7560,102 @@ mod tests {
         std::fs::rename(&from_dir, &to_dir).unwrap();
         assert_eq!(link.artifact_status(&to_dir), ArtifactStatus::Available);
     }
+
+    // GEN-ONNX-1: explicit regeneration replaces only the `generative_canvas`
+    // record; the default append path stays non-destructive.
+    #[cfg(feature = "zdata")]
+    #[test]
+    fn generative_canvas_replace_is_explicit_and_kind_safe() {
+        use crate::GenerativeCanvasArtifact;
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("IMG_0001.ARW.lumina.zdata");
+        let canvas = |value: u8| GenerativeCanvasArtifact {
+            id: "gen-1".into(),
+            width: 1,
+            height: 1,
+            pixels: vec![value, 2, 3, 255],
+        };
+        save_generative_canvas(&bundle, canvas(10), false).unwrap();
+        // The non-destructive append path rejects the duplicate id.
+        assert!(
+            save_generative_canvas(&bundle, canvas(11), false).is_err(),
+            "append must not silently overwrite an existing record"
+        );
+        // The explicit replace path installs the new bytes.
+        save_generative_canvas(&bundle, canvas(11), true).unwrap();
+        let container = load_zdata(&bundle).unwrap();
+        assert_eq!(container.generative_canvas("gen-1").unwrap().pixels[0], 11);
+
+        // The recipe link built from the record verifies `Available` and
+        // round-trips its identity.
+        let link = GenerativeArtifactRef::from_generative_canvas(
+            &canvas(11),
+            "IMG_0001.ARW.lumina.zdata",
+            "id-1",
+        );
+        assert_eq!(
+            link.artifact_status(directory.path()),
+            ArtifactStatus::Available
+        );
+        assert_eq!(link.identity(), Some("id-1"));
+        assert_eq!(
+            generative_artifact_status(directory.path(), &link, "id-1"),
+            GenerativeArtifactStatus::Available
+        );
+        assert_eq!(
+            generative_artifact_status(directory.path(), &link, "id-2"),
+            GenerativeArtifactStatus::Stale
+        );
+    }
+
+    // GEN-ONNX-1 Welle 2a: the additive `negative_prompt` field roundtrips as a
+    // top-level JSON key and a mistyped value is rejected loudly.
+    #[test]
+    fn generative_negative_prompt_is_additive_and_validated() {
+        let mut edit = GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: Some(7),
+            prompt: Some("extend".into()),
+            extras: Extras::new(),
+        };
+        assert_eq!(edit.negative_prompt(), None);
+        assert!(edit.validate_edit_extras().is_ok());
+
+        edit.set_negative_prompt(Some("blurry".into()));
+        assert_eq!(edit.negative_prompt(), Some("blurry"));
+
+        // JSON: additive top-level field, roundtrip-stable.
+        let value = serde_json::to_value(&edit).unwrap();
+        assert_eq!(value["negative_prompt"], serde_json::json!("blurry"));
+        let back: GenerativeEdit = serde_json::from_value(value).unwrap();
+        assert_eq!(back.negative_prompt(), Some("blurry"));
+
+        // Clearing removes the key (absent, not implicitly empty).
+        edit.set_negative_prompt(None);
+        assert_eq!(edit.negative_prompt(), None);
+        assert!(serde_json::to_value(&edit)
+            .unwrap()
+            .get("negative_prompt")
+            .is_none());
+
+        // A mistyped value is a hard error, never silently ignored.
+        edit.extras
+            .insert(GENERATIVE_NEGATIVE_PROMPT_KEY.into(), serde_json::json!(42));
+        assert!(edit.validate_edit_extras().is_err());
+        // `null` is accepted as identity.
+        edit.extras.insert(
+            GENERATIVE_NEGATIVE_PROMPT_KEY.into(),
+            serde_json::Value::Null,
+        );
+        assert!(edit.validate_edit_extras().is_ok());
+        assert_eq!(edit.negative_prompt(), None);
+    }
+
     // =====================================================================
     // F-077: Backup / Recovery / Conflict / Data-loss release-gate tests.
     //

@@ -1,11 +1,13 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-#[cfg(feature = "lensfun")]
 use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
-    detect_spots_heuristic, export_image, generative_variant_seed, match_total_exposure_masked,
-    render_frame, resolve_mask_planes, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
-    ExportOptions, ImageFileFormat, ImageFrame, MaskContext, MaskInference, MaskLoadContext,
-    MaskPlane, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
+    detect_spots_heuristic, export_image_with_generative, generative_variant_seed,
+    has_transparent_pixels, match_total_exposure_masked, render_frame,
+    render_frame_with_generative, resolve_mask_planes, suggest_auto_tone, tone_fingerprint,
+    AutoToneConfig, ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact,
+    GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame,
+    MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
+    RenderOutput, SourceActionArtifact,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -13,6 +15,12 @@ use lumina_core::{
 // default builds (no `onnx-rt`); it is never substituted for a requested real
 // engine. `birefnet_manifest` is the model identity/contract both paths share.
 use lumina_onnx::birefnet_manifest;
+// GEN-ONNX-1 Welle 1: deterministic generative canvas producer (fixture model)
+// and the documented real-model attachment surface.
+use lumina_onnx::generative::{
+    produce_canvas, GenerativeCanvasOutput, GenerativeModelSource,
+    GenerativeRole as OnnxGenerativeRole,
+};
 #[cfg(feature = "onnx-rt")]
 use lumina_onnx::try_load_onnx_engine;
 #[cfg(feature = "onnx-rt")]
@@ -37,20 +45,23 @@ use log::info;
 use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
 use lumina_sidecar::{
     apply_batch_op, artifact_status, default_meta_presets_dir, document_revision,
-    is_metadata_field, load_meta_preset_file, load_sidecar, now_rfc3339_utc, render_meta_preset,
-    resolve_meta_preset_path, save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir,
-    sidecar_path_for, validate_metadata_field_value, validate_smart_collection_def, AiSelect,
-    AiSelectKind, AnalysisFingerprint, ArtifactStatus, AspectPreset, BatchOp, BokehShape,
-    CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem, Crop, CurveChannels,
-    CurvePoint, Curves, DecodeFingerprint, DepthArtifactRef, EditRecipe, ExportRecord, FocusRect,
-    Geometry, GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur,
-    LensCorrection, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference,
-    MaskStatus, MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective,
-    PointColor, PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution,
-    SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction,
-    MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
-    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    generative_artifact_status, is_metadata_field, load_meta_preset_file, load_sidecar,
+    now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path, save_generative_canvas,
+    save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir, sidecar_path_for,
+    validate_metadata_field_value, validate_smart_collection_def, AiSelect, AiSelectKind,
+    AnalysisFingerprint, ArtifactStatus, AspectPreset, BatchOp, BokehShape, CollectionMembership,
+    ColorGrading, ColorGradingRange, CoordinateSystem, Crop, CurveChannels, CurvePoint, Curves,
+    DecodeFingerprint, DepthArtifactRef, EditRecipe, ExportRecord, FocusRect,
+    GenerativeArtifactRef, GenerativeArtifactStatus, GenerativeCanvas,
+    GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit, Geometry,
+    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, LensCorrection,
+    MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
+    MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective, PointColor,
+    PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument,
+    SmartCollectionDef, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
+    SourceFingerprint, SourceIdentity, SpotDistraction, MAX_KEYWORDS_PER_DOCUMENT,
+    MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, SMART_COLLECTION_VERSION,
+    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 // LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `meta inspect`.
 // LRPAR-G15-IPTC-S6: `embed_metadata` for the opt-in JPEG export bake-in.
@@ -223,6 +234,7 @@ fn render_best_effort(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
+    generative: GenerativeCanvasInput<'_>,
 ) -> Result<(RenderOutput, RenderRoute), CliError> {
     let reasons = gpu_routing_reasons(recipe, render_ctx);
 
@@ -238,12 +250,14 @@ fn render_best_effort(
             if let Err(error) = ctx.set_camera_white_balance(render_ctx.camera_white_balance) {
                 let reasons = vec![format!("camera_white_balance ({error})")];
                 lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
-                let output = render_frame(frame, render_ctx)
+                let output = render_frame_with_generative(frame, render_ctx, generative)
                     .map_err(|error| CliError::Message(error.to_string()))?;
                 return Ok((output, RenderRoute::Cpu { reasons }));
             }
+            // GEN-ONNX-1 Welle 2a: the generative artifact compositing runs on
+            // the GPU (mid-geometry `Substitute` steps) — no blanket CPU route.
             let frame = ctx
-                .render_with_gpu(frame, recipe)
+                .render_with_gpu_and_generative(frame, recipe, &generative)
                 .map(Frame::to_image_frame)
                 .map_err(|error| CliError::Message(error.to_string()))?;
             Ok((
@@ -259,7 +273,7 @@ fn render_best_effort(
             if !reasons.is_empty() {
                 lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
             }
-            let output = render_frame(frame, render_ctx)
+            let output = render_frame_with_generative(frame, render_ctx, generative)
                 .map_err(|error| CliError::Message(error.to_string()))?;
             Ok((output, RenderRoute::Cpu { reasons }))
         }
@@ -339,16 +353,17 @@ fn lensfun_corrector_active(_render_ctx: &RenderContext<'_>) -> bool {
 }
 
 /// Non-GPU build: only the CPU pipeline exists, so this is a thin alias to
-/// [`render_frame`] returning the (always CPU) route.
+/// [`render_frame_with_generative`] returning the (always CPU) route.
 #[cfg(not(feature = "gpu"))]
 fn render_best_effort(
     _ctx: Option<()>,
     frame: &ImageFrame,
     _recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
+    generative: GenerativeCanvasInput<'_>,
 ) -> Result<(RenderOutput, RenderRoute), CliError> {
-    let output =
-        render_frame(frame, render_ctx).map_err(|error| CliError::Message(error.to_string()))?;
+    let output = render_frame_with_generative(frame, render_ctx, generative)
+        .map_err(|error| CliError::Message(error.to_string()))?;
     Ok((
         output,
         RenderRoute::Cpu {
@@ -357,18 +372,16 @@ fn render_best_effort(
     ))
 }
 
-/// The CLI's single standard backend entry point: renders `frame` with the
-/// process-wide backend selection (GPU when an adapter is bound, the
-/// platform-neutral CPU reference otherwise) and logs the CPU route once per
-/// reason set. Both `process_selected` and the LRPAR-MATRIX-RECIPE runner go
-/// through this function so there is exactly one render entry point (no second
-/// pipeline, GPU-default where available).
-fn render_standard(
+/// GEN-ONNX-1: [`render_standard_routed`] with caller-supplied generative
+/// canvas artifacts (artifact compositing on the CPU oracle path).
+fn render_standard_with_generative(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
+    generative: GenerativeCanvasInput<'_>,
 ) -> Result<RenderOutput, CliError> {
-    render_standard_routed(frame, recipe, render_ctx).map(|(output, _route)| output)
+    render_standard_routed_with_generative(frame, recipe, render_ctx, generative)
+        .map(|(output, _route)| output)
 }
 
 /// [`render_standard`] returning the actual [`RenderRoute`] as well. The
@@ -379,18 +392,33 @@ pub(crate) fn render_standard_routed(
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
 ) -> Result<(RenderOutput, RenderRoute), CliError> {
+    render_standard_routed_with_generative(
+        frame,
+        recipe,
+        render_ctx,
+        GenerativeCanvasInput::default(),
+    )
+}
+
+/// GEN-ONNX-1: [`render_standard_routed`] with generative canvas artifacts.
+pub(crate) fn render_standard_routed_with_generative(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+    generative: GenerativeCanvasInput<'_>,
+) -> Result<(RenderOutput, RenderRoute), CliError> {
     #[cfg(feature = "gpu")]
     {
         GPU_CTX.with(|cell| {
             let holder = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
             let gpu: &Option<GpuContext> = holder;
-            render_best_effort(gpu.as_ref(), frame, recipe, render_ctx)
+            render_best_effort(gpu.as_ref(), frame, recipe, render_ctx, generative)
         })
     }
     #[cfg(not(feature = "gpu"))]
     {
         log_backend("render backend: cpu");
-        render_best_effort(None, frame, recipe, render_ctx)
+        render_best_effort(None, frame, recipe, render_ctx, generative)
     }
 }
 
@@ -492,6 +520,11 @@ enum Command {
     /// golden/PSNR tolerances (or write the goldens with `--update-goldens`).
     /// See `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix".
     Matrix(matrix::MatrixArgs),
+    /// GEN-ONNX-1 (Welle 1): produce/inspect the persisted `generative_canvas`
+    /// artifact of one virtual copy (local ONNX fixture model; expands or
+    /// auto-fills). Loud on a missing model/canvas, a stale identity or a
+    /// corrupt bundle. See `feature/product/generative-expand.md`.
+    Generative(GenerativeArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1523,6 +1556,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::MergeHdr(args) => merge::merge_hdr(args),
         Command::MergePano(args) => merge::merge_pano(args),
         Command::Matrix(args) => matrix::matrix(args),
+        Command::Generative(args) => generative(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -7225,6 +7259,929 @@ fn resolve_onnx_engine_from_path(
     }
 }
 
+// ---------------------------------------------------------------------------
+// GEN-ONNX-1 Welle 1: generative canvas artifact (local ONNX fixture model).
+// ---------------------------------------------------------------------------
+
+/// `lumina generative` arguments (see `feature/product/generative-expand.md`).
+#[derive(Debug, Clone, Args)]
+struct GenerativeArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    /// Report the persisted artifact status and exit (read-only).
+    #[arg(long)]
+    status: bool,
+    /// Produce and persist the composited canvas artifact.
+    #[arg(long)]
+    generate: bool,
+    /// Explicit regeneration: replace an existing record for the same identity.
+    #[arg(long)]
+    force: bool,
+    /// Remove the persisted artifact link from the recipe (the bundle record
+    /// and the original image are left untouched).
+    #[arg(long)]
+    remove: bool,
+    /// Prompt (identity-bearing, roundtrip-stable; may be empty).
+    #[arg(long)]
+    prompt: Option<String>,
+    /// Negative prompt (identity-bearing; additive schema field).
+    #[arg(long)]
+    negative_prompt: Option<String>,
+    /// Deterministic seed (identity-bearing).
+    #[arg(long)]
+    seed: Option<u64>,
+    /// `auto_fill_transparent`: fill transparent pixels after lens correction.
+    #[arg(long)]
+    auto_fill: bool,
+    /// `expand_beyond_image`: enlarge the canvas (requires `--canvas`).
+    #[arg(long)]
+    expand: bool,
+    /// Target canvas `WxH+X+Y` (offsets may be negative) for `--expand`.
+    #[arg(long)]
+    canvas: Option<String>,
+    /// `keep_generative_content` crop decision.
+    #[arg(long)]
+    keep: Option<bool>,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Owned pair of caller-supplied generative canvas artifacts.
+#[derive(Default)]
+struct GenerativeArtifacts {
+    auto_fill: Option<GenerativeCanvasArtifact>,
+    expand: Option<GenerativeCanvasArtifact>,
+}
+
+impl GenerativeArtifacts {
+    fn input(&self) -> GenerativeCanvasInput<'_> {
+        GenerativeCanvasInput {
+            auto_fill: self.auto_fill.as_ref(),
+            expand: self.expand.as_ref(),
+        }
+    }
+}
+
+fn onnx_generative_role(role: CoreGenerativeRole) -> OnnxGenerativeRole {
+    match role {
+        CoreGenerativeRole::Expand => OnnxGenerativeRole::Expand,
+        CoreGenerativeRole::AutoFillTransparent => OnnxGenerativeRole::AutoFillTransparent,
+    }
+}
+
+/// The prompt/model identity of a persisted generative edit.
+///
+/// `model_hash` is the pinned hash of the fixture model the CLI produces with
+/// (`fixture_manifest(role)`), so producer (render-time verification) and
+/// consumer (the ONNX producer) derive the exact same identity. `prompt` is the
+/// persisted prompt; `negative_prompt` is the extras-backed additive field
+/// (`GenerativeEdit::negative_prompt()`, `None` when unset) — `None` is
+/// identity and matches the producer, which derives the same value.
+fn generative_identity(
+    role: CoreGenerativeRole,
+    edit: &GenerativeEdit,
+) -> lumina_core::GenerativeIdentity {
+    lumina_core::GenerativeIdentity {
+        model_hash: lumina_onnx::fixture_manifest(onnx_generative_role(role)).model_hash,
+        prompt: edit.prompt.clone().unwrap_or_default(),
+        negative_prompt: edit.negative_prompt().map(str::to_owned),
+    }
+}
+
+/// Parse the CLI canvas spec `WxH+X+Y` / `WxH-X-Y`.
+fn parse_generative_canvas(spec: &str) -> Result<GenerativeCanvas, CliError> {
+    let invalid = || {
+        CliError::Message(format!(
+            "invalid --canvas `{spec}`: expected WxH+X+Y (offsets may be negative)"
+        ))
+    };
+    let spec = spec.trim();
+    let x_pos = spec.find('x').ok_or_else(invalid)?;
+    let width: u32 = spec[..x_pos].trim().parse().map_err(|_| invalid())?;
+    let rest = &spec[x_pos + 1..];
+    let sign_pos = rest.find(['+', '-']).unwrap_or(rest.len());
+    let height: u32 = rest[..sign_pos].trim().parse().map_err(|_| invalid())?;
+    let offsets = &rest[sign_pos..];
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    for (index, byte) in offsets.bytes().enumerate() {
+        if index > 0 && (byte == b'+' || byte == b'-') {
+            parts.push(&offsets[start..index]);
+            start = index;
+        }
+    }
+    if !offsets.is_empty() {
+        parts.push(&offsets[start..]);
+    }
+    let (source_offset_x, source_offset_y) = match parts.as_slice() {
+        [x, y] => (
+            x.parse::<i32>().map_err(|_| invalid())?,
+            y.parse::<i32>().map_err(|_| invalid())?,
+        ),
+        _ => return Err(invalid()),
+    };
+    let canvas = GenerativeCanvas {
+        output_width: width,
+        output_height: height,
+        source_offset_x,
+        source_offset_y,
+        extras: Default::default(),
+    };
+    canvas
+        .validate()
+        .map_err(|error| CliError::Message(format!("invalid --canvas `{spec}`: {error}")))?;
+    Ok(canvas)
+}
+
+/// Deterministic bundle record id for a generative identity digest.
+fn generative_record_id(identity_digest: &str) -> String {
+    let prefix = identity_digest.get(..16).unwrap_or(identity_digest);
+    format!("generative_canvas:{prefix}")
+}
+
+/// Stage the frame exactly up to the generative stage, returning the frame
+/// entering the auto-fill role (`after_lens`) and the frame entering the expand
+/// role (`after_perspective`). Delegates to the core helper so producer and
+/// consumer agree on the operation identity and no pipeline logic is
+/// duplicated.
+fn stage_generative_input(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    camera_white_balance: Option<[f32; 4]>,
+    source_actions: &[SourceActionArtifact],
+    lensfun: Option<LensfunCorrectorRef<'_>>,
+) -> Result<(ImageFrame, ImageFrame), CliError> {
+    Ok(lumina_core::generative_input_frames(
+        frame,
+        recipe,
+        camera_white_balance,
+        source_actions,
+        lensfun,
+    )?)
+}
+
+/// Produce one role's composited canvas with the deterministic fixture model.
+///
+/// The persisted edit may carry both roles; `produce_canvas` reads a single
+/// role from the flags, so a role-scoped copy is passed — the other role's flag
+/// never silently changes which canvas is produced.
+fn produce_generative_role_canvas(
+    input_frame: &ImageFrame,
+    edit: &GenerativeEdit,
+    role: CoreGenerativeRole,
+) -> Result<GenerativeCanvasOutput, CliError> {
+    let mut scoped = edit.clone();
+    match role {
+        CoreGenerativeRole::Expand => {
+            scoped.expand_beyond_image = Some(true);
+            scoped.auto_fill_transparent = Some(false);
+        }
+        CoreGenerativeRole::AutoFillTransparent => {
+            scoped.expand_beyond_image = Some(false);
+            scoped.auto_fill_transparent = Some(true);
+        }
+    }
+    let model = GenerativeModelSource::Fixture(onnx_generative_role(role));
+    produce_canvas(input_frame, &scoped, &model)
+        .map_err(|error| CliError::Message(format!("generative {role:?} canvas failed: {error}")))
+}
+
+/// Persist one produced canvas into the sidecar `.lumina.zdata` bundle and
+/// return its portable recipe link, its `--json` role object and its human
+/// summary. The record id is the deterministic identity id
+/// (`generative_record_id`) — the same convention the GUI producer uses, so GUI
+/// and CLI address the same record.
+fn persist_generative_role_canvas(
+    zdata_path: &Path,
+    relative_path: &str,
+    force: bool,
+    output: GenerativeCanvasOutput,
+) -> Result<(GenerativeArtifactRef, serde_json::Value, String), CliError> {
+    let identity = output.identity_digest;
+    let role = output.role;
+    let model_name = output.manifest.model_name.clone();
+    let model_hash = output.manifest.model_hash.clone();
+    let record = SidecarGenerativeCanvas {
+        id: generative_record_id(&identity),
+        width: output.width,
+        height: output.height,
+        pixels: output.pixels,
+    };
+    save_generative_canvas(zdata_path, record.clone(), force).map_err(|error| {
+        CliError::Message(format!(
+            "could not write generative canvas bundle `{}`: {error}",
+            zdata_path.display()
+        ))
+    })?;
+    let link =
+        GenerativeArtifactRef::from_generative_canvas(&record, relative_path, identity.clone());
+    let role_json = serde_json::json!({
+        "role": format!("{role:?}"),
+        "width": record.width,
+        "height": record.height,
+        "record": record.id,
+        "identity": identity,
+        "model": model_name,
+        "model_hash": model_hash,
+    });
+    let summary = format!(
+        "role={role:?} {}x{} record={} identity={identity}",
+        record.width, record.height, record.id
+    );
+    Ok((link, role_json, summary))
+}
+
+/// The frame entering the expand role when the auto-fill role produced a
+/// canvas: the auto-filled frame with `Lens → auto-fill → Perspective` applied,
+/// mirroring the render order `Lens → auto-fill → Perspective → expand → Crop`
+/// (GEN-ONNX-1 double-role record). Without an applied auto-fill canvas the
+/// caller uses `after_perspective` directly.
+///
+/// The CLI must **not** call `lumina-core`'s `#[cfg(feature = "lensfun")]`
+/// `ImageFrame::apply_perspective_stage` directly: the CLI's own `lensfun`
+/// feature can be off while `lumina-core`'s is on (e.g. `cargo check
+/// --workspace`, where the GUI's default `lensfun` unifies the core feature),
+/// which would select the wrong arity. The frame is therefore extracted through
+/// the shared, feature-uniform core render pipeline: supplying the auto-fill
+/// artifact makes `composite_auto_fill` replace the lens result with the
+/// artifact frame, and the perspective stage runs on it exactly as the real
+/// render does. A full-frame crop and `expand = false` keep the remaining
+/// stages identity, so the CLI still owns no image math.
+fn generative_expand_input(
+    source: &ImageFrame,
+    recipe: &EditRecipe,
+    camera_white_balance: Option<[f32; 4]>,
+    source_actions: &[SourceActionArtifact],
+    auto_fill: &GenerativeCanvasArtifact,
+    lensfun: Option<LensfunCorrectorRef<'_>>,
+) -> Result<ImageFrame, CliError> {
+    let mut staged = recipe.clone();
+    // Neutralize crop/rotation/mirroring and lens blur; they run after the
+    // expand stage in the real pipeline and must not alter the extracted frame.
+    staged.geometry = Some(Geometry {
+        version: 1,
+        crop: Some(Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }),
+        rotation_degrees: 0.0,
+        mirror_horizontal: false,
+        mirror_vertical: false,
+    });
+    staged.lens_blur = None;
+    if let Some(edit) = staged.generative_edit.as_mut() {
+        // Only the auto-fill substitution runs; the expand stage is the caller's
+        // next step. `expand = false` requires `canvas == None`
+        // (`validate_generative_edit`), and the canvas is unused by the
+        // perspective stage.
+        edit.expand_beyond_image = Some(false);
+        edit.canvas = None;
+    }
+    let output = render_frame_with_generative(
+        source,
+        &RenderContext {
+            recipe: &staged,
+            camera_white_balance,
+            source_actions,
+            masks: None,
+            lensfun,
+            depth: None,
+        },
+        GenerativeCanvasInput {
+            auto_fill: Some(auto_fill),
+            expand: None,
+        },
+    )?;
+    Ok(output.frame)
+}
+
+/// Resolve one active generative role's canvas.
+///
+/// The persisted record is addressed by the deterministic identity record id
+/// (`generative_record_id(digest)`, the same convention the GUI producer uses),
+/// so the *unlinked* second role of a double-role record is resolvable by
+/// construction: a matching record proves the exact identity (role, seed,
+/// canvas, prompt, model and input are all in the digest, and the zdata load
+/// verifies the BLAKE3 checksum). When no matching record exists, `link` — the
+/// recipe link, pre-scoped by the caller to the role it belongs to — yields the
+/// loud `missing`/`stale`/`corrupt` diagnosis. There is no silent fallback to
+/// an unexpanded render.
+///
+/// `owns_link` marks the role the single recipe link belongs to. Its link must
+/// be present: an explicit `--remove` unlink is a deliberate state and must not
+/// be silently reconstructed from the still-present bundle record.
+fn resolve_generative_role(
+    bundle_root: &Path,
+    zdata_path: &Path,
+    link: Option<&GenerativeArtifactRef>,
+    owns_link: bool,
+    role: CoreGenerativeRole,
+    digest: &str,
+) -> Result<GenerativeCanvasArtifact, CliError> {
+    if owns_link && link.is_none() {
+        return Err(CliError::Message(format!(
+            "generative {role:?} is active but no `generative_canvas` artifact is linked; run \
+             `lumina generative --generate --input <file>` (no silent fallback)"
+        )));
+    }
+    let record_id = generative_record_id(digest);
+    if zdata_path.exists() {
+        if let Ok(container) = load_zdata(zdata_path) {
+            if let Ok(record) = container.generative_canvas(&record_id) {
+                let frame = ImageFrame::new(record.width, record.height, record.pixels)
+                    .map_err(|error| CliError::Message(error.to_string()))?;
+                return Ok(GenerativeCanvasArtifact::new(role, frame));
+            }
+        }
+    }
+    // The role-scoped recipe link is the canonical diagnosis: a
+    // `Stale`/`Missing`/`Corrupt` link stays loud; a link that is current but
+    // whose record is unreadable must never render "as if not generated".
+    if let Some(link) = link {
+        let status = generative_artifact_status(bundle_root, link, digest);
+        if status != GenerativeArtifactStatus::Available {
+            return Err(CliError::Message(format!(
+                "generative canvas `{}` is {status:?} for identity {digest}; refusing to render \
+                 (run `lumina generative --generate` to rebuild it) — no silent fallback",
+                link.id
+            )));
+        }
+        return Err(CliError::Message(format!(
+            "generative {role:?} link `{}` is current but its bundle record `{record_id}` is \
+             unreadable; refusing to render (no silent fallback)",
+            link.id
+        )));
+    }
+    Err(CliError::Message(format!(
+        "generative {role:?} is active but no `generative_canvas` artifact is available for \
+         identity {digest}; run `lumina generative --generate --input <file>` (no silent fallback)"
+    )))
+}
+
+/// Non-fatal per-role status used by `--status`: `(status, resolved frame)`.
+///
+/// Mirrors [`resolve_generative_role`] without aborting, so a double-role
+/// record reports every active role; the frame is returned when the auto-fill
+/// canvas resolved (the expand identity is derived from it).
+fn generative_role_status(
+    bundle_root: &Path,
+    zdata_path: &Path,
+    link: Option<&GenerativeArtifactRef>,
+    owns_link: bool,
+    digest: &str,
+) -> (String, Option<ImageFrame>) {
+    // The link-owning role with an explicitly removed link is `missing` — the
+    // record must not be re-adopted silently (`--remove`).
+    if owns_link && link.is_none() {
+        return ("missing".to_owned(), None);
+    }
+    let record_id = generative_record_id(digest);
+    if zdata_path.exists() {
+        if let Ok(container) = load_zdata(zdata_path) {
+            if let Ok(record) = container.generative_canvas(&record_id) {
+                if let Ok(frame) = ImageFrame::new(record.width, record.height, record.pixels) {
+                    return ("available".to_owned(), Some(frame));
+                }
+            }
+        }
+    }
+    if let Some(link) = link {
+        let status = format!(
+            "{:?}",
+            generative_artifact_status(bundle_root, link, digest)
+        )
+        .to_lowercase();
+        return (status, None);
+    }
+    ("missing".to_owned(), None)
+}
+
+/// Resolve the render-time generative canvas artifacts for `recipe`.
+///
+/// GEN-ONNX-1 (double-role record): a single `GenerativeEdit` may carry both
+/// `auto_fill_transparent` and `expand_beyond_image` (the SOLL order is
+/// `Lens → auto-fill → Perspective → expand → Crop`). Both roles are resolved;
+/// the expand identity is derived from the auto-filled frame with the
+/// perspective stage applied, exactly as the producer built it. A
+/// missing/invalid/absent artifact for an active role aborts the render — there
+/// is no silent fallback.
+fn resolve_generative_artifacts(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    camera_white_balance: Option<[f32; 4]>,
+    source_actions: &[SourceActionArtifact],
+    zdata_path: &Path,
+    lensfun: Option<LensfunCorrectorRef<'_>>,
+) -> Result<GenerativeArtifacts, CliError> {
+    let Some(edit) = recipe.generative_edit.as_ref() else {
+        return Ok(GenerativeArtifacts::default());
+    };
+    let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
+    let expand_active = edit.effective_expand();
+    if !auto_fill_active && !expand_active {
+        return Ok(GenerativeArtifacts::default());
+    }
+    let seed = edit.seed.unwrap_or(0);
+    let (after_lens, after_perspective) =
+        stage_generative_input(frame, recipe, camera_white_balance, source_actions, lensfun)?;
+    let bundle_root = zdata_path.parent().unwrap_or_else(|| Path::new("."));
+    let link = edit.artifact.as_ref();
+    // The single recipe link belongs to the canvas-defining role the producer
+    // persisted: expand when it is active, otherwise auto-fill (the double-role
+    // producer links the expand canvas). It is scoped per role so a
+    // `stale`/`missing`/`corrupt` diagnosis is never reported for the wrong
+    // role.
+    let link_role = if expand_active {
+        Some(CoreGenerativeRole::Expand)
+    } else if auto_fill_active {
+        Some(CoreGenerativeRole::AutoFillTransparent)
+    } else {
+        None
+    };
+    let role_link = |role: CoreGenerativeRole| link.filter(|_| link_role == Some(role));
+    let mut artifacts = GenerativeArtifacts::default();
+    // Auto-fill first: its composited frame is the input of the expand role
+    // (`Lens → auto-fill → Perspective → expand`). Auto-fill without
+    // transparent pixels after lens needs no artifact (normative caller
+    // convention, `auto_fill = None` is the identity).
+    if auto_fill_active && has_transparent_pixels(&after_lens) {
+        let identity = generative_identity(CoreGenerativeRole::AutoFillTransparent, edit);
+        let digest = GenerativeCacheKey::auto_fill(&after_lens, seed, &identity).digest();
+        artifacts.auto_fill = Some(resolve_generative_role(
+            bundle_root,
+            zdata_path,
+            role_link(CoreGenerativeRole::AutoFillTransparent),
+            link_role == Some(CoreGenerativeRole::AutoFillTransparent),
+            CoreGenerativeRole::AutoFillTransparent,
+            &digest,
+        )?);
+    }
+    if expand_active {
+        let canvas = edit.canvas.as_ref().ok_or_else(|| {
+            CliError::Message("expand_beyond_image requires a `canvas` (output_* + offsets)".into())
+        })?;
+        // Mirror the render order `Lens → auto-fill → Perspective → expand` so
+        // the expand identity matches the canvas the producer built (the expand
+        // canvas is authoritative and must embed the auto-filled pixels).
+        let expand_input = match artifacts.auto_fill.as_ref() {
+            Some(auto_fill) => generative_expand_input(
+                frame,
+                recipe,
+                camera_white_balance,
+                source_actions,
+                auto_fill,
+                lensfun,
+            )?,
+            None => after_perspective.clone(),
+        };
+        let identity = generative_identity(CoreGenerativeRole::Expand, edit);
+        let digest = GenerativeCacheKey::expand(&expand_input, canvas, seed, &identity).digest();
+        artifacts.expand = Some(resolve_generative_role(
+            bundle_root,
+            zdata_path,
+            role_link(CoreGenerativeRole::Expand),
+            link_role == Some(CoreGenerativeRole::Expand),
+            CoreGenerativeRole::Expand,
+            &digest,
+        )?);
+    }
+    Ok(artifacts)
+}
+
+/// `lumina generative` — produce/report/remove the persisted `generative_canvas`
+/// artifact of one virtual copy (GEN-ONNX-1 Welle 1).
+fn generative(args: GenerativeArgs) -> Result<(), CliError> {
+    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
+    let wb = raw_metadata
+        .as_ref()
+        .and_then(|metadata| sanitize_camera_white_balance(metadata.camera_white_balance));
+    #[cfg(feature = "lensfun")]
+    let (_lensfun_db, lensfun_corrector) = build_lensfun_corrector(raw_metadata.as_ref())
+        .map(|(db, corrector)| (Some(db), Some(corrector)))
+        .unwrap_or((None, None));
+    // Feature-uniform corrector reference (Cargo feature unification safe).
+    #[cfg(feature = "lensfun")]
+    let generative_lensfun = lensfun_corrector.as_ref().map(LensfunCorrectorRef);
+    #[cfg(not(feature = "lensfun"))]
+    let generative_lensfun: Option<LensfunCorrectorRef<'_>> = None;
+    let sidecar_path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&sidecar_path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => SidecarDocument::new(
+            source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?,
+            "raster-mvp-1",
+        ),
+        Err(error) => return Err(error.into()),
+    };
+    let current_identity = source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?;
+    if document.source.content_hash != current_identity.content_hash {
+        return Err(CliError::Message(format!(
+            "source changed since sidecar was written: `{}`",
+            args.input.display()
+        )));
+    }
+    let copy_index = args
+        .virtual_copy
+        .as_deref()
+        .map(|id| {
+            document
+                .virtual_copies
+                .iter()
+                .position(|copy| copy.id == id)
+                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let mut recipe = document.virtual_copies[copy_index].recipe.clone();
+    let zdata_path = zdata_path_for(&args.input);
+    let bundle_root = zdata_path.parent().unwrap_or_else(|| Path::new("."));
+
+    if args.remove {
+        if let Some(edit) = recipe.generative_edit.as_mut() {
+            edit.artifact = None;
+        }
+        document.virtual_copies[copy_index].recipe = recipe;
+        save_sidecar(&sidecar_path, &document)?;
+        info!("generative: artifact link removed (bundle record kept)");
+        return Ok(());
+    }
+
+    // Merge the CLI overrides into the persisted generative edit (additive).
+    let mut edit = recipe.generative_edit.clone().unwrap_or(GenerativeEdit {
+        version: 1,
+        canvas: None,
+        artifact: None,
+        keep_generative_content: None,
+        auto_fill_transparent: None,
+        expand_beyond_image: None,
+        seed: None,
+        prompt: None,
+        extras: Default::default(),
+    });
+    if edit.version != 1 {
+        return Err(CliError::Message(format!(
+            "unsupported generative_edit version {}; explicit migration required",
+            edit.version
+        )));
+    }
+    if let Some(prompt) = args.prompt.clone() {
+        edit.prompt = Some(prompt);
+    }
+    if let Some(negative_prompt) = args.negative_prompt.clone() {
+        edit.set_negative_prompt(Some(negative_prompt));
+    }
+    if let Some(seed) = args.seed {
+        edit.seed = Some(seed);
+    }
+    if args.auto_fill {
+        edit.auto_fill_transparent = Some(true);
+    }
+    if args.expand {
+        let spec = args
+            .canvas
+            .as_deref()
+            .ok_or_else(|| CliError::Message("--expand requires --canvas WxH+X+Y".into()))?;
+        edit.expand_beyond_image = Some(true);
+        edit.canvas = Some(parse_generative_canvas(spec)?);
+    } else if let Some(spec) = args.canvas.as_deref() {
+        edit.canvas = Some(parse_generative_canvas(spec)?);
+    }
+    if let Some(keep) = args.keep {
+        edit.keep_generative_content = Some(keep);
+    }
+
+    let seed = edit.seed.unwrap_or(0);
+
+    if args.status {
+        let status_source_actions = resolve_source_actions(&recipe, &zdata_path)?;
+        return report_generative_status(
+            &edit,
+            &frame,
+            &recipe,
+            wb,
+            &status_source_actions,
+            bundle_root,
+            &zdata_path,
+            seed,
+            args.json,
+            generative_lensfun,
+        );
+    }
+    if !args.generate {
+        return Err(CliError::Message(
+            "specify one of --status, --generate or --remove".into(),
+        ));
+    }
+    let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
+    let expand_active = edit.effective_expand();
+    if !auto_fill_active && !expand_active {
+        return Err(CliError::Message(
+            "no generative role active: pass --expand or --auto-fill".into(),
+        ));
+    }
+    let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
+    let (after_lens, after_perspective) =
+        stage_generative_input(&frame, &recipe, wb, &source_actions, generative_lensfun)?;
+    let relative_path = zdata_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "generative.zdata".into());
+
+    // SOLL order `Lens → auto-fill → Perspective → expand`: the auto-fill
+    // canvas is produced first; the expand canvas is then built from the
+    // auto-filled frame with the perspective stage applied, so the composited
+    // auto-fill pixels are authoritative in the expand canvas (GEN-ONNX-1
+    // double-role record).
+    let mut auto_fill_link: Option<GenerativeArtifactRef> = None;
+    let mut expand_link: Option<GenerativeArtifactRef> = None;
+    let mut auto_fill_frame: Option<ImageFrame> = None;
+    let mut json_roles: Vec<serde_json::Value> = Vec::new();
+    let mut summaries: Vec<String> = Vec::new();
+    if auto_fill_active {
+        if !has_transparent_pixels(&after_lens) {
+            // Normative caller convention: no transparent pixels after lens →
+            // identity, no artifact required (never a silent synthetic fill).
+            info!(
+                "generative: auto_fill active but no transparent pixels after lens; \
+                 no auto-fill canvas produced (identity)"
+            );
+        } else {
+            let output = produce_generative_role_canvas(
+                &after_lens,
+                &edit,
+                CoreGenerativeRole::AutoFillTransparent,
+            )?;
+            auto_fill_frame = Some(
+                output
+                    .to_frame()
+                    .map_err(|error| CliError::Message(error.to_string()))?,
+            );
+            let (link, role_json, summary) =
+                persist_generative_role_canvas(&zdata_path, &relative_path, args.force, output)?;
+            auto_fill_link = Some(link);
+            json_roles.push(role_json);
+            summaries.push(summary);
+        }
+    }
+    if expand_active {
+        // Mirror the render order `Lens → auto-fill → Perspective → expand` so
+        // the produced expand canvas embeds the auto-filled pixels (and its
+        // identity matches what the render-time resolver recomputes). The
+        // pending double-role edit must be visible in the staged recipe — the
+        // persisted recipe is only written below.
+        let mut expand_recipe = recipe.clone();
+        expand_recipe.generative_edit = Some(edit.clone());
+        let expand_input = match auto_fill_frame.as_ref() {
+            Some(filled) => {
+                let artifact = GenerativeCanvasArtifact::new(
+                    CoreGenerativeRole::AutoFillTransparent,
+                    filled.clone(),
+                );
+                generative_expand_input(
+                    &frame,
+                    &expand_recipe,
+                    wb,
+                    &source_actions,
+                    &artifact,
+                    generative_lensfun,
+                )?
+            }
+            None => after_perspective.clone(),
+        };
+        let output =
+            produce_generative_role_canvas(&expand_input, &edit, CoreGenerativeRole::Expand)?;
+        let (link, role_json, summary) =
+            persist_generative_role_canvas(&zdata_path, &relative_path, args.force, output)?;
+        expand_link = Some(link);
+        json_roles.push(role_json);
+        summaries.push(summary);
+    }
+    if auto_fill_link.is_none() && expand_link.is_none() {
+        return Err(CliError::Message(
+            "--auto-fill: no transparent pixels after lens correction; nothing to generate \
+             (no artifact written, no silent synthetic fill)"
+                .into(),
+        ));
+    }
+    // The single recipe link is the canvas-defining expand role when both are
+    // active (SOLL: `Lens → GenerativeEdit → Perspective → Crop`); the
+    // auto-fill record stays addressable by its deterministic identity id.
+    edit.artifact = expand_link.or(auto_fill_link);
+    recipe.generative_edit = Some(edit);
+    document.virtual_copies[copy_index].recipe = recipe;
+    save_sidecar(&sidecar_path, &document)?;
+    let summary = format!("generative canvas written: {}", summaries.join("; "));
+    if args.json {
+        if let [only] = json_roles.as_slice() {
+            // Preserve the documented single-role payload shape.
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "generated",
+                    "role": only["role"],
+                    "width": only["width"],
+                    "height": only["height"],
+                    "record": only["record"],
+                    "identity": only["identity"],
+                    "model": only["model"],
+                    "model_hash": only["model_hash"],
+                })
+            );
+        } else {
+            println!(
+                "{}",
+                serde_json::json!({"status": "generated", "roles": json_roles})
+            );
+        }
+    } else {
+        println!("{summary}");
+    }
+    info!("generative: {summary}");
+    Ok(())
+}
+
+/// Source actions are needed for exact stage parity; reused by `--status`.
+///
+/// GEN-ONNX-1 (double-role record): every active role is reported. The expand
+/// identity embeds the auto-filled pixels, so it is only computed once the
+/// auto-fill canvas resolved; without it the expand role is reported `missing`
+/// (loud) instead of guessing a digest from the wrong frame.
+#[allow(clippy::too_many_arguments)]
+fn report_generative_status(
+    edit: &GenerativeEdit,
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    camera_white_balance: Option<[f32; 4]>,
+    source_actions: &[SourceActionArtifact],
+    bundle_root: &Path,
+    zdata_path: &Path,
+    seed: u64,
+    json: bool,
+    lensfun: Option<LensfunCorrectorRef<'_>>,
+) -> Result<(), CliError> {
+    let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
+    let expand_active = edit.effective_expand();
+    if !auto_fill_active && !expand_active {
+        if json {
+            println!("{}", serde_json::json!({"status": "inactive"}));
+        } else {
+            println!("generative: inactive (no role active)");
+        }
+        return Ok(());
+    }
+    let (after_lens, after_perspective) =
+        stage_generative_input(frame, recipe, camera_white_balance, source_actions, lensfun)?;
+    let link = edit.artifact.as_ref();
+    let link_role = if expand_active {
+        Some(CoreGenerativeRole::Expand)
+    } else {
+        Some(CoreGenerativeRole::AutoFillTransparent)
+    };
+    let role_link = |role: CoreGenerativeRole| link.filter(|_| link_role == Some(role));
+    // (role, identity digest, status, record id)
+    let mut roles: Vec<(&'static str, Option<String>, String, Option<String>)> = Vec::new();
+    let mut auto_fill_frame: Option<ImageFrame> = None;
+    let auto_fill_required = auto_fill_active && has_transparent_pixels(&after_lens);
+    if auto_fill_active {
+        if !auto_fill_required {
+            roles.push(("AutoFillTransparent", None, "not-required".to_owned(), None));
+        } else {
+            let identity = generative_identity(CoreGenerativeRole::AutoFillTransparent, edit);
+            let digest = GenerativeCacheKey::auto_fill(&after_lens, seed, &identity).digest();
+            let owns_link = link_role == Some(CoreGenerativeRole::AutoFillTransparent);
+            let (status, resolved) = generative_role_status(
+                bundle_root,
+                zdata_path,
+                role_link(CoreGenerativeRole::AutoFillTransparent),
+                owns_link,
+                &digest,
+            );
+            auto_fill_frame = resolved;
+            roles.push((
+                "AutoFillTransparent",
+                Some(digest.clone()),
+                status,
+                Some(generative_record_id(&digest)),
+            ));
+        }
+    }
+    if expand_active {
+        if auto_fill_required && auto_fill_frame.is_none() {
+            // The expand identity embeds the auto-filled pixels; without the
+            // auto-fill canvas its status cannot be verified.
+            roles.push(("Expand", None, "missing".to_owned(), None));
+        } else {
+            let canvas = edit.canvas.as_ref().ok_or_else(|| {
+                CliError::Message("expand_beyond_image requires a `canvas`".into())
+            })?;
+            let expand_input = match auto_fill_frame.as_ref() {
+                Some(filled) => {
+                    let artifact = GenerativeCanvasArtifact::new(
+                        CoreGenerativeRole::AutoFillTransparent,
+                        filled.clone(),
+                    );
+                    generative_expand_input(
+                        frame,
+                        recipe,
+                        camera_white_balance,
+                        source_actions,
+                        &artifact,
+                        lensfun,
+                    )?
+                }
+                None => after_perspective.clone(),
+            };
+            let identity = generative_identity(CoreGenerativeRole::Expand, edit);
+            let digest =
+                GenerativeCacheKey::expand(&expand_input, canvas, seed, &identity).digest();
+            let (status, _) = generative_role_status(
+                bundle_root,
+                zdata_path,
+                role_link(CoreGenerativeRole::Expand),
+                link_role == Some(CoreGenerativeRole::Expand),
+                &digest,
+            );
+            roles.push((
+                "Expand",
+                Some(digest.clone()),
+                status,
+                Some(generative_record_id(&digest)),
+            ));
+        }
+    }
+    let ok = |status: &str| status == "available" || status == "not-required";
+    let failed: Vec<String> = roles
+        .iter()
+        .filter(|(_, _, status, _)| !ok(status))
+        .map(|(role, _, status, _)| format!("{role}={status}"))
+        .collect();
+    let combined = if failed.is_empty() {
+        if roles.iter().any(|(_, _, status, _)| status == "available") {
+            "available".to_owned()
+        } else {
+            "not-required".to_owned()
+        }
+    } else {
+        failed.join(", ")
+    };
+    if json {
+        if let [role] = roles.as_slice() {
+            let (role, identity, status, record) = role;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": status,
+                    "role": role,
+                    "identity": identity,
+                    "record": record,
+                    "model": "inpaint-outpaint-xl",
+                })
+            );
+        } else {
+            let role_json: Vec<serde_json::Value> = roles
+                .iter()
+                .map(|(role, identity, status, record)| {
+                    serde_json::json!({
+                        "role": role,
+                        "status": status,
+                        "identity": identity,
+                        "record": record,
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": combined,
+                    "roles": role_json,
+                    "model": "inpaint-outpaint-xl",
+                })
+            );
+        }
+    } else if let [role] = roles.as_slice() {
+        println!("generative: status={} role={}", role.2, role.0);
+    } else {
+        let detail = roles
+            .iter()
+            .map(|(role, _, status, _)| format!("{role}:{status}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("generative: status={combined} roles={detail}");
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::Message(format!(
+            "generative canvas is `{combined}` (no silent fallback; run `lumina generative --generate`)"
+        )))
+    }
+}
+
 fn process_selected(
     args: ProcessArgs,
     quality: u8,
@@ -7462,7 +8419,23 @@ fn process_selected(
     // The chosen backend is logged once at startup (see `init_render_backend`).
     // `render_standard` is the single CLI backend entry point (shared with the
     // LRPAR-MATRIX-RECIPE runner — no second render path).
-    let render_output = render_standard(&frame, &recipe, &render_ctx)?;
+    //
+    // GEN-ONNX-1: an active generative edit is rendered by *compositing* the
+    // persisted `generative_canvas` artifact. The artifact is resolved (and its
+    // identity verified) here; a missing/stale/corrupt canvas aborts loudly.
+    let generative = resolve_generative_artifacts(
+        &frame,
+        &recipe,
+        wb,
+        &source_actions,
+        &zdata_path,
+        #[cfg(feature = "lensfun")]
+        lensfun_corrector.as_ref().map(LensfunCorrectorRef),
+        #[cfg(not(feature = "lensfun"))]
+        None,
+    )?;
+    let render_output =
+        render_standard_with_generative(&frame, &recipe, &render_ctx, generative.input())?;
     // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
     for warning in &resolved.warnings {
         eprintln!("warning: {warning}");
@@ -7515,7 +8488,7 @@ fn process_selected(
     // as the pre-match domain). Output stays byte-identical to the GUI export in
     // both branches (the encode step is unchanged).
     let mut encoded = if args.match_total_exposure {
-        export_image(
+        export_image_with_generative(
             &frame,
             &RenderContext {
                 recipe: &recipe,
@@ -7535,6 +8508,7 @@ fn process_selected(
                 depth: None,
             },
             options,
+            generative.input(),
         )?
     } else {
         render_output.frame.encode_with_options(options)?
@@ -8135,6 +9109,8 @@ impl StagedArtifact {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests still call the plain (no-artifact) export entry point.
+    use lumina_core::export_image;
 
     /// META-COPYPASTE-1: the clipboard file serializes with the documented
     /// format marker/version, and `load_meta_clipboard` rejects structural
@@ -12661,5 +13637,582 @@ mod tests {
                 "a Lensfun corrector must change the rendered pixels"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // GEN-ONNX-1 Welle 1: `lumina generative` end-to-end.
+    // ------------------------------------------------------------------
+
+    fn generative_args(input: &Path) -> GenerativeArgs {
+        GenerativeArgs {
+            input: input.to_path_buf(),
+            virtual_copy: None,
+            status: false,
+            generate: false,
+            force: false,
+            remove: false,
+            prompt: None,
+            negative_prompt: None,
+            seed: None,
+            auto_fill: false,
+            expand: false,
+            canvas: None,
+            keep: None,
+            json: false,
+        }
+    }
+
+    fn process_args(input: &Path, output: &Path) -> ProcessArgs {
+        ProcessArgs {
+            input: input.to_path_buf(),
+            output: output.to_path_buf(),
+            preset: None,
+            exposure: None,
+            contrast: None,
+            highlights: None,
+            shadows: None,
+            auto_tone: false,
+            match_total_exposure: false,
+            target_luminance: 0.5,
+            write_metadata: false,
+        }
+    }
+
+    #[test]
+    fn generative_expand_generate_status_and_render_end_to_end() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, source) = png_input(directory.path(), "input.png", 100);
+        assert_eq!((source.width, source.height), (2, 2));
+
+        // Produce and persist the composited canvas (fixture model, offline).
+        generative(GenerativeArgs {
+            generate: true,
+            expand: true,
+            canvas: Some("4x4+0+0".into()),
+            prompt: Some("extend".into()),
+            seed: Some(7),
+            ..generative_args(&input)
+        })
+        .unwrap();
+        assert!(lumina_sidecar::zdata_path_for(&input).is_file());
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let edit = document.virtual_copies[0]
+            .recipe
+            .generative_edit
+            .as_ref()
+            .expect("generative_edit persisted");
+        assert!(edit.effective_expand());
+        assert!(
+            edit.artifact.is_some(),
+            "the artifact link must be persisted"
+        );
+        assert_eq!(edit.artifact.as_ref().unwrap().width, 4);
+
+        // `--status` is healthy (exit 0).
+        generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap();
+
+        // Render consumes the artifact (loud on any drift).
+        let output = directory.path().join("out.png");
+        process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(output.is_file());
+        let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(
+            (rendered.width, rendered.height),
+            (4, 4),
+            "the rendered frame is the expanded canvas"
+        );
+        // The generated border differs from the flat source, and the source
+        // block is preserved at the offset (top-left here).
+        assert_eq!(&rendered.pixels[..4], &source.pixels[..4]);
+        let border = ((3 * 4 + 3) * 4) as usize;
+        assert_ne!(
+            &rendered.pixels[border..border + 3],
+            &source.pixels[..3],
+            "the generated canvas border must differ from the flat source"
+        );
+    }
+
+    #[test]
+    fn generative_status_without_artifact_exits_with_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _frame) = png_input(directory.path(), "input.png", 100);
+        // Persist a generative edit without an artifact link.
+        let mut document = SidecarDocument::new(
+            source_identity(
+                &input,
+                &fs::read(&input).unwrap(),
+                &ImageFrame::decode(&fs::read(&input).unwrap()).unwrap(),
+                None,
+            )
+            .unwrap(),
+            "raster-mvp-1",
+        );
+        document.virtual_copies[0].recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: Some(GenerativeCanvas {
+                output_width: 4,
+                output_height: 4,
+                source_offset_x: 0,
+                source_offset_y: 0,
+                extras: Default::default(),
+            }),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: Some(7),
+            prompt: None,
+            extras: Default::default(),
+        });
+        save_sidecar(&sidecar_path_for(&input), &document).unwrap();
+
+        // Status reports `missing` and fails loudly (exit code 1).
+        let error = generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("missing"), "got {error}");
+
+        // Rendering the same recipe without an artifact is also loud.
+        let output = directory.path().join("out.png");
+        let error = process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("generative_canvas"),
+            "got {error}"
+        );
+        assert!(!output.exists(), "no output on a refused render");
+    }
+
+    #[test]
+    fn generative_expand_without_canvas_is_loud() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _frame) = png_input(directory.path(), "input.png", 100);
+        let error = generative(GenerativeArgs {
+            generate: true,
+            expand: true,
+            ..generative_args(&input)
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("--canvas"), "got {error}");
+        assert!(!lumina_sidecar::zdata_path_for(&input).exists());
+    }
+
+    /// GEN-ONNX-1 BLOCKER fix: a prompt change after generation must be detected
+    /// as `stale` — the old canvas is never silently adopted.
+    #[test]
+    fn generative_prompt_change_is_detected_as_stale() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _frame) = png_input(directory.path(), "input.png", 100);
+        generative(GenerativeArgs {
+            generate: true,
+            expand: true,
+            canvas: Some("4x4+0+0".into()),
+            prompt: Some("A".into()),
+            seed: Some(7),
+            ..generative_args(&input)
+        })
+        .unwrap();
+        generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap();
+
+        // Simulate a persisted prompt change (recipe edit).
+        let sidecar_path = sidecar_path_for(&input);
+        let mut document = load_sidecar(&sidecar_path).unwrap();
+        document.virtual_copies[0]
+            .recipe
+            .generative_edit
+            .as_mut()
+            .unwrap()
+            .prompt = Some("B".into());
+        save_sidecar(&sidecar_path, &document).unwrap();
+
+        // Status is now stale and fails loudly (exit 1).
+        let error = generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("stale"),
+            "prompt drift must be reported stale, got {error}"
+        );
+
+        // And the render refuses to adopt the old canvas.
+        let output = directory.path().join("out.png");
+        let error = process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("stale"),
+            "prompt drift must refuse the render, got {error}"
+        );
+        assert!(!output.exists(), "no output on a refused render");
+    }
+
+    /// GEN-ONNX-1 Welle 2a: a negative-prompt change after generation must be
+    /// detected as `stale` (the additive schema field is identity-bearing).
+    #[test]
+    fn generative_negative_prompt_change_is_detected_as_stale() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _frame) = png_input(directory.path(), "input.png", 100);
+        generative(GenerativeArgs {
+            generate: true,
+            expand: true,
+            canvas: Some("4x4+0+0".into()),
+            prompt: Some("A".into()),
+            negative_prompt: Some("blurry".into()),
+            seed: Some(7),
+            ..generative_args(&input)
+        })
+        .unwrap();
+        generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap();
+
+        // The sidecar JSON carries the additive top-level field.
+        let sidecar_path = sidecar_path_for(&input);
+        let raw = fs::read_to_string(&sidecar_path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            value["virtual_copies"][0]["recipe"]["generative_edit"]["negative_prompt"],
+            serde_json::json!("blurry"),
+            "negative_prompt must roundtrip as a top-level JSON field"
+        );
+
+        // Simulate a persisted negative-prompt change.
+        let mut document = load_sidecar(&sidecar_path).unwrap();
+        document.virtual_copies[0]
+            .recipe
+            .generative_edit
+            .as_mut()
+            .unwrap()
+            .set_negative_prompt(Some("noisy".into()));
+        save_sidecar(&sidecar_path, &document).unwrap();
+
+        let error = generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("stale"),
+            "negative-prompt drift must be reported stale, got {error}"
+        );
+    }
+
+    /// GEN-ONNX-1 (CLI double-role follow-up): a single record carrying both
+    /// roles (`auto_fill_transparent` + `expand_beyond_image`) generates both
+    /// canvases (`Lens → auto-fill → Perspective → expand`), links the
+    /// canvas-defining expand record, reports `available`, and renders
+    /// byte-identically to the core oracle.
+    #[test]
+    fn generative_double_role_generate_render_and_status() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        // 2x2 with the top-left pixel transparent so the auto-fill role triggers.
+        let source = ImageFrame::new(
+            2,
+            2,
+            vec![
+                10, 20, 30, 0, 10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255,
+            ],
+        )
+        .unwrap();
+        fs::write(&input, source.encode(ImageFileFormat::Png).unwrap()).unwrap();
+
+        // One `--generate` produces both role canvases from the double role
+        // (`--json` exercises the multi-role payload branch).
+        generative(GenerativeArgs {
+            generate: true,
+            auto_fill: true,
+            expand: true,
+            canvas: Some("4x4+1+1".into()),
+            prompt: Some("extend".into()),
+            seed: Some(7),
+            json: true,
+            ..generative_args(&input)
+        })
+        .unwrap();
+
+        // Both deterministic identity records are persisted in one bundle.
+        let zdata = lumina_sidecar::zdata_path_for(&input);
+        let container = load_zdata(&zdata).unwrap();
+        let canvas_ids: Vec<String> = container
+            .decode_all()
+            .unwrap()
+            .into_iter()
+            .filter_map(|spec| match spec {
+                lumina_sidecar::RecordSpec::GenerativeCanvas(canvas) => Some(canvas.id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            canvas_ids.len(),
+            2,
+            "the double role must persist the auto-fill AND the expand canvas, got {canvas_ids:?}"
+        );
+
+        let document = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let edit = document.virtual_copies[0]
+            .recipe
+            .generative_edit
+            .as_ref()
+            .unwrap();
+        assert!(edit.auto_fill_transparent.unwrap_or(false) && edit.effective_expand());
+        let link = edit.artifact.as_ref().expect("expand link persisted");
+        assert_eq!(link.width, 4, "the linked canvas is the expand role");
+
+        // Status reports both roles `available` (exit 0); `--json` covers the
+        // multi-role status payload.
+        generative(GenerativeArgs {
+            status: true,
+            json: true,
+            ..generative_args(&input)
+        })
+        .unwrap();
+
+        // Render + byte-identical core oracle.
+        let output = directory.path().join("out.png");
+        process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!((rendered.width, rendered.height), (4, 4));
+        assert!(
+            rendered
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px[3] == 255),
+            "auto-fill + expand must leave no transparent pixels"
+        );
+
+        let recipe = document.virtual_copies[0].recipe.clone();
+        let artifacts = resolve_generative_artifacts(
+            &source,
+            &recipe,
+            None,
+            &[],
+            &lumina_sidecar::zdata_path_for(&input),
+            None,
+        )
+        .unwrap();
+        assert!(artifacts.auto_fill.is_some());
+        assert!(artifacts.expand.is_some());
+        let oracle = render_frame_with_generative(
+            &source,
+            &RenderContext {
+                recipe: &recipe,
+                camera_white_balance: None,
+                source_actions: &[],
+                masks: None,
+                lensfun: None,
+                depth: None,
+            },
+            artifacts.input(),
+        )
+        .unwrap()
+        .frame;
+        assert_eq!(
+            rendered.pixels, oracle.pixels,
+            "the CLI render must be byte-identical to the core oracle"
+        );
+    }
+
+    /// GEN-ONNX-1: a double-role record without any artifact is a loud refusal
+    /// (render and status exit non-zero), never a silent unexpanded render.
+    #[test]
+    fn generative_double_role_without_artifact_is_loud() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let source = ImageFrame::new(
+            2,
+            2,
+            vec![
+                10, 20, 30, 0, 10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255,
+            ],
+        )
+        .unwrap();
+        fs::write(&input, source.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        let bytes = fs::read(&input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        let mut document = SidecarDocument::new(
+            source_identity(&input, &bytes, &frame, None).unwrap(),
+            "raster-mvp-1",
+        );
+        document.virtual_copies[0].recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: Some(GenerativeCanvas {
+                output_width: 4,
+                output_height: 4,
+                source_offset_x: 1,
+                source_offset_y: 1,
+                extras: Default::default(),
+            }),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: Some(true),
+            seed: Some(7),
+            prompt: None,
+            extras: Default::default(),
+        });
+        save_sidecar(&sidecar_path_for(&input), &document).unwrap();
+
+        // Status is loud (auto-fill record missing).
+        let error = generative(GenerativeArgs {
+            status: true,
+            ..generative_args(&input)
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("missing"),
+            "double-role status without a canvas must be loud, got {error}"
+        );
+
+        // The render refuses without writing an output.
+        let output = directory.path().join("out.png");
+        let error = process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("generative_canvas"),
+            "render must refuse a double role without artifacts, got {error}"
+        );
+        assert!(!output.exists(), "no output on a refused render");
+    }
+
+    /// GEN-ONNX-1: an explicit `--remove` unlinks the role; the resolver must
+    /// not silently re-adopt the still-present bundle record (the record is
+    /// kept by design, the recipe is not).
+    #[test]
+    fn generative_removed_link_stays_loud_with_bundle_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _source) = png_input(directory.path(), "input.png", 100);
+        generative(GenerativeArgs {
+            generate: true,
+            expand: true,
+            canvas: Some("4x4+0+0".into()),
+            seed: Some(7),
+            ..generative_args(&input)
+        })
+        .unwrap();
+        let zdata = lumina_sidecar::zdata_path_for(&input);
+        assert!(zdata.is_file());
+
+        generative(GenerativeArgs {
+            remove: true,
+            ..generative_args(&input)
+        })
+        .unwrap();
+        assert!(zdata.is_file(), "`--remove` keeps the bundle record");
+
+        let output = directory.path().join("out.png");
+        let error = process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("generative_canvas"),
+            "an unlinked active role must stay loud, got {error}"
+        );
+        assert!(!output.exists(), "no output on a refused render");
+    }
+
+    /// GEN-ONNX-1 Welle 2a Follow-up (1): the normative auto-fill caller
+    /// convention — `auto_fill = None` (identity, no artifact) when the post-lens
+    /// frame has no transparent pixels. Pins that the CLI does not demand an
+    /// artifact link in that case and renders the identity.
+    #[test]
+    fn generative_auto_fill_without_transparency_needs_no_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        // Fully opaque frame (alpha 255) — no transparent pixels after lens.
+        let source = ImageFrame::new(
+            2,
+            2,
+            vec![
+                100, 100, 100, 255, 100, 100, 100, 255, 100, 100, 100, 255, 100, 100, 100, 255,
+            ],
+        )
+        .unwrap();
+        fs::write(&input, source.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        let bytes = fs::read(&input).unwrap();
+        let frame = ImageFrame::decode(&bytes).unwrap();
+        let mut document = SidecarDocument::new(
+            source_identity(&input, &bytes, &frame, None).unwrap(),
+            "raster-mvp-1",
+        );
+        document.virtual_copies[0].recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: Some(0),
+            prompt: None,
+            extras: Default::default(),
+        });
+        save_sidecar(&sidecar_path_for(&input), &document).unwrap();
+
+        let output = directory.path().join("out.png");
+        process_selected(
+            process_args(&input, &output),
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(
+            rendered.pixels, source.pixels,
+            "no transparency after lens => identity, no artifact required (caller passes None)"
+        );
     }
 }

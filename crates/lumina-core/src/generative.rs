@@ -21,6 +21,133 @@ pub fn has_transparent_pixels(frame: &ImageFrame) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// GEN-ONNX-1 Welle 1: artefact compositing (replaces the heuristic BFS on the
+// render path).
+//
+// The native `lumina-onnx` producer emits the *full composited canvas*
+// (`kind = 2 generative_canvas`, RGBA8) plus its complete identity. The core
+// render stage only *adopts* that canvas: it validates the recipe geometry and
+// the artifact dimensions and substitutes the frame. There is deliberately no
+// pixel arithmetic here — no nearest-neighbour search, no blending — so the
+// stage is inherently GPU-portable (the GPU path renders the adopted frame with
+// its normal stages; CPU remains the oracle).
+//
+// No silent fallback: if a generative edit is active (`expand_beyond_image` or
+// `auto_fill_transparent`) and the caller supplies no matching artifact, the
+// render aborts loudly (`InvalidAdjustment`). It never falls back to the BFS
+// heuristic and never renders "as if nothing had been generated".
+// ---------------------------------------------------------------------------
+
+/// A caller-supplied, model-produced composited canvas for the render stage.
+///
+/// The caller (CLI/GUI orchestration) loads the persisted `generative_canvas`
+/// record from the `.lumina.zdata` bundle, verifies its identity against the
+/// current operation and passes the pixels here. The core stays I/O-free.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerativeCanvasArtifact {
+    pub role: GenerativeRole,
+    pub frame: ImageFrame,
+}
+
+impl GenerativeCanvasArtifact {
+    #[must_use]
+    pub fn new(role: GenerativeRole, frame: ImageFrame) -> Self {
+        Self { role, frame }
+    }
+}
+
+/// The two possible generative canvas artifacts for one render.
+///
+/// A single `GenerativeEdit` record may carry both flags (SOLL: MVP single
+/// record, order `Lens → GenerativeEdit → Perspective → Crop`), and the
+/// auto-fill and expand canvases are distinct (auto-fill is source-sized,
+/// expand is `canvas`-sized). The caller supplies each role separately; a
+/// missing role aborts loudly when that role is active.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GenerativeCanvasInput<'a> {
+    /// Composited canvas for `auto_fill_transparent` (source-sized).
+    pub auto_fill: Option<&'a GenerativeCanvasArtifact>,
+    /// Composited canvas for `expand_beyond_image` (`canvas`-sized).
+    pub expand: Option<&'a GenerativeCanvasArtifact>,
+}
+
+fn generative_artifact_error(name: &str) -> CoreError {
+    CoreError::InvalidAdjustment {
+        name: name.into(),
+        value: -1.0,
+        minimum: 0.0,
+        maximum: 1.0,
+    }
+}
+
+/// GEN-ONNX-1: apply the auto-fill role through artifact compositing.
+///
+/// Identity (per `feature/product/generative-expand.md`): the trigger is
+/// `auto_fill_transparent == true` **and** transparent pixels present after
+/// lens correction. Without transparent pixels the stage is the identity and
+/// needs **no** artifact (matching the SOLL). With transparent pixels the
+/// caller must supply a matching [`GenerativeRole::AutoFillTransparent`]
+/// artifact whose dimensions equal the current frame; otherwise the render
+/// aborts loudly.
+pub fn composite_auto_fill(
+    frame: ImageFrame,
+    artifact: Option<&GenerativeCanvasArtifact>,
+) -> Result<ImageFrame, CoreError> {
+    if !has_transparent_pixels(&frame) {
+        return Ok(frame);
+    }
+    let Some(artifact) = artifact else {
+        return Err(generative_artifact_error(
+            "generative_artifact.auto_fill.missing",
+        ));
+    };
+    if artifact.role != GenerativeRole::AutoFillTransparent {
+        return Err(generative_artifact_error(
+            "generative_artifact.auto_fill.role",
+        ));
+    }
+    if artifact.frame.width != frame.width || artifact.frame.height != frame.height {
+        return Err(generative_artifact_error(
+            "generative_artifact.auto_fill.dimensions",
+        ));
+    }
+    Ok(artifact.frame.clone())
+}
+
+/// GEN-ONNX-1: apply the manual expand role through artifact compositing.
+///
+/// The recipe canvas defines the target geometry; the artifact must be an
+/// [`GenerativeRole::Expand`] canvas with exactly `canvas.output_*`
+/// dimensions. Any mismatch (missing artifact, wrong role, wrong dimensions,
+/// invalid canvas bounds) is a loud [`CoreError::InvalidAdjustment`] — never a
+/// silent unexpanded render.
+pub fn composite_expand(
+    frame: ImageFrame,
+    recipe: &lumina_sidecar::EditRecipe,
+    artifact: Option<&GenerativeCanvasArtifact>,
+) -> Result<ImageFrame, CoreError> {
+    let Some(canvas) = generative_canvas(recipe) else {
+        return Err(generative_artifact_error("generative_expand.canvas"));
+    };
+    validate_expand_canvas(&frame, canvas)?;
+    let Some(artifact) = artifact else {
+        return Err(generative_artifact_error(
+            "generative_artifact.expand.missing",
+        ));
+    };
+    if artifact.role != GenerativeRole::Expand {
+        return Err(generative_artifact_error("generative_artifact.expand.role"));
+    }
+    if artifact.frame.width != canvas.output_width || artifact.frame.height != canvas.output_height
+    {
+        return Err(generative_artifact_error(
+            "generative_artifact.expand.dimensions",
+        ));
+    }
+    Ok(artifact.frame.clone())
+}
+
+// ---------------------------------------------------------------------------
 // GEN-EXPAND-CACHE-1: persistent-free expand/auto-fill result cache.
 //
 // The heuristic fill (`fill_transparent_heuristic`) is a sequential global BFS
@@ -30,13 +157,18 @@ pub fn has_transparent_pixels(frame: &ImageFrame) -> bool {
 // generative identity.
 //
 // Identity (analogous to the AI-mask identity in `Agents.md`) is *complete*: it
-// is the digest of the exact BFS input frame (which already folds in source
+// is the digest of the exact input frame (which already folds in source
 // content, decode context and the full geometry/lens/perspective context)
-// combined with the role discriminator, the `seed` and the target `canvas`.
-// Any change to source, decode, recipe, seed or canvas therefore produces a
-// different key => a miss => a loud recomputation. A stale result can never be
-// served silently: there is no timestamp/partial-match lookup, only exact
-// identity equality.
+// combined with the role discriminator, the `seed`, the target `canvas` **and
+// the prompt/model identity** (`GenerativeIdentity`: `model_hash`, `prompt`,
+// optional `negative_prompt`). The fixture/model pixels depend on the prompt
+// (see `lumina-onnx` outpaint/inpaint) and the SOLL lists prompt, negative
+// prompt and model context as identity components, so omitting them would let
+// a prompt/model change serve a stale canvas silently. Any change to source,
+// decode, recipe, seed, canvas, prompt or model therefore produces a different
+// key => a miss => a loud recomputation. A stale result can never be served
+// silently: there is no timestamp/partial-match lookup, only exact identity
+// equality.
 //
 // The cache is deliberately RAM-only and process-local (per thread). It is a
 // pure performance layer, fully deletable and rebuildable from source+recipe:
@@ -67,8 +199,67 @@ impl GenerativeRole {
     }
 }
 
-/// Complete identity of one BFS run. Two keys with equal [`Self::digest`] are
-/// guaranteed to describe the exact same BFS input and parameters.
+/// The prompt/model identity components of one generative operation.
+///
+/// Mandatory identity components per `feature/product/generative-expand.md`
+/// ("Modellkontext", "Prompt-Kontext"): the model artifact hash, the exact
+/// prompt and the optional negative prompt. `None` for `negative_prompt` is
+/// identity (absent), never implicitly empty.
+///
+/// The persisted [`lumina_sidecar::GenerativeEdit`] currently carries `prompt`
+/// and `seed` but no `model`/`negative_prompt` field (schema decision pending),
+/// so callers pass `negative_prompt = None` and derive `model_hash` from the
+/// selected model source; the type already carries both so a later schema
+/// extension cannot silently keep the identity prompt-/model-blind.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GenerativeIdentity {
+    /// `model_hash` of the exact model (`sha256:<hex>`; the fixture spec digest
+    /// or the real `.onnx` artifact digest). Part of the identity: switching
+    /// models invalidates the artifact.
+    pub model_hash: String,
+    /// Exact prompt (roundtrip-stable; may be empty).
+    pub prompt: String,
+    /// Optional negative prompt; `None` is identity.
+    pub negative_prompt: Option<String>,
+}
+
+impl GenerativeIdentity {
+    #[must_use]
+    pub fn new(model_hash: impl Into<String>, prompt: impl Into<String>) -> Self {
+        Self {
+            model_hash: model_hash.into(),
+            prompt: prompt.into(),
+            negative_prompt: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_negative_prompt(mut self, negative_prompt: Option<impl Into<String>>) -> Self {
+        self.negative_prompt = negative_prompt.map(Into::into);
+        self
+    }
+
+    /// Identity used by the standalone heuristic BFS utilities (no model, no
+    /// prompt). The render path does **not** use these utilities (GEN-ONNX-1);
+    /// their cache keys are intentionally distinct from every model run.
+    #[must_use]
+    pub fn heuristic() -> Self {
+        Self {
+            model_hash: "heuristic-bfs".into(),
+            prompt: String::new(),
+            negative_prompt: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = prompt.into();
+        self
+    }
+}
+
+/// Complete identity of one generative run. Two keys with equal [`Self::digest`]
+/// are guaranteed to describe the exact same input and parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerativeCacheKey {
     pub role: GenerativeRole,
@@ -76,27 +267,35 @@ pub struct GenerativeCacheKey {
     /// Target canvas `(output_width, output_height, source_offset_x,
     /// source_offset_y)` for [`GenerativeRole::Expand`]; `None` for auto-fill.
     pub canvas: Option<(u32, u32, i32, i32)>,
-    /// BLAKE3 digest of the exact input frame the BFS consumes (dimensions +
-    /// RGBA8 pixels).
+    /// BLAKE3 digest of the exact input frame the model/BFS consumes
+    /// (dimensions + RGBA8 pixels).
     pub input_digest: String,
+    /// Prompt/model identity (model hash + prompt + optional negative prompt).
+    pub identity: GenerativeIdentity,
 }
 
 impl GenerativeCacheKey {
-    /// Identity of an auto-fill run over `frame` with `seed`.
+    /// Identity of an auto-fill run over `frame` with `seed` and `identity`.
     #[must_use]
-    pub fn auto_fill(frame: &ImageFrame, seed: u64) -> Self {
+    pub fn auto_fill(frame: &ImageFrame, seed: u64, identity: &GenerativeIdentity) -> Self {
         Self {
             role: GenerativeRole::AutoFillTransparent,
             seed,
             canvas: None,
             input_digest: generative_input_digest(frame),
+            identity: identity.clone(),
         }
     }
 
     /// Identity of an expand run that composites `frame` into `canvas` with
-    /// `seed`.
+    /// `seed` and `identity`.
     #[must_use]
-    pub fn expand(frame: &ImageFrame, canvas: &GenerativeCanvas, seed: u64) -> Self {
+    pub fn expand(
+        frame: &ImageFrame,
+        canvas: &GenerativeCanvas,
+        seed: u64,
+        identity: &GenerativeIdentity,
+    ) -> Self {
         Self {
             role: GenerativeRole::Expand,
             seed,
@@ -107,14 +306,23 @@ impl GenerativeCacheKey {
                 canvas.source_offset_y,
             )),
             input_digest: generative_input_digest(frame),
+            identity: identity.clone(),
         }
     }
 
     /// Stable cache digest; every identity component participates.
+    ///
+    /// Every variable-length component (input digest, model hash, prompt,
+    /// negative prompt) is length-prefixed so no two distinct identity tuples
+    /// can collide by concatenation.
     #[must_use]
     pub fn digest(&self) -> String {
+        fn update_component(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+            hasher.update(&(bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        }
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"generative-cache");
+        hasher.update(b"generative-cache-v2");
         hasher.update(&[self.role.tag()]);
         hasher.update(&self.seed.to_le_bytes());
         match self.canvas {
@@ -129,7 +337,18 @@ impl GenerativeCacheKey {
                 hasher.update(&oy.to_le_bytes());
             }
         }
-        hasher.update(self.input_digest.as_bytes());
+        update_component(&mut hasher, self.input_digest.as_bytes());
+        update_component(&mut hasher, self.identity.model_hash.as_bytes());
+        update_component(&mut hasher, self.identity.prompt.as_bytes());
+        match &self.identity.negative_prompt {
+            None => {
+                hasher.update(&[0]);
+            }
+            Some(negative) => {
+                hasher.update(&[1]);
+                update_component(&mut hasher, negative.as_bytes());
+            }
+        }
         hasher.finalize().to_hex().to_string()
     }
 }
@@ -344,7 +563,7 @@ pub fn fill_transparent_cached(
     frame: &mut ImageFrame,
     seed: u64,
 ) -> FillOutcome {
-    let key = GenerativeCacheKey::auto_fill(frame, seed);
+    let key = GenerativeCacheKey::auto_fill(frame, seed, &GenerativeIdentity::heuristic());
     if let Some(cached) = cache.get(&key) {
         *frame = cached;
         return FillOutcome {
@@ -562,6 +781,13 @@ pub fn resolve_canvas_for_recipe(
 /// GEN-FILL-02 stub: expand canvas heuristically (no model). Validates canvas
 /// bounds. Uses the current thread's [`GenerativeCache`] so a repeated render of
 /// the identical identity does not run the BFS again (GEN-EXPAND-CACHE-1).
+///
+/// **Not on the render path since GEN-ONNX-1 Welle 1.** The shared render stage
+/// composites the model-produced `generative_canvas` artifact
+/// ([`composite_expand`]) and never calls this heuristic; the function remains a
+/// deterministic standalone/test utility (and the BFS cache's miss/hit contract
+/// is still unit-tested). A generative edit without an artifact is a loud
+/// render error, never a fallback to this function.
 pub fn apply_generative_expand(
     frame: &ImageFrame,
     recipe: &lumina_sidecar::EditRecipe,
@@ -593,7 +819,12 @@ pub fn apply_generative_expand_cached(
     };
     validate_expand_canvas(frame, canvas)?;
     let seed = ge.seed.unwrap_or(0);
-    let key = GenerativeCacheKey::expand(frame, canvas, seed);
+    // Standalone heuristic utility (not the render path): the prompt is part of
+    // the key so a recipe prompt change re-runs it; the model component is the
+    // heuristic sentinel (no model is consumed here).
+    let identity =
+        GenerativeIdentity::heuristic().with_prompt(ge.prompt.clone().unwrap_or_default());
+    let key = GenerativeCacheKey::expand(frame, canvas, seed, &identity);
     if let Some(cached) = cache.get(&key) {
         return Ok(cached);
     }
@@ -1179,14 +1410,75 @@ mod tests {
     #[test]
     fn cache_key_digest_separates_role_seed_and_canvas() {
         let frame = expand_frame();
-        let base = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 1, 1), 0);
-        let seed = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 1, 1), 1);
-        let canvas_changed = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 0, 0), 0);
-        let auto = GenerativeCacheKey::auto_fill(&frame, 0);
+        let identity = GenerativeIdentity::heuristic();
+        let base = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 1, 1), 0, &identity);
+        let seed = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 1, 1), 1, &identity);
+        let canvas_changed = GenerativeCacheKey::expand(&frame, &canvas(6, 6, 0, 0), 0, &identity);
+        let auto = GenerativeCacheKey::auto_fill(&frame, 0, &identity);
         assert_ne!(base.digest(), seed.digest());
         assert_ne!(base.digest(), canvas_changed.digest());
         assert_ne!(base.digest(), auto.digest(), "roles never alias");
         assert_eq!(base.digest(), base.clone().digest(), "stable digest");
+    }
+
+    // GEN-ONNX-1 BLOCKER fix: the durable identity must participate in the
+    // prompt, negative prompt and model hash — a change to any of them is a
+    // loud miss, never a silently served stale canvas.
+    #[test]
+    fn cache_key_digest_separates_prompt_negative_prompt_and_model() {
+        let frame = expand_frame();
+        let canvas = canvas(6, 6, 1, 1);
+        let base_identity = GenerativeIdentity::new("sha256:model-a", "extend the sky");
+        let base = GenerativeCacheKey::expand(&frame, &canvas, 0, &base_identity);
+
+        let prompt_changed = GenerativeCacheKey::expand(
+            &frame,
+            &canvas,
+            0,
+            &base_identity.clone().with_prompt("extend the sea"),
+        );
+        assert_ne!(
+            base.digest(),
+            prompt_changed.digest(),
+            "a prompt change MUST flip the generative identity"
+        );
+
+        let negative_changed = GenerativeCacheKey::expand(
+            &frame,
+            &canvas,
+            0,
+            &base_identity.clone().with_negative_prompt(Some("blurry")),
+        );
+        assert_ne!(
+            base.digest(),
+            negative_changed.digest(),
+            "a negative-prompt change MUST flip the generative identity"
+        );
+        // `None` vs `Some("")` are distinct (not implicitly equal).
+        let empty_negative = GenerativeCacheKey::expand(
+            &frame,
+            &canvas,
+            0,
+            &base_identity.clone().with_negative_prompt(Some("")),
+        );
+        assert_ne!(base.digest(), empty_negative.digest());
+
+        let model_changed = GenerativeCacheKey::expand(
+            &frame,
+            &canvas,
+            0,
+            &GenerativeIdentity::new("sha256:model-b", "extend the sky"),
+        );
+        assert_ne!(
+            base.digest(),
+            model_changed.digest(),
+            "a model-hash change MUST flip the generative identity"
+        );
+
+        // No concatenation aliasing: moving a character between fields differs.
+        let a = GenerativeCacheKey::expand(&frame, &canvas, 0, &GenerativeIdentity::new("ab", "c"));
+        let b = GenerativeCacheKey::expand(&frame, &canvas, 0, &GenerativeIdentity::new("a", "bc"));
+        assert_ne!(a.digest(), b.digest());
     }
 
     #[test]
@@ -1233,5 +1525,141 @@ mod tests {
             "second identical expand must not run BFS"
         );
         assert_eq!(first.pixels, second.pixels);
+    }
+
+    // ---- GEN-ONNX-1: artefact compositing replaces the BFS render path ----
+
+    fn composite_recipe(canvas: GenerativeCanvas) -> lumina_sidecar::EditRecipe {
+        let mut recipe = lumina_sidecar::EditRecipe::default();
+        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
+            version: 1,
+            canvas: Some(canvas),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: Some(0),
+            prompt: None,
+            extras: Default::default(),
+        });
+        recipe
+    }
+
+    fn solid(width: u32, height: u32, rgba: [u8; 4]) -> crate::ImageFrame {
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..width * height {
+            pixels.extend_from_slice(&rgba);
+        }
+        crate::ImageFrame::new(width, height, pixels).unwrap()
+    }
+
+    #[test]
+    fn composite_expand_adopts_the_artifact_bytes() {
+        let recipe = composite_recipe(canvas(6, 6, 1, 1));
+        let frame = solid(4, 4, [10, 20, 30, 255]);
+        let artifact =
+            GenerativeCanvasArtifact::new(GenerativeRole::Expand, solid(6, 6, [1, 2, 3, 255]));
+        let out = composite_expand(frame, &recipe, Some(&artifact)).unwrap();
+        assert_eq!(
+            out.pixels, artifact.frame.pixels,
+            "the composited canvas is adopted byte-for-byte (no arithmetic)"
+        );
+        assert_eq!((out.width, out.height), (6, 6));
+    }
+
+    #[test]
+    fn composite_expand_missing_artifact_is_loud() {
+        let recipe = composite_recipe(canvas(6, 6, 1, 1));
+        let err = composite_expand(solid(4, 4, [1, 2, 3, 255]), &recipe, None).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidAdjustment { .. }));
+    }
+
+    #[test]
+    fn composite_expand_wrong_role_is_loud() {
+        let recipe = composite_recipe(canvas(6, 6, 1, 1));
+        let artifact = GenerativeCanvasArtifact::new(
+            GenerativeRole::AutoFillTransparent,
+            solid(6, 6, [1, 2, 3, 255]),
+        );
+        assert!(matches!(
+            composite_expand(solid(4, 4, [1, 2, 3, 255]), &recipe, Some(&artifact)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn composite_expand_wrong_dimensions_is_loud() {
+        let recipe = composite_recipe(canvas(6, 6, 1, 1));
+        let artifact =
+            GenerativeCanvasArtifact::new(GenerativeRole::Expand, solid(5, 5, [1, 2, 3, 255]));
+        assert!(matches!(
+            composite_expand(solid(4, 4, [1, 2, 3, 255]), &recipe, Some(&artifact)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+    }
+
+    #[test]
+    fn composite_auto_fill_without_transparency_needs_no_artifact() {
+        let frame = solid(4, 4, [10, 20, 30, 255]);
+        let out = composite_auto_fill(frame.clone(), None).unwrap();
+        assert_eq!(out.pixels, frame.pixels, "identity: no artifact required");
+    }
+
+    #[test]
+    fn composite_auto_fill_with_transparency_requires_matching_artifact() {
+        let frame = solid(2, 2, [10, 20, 30, 0]);
+        assert!(matches!(
+            composite_auto_fill(frame.clone(), None),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+        let wrong_dims =
+            GenerativeCanvasArtifact::new(GenerativeRole::AutoFillTransparent, solid(3, 3, [9; 4]));
+        assert!(matches!(
+            composite_auto_fill(frame.clone(), Some(&wrong_dims)),
+            Err(CoreError::InvalidAdjustment { .. })
+        ));
+        let good = GenerativeCanvasArtifact::new(
+            GenerativeRole::AutoFillTransparent,
+            solid(2, 2, [9, 8, 7, 255]),
+        );
+        assert_eq!(
+            composite_auto_fill(frame, Some(&good)).unwrap().pixels,
+            good.frame.pixels
+        );
+    }
+
+    #[test]
+    fn render_never_runs_the_bfs_and_adopts_the_artifact() {
+        // GEN-ONNX-1: the render path composites the caller artifact and never
+        // invokes the heuristic BFS. Proven via the cache's BFS counter.
+        clear_generative_cache();
+        let before = generative_cache_stats().bfs_runs;
+        let recipe = composite_recipe(canvas(6, 6, 1, 1));
+        let frame = solid(4, 4, [10, 20, 30, 255]);
+        let artifact =
+            GenerativeCanvasArtifact::new(GenerativeRole::Expand, solid(6, 6, [1, 2, 3, 255]));
+        let context = crate::RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        };
+        let out = crate::render_frame_with_generative(
+            &frame,
+            &context,
+            GenerativeCanvasInput {
+                auto_fill: None,
+                expand: Some(&artifact),
+            },
+        )
+        .unwrap();
+        assert_eq!(out.frame.pixels, artifact.frame.pixels);
+        assert_eq!(
+            generative_cache_stats().bfs_runs,
+            before,
+            "artifact compositing must not run the heuristic BFS"
+        );
     }
 }

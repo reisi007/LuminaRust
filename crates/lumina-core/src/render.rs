@@ -159,9 +159,69 @@ pub fn render_frame(
     frame: &ImageFrame,
     context: &RenderContext<'_>,
 ) -> Result<RenderOutput, CoreError> {
+    render_frame_with_generative(
+        frame,
+        context,
+        crate::generative::GenerativeCanvasInput::default(),
+    )
+}
+
+/// GEN-ONNX-1: [`render_frame`] with caller-supplied, model-produced
+/// generative canvas artifacts.
+///
+/// A generative edit (`expand_beyond_image` / `auto_fill_transparent`) is
+/// rendered by *compositing* the supplied artifacts — never by the former
+/// heuristic BFS. Without a matching artifact for an active generative edit the
+/// render aborts loudly (see [`crate::generative::composite_expand`] /
+/// [`crate::generative::composite_auto_fill`]).
+pub fn render_frame_with_generative(
+    frame: &ImageFrame,
+    context: &RenderContext<'_>,
+    generative: crate::generative::GenerativeCanvasInput<'_>,
+) -> Result<RenderOutput, CoreError> {
     let mut work = StageWork::default();
     let base = prepare_source_base(frame, context.source_actions, &mut work)?;
-    render_frame_from_base(base, context, &mut work)
+    render_frame_from_base_with_generative(base, context, &mut work, generative)
+}
+
+/// GEN-ONNX-1: compute the frames entering the generative stage, mirroring the
+/// decoupled geometry head of [`render_frame_from_base`] exactly.
+///
+/// Returns `(after_lens, after_perspective)`: the frame a `auto_fill_transparent`
+/// artifact consumes and the frame an `expand_beyond_image` artifact consumes.
+/// Callers (CLI/GUI) derive the exact generative operation identity from these
+/// frames without duplicating pipeline logic; the function is I/O-free and
+/// platform-neutral. The feature-uniform [`LensfunCorrectorRef`] parameter keeps
+/// it usable from crates whose own `lensfun` feature may differ (Cargo feature
+/// unification).
+pub fn generative_input_frames(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    camera_white_balance: Option<[f32; 4]>,
+    source_actions: &[SourceActionArtifact],
+    lensfun: Option<LensfunCorrectorRef<'_>>,
+) -> Result<(ImageFrame, ImageFrame), CoreError> {
+    let mut work = StageWork::default();
+    let mut staged = prepare_source_base(frame, source_actions, &mut work)?;
+    apply_spot_heals_from_recipe(&mut staged, recipe)?;
+    staged.apply_recipe_with_white_balance(recipe, camera_white_balance)?;
+    #[cfg(feature = "lensfun")]
+    let lensfun = lensfun.map(|LensfunCorrectorRef(corrector)| corrector);
+    #[cfg(not(feature = "lensfun"))]
+    let _ = lensfun;
+    staged.apply_lens_stage(
+        recipe.lens_correction.as_ref(),
+        #[cfg(feature = "lensfun")]
+        lensfun,
+    )?;
+    let after_lens = staged.clone();
+    staged.apply_perspective_stage(
+        recipe.lens_correction.as_ref(),
+        recipe.perspective.as_ref(),
+        #[cfg(feature = "lensfun")]
+        lensfun,
+    )?;
+    Ok((after_lens, staged))
 }
 
 /// PERF-GUI-1: builds the cacheable base stage from a decoded source frame.
@@ -394,9 +454,25 @@ fn default_crop_active(context: &RenderContext<'_>) -> bool {
 /// `base` is consumed and mutated in place; no extra full-frame clone happens
 /// on this path.
 pub fn render_frame_from_base(
+    base: ImageFrame,
+    context: &RenderContext<'_>,
+    work: &mut StageWork,
+) -> Result<RenderOutput, CoreError> {
+    render_frame_from_base_with_generative(
+        base,
+        context,
+        work,
+        crate::generative::GenerativeCanvasInput::default(),
+    )
+}
+
+/// GEN-ONNX-1: [`render_frame_from_base`] with caller-supplied generative
+/// canvas artifacts (see [`render_frame_with_generative`] for the contract).
+pub fn render_frame_from_base_with_generative(
     mut base: ImageFrame,
     context: &RenderContext<'_>,
     work: &mut StageWork,
+    generative: crate::generative::GenerativeCanvasInput<'_>,
 ) -> Result<RenderOutput, CoreError> {
     apply_spot_heals_from_recipe(&mut base, context.recipe)?;
     base.apply_recipe_with_white_balance(context.recipe, context.camera_white_balance)?;
@@ -409,8 +485,13 @@ pub fn render_frame_from_base(
     // between lens and perspective (transparent wedges from undistortion are
     // filled before perspective resamples them), and the generative expand
     // must run before crop (crop coordinates reference the expanded canvas).
-    // A failing expand (missing canvas, out-of-bounds offsets) aborts the
-    // render with `InvalidAdjustment` — never a silent unexpanded render.
+    //
+    // GEN-ONNX-1: the generative stage is artifact compositing, not the former
+    // heuristic BFS. It adopts the caller-supplied model-produced canvas
+    // (`generative`) after validating the recipe geometry and the artifact
+    // dimensions. A missing/mismatched artifact aborts the render with
+    // `InvalidAdjustment` — never a silent unexpanded/„as if not generated"
+    // render.
     #[cfg(feature = "lensfun")]
     {
         let corrector = context.lensfun.map(|LensfunCorrectorRef(c)| c);
@@ -420,10 +501,13 @@ pub fn render_frame_from_base(
     {
         base.apply_lens_stage(context.recipe.lens_correction.as_ref())?;
     }
-    if let Some(ge) = context.recipe.generative_edit.as_ref() {
-        if ge.auto_fill_transparent.unwrap_or(false) {
-            base.apply_auto_fill_transparent(true, ge.seed.unwrap_or(0));
-        }
+    if context
+        .recipe
+        .generative_edit
+        .as_ref()
+        .is_some_and(|ge| ge.auto_fill_transparent.unwrap_or(false))
+    {
+        base = crate::generative::composite_auto_fill(base, generative.auto_fill)?;
     }
     base.apply_perspective_stage(
         context.recipe.lens_correction.as_ref(),
@@ -437,7 +521,7 @@ pub fn render_frame_from_base(
         .as_ref()
         .is_some_and(|ge| ge.effective_expand())
     {
-        base = crate::generative::apply_generative_expand(&base, context.recipe)?;
+        base = crate::generative::composite_expand(base, context.recipe, generative.expand)?;
     }
     base.apply_crop_stage(
         context.recipe.geometry.as_ref(),
@@ -2584,6 +2668,38 @@ mod tests {
         ImageFrame::new(32, 32, pixels).unwrap()
     }
 
+    // ---- GEN-ONNX-1: caller-supplied generative canvas artifacts ----
+    //
+    // The deterministic producer used here is the same heuristic the render
+    // stage used before GEN-ONNX-1; the *content* is irrelevant to the
+    // compositing contract under test (the render only adopts and validates
+    // it). The engine identity is exercised in `lumina-onnx`.
+
+    fn auto_fill_artifact(
+        frame: &ImageFrame,
+        seed: u64,
+    ) -> crate::generative::GenerativeCanvasArtifact {
+        let mut filled = frame.clone();
+        crate::generative::fill_transparent_heuristic(&mut filled, seed);
+        crate::generative::GenerativeCanvasArtifact::new(
+            crate::generative::GenerativeRole::AutoFillTransparent,
+            filled,
+        )
+    }
+
+    fn expand_artifact(
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+    ) -> crate::generative::GenerativeCanvasArtifact {
+        let mut cache = crate::generative::GenerativeCache::new(usize::MAX);
+        let expanded =
+            crate::generative::apply_generative_expand_cached(&mut cache, frame, recipe).unwrap();
+        crate::generative::GenerativeCanvasArtifact::new(
+            crate::generative::GenerativeRole::Expand,
+            expanded,
+        )
+    }
+
     #[test]
     fn auto_fill_transparent_trigger_via_lens() {
         let frame = checker_8x8();
@@ -2858,20 +2974,44 @@ mod tests {
             .as_mut()
             .unwrap()
             .auto_fill_transparent = Some(true);
-        let output = render_frame(&frame, &default_context(&recipe, None)).unwrap();
-        // Expand 32×32 → 40×40, then crop 0.5 → 20×20.
-        assert_eq!((output.frame.width, output.frame.height), (20, 20));
 
-        let mut manual = frame.clone();
-        manual
+        // GEN-ONNX-1: produce the composited artifacts with the deterministic
+        // producer and feed them through the caller hook (the render only
+        // adopts and validates them).
+        let mut after_lens = frame.clone();
+        after_lens
             .apply_lens_stage(
                 recipe.lens_correction.as_ref(),
                 #[cfg(feature = "lensfun")]
                 None,
             )
             .unwrap();
-        let ge = recipe.generative_edit.as_ref().unwrap();
-        manual.apply_auto_fill_transparent(true, ge.seed.unwrap_or(0));
+        let seed = recipe.generative_edit.as_ref().unwrap().seed.unwrap_or(0);
+        let auto_fill = auto_fill_artifact(&after_lens, seed);
+        let mut after_fill = auto_fill.frame.clone();
+        after_fill
+            .apply_perspective_stage(
+                recipe.lens_correction.as_ref(),
+                recipe.perspective.as_ref(),
+                #[cfg(feature = "lensfun")]
+                None,
+            )
+            .unwrap();
+        let expand = expand_artifact(&after_fill, &recipe);
+
+        let output = render_frame_with_generative(
+            &frame,
+            &default_context(&recipe, None),
+            crate::generative::GenerativeCanvasInput {
+                auto_fill: Some(&auto_fill),
+                expand: Some(&expand),
+            },
+        )
+        .unwrap();
+        // Expand 32×32 → 40×40, then crop 0.5 → 20×20.
+        assert_eq!((output.frame.width, output.frame.height), (20, 20));
+
+        let mut manual = auto_fill.frame.clone();
         manual
             .apply_perspective_stage(
                 recipe.lens_correction.as_ref(),
@@ -2900,10 +3040,16 @@ mod tests {
             depth: None,
             masks: None,
         };
-        let reference = render_frame(&frame, &context).unwrap();
+        let expand = expand_artifact(&frame, &recipe);
+        let input = crate::generative::GenerativeCanvasInput {
+            auto_fill: None,
+            expand: Some(&expand),
+        };
+        let reference = render_frame_with_generative(&frame, &context, input).unwrap();
         let mut work = StageWork::default();
         let base = prepare_source_base(&frame, context.source_actions, &mut work).unwrap();
-        let staged = render_frame_from_base(base, &context, &mut work).unwrap();
+        let staged =
+            render_frame_from_base_with_generative(base, &context, &mut work, input).unwrap();
         assert_eq!(reference.frame.pixels, staged.frame.pixels);
         assert_eq!((staged.frame.width, staged.frame.height), (20, 20));
     }
@@ -2912,15 +3058,20 @@ mod tests {
     fn render_with_expand_is_deterministic_and_differs_from_source() {
         let frame = checker_8x8();
         let recipe = expand_recipe();
-        let first = render_frame(&frame, &default_context(&recipe, None))
+        let expand = expand_artifact(&frame, &recipe);
+        let input = crate::generative::GenerativeCanvasInput {
+            auto_fill: None,
+            expand: Some(&expand),
+        };
+        let first = render_frame_with_generative(&frame, &default_context(&recipe, None), input)
             .unwrap()
             .frame;
-        let second = render_frame(&frame, &default_context(&recipe, None))
+        let second = render_frame_with_generative(&frame, &default_context(&recipe, None), input)
             .unwrap()
             .frame;
         assert_eq!(first.pixels, second.pixels);
         // The crop window (top-left 20×20 of the 40×40 canvas, source at
-        // offset 4,4) contains generated border pixels: the heuristic expand
+        // offset 4,4) contains generated border pixels: the composited canvas
         // fills every pixel, so none may stay transparent, and the histogram
         // must move away from the source digest.
         assert!(!first.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255));
@@ -2929,7 +3080,7 @@ mod tests {
         assert_ne!(h_src.digest(), h_out.digest());
         // Re-rendering the output recipe snapshot is stable (history
         // reproducibility): same recipe + same source → same bytes.
-        let third = render_frame(&frame, &default_context(&recipe, None))
+        let third = render_frame_with_generative(&frame, &default_context(&recipe, None), input)
             .unwrap()
             .frame;
         assert_eq!(crate::spot_heal::psnr(&first, &third), f64::INFINITY);
@@ -3000,9 +3151,17 @@ mod tests {
             prompt: None,
             extras: Default::default(),
         });
-        let rendered = render_frame(&frame, &default_context(&recipe, None))
-            .unwrap()
-            .frame;
+        let auto_fill = auto_fill_artifact(&frame, 11);
+        let rendered = render_frame_with_generative(
+            &frame,
+            &default_context(&recipe, None),
+            crate::generative::GenerativeCanvasInput {
+                auto_fill: Some(&auto_fill),
+                expand: None,
+            },
+        )
+        .unwrap()
+        .frame;
 
         // Manual Fill → Perspective sequence.
         let mut forward = frame.clone();

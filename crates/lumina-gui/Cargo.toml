@@ -25,6 +25,12 @@ lumina-raw = { path = "../lumina-raw" }
 # missing capability in the Geometry status line.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# GEN-ONNX-1 Welle 2b: the GUI resolves/produces the persisted
+# `generative_canvas` artifact through the same fixture/identity surface the
+# CLI uses (`fixture_manifest` / `produce_canvas`). Default features are pure
+# Rust (no `ort`, no network); the real-weight path stays a documented,
+# feature-gated interface.
+lumina-onnx = { path = "../lumina-onnx" }
 # LRPAR-G15-IPTC-S8: read-only embedded IPTC display (JPEG IIM/XMP) in the
 # Library Metadata panel. Pure-Rust compile-time dependency, no runtime tools.
 lumina-iptc = { path = "../lumina-iptc" }

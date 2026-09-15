@@ -36,13 +36,14 @@ pub use cache::{
 };
 pub use crop_max_rect::{maximum_content_rect, PixelRect, CONTENT_ALPHA_MIN};
 pub use generative::{
-    apply_generative_expand_cached, clear_generative_cache,
+    apply_generative_expand_cached, clear_generative_cache, composite_auto_fill, composite_expand,
     effective_keep as effective_keep_generative, fill_transparent_cached,
     fill_transparent_cached_global, fill_transparent_heuristic, generative_cache_stats,
     generative_canvas, generative_edit, generative_input_digest, has_transparent_pixels,
     materialize_canvas_for_crop, materialize_canvas_for_crop_with_source,
     resolve_canvas_for_recipe, FillOutcome, GenerativeCache, GenerativeCacheKey,
-    GenerativeCacheStats, GenerativeRole,
+    GenerativeCacheStats, GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeIdentity,
+    GenerativeRole,
 };
 pub use histogram::LuminanceHistogram;
 pub use lens_blur::{apply_lens_blur, lens_blur_status, validate_lens_blur, DepthPlane};
@@ -60,8 +61,10 @@ pub use preview_cache::{
     PreviewEncode, PreviewKey, PreviewKind,
 };
 pub use render::{
-    prepare_source_base, render_frame, render_frame_from_base, LensfunCorrectorRef, MaskContext,
-    MaskLayerResult, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, StageWork,
+    apply_spot_heals_from_recipe, generative_input_frames, prepare_source_base, render_frame,
+    render_frame_from_base, render_frame_from_base_with_generative, render_frame_with_generative,
+    LensfunCorrectorRef, MaskContext, MaskLayerResult, MaskPolicy, RenderContext, RenderOutput,
+    SourceActionArtifact, StageWork,
 };
 pub use spot_heal::{
     apply_spot_heals, apply_visualize_overlay, detect_spots_heuristic, distraction_candidates,
@@ -121,7 +124,23 @@ pub fn export_image(
     context: &RenderContext,
     options: ExportOptions,
 ) -> Result<Vec<u8>, CoreError> {
-    let rendered = render_frame(frame, context)?;
+    export_image_with_generative(
+        frame,
+        context,
+        options,
+        crate::generative::GenerativeCanvasInput::default(),
+    )
+}
+
+/// GEN-ONNX-1: [`export_image`] with a caller-supplied generative canvas
+/// artifact (artifact compositing instead of the former heuristic BFS).
+pub fn export_image_with_generative(
+    frame: &ImageFrame,
+    context: &RenderContext,
+    options: ExportOptions,
+    generative: crate::generative::GenerativeCanvasInput<'_>,
+) -> Result<Vec<u8>, CoreError> {
+    let rendered = render_frame_with_generative(frame, context, generative)?;
     rendered.frame.encode_with_options(options)
 }
 
@@ -532,7 +551,7 @@ impl ImageFrame {
     /// This is the fifth geometry sub-stage (`Crop`); together with
     /// [`Self::apply_lens_stage`], [`Self::apply_auto_fill_transparent`],
     /// [`Self::apply_perspective_stage`] and
-    /// [`crate::generative::apply_generative_expand`] it forms the decoupled
+    /// [`crate::generative::composite_expand`] it forms the decoupled
     /// order `Lens → Fill → Perspective → Expand → Crop`. [`Self::apply_geometry`]
     /// and [`Self::apply_geometry_with_auto_fill`] delegate to these stages so
     /// the legacy 5-in-1 entry points stay byte-identical.
@@ -654,6 +673,10 @@ impl ImageFrame {
     }
 
     /// GEN-FILL-01: heuristic auto-fill for transparent pixels after lens correction.
+    ///
+    /// **Not on the render path since GEN-ONNX-1 Welle 1** (the render composites
+    /// a model-produced artifact via [`crate::generative::composite_auto_fill`]);
+    /// kept as an explicit standalone/test utility with its cache contract.
     pub fn apply_auto_fill_transparent(&mut self, auto_fill_transparent: bool, seed: u64) -> bool {
         if !auto_fill_transparent {
             return false;
@@ -5178,6 +5201,8 @@ mod tests {
         );
 
         // Auto-filled: no transparent pixel remains, so nothing is cropped.
+        // GEN-ONNX-1: the render consumes a caller-supplied composited canvas;
+        // build it from the post-lens frame (deterministic producer).
         let filled_recipe = recipe(true);
         let filled_context = RenderContext {
             recipe: &filled_recipe,
@@ -5187,7 +5212,31 @@ mod tests {
             depth: None,
             lensfun: None,
         };
-        let filled = render_frame(&source, &filled_context).unwrap().frame;
+        let mut lensed = source.clone();
+        #[cfg(feature = "lensfun")]
+        lensed
+            .apply_lens_stage(filled_recipe.lens_correction.as_ref(), None)
+            .unwrap();
+        #[cfg(not(feature = "lensfun"))]
+        lensed
+            .apply_lens_stage(filled_recipe.lens_correction.as_ref())
+            .unwrap();
+        let mut canvas = lensed.clone();
+        crate::generative::fill_transparent_heuristic(&mut canvas, 7);
+        let artifact = crate::generative::GenerativeCanvasArtifact::new(
+            crate::generative::GenerativeRole::AutoFillTransparent,
+            canvas,
+        );
+        let filled = crate::render_frame_with_generative(
+            &source,
+            &filled_context,
+            crate::generative::GenerativeCanvasInput {
+                auto_fill: Some(&artifact),
+                expand: None,
+            },
+        )
+        .unwrap()
+        .frame;
         assert!(!has_transparent_alpha(&filled));
         assert_eq!(
             (filled.width, filled.height),

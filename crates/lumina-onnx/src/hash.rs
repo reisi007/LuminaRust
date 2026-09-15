@@ -42,6 +42,13 @@ pub enum ModelHashStatus {
     /// identity exists yet, so the artifact could not be verified. This state
     /// is visible through [`ModelHashStatus`](self) and must not be presented
     /// as verified.
+    ///
+    /// [`Self::allows_inference`]/[`Self::enforce_inference_allowed`] keep
+    /// allowing `Pending` for the established mask-artifact paths. Consumers
+    /// that require a pinned identity **must** refuse it themselves — the
+    /// generative real-artifact path does exactly that
+    /// (`lumina_onnx::generative::GenerativeModelSource::resolve_manifest`
+    /// rejects `Pending` with `UnsupportedModel`).
     Pending,
     /// The computed digest differs from the manifest `model_hash`: the
     /// artifact is stale/mismatched. Backends refuse inference with this
@@ -116,10 +123,18 @@ pub fn compute_sha256_hex(mut reader: impl Read) -> std::io::Result<String> {
 /// * expected == [`PENDING_INTEGRATION_HASH`] → [`ModelHashStatus::Pending`]
 /// * expected == actual → [`ModelHashStatus::Verified`]
 /// * otherwise → [`ModelHashStatus::Mismatch`]
+///
+/// The optional `sha256:` prefix (the SOLL spelling `sha256:<64 hex>` used by
+/// the sidecar/model identity) is normalized on both sides, so a manifest may
+/// pin either the prefixed or the bare hex digest and still verify. The
+/// comparison stays an exact digest comparison — no prefix-only match.
 pub fn verify_model_hash(expected: &str, actual: &str) -> ModelHashStatus {
+    fn normalize(hash: &str) -> &str {
+        hash.strip_prefix("sha256:").unwrap_or(hash)
+    }
     if expected == PENDING_INTEGRATION_HASH {
         ModelHashStatus::Pending
-    } else if expected == actual {
+    } else if normalize(expected) == normalize(actual) {
         ModelHashStatus::Verified
     } else {
         ModelHashStatus::Mismatch {

@@ -104,6 +104,10 @@ impl StubInpaintBackend {
                 out[base] = (mean[0] as i16 + r_off / 32).clamp(0, 255) as u8;
                 out[base + 1] = (mean[1] as i16 + g_off / 32).clamp(0, 255) as u8;
                 out[base + 2] = (mean[2] as i16 + b_off / 32).clamp(0, 255) as u8;
+                // GEN-ONNX-1: a replaced pixel is fully opaque. The generative
+                // canvas artifact must be a complete canvas; leaving the source
+                // alpha untouched would keep the "filled" wedge transparent.
+                out[base + 3] = 255;
             }
         }
         let manifest = Self::manifest();

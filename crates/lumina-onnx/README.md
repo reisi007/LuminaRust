@@ -34,6 +34,10 @@ ONNX inference is a native capability, the browser remains explicitly "offen"
   a prompt/seed/canvas hash offset. `available == false` reports
   `ModelUnavailable`, a manifest without `outpaint` is rejected with
   `UnsupportedModel` — never a silent fallback.
+- `generative.rs` — GEN-ONNX-1 producer: `produce_canvas` (role from the
+  persisted `GenerativeEdit` flags, capability + hash gated), the real
+  hash-pinned `fixture_manifest`/`verify_fixture_manifest`, and the documented
+  real-weight attachment surface `GenerativeModelSource::artifact`.
 - `preprocess.rs` — pure, deterministic, dependency-free resize /
   rescale helpers (nearest-neighbor, documented integer mapping).
 - `backend.rs` — the `SubjectInference` trait and the deterministic
@@ -101,6 +105,17 @@ identity. Real BiRefNet/SAM-2 model weights remain `pending-integration`
 `outpaint_expand_manifest()` declares the planned local ONNX outpaint model
 (`inpaint-outpaint-xl` 1.0.0, 1024×1024, capability `outpaint`):
 
+- **GEN-ONNX-1 Welle 1 (`generative.rs`):** `produce_canvas(frame, edit, source)`
+  emits the full composited `generative_canvas` (RGBA8) plus its complete
+  identity (the core `GenerativeCacheKey::digest`), gated on the manifest
+  capability and — for a real artifact — the pinned SHA-256. `fixture_manifest`
+  pins the deterministic fixture model with a **real** `sha256:<64 hex>` over the
+  versioned fixture specification (`verify_fixture_manifest` recomputes it);
+  `GenerativeModelSource::artifact(manifest, path)` is the documented real-weight
+  attachment surface (`resolve_manifest` refuses a stale/missing artifact
+  loudly). `pending-integration` descriptors stay loud — the fixture is never a
+  silent substitute for real weights. See `feature/product/generative-expand.md`
+  § Modell-Entscheid Welle 1.
 - **Local vs. Cloud are separate capabilities** (no silent fallback):
   local ONNX inference lives in this crate (native); a Cloud-API path is
   **not planned** and needs an explicit capability decision first

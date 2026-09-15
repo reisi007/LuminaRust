@@ -59,10 +59,114 @@ Ergebnis cachen/wiederverwenden (→ GEN-EXPAND-CACHE-1); (2) ONNX-Pfad ASAP
 nachziehen (→ GEN-ONNX-1), danach entfällt der BFS-Platzhalter zugunsten von
 Artefakt-Compositing (GPU-portierbar).
 
+**Stand 2026-09-15 (GEN-ONNX-1 Welle 2a, ohne GUI; Verifizierung BESTANDEN, Re-Verifizierung 2026-09-16):** Die laute CPU-Route für
+generative Rezepte ist entfallen; das Artefakt-Compositing läuft auf GPU **und**
+CPU. **(1) GPU-Injektionspunkt:** `GpuContext::render_with_gpu_and_generative`
+adoptiert das `GenerativeCanvasInput`; die GPU-Geometrie-Kette fügt einen
+`Substitute`-Schritt an derselben mittigen Position wie der CPU-Oracle ein
+(`Lens → [auto-fill] → Perspective → CA → [expand] → Crop`), validiert
+Rolle/Dimensionen/Canvas-Bounds laut und ist byte-identisch
+(`generative_canvas_compositing_is_gpu_parity` mit Crop nach der Substitution,
+`generative_auto_fill_compositing_is_gpu_parity` für den Substitute-only-Pfad,
+beide `maxAbsDiff == 0`). **Blocker-Fix (Re-Verifizierung offen):** Ein
+**trailing** `Substitute` (letzter Plan-Schritt) wurde zuvor still verworfen,
+wenn ein Render-Pass davor lag (z.B. Lens/Perspective + Identitäts-Crop + Expand);
+der finale Kopiervorgang ist jetzt an `plan.steps.last().is_substitute()`
+gekoppelt (der letzte Render-Pass schreibt ggf. in ein Zwischenziel, danach das
+Artefakt nach `final_view`) und durch
+`generative_trailing_substitute_after_render_pass_is_gpu_parity` gepinnt
+(vor dem Fix: maxAbsDiff 235 statt 0). `unsupported_gpu_stages*` führt `generative_edit`
+**nicht mehr** als Reason; ein artifact-blinder Render (rezept-only
+`render_with_gpu`, CPU-`render_frame`, `render_to_vram` ohne Readback) lehnt
+eine aktive generative Stufe **laut** ab statt sie pauschal auf die CPU zu
+routen (CLI-Reason `main.rs` entfernt; die CLI ruft den artifact-aware Pfad).
+**(2) Negativ-Prompt-Schema:** additives Top-Level-Feld `negative_prompt`
+(`GenerativeEdit::negative_prompt`/`set_negative_prompt`, extras-gestützt, siehe
+Schema-Entscheid unten); Produzent (`produce_canvas`) und CLI-Verifier nutzen es
+(statt hart-`None`), die Identität trägt es bereits — Negativ-Prompt-Wechsel →
+`Stale`/laut (CLI-E2E-Test). **(3)** `feature/architecture/pipeline.md`
+Stufen-Doku nachgezogen. Erledigt in **Welle 2b (2026-09-16, Verifizierung
+BESTANDEN, Re-Verifizierung nach Befunden):** GUI-Anbindung
+(Preview/Export-Hook + Badge für den artefakt-blinden VRAM-Present, siehe
+GUI-GPU-Entscheid unten), 3 kittest-Goldens (VISION-OK), Doppelrollen-Record
+(GUI + CLI angeglichen).
+
+**Schema-Entscheid `negative_prompt` (Welle 2a, normativ):** Das Feld ist
+additiv als **Top-Level-JSON-Schlüssel** `"negative_prompt"` (String | null)
+geführt und wird in der Rust-`GenerativeEdit` über die bestehende, geflattete
+`extras`-Map gehalten (typisierte Accessors `negative_prompt()` /
+`set_negative_prompt()`), **nicht** als neues Struct-Feld. Grund: ein neues
+Feld würde jedes `GenerativeEdit`-Struct-Literal außerhalb dieser Welle brechen
+(insbesondere `lumina-gui`, Welle 2b). Das JSON-Schema ist damit exakt das
+additive SOLL-Feld; ein vorhandener, aber nicht-String/nicht-null-Wert wird
+**laut abgelehnt** (`validate_edit_extras`, eingebunden in die
+Dokumentvalidierung) — kein stilles Ignorieren. Die Stufen-Version
+`GenerativeEdit.version` bleibt **1**: das Feld ist rein additiv, unbekannte
+Felder werden via `extras` roundtrip-erhalten, es gibt keine inkompatible
+Migration.
+
+**Auto-Fill-Caller-Konvention (Welle 2a, normativ):** Der Renderer übernimmt für
+die Auto-Fill-Rolle **genau dann**, wenn der Caller `auto_fill = Some(artifact)`
+übergibt; `auto_fill = None` ist für die GPU die Identität (keine Substitution).
+Die CPU prüft zusätzlich selbst `has_transparent_pixels` auf dem Post-Lens-Frame
+und substituiert nur dann (sonst Identität). Daraus folgt verbindlich: **Der
+Caller MUSS `auto_fill = None` übergeben, wenn nach Lens keine transparenten
+Pixel existieren** (kein Artefakt nötig), und `Some` genau dann, wenn
+transparente Pixel vorliegen. Die GPU kann Transparenz nicht ohne Readback
+prüfen und vertraut daher dem Caller-Signal; die CLI erfüllt die Konvention
+(`resolve_generative_artifacts` gibt ohne Transparenz `None` zurück, ohne ein
+Artefakt zu verlangen) und pinnt sie per Test. Für die Expand-Rolle ist ein
+fehlendes Artefakt dagegen immer ein lauter Fehler (`generative_artifact.expand.missing`).
+
+**Stand 2026-09-15 (GEN-ONNX-1 Welle 1, ohne GUI):** Der modellbasierte
+Inpaint/Outpaint-Pfad ist für die nicht-GUI-Crates umgesetzt. Die Render-Stufe
+ist **Artefakt-Compositing** (die sequentielle BFS-Heuristik entfällt aus dem
+Renderpfad): `lumina-onnx` erzeugt das vollständige kompositierte Canvas
+(`kind = 2 generative_canvas`, RGBA8) samt **vollständiger Identität** — Rolle,
+Seed, Canvas, BLAKE3-Pixel-Digest des Eingabeframes **plus Prompt,
+Negativ-Prompt und Modell-Hash** (`GenerativeIdentity`); ein Prompt- oder
+Modellwechsel invalidiert das Artefakt damit sichtbar (`stale`), kein stilles
+Adoptieren eines veralteten Canvas. `lumina-core`
+**adoptiert** das per Caller-Hook durchgereichte Canvas (`GenerativeCanvasInput`,
+`render_frame_with_generative` / `render_frame_from_base_with_generative` /
+`export_image_with_generative`) ohne eigene Pixelarithmetik — dadurch inhärent
+GPU-portierbar (die GPU-Parität ist per Oracle/Parity-Test belegt, siehe
+Testanforderungen). Ein aktiver `expand_beyond_image`/`auto_fill_transparent`
+**ohne** Artefakt bricht laut ab (`CoreError::InvalidAdjustment`), es gibt
+keinen stillen BFS-/„als wäre nichts generiert"-Fallback mehr. Die durable
+`zdata`-Verdrahtung ist aktiv: Identität schreiben (`GenerativeArtifactRef`
+mit `generative_identity`-Digest) + persistiertes Canvas per Caller-Hook in den
+Render zurückspeisen; Core bleibt I/O-frei. CLI-End-to-End:
+`lumina generative --generate|--status|--remove` (Exit-Codes laut; fehlendes
+Modell/Artefakt/Identitätsdrift → Exit 1). **Modell-Entscheid und
+Restrisiko siehe § Modell, Capability und Lizenz.** Präzisierung zur Identität:
+`negative_prompt` ist derzeit immer `None`, weil `GenerativeEdit` noch kein
+Negativ-Prompt-Feld persistiert (additives Schema-Entscheid offen); die
+Identität trägt das Feld bereits, sodass die Schema-Erweiterung die Identität
+nicht wieder blind macht. Erledigt in **Welle 2b (2026-09-16):**
+GUI-Anbindung (Preview/Export-Hook, artifact-aware CPU-Pfad), 3
+kittest-Goldens (VISION-OK), GPU-Injektionspunkt-Badge (siehe GUI-GPU-Entscheid
+unten) sowie Doppelrollen-Record in GUI **und** CLI (CLI hart ablehnend →
+angeglichen, `resolve_generative_artifacts` + `--generate` lösen beide Rollen).
+
+**Rework 2026-09-15 (Verifizierung Befund BLOCKER + F1–F3 behoben):** (a) Prompt,
+Negativ-Prompt und Modell-Hash sind in `GenerativeIdentity`/`GenerativeCacheKey`
+aufgenommen und gehen in den Digest ein (längenpräfixiert); Drift-Tests für
+Prompt- und Modellwechsel (Core-Digest + CLI-E2E `Stale`/laut + ONNX-Produzent).
+F1: der reale `GenerativeModelSource::Artifact`-Pfad verweigert
+`pending-integration` hart (`UnsupportedModel`), inkl. Test; die Fixture bleibt
+`Verified`. F2: GPU-Doku/Kommentare nennen als Routing-Grund den fehlenden
+GPU-Injektionspunkt fürs Artefakt-Compositing (nicht mehr „sequential global
+BFS"). F3: Test für die Doppelrollen-Ablehnung (Render + `--generate`).
+
 **Stand 2026-09-14 (GEN-EXPAND-CACHE-1 BESTANDEN):** RAM-Cache erfüllt die
 User-Bedingung — Zweit-Render ohne BFS (thread-lokales LRU, Key aus Rolle +
 Seed + Canvas + BLAKE3-Pixel-Digest, exakte Identität, stale nie serviert,
-`trace!`-Logging; 9 Core- + 1 GUI-Test). Scope-Entscheid (verifiziert
+`trace!`-Logging; 9 Core- + 1 GUI-Test). **Korrektur 2026-09-15 (GEN-ONNX-1
+BLOCKER-Fix):** der Identitäts-Digest enthält zusätzlich Prompt,
+Negativ-Prompt und Modell-Hash (`GenerativeIdentity`); die ursprüngliche
+Formulierung „Rolle + Seed + Canvas + Pixel-Digest" war prompt-/modellblind.
+Scope-Entscheid (verifiziert
 akzeptiert): die durable `zdata`-Verdrahtung (Identität schreiben +
 persistiertes Canvas in den Render zurückspeisen) kommt mit GEN-ONNX-1, wo
 Artefakt-Compositing den BFS ersetzt — die `GenerativeArtifactRef`-Identität
@@ -564,6 +668,49 @@ manueller Expand **vor** Crop (und nach Perspective).
   Fähigkeit wird abgelehnt (kein stiller Ersatz durch ein anderes Modell).
   Die Auswahl ist deterministisch (keine stille Variantenwahl zur Laufzeit).
 
+### Modell-Entscheid Welle 1 (2026-09-15, normativ)
+
+**Entscheid:** Es wird **kein** generatives Gewichtsmodell committet oder
+heruntergeladen. Der getestete Pfad ist ein **deterministisches, hash-gepinntes
+Fixture-Modell**; der Anschluss echter Gewichte ist als dokumentierte
+Schnittstelle implementiert. Begründung: kein lizenzsauberes
+Inpaint-/Outpaint-Modell liegt im Workspace vor, und die Doktrin verbietet
+spontane Downloads bzw. Netzabhängigkeit in Tests (F-078).
+
+- **Fixture-Identität (real, nicht `pending-integration`):**
+  `lumina_onnx::fixture_manifest(role)` liefert das Manifest mit
+  `model_hash = sha256:<64 hex>` — der SHA-256 über die kanonische, versionierte
+  Fixture-Spezifikation (`lumina-generative-fixture-v1`: Name, Version,
+  Inferenzauflösung, Tensor-Contract, Normalisierung).
+  `verify_fixture_manifest` rechnet den Pin nach (`Verified`); das ist ein
+  echter, prüfbarer Pin, kein Phantom. Der Fixture-Hash ist ein
+  **Spezifikations-Hash** (es existieren keine Gewichte), nicht ein
+  `.onnx`-Datei-Hash — das ist die bewusste, dokumentierte Abweichung der
+  Pre-Integration-Fixture und wird nicht als Gewichts-Hash ausgegeben.
+- **Reale Gewichte (Schnittstelle, dokumentiert):**
+  `GenerativeModelSource::artifact(manifest, path)` verbindet ein lokales
+  `.onnx`-Artefakt mit einem gepinnten Manifest. `resolve_manifest`
+  stream-hasht die Datei (SHA-256) und **verweigert** bei
+  `Mismatch`/fehlender Datei laut (`ModelArtifactStale`/`MissingModel`); ein
+  `pending-integration`-Manifest wird auf dem realen Artefaktpfad **hart
+  abgelehnt** (`UnsupportedModel`) — ohne gepinnten Hash keine Inferenz (kein
+  Phantom-Grün). Die geplanten
+  Gewichtsdeskriptoren (`inpaint_heal_manifest`, `outpaint_expand_manifest`)
+  behalten bewusst den `pending-integration`-Platzhalter: das fehlende echte
+  Modell ist damit sichtbar „nicht verfügbar", nie still durch die Fixture
+  ersetzt.
+- **Lizenz:** Für die Fixture existieren keine Gewichte; die Platzhalter-Lizenz
+  der Deskriptoren (`Apache-2.0`) bleibt eine Vorintegrations-Deklaration.
+  Vor dem ersten Commit echter Gewichte gilt unverändert: Lizenz/Provenienz +
+  Hash in `feature/quality/fixtures-licensing.md` und
+  `THIRD-PARTY-NOTICES.md` dokumentieren; viele State-of-the-Art-Inpaint-/
+  Outpaint-Gewichte sind nicht-kommerziell (AGPL-/NC-Falle, vgl. §5 der
+  Fixtures-Doku). Tests laufen ausschließlich gegen Fixture/Stub — **kein Netz,
+  kein Download**.
+- **Kein Phantom-Grün:** Ein fehlendes Modell/eine fehlende Datei ist ein
+  lauter Fehler (`MissingModel`/`ModelUnavailable`), kein stilles Überspringen;
+  `lumina generative --status` meldet `missing`/`stale`/`corrupt` mit Exit 1.
+
 ## UI-Flow (GUI)
 
 Nach GUI-STAGE-1/GUI-WGPU-PRESENT-1 (Native Desktop):
@@ -690,6 +837,45 @@ AI-Masken/virtuellen Kopien):
   Goldens deterministisch, `UPDATE_SNAPSHOTS=true` dokumentiert, keine
   manuellen Screenshots als Gate.
 
+**Welle-1-Belege (2026-09-15, ohne GUI):** `lumina-onnx` — Fixture-Pin
+(`sha256:`-real, deterministisch, richtungssensitiv), Rollenwahl aus Flags
+(nicht aus Namen), Hash-/Capability-Gate (`ModelArtifactStale`,
+`UnsupportedModel`), `produce_canvas` deterministisch + identisch zum
+Core-`GenerativeCacheKey`-Digest, fehlendes Modell laut. `lumina-core` —
+`composite_expand`/`composite_auto_fill` adoptieren das Artefakt byteweise,
+laut bei fehlendem/falschem/verkehrt-dimensionalem Artefakt; der Renderpfad
+ruft **kein** BFS mehr auf (`bfs_runs`-Zähler bleibt konstant). GPU-Parität:
+`lumina-gpu/tests/parity.rs::generative_canvas_compositing_is_gpu_parity`
+(CPU-Oracle-Compositing == GPU über dem adoptierten Canvas, `maxAbsDiff == 0`,
+Metal lokal) plus die verschärfte Refusal-Parität für Expand ohne Artefakt.
+`lumina-sidecar` — `GenerativeArtifactRef::from_generative_canvas`,
+`save_generative_canvas(replace=true)` (expliziter Regenerationspfad) und
+`GenerativeCanvasArtifact`-Replace; `generative_artifact_status` unverändert
+identitätsgeprüft. CLI — `lumina generative --generate|--status|--remove`
+inkl. Exit 1 bei `missing`/`stale`/`corrupt` und identitätsgeprüftem
+Render-Hook. **Welle 2a (2026-09-15, ohne GUI; Verifikation OFFEN — Re-Verifizierung nach
+Blocker-Fix „trailing Substitute"):** `lumina-gpu`
+`render_with_gpu_and_generative` + `Substitute`-Schritt; Parity-Tests
+`generative_canvas_compositing_is_gpu_parity`,
+`generative_auto_fill_compositing_is_gpu_parity` und
+`generative_trailing_substitute_after_render_pass_is_gpu_parity` (`maxAbsDiff == 0`),
+`artifact_blind_generative_render_is_loud_not_routed`; `unsupported_gpu_stages*`
+ohne `generative_edit`; CLI-Reason entfernt. `lumina-sidecar`
+`GenerativeEdit::{negative_prompt,set_negative_prompt,validate_edit_extras}` +
+Dokumentvalidierung; CLI `--negative-prompt` + Drift-Test,
+Auto-Fill-Caller-Konventionstest
+(`generative_auto_fill_without_transparency_needs_no_artifact`). **Welle 2b (2026-09-16,
+Verifizierung BESTANDEN nach Rework + VISION-OK):**
+GUI-Preview/Export-Hook (`render_frame_from_base_with_generative` /
+`export_image_with_generative`, GUI-eigener Resolver, Generate-Aktion mit
+atomarer zdata-Persistenz, Auto-Fill-Caller-Konvention + CPU-Defense-in-Depth),
+3 kittest-Goldens (Expand off/ready, Auto-Fill; deterministische
+Relativ-Fixtures), Doppelrollen-Record in GUI + CLI (Expand-Link-Vorrang,
+Auto-Fill per identitätsabgeleiteter Record-ID, Reihenfolge-Test, Reload via
+`load_sidecar`), F4-Render-Error-Fix (kein `let _ = self.render()` mehr),
+VRAM-Refusal-Badge (E2E-Test), 4-stufiger Rollen-Status
+(valid/stale/missing/corrupt).
+
 ## Abnahme
 
 - Original bleibt byteweise unverändert; das Ergebnis ist ein ableitbares,
@@ -718,12 +904,42 @@ AI-Masken/virtuellen Kopien):
 ## Offene Punkte und Abhängigkeiten
 
 - **Abhängigkeiten:** F-082/F-083 (SAM-Adapter, `lumina-onnx`) existiert;
-  lokale Inpainting/Outpainting-Modelle und deren Artefakte
-  (`pending-integration`); GUI-Flow erst nach GUI-STAGE-1/
-  GUI-WGPU-PRESENT-1; `lumina-gpu`/Present-Pfad berührt.
-- **Offen:** Modellauswahl (Modellfamilie mit dynamischer Variantenwahl wie bei
-  SAM 2.1 oder fixe Modelle), Cloud-API-Capability (bewusst getrennt, siehe
-  oben), Schema-/
-  Migrationsentscheidung für die Rezept-Stufe vor Implementierung (neue
-  versionierte Stufe `GenerativeEdit`, additives Schema-v2-Feld, Migration
-  dokumentiert, kein Pre-MVP-Bruch ohne Bump).
+  echte Inpainting-/Outpainting-Gewichte bleiben `pending-integration`
+  (Welle-1-Entscheid: Fixture-Pfad + dokumentierte
+  `GenerativeModelSource::artifact`-Schnittstelle); GUI-Flow erst nach
+  GUI-STAGE-1/GUI-WGPU-PRESENT-1. Der GPU-Injektionspunkt ist mit Welle 2a
+  umgesetzt; nur der readback-freie VRAM-Present-Pfad lehnt eine aktive
+  generative Stufe weiter laut ab (kein Injektionspunkt ohne Readback).
+- **Offen (Welle 2b, erledigt 2026-09-16, Verifizierung BESTANDEN):**
+  GUI-Preview/Export-Anbindung des Artefakt-Hooks (CPU-artifact-aware; zum
+  GPU-Present siehe GUI-GPU-Entscheid unten), 3 kittest-Goldens für
+  Expand-Rahmen/Auto-Fill (VISION-OK), ein Record mit beiden Rollen
+  (`auto_fill_transparent` + `expand_beyond_image`) samt Reihenfolge-Test in
+  GUI **und** CLI. Cloud-API-Capability bleibt bewusst getrennt und nicht
+  geplant.
+- **GUI-GPU-Entscheid (2026-09-16, normativ):** Die GUI rendert Preview und
+  Export über den artefakt-bewussten CPU-Pfad
+  (`render_frame_from_base_with_generative` / `export_image_with_generative`);
+  der GPU-Pfad ist ausschließlich der readback-freie VRAM-Present
+  (`render_to_vram`), der artefakt-blind ist und eine aktive generative Stufe
+  laut ablehnt (kein VRAM-Injektionspunkt ohne Readback).
+  `GpuContext::render_with_gpu_and_generative` hat daher bewusst keinen
+  GUI-Aufrufer; die Ablehnung wird als sichtbares Routing-Badge klassifiziert
+  (kein stiller CPU-Fallback). Ein künftiger VRAM-Present-Pfad mit
+  Generative-Injektion ersetzt die Ablehnung; bis dahin bleibt die CPU die
+  vollständige Referenz.
+- **Folgearbeit (nicht blockierend, dokumentiert statt Todo — kein neuer Task):**
+  GUI-Control + Golden für die Crop-Entscheidung `keep_generative_content`
+  (UI-Flow Schritt 5, derzeit kein Bedienelement); Auto-Fill-Golden mit echter
+  Lens-Verzerrung; Core-Helfer gegen GUI↔CLI-Duplikation
+  (`produce/persist/generative_expand_input`); F-074-Perf für
+  Doppelrolle/Drag ungemessen; Sekundärkonsumenten (Navigator/Neighbor/Matrix)
+  degradieren sichtbar; GUI↔CLI-Digest-Paritätstest für Doppelrollen-Bundle.
+- **Entschieden (Welle 2a, 2026-09-15):** GPU-Artefakt-Injektion
+  (`Substitute`-Schritt, CPU-Oracle-Parität byte-identisch, keine pauschale
+  CPU-Route mehr); additives `negative_prompt`-Feld (extras-gestützt, siehe
+  Schema-Entscheid oben).
+- **Entschieden (Welle 1, 2026-09-15):** Modellwahl = deterministisches
+  Fixture-Modell + dokumentierte Echtgewicht-Schnittstelle (siehe § Modell,
+  Capability und Lizenz); Render-Stufe = Artefakt-Compositing (BFS entfällt);
+  durable `zdata`-Verdrahtung aktiv (Identität schreiben + Caller-Hook).

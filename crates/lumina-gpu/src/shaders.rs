@@ -211,6 +211,7 @@ pub fn create_output_texture(
         format: RGBA8_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::TEXTURE_BINDING,
     })
 }

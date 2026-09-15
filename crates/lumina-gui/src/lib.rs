@@ -36,15 +36,19 @@ use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
     analyze_tone, analyze_tone_with_histogram, apply_visualize_overlay, detect_spots_heuristic,
-    distraction_candidates, generative_variant_seed, match_total_exposure_masked,
-    prepare_source_base, render_frame_from_base, suggest_auto_tone, tone_fingerprint,
-    AutoToneConfig, AutoToneResult, CacheStage, DetectedSpot, DistractionKind, DistractionSetting,
-    DistractionStatus, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext,
+    distraction_candidates, generative_input_frames, generative_variant_seed,
+    has_transparent_pixels, match_total_exposure_masked, prepare_source_base,
+    render_frame_from_base_with_generative, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
+    AutoToneResult, CacheStage, DetectedSpot, DistractionKind, DistractionSetting,
+    DistractionStatus, GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput,
+    GenerativeIdentity, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext,
     MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
-use lumina_core::{export_image, masks::rasterize_prompt, range_masks, ExportOptions};
+use lumina_core::{
+    export_image_with_generative, masks::rasterize_prompt, range_masks, ExportOptions,
+};
 use lumina_raw::RawError;
 use lumina_sidecar::{apply_batch_op, validate_smart_collection_def, SMART_COLLECTION_VERSION};
 use lumina_sidecar::{
@@ -69,6 +73,18 @@ use lumina_sidecar::{
     NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset, Sharpening,
     SpotDistraction, Vignette,
 };
+// GEN-ONNX-1 Welle 2b: the GUI resolves and (fixture-)produces the persisted
+// `generative_canvas` artifact through the same documented ONNX/sidecar surface
+// as the CLI: identical identity digest, identical capability/hash gate, the
+// same durable `.lumina.zdata` record. The ONNX and core `GenerativeRole`
+// enums are distinct layers and are aliased to keep that legible.
+use lumina_onnx::{
+    fixture_manifest, produce_canvas, GenerativeModelSource, GenerativeRole as OnnxGenerativeRole,
+};
+use lumina_sidecar::{
+    generative_artifact_status, save_generative_canvas, GenerativeArtifactRef,
+    GenerativeArtifactStatus, GenerativeCanvasArtifact as SidecarGenerativeCanvas,
+};
 // LRPAR-G15-IPTC-S8: read-only embedded IPTC display (JPEG IIM/XMP) in the
 // Library Metadata panel. Display only — mutations always go through the
 // sidecar draft helpers above (same path as the CLI).
@@ -88,6 +104,105 @@ use theme::apply_lightroom_dark;
 
 use filmstrip::{downscale_rgba, ThumbnailManager, THUMBNAIL_MAX_DIM};
 use i18n::Str;
+
+/// GEN-ONNX-1 Welle 2b: one resolved generative canvas plus the exact identity
+/// digest of the run it belongs to. The digest is the
+/// [`lumina_core::GenerativeCacheKey::digest`] the producing run published, so
+/// a later render can prove the canvas still matches the current
+/// source/recipe/seed/canvas/prompt before it is composited — a stale canvas is
+/// never served silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedGenerativeCanvas {
+    identity: String,
+    artifact: GenerativeCanvasArtifact,
+}
+
+/// GEN-ONNX-1 Welle 2b: the caller-supplied generative canvases of one GUI
+/// render (preview and export share this struct). Exactly one entry per active
+/// role; the both-roles-at-once record keeps two entries (the SOLL allows a
+/// single record to carry `auto_fill_transparent` + `expand_beyond_image`).
+/// Each entry is pinned to its identity digest and re-validated on every
+/// resolve, so a recipe/seed/canvas/prompt change invalidates it loudly instead
+/// of compositing a stale canvas.
+#[derive(Debug, Clone, Default)]
+struct GenerativeArtifacts {
+    auto_fill: Option<CachedGenerativeCanvas>,
+    expand: Option<CachedGenerativeCanvas>,
+}
+
+impl GenerativeArtifacts {
+    /// Borrow as the core render-hook input.
+    fn input(&self) -> GenerativeCanvasInput<'_> {
+        GenerativeCanvasInput {
+            auto_fill: self.auto_fill.as_ref().map(|cached| &cached.artifact),
+            expand: self.expand.as_ref().map(|cached| &cached.artifact),
+        }
+    }
+
+    fn get(&self, role: OnnxGenerativeRole) -> Option<&CachedGenerativeCanvas> {
+        match role {
+            OnnxGenerativeRole::AutoFillTransparent => self.auto_fill.as_ref(),
+            OnnxGenerativeRole::Expand => self.expand.as_ref(),
+        }
+    }
+
+    fn set(&mut self, role: OnnxGenerativeRole, cached: CachedGenerativeCanvas) {
+        match role {
+            OnnxGenerativeRole::AutoFillTransparent => self.auto_fill = Some(cached),
+            OnnxGenerativeRole::Expand => self.expand = Some(cached),
+        }
+    }
+
+    /// The core role mirror of one ONNX role.
+    fn core_role(role: OnnxGenerativeRole) -> lumina_core::GenerativeRole {
+        match role {
+            OnnxGenerativeRole::AutoFillTransparent => {
+                lumina_core::GenerativeRole::AutoFillTransparent
+            }
+            OnnxGenerativeRole::Expand => lumina_core::GenerativeRole::Expand,
+        }
+    }
+}
+
+/// Deterministic bundle record id for a generative identity digest — identical
+/// to the CLI's `generative_record_id`, so GUI and CLI address the same record.
+fn generative_record_id(identity_digest: &str) -> String {
+    let prefix = identity_digest.get(..16).unwrap_or(identity_digest);
+    format!("generative_canvas:{prefix}")
+}
+
+/// GEN-ONNX-1 Welle 2b: visible status of one generative role, mirroring the
+/// sidecar vocabulary `valid` | `stale` | `missing` | `corrupt` (SOLL
+/// `feature/product/generative-expand.md`, "Statuswerte wie bei AI-Masken").
+/// Recorded by the resolver for the last resolved recipe identity, so the panel
+/// can show *why* a role is not ready instead of only ready/missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GenerativeRoleStatus {
+    #[default]
+    Missing,
+    Valid,
+    Stale,
+    Corrupt,
+}
+
+impl GenerativeRoleStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Valid => "valid",
+            Self::Stale => "stale",
+            Self::Missing => "missing",
+            Self::Corrupt => "corrupt",
+        }
+    }
+}
+
+/// Stable index of one generative role in the per-role status array.
+fn generative_role_index(role: OnnxGenerativeRole) -> usize {
+    match role {
+        OnnxGenerativeRole::AutoFillTransparent => 0,
+        OnnxGenerativeRole::Expand => 1,
+    }
+}
 
 /// Work which may be performed when the GUI has no interactive input.
 ///
@@ -1426,6 +1541,25 @@ pub struct LuminaApp {
     directory: String,
     entries: Vec<FileBrowserEntry>,
     recipe: EditRecipe,
+    /// GEN-ONNX-1 Welle 2b: the generative canvas artifacts the render hook
+    /// feeds into the shared pipeline for the current source/copy. Populated by
+    /// the explicit `Generative Expand → Generieren` action (fixture model
+    /// pre-integration) and/or by loading the persisted `generative_canvas`
+    /// record for the current identity. Every active role without a matching
+    /// artifact is a loud render error — never a silent "as if not generated".
+    generative_artifacts: GenerativeArtifacts,
+    /// GEN-ONNX-1 Welle 2b: per-role status (`valid`/`stale`/`missing`/
+    /// `corrupt`) recorded by the resolver for the current source/recipe, so the
+    /// Generative panel can name the precise cause. Indexed by
+    /// [`generative_role_index`].
+    generative_role_status: [GenerativeRoleStatus; 2],
+    /// Memo key (resolved source hash + recipe digest) for which
+    /// [`Self::generative_artifacts`] were last resolved. Recomputing the
+    /// generative input frames is a full pipeline head, so an unchanged
+    /// source/recipe reuses the resolved canvases without re-hashing the frames.
+    /// A stale key never serves a canvas: the per-role identity digest is still
+    /// compared on every resolve.
+    generative_memo: Option<String>,
     texture: Option<egui::TextureHandle>,
     /// R2-GUIMOD-02: identity of the pixels currently held by
     /// [`Self::texture`] — `(preview generation, before_after, [w, h])`.
@@ -2525,6 +2659,9 @@ impl LuminaApp {
             directory: ".".into(),
             entries: Vec::new(),
             recipe: EditRecipe::default(),
+            generative_artifacts: GenerativeArtifacts::default(),
+            generative_role_status: [GenerativeRoleStatus::Missing; 2],
+            generative_memo: None,
             texture: None,
             // R2-GUIMOD-02: no CPU pixels uploaded yet (see `texture_identity`).
             texture_identity: None,
@@ -6511,6 +6648,12 @@ impl LuminaApp {
         let previous_id = self.virtual_copy_id.clone();
         self.virtual_copy_id = copy.id.clone();
         self.recipe = copy.recipe.clone();
+        // GEN-ONNX-1 Welle 2b: the generative artifacts belong to the previous
+        // copy's recipe/source identity; drop them so the new copy resolves its
+        // own (loudly if none is available).
+        self.generative_artifacts = GenerativeArtifacts::default();
+        self.generative_role_status = [GenerativeRoleStatus::Missing; 2];
+        self.generative_memo = None;
         // G04-FOLLOWUP-1: per-copy session default — the detect input tracks
         // the newly adopted recipe's visualize threshold (else 0.5).
         self.spot_detect_threshold = self.recipe.spot_visualize_threshold().unwrap_or(0.5);
@@ -7442,14 +7585,22 @@ impl LuminaApp {
             .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
         self.mark_dirty();
         self.save_sidecar();
-        let _ = self.render();
+        // GEN-ONNX-1 Welle 2b (F4/F7): never swallow a render error — surface
+        // it loudly via the visible error dialog (the spot itself is already
+        // persisted; the render failure must not be discarded).
+        if let Err(error) = self.render() {
+            self.show_error(error);
+        }
         Ok(())
     }
     pub fn clear_spot_heals(&mut self) {
         self.recipe.extras.remove("spot_removals");
         self.mark_dirty();
         self.save_sidecar();
-        let _ = self.render();
+        // F4/F7: surface the render result instead of discarding it.
+        if let Err(error) = self.render() {
+            self.show_error(error);
+        }
     }
 
     // ---- LRPAR-G04-REMOVE (G-04 Remove-Parität) ---------------------------
@@ -7596,7 +7747,11 @@ impl LuminaApp {
             .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
         self.mark_dirty();
         self.save_sidecar();
-        let _ = self.render();
+        // F4/F7: no swallowed render error on the spot-apply path — surface it
+        // visibly (the applied spots are already persisted).
+        if let Err(error) = self.render() {
+            self.show_error(error);
+        }
         info!("GUI interaction: apply_detected_spots -> {applied} spot(s)");
         self.spot_detect_status = format!("Applied {applied} detected spot(s)");
         Ok(applied)
@@ -7712,7 +7867,11 @@ impl LuminaApp {
             .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
         self.mark_dirty();
         self.save_sidecar();
-        let _ = self.render();
+        // F4/F7: no swallowed render error on the spot-variant path — surface
+        // it visibly (the regenerated seed is already persisted).
+        if let Err(error) = self.render() {
+            self.show_error(error);
+        }
         info!("GUI interaction: regenerate_spot_variant {spot_id} -> seed {derived}");
         self.spot_gen_status = format!(
             "Regenerated `{spot_id}` variant {} (seed {derived})",
@@ -7871,7 +8030,12 @@ impl LuminaApp {
             }
         }
         if self.original.is_some() {
-            let _ = self.render();
+            // GEN-ONNX-1 Welle 2b (F4): propagate the render result instead of
+            // swallowing it. An active `expand_beyond_image` without a matching
+            // canvas artifact is a loud render error and must reach the caller
+            // (the panel calls `show_error`); a silent `let _ =` used to hide
+            // exactly the "generative stage unavailable" failure.
+            self.render()?;
         }
         Ok(())
     }
@@ -7909,9 +8073,584 @@ impl LuminaApp {
             }
         }
         if self.original.is_some() {
-            let _ = self.render();
+            // GEN-ONNX-1 Welle 2b (F4): loud render result, never swallowed.
+            self.render()?;
         }
         Ok(())
+    }
+
+    // ---- GEN-ONNX-1 Welle 2b: generative canvas hook (preview/export/GPU) ----
+    //
+    // GPU decision (F3): the GUI has **no GPU readback render path**. Preview
+    // and export render on the CPU artifact-aware path
+    // (`render_frame_from_base_with_generative` / `export_image_with_generative`,
+    // both wrapping the same shared core pipeline), while the GPU is used only
+    // for the readback-free VRAM **present** (tone stage) via `render_to_vram`.
+    // That present path is artifact-blind by design — `lumina-gpu` Welle 2a
+    // documents that there is no VRAM generative injection point without a
+    // readback — so the GUI deliberately does **not** call
+    // `GpuContext::render_with_gpu_and_generative`: no GUI render site consumes
+    // its readback frame, and adding one would only introduce a device→host copy
+    // without changing the presented pixels. The refusal is classified
+    // (`classify_vram_refusal`) into a visible routing badge, so the CPU route is
+    // never silent. A future VRAM generative present path would replace this
+    // refusal with an artifact-aware VRAM entry; until then CPU is the complete
+    // reference (Agents.md: GPU is acceleration only, never a requirement).
+
+    /// GEN-ONNX-1 Welle 2b: enable/disable the auto-fill-transparent role
+    /// (fills transparent pixels after Lens correction). The role flag alone
+    /// changes no geometry; the render is loud while no canvas artifact exists
+    /// (press "Generate"), and an opaque post-lens frame needs no artifact
+    /// (caller convention). Persisted like every other recipe edit.
+    pub fn set_auto_fill_transparent(&mut self, auto_fill: bool) -> Result<(), GuiError> {
+        let mut ge = self
+            .recipe
+            .generative_edit
+            .clone()
+            .unwrap_or(GenerativeEdit {
+                version: 1,
+                canvas: None,
+                artifact: None,
+                keep_generative_content: None,
+                auto_fill_transparent: None,
+                expand_beyond_image: None,
+                seed: None,
+                prompt: None,
+                extras: Default::default(),
+            });
+        ge.auto_fill_transparent = Some(auto_fill);
+        self.recipe.generative_edit = Some(ge);
+        self.mark_dirty();
+        if self.document.is_some() {
+            self.save_sidecar();
+        }
+        info!("GUI interaction: set_auto_fill_transparent -> {auto_fill}");
+        if self.original.is_some() {
+            // GEN-ONNX-1 Welle 2b (F4): a failed render (e.g. an active
+            // auto-fill without a canvas artifact on a transparent frame) must
+            // surface, never be swallowed.
+            self.render()?;
+        }
+        Ok(())
+    }
+
+    /// Whether the active recipe carries an active generative role
+    /// (`auto_fill_transparent` or `expand_beyond_image`).
+    fn generative_stage_active(&self) -> bool {
+        self.recipe.generative_edit.as_ref().is_some_and(|edit| {
+            edit.effective_expand() || edit.auto_fill_transparent.unwrap_or(false)
+        })
+    }
+
+    /// User-visible per-role status of the active generative edit: the last
+    /// resolver outcome mirroring the sidecar vocabulary
+    /// `valid`/`stale`/`missing`/`corrupt` (SOLL
+    /// `feature/product/generative-expand.md`). Display only — the render itself
+    /// still verifies the identity digest and is loud when a canvas is absent or
+    /// stale.
+    fn generative_status_text(&self) -> String {
+        let Some(edit) = self.recipe.generative_edit.as_ref() else {
+            return String::new();
+        };
+        let mut roles = Vec::new();
+        if edit.effective_expand() {
+            roles.push(OnnxGenerativeRole::Expand);
+        }
+        if edit.auto_fill_transparent.unwrap_or(false) {
+            roles.push(OnnxGenerativeRole::AutoFillTransparent);
+        }
+        if roles.is_empty() {
+            return String::new();
+        }
+        let parts: Vec<String> = roles
+            .iter()
+            .map(|role| {
+                format!(
+                    "{role:?}: {}",
+                    self.generative_role_status[generative_role_index(*role)].label()
+                )
+            })
+            .collect();
+        format!("Generative canvas — {}", parts.join(", "))
+    }
+
+    /// The prompt/model identity of a persisted generative edit for one role.
+    ///
+    /// Mirrors the CLI's `generative_identity`: the fixture manifest supplies
+    /// the real, pinned `model_hash`, and the persisted prompt/negative prompt
+    /// are the exact producer inputs. No guessing from model names.
+    fn generative_identity_for(
+        role: OnnxGenerativeRole,
+        edit: &GenerativeEdit,
+    ) -> GenerativeIdentity {
+        GenerativeIdentity {
+            model_hash: fixture_manifest(role).model_hash,
+            prompt: edit.prompt.clone().unwrap_or_default(),
+            negative_prompt: edit.negative_prompt().map(str::to_owned),
+        }
+    }
+
+    /// Produce one role's composited canvas with the deterministic fixture
+    /// model. The persisted edit may carry both roles; `produce_canvas` reads a
+    /// single role from the flags, so a role-scoped copy is passed — the other
+    /// role's flag never silently changes which canvas is produced.
+    fn produce_generative_canvas(
+        input_frame: &ImageFrame,
+        edit: &GenerativeEdit,
+        role: OnnxGenerativeRole,
+    ) -> Result<lumina_onnx::GenerativeCanvasOutput, GuiError> {
+        let mut scoped = edit.clone();
+        match role {
+            OnnxGenerativeRole::Expand => {
+                scoped.expand_beyond_image = Some(true);
+                scoped.auto_fill_transparent = Some(false);
+            }
+            OnnxGenerativeRole::AutoFillTransparent => {
+                scoped.expand_beyond_image = Some(false);
+                scoped.auto_fill_transparent = Some(true);
+            }
+        }
+        let model = GenerativeModelSource::Fixture(role);
+        produce_canvas(input_frame, &scoped, &model)
+            .map_err(|error| GuiError::Io(format!("generative {role:?} canvas failed: {error}")))
+    }
+
+    /// Persist one produced canvas into the sidecar `.lumina.zdata` bundle and
+    /// return its portable recipe link. Same record id, checksum and identity
+    /// digest as the CLI (`generative_record_id`, `with_identity`), so GUI and
+    /// CLI address the same record. `replace = true` is the explicit
+    /// regeneration path; records of the other generative role are preserved.
+    fn persist_generative_canvas(
+        zdata_path: &Path,
+        relative_path: &str,
+        output: &lumina_onnx::GenerativeCanvasOutput,
+    ) -> Result<GenerativeArtifactRef, GuiError> {
+        let record = SidecarGenerativeCanvas {
+            id: generative_record_id(&output.identity_digest),
+            width: output.width,
+            height: output.height,
+            pixels: output.pixels.clone(),
+        };
+        save_generative_canvas(zdata_path, record.clone(), true).map_err(|error| {
+            GuiError::Io(format!(
+                "could not write generative canvas bundle `{}`: {error}",
+                zdata_path.display()
+            ))
+        })?;
+        Ok(GenerativeArtifactRef::from_generative_canvas(
+            &record,
+            relative_path,
+            output.identity_digest.clone(),
+        ))
+    }
+
+    /// The frame entering the expand role when the auto-fill role produced a
+    /// canvas: the auto-filled frame with the perspective stage applied,
+    /// mirroring the render order `Lens → auto-fill → Perspective → expand`.
+    /// Without an applied auto-fill canvas this is exactly `after_perspective`.
+    ///
+    /// Only `lumina-core`'s own public stage function is used — the GUI owns no
+    /// image math and never re-implements the pipeline.
+    fn generative_expand_input(
+        after_perspective: &ImageFrame,
+        auto_fill_frame: Option<&ImageFrame>,
+        lens: Option<&lumina_sidecar::LensCorrection>,
+        perspective: Option<&lumina_sidecar::Perspective>,
+        lensfun: Option<lumina_core::LensfunCorrectorRef<'_>>,
+    ) -> Result<ImageFrame, GuiError> {
+        let Some(filled) = auto_fill_frame else {
+            return Ok(after_perspective.clone());
+        };
+        let mut frame = filled.clone();
+        #[cfg(feature = "lensfun")]
+        frame.apply_perspective_stage(lens, perspective, lensfun.map(|reference| reference.0))?;
+        #[cfg(not(feature = "lensfun"))]
+        {
+            let _ = lensfun;
+            frame.apply_perspective_stage(lens, perspective)?;
+        }
+        Ok(frame)
+    }
+
+    /// Cheap memo key of the state the resolved generative canvases depend on:
+    /// resolved source hash + recipe digest. The per-role identity digest is
+    /// still compared on every resolve, so this only skips recomputation — it
+    /// never serves a stale canvas.
+    fn generative_memo_key(&mut self) -> String {
+        let source_hash = self.resolved_source_hash();
+        let recipe = serde_json::to_vec(&self.recipe).unwrap_or_default();
+        format!("{source_hash}|blake3:{}", blake3::hash(&recipe).to_hex())
+    }
+
+    /// GEN-ONNX-1 Welle 2b: the explicit GUI "Generieren" action.
+    ///
+    /// Produces the deterministic fixture canvas for every active generative
+    /// role, persists it into the sidecar `.lumina.zdata` bundle (durable
+    /// wiring — same identity digest and record id as the CLI), links it in the
+    /// recipe and renders. Neither role active, or a persisted double role, is
+    /// handled without any silent fallback:
+    ///
+    /// * `auto_fill_transparent` with no transparent pixels after lens needs no
+    ///   artifact (caller convention) — it is skipped and logged, not faked.
+    /// * A record carrying both roles produces both canvases; the canvas-
+    ///   defining `expand` link is the one persisted in the single recipe
+    ///   `artifact` field (the auto-fill record stays addressable by its
+    ///   deterministic bundle id).
+    pub fn generate_generative_canvas(&mut self) -> Result<(), GuiError> {
+        let frame = self
+            .original
+            .clone()
+            .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
+        if self.path.trim().is_empty() {
+            return Err(GuiError::Io(
+                "Generative generation needs a local file path (the canvas is persisted in the \
+                 sidecar bundle)"
+                    .into(),
+            ));
+        }
+        let mut edit = self.recipe.generative_edit.clone().ok_or_else(|| {
+            GuiError::Io("No generative edit in the recipe; enable the Expand mode first".into())
+        })?;
+        let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
+        let expand_active = edit.effective_expand();
+        if !auto_fill_active && !expand_active {
+            return Err(GuiError::Io(
+                "Generative generation requested but neither `auto_fill_transparent` nor \
+                 `expand_beyond_image` is active (no silent canvas)"
+                    .into(),
+            ));
+        }
+        // The frames entering each role, computed exactly like the render does
+        // (same corrector, same white balance, same empty source actions).
+        #[cfg(feature = "lensfun")]
+        self.ensure_lensfun_cache(frame.width, frame.height);
+        #[cfg(feature = "lensfun")]
+        let lensfun = self.lensfun_render_ref();
+        #[cfg(not(feature = "lensfun"))]
+        let lensfun = None;
+        let (after_lens, after_perspective) = generative_input_frames(
+            &frame,
+            &self.recipe,
+            self.camera_white_balance,
+            &[],
+            lensfun,
+        )?;
+        let zdata_path = zdata_path_for(Path::new(self.path.trim()));
+        let relative_path = zdata_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "generative.zdata".into());
+
+        let mut artifacts = GenerativeArtifacts::default();
+        let mut auto_fill_link: Option<GenerativeArtifactRef> = None;
+        let mut expand_link: Option<GenerativeArtifactRef> = None;
+        // Auto-fill first: its transparent mask is derived before the expand.
+        let mut auto_fill_frame: Option<ImageFrame> = None;
+        if auto_fill_active {
+            if !has_transparent_pixels(&after_lens) {
+                // Caller convention (normative): no transparent pixels after
+                // lens → `auto_fill = None` (identity), no artifact required.
+                info!(
+                    "generative: auto_fill active but no transparent pixels after lens; \
+                     no auto-fill canvas produced (identity)"
+                );
+            } else {
+                let produced = Self::produce_generative_canvas(
+                    &after_lens,
+                    &edit,
+                    OnnxGenerativeRole::AutoFillTransparent,
+                )?;
+                auto_fill_link = Some(Self::persist_generative_canvas(
+                    &zdata_path,
+                    &relative_path,
+                    &produced,
+                )?);
+                let frame = produced.to_frame().map_err(|error| {
+                    GuiError::Io(format!("generative auto-fill frame invalid: {error}"))
+                })?;
+                auto_fill_frame = Some(frame.clone());
+                artifacts.set(
+                    OnnxGenerativeRole::AutoFillTransparent,
+                    CachedGenerativeCanvas {
+                        identity: produced.identity_digest.clone(),
+                        artifact: GenerativeCanvasArtifact::new(
+                            lumina_core::GenerativeRole::AutoFillTransparent,
+                            frame,
+                        ),
+                    },
+                );
+                info!(
+                    "generative: auto-fill canvas produced {}x{} identity={}",
+                    produced.width, produced.height, produced.identity_digest
+                );
+            }
+        }
+        if expand_active {
+            // SOLL order `Lens → auto-fill → Perspective → expand`: when the
+            // auto-fill role produced a canvas, the expand canvas is built from
+            // that composited frame with the perspective stage applied (the
+            // core's own public stage), so transparent pixels filled by the
+            // auto-fill survive the authoritative expand canvas.
+            let expand_input = Self::generative_expand_input(
+                &after_perspective,
+                auto_fill_frame.as_ref(),
+                self.recipe.lens_correction.as_ref(),
+                self.recipe.perspective.as_ref(),
+                lensfun,
+            )?;
+            let produced =
+                Self::produce_generative_canvas(&expand_input, &edit, OnnxGenerativeRole::Expand)?;
+            expand_link = Some(Self::persist_generative_canvas(
+                &zdata_path,
+                &relative_path,
+                &produced,
+            )?);
+            let frame = produced.to_frame().map_err(|error| {
+                GuiError::Io(format!("generative expand frame invalid: {error}"))
+            })?;
+            artifacts.set(
+                OnnxGenerativeRole::Expand,
+                CachedGenerativeCanvas {
+                    identity: produced.identity_digest.clone(),
+                    artifact: GenerativeCanvasArtifact::new(
+                        lumina_core::GenerativeRole::Expand,
+                        frame,
+                    ),
+                },
+            );
+            info!(
+                "generative: expand canvas produced {}x{} identity={}",
+                produced.width, produced.height, produced.identity_digest
+            );
+        }
+        // The single recipe link is the canvas-defining expand role when both
+        // are active (SOLL: Lens → GenerativeEdit → Perspective → Crop); the
+        // auto-fill record stays addressable by its deterministic bundle id.
+        edit.artifact = expand_link.or(auto_fill_link);
+        self.recipe.generative_edit = Some(edit);
+        self.generative_artifacts = artifacts;
+        self.mark_dirty();
+        // Persist the recipe link durably: a byte-drop session may not have a
+        // document yet, so it is created from the source identity first (the
+        // `.lumina.zdata` bundle was already written above).
+        self.ensure_document_loaded()?;
+        self.save_sidecar();
+        // Render now so the produced canvas is visible; the resolver finds the
+        // freshly installed session artifacts (identity match) and does not
+        // touch the disk again.
+        self.render()?;
+        Ok(())
+    }
+
+    /// Resolve the generative canvases for one render from the full-resolution
+    /// source. Every active role is resolved either from the in-memory session
+    /// store (freshly generated / previously resolved) or from the persisted
+    /// `.lumina.zdata` bundle by its deterministic identity id. An active role
+    /// without a matching canvas is a loud error — never a silent unexpanded
+    /// render. The auto-fill caller convention is honoured: a post-lens frame
+    /// without transparent pixels resolves `auto_fill = None` (identity, no
+    /// artifact required).
+    fn resolve_generative_artifacts(
+        &mut self,
+        full_source: &ImageFrame,
+    ) -> Result<GenerativeArtifacts, GuiError> {
+        let Some(edit) = self.recipe.generative_edit.clone() else {
+            return Ok(GenerativeArtifacts::default());
+        };
+        let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
+        let expand_active = edit.effective_expand();
+        if !auto_fill_active && !expand_active {
+            return Ok(GenerativeArtifacts::default());
+        }
+        // The input frames (and therefore the identity digests) are expensive
+        // to rebuild; reuse them while neither source nor recipe changed.
+        let memo_key = self.generative_memo_key();
+        if self.generative_memo.as_deref() == Some(memo_key.as_str()) {
+            return Ok(self.generative_artifacts.clone());
+        }
+        #[cfg(feature = "lensfun")]
+        self.ensure_lensfun_cache(full_source.width, full_source.height);
+        #[cfg(feature = "lensfun")]
+        let lensfun = self.lensfun_render_ref();
+        #[cfg(not(feature = "lensfun"))]
+        let lensfun = None;
+        let (after_lens, after_perspective) = generative_input_frames(
+            full_source,
+            &self.recipe,
+            self.camera_white_balance,
+            &[],
+            lensfun,
+        )?;
+        let seed = edit.seed.unwrap_or(0);
+        // Per-role status is collected locally and committed to `self` only
+        // after `lensfun` (a shared borrow of `self`) is released, so the loud
+        // error path also records the precise `valid`/`stale`/`missing`/
+        // `corrupt` verdict the panel shows.
+        let mut role_status = [GenerativeRoleStatus::Missing; 2];
+        let mut resolved = GenerativeArtifacts::default();
+        let mut deferred_error: Option<GuiError> = None;
+        let mut auto_fill_frame: Option<ImageFrame> = None;
+        if auto_fill_active {
+            if has_transparent_pixels(&after_lens) {
+                let identity =
+                    Self::generative_identity_for(OnnxGenerativeRole::AutoFillTransparent, &edit);
+                let digest = GenerativeCacheKey::auto_fill(&after_lens, seed, &identity).digest();
+                let (status, result) =
+                    self.resolve_generative_role(OnnxGenerativeRole::AutoFillTransparent, &digest);
+                role_status[generative_role_index(OnnxGenerativeRole::AutoFillTransparent)] =
+                    status;
+                match result {
+                    Ok(cached) => {
+                        auto_fill_frame = Some(cached.artifact.frame.clone());
+                        resolved.auto_fill = Some(cached);
+                    }
+                    Err(error) => deferred_error = Some(error),
+                }
+            } else {
+                // Caller convention (normative): no transparent pixels after
+                // lens → `auto_fill = None` (identity) and the role is valid
+                // without an artifact.
+                role_status[generative_role_index(OnnxGenerativeRole::AutoFillTransparent)] =
+                    GenerativeRoleStatus::Valid;
+            }
+        }
+        if expand_active && deferred_error.is_none() {
+            let canvas = match edit.canvas.clone() {
+                Some(canvas) => Some(canvas),
+                None => {
+                    deferred_error = Some(GuiError::Io(
+                        "`expand_beyond_image` requires a `canvas` (output_* + offsets)".into(),
+                    ));
+                    None
+                }
+            };
+            if let Some(canvas) = canvas {
+                // Mirror the render order `Lens → auto-fill → Perspective →
+                // expand` so the expand identity matches the canvas the producer
+                // built (the expand canvas is authoritative and must embed the
+                // auto-filled pixels). Without an applied auto-fill canvas the
+                // frame entering expand is exactly `after_perspective`.
+                match Self::generative_expand_input(
+                    &after_perspective,
+                    auto_fill_frame.as_ref(),
+                    self.recipe.lens_correction.as_ref(),
+                    self.recipe.perspective.as_ref(),
+                    lensfun,
+                ) {
+                    Ok(expand_input) => {
+                        let identity =
+                            Self::generative_identity_for(OnnxGenerativeRole::Expand, &edit);
+                        let digest =
+                            GenerativeCacheKey::expand(&expand_input, &canvas, seed, &identity)
+                                .digest();
+                        let (status, result) =
+                            self.resolve_generative_role(OnnxGenerativeRole::Expand, &digest);
+                        role_status[generative_role_index(OnnxGenerativeRole::Expand)] = status;
+                        match result {
+                            Ok(cached) => resolved.expand = Some(cached),
+                            Err(error) => deferred_error = Some(error),
+                        }
+                    }
+                    Err(error) => deferred_error = Some(error),
+                }
+            }
+        }
+        // `lensfun` is no longer used past this point: commit the collected
+        // role verdicts before surfacing any deferred loud error.
+        self.generative_role_status = role_status;
+        if let Some(error) = deferred_error {
+            return Err(error);
+        }
+        self.generative_artifacts = resolved.clone();
+        self.generative_memo = Some(memo_key);
+        Ok(resolved)
+    }
+
+    /// Resolve one role's canvas: session store first, then the persisted
+    /// bundle addressed by the deterministic identity record id (this also
+    /// covers the unlinked second role of a double-role record), then a loud
+    /// diagnosis through the recipe link. The result is pinned to `digest`.
+    ///
+    /// Returns the visible [`GenerativeRoleStatus`] alongside the result so the
+    /// panel can distinguish `valid`/`stale`/`missing`/`corrupt`.
+    fn resolve_generative_role(
+        &self,
+        role: OnnxGenerativeRole,
+        digest: &str,
+    ) -> (
+        GenerativeRoleStatus,
+        Result<CachedGenerativeCanvas, GuiError>,
+    ) {
+        if let Some(cached) = self.generative_artifacts.get(role) {
+            if cached.identity == digest {
+                return (GenerativeRoleStatus::Valid, Ok(cached.clone()));
+            }
+        }
+        let path = self.path.trim();
+        let link = self
+            .recipe
+            .generative_edit
+            .as_ref()
+            .and_then(|edit| edit.artifact.as_ref());
+        if !path.is_empty() {
+            let zdata_path = zdata_path_for(Path::new(path));
+            let bundle_root = zdata_path.parent().unwrap_or_else(|| Path::new("."));
+            // The record id is derived from the identity digest, so a matching
+            // record is current by construction (role/seed/canvas/prompt/model/
+            // input are all in the digest, and zdata load verifies checksums).
+            if zdata_path.exists() {
+                if let Ok(container) = load_zdata(&zdata_path) {
+                    if let Ok(record) = container.generative_canvas(&generative_record_id(digest)) {
+                        return match ImageFrame::new(record.width, record.height, record.pixels) {
+                            Ok(frame) => (
+                                GenerativeRoleStatus::Valid,
+                                Ok(CachedGenerativeCanvas {
+                                    identity: digest.to_string(),
+                                    artifact: GenerativeCanvasArtifact::new(
+                                        GenerativeArtifacts::core_role(role),
+                                        frame,
+                                    ),
+                                }),
+                            ),
+                            Err(error) => {
+                                (GenerativeRoleStatus::Corrupt, Err(GuiError::Core(error)))
+                            }
+                        };
+                    }
+                }
+            }
+            if let Some(link) = link {
+                let status = generative_artifact_status(bundle_root, link, digest);
+                let role_status = match status {
+                    GenerativeArtifactStatus::Available => GenerativeRoleStatus::Corrupt,
+                    GenerativeArtifactStatus::Stale => GenerativeRoleStatus::Stale,
+                    GenerativeArtifactStatus::Missing => GenerativeRoleStatus::Missing,
+                    GenerativeArtifactStatus::Corrupt => GenerativeRoleStatus::Corrupt,
+                };
+                let error = match status {
+                    // The link claims to be current but its record is unreadable
+                    // — never render "as if not generated".
+                    GenerativeArtifactStatus::Available => GuiError::Io(format!(
+                        "generative {role:?} link `{}` is current but its bundle record is \
+                         unreadable; refusing to render (no silent fallback)",
+                        link.id
+                    )),
+                    other => GuiError::Io(format!(
+                        "generative {role:?} canvas `{}` is {other:?} for the current identity; \
+                         run \"Generate\" to rebuild it (no silent fallback)",
+                        link.id
+                    )),
+                };
+                return (role_status, Err(error));
+            }
+        }
+        (
+            GenerativeRoleStatus::Missing,
+            Err(GuiError::Io(format!(
+                "generative {role:?} is active but no canvas artifact is available; run \
+                 \"Generate\" (no silent fallback)"
+            ))),
+        )
     }
 
     /// Returns the active virtual copy's source dimensions, used as the brush
@@ -8825,6 +9564,11 @@ impl LuminaApp {
         self.before_after = false;
         self.wb_pick_mode = false;
         self.render_mask_layers.clear();
+        // GEN-ONNX-1 Welle 2b: a new source invalidates every session/persisted
+        // generative canvas — the identity digests are source-bound.
+        self.generative_artifacts = GenerativeArtifacts::default();
+        self.generative_role_status = [GenerativeRoleStatus::Missing; 2];
+        self.generative_memo = None;
         self.render_key = None;
         self.tone_analysis = None;
         self.preview_histogram = None;
@@ -10250,7 +10994,10 @@ impl LuminaApp {
         self.pending_slider_commit = None;
         self.pending_history_step = None;
         if self.original.is_some() {
-            let _ = self.render();
+            // F4/F7: surface a render failure instead of discarding it.
+            if let Err(error) = self.render() {
+                self.show_error(error);
+            }
         }
     }
 
@@ -10284,9 +11031,30 @@ impl LuminaApp {
                 self.preview_pane_h,
             )
         });
+        // GEN-ONNX-1 Welle 2b: a generative canvas is absolute geometry on the
+        // full-resolution source (its identity and dimensions are defined
+        // there). A zoom ROI crop cannot host it, so the full frame is
+        // rendered instead of silently skipping the generative stage.
+        let roi = if self.generative_stage_active() {
+            if roi.is_some() {
+                trace!(
+                    "GUI render: generative stage active — zoom ROI disabled (absolute canvas geometry)"
+                );
+            }
+            None
+        } else {
+            roi
+        };
         self.preview_is_draft = false;
         self.pending_full_render = false;
-        let result = self.render_from(&original, true, roi);
+        let generative = match self.resolve_generative_artifacts(&original) {
+            Ok(artifacts) => artifacts,
+            Err(error) => {
+                self.original = Some(original);
+                return Err(error);
+            }
+        };
+        let result = self.render_from(&original, true, roi, generative);
         self.original = Some(original);
         result
     }
@@ -10302,6 +11070,15 @@ impl LuminaApp {
         _viewport: [u32; 2],
         roi: Option<[u32; 4]>,
     ) -> Result<(), GuiError> {
+        // GEN-ONNX-1 Welle 2b: a generative canvas is absolute geometry on the
+        // full-resolution source. A downscaled draft cannot host it (the
+        // auto-fill canvas is source-sized, the expand canvas canvas-sized), so
+        // the draft is upgraded to a full render instead of silently skipping
+        // the generative stage or compositing mismatched dimensions.
+        if self.generative_stage_active() {
+            trace!("GUI render: generative stage active — draft upgraded to full render");
+            return self.render_full(_viewport, roi);
+        }
         // Take the pre-allocated draft source so `render_from` borrows a local
         // value rather than `self` — zero allocation while dragging. Fall back to
         // a clone of the full original only when no draft is cached yet.
@@ -10331,7 +11108,10 @@ impl LuminaApp {
             )
         });
         self.preview_is_draft = true;
-        let result = self.render_from(&source, false, roi);
+        // No generative stage is active here (checked above), so the hook gets
+        // an empty artifact set — the core render then cannot hit the
+        // generative stage at all.
+        let result = self.render_from(&source, false, roi, GenerativeArtifacts::default());
         if took_draft {
             self.draft_original = Some(source);
         }
@@ -10348,36 +11128,53 @@ impl LuminaApp {
     /// sequence this method replaces.
     fn render_draft_tick(&mut self, viewport: [u32; 2]) {
         let gpu_t0 = std::time::Instant::now();
+        // GEN-ONNX-1 Welle 2b (F6): evaluated before the GPU borrow so the
+        // proactive skip below can write the present-refusal fields.
+        #[cfg(feature = "gpu")]
+        let generative_active = self.generative_stage_active();
         #[cfg(feature = "gpu")]
         {
             if let Some(gpu) = self.gpu.as_ref() {
                 if gpu.is_available() {
-                    // R2-GUIMOD-03: borrow instead of clone. The fallback
-                    // branch (`draft_original` absent on the first tick
-                    // after a full render) used to memcpy the entire
-                    // full-resolution original (~180 MB worst case) into
-                    // a temporary that was dropped immediately after the
-                    // call — `render_to_vram` only needs `&ImageFrame`.
-                    let source = self.draft_original.as_ref().or(self.original.as_ref());
-                    if let Some(src) = source {
-                        match gpu.render_to_vram(src, &self.recipe) {
-                            Ok(()) => {
-                                // GUI-WGPU-PRESENT-1: the VRAM output now
-                                // matches the current recipe/source — the
-                                // present path may use it this frame.
-                                self.vram_fresh = true;
-                                // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
-                                // render clears any earlier present refusal.
-                                self.vram_render_refusal = None;
-                            }
-                            Err(err) => {
-                                warn!("gpu render_to_vram failed: {err}");
-                                self.vram_fresh = false;
-                                // GUI-LENSFUN-GATE-3 (F1): classify the present
-                                // refusal so it can surface as a badge even when
-                                // the recipe gate is empty (dimension-changing
-                                // geometry is refused *after* the gate).
-                                self.vram_render_refusal = Self::classify_vram_refusal(&err);
+                    if generative_active {
+                        // The readback-free VRAM present path is artifact-blind
+                        // and can never render a generative recipe (documented
+                        // `lumina-gpu` limitation, no VRAM injection point
+                        // without a readback). Skip the doomed `render_to_vram`
+                        // attempt — no per-tick `warn!` spam — and record the
+                        // known refusal for the badge; the CPU artifact-aware
+                        // render below is the authoritative preview.
+                        self.vram_fresh = false;
+                        self.vram_render_refusal =
+                            Some(Self::GENERATIVE_VRAM_REFUSAL_REASON.to_owned());
+                    } else {
+                        // R2-GUIMOD-03: borrow instead of clone. The fallback
+                        // branch (`draft_original` absent on the first tick
+                        // after a full render) used to memcpy the entire
+                        // full-resolution original (~180 MB worst case) into
+                        // a temporary that was dropped immediately after the
+                        // call — `render_to_vram` only needs `&ImageFrame`.
+                        let source = self.draft_original.as_ref().or(self.original.as_ref());
+                        if let Some(src) = source {
+                            match gpu.render_to_vram(src, &self.recipe) {
+                                Ok(()) => {
+                                    // GUI-WGPU-PRESENT-1: the VRAM output now
+                                    // matches the current recipe/source — the
+                                    // present path may use it this frame.
+                                    self.vram_fresh = true;
+                                    // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
+                                    // render clears any earlier present refusal.
+                                    self.vram_render_refusal = None;
+                                }
+                                Err(err) => {
+                                    warn!("gpu render_to_vram failed: {err}");
+                                    self.vram_fresh = false;
+                                    // GUI-LENSFUN-GATE-3 (F1): classify the present
+                                    // refusal so it can surface as a badge even when
+                                    // the recipe gate is empty (dimension-changing
+                                    // geometry is refused *after* the gate).
+                                    self.vram_render_refusal = Self::classify_vram_refusal(&err);
+                                }
                             }
                         }
                     }
@@ -10669,6 +11466,7 @@ impl LuminaApp {
         source: &ImageFrame,
         with_masks: bool,
         roi: Option<[u32; 4]>,
+        generative: GenerativeArtifacts,
     ) -> Result<(), GuiError> {
         // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
         // the full frame is never processed for a magnified view.
@@ -10822,7 +11620,11 @@ impl LuminaApp {
             None
         };
         // ---- Downstream stages: Adjustments → geometry → Masks ----
-        let output = render_frame_from_base(
+        // GEN-ONNX-1 Welle 2b: the caller-supplied generative canvases enter the
+        // shared pipeline at the mid-geometry positions
+        // (`Lens → [auto-fill] → Perspective → [expand] → Crop`); the core owns
+        // the compositing, the GUI never re-implements it.
+        let output = render_frame_from_base_with_generative(
             base_frame,
             &RenderContext {
                 recipe: &self.recipe,
@@ -10833,15 +11635,16 @@ impl LuminaApp {
                 depth: None,
             },
             &mut work,
+            generative.input(),
         )?;
-        // GEN-PIPELINE-DECOUPLE: `render_frame_from_base` already ran the
-        // `GenerativeEdit(expand)` stage internally
-        // (`Lens → Fill → Perspective → Expand → Crop`). The core frame is the
-        // preview — a second post-render expand must not run here: the canvas
-        // is no longer larger than the frame, so it would fail
-        // `validate_with_source` (double-expand), and the GUI must not keep a
-        // second checker-fill implementation beside the core heuristic
-        // (Agents.md: keine GUI-spezifische Bildlogik außerhalb der Pipeline).
+        // GEN-ONNX-1 Welle 2b: `render_frame_from_base_with_generative` already
+        // ran the generative stage internally
+        // (`Lens → [auto-fill] → Perspective → [expand] → Crop`) by adopting the
+        // caller-supplied canvas artifacts. The core frame is the preview — a
+        // second post-render expand must not run here (the canvas no longer
+        // matches the frame and `validate_with_source` would fail), and the GUI
+        // keeps no generative pixel logic of its own (Agents.md: keine
+        // GUI-spezifische Bildlogik außerhalb der Pipeline).
         let mask_warnings = output.mask_warnings;
         let mut preview = output.frame;
         // GUI-LENSFUN-GATE-2: record the corrector state that produced this
@@ -10983,7 +11786,7 @@ impl LuminaApp {
                 } else {
                     None
                 };
-                let full_output = render_frame_from_base(
+                let full_output = render_frame_from_base_with_generative(
                     full_base,
                     &RenderContext {
                         recipe: &self.recipe,
@@ -10994,6 +11797,7 @@ impl LuminaApp {
                         depth: None,
                     },
                     &mut analysis_work,
+                    generative.input(),
                 )?;
                 analyze_tone_with_histogram(&full_output.frame)
             }
@@ -11703,21 +12507,51 @@ impl LuminaApp {
         reasons
     }
 
+    /// GEN-ONNX-1 Welle 2b: the single, stable refusal reason for an active
+    /// generative stage on the readback-free VRAM present path. Shared by
+    /// [`Self::classify_vram_refusal`] (real `render_to_vram` error) and the
+    /// proactive skip in [`Self::render_draft_tick`] so the badge text and the
+    /// no-spam fast path cannot drift.
+    #[cfg(feature = "gpu")]
+    const GENERATIVE_VRAM_REFUSAL_REASON: &'static str =
+        "generative_edit (artifact-blind VRAM present stage; CPU renders the caller-supplied canvas)";
+
     /// GUI-LENSFUN-GATE-3 (F1): classify a failed `render_to_vram` into a
     /// user-facing present-refusal reason, or `None` for failures already
-    /// covered by the recipe gate / other visible paths. Only the
-    /// dimension-changing output refusal is classified here: it is a documented
-    /// `lumina-gpu` limitation (source-sized present texture) that the
-    /// recipe-only gate cannot express. Other failures (device lost, no
-    /// adapter, invalid recipe) keep their existing loud `warn!`/gate handling.
+    /// covered by the recipe gate / other visible paths. Two post-gate refusals
+    /// are classified here — both are documented `lumina-gpu` limitations the
+    /// recipe-only gate cannot express:
+    ///
+    /// * a **dimension-changing** geometry chain (source-sized present
+    ///   texture); and
+    /// * GEN-ONNX-1 Welle 2a/2b an **active generative stage**: the
+    ///   readback-free VRAM present path is artifact-blind and refuses it
+    ///   loudly (`generative_artifact.missing`) because there is no VRAM
+    ///   generative injection point without a readback.
+    ///
+    /// Other failures (device lost, no adapter, invalid recipe) keep their
+    /// existing loud `warn!`/gate handling.
     #[cfg(feature = "gpu")]
     fn classify_vram_refusal(error: &lumina_gpu::GpuError) -> Option<String> {
         let message = error.to_string();
         // Mirrors `lumina-gpu`'s documented `warn_vram_dimension_change_once`
         // reason string; a stable cross-crate contract for this limitation.
-        message.contains("dimension-changing output").then(|| {
-            "geometry (dimension-changing output; the VRAM present texture is source-sized)".into()
-        })
+        if message.contains("dimension-changing output") {
+            return Some(
+                "geometry (dimension-changing output; the VRAM present texture is source-sized)"
+                    .into(),
+            );
+        }
+        // GEN-ONNX-1 Welle 2a/2b: the readback-free VRAM present path is
+        // artifact-blind and refuses an active generative stage loudly
+        // (`generative_artifact.missing`) because there is no VRAM generative
+        // injection point without a readback. The CPU preview renders it through
+        // the artifact-aware hook; the badge makes the refusal visible instead
+        // of swallowing it into a plain `warn!` line.
+        if message.contains("generative_artifact") {
+            return Some(Self::GENERATIVE_VRAM_REFUSAL_REASON.into());
+        }
+        None
     }
 
     /// The visible badge text for a CPU routing decision: the generic
@@ -12571,6 +13405,19 @@ impl LuminaApp {
             .as_ref()
             .map(|frame| (frame.width, frame.height))
             .unwrap_or((0, 0));
+        // GEN-ONNX-1 Welle 2b: resolve the generative canvases before any
+        // shared borrow of `self` (the resolver needs `&mut self` for the
+        // corrector cache). Only done when a generative role is active, so a
+        // plain export never pays for the clone.
+        let generative = if self.generative_stage_active() {
+            let original = self
+                .original
+                .clone()
+                .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
+            self.resolve_generative_artifacts(&original)?
+        } else {
+            GenerativeArtifacts::default()
+        };
         // G-06: Lensfun auto-corrector for the exported source (same
         // cached lookup as the preview render — export and preview share
         // the correction, no second pipeline).
@@ -12629,12 +13476,13 @@ impl LuminaApp {
             lensfun: export_lensfun,
             depth: None,
         };
-        // GEN-PIPELINE-DECOUPLE: `export_image` renders via `render_frame`,
-        // which already contains the `GenerativeEdit(expand)` stage
-        // (`Lens → Fill → Perspective → Expand → Crop`). No post-render
-        // expand runs here — a second expand would fail `validate_with_source`
-        // (canvas no longer larger) and abort the export.
-        let encoded = export_image(original, &context, options).map_err(GuiError::Core)?;
+        // GEN-ONNX-1 Welle 2b: `export_image_with_generative` renders via the
+        // shared artifact-aware path (`Lens → [auto-fill] → Perspective →
+        // [expand] → Crop`). No post-render expand runs here — a second expand
+        // would fail `validate_with_source` (canvas no longer larger) and abort
+        // the export.
+        let encoded = export_image_with_generative(original, &context, options, generative.input())
+            .map_err(GuiError::Core)?;
         lumina_sidecar::write_atomically(&output, &encoded).map_err(GuiError::Sidecar)?;
         self.error = None;
         self.status = format!(
@@ -15234,12 +16082,26 @@ impl LuminaApp {
                 .generative_edit
                 .as_ref()
                 .is_some_and(|ge| ge.effective_expand());
+            let mut auto_fill = self
+                .recipe
+                .generative_edit
+                .as_ref()
+                .and_then(|ge| ge.auto_fill_transparent)
+                .unwrap_or(false);
             ui.label(Str::ExpandHint.t());
             if ui
                 .checkbox(&mut expand, Str::ExpandBeyondImage.t())
                 .changed()
             {
                 if let Err(e) = self.set_expand_beyond_image(expand) {
+                    self.show_error(e);
+                }
+            }
+            if ui
+                .checkbox(&mut auto_fill, Str::AutoFillTransparent.t())
+                .changed()
+            {
+                if let Err(e) = self.set_auto_fill_transparent(auto_fill) {
                     self.show_error(e);
                 }
             }
@@ -15339,7 +16201,12 @@ impl LuminaApp {
                             source_offset_y: 2,
                             extras: Default::default(),
                         };
-                        let _ = self.set_expand_canvas(new_canvas);
+                        // GEN-ONNX-1 Welle 2b (F4): a failed canvas apply (e.g.
+                        // the active expand has no artifact yet) must surface,
+                        // never be discarded.
+                        if let Err(e) = self.set_expand_canvas(new_canvas) {
+                            self.show_error(e);
+                        }
                     }
                 } else {
                     ui.label("Canvas not set — use frame drag to define.");
@@ -15353,7 +16220,10 @@ impl LuminaApp {
                             source_offset_y: 2,
                             extras: Default::default(),
                         };
-                        let _ = self.set_expand_canvas(new_canvas);
+                        // GEN-ONNX-1 Welle 2b (F4): loud, never swallowed.
+                        if let Err(e) = self.set_expand_canvas(new_canvas) {
+                            self.show_error(e);
+                        }
                     }
                 }
                 ui.colored_label(
@@ -15362,6 +16232,19 @@ impl LuminaApp {
                 );
             } else {
                 ui.label("auf Bild beschneiden — kein Expand.");
+            }
+            // GEN-ONNX-1 Welle 2b: the explicit generation action (visible for
+            // either active role). It produces the deterministic fixture canvas,
+            // persists it into the sidecar bundle and links it in the recipe; a
+            // missing model/artifact shows here as a loud error, never a faked
+            // preview.
+            if self.generative_stage_active() {
+                if ui.button(Str::GenerateCanvas.t()).clicked() {
+                    if let Err(e) = self.generate_generative_canvas() {
+                        self.show_error(e);
+                    }
+                }
+                ui.label(self.generative_status_text());
             }
         });
     }
@@ -23188,7 +24071,7 @@ mod tests {
             dither: false,
             ..Default::default()
         };
-        let cli_bytes = export_image(&frame, &context, options).unwrap();
+        let cli_bytes = lumina_core::export_image(&frame, &context, options).unwrap();
 
         // GUI path: load the same bytes, set the same recipe, then export via the
         // module's own `export_to` (which internally calls `export_image`).
@@ -23235,7 +24118,7 @@ mod tests {
             dither: false,
             ..Default::default()
         };
-        let cli_bytes = export_image(&frame, &context, options).unwrap();
+        let cli_bytes = lumina_core::export_image(&frame, &context, options).unwrap();
 
         let mut app = new_app();
         app.load_bytes(bytes.clone(), "photo.png").unwrap();
@@ -27308,6 +28191,79 @@ mod tests {
         assert!(badge.contains("dimension-changing output"));
     }
 
+    /// GEN-ONNX-1 Welle 2b (point 3): the readback-free VRAM present path is
+    /// artifact-blind. An active generative recipe is refused by `lumina-gpu`
+    /// with `generative_artifact.missing`; the GUI classifies that refusal into
+    /// a visible badge (never a swallowed `warn!`-only CPU route), while the
+    /// artifact-aware CPU preview still renders the supplied canvas. Pure
+    /// classification, so it runs without a bound adapter.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn artifact_blind_vram_refusal_earns_a_badge() {
+        let refusal = lumina_gpu::GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
+            name: "generative_artifact.missing (GPU entry without artifacts)".into(),
+            value: 0.0,
+            minimum: 0.0,
+            maximum: 1.0,
+        });
+        let reason = LuminaApp::classify_vram_refusal(&refusal)
+            .expect("an artifact-blind generative refusal must be classified");
+        assert!(reason.contains("generative_edit"), "got {reason:?}");
+        let reasons = LuminaApp::combine_routing_reasons(Vec::new(), Some(&reason));
+        let badge = LuminaApp::format_routing_fallback_reason(&reasons).expect("badge");
+        assert!(badge.contains(Str::CpuFallbackUnsupportedStages.t()));
+        assert!(badge.contains("generative_edit"));
+    }
+
+    /// GEN-ONNX-1 Welle 2b (F4): end-to-end — an active generative recipe is
+    /// driven through the real drag tick (`render_draft_tick` →
+    /// `render_to_vram`), the artifact-blind VRAM refusal is captured and
+    /// classified, and `gpu_routing_fallback_badge()` surfaces it as a visible
+    /// badge instead of a swallowed `warn!`. The recipe gate itself carries no
+    /// generative reason. Skips loudly-commented without a usable adapter.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn generative_vram_refusal_surfaces_as_badge_end_to_end() {
+        let (png, _frame) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png.clone(), "gpu-generative-badge.png")
+            .unwrap();
+        let _dir = app_source_path(&mut app, &png, "gpu-generative-badge.png");
+        let Some(gpu) = lumina_gpu::GpuContext::new().ok() else {
+            eprintln!("no GPU adapter; skipping generative VRAM-badge integration test");
+            return;
+        };
+        if !gpu.is_available() {
+            eprintln!("GPU unavailable; skipping generative VRAM-badge integration test");
+            return;
+        }
+        app.gpu = Some(gpu);
+        // Arm expand without an artifact: the render is loud and the VRAM
+        // present path is artifact-blind.
+        app.set_expand_beyond_image(true).unwrap_err();
+        app.render_draft_tick([800, 600]);
+        assert!(
+            app.error().is_some(),
+            "the armed generative recipe must stay loud on the CPU path"
+        );
+        let refusal = app
+            .vram_render_refusal
+            .as_deref()
+            .expect("the artifact-blind VRAM refusal must be captured");
+        assert!(refusal.contains("generative_edit"), "got {refusal:?}");
+        // `update_texture` is the real badge producer (via the present gate).
+        app.update_texture(&egui::Context::default());
+        let badge = app
+            .gpu_routing_fallback_badge()
+            .expect("the captured refusal must surface as a routing badge")
+            .to_owned();
+        assert!(badge.contains("generative_edit"), "got {badge:?}");
+        assert!(
+            app.gpu_unsupported_stage_reasons().is_empty(),
+            "generative_edit must not be a recipe-gate reason"
+        );
+    }
+
     /// GUI-LENSFUN-GATE-3 (F1): the captured present refusal only fills an
     /// *empty* gate — a recipe-gate reason already explains the CPU route, and
     /// the dimension-changing refusal is a post-gate condition that never
@@ -28021,17 +28977,47 @@ mod tests {
         assert_eq!(preview.pixels, core.pixels);
     }
 
-    // ---- GEN-FILL-02: Manueller Expand per Checkbox default „auf Bild beschneiden" ----
+    // ---- GEN-FILL-02 / GEN-ONNX-1 Welle 2b: Artefakt-Compositing ----
+
+    /// GEN-ONNX-1 Welle 2b: build the deterministic fixture canvas for `edit`'s
+    /// active role over `input` and wrap it as the core render-hook artifact.
+    fn fixture_canvas_artifact(
+        input: &ImageFrame,
+        edit: &GenerativeEdit,
+        role: lumina_onnx::GenerativeRole,
+    ) -> GenerativeCanvasArtifact {
+        let output = lumina_onnx::produce_canvas(
+            input,
+            edit,
+            &lumina_onnx::GenerativeModelSource::Fixture(role),
+        )
+        .unwrap();
+        let core_role = match role {
+            lumina_onnx::GenerativeRole::Expand => lumina_core::GenerativeRole::Expand,
+            lumina_onnx::GenerativeRole::AutoFillTransparent => {
+                lumina_core::GenerativeRole::AutoFillTransparent
+            }
+        };
+        GenerativeCanvasArtifact::new(core_role, output.to_frame().unwrap())
+    }
+
+    /// GEN-ONNX-1 Welle 2b: give `app` a real source path (writing `png` there)
+    /// so the generative action can persist its `.lumina.zdata` bundle. The
+    /// returned tempdir must stay alive for the test.
+    fn app_source_path(app: &mut LuminaApp, png: &[u8], name: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join(name);
+        std::fs::write(&source, png).unwrap();
+        app.path = source.display().to_string();
+        dir
+    }
 
     #[test]
     fn generative_expand_synthetic_8x8_expand_true_creates_larger_canvas() {
-        // GUI-DOUBLE-EXPAND-FIX: the expand runs ONCE inside the shared core
-        // pipeline (`render_frame`, `Lens → Fill → Perspective → Expand → Crop`);
-        // the GUI applies no post-render expand. Inner source pixels stay
-        // byte-identical at the canvas offset; the heuristic border is opaque
-        // (core nearest-neighbor fill, no GUI checker-fill). The source is
-        // fully opaque — a transparent source would stay transparent, as the
-        // heuristic only fills from opaque pixels.
+        // GEN-ONNX-1 Welle 2b: the expand is artifact compositing. The caller
+        // supplies the fixture-produced canvas; core adopts it byte-wise and
+        // places the source at the documented offset. Without the artifact the
+        // same render is a loud error (kein stiller Fallback).
         let mut pixels = Vec::with_capacity(8 * 8 * 4);
         for _ in 0..8 * 8 {
             pixels.extend_from_slice(&[42, 42, 42, 255]);
@@ -28063,7 +29049,28 @@ mod tests {
             lensfun: None,
             depth: None,
         };
-        let expanded = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
+        // Active expand without an artifact is loud — never an unexpanded render.
+        assert!(
+            lumina_core::render_frame_with_generative(
+                &frame,
+                &ctx,
+                GenerativeCanvasInput::default()
+            )
+            .is_err(),
+            "active expand without a canvas artifact must fail loudly"
+        );
+        let artifact = fixture_canvas_artifact(
+            &frame,
+            recipe.generative_edit.as_ref().unwrap(),
+            lumina_onnx::GenerativeRole::Expand,
+        );
+        let g = GenerativeCanvasInput {
+            auto_fill: None,
+            expand: Some(&artifact),
+        };
+        let expanded = lumina_core::render_frame_with_generative(&frame, &ctx, g)
+            .unwrap()
+            .frame;
         assert_eq!(expanded.width, 12);
         assert_eq!(expanded.height, 12);
         for y in 0..8 {
@@ -28083,7 +29090,7 @@ mod tests {
                 .0
                 .iter()
                 .all(|px| px[3] == 255),
-            "heuristic expand fill must leave no transparent pixels"
+            "composited expand canvas must leave no transparent pixels"
         );
     }
 
@@ -28216,15 +29223,18 @@ mod tests {
 
     #[test]
     fn generative_expand_preview_generation_bumps_and_persists() {
+        let (png, _) = synthetic_8x8_png();
         let mut app = new_app();
-        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
-            .unwrap();
+        app.load_bytes(png.clone(), "sample.png").unwrap();
+        let dir = app_source_path(&mut app, &png, "sample.png");
         let before = app.preview_generation();
-        app.set_expand_beyond_image(true).unwrap();
-        let after = app.preview_generation();
+        // Enabling the expand toggle without a canvas artifact is loud: the
+        // recipe stays active and the render refuses — no silent unexpanded
+        // preview.
+        let err = app.set_expand_beyond_image(true).unwrap_err();
         assert!(
-            after > before,
-            "preview_generation must bump on expand toggle"
+            err.to_string().contains("generative"),
+            "expand without an artifact must fail loudly, got {err}"
         );
         assert!(app
             .recipe()
@@ -28232,6 +29242,35 @@ mod tests {
             .as_ref()
             .unwrap()
             .effective_expand());
+        // Explicit generation produces + persists the fixture canvas and renders.
+        app.generate_generative_canvas().unwrap();
+        assert!(
+            app.preview_generation() > before,
+            "preview_generation must bump on generation"
+        );
+        assert!(
+            app.error().is_none(),
+            "generation must succeed, got {:?}",
+            app.error()
+        );
+        assert!(
+            app.recipe()
+                .generative_edit
+                .as_ref()
+                .unwrap()
+                .artifact
+                .is_some(),
+            "the recipe must link the persisted generative canvas"
+        );
+        assert!(
+            zdata_path_for(&dir.path().join("sample.png")).exists(),
+            "the generative canvas must be persisted in the sidecar bundle"
+        );
+        assert!(
+            sidecar_path_for(&dir.path().join("sample.png")).exists(),
+            "the recipe link must be persisted in the sidecar"
+        );
+        // Toggling off clears the canvas (identity, no expand).
         app.set_expand_beyond_image(false).unwrap();
         assert!(!app
             .recipe()
@@ -28270,9 +29309,9 @@ mod tests {
 
     #[test]
     fn generative_expand_golden_preview_headless() {
-        // GUI-DOUBLE-EXPAND-FIX: golden assertions run against the single core
-        // expand (`render_frame`); the removed GUI checker-fill is gone, so the
-        // border carries the deterministic core heuristic fill and stays opaque.
+        // GEN-ONNX-1 Welle 2b: golden assertions run against the composited
+        // fixture canvas; the source reappears verbatim at the canvas offset and
+        // the generated border is opaque and deterministic.
         let frame = ImageFrame::new(
             4,
             4,
@@ -28310,7 +29349,18 @@ mod tests {
             lensfun: None,
             depth: None,
         };
-        let expanded = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
+        let artifact = fixture_canvas_artifact(
+            &frame,
+            recipe.generative_edit.as_ref().unwrap(),
+            lumina_onnx::GenerativeRole::Expand,
+        );
+        let g = GenerativeCanvasInput {
+            auto_fill: None,
+            expand: Some(&artifact),
+        };
+        let expanded = lumina_core::render_frame_with_generative(&frame, &ctx, g)
+            .unwrap()
+            .frame;
         assert_eq!((expanded.width, expanded.height), (6, 6));
         let src_origin_idx = (1 * 6 + 1) * 4;
         let src_idx = 0;
@@ -28331,37 +29381,61 @@ mod tests {
                 .0
                 .iter()
                 .all(|px| px[3] == 255),
-            "single core expand must leave no transparent pixels"
+            "composited expand canvas must leave no transparent pixels"
         );
-        recipe.generative_edit.as_mut().unwrap().canvas = Some(GenerativeCanvas {
+        // Determinism: identical inputs give the byte-identical canvas.
+        let again = lumina_core::render_frame_with_generative(&frame, &ctx, g)
+            .unwrap()
+            .frame;
+        assert_eq!(expanded.pixels, again.pixels);
+        // Visual analysis: the composited canvas differs from the source
+        // (generated border) and identical inputs are byte-identical.
+        let psnr_val = lumina_core::psnr(&expanded, &again);
+        assert!(
+            psnr_val.is_infinite(),
+            "identical composited canvases must be byte-identical, got PSNR {psnr_val}"
+        );
+        let hist_src = LuminanceHistogram::new(&frame);
+        let hist_expanded = LuminanceHistogram::new(&expanded);
+        assert_ne!(
+            hist_src.digest(),
+            hist_expanded.digest(),
+            "the generated border must change the histogram"
+        );
+        // A canvas that does not expand (`output == source`) is rejected loudly.
+        let mut bad_recipe = recipe.clone();
+        bad_recipe.generative_edit.as_mut().unwrap().canvas = Some(GenerativeCanvas {
             output_width: 4,
             output_height: 4,
             source_offset_x: 0,
             source_offset_y: 0,
             extras: Default::default(),
         });
-        let ctx = RenderContext {
-            recipe: &recipe,
+        let bad_ctx = RenderContext {
+            recipe: &bad_recipe,
             camera_white_balance: None,
             source_actions: &[],
             masks: None,
             lensfun: None,
             depth: None,
         };
-        assert!(lumina_core::render_frame(&frame, &ctx).is_err());
+        assert!(lumina_core::render_frame_with_generative(&frame, &bad_ctx, g).is_err());
     }
 
     #[test]
     fn generative_expand_preview_uses_single_core_expand() {
-        // GUI-DOUBLE-EXPAND-FIX: the app preview with an expand recipe is the
-        // core frame (8→12, inner source pixels byte-identical), rendered
-        // exactly once — no second post-render expand, no "Expand canvas error".
+        // GEN-ONNX-1 Welle 2b: the GUI preview injects the resolved canvas
+        // through the core hook; the composited frame is rendered exactly once
+        // (a second expand would fail `validate_with_source`).
         let (png, frame) = synthetic_8x8_png();
         let mut app = new_app();
-        app.load_bytes(png, "expand-preview-test.png").unwrap();
+        app.load_bytes(png.clone(), "expand-preview-test.png")
+            .unwrap();
+        let _dir = app_source_path(&mut app, &png, "expand-preview-test.png");
         let plain_key = app.render_key().cloned().unwrap().digest();
         let gen_before = app.preview_generation();
-        app.set_expand_beyond_image(true).unwrap();
+        app.set_expand_beyond_image(true).unwrap_err();
+        app.generate_generative_canvas().unwrap();
         let preview = app.preview().unwrap().clone();
         assert_eq!((preview.width, preview.height), (12, 12));
         for y in 0..8 {
@@ -28376,21 +29450,22 @@ mod tests {
         }
         assert!(
             app.preview_generation() > gen_before,
-            "preview_generation must bump on expand"
+            "preview_generation must bump on generation"
         );
         assert_ne!(
             app.render_key().cloned().unwrap().digest(),
             plain_key,
-            "expand must change the render key"
+            "the generative stage must change the render key"
         );
         assert!(
             app.error().is_none(),
-            "single core expand must not set an expand error, got {:?}",
+            "composited expand must not leave an error, got {:?}",
             app.error()
         );
-        // The preview equals one direct core render — applying the expand a
-        // second time would fail `validate_with_source`, so equality proves
-        // the GUI did not re-expand.
+        // The preview equals one direct core render with the same resolved
+        // artifacts — applying the expand a second time would fail
+        // `validate_with_source`, so equality proves the GUI did not re-expand.
+        let g = app.generative_artifacts.clone();
         let ctx = RenderContext {
             recipe: app.recipe(),
             camera_white_balance: None,
@@ -28399,24 +29474,28 @@ mod tests {
             lensfun: None,
             depth: None,
         };
-        let direct = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
+        let direct = lumina_core::render_frame_with_generative(&frame, &ctx, g.input())
+            .unwrap()
+            .frame;
         assert_eq!(
             preview.pixels, direct.pixels,
-            "app preview must equal a single core render with the expand recipe"
+            "app preview must equal a single core render with the resolved canvas"
         );
     }
 
     #[test]
     fn generative_expand_export_is_single_core_expand() {
-        // GUI-DOUBLE-EXPAND-FIX: exporting with an expand recipe must succeed
-        // (the old post-render expand aborted the export at
-        // `validate_with_source`) and match the preview as well as the shared
-        // `export_image` path byte-identically.
+        // GEN-ONNX-1 Welle 2b: the export hook injects the same resolved canvas
+        // as the preview and stays byte-identical to the shared artifact-aware
+        // `export_image_with_generative` path.
         let directory = tempfile::tempdir().unwrap();
         let (png, frame) = synthetic_8x8_png();
         let mut app = new_app();
-        app.load_bytes(png, "expand-export-test.png").unwrap();
-        app.set_expand_beyond_image(true).unwrap();
+        app.load_bytes(png.clone(), "expand-export-test.png")
+            .unwrap();
+        let _dir = app_source_path(&mut app, &png, "expand-export-test.png");
+        app.set_expand_beyond_image(true).unwrap_err();
+        app.generate_generative_canvas().unwrap();
         let preview = app.preview().unwrap().clone();
         assert_eq!((preview.width, preview.height), (12, 12));
         app.export_format = ImageFileFormat::Png;
@@ -28429,6 +29508,7 @@ mod tests {
             decoded.pixels, preview.pixels,
             "export must match the app preview"
         );
+        let g = app.generative_artifacts.clone();
         let context = RenderContext {
             recipe: app.recipe(),
             camera_white_balance: None,
@@ -28443,40 +29523,385 @@ mod tests {
             dither: false,
             ..Default::default()
         };
-        let cli_bytes = export_image(&frame, &context, options).unwrap();
+        let cli_bytes =
+            lumina_core::export_image_with_generative(&frame, &context, options, g.input())
+                .unwrap();
         assert_eq!(
             cli_bytes, gui_bytes,
-            "GUI export with expand must be byte-identical to the shared path"
+            "GUI export with the resolved canvas must be byte-identical to the shared path"
         );
     }
 
     #[test]
-    fn generative_expand_preview_reuses_cache_without_bfs() {
-        // GEN-EXPAND-CACHE-1: the GUI preview/export share the core pipeline and
-        // therefore the same thread-local expand cache. A second identical render
-        // must reuse the already-produced result instead of running the
-        // heuristic BFS again.
+    fn generative_expand_preview_reuses_resolved_canvas_without_bfs() {
+        // GEN-ONNX-1 Welle 2b: the former heuristic BFS (and its `bfs_runs`
+        // counter) is gone. A second identical render reuses the already
+        // resolved session canvas: removing the persisted bundle before the
+        // second render proves no disk re-read and no re-generation.
         let (png, _frame) = synthetic_8x8_png();
         let mut app = new_app();
-        app.load_bytes(png, "expand-cache-test.png").unwrap();
-        lumina_core::clear_generative_cache();
-        let before = lumina_core::generative_cache_stats().bfs_runs;
-        app.set_expand_beyond_image(true).unwrap();
-        let after_first = lumina_core::generative_cache_stats().bfs_runs;
-        assert_eq!(after_first, before + 1, "first expand runs the BFS once");
+        app.load_bytes(png.clone(), "expand-cache-test.png")
+            .unwrap();
+        let dir = app_source_path(&mut app, &png, "expand-cache-test.png");
+        app.set_expand_beyond_image(true).unwrap_err();
+        app.generate_generative_canvas().unwrap();
         let first_preview = app.preview().unwrap().clone();
-
+        let identity = app
+            .generative_artifacts
+            .expand
+            .as_ref()
+            .unwrap()
+            .identity
+            .clone();
+        let memo = app.generative_memo.clone();
+        assert!(memo.is_some(), "generation must seed the resolve memo");
+        let zdata = zdata_path_for(&dir.path().join("expand-cache-test.png"));
+        assert!(zdata.exists(), "the bundle must be persisted");
+        std::fs::remove_file(&zdata).unwrap();
         app.render_full([800, 600], None).unwrap();
-        assert_eq!(
-            lumina_core::generative_cache_stats().bfs_runs,
-            after_first,
-            "second identical GUI render must reuse the cached expand (no BFS)"
-        );
         assert_eq!(
             app.preview().unwrap().pixels,
             first_preview.pixels,
-            "cached reuse is byte-identical to the first render"
+            "reused canvas is byte-identical to the first render"
         );
+        assert_eq!(
+            app.generative_artifacts.expand.as_ref().unwrap().identity,
+            identity,
+            "the resolved identity must be stable across renders"
+        );
+        assert_eq!(
+            app.generative_memo, memo,
+            "an unchanged source/recipe must not recompute the generative inputs"
+        );
+    }
+
+    /// GEN-ONNX-1 Welle 2b (F6): an active generative recipe turns a draft
+    /// request into exactly one full-quality render (absolute canvas geometry;
+    /// no draft compositing), so slider drags on a generative recipe never show
+    /// a mismatched or blank preview.
+    #[test]
+    fn generative_draft_render_upgrades_to_full_render() {
+        let (png, _frame) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png.clone(), "expand-draft-test.png")
+            .unwrap();
+        let _dir = app_source_path(&mut app, &png, "expand-draft-test.png");
+        app.set_expand_beyond_image(true).unwrap_err();
+        app.generate_generative_canvas().unwrap();
+        let gen_before = app.preview_generation();
+        // A draft request must upgrade to a full render: the preview is the
+        // composited 12x12 canvas and `preview_is_draft` stays false.
+        app.render_draft([800, 600], None).unwrap();
+        assert!(
+            !app.preview_is_draft(),
+            "a generative recipe must upgrade a draft to a full render"
+        );
+        assert_eq!(
+            app.preview_generation(),
+            gen_before + 1,
+            "the upgrade must run exactly one full render"
+        );
+        assert_eq!(app.preview().unwrap().width, 12);
+        assert!(app.error().is_none(), "got {:?}", app.error());
+    }
+
+    /// GEN-ONNX-1 Welle 2b (F8): the panel status distinguishes
+    /// `valid`/`stale`/`missing`/`corrupt` from the last resolver outcome, not
+    /// just ready/missing.
+    #[test]
+    fn generative_status_text_covers_all_states() {
+        let (png, frame) = synthetic_8x8_png();
+        let mut app = new_app();
+        app.load_bytes(png.clone(), "status-test.png").unwrap();
+        let dir = app_source_path(&mut app, &png, "status-test.png");
+        // Inactive → no text.
+        assert!(app.generative_status_text().is_empty());
+        // Armed expand without a canvas artifact: the loud render records
+        // `missing` for the role.
+        app.set_expand_beyond_image(true).unwrap_err();
+        let text = app.generative_status_text();
+        assert!(
+            text.contains("Expand: missing"),
+            "an armed expand without an artifact must read missing, got {text:?}"
+        );
+        // Generated → valid.
+        app.generate_generative_canvas().unwrap();
+        let text = app.generative_status_text();
+        assert!(
+            text.contains("Expand: valid"),
+            "a resolved canvas must read valid, got {text:?}"
+        );
+        // A recipe identity drift with a persisted (now stale) link reports
+        // stale: change the seed and resolve again.
+        let zdata = zdata_path_for(&dir.path().join("status-test.png"));
+        assert!(zdata.exists());
+        app.generative_artifacts = GenerativeArtifacts::default();
+        app.generative_memo = None;
+        app.recipe.generative_edit.as_mut().unwrap().seed = Some(999);
+        // The persisted link is for seed 7, so the current identity is stale.
+        let error = app.resolve_generative_artifacts(&frame).unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("stale"),
+            "got {error}"
+        );
+        assert!(
+            app.generative_status_text().contains("Expand: stale"),
+            "an identity drift must read stale, got {:?}",
+            app.generative_status_text()
+        );
+        // Corrupt: point the link at a bundle whose record checksum fails by
+        // flipping the stored identity record via a fresh mismatch is already
+        // covered by Stale; a corrupt bundle is the `Corrupt` branch.
+        std::fs::write(&zdata, b"not a LUMZDATA container").unwrap();
+        app.generative_artifacts = GenerativeArtifacts::default();
+        app.generative_memo = None;
+        app.recipe.generative_edit.as_mut().unwrap().seed = Some(7);
+        let error = app.resolve_generative_artifacts(&frame).unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("corrupt"),
+            "a damaged bundle must read corrupt, got {error}"
+        );
+        assert!(
+            app.generative_status_text().contains("Expand: corrupt"),
+            "a damaged bundle must read corrupt, got {:?}",
+            app.generative_status_text()
+        );
+    }
+
+    /// GEN-ONNX-1 Welle 2b: a single record carrying both roles
+    /// (`auto_fill_transparent` + `expand_beyond_image`) renders with the
+    /// documented order `Lens → auto-fill → Perspective → expand → Crop`. The
+    /// expand canvas embeds the auto-filled pixels, both canvases persist, and
+    /// a fresh app resolves both from the bundle alone.
+    #[test]
+    fn generative_double_role_record_renders() {
+        let mut pixels = Vec::with_capacity(8 * 8 * 4);
+        for y in 0..8 {
+            for x in 0..8 {
+                let alpha = if x == 0 && y == 0 { 0 } else { 255 };
+                pixels.extend_from_slice(&[80, 90, 100, alpha]);
+            }
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
+        let png = frame.encode(ImageFileFormat::Png).unwrap();
+        let mut app = new_app();
+        app.load_bytes(png.clone(), "double-role.png").unwrap();
+        let dir = app_source_path(&mut app, &png, "double-role.png");
+        app.recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: Some(GenerativeCanvas {
+                output_width: 12,
+                output_height: 12,
+                source_offset_x: 2,
+                source_offset_y: 2,
+                extras: Default::default(),
+            }),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: Some(true),
+            seed: Some(7),
+            prompt: Some("expand the sky".into()),
+            extras: Default::default(),
+        });
+        app.generate_generative_canvas().unwrap();
+        assert!(
+            app.generative_artifacts.auto_fill.is_some(),
+            "the double role must produce the auto-fill canvas"
+        );
+        assert!(
+            app.generative_artifacts.expand.is_some(),
+            "the double role must produce the expand canvas"
+        );
+        let preview = app.preview().unwrap().clone();
+        assert_eq!((preview.width, preview.height), (12, 12));
+        assert!(
+            preview
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px[3] == 255),
+            "auto-fill + expand must leave no transparent pixels"
+        );
+        // The expand canvas is authoritative and embeds the auto-filled pixel:
+        // the source pixel at the canvas offset is opaque (the composited frame
+        // can never be served as the original transparent pixel).
+        let offset_idx = (2 * 12 + 2) * 4;
+        assert_eq!(preview.pixels[offset_idx + 3], 255);
+        // Byte-identical to a direct core render with both resolved artifacts.
+        let g = app.generative_artifacts.clone();
+        let ctx = RenderContext {
+            recipe: app.recipe(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        };
+        let direct = lumina_core::render_frame_with_generative(&frame, &ctx, g.input())
+            .unwrap()
+            .frame;
+        assert_eq!(preview.pixels, direct.pixels);
+        // Both canvases persist; the recipe links the canvas-defining expand
+        // record.
+        assert!(zdata_path_for(&dir.path().join("double-role.png")).exists());
+        assert!(app
+            .recipe()
+            .generative_edit
+            .as_ref()
+            .unwrap()
+            .artifact
+            .is_some());
+        // F5: a fresh app must reload the persisted state through the real
+        // sidecar (`open_and_decode` → `finish_decode` → `load_sidecar`), not a
+        // manually injected recipe. Both roles resolve from the bundle (the
+        // auto-fill record is addressed by its deterministic identity id).
+        let reloaded_path = dir.path().join("double-role.png");
+        let mut reloaded = new_app();
+        open_and_decode(&mut reloaded, reloaded_path.display().to_string());
+        assert!(
+            reloaded.original.is_some(),
+            "the reloaded source must decode"
+        );
+        let reloaded_edit = reloaded
+            .recipe()
+            .generative_edit
+            .clone()
+            .expect("the generative edit must be restored from the sidecar");
+        assert!(
+            reloaded_edit.artifact.is_some(),
+            "the sidecar must carry the persisted artifact link"
+        );
+        assert_eq!(
+            reloaded_edit.expand_beyond_image,
+            Some(true),
+            "the persisted expand flag must be restored"
+        );
+        assert_eq!(
+            reloaded_edit.auto_fill_transparent,
+            Some(true),
+            "the persisted auto-fill flag must be restored"
+        );
+        let resolved = reloaded.resolve_generative_artifacts(&frame).unwrap();
+        assert!(
+            resolved.auto_fill.is_some(),
+            "auto-fill must resolve from the bundle"
+        );
+        assert!(
+            resolved.expand.is_some(),
+            "expand must resolve from the bundle"
+        );
+    }
+
+    /// GEN-ONNX-1 Welle 2b: the auto-fill hook and the normative caller
+    /// convention. With transparent pixels after lens the GUI injects the
+    /// generated canvas (loud when absent); without transparency the caller
+    /// passes `auto_fill = None` (identity) and no artifact is required.
+    #[test]
+    fn generative_auto_fill_hook_and_caller_convention() {
+        let mut pixels = Vec::with_capacity(8 * 8 * 4);
+        for y in 0..8 {
+            for x in 0..8 {
+                let alpha = if x == 0 && y == 0 { 0 } else { 255 };
+                pixels.extend_from_slice(&[50, 60, 70, alpha]);
+            }
+        }
+        let frame = ImageFrame::new(8, 8, pixels).unwrap();
+        let png = frame.encode(ImageFileFormat::Png).unwrap();
+        let mut app = new_app();
+        app.load_bytes(png.clone(), "auto-fill.png").unwrap();
+        let _dir = app_source_path(&mut app, &png, "auto-fill.png");
+        app.recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: Some(9),
+            prompt: None,
+            extras: Default::default(),
+        });
+        // Active auto-fill with transparent pixels but no canvas → loud.
+        assert!(
+            app.render().is_err(),
+            "auto-fill without a canvas artifact must fail loudly"
+        );
+        app.generate_generative_canvas().unwrap();
+        let preview = app.preview().unwrap().clone();
+        assert_eq!((preview.width, preview.height), (8, 8));
+        assert!(
+            preview
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px[3] == 255),
+            "the auto-fill hook must make every pixel opaque"
+        );
+        let g = app.generative_artifacts.clone();
+        assert!(g.auto_fill.is_some());
+        let ctx = RenderContext {
+            recipe: app.recipe(),
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        };
+        let direct = lumina_core::render_frame_with_generative(&frame, &ctx, g.input())
+            .unwrap()
+            .frame;
+        assert_eq!(preview.pixels, direct.pixels);
+
+        // Caller convention (normative): `auto_fill_transparent` active on an
+        // opaque frame → `auto_fill = None` (identity); the render succeeds
+        // with no artifact and no silent synthetic fill.
+        let mut opaque_pixels = Vec::with_capacity(4 * 4 * 4);
+        for _ in 0..4 * 4 {
+            opaque_pixels.extend_from_slice(&[100, 100, 100, 255]);
+        }
+        let opaque = ImageFrame::new(4, 4, opaque_pixels).unwrap();
+        let mut recipe = EditRecipe::default();
+        recipe.generative_edit = Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: Some(1),
+            prompt: None,
+            extras: Default::default(),
+        });
+        let ctx = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        };
+        let out = lumina_core::render_frame_with_generative(
+            &opaque,
+            &ctx,
+            GenerativeCanvasInput::default(),
+        )
+        .unwrap()
+        .frame;
+        assert_eq!(out.pixels, opaque.pixels);
+        // Defense in depth: a transparent frame with auto_fill and no artifact
+        // is rejected by core itself (the GPU trusts the caller signal, the CPU
+        // re-checks transparency — never a silent unfilled render).
+        let mut transparent = opaque.clone();
+        transparent.pixels[3] = 0;
+        assert!(lumina_core::render_frame_with_generative(
+            &transparent,
+            &ctx,
+            GenerativeCanvasInput::default()
+        )
+        .is_err());
     }
 
     #[test]

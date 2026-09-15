@@ -36,6 +36,7 @@
 //! leaks into the platform-neutral core).
 
 pub mod backend;
+pub mod generative;
 pub mod hash;
 pub mod inpaint;
 pub mod manifest;
@@ -48,6 +49,11 @@ pub mod sam2;
 pub mod ort_backend;
 
 pub use backend::{StubBackend, SubjectInference};
+pub use generative::{
+    fixture_manifest, fixture_model_hash, manifest_hash_is_pinned, outpaint_canvas_from_sidecar,
+    produce_canvas, role_from_core, transparent_mask, verify_fixture_manifest,
+    GenerativeCanvasOutput, GenerativeModelSource, GenerativeRole, GENERATIVE_FIXTURE_ALGORITHM,
+};
 pub use hash::{
     compute_sha256_hex, verify_model_file, verify_model_hash, ModelHashStatus,
     PENDING_INTEGRATION_HASH,

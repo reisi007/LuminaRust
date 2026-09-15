@@ -1041,6 +1041,29 @@ impl ZDataContainer {
         Self::new_with(specs)
     }
 
+    /// GEN-ONNX-1: returns a new container with the `generative_canvas` record
+    /// `canvas.id` *explicitly replaced*.
+    ///
+    /// Unlike [`Self::add_generative_canvas`] this is the deliberate
+    /// regeneration path (the caller explicitly asked to re-generate). It never
+    /// touches records of other kinds and still rejects an id collision with a
+    /// different kind, so nothing is overwritten silently.
+    pub fn replace_generative_canvas(
+        &self,
+        canvas: GenerativeCanvasArtifact,
+    ) -> Result<Self, ZDataError> {
+        canvas.validate()?;
+        let mut specs = self.decode_all()?;
+        specs.retain(|spec| {
+            !matches!(spec, RecordSpec::GenerativeCanvas(existing) if existing.id == canvas.id)
+        });
+        if self.has_id(&specs, &canvas.id) {
+            return Err(ZDataError::DuplicateId(canvas.id));
+        }
+        specs.push(RecordSpec::GenerativeCanvas(canvas));
+        Self::new_with(specs)
+    }
+
     /// Returns a new container with `spot` appended.  Existing records of
     /// every kind are preserved; a duplicate id (across all kinds) is
     /// rejected.
@@ -1131,6 +1154,32 @@ pub fn append_generative_canvas(
         None
     };
     let container = match existing {
+        Some(container) => container.add_generative_canvas(canvas)?,
+        None => ZDataContainer::new(vec![])?.add_generative_canvas(canvas)?,
+    };
+    save_zdata_locked(path, &container)
+}
+
+/// GEN-ONNX-1: writes a generative canvas to the bundle at `path` (creating it
+/// if needed) under the `.zdata.lock`.
+///
+/// `replace = false` appends and rejects a duplicate id (the default,
+/// non-destructive path); `replace = true` is the explicit regeneration path
+/// ([`ZDataContainer::replace_generative_canvas`]). Both write atomically
+/// (Temp + Rename). Pre-existing records of every kind are preserved.
+pub fn save_generative_canvas(
+    path: &Path,
+    canvas: GenerativeCanvasArtifact,
+    replace: bool,
+) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let container = match existing {
+        Some(container) if replace => container.replace_generative_canvas(canvas)?,
         Some(container) => container.add_generative_canvas(canvas)?,
         None => ZDataContainer::new(vec![])?.add_generative_canvas(canvas)?,
     };

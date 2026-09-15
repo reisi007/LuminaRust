@@ -361,6 +361,9 @@ pub enum Str {
     ExpandOffsetY,
     ExpandHint,
     ExpandCanvasInvalid,
+    // GEN-ONNX-1 Welle 2b: auto-fill toggle + the explicit generation action.
+    AutoFillTransparent,
+    GenerateCanvas,
 
     HuePattern,
     SatPattern,
@@ -955,6 +958,8 @@ impl Str {
             Str::ExpandOffsetX => "Offset X",
             Str::ExpandOffsetY => "Offset Y",
             Str::ExpandCanvasInvalid => "Invalid canvas",
+            Str::AutoFillTransparent => "Auto-fill transparent pixels (after lens)",
+            Str::GenerateCanvas => "Generate",
 
             Str::HuePattern => "{} Hue",
             Str::SatPattern => "{} Sat",
