@@ -42,6 +42,40 @@ pub use merge_recipe::{
     MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
 };
 
+// LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
+// (detections, embedding/vector references, clusters, person labels plus
+// identity/status; no models, no clustering evaluation, no CLI/GUI).
+mod face;
+pub use face::{
+    validate_face_analysis, validate_face_sha256, FaceAnalysis, FaceArtifactStatus,
+    FaceBoundingBox, FaceCluster, FaceClusteringIdentity, FaceDetection, FaceEmbedding,
+    FaceIdentity, FaceLandmark, FacePerson, FaceVectorRef, FACE_HASH_HEX_LEN,
+    FACE_PENDING_MODEL_HASH, FACE_SCHEMA_VERSION, FACE_SHA256_PREFIX, MAX_FACE_CLUSTERS,
+    MAX_FACE_CLUSTER_MEMBERS, MAX_FACE_DETECTIONS, MAX_FACE_EMBEDDINGS, MAX_FACE_ERROR_CHARS,
+    MAX_FACE_ID_CHARS, MAX_FACE_LANDMARKS, MAX_FACE_NAME_CHARS, MAX_FACE_PERSONS,
+};
+
+// LRPAR-G14-DENOISE-20: additive `recipe.adjustments.denoise_ai` schema
+// (identity + model + input-spec digest + strength/detail + binary artifact
+// reference; no pipeline stage, no zdata codec, no ONNX/CLI/GUI).
+mod denoise;
+pub use denoise::{
+    validate_denoise_ai, validate_denoise_sha256, DenoiseAi, DenoiseArtifactKind,
+    DenoiseArtifactRef, DenoiseModelIdentity, DENOISE_AI_VERSION, DENOISE_ARTIFACT_KIND,
+    DENOISE_HASH_HEX_LEN, DENOISE_PENDING_MODEL_HASH, DENOISE_SHA256_PREFIX,
+};
+
+// LRPAR-G09-CULL-25: source-level `culling` proposal section (assisted
+// culling; never writes rating/flag/label; proposal/score/reasons/identity/
+// status only — no heuristic, no ONNX, no CLI/GUI).
+mod culling;
+pub use culling::{
+    validate_culling_reason, validate_culling_section, validate_culling_sha256, CullProposal,
+    CullingAnalyzer, CullingAnalyzerKind, CullingIdentity, CullingSection, CullingStatus,
+    CULLING_HASH_HEX_LEN, CULLING_PENDING_MODEL_HASH, CULLING_SCHEMA_VERSION,
+    CULLING_SHA256_PREFIX, MAX_CULLING_ERROR_CHARS, MAX_CULLING_REASONS, MAX_CULLING_REASON_CHARS,
+};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -1054,6 +1088,12 @@ pub struct EditRecipe {
     pub color_grading: Option<ColorGrading>,
     pub presence: Option<Presence>,
     pub noise_reduction: Option<NoiseReduction>,
+    /// LRPAR-G14-DENOISE-20 (Release 2.0): optional additive AI-denoise stage
+    /// (`recipe.adjustments.denoise_ai`, schema v2). `None` is identity and
+    /// MVP recipes stay byte-identical; it runs *before* the manual F-096
+    /// `noise_reduction` and never replaces it. See the `denoise` module for
+    /// the field contract and the documented artifact-shape decision.
+    pub denoise_ai: Option<DenoiseAi>,
     pub sharpening: Option<Sharpening>,
     /// Optional G-14 red-eye correction (LRPAR-G14-REDEYE-15, Release 1.5).
     /// Additive in schema v2; absent is identity and requires no migration.
@@ -1141,6 +1181,14 @@ impl Serialize for EditRecipe {
             adjustment.insert(
                 "noise_reduction".into(),
                 serde_json::to_value(noise_reduction).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        // LRPAR-G14-DENOISE-20: additive nested adjustment (`None` = identity,
+        // key omitted so legacy recipes roundtrip byte-stable).
+        if let Some(denoise_ai) = &self.denoise_ai {
+            adjustment.insert(
+                "denoise_ai".into(),
+                serde_json::to_value(denoise_ai).map_err(serde::ser::Error::custom)?,
             );
         }
         if let Some(sharpening) = &self.sharpening {
@@ -1249,6 +1297,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
         let mut color_grading = None;
         let mut presence = None;
         let mut noise_reduction = None;
+        let mut denoise_ai = None;
         let mut sharpening = None;
         let mut red_eye = None;
         let geometry = root
@@ -1326,6 +1375,11 @@ impl<'de> Deserialize<'de> for EditRecipe {
                 noise_reduction =
                     Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
+            // LRPAR-G14-DENOISE-20: nested object (not an f64 slider), so it is
+            // consumed before the remaining keys fall into `adjustments`.
+            if let Some(value) = object.remove("denoise_ai") {
+                denoise_ai = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            }
             if let Some(value) = object.remove("sharpening") {
                 sharpening = Some(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
             }
@@ -1370,6 +1424,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             color_grading,
             presence,
             noise_reduction,
+            denoise_ai,
             sharpening,
             red_eye,
             geometry,
@@ -1800,6 +1855,7 @@ impl Default for EditRecipe {
             color_grading: None,
             presence: None,
             noise_reduction: None,
+            denoise_ai: None,
             sharpening: None,
             red_eye: None,
             geometry: None,
@@ -2704,6 +2760,18 @@ pub struct SidecarDocument {
     /// draft and an empty draft serializes back absent.
     #[serde(default, skip_serializing_if = "MetadataDraft::is_empty")]
     pub metadata: MetadataDraft,
+    /// LRPAR-G12-FACE-20 (FACE-20-S1): optional source-level face analysis
+    /// (detections, embeddings, clusters, person labels plus their identity
+    /// and status). Additive: absent in older sidecars reads as `None` and an
+    /// absent section serializes back absent (no schema bump, no migration).
+    /// Shared by every virtual copy — local adjustments stay per copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<FaceAnalysis>,
+    /// LRPAR-G09-CULL-25: optional source-level culling proposal (assisted
+    /// culling). Additive: absent is the valid "no proposal" state and
+    /// serializes back absent. The proposal never writes rating/flag/label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culling: Option<CullingSection>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
 }
@@ -3427,6 +3495,8 @@ impl SidecarDocument {
             keywords: vec![],
             collections: vec![],
             metadata: MetadataDraft::default(),
+            face: None,
+            culling: None,
             extras: Extras::new(),
         }
     }
@@ -3625,6 +3695,17 @@ impl SidecarDocument {
         // LRPAR-G15-IPTC-S1: source-level metadata draft (own history,
         // separate from the per-copy edit history below).
         self.metadata.validate()?;
+        // LRPAR-G12-FACE-20 (FACE-20-S1): source-level face analysis. Absent is
+        // the valid legacy state; a present section is validated loudly,
+        // including every detection ↔ embedding ↔ cluster ↔ person cross-link.
+        if let Some(face) = &self.face {
+            validate_face_analysis(face)?;
+        }
+        // LRPAR-G09-CULL-25: source-level culling proposal. Absent is the valid
+        // "no proposal" state; a present section is validated loudly.
+        if let Some(culling) = &self.culling {
+            validate_culling_section(culling)?;
+        }
         if self.virtual_copies.is_empty() {
             return invalid("at least one virtual copy is required");
         }
@@ -4548,6 +4629,11 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    // LRPAR-G14-DENOISE-20: the optional AI-denoise stage validates its own
+    // contract (version, model identity, digest, strengths, artifact reference).
+    if let Some(d) = &a.denoise_ai {
+        validate_denoise_ai(d)?;
+    }
     if let Some(s) = &a.sharpening {
         if s.version != 1 {
             return invalid("unsupported sharpening version");
@@ -5007,6 +5093,7 @@ mod tests {
                 color_grading: None,
                 presence: None,
                 noise_reduction: None,
+                denoise_ai: None,
                 sharpening: None,
                 red_eye: None,
                 geometry: None,
@@ -5047,6 +5134,7 @@ mod tests {
                     color_grading: None,
                     presence: None,
                     noise_reduction: None,
+                    denoise_ai: None,
                     sharpening: None,
                     red_eye: None,
                     geometry: None,
@@ -5085,6 +5173,7 @@ mod tests {
                 color_grading: None,
                 presence: None,
                 noise_reduction: None,
+                denoise_ai: None,
                 sharpening: None,
                 red_eye: None,
                 geometry: None,

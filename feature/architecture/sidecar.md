@@ -119,6 +119,22 @@ bleiben außerhalb beider Dateien. Atomare JSON- und zdata-Schreibvorgänge sind
 jeweils gewährleistet; eine gemeinsame Zwei-Dateien-Transaktion ist ausdrücklich
 noch offen.
 
+### Externe Tiefenkarte (`lens_blur.depth_artifact`, reserviert)
+
+`recipe.lens_blur.depth_artifact` (`DepthArtifactRef`, G-05) ist eine portable
+Referenz (relativer Pfad + SHA-256, absolute Pfade verboten) auf eine externe
+Tiefenkarte. In Schema-Version 1 / Release 1.0 ist das Feld **reserviert**:
+Es gibt weder einen `.lumina.zdata`-Record-Typ noch ein definiertes
+Dateiformat für Tiefenkarten (keine Dimensions-, Kanaltyp-, Quantisierungs-
+oder Prüfsummensemantik). Die Referenz wird serialisiert und validiert
+(Relativpfad, Name/SHA-256-Form), aber **kein** Caller lädt eine Ebene: CLI,
+GUI und MCP binden `RenderContext::depth = None`, `GpuContext::set_depth_plane`
+bleibt ungenutzt. Ein Render mit gesetzter Referenz bricht laut ab — nie ein
+stiller Heuristik-Fallback (Entscheid und Begründung:
+`architecture/pipeline.md` § „External-Depth-Bindung“). Ein zdata-Record-Typ
+wird erst mit einem Producer (Tiefenschätzung) und einer eigenen
+Format-/Schemaentscheidung ergänzt.
+
 ### Artefaktstatus-Prüfung (`artifact_status`)
 
 `artifact_status(bundle_root, reference)` meldet pro Artefakt `Available`,
@@ -259,6 +275,16 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   historische Bump läuft ausschließlich über den expliziten Migrationspfad.
 - **Verbraucherhinweis:** Konsumenten müssen auf `!= Available` prüfen, um
   `Corrupt` zu erfassen (CLI tut dies; GUI seit 2026-08-25 ebenfalls).
+- **Neue Schema-Sektionen (2026-09-16, verifiziert BESTANDEN):**
+  `face: Option<FaceAnalysis>` (Quellebene: Detektionen, Embeddings als
+  `FaceVectorRef`, Cluster, Personen mit stabilen IDs, Identität/Status;
+  kein Float-Array im JSON), `denoise_ai: Option<DenoiseAi>` (additiv v2,
+  `None`/`enabled:false`/`strength:0` = Identität, `kind = "denoise_rgb"`;
+  der zdata-`RecordKind` folgt im Persistenz-Slice), `culling:
+  Option<CullingSection>` (Quellebene, fehlend = gültig „kein Vorschlag",
+  offene `reasons[]`-Registry nur formvalidiert). Alle additiv-optional,
+  `schema_version` 2 unverändert, Roundtrip/Migration/Atomic/Recovery getestet
+  (sidecar `199p` ohne / `239p` mit `zdata`).
 
 ## Metadaten: Keywords, Sammlungen, Stapel-Ops (G-15 META-MVP, Slice 1)
 

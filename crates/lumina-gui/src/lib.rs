@@ -2113,7 +2113,8 @@ pub struct LuminaApp {
     /// When set, [`Self::routing_fallback_reason`] surfaces it as the badge
     /// **only if** the gate itself is empty. Diagnostic only: never consulted
     /// for routing/presentation; cleared by any edit (`mark_dirty`/
-    /// `set_adjustment`), a new source, or a successful VRAM render.
+    /// `set_adjustment`), a new source, adopting a neighbor frame, or a
+    /// successful VRAM render.
     #[cfg(feature = "gpu")]
     vram_render_refusal: Option<String>,
     /// GUI-LENSFUN-GATE-2: whether the Lensfun corrector that produced the
@@ -10431,6 +10432,10 @@ impl LuminaApp {
     /// or `missing depth artifact`. The GUI never resolves external depth
     /// files (no depth format in v1), so a referenced artifact reports
     /// `missing` until a loader exists — identical to the CLI contract.
+    /// DEPTH-PLUMBING-1 (Entscheid 2026-09-16): runtime binding of external
+    /// depth is deliberately Post-MVP; v1 persists/reports the reserved
+    /// reference and a set reference aborts the render loudly.
+    /// (`feature/architecture/pipeline.md` § „External-Depth-Bindung“.)
     pub fn lens_blur_status_text(&self) -> String {
         lumina_core::lens_blur_status(self.recipe.lens_blur.as_ref(), false).into()
     }
@@ -13039,6 +13044,12 @@ impl LuminaApp {
         #[cfg(feature = "gpu")]
         {
             self.displayed_lensfun_active = false;
+            // GUI-LENSFUN-GATE-4: a present refusal captured for the *previous*
+            // frame/recipe is not known to apply to this adopted stand-in — the
+            // next `update_texture` would otherwise surface a transient, stale
+            // CPU-routing badge. The neighbor pipeline never runs `render_to_vram`,
+            // so no fresh refusal can be produced here either.
+            self.vram_render_refusal = None;
         }
     }
 
@@ -20846,6 +20857,79 @@ mod tests {
             "New Mask row must not push the panel past its 320px default (got {panel_rect:?})"
         );
     }
+    /// GUI-LENSFUN-GATE-4 (optional, same bug class as
+    /// `masking_new_button_fully_inside_panel`): the Metadata draft editor's
+    /// four actions (`Save/Clear/Copy/Paste`) must not widen the resizable
+    /// right panel past its 320 px default. KITTEST-COVERAGE-STATES-2 measured
+    /// ~353 px for the unwrapped row, which reflowed the centre at 1024 px;
+    /// the `horizontal_wrapped` fix must keep the panel and every action label
+    /// inside it. Tall synthetic screen so the whole draft editor (all fields
+    /// plus the action row) fits the panel height without scrolling.
+    #[test]
+    fn metadata_panel_stays_inside_default_width() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.ensure_document_loaded().unwrap();
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 1200.0));
+        // Simulated clock: the open/close animation only progresses while
+        // time advances, so every frame steps it by 1/60s.
+        let mut t = 0.0;
+        let mut panel_rect = egui::Rect::NOTHING;
+        let mut run = |events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let r = egui::Panel::right("controls")
+                        .resizable(true)
+                        .default_size(320.0)
+                        .show(ui, |ui| app.draw_library_metadata_panel(ui));
+                    panel_rect = r.response.rect;
+                },
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        // Frame 1: layout; locate the "Metadata draft" collapsing header.
+        let shapes = run(vec![]);
+        let pos = text_shapes_for(&shapes, Str::MetadataDraftSection.t())
+            .into_iter()
+            .next()
+            .expect("Metadata draft header must be painted")
+            .0
+            .center();
+        let click = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run(vec![egui::Event::PointerMoved(pos), click(true)]);
+        run(vec![egui::Event::PointerMoved(pos), click(false)]);
+        let mut shapes = Vec::new();
+        for _ in 0..30 {
+            shapes = run(vec![]);
+        }
+        for label in [
+            Str::MetadataSaveDraft.t(),
+            Str::MetadataClearDraft.t(),
+            Str::MetadataCopyDraft.t(),
+            Str::MetadataPasteDraft.t(),
+        ] {
+            assert_fully_visible(&shapes, label);
+        }
+        assert!(
+            panel_rect.width() <= 321.0,
+            "Metadata draft actions must not push the panel past its 320px default (got {panel_rect:?})"
+        );
+    }
     /// GUI-VISION-1 refactor guard: the outer Develop panel is bottom-up
     /// (pinned footer) but the scroll content must stay top-down in F-100
     /// order — headers paint top-to-bottom Basic → … → Masking.
@@ -28364,6 +28448,60 @@ mod tests {
         assert!(
             !app.displayed_lensfun_active,
             "an adopted neighbor frame carries no Lensfun correction"
+        );
+    }
+
+    /// GUI-LENSFUN-GATE-4: adopting a cached neighbor frame clears any captured
+    /// present refusal. The refusal describes the *previous* frame/recipe; the
+    /// neighbor pipeline never runs `render_to_vram`, so it can neither be
+    /// validated nor replaced here. Without the reset, the next
+    /// `update_texture` would surface a transient, stale CPU-routing badge for
+    /// the adopted stand-in.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn neighbor_adopt_resets_vram_render_refusal() {
+        let mut app = new_app();
+        app.load_bytes(png(), "lensfun-adopt-refusal.png").unwrap();
+        app.vram_render_refusal = Some("geometry (dimension-changing output)".into());
+        let frame = ImageFrame::new(2, 2, vec![0u8; 2 * 2 * 4]).expect("2x2 frame");
+        app.adopt_neighbor_preview_frame(frame);
+        assert!(
+            app.vram_render_refusal.is_none(),
+            "an adopted neighbor frame must not carry the previous present refusal"
+        );
+    }
+
+    /// GUI-LENSFUN-GATE-4: `vram_render_refusal` is invalidated by every state
+    /// change that makes the captured refusal no longer known to apply. Pins
+    /// all three reset sites of the class (recipe edit via `set_adjustment`,
+    /// generic edit via `mark_dirty`, source switch via `apply_decoded_frame`)
+    /// instead of sampling one.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn vram_render_refusal_invalidated_on_recipe_and_source_change() {
+        let mut app = new_app();
+        app.load_bytes(png(), "lensfun-invalidate.png").unwrap();
+
+        app.vram_render_refusal = Some("geometry (dimension-changing output)".into());
+        app.set_adjustment("exposure", 0.5);
+        assert!(
+            app.vram_render_refusal.is_none(),
+            "set_adjustment must invalidate a stale present refusal"
+        );
+
+        app.vram_render_refusal = Some("geometry (dimension-changing output)".into());
+        app.mark_dirty();
+        assert!(
+            app.vram_render_refusal.is_none(),
+            "mark_dirty must invalidate a stale present refusal"
+        );
+
+        app.vram_render_refusal = Some("geometry (dimension-changing output)".into());
+        app.load_bytes(png(), "lensfun-invalidate-second.png")
+            .unwrap();
+        assert!(
+            app.vram_render_refusal.is_none(),
+            "a source switch must invalidate a stale present refusal"
         );
     }
 

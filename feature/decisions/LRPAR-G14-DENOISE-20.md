@@ -58,6 +58,13 @@ Vorschlag für die Implementierungs-Folgearbeit (erst dort nach `sidecar.md`-Ver
 }
 ```
 
+> **Umsetzungs-Nachtrag (Schema-Slice 2026-09-16, verifiziert BESTANDEN):**
+> Die Skizze oben war Kurzform. Umgesetzt ist die volle `DenoiseArtifactRef`
+> nach Sidecar-Artefaktvertrag (`relative_path`, `format`, `checksum` =
+> BLAKE3 über den unkomprimierten RGB-Strom, `width`/`height`, `channels`,
+> `data_version`, `kind = "denoise_rgb"`); der zdata-`RecordKind` folgt im
+> Persistenz-Slice. Diese Form ist normativ, die Skizze nur illustrativ.
+
 - **Validierung:** `version == 1`, `strength`/`preserve_detail` endlich in `0..=1`, Modell-Identität vollständig (sonst Ablehnung, kein Clipping/Ergänzen); unbekannte Felder bleiben erhalten (Roundtrip-Regel).
 - **Artefakt:** entrauschtes RGB liegt als versionierter Eintrag im `.lumina.zdata`-Bundle (`kind = "denoise_rgb"`, relativer Pfad, Format/Auflösung/Kanäle/Prüfsumme, atomarer Write, `.zdata.lock`-Serialisierung — Muster: `sidecar.md` + `generative-expand.md`/`spot-removal.md`). Kein unkomprimiertes Float-Array im JSON. Pro virtuelle Kopie referenziert (Teilung auf Quellebene zulässig wie bei Masken-Matten; Layer/Invert/lokale Anpassung bleibt Kopien-Sache).
 - **Render-Key:** `denoise_ai`-Inhalt (inkl. `input_spec_digest`, Modell-Hash, Artefakt-Hash) fließt in `recipe_hash`/Render-Key ein; Änderung invalidiert ab dieser Unterstufe (nicht Decode/AI-Masken).

@@ -815,6 +815,14 @@ kollabierbare Untergruppe „Lens Blur“, kein zweiter Renderpfad):
 - **Tiefenstatus:** sichtbar (`Off` / `Heuristic active` / `Missing depth
   artifact`); fehlendes referenziertes Artefakt bricht Render/Export laut
   ab (Exit 1), nie stilles Heuristik-Rendering.
+- **External-Depth-Bindung (Entscheid 2026-09-16, DEPTH-PLUMBING-1):** Die
+  Laufzeit-Bindung einer externen Tiefenkarte (Dateiformat + Loader) ist
+  bewusst **Post-MVP** (Details/Validierung:
+  `feature/architecture/pipeline.md` § „External-Depth-Bindung“). In v1
+  persistieren `--set-depth-artifact` / `--clear-depth-artifact` ausschließlich
+  die portable Referenz; **kein** CLI-/GUI-Caller lädt eine Ebene, ein Rezept
+  mit gesetzter Referenz bricht im Render/Export laut ab (Exit 1). Die
+  Fokus-Rechteck-Heuristik bleibt die einzige renderbare Tiefenquelle.
 - **CLI:** `lumina lens-blur --list` (Werte + Status je Kopie),
   `--enable/--disable`, `--set-amount`, `--set-focal-near/--far`,
   `--set-bokeh round|elliptical|hexagonal`, `--set-focus-rect

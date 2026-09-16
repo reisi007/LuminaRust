@@ -109,9 +109,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | KITTEST-COVERAGE-OVERLAYS-1 | G-03/G-11 | Preview-Overlays |
-| 1.0 | LENSFUN-GATE-4 | G-10 | Badge-Refusal-Rest |
-| 1.0 | DEPTH-PLUMBING-1 | G-05 | External-Depth-Caller |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
@@ -150,9 +147,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 - [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: niedrig] DEPTH-PLUMBING-1 (Release: 1.0)** Follow-up aus Lens-Blur-Verifizierung (BESTANDEN): kein Caller (CLI/MCP/GUI) kann eine `DepthPlane` binden (`set_depth_plane` ungenutzt, alle `RenderContext.depth = None`); `depth_artifact`-Rezepte sind für alle Caller unrenderbar (laut, vorbestehend). Entscheidung: Caller-Plumbing (Depth-Datei laden + binden, analog SourceAction-Artefakte) oder bewusst als nicht-MVP in `feature/` dokumentieren. Abnahme: Entscheid dokumentiert + umgesetzt oder begründet verworfen. Crates: `lumina-cli`, `lumina-gui` (+ ggf. `lumina-mcp`).
-- [ ] **[PRIO: niedrig] KITTEST-COVERAGE-OVERLAYS-1 (Release: 1.0)** Develop-Overlays + Navigator per kittest pinnen (Te committed c6271c5, Task offen: 4 Overlay-Goldens + Navigator-closed; offene Navigator-Seite pinnt weiter). Abnahme: kittest + lib grün. Crate: `lumina-gui`.
-- [ ] **[PRIO: niedrig] LENSFUN-GATE-4 (Release: 1.0)** Residuen aus LENSFUN-GATE-3-Verifizierung (BESTANDEN): `adopt_neighbor_preview_frame` setzt `vram_render_refusal` nicht zurück (transient veralteter Badge möglich); `vram_render_refusal`-Invalidierung ohne Unit-Test; optional Metadata-Panel-Breiten-Gate nach Muster `masking_new_button_fully_inside_panel`. Abnahme: GUI-headless + kittest grün. Crate: `lumina-gui`.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 

@@ -939,6 +939,28 @@ Rezeptentscheidung, kein Laufzeit-Raten). Der Status (`off` / `heuristic
 active` / `missing depth artifact`) ist in CLI (`lens-blur --list`) und GUI
 (Optics-adjazente Sektion) sichtbar.
 
+**External-Depth-Bindung (Entscheid 2026-09-16, DEPTH-PLUMBING-1):** Die
+Laufzeit-Bindung einer externen Tiefenebene — Datei-/Artefaktformat, Loader in
+CLI/GUI/MCP und GPU-Upload via `GpuContext::set_depth_plane` — ist bewusst
+**Post-MVP**. In v1 (Release 1.0) ist `depth_artifact` damit ein
+schema-reserviertes Referenzfeld: CLI und GUI persistieren die Referenz und
+melden sie als `missing depth artifact`, aber **kein** Caller lädt eine Ebene
+(`RenderContext::depth` ist überall `None`, `set_depth_plane` bleibt
+ungenutzt). Ein Rezept mit gesetzter Referenz bricht in jedem Caller
+(CLI `render`/`export`/`process`/`batch`, GUI-Preview und -Export, MCP,
+Matrix-Runner) laut ab — nie ein stiller Heuristik-Fallback. Dieser laut-abbrechende
+v1-Vertrag ist getestet: CLI `lens_blur_missing_depth_artifact_fails_render_loudly`,
+GUI `g05_lens_blur_preview_changes_and_missing_depth_fails_loudly`, GPU-Parität
+in `lumina-gpu/tests/parity.rs` — und damit keine stille Lücke. Begründung: Es gibt
+weder ein definiertes Tiefenkarten-Format (kein `.lumina.zdata`-Record-Typ,
+keine Dimensions-/Quantisierungs-/Prüfsummensemantik) noch einen Producer
+(Tiefenschätzung) im v1-Umfang; ein geratenes Format würde Reproduzierbarkeit
+durch Laufzeit-Annahmen ersetzen. Die Bindung wird erst mit einer eigenen
+Format-/Schemaentscheidung (im SOLL zuerst) und einem Producer nachgezogen;
+bis dahin bleibt die Fokus-Rechteck-Heuristik die einzige renderbare
+Tiefenquelle. Details der reservierten Referenz: `architecture/sidecar.md`
+§ Externe Tiefenkarte.
+
 **Render-Semantik:** Pro Pixel Tiefenwert `d`, Schärfegewicht 0 im Band
 `[focal_near, focal_far]`, linearer Ramp auf 1 an den Rändern; Ausgabe =
 `lerp(original, bokeh_blur(original, radius), gewicht)` mit
@@ -973,7 +995,8 @@ Focal-Order, Focus-Geometrie und portabler Relativpfade);
 round(amount·16)`, RGB, Alpha unberührt, Missing-Artefakt = harter
 `InvalidAdjustment`) mit Hook in `render_frame_from_base` nach Crop und vor
 Masks (keine zweite Pipeline); `RenderContext::depth` für externe Ebenen (GPU-Vertrag: `set_depth_plane`;
-Caller ohne Plane erhalten den lauten Oracle-Fehler);
+Caller ohne Plane erhalten den lauten Oracle-Fehler) — in v1 bindet kein Caller
+eine Ebene (siehe Entscheid „External-Depth-Bindung“ oben);
 GPU rendert aktives `lens_blur` seit 2026-09-14 (Parität byte-identisch bzw.
 maxAbsDiff ≤ 1 nach Post-Stufen). CLI `lumina lens-blur`
 (setzen/lesen/listen/löschen, Exit 0/1/2 wie Bestand); GUI-Sektion in Optics
