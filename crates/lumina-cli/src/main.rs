@@ -1,13 +1,13 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
-    detect_spots_heuristic, export_image_with_generative, generative_variant_seed,
+    analyze_upright, detect_spots_heuristic, export_image_with_generative, generative_variant_seed,
     has_transparent_pixels, match_total_exposure_masked, render_frame,
     render_frame_with_generative, resolve_mask_planes, suggest_auto_tone, tone_fingerprint,
-    AutoToneConfig, ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact,
-    GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame,
-    MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
-    RenderOutput, SourceActionArtifact,
+    upright_analysis, upright_input_fingerprint, AutoToneConfig, ExportOptions, GenerativeCacheKey,
+    GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole,
+    ImageFileFormat, ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane,
+    MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -57,11 +57,11 @@ use lumina_sidecar::{
     GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, LensCorrection,
     MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
     MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective, PointColor,
-    PointColorEntry, Preprocessing, Preset, PromptTransform, Resolution, SidecarDocument,
-    SmartCollectionDef, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
-    SourceFingerprint, SourceIdentity, SpotDistraction, MAX_KEYWORDS_PER_DOCUMENT,
-    MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, SMART_COLLECTION_VERSION,
-    SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    PointColorEntry, Preprocessing, Preset, PromptTransform, RedEyeCorrection, RedEyeRegion,
+    Resolution, SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction, Upright,
+    MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
+    RED_EYE_MAX_REGIONS, SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 // LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `meta inspect`.
 // LRPAR-G15-IPTC-S6: `embed_metadata` for the opt-in JPEG export bake-in.
@@ -471,6 +471,23 @@ enum Command {
     /// rotation, mirrors, manual lens correction, manual perspective) plus
     /// the Lensfun auto-profile status from EXIF. See [`GeometryArgs`].
     Geometry(GeometryArgs),
+    /// LRPAR-G06-UPRIGHT-15 (Release 1.5): automatic upright analysis as a
+    /// persisted recipe stage. `--analyze` computes the deterministic,
+    /// model-free line analysis of the decoded source and persists it with a
+    /// source fingerprint; `--enable`/`--disable` toggle whether the persisted
+    /// suggestion supplies the effective F-099 perspective (Lightroom
+    /// semantics: the manual perspective stays persisted and returns when
+    /// disabled); `--clear` removes the stage. Reads are loud (unknown copies,
+    /// stale fingerprints are reported, never silently recomputed). See
+    /// `feature/architecture/pipeline.md` § F-099.
+    Upright(UprightArgs),
+    /// G-14 Rote Augen (LRPAR-G14-REDEYE-15, Release 1.5): inspect and edit
+    /// the persisted red-eye regions of one virtual copy. "Erkennung" in this
+    /// release is explicit marking (`--set ID:x,y,radius,desaturate,darken`);
+    /// the correction itself is the deterministic, model-free G-14 formula,
+    /// applied on CPU and GPU with oracle parity. See
+    /// `feature/architecture/pipeline.md` § G-14.
+    RedEye(RedEyeArgs),
     /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
     /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
     Keywords(KeywordsArgs),
@@ -1416,6 +1433,66 @@ struct InspectArgs {
     json: bool,
 }
 
+/// LRPAR-G06-UPRIGHT-15 (Release 1.5): inspect and edit the persisted
+/// automatic upright analysis of one virtual copy. The analysis is classic,
+/// model-free and deterministic; `--analyze` binds it to the current source
+/// identity (`upright_input_fingerprint`), so a changed source is reported as
+/// stale, never silently recomputed. Every mutation validates loudly and
+/// appends exactly one history entry. See `feature/architecture/pipeline.md`
+/// § F-099.
+#[derive(Debug, Clone, Args)]
+struct UprightArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+    /// List the persisted upright stage and whether its fingerprint is still
+    /// fresh for the current source (read-only; the default).
+    #[arg(long)]
+    list: bool,
+    /// Run the deterministic `upright-lines-v1` analysis on the decoded source
+    /// and persist it (fingerprint bound to the source identity). Enables the
+    /// stage in the same step (use `--disable` to keep a suggestion without
+    /// applying it).
+    #[arg(long)]
+    analyze: bool,
+    /// Apply the persisted analysis as the effective F-099 perspective.
+    #[arg(long)]
+    enable: bool,
+    /// Stop applying the persisted analysis; the manual perspective returns.
+    #[arg(long)]
+    disable: bool,
+    /// Remove the whole upright stage (analysis included).
+    #[arg(long)]
+    clear: bool,
+}
+
+#[derive(Debug, Args)]
+struct RedEyeArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    #[arg(long)]
+    json: bool,
+    /// List the persisted red-eye regions (read-only; the default).
+    #[arg(long)]
+    list: bool,
+    /// Mark one region as `ID:x,y,radius,desaturate,darken` (normalized
+    /// coordinates; repeatable). Regions are identified by their stable id,
+    /// never by list position; an existing id is replaced loudly.
+    #[arg(long, value_name = "ID:X,Y,RADIUS,DESAT,DARKEN")]
+    set: Vec<String>,
+    /// Remove regions by id (comma-separated, repeatable).
+    #[arg(long, value_delimiter = ',')]
+    remove: Vec<String>,
+    /// Remove the whole red-eye stage (identity).
+    #[arg(long)]
+    clear: bool,
+}
+
 /// G-06 Geometrie-Parität (LRPAR-G06-GEO): inspect and edit the geometry
 /// stages of one image sidecar. Without mutation flags the command lists
 /// crop/lens/perspective values (read-only). `--straighten` is a documented
@@ -1546,6 +1623,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::LensBlur(args) => lens_blur(args),
         Command::Color(args) => color(args),
         Command::Geometry(args) => geometry(args),
+        Command::Upright(args) => upright(args),
+        Command::RedEye(args) => red_eye(args),
         Command::Keywords(args) => keywords(args),
         Command::Collections(args) => collections(args),
         Command::BatchMeta(args) => batch_meta(args),
@@ -6086,6 +6165,446 @@ fn geometry(args: GeometryArgs) -> Result<(), CliError> {
         save_sidecar(&path, &document)?;
     }
     geometry_list(&args, &document, &copy_id, &actions)
+}
+
+/// LRPAR-G06-UPRIGHT-15: analyze/enable/disable/clear/status the persisted
+/// upright stage of one virtual copy. `--analyze` decodes the source, runs the
+/// deterministic `upright-lines-v1` analysis and persists the suggestion bound
+/// to the current source fingerprint; the manual perspective stays persisted
+/// and is authoritative whenever upright is disabled.
+fn upright(args: UprightArgs) -> Result<(), CliError> {
+    if args.enable && args.disable {
+        return Err(CliError::Message(
+            "--enable and --disable are mutually exclusive".into(),
+        ));
+    }
+    if args.analyze && args.clear {
+        return Err(CliError::Message(
+            "--analyze and --clear are mutually exclusive".into(),
+        ));
+    }
+    let wants_mutation = args.analyze || args.enable || args.disable || args.clear;
+    if args.list && wants_mutation {
+        return Err(CliError::Message(
+            "--list is read-only; pass no mutation flags with it".into(),
+        ));
+    }
+    let path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+
+    if args.clear {
+        mask_copy_mut(&mut document, &copy_id)?.recipe.upright = None;
+        info!("upright: cleared stage on copy `{copy_id}`");
+        actions.push("upright:clear".into());
+    } else {
+        if args.analyze {
+            let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+            let (frame, raw) = decode_input(&args.input, &bytes)?;
+            let identity = source_identity(&args.input, &bytes, &frame, raw.as_ref())?;
+            let fingerprint = upright_input_fingerprint(
+                &identity.content_hash,
+                frame.width,
+                frame.height,
+                identity.orientation,
+            );
+            let suggestion = analyze_upright(&frame);
+            info!(
+                "upright: analyzed copy `{copy_id}` ({} line pixels, confidence {:.3}, \
+                 vertical {:.3}, horizontal {:.3}, rotation {:.3})",
+                suggestion.line_count,
+                suggestion.confidence,
+                suggestion.vertical,
+                suggestion.horizontal,
+                suggestion.rotation
+            );
+            // `--analyze` applies the fresh suggestion; `--disable` in the same
+            // call keeps it persisted but inactive.
+            let enabled = !args.disable;
+            mask_copy_mut(&mut document, &copy_id)?.recipe.upright = Some(Upright {
+                version: 1,
+                enabled,
+                analysis: Some(upright_analysis(suggestion, fingerprint)),
+            });
+            actions.push("upright:analyze".into());
+            actions.push(format!(
+                "upright:{}",
+                if enabled { "enable" } else { "disable" }
+            ));
+        } else if args.enable || args.disable {
+            let enabled = args.enable;
+            let upright = upright_mut(&mut document, &copy_id)?;
+            if upright.analysis.is_none() {
+                return Err(CliError::Message(
+                    "no persisted upright analysis; run `upright --analyze` first".into(),
+                ));
+            }
+            upright.enabled = enabled;
+            info!(
+                "upright: {} on copy `{copy_id}`",
+                if enabled { "enabled" } else { "disabled" }
+            );
+            actions.push(format!(
+                "upright:{}",
+                if enabled { "enable" } else { "disable" }
+            ));
+        }
+    }
+
+    if wants_mutation {
+        document
+            .validate()
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        let final_recipe = copy.recipe.clone();
+        let mut id = format!("upright-{}", timestamp());
+        let mut suffix = 0u32;
+        while copy.history.iter().any(|entry| entry.id == id) {
+            suffix += 1;
+            id = format!("upright-{}-{suffix}", timestamp());
+        }
+        let mut extras = BTreeMap::new();
+        extras.insert("step".into(), serde_json::Value::String("upright".into()));
+        extras.insert(
+            "actions".into(),
+            serde_json::Value::String(actions.join(",")),
+        );
+        copy.history.push(HistoryEntry {
+            id,
+            recipe: final_recipe,
+            recorded_at: Some(timestamp()),
+            extras,
+        });
+        save_sidecar(&path, &document)?;
+    }
+    upright_list(&args, &document, &copy_id, &actions)
+}
+
+/// Mutable access to one virtual copy's upright stage, creating an empty
+/// (disabled, no analysis) stage when none exists.
+fn upright_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut Upright, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.upright.get_or_insert(Upright {
+        version: 1,
+        enabled: false,
+        analysis: None,
+    }))
+}
+
+/// Read-only upright status: persisted stage plus `fresh`/`stale` vs. the
+/// current source fingerprint. A stale analysis is reported, never silently
+/// recomputed (SOLL: Identität/Veraltung).
+fn upright_list(
+    args: &UprightArgs,
+    document: &SidecarDocument,
+    copy_id: &str,
+    actions: &[String],
+) -> Result<(), CliError> {
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    let stage = copy.recipe.upright.as_ref();
+    // Current fingerprint from the sidecar source identity geometry; a change
+    // to the source bytes flips to `stale` loudly.
+    let current_content_hash = match fs::read(&args.input) {
+        Ok(bytes) => format!("blake3:{}", blake3::hash(&bytes).to_hex()),
+        Err(_) => document.source.content_hash.clone(),
+    };
+    let current = upright_input_fingerprint(
+        &current_content_hash,
+        document.source.geometry_fingerprint.width,
+        document.source.geometry_fingerprint.height,
+        document.source.orientation,
+    );
+    let status = match stage.and_then(|stage| stage.analysis.as_ref()) {
+        None => "none",
+        Some(analysis) if analysis.fingerprint.input_fingerprint == current => "fresh",
+        Some(_) => "stale",
+    };
+    if args.json {
+        emit(
+            true,
+            serde_json::json!({
+                "command": "upright",
+                "input": args.input,
+                "copy": copy_id,
+                "enabled": stage.map(|stage| stage.enabled),
+                "status": status,
+                "upright": stage,
+                "actions": actions,
+            }),
+            "upright status listed",
+        )
+    } else {
+        match stage {
+            None => println!("  upright: none"),
+            Some(stage) => {
+                println!("  upright: enabled={} status={status}", stage.enabled);
+                if let Some(analysis) = &stage.analysis {
+                    println!(
+                        "    analysis: {} v{} vertical={} horizontal={} rotation={} \
+                         lines={} confidence={}",
+                        analysis.fingerprint.algorithm,
+                        analysis.fingerprint.version,
+                        analysis.vertical,
+                        analysis.horizontal,
+                        analysis.rotation,
+                        analysis.line_count,
+                        analysis.confidence
+                    );
+                    println!(
+                        "    fingerprint: {}",
+                        analysis.fingerprint.input_fingerprint
+                    );
+                }
+            }
+        }
+        emit(
+            false,
+            serde_json::json!({"command":"upright","status":"ok"}),
+            if actions.is_empty() {
+                "upright status listed"
+            } else {
+                "upright updated"
+            },
+        )
+    }
+}
+
+/// G-14: inspect/edit the persisted red-eye regions of one virtual copy.
+fn red_eye(args: RedEyeArgs) -> Result<(), CliError> {
+    let wants_mutation = !args.set.is_empty() || !args.remove.is_empty() || args.clear;
+    if args.list && wants_mutation {
+        return Err(CliError::Message(
+            "--list is read-only; pass no mutation flags with it".into(),
+        ));
+    }
+    if args.clear && (!args.set.is_empty() || !args.remove.is_empty()) {
+        return Err(CliError::Message(
+            "--clear contradicts --set/--remove".into(),
+        ));
+    }
+    let path = sidecar_path_for(&args.input);
+    let mut document = match load_sidecar(&path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            return Err(CliError::Message(format!(
+                "no sidecar for `{}`; run `import` first",
+                args.input.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let mut actions: Vec<String> = Vec::new();
+
+    if args.clear {
+        mask_copy_mut(&mut document, &copy_id)?.recipe.red_eye = None;
+        info!("red-eye: cleared stage on copy `{copy_id}`");
+        actions.push("red-eye:clear".into());
+    } else {
+        for spec in &args.set {
+            let region = parse_red_eye_region(spec)?;
+            let correction = red_eye_mut(&mut document, &copy_id)?;
+            match correction
+                .regions
+                .iter_mut()
+                .find(|existing| existing.id == region.id)
+            {
+                Some(existing) => *existing = region.clone(),
+                None => {
+                    if correction.regions.len() >= RED_EYE_MAX_REGIONS {
+                        return Err(CliError::Message(format!(
+                            "red-eye region limit of {RED_EYE_MAX_REGIONS} reached"
+                        )));
+                    }
+                    correction.regions.push(region.clone());
+                }
+            }
+            info!(
+                "red-eye: marked `{}` at ({}, {}) r={} on copy `{copy_id}`",
+                region.id, region.x, region.y, region.radius
+            );
+            actions.push(format!("red-eye:set:{}", region.id));
+        }
+        for id in &args.remove {
+            let correction = red_eye_mut(&mut document, &copy_id)?;
+            let before = correction.regions.len();
+            correction.regions.retain(|region| &region.id != id);
+            if correction.regions.len() == before {
+                return Err(CliError::Message(format!("unknown red-eye region `{id}`")));
+            }
+            info!("red-eye: removed `{id}` on copy `{copy_id}`");
+            actions.push(format!("red-eye:remove:{id}"));
+        }
+    }
+
+    if wants_mutation {
+        // Loud gate: ranges, ids and the 32-region cap are rejected before
+        // anything is written (the sidecar validator re-checks after the edit).
+        document
+            .validate()
+            .map_err(|error| CliError::Message(error.to_string()))?;
+        let copy = mask_copy_mut(&mut document, &copy_id)?;
+        let final_recipe = copy.recipe.clone();
+        let mut id = format!("red-eye-{}", timestamp());
+        let mut suffix = 0u32;
+        while copy.history.iter().any(|entry| entry.id == id) {
+            suffix += 1;
+            id = format!("red-eye-{}-{suffix}", timestamp());
+        }
+        let mut extras = BTreeMap::new();
+        extras.insert("step".into(), serde_json::Value::String("red-eye".into()));
+        extras.insert(
+            "actions".into(),
+            serde_json::Value::String(actions.join(",")),
+        );
+        copy.history.push(HistoryEntry {
+            id,
+            recipe: final_recipe,
+            recorded_at: Some(timestamp()),
+            extras,
+        });
+        save_sidecar(&path, &document)?;
+    }
+    red_eye_list(&args, &document, &copy_id, &actions)
+}
+
+/// Mutable access to one virtual copy's red-eye stage, creating an empty
+/// (`version = 1`, no regions) stage when none exists.
+fn red_eye_mut<'a>(
+    document: &'a mut SidecarDocument,
+    copy_id: &str,
+) -> Result<&'a mut RedEyeCorrection, CliError> {
+    let copy = mask_copy_mut(document, copy_id)?;
+    Ok(copy.recipe.red_eye.get_or_insert_with(|| RedEyeCorrection {
+        version: 1,
+        regions: Vec::new(),
+    }))
+}
+
+/// Parses `ID:x,y,radius,desaturate,darken` with normalized values and loud
+/// range checks (never clipped).
+fn parse_red_eye_region(spec: &str) -> Result<RedEyeRegion, CliError> {
+    let (id, values) = spec.split_once(':').ok_or_else(|| {
+        CliError::Message(format!(
+            "invalid red-eye region `{spec}`: expected `ID:x,y,radius,desaturate,darken`"
+        ))
+    })?;
+    if id.is_empty() {
+        return Err(CliError::Message(
+            "red-eye region id must not be empty".into(),
+        ));
+    }
+    let numbers: Vec<&str> = values.split(',').collect();
+    if numbers.len() != 5 {
+        return Err(CliError::Message(format!(
+            "invalid red-eye region `{spec}`: expected 5 values after the id"
+        )));
+    }
+    let parse = |raw: &str, field: &str| -> Result<f32, CliError> {
+        raw.trim().parse::<f32>().map_err(|_| {
+            CliError::Message(format!(
+                "invalid red-eye {field} `{raw}`: expected a number"
+            ))
+        })
+    };
+    let x = parse(numbers[0], "x")?;
+    let y = parse(numbers[1], "y")?;
+    let radius = parse(numbers[2], "radius")?;
+    let desaturate = parse(numbers[3], "desaturate")?;
+    let darken = parse(numbers[4], "darken")?;
+    if !x.is_finite() || !(0.0..=1.0).contains(&x) {
+        return Err(CliError::Message(format!("red-eye x `{x}` out of 0..=1")));
+    }
+    if !y.is_finite() || !(0.0..=1.0).contains(&y) {
+        return Err(CliError::Message(format!("red-eye y `{y}` out of 0..=1")));
+    }
+    if !radius.is_finite() || radius <= 0.0 || radius > 1.0 {
+        return Err(CliError::Message(format!(
+            "red-eye radius `{radius}` out of (0, 1]"
+        )));
+    }
+    for (field, value) in [("desaturate", desaturate), ("darken", darken)] {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(CliError::Message(format!(
+                "red-eye {field} `{value}` out of 0..=1"
+            )));
+        }
+    }
+    Ok(RedEyeRegion {
+        id: id.into(),
+        x,
+        y,
+        radius,
+        desaturate,
+        darken,
+    })
+}
+
+fn red_eye_list(
+    args: &RedEyeArgs,
+    document: &SidecarDocument,
+    copy_id: &str,
+    actions: &[String],
+) -> Result<(), CliError> {
+    let copy = document
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.id == copy_id)
+        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
+    let correction = copy.recipe.red_eye.as_ref();
+    let regions = correction.map(|c| c.regions.as_slice()).unwrap_or(&[]);
+    if args.json {
+        emit(
+            true,
+            serde_json::json!({
+                "command": "red-eye",
+                "input": args.input,
+                "copy": copy_id,
+                "count": regions.len(),
+                "red_eye": correction,
+                "actions": actions,
+            }),
+            "red-eye status listed",
+        )
+    } else {
+        if regions.is_empty() {
+            println!("  red-eye: none");
+        } else {
+            println!("  red-eye: {} region(s)", regions.len());
+            for region in regions {
+                println!(
+                    "    {} x={} y={} radius={} desaturate={} darken={}",
+                    region.id, region.x, region.y, region.radius, region.desaturate, region.darken
+                );
+            }
+        }
+        emit(
+            false,
+            serde_json::json!({"command":"red-eye","status":"ok"}),
+            if actions.is_empty() {
+                "red-eye status listed"
+            } else {
+                "red-eye updated"
+            },
+        )
+    }
 }
 
 /// Mutable access to one virtual copy's geometry stage, creating an
@@ -12424,6 +12943,293 @@ mod tests {
         assert!(recipe.lens_correction.is_none());
         assert!(recipe.perspective.is_none());
         assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    fn upright_base_args(input: PathBuf) -> UprightArgs {
+        UprightArgs {
+            input,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            analyze: false,
+            enable: false,
+            disable: false,
+            clear: false,
+        }
+    }
+
+    fn red_eye_base_args(input: PathBuf) -> RedEyeArgs {
+        RedEyeArgs {
+            input,
+            virtual_copy: None,
+            json: true,
+            list: false,
+            set: Vec::new(),
+            remove: Vec::new(),
+            clear: false,
+        }
+    }
+
+    /// A `size`×`size` grid (bright bars on dark) rotated by `angle_deg`, so the
+    /// `upright-lines-v1` detector has a real line signal to measure.
+    fn tilted_png_frame(size: u32, angle_deg: f32) -> ImageFrame {
+        let (sa, ca) = angle_deg.to_radians().sin_cos();
+        let period = 0.4f32;
+        let mut pixels = vec![0u8; (size as usize) * (size as usize) * 4];
+        for y in 0..size {
+            for x in 0..size {
+                let nx = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+                let ny = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+                let rx = ca * nx + sa * ny;
+                let dy = (rx / period - (rx / period).round()).abs() * period;
+                let value = if dy < 0.05 { 235u8 } else { 20u8 };
+                let i = ((y * size + x) as usize) * 4;
+                pixels[i] = value;
+                pixels[i + 1] = value;
+                pixels[i + 2] = value;
+                pixels[i + 3] = 255;
+            }
+        }
+        ImageFrame::new(size, size, pixels).unwrap()
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: analyze → disable → enable → clear roundtrip with
+    /// exactly one history entry per mutating call and an untouched original.
+    #[test]
+    fn upright_analyze_enable_disable_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("tilted.png");
+        fs::write(
+            &input,
+            tilted_png_frame(128, 6.0)
+                .encode(ImageFileFormat::Png)
+                .unwrap(),
+        )
+        .unwrap();
+        let original_bytes = fs::read(&input).unwrap();
+        import_sidecar_for(&input);
+
+        // Read-only list before analysis leaves the sidecar byte-identical.
+        let sidecar_path = sidecar_path_for(&input);
+        let before = fs::read(&sidecar_path).unwrap();
+        upright(upright_base_args(input.clone())).unwrap();
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before);
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert!(document.virtual_copies[0].recipe.upright.is_none());
+
+        // Analyze + persist (enabled by default).
+        let mut analyze = upright_base_args(input.clone());
+        analyze.analyze = true;
+        upright(analyze).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        let stage = document.virtual_copies[0]
+            .recipe
+            .upright
+            .as_ref()
+            .expect("upright persisted");
+        assert!(stage.enabled);
+        let analysis = stage.analysis.as_ref().expect("analysis persisted");
+        assert_eq!(
+            analysis.fingerprint.algorithm,
+            lumina_core::UPRIGHT_ALGORITHM
+        );
+        assert!(analysis.line_count > 0);
+        assert!(analysis.rotation.abs() > 0.0);
+        assert!(document.virtual_copies[0]
+            .recipe
+            .effective_perspective()
+            .is_some());
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        assert!(document.virtual_copies[0].history[0]
+            .id
+            .starts_with("upright-"));
+
+        // Disable: the manual perspective returns, the analysis stays persisted.
+        let mut disable = upright_base_args(input.clone());
+        disable.disable = true;
+        upright(disable).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        let stage = document.virtual_copies[0].recipe.upright.as_ref().unwrap();
+        assert!(!stage.enabled);
+        assert!(stage.analysis.is_some());
+        assert!(document.virtual_copies[0]
+            .recipe
+            .effective_perspective()
+            .is_none());
+
+        // Enable again without re-analyzing.
+        let mut enable = upright_base_args(input.clone());
+        enable.enable = true;
+        upright(enable).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert!(
+            document.virtual_copies[0]
+                .recipe
+                .upright
+                .as_ref()
+                .unwrap()
+                .enabled
+        );
+        assert!(document.virtual_copies[0]
+            .recipe
+            .effective_perspective()
+            .is_some());
+
+        // Enable without analysis is loud (no silent identity render).
+        let mut no_analysis = upright_base_args(input.clone());
+        no_analysis.clear = true;
+        upright(no_analysis.clone()).unwrap();
+        no_analysis.clear = false;
+        no_analysis.enable = true;
+        let error = upright(no_analysis).unwrap_err().to_string();
+        assert!(error.contains("no persisted upright analysis"), "{error}");
+
+        // Clear removes the stage entirely; original untouched.
+        let mut clear = upright_base_args(input.clone());
+        clear.clear = true;
+        upright(clear).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert!(document.virtual_copies[0].recipe.upright.is_none());
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: `--list` is read-only; contradictory flags are loud.
+    #[test]
+    fn upright_rejects_contradictory_flags() {
+        let mut args = upright_base_args(PathBuf::from("unused.png"));
+        args.list = true;
+        args.analyze = true;
+        assert!(upright(args)
+            .unwrap_err()
+            .to_string()
+            .contains("--list is read-only"));
+        let mut args = upright_base_args(PathBuf::from("unused.png"));
+        args.enable = true;
+        args.disable = true;
+        assert!(upright(args)
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
+        let mut args = upright_base_args(PathBuf::from("unused.png"));
+        args.analyze = true;
+        args.clear = true;
+        assert!(upright(args)
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
+    }
+
+    /// G-14: explicit marking (`--set`) → `--remove` → `--clear` roundtrip,
+    /// stable ids (replace, never duplicate), one history entry per call, and a
+    /// loud rejection of out-of-range/invalid region specs. Original untouched.
+    #[test]
+    fn red_eye_set_remove_clear_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _) = png_input(directory.path(), "input.png", 120);
+        let original_bytes = fs::read(&input).unwrap();
+        import_sidecar_for(&input);
+        let sidecar_path = sidecar_path_for(&input);
+
+        // Read-only list before marking.
+        red_eye(red_eye_base_args(input.clone())).unwrap();
+        assert!(load_sidecar(&sidecar_path).unwrap().virtual_copies[0]
+            .recipe
+            .red_eye
+            .is_none());
+
+        // Mark two regions.
+        let mut set = red_eye_base_args(input.clone());
+        set.set = vec![
+            "re-1:0.25,0.35,0.05,0.8,0.4".into(),
+            "re-2:0.6,0.4,0.03,1.0,0.5".into(),
+        ];
+        red_eye(set).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        let regions = &document.virtual_copies[0]
+            .recipe
+            .red_eye
+            .as_ref()
+            .unwrap()
+            .regions;
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].id, "re-1");
+        assert_eq!(regions[0].desaturate, 0.8);
+        assert_eq!(regions[0].darken, 0.4);
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        assert!(document.virtual_copies[0].history[0]
+            .id
+            .starts_with("red-eye-"));
+
+        // Re-marking an existing id replaces it (stable identity, no growth).
+        let mut replace = red_eye_base_args(input.clone());
+        replace.set = vec!["re-1:0.3,0.3,0.04,0.5,0.5".into()];
+        red_eye(replace).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        let regions = &document.virtual_copies[0]
+            .recipe
+            .red_eye
+            .as_ref()
+            .unwrap()
+            .regions;
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].id, "re-1");
+        assert_eq!(regions[0].radius, 0.04);
+
+        // Remove by id; unknown ids are loud and write nothing.
+        let mut remove = red_eye_base_args(input.clone());
+        remove.remove = vec!["re-2".into()];
+        red_eye(remove).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .red_eye
+                .as_ref()
+                .unwrap()
+                .regions
+                .len(),
+            1
+        );
+        let before = fs::read(&sidecar_path).unwrap();
+        let mut unknown = red_eye_base_args(input.clone());
+        unknown.remove = vec!["re-missing".into()];
+        assert!(red_eye(unknown)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown red-eye region"));
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before);
+
+        // Clear back to identity.
+        let mut clear = red_eye_base_args(input.clone());
+        clear.clear = true;
+        red_eye(clear).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert!(document.virtual_copies[0].recipe.red_eye.is_none());
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    /// G-14: every malformed/out-of-range region spec is rejected loudly.
+    #[test]
+    fn red_eye_region_specs_are_validated_loudly() {
+        for (spec, needle) in [
+            ("no-separator", "expected `ID:"),
+            (":0.1,0.1,0.1,1,1", "must not be empty"),
+            ("re-1:0.1,0.1,0.1,1", "expected 5 values"),
+            ("re-1:1.5,0.1,0.1,1,1", "x"),
+            ("re-1:0.1,-1.0,0.1,1,1", "y"),
+            ("re-1:0.1,0.1,0.0,1,1", "radius"),
+            ("re-1:0.1,0.1,1.5,1,1", "radius"),
+            ("re-1:0.1,0.1,0.1,1.5,1", "desaturate"),
+            ("re-1:0.1,0.1,0.1,1,-0.2", "darken"),
+            ("re-1:a,0.1,0.1,1,1", "x"),
+        ] {
+            let error = parse_red_eye_region(spec).unwrap_err().to_string();
+            assert!(
+                error.contains(needle),
+                "spec `{spec}` → `{error}` (expected `{needle}`)"
+            );
+        }
+        assert!(parse_red_eye_region("re-1:0.25,0.35,0.05,0.8,0.4").is_ok());
     }
 
     /// G-06: free-crop rects and the straighten alias round-trip; `--list`

@@ -463,7 +463,8 @@ pub fn unsupported_gpu_stages_with_context(
 /// that crop is pixel-dependent (the resampled alpha), so it is never predicted
 /// here; the caller routes the whole recipe to the exact CPU reference instead.
 fn default_content_crop_active(recipe: &EditRecipe) -> bool {
-    let correction_active = recipe.lens_correction.is_some() || recipe.perspective.is_some();
+    let correction_active =
+        recipe.lens_correction.is_some() || recipe.effective_perspective().is_some();
     let explicit_crop = recipe
         .geometry
         .as_ref()
@@ -5209,6 +5210,75 @@ mod routing_gate_tests {
                 .any(|reason| reason.contains("geometry (default content crop)")),
             "an uncropped perspective must flag the default content crop: {reasons:?}"
         );
+
+        // LRPAR-G06-UPRIGHT-15: an enabled upright analysis resolves to the
+        // effective perspective. It behaves exactly like the equivalent manual
+        // perspective — GPU-eligible with an explicit crop, and the content
+        // default crop reason without one (never a silent CPU or identity path).
+        let upright_analysis = lumina_sidecar::UprightAnalysis {
+            fingerprint: lumina_sidecar::AnalysisFingerprint {
+                algorithm: lumina_core::UPRIGHT_ALGORITHM.into(),
+                version: lumina_core::UPRIGHT_ALGORITHM_VERSION.into(),
+                input_fingerprint: "blake3:test".into(),
+                extras: Default::default(),
+            },
+            vertical: 0.2,
+            horizontal: 0.0,
+            rotation: 0.0,
+            line_count: 10,
+            confidence: 0.5,
+        };
+        let upright_cropped = EditRecipe {
+            geometry: Some(lumina_sidecar::Geometry {
+                version: 1,
+                crop: Some(lumina_sidecar::Crop::Free {
+                    x: 0.1,
+                    y: 0.1,
+                    width: 0.8,
+                    height: 0.8,
+                }),
+                rotation_degrees: 0.0,
+                mirror_horizontal: false,
+                mirror_vertical: false,
+            }),
+            upright: Some(lumina_sidecar::Upright {
+                version: 1,
+                enabled: true,
+                analysis: Some(upright_analysis.clone()),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            unsupported_gpu_stages(&upright_cropped).is_empty(),
+            "an enabled upright with an explicit crop is GPU-rendered"
+        );
+        let upright_uncropped = EditRecipe {
+            upright: Some(lumina_sidecar::Upright {
+                version: 1,
+                enabled: true,
+                analysis: Some(upright_analysis),
+            }),
+            ..Default::default()
+        };
+        let reasons = unsupported_gpu_stages(&upright_uncropped);
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.contains("geometry (default content crop)")),
+            "an uncropped upright must flag the default content crop: {reasons:?}"
+        );
+        // A disabled upright is neutral: it neither routes nor changes the
+        // effective perspective.
+        let upright_disabled = EditRecipe {
+            upright: Some(lumina_sidecar::Upright {
+                version: 1,
+                enabled: false,
+                analysis: None,
+            }),
+            ..Default::default()
+        };
+        assert!(unsupported_gpu_stages(&upright_disabled).is_empty());
+        assert!(upright_disabled.effective_perspective().is_none());
 
         // Effects (vignette/grain) is fully GPU-supported now.
         let effects = EditRecipe {

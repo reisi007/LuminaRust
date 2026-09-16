@@ -197,6 +197,7 @@ impl RenderKey {
         mask_recipe.geometry = None;
         mask_recipe.lens_correction = None;
         mask_recipe.perspective = None;
+        mask_recipe.upright = None;
         for key in [
             "crop",
             "rotation",

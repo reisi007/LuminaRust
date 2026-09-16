@@ -712,6 +712,17 @@ in `(0, 1]`, endliche `desaturate`/`darken` in `0..=1` — jede Abweichung
 (inkl. NaN) wird mit einem Fehler abgelehnt. Unbekannte Felder bleiben
 erhalten (Roundtrip-Regel).
 
+**Erkennung im 1.5-Scope (Entscheid 2026-09-16, LRPAR-G14-REDEYE-15):** Das
+SOLL schließt eine automatische Pupillen-Erkennung für 1.5 bewusst aus.
+„Erkennung" bedeutet in diesem Release daher **explizites Markieren**: CLI und
+GUI stellen einen Region-Picker (normierte Klick-/Drag-Zentren + Radius)
+bereit, der Regionen als `recipe.adjustments.red_eye` persistiert; die
+Korrektur selbst ist die obige deterministische, modellfreie Formel. Eine
+automatische Rot-Dominanz-Pupillenerkennung bleibt ausdrücklich Folgearbeit
+(kein Modell, keine stille Vorbefüllung). Die Korrektur läuft auf GPU mit
+CPU-Oracle-Parität (Stage 3, siehe GPU-Status); ungültige Regionen bleiben
+laut CPU-geroutet.
+
 **Platzierung, Cache und Abnahme:** In `Adjustments` nach Schärfen (F-095)
 und vor Effekten (F-097)/Masken/Crop; das Format-Tupel bleibt unverändert.
 Feld, Version und alle Regionen gehen in den `recipe_hash` (BLAKE3 über das
@@ -915,6 +926,80 @@ gehören zum RenderKey; Geometrieänderungen invalidieren Preview/Export, nicht
 Decode oder AI-Artefakte. Abnahme: Identität, Eckpunktprojektion,
 Parametergrenzen, Zusammenspiel mit Objektivkorrektur/Crop und Cache.
 Abhängigkeiten: F-029, F-031, F-041, F-098.
+
+**LRPAR-G06-UPRIGHT-15 Auto-Upright-Analyse (Release 1.5):** Zusätzlich zur
+manuellen Perspektive analysiert LuminaRust stürzende Linien automatisch und
+persistiert das Ergebnis als additive Rezept-Stufe. Die Analyse ist
+**klassisch, modellfrei und deterministisch** (keine ONNX-Modelle, keine
+Zufallszahlen, keine Vanishing-Point-Optimierung, kein Guided-Mode).
+
+- **Schema:** `recipe.upright` (additiv in Schema v2, top-level wie
+  `perspective`; absent = keine Analyse und Identität, keine Migration).
+  `Upright` trägt `version` (`1`), `enabled` (bool) und
+  `analysis: Option<UprightAnalysis>`. `UprightAnalysis` trägt
+  `fingerprint: AnalysisFingerprint` (Algorithmus, Version,
+  `input_fingerprint`), die vorgeschlagenen Perspektivwerte `vertical`,
+  `horizontal`, `rotation` (je `-1..=1`, exakt die F-099-Domäne),
+  `line_count` (Zahl der stützenden Linienpixel) und `confidence` (`0..=1`).
+  Das Objekt wird nie über eine Listenposition identifiziert; es gibt genau
+  eine Analyse pro Rezept.
+- **Analyse-Algorithmus `upright-lines-v1` (deterministisch, modellfrei):**
+  Graustufen-Downsample (längste Seite ≤ 256, Box-Filter), dann ein
+  deterministischer Winkel-Sweep von ±30° in 0,5°-Schritten. Für jeden
+  Kandidatenwinkel wird das Bild entlang der gedrehten Achse gebinnt und die
+  Schärfe des resultierenden Projektionsprofils gemessen (Summe der quadrierten
+  zweiten Differenzen): Der Winkel mit dem spitzesten horizontalen bzw.
+  vertikalen Profil ist der Rotationsvorschlag (Vorzeichen so, dass die
+  Anwendung die Linien ausrichtet; die stärkere Achse gewinnt). Der
+  Vertikal-Keystone entsteht aus dem Unterschied des besten Vertikal-Profil-
+  winkels linke/rechte Bildhälfte, der Horizontal-Keystone aus obere/untere
+  Hälfte. Das Projektionsprofil ist bewusst gegen das Staircase-Aliasing
+  robust, das eine Per-Pixel-Gradientenorientierung bei groben Gittern
+  verzerrt. Werte außerhalb `-1..=1` werden auf die Domäne begrenzt (`clamp`,
+  dokumentiert, kein stilles Verwerfen); `line_count` zählt die Pixel mit
+  Sobel-Magnitude ≥ 25 % des stärksten Gradienten, `confidence` die
+  Prominenz des Profil-Peaks über den Mittelwert des Sweeps.
+- **Ausgabeformat:** die vorgeschlagenen `vertical`/`horizontal`/`rotation`
+  plus `line_count`, `confidence` und der `AnalysisFingerprint`. Der
+  `input_fingerprint` wird vom Aufrufer (CLI/GUI) aus Quell-Content-Hash,
+  Decode-/Geometrie-Kontext und Algorithmus-Version abgeleitet
+  (`upright_input_fingerprint`), damit die Analyse ohne erneute Pixelanalyse
+  auf Gültigkeit geprüft werden kann.
+- **Identität/Veraltung:** Weicht der gespeicherte `input_fingerprint` vom
+  aktuellen Quell-/Decode-Kontext ab, ist die Analyse **veraltet**. Veraltet
+  wird sichtbar gemeldet (CLI `upright --status`, GUI-Statuszeile) und nie
+  stillschweigend neu berechnet oder durch eine andere Korrektur ersetzt; das
+  Rezept bleibt vollständig reproduzierbar. Eine erneute Analyse ist eine
+  explizite Nutzeraktion (kein Auto-Rerun als einzige Option).
+- **Einordnung (unmittelbar vor der Perspektive):** Upright ist eine
+  Geometrie-Untersstufe **vor** der F-099-Perspektive. Bei `enabled = true`
+  liefert die persistierte Analyse die **effektive** Perspektive
+  (`EditRecipe::effective_perspective`): `vertical`/`horizontal`/`rotation`
+  aus der Analyse, `scale = 1`, `aspect_ratio = 1`, `shift_x = 0`,
+  `shift_y = 0`. Das manuelle `recipe.perspective` bleibt persistiert und ist
+  bei `enabled = false` unverändert wirksam (Lightroom-Semantik: Upright setzt
+  die Transformation; das Ausschalten stellt die manuellen Werte wieder her).
+  `enabled = true` ohne `analysis` wird laut abgelehnt (kein stiller
+  Identitäts-Render).
+- **Cache:** `recipe.upright` liegt im Root und fließt automatisch in den
+  vollen `recipe_hash`/RenderKey; wie `geometry`/`lens_correction`/
+  `perspective` wird es aus der Masken-Identität (`mask_recipe`) entfernt,
+  damit eine Upright-/Geometrieänderung keine quellgroßen Masken invalidiert.
+- **GPU-Parität:** Die Korrektur einer aktiven Upright-Analyse ist die
+  bestehende F-099-Perspektiv-Homographie und läuft damit auf GPU mit
+  CPU-Oracle-Parität (explizites Crop) bzw. routet ohne explizites Crop laut
+  auf CPU (`geometry (default content crop)`, dokumentierte CROP-MAXRECT-1-
+  Grenze) — es gibt keinen stillen CPU-Zweig und keinen GPU-only-Weg. Die
+  Analyse selbst ist eine deterministische CPU-Vorverarbeitung, die Parameter
+  persistiert (wie Auto-Tone); sie ist **keine** Pixel-Renderstufe und erzeugt
+  keine Render-Route.
+- **Abnahme:** deterministische Analyse (zwei Läufe byte-identisch),
+  Identität bei `enabled=false`/ohne Analyse, Vorschlag richtet synthetisch
+  gedrehte/verkippte Linien messbar aus, Rezept mit Upright ist byte-identisch
+  zu einem Rezept mit den gleichen manuellen `Perspective`-Werten,
+  Fingerprint-Veraltung sichtbar, Schema-Roundtrip inkl. Validierungsablehnung,
+  CLI-Status/-Analyse, GUI-headless (Analyse-Aktion + Status + Toggle).
+  Abhängigkeiten: F-029, F-031, F-041, F-098, F-099.
 
 ### G-05 Lens Blur (Tiefen-Bokeh, Release 1.0)
 
@@ -1296,7 +1381,13 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Oracle-Reihenfolge nach Sharpening, inkl. VRAM-Pfad; ungültige Werte bleiben
   laut CPU-geroutet) laufen auf GPU mit CPU-Oracle-Parität — byte-identisch wo
   0 gemessen, sonst maxAbsDiff ≤ 1 (≤ 2 für voll gestapelte Rezepte),
-  PSNR ≥ 48 dB, Bias ≤ 0.05. Erledigte Follow-ups: Radius>10-Ablehnung an
+  PSNR ≥ 48 dB, Bias ≤ 0.05. Erledigt (Teilwelle, 2026-09-16,
+  LRPAR-G06-UPRIGHT-15): eine aktive Upright-Analyse wird über die effektive
+  F-099-Perspektive identisch auf CPU und GPU geplant (`EditRecipe::
+  effective_perspective`); mit explizitem Crop ist sie GPU-rendered
+  (Parity-Recipe `upright_perspective_cropped`, maxAbsDiff 0/1), ohne Crop
+  routet sie laut über den Default-Content-Crop-Grund — kein stiller CPU-Zweig.
+  Erledigte Follow-ups: Radius>10-Ablehnung an
   beiden Eintrittspunkten, `GPU_EFFECTIVE_SCALE` zentral, Parity-Recipe
   radius 10 + Masking, schema-fremde Keys laut abgelehnt. Erledigt (Teilwelle,
   BESTANDEN): Spot-Heal-Pass (Legacy, beide Pfade, byte-identisch),

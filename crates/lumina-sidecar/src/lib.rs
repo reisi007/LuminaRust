@@ -1104,6 +1104,10 @@ pub struct EditRecipe {
     pub lens_correction: Option<LensCorrection>,
     /// Optional F-099 perspective model, additive in schema v2.
     pub perspective: Option<Perspective>,
+    /// Optional LRPAR-G06-UPRIGHT-15 automatic upright analysis, additive in
+    /// schema v2. When `enabled` it supplies the effective F-099 perspective
+    /// (see [`EditRecipe::effective_perspective`]); absent is identity.
+    pub upright: Option<Upright>,
     /// Optional F-097 stylistic effects (vignette + grain). Additive in schema
     /// v2; absent is no effects and requires no migration. Serialized into the
     /// root map (like `geometry`) so both effect objects flow into the
@@ -1221,6 +1225,12 @@ impl Serialize for EditRecipe {
                 serde_json::to_value(perspective).map_err(serde::ser::Error::custom)?,
             );
         }
+        if let Some(upright) = &self.upright {
+            root.insert(
+                "upright".into(),
+                serde_json::to_value(upright).map_err(serde::ser::Error::custom)?,
+            );
+        }
         if let Some(effects) = &self.effects {
             root.insert(
                 "effects".into(),
@@ -1312,6 +1322,11 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .map_err(serde::de::Error::custom)?;
         let perspective = root
             .remove("perspective")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let upright = root
+            .remove("upright")
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
@@ -1430,6 +1445,7 @@ impl<'de> Deserialize<'de> for EditRecipe {
             geometry,
             lens_correction,
             perspective,
+            upright,
             effects,
             lens_blur,
             source_actions,
@@ -1658,6 +1674,10 @@ pub struct RedEyeCorrection {
 /// LRPAR-G14-REDEYE-15: maximum number of persisted red-eye regions.
 pub const RED_EYE_MAX_REGIONS: usize = 32;
 
+/// LRPAR-G06-UPRIGHT-15: upper bound on the reported number of supporting
+/// line pixels of one upright analysis (hostile-document guard).
+pub const UPRIGHT_MAX_LINE_COUNT: u32 = 100_000_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Geometry {
     pub version: u8,
@@ -1700,6 +1720,63 @@ pub struct Perspective {
     pub aspect_ratio: f32,
     pub shift_x: f32,
     pub shift_y: f32,
+}
+
+/// LRPAR-G06-UPRIGHT-15 (Release 1.5): persisted automatic upright analysis.
+/// Classic, model-free line detection (see the `upright-lines-v1` algorithm in
+/// `lumina-core`). The suggestion lives in the F-099 `Perspective` domain so it
+/// can be applied as the effective perspective. `fingerprint` binds the
+/// analysis to the exact source/decode/geometry context; `line_count` and
+/// `confidence` are deterministic evidence, never a user-facing score to
+/// optimize.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UprightAnalysis {
+    pub fingerprint: AnalysisFingerprint,
+    /// Suggested vertical keystone correction (`-1..=1`).
+    pub vertical: f32,
+    /// Suggested horizontal keystone correction (`-1..=1`).
+    pub horizontal: f32,
+    /// Suggested in-plane rotation (`-1..=1`).
+    pub rotation: f32,
+    /// Number of supporting line pixels found by the detector.
+    pub line_count: u32,
+    /// Deterministic confidence `0..=1` of the suggestion.
+    pub confidence: f32,
+}
+
+/// LRPAR-G06-UPRIGHT-15: additive top-level recipe stage. `enabled` selects
+/// whether the persisted [`UprightAnalysis`] supplies the effective F-099
+/// perspective (`EditRecipe::effective_perspective`); the manual
+/// `recipe.perspective` stays persisted and is restored when disabled. An
+/// absent field is identity and requires no migration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Upright {
+    pub version: u8,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<UprightAnalysis>,
+}
+
+impl Upright {
+    /// Resolves the effective F-099 perspective supplied by this stage when it
+    /// is enabled and carries an analysis. `None` when disabled or without an
+    /// analysis (validation rejects `enabled` without `analysis` loudly).
+    pub fn resolved_perspective(&self) -> Option<Perspective> {
+        if !self.enabled {
+            return None;
+        }
+        self.analysis.as_ref().map(|analysis| Perspective {
+            version: 1,
+            vertical: analysis.vertical,
+            horizontal: analysis.horizontal,
+            rotation: analysis.rotation,
+            scale: 1.0,
+            aspect_ratio: 1.0,
+            shift_x: 0.0,
+            shift_y: 0.0,
+        })
+    }
 }
 
 /// F-097 Vignette: a deterministic radial edge-darkening (or -lightening) effect.
@@ -1861,6 +1938,7 @@ impl Default for EditRecipe {
             geometry: None,
             lens_correction: None,
             perspective: None,
+            upright: None,
             effects: None,
             lens_blur: None,
             source_actions: Vec::new(),
@@ -1870,6 +1948,21 @@ impl Default for EditRecipe {
             auto_features: AutoFeatures::default(),
             extras: Extras::new(),
         }
+    }
+}
+
+impl EditRecipe {
+    /// LRPAR-G06-UPRIGHT-15: the effective F-099 perspective used by the
+    /// renderer. When the `upright` stage is enabled and carries an analysis,
+    /// its suggestion is authoritative (the manual `perspective` stays
+    /// persisted and returns when `upright.enabled` is `false`); otherwise the
+    /// manual `recipe.perspective` is used. Pure recipe derivation — no pixel
+    /// or platform dependency, used identically by CPU and GPU.
+    pub fn effective_perspective(&self) -> Option<Perspective> {
+        self.upright
+            .as_ref()
+            .and_then(Upright::resolved_perspective)
+            .or(self.perspective)
     }
 }
 
@@ -4749,6 +4842,36 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
             }
         }
     }
+    // LRPAR-G06-UPRIGHT-15: additive upright stage. `enabled` requires a
+    // persisted analysis (loud, never a silent identity render); the
+    // suggestion stays in the F-099 domain.
+    if let Some(u) = &a.upright {
+        if u.version != 1 {
+            return invalid("unsupported upright version");
+        }
+        if u.enabled && u.analysis.is_none() {
+            return invalid("upright enabled requires a persisted analysis");
+        }
+        if let Some(analysis) = &u.analysis {
+            validate_name("upright algorithm", &analysis.fingerprint.algorithm)?;
+            validate_name("upright algorithm version", &analysis.fingerprint.version)?;
+            validate_name(
+                "upright input fingerprint",
+                &analysis.fingerprint.input_fingerprint,
+            )?;
+            for v in [analysis.vertical, analysis.horizontal, analysis.rotation] {
+                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                    return invalid("invalid upright suggestion coefficient");
+                }
+            }
+            if !analysis.confidence.is_finite() || !(0.0..=1.0).contains(&analysis.confidence) {
+                return invalid("invalid upright confidence");
+            }
+            if analysis.line_count > UPRIGHT_MAX_LINE_COUNT {
+                return invalid("invalid upright line_count");
+            }
+        }
+    }
     for action in &a.source_actions {
         if action.version != SOURCE_ACTION_VERSION {
             return invalid("unsupported source_action version");
@@ -5099,6 +5222,7 @@ mod tests {
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
+                upright: None,
                 effects: None,
                 lens_blur: None,
                 generative_edit: None,
@@ -5140,6 +5264,7 @@ mod tests {
                     geometry: None,
                     lens_correction: None,
                     perspective: None,
+                    upright: None,
                     effects: None,
                     lens_blur: None,
                     generative_edit: None,
@@ -5179,6 +5304,7 @@ mod tests {
                 geometry: None,
                 lens_correction: None,
                 perspective: None,
+                upright: None,
                 effects: None,
                 lens_blur: None,
                 generative_edit: None,
@@ -6449,6 +6575,162 @@ mod tests {
         assert!(validate_adjustments(&candidate).is_err());
         // The valid recipe passes.
         assert!(validate_adjustments(&recipe).is_ok());
+    }
+
+    // ---- LRPAR-G06-UPRIGHT-15: upright recipe stage ----
+
+    fn upright_analysis() -> UprightAnalysis {
+        UprightAnalysis {
+            fingerprint: AnalysisFingerprint {
+                algorithm: "upright-lines-v1".into(),
+                version: "1".into(),
+                input_fingerprint: "blake3:abc".into(),
+                extras: Extras::new(),
+            },
+            vertical: 0.2,
+            horizontal: -0.1,
+            rotation: 0.05,
+            line_count: 1234,
+            confidence: 0.7,
+        }
+    }
+
+    #[test]
+    fn upright_roundtrip_and_validate_ranges() {
+        // Disabled analysis (persisted suggestion, not applied) roundtrips at
+        // the recipe root like `perspective`.
+        let recipe = EditRecipe {
+            upright: Some(Upright {
+                version: 1,
+                enabled: false,
+                analysis: Some(upright_analysis()),
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&recipe).unwrap();
+        assert!(value["upright"].is_object(), "upright lives at the root");
+        assert_eq!(value["upright"]["enabled"], serde_json::Value::Bool(false));
+        assert_eq!(recipe, serde_json::from_value(value).unwrap());
+        assert!(validate_adjustments(&recipe).is_ok());
+        // Disabled → the manual perspective stays authoritative.
+        assert!(recipe.effective_perspective().is_none());
+
+        // Enabled → the analysis supplies the effective perspective.
+        let enabled = EditRecipe {
+            upright: Some(Upright {
+                version: 1,
+                enabled: true,
+                analysis: Some(upright_analysis()),
+            }),
+            perspective: Some(Perspective {
+                version: 1,
+                vertical: 0.9,
+                horizontal: 0.9,
+                rotation: 0.9,
+                scale: 2.0,
+                aspect_ratio: 1.0,
+                shift_x: 0.0,
+                shift_y: 0.0,
+            }),
+            ..Default::default()
+        };
+        let effective = enabled
+            .effective_perspective()
+            .expect("enabled upright supplies a perspective");
+        assert_eq!(effective.vertical, 0.2);
+        assert_eq!(effective.horizontal, -0.1);
+        assert_eq!(effective.rotation, 0.05);
+        assert_eq!(effective.scale, 1.0);
+
+        // Disabling restores the manual perspective unchanged.
+        let mut disabled = enabled.clone();
+        disabled.upright.as_mut().unwrap().enabled = false;
+        assert_eq!(
+            disabled.effective_perspective().unwrap().vertical,
+            0.9,
+            "manual perspective returns when upright is off"
+        );
+
+        // Absent key stays absent (additive, legacy identity, no migration).
+        let legacy = serde_json::json!({
+            "recipe_version": "1",
+            "adjustments": {},
+            "options": {},
+            "auto_features": {"enable_auto_tone": false, "match_total_exposure": false, "target_luminance": 0.5},
+        });
+        let decoded: EditRecipe = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.upright.is_none());
+        assert!(validate_adjustments(&decoded).is_ok());
+    }
+
+    #[test]
+    fn upright_enabled_without_analysis_is_rejected_loudly() {
+        let recipe = EditRecipe {
+            upright: Some(Upright {
+                version: 1,
+                enabled: true,
+                analysis: None,
+            }),
+            ..Default::default()
+        };
+        assert!(validate_adjustments(&recipe).is_err());
+        // Disabled without analysis is a valid no-op state.
+        let disabled = EditRecipe {
+            upright: Some(Upright {
+                version: 1,
+                enabled: false,
+                analysis: None,
+            }),
+            ..Default::default()
+        };
+        assert!(validate_adjustments(&disabled).is_ok());
+        // Foreign version is rejected.
+        let mut bad = SidecarDocument::new(source(), "pipeline-1");
+        bad.virtual_copies[0].recipe.upright = Some(Upright {
+            version: 2,
+            enabled: false,
+            analysis: None,
+        });
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn upright_rejects_out_of_range_and_nan() {
+        let base = EditRecipe {
+            upright: Some(Upright {
+                version: 1,
+                enabled: true,
+                analysis: Some(upright_analysis()),
+            }),
+            ..Default::default()
+        };
+        for mutate in [
+            |a: &mut UprightAnalysis| a.vertical = 1.5,
+            |a: &mut UprightAnalysis| a.horizontal = -1.5,
+            |a: &mut UprightAnalysis| a.rotation = f32::NAN,
+            |a: &mut UprightAnalysis| a.confidence = 1.1,
+            |a: &mut UprightAnalysis| a.confidence = f32::NAN,
+            |a: &mut UprightAnalysis| a.line_count = UPRIGHT_MAX_LINE_COUNT + 1,
+            |a: &mut UprightAnalysis| a.fingerprint.algorithm.clear(),
+            |a: &mut UprightAnalysis| a.fingerprint.version.clear(),
+            |a: &mut UprightAnalysis| a.fingerprint.input_fingerprint.clear(),
+        ] {
+            let mut candidate = base.clone();
+            mutate(
+                candidate
+                    .upright
+                    .as_mut()
+                    .unwrap()
+                    .analysis
+                    .as_mut()
+                    .unwrap(),
+            );
+            assert!(
+                validate_adjustments(&candidate).is_err(),
+                "invalid upright contract must be rejected loudly"
+            );
+        }
+        assert!(validate_adjustments(&base).is_ok());
     }
 
     // ---- F-097: effects (vignette + grain) recipe schema field ----

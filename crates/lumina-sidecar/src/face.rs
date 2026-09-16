@@ -875,4 +875,57 @@ mod tests {
             "uppercase hex rejected"
         );
     }
+
+    /// D1-Nacharbeit (Schema-Verifizierung): every `FaceArtifactStatus`
+    /// variant must survive a serde roundtrip on its documented lowercase wire
+    /// form. The earlier coverage only exercised `Valid`; this table adds the
+    /// visible degraded states `stale`/`missing`/`corrupt` (per analysis and
+    /// per detection/embedding).
+    #[test]
+    fn serde_roundtrip_covers_every_artifact_status() {
+        for (variant, wire) in [
+            (FaceArtifactStatus::Valid, "\"valid\""),
+            (FaceArtifactStatus::Stale, "\"stale\""),
+            (FaceArtifactStatus::Missing, "\"missing\""),
+            (FaceArtifactStatus::Corrupt, "\"corrupt\""),
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, wire, "FaceArtifactStatus wire form");
+            let decoded: FaceArtifactStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, variant);
+        }
+    }
+
+    /// D1-Nacharbeit: the nested face analysis must roundtrip losslessly with
+    /// the degraded statuses set on the section, the detection and the
+    /// embedding at once — including an explicit error text. This pins the
+    /// placement of the status field in all three locations.
+    #[test]
+    fn serde_roundtrip_matrix_covers_degraded_artifact_statuses() {
+        for status in [
+            FaceArtifactStatus::Valid,
+            FaceArtifactStatus::Stale,
+            FaceArtifactStatus::Missing,
+            FaceArtifactStatus::Corrupt,
+        ] {
+            let mut face = analysis();
+            face.status = status;
+            face.detections[0].status = status;
+            face.embeddings[0].status = status;
+            let error = (!matches!(status, FaceArtifactStatus::Valid))
+                .then(|| format!("artifact state {status:?}"));
+            face.error = error.clone();
+            face.detections[0].error = error.clone();
+            face.embeddings[0].error = error;
+            validate_face_analysis(&face)
+                .unwrap_or_else(|e| panic!("{status:?} must be valid: {e}"));
+            let json = serde_json::to_string(&face).unwrap();
+            let decoded: FaceAnalysis = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, face);
+            assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+            assert_eq!(decoded.status, status);
+            assert_eq!(decoded.detections[0].status, status);
+            assert_eq!(decoded.embeddings[0].status, status);
+        }
+    }
 }

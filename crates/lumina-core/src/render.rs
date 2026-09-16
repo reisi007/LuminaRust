@@ -215,9 +215,10 @@ pub fn generative_input_frames(
         lensfun,
     )?;
     let after_lens = staged.clone();
+    let perspective = recipe.effective_perspective();
     staged.apply_perspective_stage(
         recipe.lens_correction.as_ref(),
-        recipe.perspective.as_ref(),
+        perspective.as_ref(),
         #[cfg(feature = "lensfun")]
         lensfun,
     )?;
@@ -432,7 +433,7 @@ fn check_typed_spot_entry(
 /// needed here.
 fn default_crop_active(context: &RenderContext<'_>) -> bool {
     let lens = context.recipe.lens_correction.is_some();
-    let perspective = context.recipe.perspective.is_some();
+    let perspective = context.recipe.effective_perspective().is_some();
     #[cfg(feature = "lensfun")]
     {
         lens || perspective || context.lensfun.is_some()
@@ -509,9 +510,14 @@ pub fn render_frame_from_base_with_generative(
     {
         base = crate::generative::composite_auto_fill(base, generative.auto_fill)?;
     }
+    // GEN-PIPELINE-DECOUPLE position of the LRPAR-G06-UPRIGHT-15 stage: the
+    // persisted upright analysis (when enabled) supplies the effective F-099
+    // perspective here, immediately before the perspective sub-stage. The
+    // manual `recipe.perspective` stays authoritative when upright is off.
+    let perspective = context.recipe.effective_perspective();
     base.apply_perspective_stage(
         context.recipe.lens_correction.as_ref(),
-        context.recipe.perspective.as_ref(),
+        perspective.as_ref(),
         #[cfg(feature = "lensfun")]
         context.lensfun.map(|LensfunCorrectorRef(c)| c),
     )?;

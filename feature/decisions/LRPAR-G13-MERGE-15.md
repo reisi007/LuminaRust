@@ -214,8 +214,8 @@ Folge-Task fest):
   dokumentierten Verschiebungsschwelle → sichtbare Warnung (`aligned_with_
   residual`, Pixelmaß im Merge-Status), kein stiller Abbruch und kein
   stilles Croppen ohne Meldung.
-- **Panorama (1.5-Scope):** Merkmalsbasierte Homographie (Translation +
-  Rotation light, eine Dimension Kette statt Voll-Bündelausgleich),
+- **Panorama (1.5-Scope):** dichte intensitätsbasierte SAD-Suche über
+  ganzzahlige Translation + Rotation-light (±2°, um das Frame-Zentrum),
   zylindrische Projektion als dokumentierte Grenze (nur zylindrisch, keine
   sphärische/fisheye-Projektion in 1.5), lineares Blending im Überlapp
   (Federung, keine Mehrband-Blending in 1.5). Nicht überlappende oder

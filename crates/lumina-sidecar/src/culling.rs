@@ -490,6 +490,112 @@ mod tests {
         validate_culling_section(&onnx).expect("real pin is legal");
     }
 
+    /// D1-Nacharbeit (Schema-Verifizierung): every enum variant must survive a
+    /// serde roundtrip on its documented wire form. The earlier matrices only
+    /// exercised the `heuristic`/`valid`/`review` defaults, so this table
+    /// covers the previously untested variants: all `CullProposal`s
+    /// (`keep`/`review`/`reject-kandidat`), all `CullingStatus`s
+    /// (`valid`/`stale`/`missing`/`corrupt`) and both `CullingAnalyzerKind`s
+    /// (`heuristic`/`onnx`).
+    #[test]
+    fn serde_roundtrip_covers_every_enum_variant() {
+        for (variant, wire) in [
+            (CullProposal::Keep, "\"keep\""),
+            (CullProposal::Review, "\"review\""),
+            (CullProposal::RejectCandidate, "\"reject-kandidat\""),
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, wire, "CullProposal wire form");
+            let decoded: CullProposal = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, variant);
+        }
+        for (variant, wire) in [
+            (CullingStatus::Valid, "\"valid\""),
+            (CullingStatus::Stale, "\"stale\""),
+            (CullingStatus::Missing, "\"missing\""),
+            (CullingStatus::Corrupt, "\"corrupt\""),
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, wire, "CullingStatus wire form");
+            let decoded: CullingStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, variant);
+        }
+        for (variant, wire) in [
+            (CullingAnalyzerKind::Heuristic, "\"heuristic\""),
+            (CullingAnalyzerKind::Onnx, "\"onnx\""),
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, wire, "CullingAnalyzerKind wire form");
+            let decoded: CullingAnalyzerKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, variant);
+        }
+    }
+
+    /// D1-Nacharbeit: the full source-level section must roundtrip losslessly
+    /// for every documented proposal/status pair, including the ONNX analyzer
+    /// (with the explicit `pending-integration` and real hash pins). The
+    /// section is a nested struct, so this pins key placement and ordering in
+    /// addition to the enum wire forms.
+    #[test]
+    fn serde_roundtrip_matrix_covers_every_proposal_and_status() {
+        for proposal in [
+            CullProposal::Keep,
+            CullProposal::Review,
+            CullProposal::RejectCandidate,
+        ] {
+            for status in [
+                CullingStatus::Valid,
+                CullingStatus::Stale,
+                CullingStatus::Missing,
+                CullingStatus::Corrupt,
+            ] {
+                let mut value = section();
+                value.proposal = proposal;
+                value.status = status;
+                value.error = matches!(
+                    status,
+                    CullingStatus::Stale | CullingStatus::Missing | CullingStatus::Corrupt
+                )
+                .then(|| "artifact no longer usable".to_string());
+                validate_culling_section(&value)
+                    .unwrap_or_else(|e| panic!("{proposal:?}/{status:?} must be valid: {e}"));
+                let json = serde_json::to_string(&value).unwrap();
+                let decoded: CullingSection = serde_json::from_str(&json).unwrap();
+                assert_eq!(decoded, value);
+                assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+                // The status enum serializes at its documented pointer.
+                let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+                assert!(raw["status"].is_string());
+            }
+        }
+    }
+
+    #[test]
+    fn onnx_analyzer_roundtrips_with_both_legal_hash_pins() {
+        for hash in [
+            CULLING_PENDING_MODEL_HASH.to_string(),
+            format!("{CULLING_SHA256_PREFIX}{}", "ab".repeat(32)),
+        ] {
+            let mut value = section();
+            value.identity.analyzer = CullingAnalyzer {
+                kind: CullingAnalyzerKind::Onnx,
+                name: "lumina-cull-onnx".into(),
+                version: "2".into(),
+                model_hash: Some(hash.clone()),
+                extras: Extras::new(),
+            };
+            validate_culling_section(&value).expect("legal ONNX pin");
+            let json = serde_json::to_string(&value).unwrap();
+            let decoded: CullingSection = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, value);
+            assert_eq!(decoded.identity.analyzer.kind, CullingAnalyzerKind::Onnx);
+            assert_eq!(
+                decoded.identity.analyzer.model_hash.as_deref(),
+                Some(hash.as_str())
+            );
+        }
+    }
+
     #[test]
     fn unknown_fields_and_open_reason_registry_roundtrip() {
         let mut value = section();

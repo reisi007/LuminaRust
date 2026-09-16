@@ -154,6 +154,8 @@ Sidecars vollständig wiederherstellbar sein.
 | SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
 | LRPAR-G15-IPTC-1 | IPTC-Metadaten (Draft, Presets, Sync, JPEG-Bake-In) | [IPTC Metadaten](product/iptc-metadata.md) | hoch |
 | LRPAR-G13-MERGE-15 | HDR-/Panorama-Merge (G-13, Release 1.5): Merge-Rezept-Schema, `lumina-merge`-Alignment, linearer DNG-Writer + Re-Import, CLI `merge-hdr`/`merge-pano`, GUI-Aktionen, Golden-Gates | [HDR-/Panorama-Merge](decisions/LRPAR-G13-MERGE-15.md) | hoch |
+| LRPAR-G06-UPRIGHT-15 | Auto-Upright (G-06, Release 1.5): deterministische, modellfreie Linienanalyse als additive Rezept-Stufe `recipe.upright` (Fingerprint/Veraltung, effektive Perspektive vor F-099), CLI `upright`, GUI Geometry-Sektion, Golden-Gates | [Pipeline](architecture/pipeline.md) | hoch |
+| LRPAR-G14-REDEYE-15 | Rote Augen (G-14, Release 1.5): explizite Regionen `recipe.adjustments.red_eye` + deterministische, modellfreie Korrektur nach Schärfen, CLI `red-eye`, GUI Detail-Sektion mit Vorschau-Picker, Golden-Gates | [Pipeline](architecture/pipeline.md) | mittel |
 
 ## Arbeitsweise
 

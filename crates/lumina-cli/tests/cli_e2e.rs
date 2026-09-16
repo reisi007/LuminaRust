@@ -840,3 +840,88 @@ fn previous_missing_target_sidecar_exits_three() {
         "previous"
     );
 }
+
+/// A structured `size`×`size` PNG (checkerboard with the given shade). Enough
+/// for the upright stage to persist a fingerprint; `shade` lets a test rewrite
+/// the same path with different bytes.
+fn write_structured_png(
+    directory: &tempfile::TempDir,
+    name: &str,
+    shade: u8,
+) -> std::path::PathBuf {
+    let path = directory.path().join(name);
+    let size = 24u32;
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let v = if (x + y) % 2 == 0 { shade } else { 255 - shade };
+            pixels.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let frame = ImageFrame::new(size, size, pixels).unwrap();
+    fs::write(&path, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    path
+}
+
+/// LRPAR-G06-UPRIGHT-15 (L2): `upright --list --json` reports the persisted
+/// analysis freshness against the current source — `none` before `--analyze`,
+/// `fresh` right after, and `stale` once the source bytes change. The status is
+/// never silently recomputed.
+#[test]
+fn upright_list_reports_fresh_then_stale_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = write_structured_png(&directory, "upright.png", 40);
+    let imported = cli()
+        .args(["import", "--input", input.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "import stderr: {}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+
+    let list_status = |input: &std::path::Path| -> String {
+        let output = cli()
+            .args([
+                "upright",
+                "--input",
+                input.to_str().unwrap(),
+                "--list",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "upright --list stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        payload["status"].as_str().unwrap().to_string()
+    };
+
+    assert_eq!(list_status(&input), "none");
+
+    let analyzed = cli()
+        .args([
+            "upright",
+            "--input",
+            input.to_str().unwrap(),
+            "--analyze",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        analyzed.status.success(),
+        "upright --analyze stderr: {}",
+        String::from_utf8_lossy(&analyzed.stderr)
+    );
+    assert_eq!(list_status(&input), "fresh");
+
+    // Rewrite the source with different bytes: the persisted fingerprint no
+    // longer matches and the read-only list reports it as stale.
+    let _ = write_structured_png(&directory, "upright.png", 90);
+    assert_eq!(list_status(&input), "stale");
+}

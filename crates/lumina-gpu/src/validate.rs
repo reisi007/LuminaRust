@@ -89,6 +89,12 @@ fn validate_nested(recipe: &EditRecipe) -> Result<(), GpuError> {
     if let Some(p) = &recipe.perspective {
         validate_perspective(p)?;
     }
+    if let Some(u) = &recipe.upright {
+        // LRPAR-G06-UPRIGHT-15: the core validator is the single source of
+        // truth for the additive upright stage, so the GPU entry returns the
+        // exact CPU `CoreError` (including `enabled` without `analysis`).
+        lumina_core::validate_upright(u).map_err(GpuError::Core)?;
+    }
     if let Some(g) = &recipe.generative_edit {
         validate_generative_edit(g)?;
     }

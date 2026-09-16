@@ -35,14 +35,15 @@ use lumina_core::cache::PreviewKind;
 use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
-    analyze_tone, analyze_tone_with_histogram, apply_visualize_overlay, detect_spots_heuristic,
-    distraction_candidates, generative_input_frames, generative_variant_seed,
-    has_transparent_pixels, match_total_exposure_masked, prepare_source_base,
-    render_frame_from_base_with_generative, suggest_auto_tone, tone_fingerprint, AutoToneConfig,
-    AutoToneResult, CacheStage, DetectedSpot, DistractionKind, DistractionSetting,
-    DistractionStatus, GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput,
-    GenerativeIdentity, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext,
-    MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
+    analyze_tone, analyze_tone_with_histogram, analyze_upright, apply_visualize_overlay,
+    detect_spots_heuristic, distraction_candidates, generative_input_frames,
+    generative_variant_seed, has_transparent_pixels, match_total_exposure_masked,
+    prepare_source_base, render_frame_from_base_with_generative, suggest_auto_tone,
+    tone_fingerprint, upright_analysis, upright_input_fingerprint, AutoToneConfig, AutoToneResult,
+    CacheStage, DetectedSpot, DistractionKind, DistractionSetting, DistractionStatus,
+    GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeIdentity,
+    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
+    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
@@ -70,8 +71,8 @@ use lumina_sidecar::{
     AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
     CurveChannels, CurvePoint, Curves, EditRecipe, Effects, Flag, FocusRect, GenerativeCanvas,
     GenerativeEdit, Geometry, Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection,
-    NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset, Sharpening,
-    SpotDistraction, Vignette,
+    NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset, RedEyeCorrection,
+    RedEyeRegion, Sharpening, SpotDistraction, Upright, Vignette, RED_EYE_MAX_REGIONS,
 };
 // GEN-ONNX-1 Welle 2b: the GUI resolves and (fixture-)produces the persisted
 // `generative_canvas` artifact through the same documented ONNX/sidecar surface
@@ -1827,6 +1828,9 @@ pub struct LuminaApp {
     mask_baseline: Vec<MaskLayer>,
     /// White-balance eyedropper armed state.
     wb_pick_mode: bool,
+    /// LRPAR-G14-REDEYE-15: red-eye region picker armed state (click the
+    /// preview to mark a pupil; regions are persisted explicitly).
+    red_eye_pick_mode: bool,
     /// Generated filmstrip thumbnail textures.
     thumbnails: ThumbnailManager,
     /// GUI-FILMSTRIP-SYNC-1: multi-selection of filmstrip entries
@@ -2778,6 +2782,7 @@ impl LuminaApp {
             recipe_baseline: None,
             mask_baseline: Vec::new(),
             wb_pick_mode: false,
+            red_eye_pick_mode: false,
             thumbnails: ThumbnailManager::new(),
             filmstrip_selection: BTreeSet::new(),
             filmstrip_anchor: None,
@@ -4138,6 +4143,7 @@ impl LuminaApp {
             SECTION_DETAIL => {
                 dst.sharpening.clone_from(&src.sharpening);
                 dst.noise_reduction.clone_from(&src.noise_reduction);
+                dst.red_eye.clone_from(&src.red_eye);
             }
             SECTION_EFFECTS => dst.effects.clone_from(&src.effects),
             SECTION_OPTICS => {
@@ -4147,6 +4153,7 @@ impl LuminaApp {
             SECTION_GEOMETRY => {
                 dst.geometry.clone_from(&src.geometry);
                 dst.perspective.clone_from(&src.perspective);
+                dst.upright.clone_from(&src.upright);
             }
             _ => {}
         }
@@ -4186,6 +4193,9 @@ impl LuminaApp {
             SECTION_DETAIL => {
                 recipe.sharpening = None;
                 recipe.noise_reduction = None;
+                // G-14 red-eye lives in this panel; a section reset clears it
+                // too (visible recipe edit, no hidden state).
+                recipe.red_eye = None;
             }
             SECTION_EFFECTS => recipe.effects = None,
             SECTION_OPTICS => {
@@ -4195,6 +4205,8 @@ impl LuminaApp {
             SECTION_GEOMETRY => {
                 recipe.geometry = None;
                 recipe.perspective = None;
+                // LRPAR-G06-UPRIGHT-15 lives in this panel.
+                recipe.upright = None;
             }
             _ => {}
         }
@@ -7491,7 +7503,9 @@ impl LuminaApp {
                 || g.mirror_horizontal
                 || g.mirror_vertical
         });
-        let perspective_active = self.recipe.perspective.as_ref().is_some_and(|p| {
+        // LRPAR-G06-UPRIGHT-15: the effective perspective (manual or upright)
+        // determines whether the preview is geometrically transformed.
+        let perspective_active = self.recipe.effective_perspective().is_some_and(|p| {
             p.vertical != 0.0
                 || p.horizontal != 0.0
                 || p.rotation != 0.0
@@ -7527,6 +7541,48 @@ impl LuminaApp {
         self.drag_start = None;
         self.drag_current = None;
         self.drawing = false;
+    }
+
+    /// G-14 (H1): arm the WB eyedropper and disarm the red-eye region picker.
+    /// Both pickers consume the same preview click, so they are mutually
+    /// exclusive — a single click must never sample a white balance *and* mark
+    /// a pupil.
+    fn arm_wb_picker(&mut self) {
+        self.wb_pick_mode = true;
+        self.red_eye_pick_mode = false;
+        info!("GUI interaction: white-balance pick mode armed");
+    }
+
+    /// G-14 (H1): arm/disarm the red-eye region picker. Arming disarms the WB
+    /// eyedropper (see [`Self::arm_wb_picker`]).
+    fn set_red_eye_pick_mode(&mut self, armed: bool) {
+        self.red_eye_pick_mode = armed;
+        if armed {
+            self.wb_pick_mode = false;
+        }
+        info!("GUI interaction: red-eye pick mode -> {armed}");
+    }
+
+    /// Disarm both preview pickers (image switch and `Esc`). The recipe and the
+    /// persisted state are never touched.
+    fn disarm_preview_pickers(&mut self) {
+        self.wb_pick_mode = false;
+        self.red_eye_pick_mode = false;
+    }
+
+    /// `Esc` cancels an armed WB eyedropper / red-eye region picker and an
+    /// armed spot tool (F-103-N3 / G-14 / SPOT). The recipe stays untouched.
+    fn cancel_armed_preview_tools(&mut self) {
+        self.disarm_preview_pickers();
+        self.spot_tool = SpotTool::None;
+    }
+
+    /// `Esc` key wiring: read the frame's input and cancel the armed preview
+    /// tools. Extracted so a headless test can drive the real key event.
+    fn handle_escape_shortcut(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cancel_armed_preview_tools();
+        }
     }
 
     pub fn set_spot_tool(&mut self, tool: SpotTool) {
@@ -8396,7 +8452,7 @@ impl LuminaApp {
                 &after_perspective,
                 auto_fill_frame.as_ref(),
                 self.recipe.lens_correction.as_ref(),
-                self.recipe.perspective.as_ref(),
+                self.recipe.effective_perspective().as_ref(),
                 lensfun,
             )?;
             let produced =
@@ -8535,7 +8591,7 @@ impl LuminaApp {
                     &after_perspective,
                     auto_fill_frame.as_ref(),
                     self.recipe.lens_correction.as_ref(),
-                    self.recipe.perspective.as_ref(),
+                    self.recipe.effective_perspective().as_ref(),
                     lensfun,
                 ) {
                     Ok(expand_input) => {
@@ -9563,7 +9619,7 @@ impl LuminaApp {
         self.navigator_overview = None;
         self.navigator_overview_key = None;
         self.before_after = false;
-        self.wb_pick_mode = false;
+        self.disarm_preview_pickers();
         self.render_mask_layers.clear();
         // GEN-ONNX-1 Welle 2b: a new source invalidates every session/persisted
         // generative canvas — the identity digests are source-bound.
@@ -10893,6 +10949,209 @@ impl LuminaApp {
         self.mark_recipe_dirty(&format!("perspective.{field}"), value);
         self.pending_history_step = Some(format!("perspective.{field}"));
         info!("GUI interaction: set_perspective_value {field} -> {value}");
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: run the deterministic `upright-lines-v1` analysis
+    /// on the currently loaded source frame and persist it, bound to the source
+    /// identity fingerprint. Enables the stage (the analysis is meant to be
+    /// applied); the manual perspective stays persisted and returns on disable.
+    pub fn analyze_upright_now(&mut self) -> Result<(), GuiError> {
+        let Some(frame) = self.original.clone() else {
+            return Ok(());
+        };
+        let source_hash = self.resolved_source_hash();
+        let fingerprint = upright_input_fingerprint(
+            &source_hash,
+            frame.width,
+            frame.height,
+            self.raw_orientation,
+        );
+        let suggestion = analyze_upright(&frame);
+        let current = self
+            .recipe
+            .upright
+            .as_ref()
+            .map(|stage| stage.enabled)
+            .unwrap_or(true);
+        self.recipe.upright = Some(Upright {
+            version: 1,
+            enabled: current,
+            analysis: Some(upright_analysis(suggestion, fingerprint)),
+        });
+        self.mark_recipe_dirty("upright.analyze", f64::from(suggestion.confidence));
+        self.pending_history_step = Some("upright.analyze".into());
+        info!(
+            "GUI interaction: analyze_upright_now -> lines={} confidence={:.3} \
+             vertical={:.3} horizontal={:.3} rotation={:.3}",
+            suggestion.line_count,
+            suggestion.confidence,
+            suggestion.vertical,
+            suggestion.horizontal,
+            suggestion.rotation
+        );
+        Ok(())
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: apply or stop applying the persisted analysis.
+    /// Enabling without an analysis is refused loudly (no silent identity
+    /// render); the manual perspective is authoritative while disabled.
+    pub fn set_upright_enabled(&mut self, enabled: bool) -> Result<(), GuiError> {
+        let stage = self.recipe.upright.clone().unwrap_or(Upright {
+            version: 1,
+            enabled: false,
+            analysis: None,
+        });
+        if enabled && stage.analysis.is_none() {
+            return Err(GuiError::Io(
+                "no persisted upright analysis; run Analyze first".into(),
+            ));
+        }
+        let mut stage = stage;
+        stage.enabled = enabled;
+        self.recipe.upright = Some(stage);
+        self.mark_recipe_dirty("upright.enabled", f64::from(u8::from(enabled)));
+        self.pending_history_step = Some("upright.enabled".into());
+        info!("GUI interaction: set_upright_enabled -> {enabled}");
+        Ok(())
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: remove the whole upright stage (the manual
+    /// perspective, if any, becomes authoritative again).
+    pub fn clear_upright(&mut self) {
+        self.recipe.upright = None;
+        self.mark_recipe_dirty("upright.clear", 0.0);
+        self.pending_history_step = Some("upright.clear".into());
+        info!("GUI interaction: clear_upright");
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: `fresh`/`stale`/`none` status of the persisted
+    /// analysis for the currently loaded source (visible, never a silent
+    /// recompute). Pure read; the source hash is memoized.
+    pub fn upright_status(&mut self) -> &'static str {
+        let Some(persisted) = self
+            .recipe
+            .upright
+            .as_ref()
+            .and_then(|stage| stage.analysis.as_ref())
+            .map(|analysis| analysis.fingerprint.input_fingerprint.clone())
+        else {
+            return "none";
+        };
+        let Some((width, height)) = self
+            .original
+            .as_ref()
+            .map(|frame| (frame.width, frame.height))
+        else {
+            return "none";
+        };
+        let source_hash = self.resolved_source_hash();
+        let current = upright_input_fingerprint(&source_hash, width, height, self.raw_orientation);
+        if persisted == current {
+            "fresh"
+        } else {
+            "stale"
+        }
+    }
+
+    /// G-14: mark one red-eye region at normalized source coordinates (the
+    /// preview picker path). The next free `re-N` id is used; the new region
+    /// starts with the panel's default strengths and the persisted default
+    /// radius. Loud when the 32-region cap is reached.
+    ///
+    /// L1: the coordinates are validated loudly against `0..=1` (finite) and
+    /// never silently clipped — consistent with the pipeline's no-clipping
+    /// rule. The preview picker already maps/clamps through
+    /// [`Self::to_normalized`], so its clicks stay valid.
+    pub fn add_red_eye_region(&mut self, x: f32, y: f32) -> Result<(), GuiError> {
+        if !x.is_finite() || !(0.0..=1.0).contains(&x) {
+            return Err(GuiError::Io(format!("red-eye x `{x}` out of 0..=1")));
+        }
+        if !y.is_finite() || !(0.0..=1.0).contains(&y) {
+            return Err(GuiError::Io(format!("red-eye y `{y}` out of 0..=1")));
+        }
+        let mut correction = self.recipe.red_eye.clone().unwrap_or(RedEyeCorrection {
+            version: 1,
+            regions: Vec::new(),
+        });
+        if correction.regions.len() >= RED_EYE_MAX_REGIONS {
+            return Err(GuiError::Io(format!(
+                "red-eye region limit of {RED_EYE_MAX_REGIONS} reached"
+            )));
+        }
+        let mut index = 1u32;
+        let id = loop {
+            let candidate = format!("re-{index}");
+            if correction
+                .regions
+                .iter()
+                .all(|region| region.id != candidate)
+            {
+                break candidate;
+            }
+            index += 1;
+        };
+        correction.regions.push(RedEyeRegion {
+            id: id.clone(),
+            x,
+            y,
+            radius: 0.05,
+            desaturate: 0.8,
+            darken: 0.4,
+        });
+        self.recipe.red_eye = Some(correction);
+        self.mark_recipe_dirty("red_eye.add", f64::from(x) + f64::from(y));
+        self.pending_history_step = Some("red_eye.add".into());
+        info!("GUI interaction: add_red_eye_region {id} at ({x:.3},{y:.3})");
+        Ok(())
+    }
+
+    /// G-14: set one field (`radius`/`desaturate`/`darken`) of one persisted
+    /// region by its stable id. Unknown ids/fields are ignored loudly.
+    pub fn set_red_eye_region_value(&mut self, id: &str, field: &str, value: f64) {
+        let Some(correction) = self.recipe.red_eye.as_mut() else {
+            warn!("set_red_eye_region_value: no red-eye stage");
+            return;
+        };
+        let Some(region) = correction.regions.iter_mut().find(|region| region.id == id) else {
+            warn!("set_red_eye_region_value: unknown region {id}");
+            return;
+        };
+        match field {
+            "radius" => region.radius = value as f32,
+            "desaturate" => region.desaturate = value as f32,
+            "darken" => region.darken = value as f32,
+            _ => {
+                warn!("set_red_eye_region_value: unknown field {field}");
+                return;
+            }
+        }
+        self.mark_recipe_dirty(&format!("red_eye.{id}.{field}"), value);
+        self.pending_history_step = Some(format!("red_eye.{id}.{field}"));
+        info!("GUI interaction: set_red_eye_region_value {id}.{field} -> {value}");
+    }
+
+    /// G-14: remove one persisted region by id. Unknown ids are ignored loudly.
+    pub fn remove_red_eye_region(&mut self, id: &str) {
+        let Some(correction) = self.recipe.red_eye.as_mut() else {
+            return;
+        };
+        let before = correction.regions.len();
+        correction.regions.retain(|region| region.id != id);
+        if correction.regions.len() == before {
+            warn!("remove_red_eye_region: unknown region {id}");
+            return;
+        }
+        self.mark_recipe_dirty("red_eye.remove", 0.0);
+        self.pending_history_step = Some("red_eye.remove".into());
+        info!("GUI interaction: remove_red_eye_region {id}");
+    }
+
+    /// G-14: remove the whole red-eye stage (identity).
+    pub fn clear_red_eye(&mut self) {
+        self.recipe.red_eye = None;
+        self.mark_recipe_dirty("red_eye.clear", 0.0);
+        self.pending_history_step = Some("red_eye.clear".into());
+        info!("GUI interaction: clear_red_eye");
     }
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
@@ -13792,13 +14051,15 @@ impl LuminaApp {
 
             let armed = self.mask_tool != MaskTool::None;
             let pick = self.wb_pick_mode;
+            let red_eye_pick = self.red_eye_pick_mode;
 
             // A mask tool arms the preview for a drag gesture; the WB eyedropper
-            // keeps a plain click; otherwise a zoomed image drags to pan (hand
-            // tool). Pan never conflicts with an armed mask tool or the picker.
+            // and the red-eye region picker keep a plain click; otherwise a
+            // zoomed image drags to pan (hand tool). Pan never conflicts with an
+            // armed mask tool or either picker.
             let sense = if armed {
                 egui::Sense::drag()
-            } else if pick {
+            } else if pick || red_eye_pick {
                 egui::Sense::click()
             } else if pan_eligible {
                 egui::Sense::drag()
@@ -13808,7 +14069,7 @@ impl LuminaApp {
             let response = ui.allocate_rect(rect, sense);
 
             // Pan while zoomed (only when no mask tool and not picking).
-            if !armed && !pick && pan_eligible {
+            if !armed && !pick && !red_eye_pick && pan_eligible {
                 let delta = response.drag_delta();
                 if delta != egui::Vec2::ZERO {
                     if response.drag_started() {
@@ -13945,6 +14206,35 @@ impl LuminaApp {
                     egui::StrokeKind::Middle,
                 );
             }
+            // G-14 red-eye region picker: a click marks a pupil at the clicked
+            // source position (normalized). The overlays/region list live in the
+            // Detail panel; geometry that blocks source mapping is refused
+            // visibly, exactly like the WB eyedropper.
+            if red_eye_pick {
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
+                    egui::StrokeKind::Middle,
+                );
+                if response.clicked() {
+                    if self.geometry_blocks_source_mapping() {
+                        self.red_eye_pick_mode = false;
+                        self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
+                    } else if let Some(pos) = response.interact_pointer_pos() {
+                        let full = self.image_dims().unwrap_or((1, 1));
+                        let roi = self.preview_roi.map(|r| {
+                            Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src)
+                        });
+                        let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
+                        if let Err(error) = self.add_red_eye_region(nx, ny) {
+                            self.show_error(error);
+                        }
+                        // One click marks one region; the picker stays armed so
+                        // several pupils can be marked in a row.
+                    }
+                }
+            }
             self.handle_mask_tool_drag(&response, rect);
             // Mask overlay is painted over the full-frame rect (accounting for the
             // current ROI crop) so it lines up with the zoomed/panned view.
@@ -13999,8 +14289,11 @@ impl LuminaApp {
         let fx = ((pos.x - rect.min.x) / rw).clamp(0.0, 1.0);
         let fy = ((pos.y - rect.min.y) / rh).clamp(0.0, 1.0);
         let roi = roi.unwrap_or([0, 0, full.0, full.1]);
-        let nx = (roi[0] as f32 + fx * roi[2] as f32) / full.0 as f32;
-        let ny = (roi[1] as f32 + fy * roi[3] as f32) / full.1 as f32;
+        // L1: the picker contract is normalized `0..=1`; clamp the internal
+        // mapping so floating-point rounding can never push a click past the
+        // (now loud) `add_red_eye_region` validation.
+        let nx = ((roi[0] as f32 + fx * roi[2] as f32) / full.0 as f32).clamp(0.0, 1.0);
+        let ny = ((roi[1] as f32 + fy * roi[3] as f32) / full.1 as f32).clamp(0.0, 1.0);
         (nx, ny)
     }
 
@@ -14834,7 +15127,7 @@ impl LuminaApp {
                         self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
                     }
                 } else {
-                    self.wb_pick_mode = true;
+                    self.arm_wb_picker();
                 }
             }
             ui.separator();
@@ -15545,6 +15838,86 @@ impl LuminaApp {
             ) {
                 self.set_noise_reduction_value("color", f64::from(col));
             }
+            // G-14 Rote Augen (LRPAR-G14-REDEYE-15): explicit region marking.
+            // The picker marks a pupil on the preview; every region is persisted
+            // by a stable id with its own strength. No automatic detection in
+            // this release (documented Folgearbeit).
+            ui.separator();
+            ui.label(Str::RedEye.t()).on_hover_text(Str::RedEyeHint.t());
+            let mut pick = self.red_eye_pick_mode;
+            if ui
+                .toggle_value(&mut pick, Str::RedEyePickMode.t())
+                .changed()
+            {
+                self.set_red_eye_pick_mode(pick);
+            }
+            let regions = self
+                .recipe
+                .red_eye
+                .as_ref()
+                .map(|correction| correction.regions.clone())
+                .unwrap_or_default();
+            if !regions.is_empty() {
+                ui.label(Str::RedEyeCountPattern.format_arg(&regions.len().to_string()));
+            }
+            let mut pending_value: Option<(String, &'static str, f64)> = None;
+            let mut pending_remove: Option<String> = None;
+            for region in &regions {
+                let id = region.id.clone();
+                ui.push_id(&id, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(Str::RedEyeRegion.format_arg(&id));
+                        if ui.button(Str::RedEyeRemove.t()).clicked() {
+                            pending_remove = Some(id.clone());
+                        }
+                    });
+                    let mut radius = region.radius;
+                    if matches!(
+                        lr_slider(
+                            ui,
+                            Str::RedEyeRadius.t(),
+                            &mut radius,
+                            identity_spec(0.001..=1.0, 0.05, 0.001)
+                        ),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        pending_value = Some((id.clone(), "radius", f64::from(radius)));
+                    }
+                    let mut desaturate = region.desaturate;
+                    if matches!(
+                        lr_slider(
+                            ui,
+                            Str::RedEyeDesaturate.t(),
+                            &mut desaturate,
+                            identity_spec(0.0..=1.0, 0.8, 0.01)
+                        ),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        pending_value = Some((id.clone(), "desaturate", f64::from(desaturate)));
+                    }
+                    let mut darken = region.darken;
+                    if matches!(
+                        lr_slider(
+                            ui,
+                            Str::RedEyeDarken.t(),
+                            &mut darken,
+                            identity_spec(0.0..=1.0, 0.4, 0.01)
+                        ),
+                        SliderAction::Changed | SliderAction::ResetRequested
+                    ) {
+                        pending_value = Some((id.clone(), "darken", f64::from(darken)));
+                    }
+                });
+            }
+            if let Some((id, field, value)) = pending_value {
+                self.set_red_eye_region_value(&id, field, value);
+            }
+            if let Some(id) = pending_remove {
+                self.remove_red_eye_region(&id);
+            }
+            if !regions.is_empty() && ui.button(Str::RedEyeClear.t()).clicked() {
+                self.clear_red_eye();
+            }
         });
         if section_response.header_response.clicked() {
             self.set_section_open(SECTION_DETAIL, !section_was_open);
@@ -16054,6 +16427,40 @@ impl LuminaApp {
                     };
                     self.set_perspective_value(name, f64::from(v));
                 }
+            }
+            // LRPAR-G06-UPRIGHT-15: persisted automatic upright analysis. The
+            // suggestion is computed on demand (classic, model-free) and stored
+            // with a source fingerprint; the status line reports `fresh`/`stale`
+            // visibly (never a silent recompute). "Apply analysis" toggles
+            // whether it supplies the effective perspective — the manual
+            // sliders above stay persisted and return when disabled.
+            let status = self.upright_status();
+            ui.label(Str::UprightStatusPattern.format_arg(match status {
+                "fresh" => Str::UprightFresh.t(),
+                "stale" => Str::UprightStale.t(),
+                _ => Str::UprightNone.t(),
+            }));
+            if ui
+                .button(Str::UprightAnalyze.t())
+                .on_hover_text(Str::UprightHint.t())
+                .clicked()
+            {
+                if let Err(error) = self.analyze_upright_now() {
+                    self.show_error(error);
+                }
+            }
+            let mut enabled = self
+                .recipe
+                .upright
+                .as_ref()
+                .is_some_and(|stage| stage.enabled);
+            if ui.checkbox(&mut enabled, Str::UprightEnable.t()).changed() {
+                if let Err(error) = self.set_upright_enabled(enabled) {
+                    self.show_error(error);
+                }
+            }
+            if self.recipe.upright.is_some() && ui.button(Str::UprightClear.t()).clicked() {
+                self.clear_upright();
             }
             // Lensfun auto status (G-06): always visible (EXIF snapshot or
             // the missing-capability reason), never implied.
@@ -19633,10 +20040,7 @@ impl eframe::App for LuminaApp {
                 "Spot heal disarmed".into()
             };
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.wb_pick_mode = false;
-            self.spot_tool = SpotTool::None;
-        }
+        self.handle_escape_shortcut(&ctx);
 
         // Module-switch shortcuts (`G` Library grid, `D` Develop, `E`
         // Library loupe). They are ignored while a widget wants keyboard
@@ -25985,6 +26389,387 @@ mod tests {
         );
     }
 
+    // ---- LRPAR-G06-UPRIGHT-15 / G-14 (LRPAR-G14-REDEYE-15) ----
+
+    /// A `size`×`size` grid (bright bars on dark) tilted by `angle_deg`, so the
+    /// deterministic upright analysis has a real line signal.
+    fn save_tilted_png(path: &Path, angle_deg: f32) {
+        let size = 128u32;
+        let (sa, ca) = angle_deg.to_radians().sin_cos();
+        let period = 0.4f32;
+        let mut pixels = vec![0u8; (size as usize) * (size as usize) * 4];
+        for y in 0..size {
+            for x in 0..size {
+                let nx = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+                let ny = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+                let rx = ca * nx + sa * ny;
+                let dy = (rx / period - (rx / period).round()).abs() * period;
+                let value = if dy < 0.05 { 235u8 } else { 20u8 };
+                let i = ((y * size + x) as usize) * 4;
+                pixels[i] = value;
+                pixels[i + 1] = value;
+                pixels[i + 2] = value;
+                pixels[i + 3] = 255;
+            }
+        }
+        let frame = ImageFrame::new(size, size, pixels).unwrap();
+        std::fs::write(path, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    }
+
+    /// LRPAR-G06-UPRIGHT-15: analyze → apply → disable → reload. The analysis
+    /// persists with a source fingerprint and supplies the effective
+    /// perspective while enabled (DoD §1 chain: action → commit → file →
+    /// reload).
+    #[test]
+    fn upright_analyze_apply_disable_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("tilted.png");
+        save_tilted_png(&source, 6.0);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.recipe().upright.is_none());
+        assert_eq!(app.upright_status(), "none");
+
+        // Enabling without an analysis is refused loudly, recipe untouched.
+        let error = app.set_upright_enabled(true).unwrap_err().to_string();
+        assert!(error.contains("no persisted upright analysis"), "{error}");
+        assert!(app.recipe().upright.is_none());
+
+        // Analyze: applied by default, effective perspective from the analysis.
+        app.analyze_upright_now().unwrap();
+        let stage = app.recipe().upright.as_ref().expect("stage persisted");
+        assert!(stage.enabled);
+        let analysis = stage.analysis.as_ref().expect("analysis persisted");
+        assert_eq!(
+            analysis.fingerprint.algorithm,
+            lumina_core::UPRIGHT_ALGORITHM
+        );
+        assert!(analysis.line_count > 0);
+        assert!(analysis.rotation.abs() > 0.0);
+        let effective = app
+            .recipe()
+            .effective_perspective()
+            .expect("analysis supplies the perspective");
+        assert!(effective.rotation.abs() > 0.0);
+        assert_eq!(app.upright_status(), "fresh");
+
+        let document = commit_and_load_doc(&mut app, &source);
+        let stage = document.virtual_copies[0]
+            .recipe
+            .upright
+            .as_ref()
+            .expect("upright persisted");
+        assert!(stage.enabled);
+        assert_eq!(
+            stage.analysis.as_ref().unwrap().fingerprint.algorithm,
+            lumina_core::UPRIGHT_ALGORITHM
+        );
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+        assert_eq!(
+            document.virtual_copies[0].history[0]
+                .extras
+                .get("action")
+                .and_then(|value| value.as_str()),
+            Some("upright.analyze")
+        );
+
+        // Reload → the analysis is fresh for the same source.
+        let mut reopened = reopen_app(&source);
+        assert!(reopened.recipe().upright.as_ref().unwrap().enabled);
+        assert_eq!(reopened.upright_status(), "fresh");
+
+        // Disable → the manual perspective (none here) is authoritative again.
+        reopened.set_upright_enabled(false).unwrap();
+        assert!(reopened.recipe().effective_perspective().is_none());
+        assert!(!reopened.recipe().upright.as_ref().unwrap().enabled);
+        // The analysis itself stays persisted and still reports its freshness.
+        assert_eq!(reopened.upright_status(), "fresh");
+
+        // A changed fingerprint is reported `stale`, never silently recomputed.
+        reopened
+            .recipe
+            .upright
+            .as_mut()
+            .unwrap()
+            .analysis
+            .as_mut()
+            .unwrap()
+            .fingerprint
+            .input_fingerprint = "blake3:other".into();
+        assert_eq!(reopened.upright_status(), "stale");
+
+        // Clear removes the whole stage.
+        reopened.clear_upright();
+        assert!(reopened.recipe().upright.is_none());
+        assert_eq!(reopened.upright_status(), "none");
+    }
+
+    /// G-14: the preview picker marks regions with stable `re-N` ids, the
+    /// per-region strengths commit and survive a reload, and removal/clear are
+    /// visible recipe edits (DoD §1).
+    #[test]
+    fn red_eye_picker_marks_regions_commit_and_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        assert!(app.recipe().red_eye.is_none());
+
+        app.add_red_eye_region(0.25, 0.35).unwrap();
+        app.add_red_eye_region(0.60, 0.40).unwrap();
+        // Stable ids in marking order.
+        let ids: Vec<String> = app
+            .recipe()
+            .red_eye
+            .as_ref()
+            .unwrap()
+            .regions
+            .iter()
+            .map(|region| region.id.clone())
+            .collect();
+        assert_eq!(ids, vec!["re-1", "re-2"]);
+        app.set_red_eye_region_value("re-1", "radius", 0.08);
+        app.set_red_eye_region_value("re-1", "desaturate", 1.0);
+        app.set_red_eye_region_value("re-1", "darken", 0.6);
+        // Unknown id/field is ignored loudly (recipe unchanged).
+        app.set_red_eye_region_value("re-missing", "radius", 0.5);
+        app.set_red_eye_region_value("re-2", "bogus", 0.5);
+        assert_eq!(
+            app.recipe().red_eye.as_ref().unwrap().regions[1].radius,
+            0.05
+        );
+
+        let document = commit_and_load_doc(&mut app, &source);
+        let regions = &document.virtual_copies[0]
+            .recipe
+            .red_eye
+            .as_ref()
+            .expect("red-eye persisted")
+            .regions;
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].id, "re-1");
+        assert_eq!(regions[0].x, 0.25);
+        assert_eq!(regions[0].y, 0.35);
+        assert_eq!(regions[0].radius, 0.08);
+        assert_eq!(regions[0].desaturate, 1.0);
+        assert_eq!(regions[0].darken, 0.6);
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+
+        let mut reopened = reopen_app(&source);
+        assert_eq!(reopened.recipe().red_eye.as_ref().unwrap().regions.len(), 2);
+        // Remove one region, then clear the rest: each is a visible edit.
+        reopened.remove_red_eye_region("re-1");
+        assert_eq!(
+            reopened.recipe().red_eye.as_ref().unwrap().regions[0].id,
+            "re-2"
+        );
+        reopened.clear_red_eye();
+        assert!(reopened.recipe().red_eye.is_none());
+    }
+
+    /// G-14: the picker refuses to add beyond the 32-region cap (loud).
+    #[test]
+    fn red_eye_picker_enforces_region_cap() {
+        let mut app = new_app();
+        for index in 0..RED_EYE_MAX_REGIONS {
+            app.add_red_eye_region(0.5, 0.5)
+                .unwrap_or_else(|e| panic!("region {index}: {e}"));
+        }
+        let error = app.add_red_eye_region(0.5, 0.5).unwrap_err().to_string();
+        assert!(error.contains("region limit"), "{error}");
+        assert_eq!(
+            app.recipe().red_eye.as_ref().unwrap().regions.len(),
+            RED_EYE_MAX_REGIONS
+        );
+    }
+
+    /// G-14 L1: `add_red_eye_region` validates normalized coordinates loudly
+    /// instead of silently clipping them; rejected marks persist nothing, and
+    /// the `0..=1` borders are accepted verbatim.
+    #[test]
+    fn add_red_eye_region_rejects_out_of_range_coordinates() {
+        let mut app = new_app();
+        for (x, y) in [
+            (1.5_f32, 0.5_f32),
+            (-0.1, 0.5),
+            (0.5, 2.0),
+            (f32::NAN, 0.5),
+            (0.5, f32::INFINITY),
+            (f32::NEG_INFINITY, 0.5),
+        ] {
+            let error = app.add_red_eye_region(x, y).unwrap_err().to_string();
+            assert!(error.contains("out of 0..=1"), "({x}, {y}): {error}");
+        }
+        assert!(
+            app.recipe().red_eye.is_none(),
+            "rejected marks must not be persisted"
+        );
+        app.add_red_eye_region(0.0, 1.0).unwrap();
+        let region = &app.recipe().red_eye.as_ref().unwrap().regions[0];
+        assert_eq!((region.x, region.y), (0.0, 1.0));
+    }
+
+    /// G-14 H1 regression: the WB eyedropper and the red-eye region picker are
+    /// mutually exclusive on the shared preview click. Arming one disarms the
+    /// other, so one click can never sample a white balance *and* mark a
+    /// pupil. The click is driven headlessly through `draw_preview`.
+    #[test]
+    fn wb_and_red_eye_pickers_are_mutually_exclusive_on_click() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        app.load_bytes(
+            ImageFrame::new(200, 150, [128_u8, 128, 128, 255].repeat(200 * 150))
+                .unwrap()
+                .encode(ImageFileFormat::Png)
+                .unwrap(),
+            "pickers.png",
+        )
+        .unwrap();
+        app.render().unwrap();
+        app.texture = Some(ctx.load_texture(
+            "preview",
+            egui::ColorImage::filled([200, 150], egui::Color32::BLACK),
+            egui::TextureOptions::LINEAR,
+        ));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let pos = screen.center();
+        let pass = |app: &mut LuminaApp, events: Vec<egui::Event>, time: f64| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+                },
+            );
+            // No GPU renderer consumes the per-frame texture deltas headlessly.
+            output.textures_delta.clear();
+        };
+        // Warm-up pass so the preview widget exists and is hit-tested.
+        pass(&mut app, vec![egui::Event::PointerMoved(pos)], 0.5);
+        let click = |app: &mut LuminaApp, time: f64| {
+            pass(
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ],
+                time,
+            );
+            pass(
+                app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+                time + 0.05,
+            );
+        };
+
+        // Arm A (red-eye), then arm B (WB): B wins and A is disarmed.
+        app.set_red_eye_pick_mode(true);
+        assert!(app.red_eye_pick_mode && !app.wb_pick_mode);
+        app.arm_wb_picker();
+        assert!(
+            app.wb_pick_mode && !app.red_eye_pick_mode,
+            "arming the WB eyedropper must disarm the red-eye picker"
+        );
+        // The grey frame samples 6500 K; the disarmed red-eye picker must not
+        // add a region for the very same click.
+        click(&mut app, 1.0);
+        assert_eq!(
+            app.recipe().adjustments.get("wb_temperature"),
+            Some(&6500.0)
+        );
+        assert!(
+            app.recipe().red_eye.is_none(),
+            "a disarmed red-eye picker must not mark a region"
+        );
+        assert!(!app.wb_pick_mode, "a WB pick disarms the eyedropper");
+
+        // Arm A (WB), then arm B (red-eye): B wins and A is disarmed.
+        app.arm_wb_picker();
+        app.set_red_eye_pick_mode(true);
+        assert!(
+            app.red_eye_pick_mode && !app.wb_pick_mode,
+            "arming the red-eye picker must disarm the WB eyedropper"
+        );
+        let picked = app.recipe().adjustments.get("wb_temperature").copied();
+        click(&mut app, 2.0);
+        assert_eq!(
+            app.recipe().red_eye.as_ref().map(|c| c.regions.len()),
+            Some(1),
+            "the armed red-eye picker must mark exactly one region"
+        );
+        assert_eq!(
+            app.recipe().adjustments.get("wb_temperature").copied(),
+            picked,
+            "the disarmed WB eyedropper must not resample"
+        );
+        assert!(
+            app.red_eye_pick_mode,
+            "the red-eye picker stays armed for multiple marks"
+        );
+    }
+
+    /// The Develop panel paints the Upright controls (Geometry section) and the
+    /// Red Eye controls (Detail section) headlessly — every visible label.
+    #[test]
+    fn upright_and_red_eye_panels_paint() {
+        let mut app = new_app();
+        app.set_section_open(SECTION_GEOMETRY, true);
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_geometry(ui));
+        let texts = painted_texts(&shapes);
+        assert!(
+            texts.iter().any(|t| t == Str::UprightAnalyze.t()),
+            "Upright analyze button must paint, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == Str::UprightEnable.t()),
+            "Upright apply checkbox must paint, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains(Str::UprightNone.t())),
+            "Upright status must paint, got {texts:?}"
+        );
+
+        let mut app = new_app();
+        app.set_section_open(SECTION_DETAIL, true);
+        // Give the section one region so every per-region control paints.
+        app.add_red_eye_region(0.3, 0.3).unwrap();
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_detail(ui));
+        let texts = painted_texts(&shapes);
+        for needle in [
+            Str::RedEye.t(),
+            Str::RedEyePickMode.t(),
+            Str::RedEyeRadius.t(),
+            Str::RedEyeDesaturate.t(),
+            Str::RedEyeDarken.t(),
+            Str::RedEyeRemove.t(),
+            Str::RedEyeClear.t(),
+        ] {
+            assert!(
+                texts.iter().any(|t| t == needle),
+                "red-eye control {needle:?} must paint, got {texts:?}"
+            );
+        }
+        assert!(
+            texts.iter().any(|t| t.contains("re-1")),
+            "the marked region id must paint, got {texts:?}"
+        );
+    }
+
     // ---- G-06 Geometrie-Parität (LRPAR-G06-GEO) ----
 
     /// G-06: crop aspect + straighten + mirror commit through the debounced
@@ -27569,6 +28354,7 @@ mod tests {
         app.preview_roi = Some([0, 0, 1, 1]);
         app.before_after = true;
         app.wb_pick_mode = true;
+        app.red_eye_pick_mode = true;
         app.history_selected = Some("history-stale".into());
         app.drag_start = Some(Point2 { x: 0.1, y: 0.1 });
         app.drawing = true;
@@ -27580,9 +28366,56 @@ mod tests {
         assert_eq!(app.preview_roi, None);
         assert!(!app.before_after, "Before/After must reset");
         assert!(!app.wb_pick_mode, "WB eyedropper must disarm");
+        assert!(!app.red_eye_pick_mode, "red-eye picker must disarm");
         assert_eq!(app.history_selected, None);
         assert_eq!(app.drag_start, None);
         assert!(!app.drawing);
+    }
+
+    /// G-14 H2: `Esc` cancels an armed red-eye region picker (and the WB
+    /// eyedropper / spot tool it shares the cancel path with). The recipe is
+    /// untouched. The real `Esc` key event is driven headlessly.
+    #[test]
+    fn escape_cancels_armed_preview_pickers() {
+        let ctx = egui::Context::default();
+        let mut app = LuminaApp::new(ctx.clone());
+        app.load_bytes(png(), "test.png").unwrap();
+        let recipe = app.recipe().clone();
+
+        let escape = |app: &mut LuminaApp| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1024.0, 720.0),
+                    )),
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+                |ui| app.handle_escape_shortcut(ui.ctx()),
+            );
+            output.textures_delta.clear();
+        };
+
+        app.arm_wb_picker();
+        assert!(app.wb_pick_mode);
+        escape(&mut app);
+        assert!(!app.wb_pick_mode, "Esc must disarm the WB eyedropper");
+
+        app.set_red_eye_pick_mode(true);
+        app.set_spot_tool(SpotTool::Heal);
+        assert!(app.red_eye_pick_mode && app.spot_tool == SpotTool::Heal);
+        escape(&mut app);
+        assert!(!app.red_eye_pick_mode, "Esc must disarm the red-eye picker");
+        assert_eq!(app.spot_tool, SpotTool::None);
+        assert_eq!(app.recipe().adjustments, recipe.adjustments);
+        assert_eq!(app.recipe().red_eye, recipe.red_eye);
     }
 
     // ---- REVIEW-GUI-N5: draft preview is never silently measured ----

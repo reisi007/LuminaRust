@@ -110,11 +110,10 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
-| 1.5 | LRPAR-G06-UPRIGHT-15 | G-06 | Auto-Upright |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
-| 1.5 | LRPAR-G14-REDEYE-15 | G-14 | Rote Augen |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
+| 2.0 | LRPAR-G14-REDEYE-AUTO-15 | G-14 | Pupillen-Auto-Erkennung |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
 | nie | — | G-12 | Karten-Modul/GPS (Nicht-Ziel) |
 | nie | — | G-15 | Veröffentlichungsdienste (Nicht-Ziel) |
@@ -145,13 +144,12 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] LRPAR-G06-UPRIGHT-15 (Release: 1.5)** Auto-Upright (G-06-Abspaltung, User-Entscheid 2026-09-03): automatische Upright-Analyse als Rezept-Stufe. Abnahme: CLI + GUI-headless, Golden-Gates.
-- [ ] **[PRIO: mittel] LRPAR-G14-REDEYE-15 (Release: 1.5)** Rote-Augen-Korrektur (G-14-Abspaltung, Ziel 1.5, User-Entscheid 2026-09-03): Erkennung + Korrektur als Rezept-Stufe mit Persistenz. Abnahme: CLI + GUI-headless, Golden-Gates.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
 ### PRIO: niedrig
 
+- [ ] **[PRIO: niedrig] LRPAR-G14-REDEYE-AUTO-15 (Release: 2.0)** Automatische Pupillen-Erkennung als Folgearbeit zu LRPAR-G14-REDEYE-15 (SOLL: Regionen derzeit explizit markiert, keine stille Vorbefüllung): deterministische Heuristik (kein Modell) oder Entscheid-Delta in `feature/architecture/pipeline.md` §G-14. Abnahme: CLI + GUI-headless, Golden-Gates, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-IMPL-20 (Release: 2.0)** KI-Denoise-Implementierung nach Entscheid `feature/decisions/LRPAR-G14-DENOISE-20.md` (F-078-Freigabe → Schema `denoise_ai` → Pipeline-Stufe → ONNX-`denoise`-Capability → Perf-Budgets F-074). Abnahme: CLI + GUI-headless + Golden/PSNR, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G09-CULL-IMPL-25 (Release: 2.5)** KI-Culling-Implementierung nach Entscheid `feature/decisions/LRPAR-G09-CULL-25.md` (Schema → Heuristik Stufe 1 → CLI → GUI → optional ONNX Stufe 2 → Perf F-074). Abnahme: CLI-Exit-Codes + GUI-headless + kittest, Vorschlag schreibt nie Rating/Flag/Label.
 

@@ -223,6 +223,30 @@ pub enum Str {
     ShiftY,
     LensfunAutoPattern,
 
+    // Upright (LRPAR-G06-UPRIGHT-15)
+    Upright,
+    UprightAnalyze,
+    UprightEnable,
+    UprightClear,
+    UprightStatusPattern,
+    UprightFresh,
+    UprightStale,
+    UprightNone,
+    UprightHint,
+
+    // Red Eye (G-14 / LRPAR-G14-REDEYE-15)
+    RedEye,
+    RedEyeHint,
+    RedEyePickMode,
+    RedEyeRegion,
+    RedEyeRemove,
+    RedEyeClear,
+    RedEyeDesaturate,
+    RedEyeDarken,
+    RedEyeRadius,
+    RedEyeCountPattern,
+    RedEyeRadiusDefault,
+
     // Masking
     NewMask,
     SelectMask,
@@ -833,6 +857,30 @@ impl Str {
             Str::ShiftX => "Shift X",
             Str::ShiftY => "Shift Y",
             Str::LensfunAutoPattern => "Lensfun auto: {}",
+
+            Str::Upright => "Upright",
+            Str::UprightAnalyze => "Analyze",
+            Str::UprightEnable => "Apply analysis",
+            Str::UprightClear => "Clear upright",
+            Str::UprightStatusPattern => "Upright analysis: {}",
+            Str::UprightFresh => "fresh",
+            Str::UprightStale => "stale",
+            Str::UprightNone => "none",
+            Str::UprightHint => {
+                "Classic, model-free line analysis. Disabling keeps the manual perspective."
+            }
+
+            Str::RedEye => "Red Eye",
+            Str::RedEyeHint => "Click the preview to mark a red pupil. Regions are persisted explicitly.",
+            Str::RedEyePickMode => "Mark region",
+            Str::RedEyeRegion => "Region {}",
+            Str::RedEyeRemove => "Remove",
+            Str::RedEyeClear => "Clear all",
+            Str::RedEyeDesaturate => "Desaturate",
+            Str::RedEyeDarken => "Darken",
+            Str::RedEyeRadius => "Radius",
+            Str::RedEyeCountPattern => "{} region(s)",
+            Str::RedEyeRadiusDefault => "0.05",
 
             Str::NewMask => "New Mask",
             Str::SelectMask => "Select Mask",

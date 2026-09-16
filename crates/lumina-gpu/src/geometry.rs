@@ -848,7 +848,12 @@ impl GeometryPlan {
         artifact_aware: bool,
     ) -> Result<Option<Self>, GpuError> {
         let lens = recipe.lens_correction.as_ref();
-        let perspective = recipe.perspective.as_ref().filter(|p| !is_neutral(p));
+        // LRPAR-G06-UPRIGHT-15: when the additive upright stage is enabled, its
+        // persisted analysis supplies the effective F-099 perspective (exactly
+        // like the CPU oracle's `render_frame_from_base`). The manual
+        // `recipe.perspective` is only authoritative when upright is off.
+        let effective_perspective = recipe.effective_perspective();
+        let perspective = effective_perspective.as_ref().filter(|p| !is_neutral(p));
         let geometry = recipe.geometry.as_ref();
         let edit = recipe.generative_edit.as_ref();
         let auto_fill_active = edit.is_some_and(|e| e.auto_fill_transparent.unwrap_or(false));

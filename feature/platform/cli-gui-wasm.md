@@ -890,6 +890,58 @@ explizit **nicht** Teil dieses Slices (1.5, LRPAR-G06-UPRIGHT-15).
   Datei → Reload, Preview-Änderung); GPU routet aktive Geometrie laut auf
   CPU (Bestand).
 
+### Auto-Upright G-06 (LRPAR-G06-UPRIGHT-15, Release 1.5)
+
+Normative GUI-/CLI-Fläche für die automatische Upright-Analyse
+(Feldsemantik, Algorithmus `upright-lines-v1`, Fingerprint/Veraltung,
+Einordnung vor der Perspektive: `feature/architecture/pipeline.md` § F-099).
+
+- **Schema/Persistenz:** `recipe.upright` (additiv, top-level; `version`,
+  `enabled`, `analysis` mit `fingerprint`/`vertical`/`horizontal`/`rotation`/
+  `line_count`/`confidence`). `enabled` ohne `analysis` wird laut abgelehnt.
+- **GUI (Geometry-Sektion):** Statuszeile `Upright analysis: fresh|stale|none`,
+  Button **Analyze** (läuft die deterministische Analyse auf dem geladenen
+  Quellbild und persistiert sie fingerprint-gebunden), Checkbox **Apply
+  analysis** (schaltet die effektive Perspektive ein/aus; das manuelle
+  Perspektiv-Modell bleibt persistiert und greift bei Deaktivierung wieder),
+  Button **Clear upright**. Die Analyse selbst ist nicht Teil des Deferred
+  Sliders-Saves — sie schreibt über den normalen Save/Debounce-Commit.
+- **CLI:** `lumina upright --input PFAD [--list] [--analyze] [--enable]
+  [--disable] [--clear]`. `--list` ist read-only (Default) und widerspricht
+  jedem Mutations-Flag laut; ein veralteter Fingerprint wird als `stale`
+  gemeldet, nie still neu berechnet. Ein Aufruf = genau ein History-Eintrag.
+- **Sichtbarkeit/Determinismus:** kein stiller Fallback — eine fehlende
+  Analyse blockiert `--enable`/„Apply"; die Korrektur ist die bestehende
+  F-099-Homographie (GPU-paritätisch bei explizitem Crop, sonst lautes
+  CPU-Routing über den Default-Content-Crop-Grund).
+
+### Rote-Augen-Parität G-14 (LRPAR-G14-REDEYE-15, Release 1.5)
+
+Normative GUI-/CLI-Fläche für die Rote-Augen-Korrektur (Formel, Validierung,
+Platzierung nach Schärfen: `feature/architecture/pipeline.md` § G-14).
+
+- **Erkennung = explizites Markieren (Entscheid 2026-09-16):** In diesem
+  Release gibt es **keine** automatische Pupillenerkennung. GUI und CLI
+  markieren Regionen explizit und persistieren sie als
+  `recipe.adjustments.red_eye.regions` mit stabilen ids; die Korrektur ist die
+  deterministische, modellfreie G-14-Formel (GPU-paritätisch).
+- **GUI (Detail-Sektion):** Toggle **Mark region** bewaffnet den
+  Vorschau-Picker (Klick markiert ein Pupillenzentrum in normierten
+  Quellkoordinaten; der Picker bleibt für mehrere Markierungen aktiv).
+  Die WB-Pipette und der Red-Eye-Picker sind gegenseitig exklusiv; ein
+  Geometrie-Schritt, der die Quell-Zuordnung blockiert, verweigert den Klick
+  sichtbar. Pro Region: id-Label, Slider **Radius** (`0.001..=1`),
+  **Desaturate**/**Darken** (`0..=1`), **Remove**; globaler **Clear all**.
+- **CLI:** `lumina red-eye --input PFAD [--list] [--set
+  ID:x,y,radius,desaturate,darken]… [--remove ID]… [--clear]`. Specs werden
+  laut validiert (Bereiche, ≥1 Region, ≤32); Re-Markieren derselben id
+  ersetzt sie stabil; `--remove` einer unbekannten id ist laut und schreibt
+  nichts; ein Aufruf = genau ein History-Eintrag.
+- **Platzierung/Abnahme:** nach Schärfen und vor Effekten/Masken/Crop;
+  Golden-Gates: Lokalität (Pixel außerhalb/nicht-rot unverändert), Monotonie,
+  Determinismus, Alpha-Erhalt, JSON-Roundtrip, Validierungsablehnung — plus
+  headless GUI-E2E (Markieren/Ändern → Commit → Datei → Reload).
+
 ### Color-Parität G-02 (LRPAR-G02-COLOR, Release 1.0)
 
 Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-02 (Feldsemantik,

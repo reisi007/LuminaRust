@@ -33,12 +33,13 @@ use lumina_gpu::{
     GpuContext, MAX_SOURCE_ACTIONS,
 };
 use lumina_sidecar::{
-    AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop, CurveChannels, CurvePoint,
-    Curves, DepthArtifactRef, EditRecipe, Effects, FocusRect, GenerativeCanvas, GenerativeEdit,
-    Geometry, Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction,
-    Perspective, PointColor, PointColorEntry, Presence, RedEyeCorrection, RedEyeRegion, Sharpening,
-    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SpotRemoval, SpotRemovalMode,
-    Vignette, SOURCE_ACTION_VERSION,
+    AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
+    CurveChannels, CurvePoint, Curves, DepthArtifactRef, EditRecipe, Effects, FocusRect,
+    GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments, HslChannel, LensBlur,
+    LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry, Presence,
+    RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SpotRemoval, SpotRemovalMode, Upright, UprightAnalysis, Vignette,
+    SOURCE_ACTION_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -695,6 +696,45 @@ fn supported_recipes() -> Vec<(&'static str, EditRecipe)> {
                 ..Default::default()
             },
         ),
+        // LRPAR-G06-UPRIGHT-15: an enabled upright analysis resolves to the
+        // effective F-099 perspective (with an explicit crop it is
+        // GPU-eligible). The GPU must render the same homography as the CPU
+        // oracle, so this recipe is a plain perspective-parity case.
+        (
+            "upright_perspective_cropped",
+            EditRecipe {
+                geometry: Some(Geometry {
+                    version: 1,
+                    crop: Some(Crop::Free {
+                        x: 0.1,
+                        y: 0.1,
+                        width: 0.8,
+                        height: 0.8,
+                    }),
+                    rotation_degrees: 0.0,
+                    mirror_horizontal: false,
+                    mirror_vertical: false,
+                }),
+                upright: Some(Upright {
+                    version: 1,
+                    enabled: true,
+                    analysis: Some(UprightAnalysis {
+                        fingerprint: AnalysisFingerprint {
+                            algorithm: "upright-lines-v1".into(),
+                            version: "1".into(),
+                            input_fingerprint: "blake3:parity".into(),
+                            extras: Default::default(),
+                        },
+                        vertical: 0.15,
+                        horizontal: -0.1,
+                        rotation: 0.05,
+                        line_count: 2048,
+                        confidence: 0.6,
+                    }),
+                }),
+                ..Default::default()
+            },
+        ),
         (
             "geometry_rotate_90",
             EditRecipe {
@@ -1184,6 +1224,9 @@ fn equivalence_for(name: &str) -> Equivalence {
         "geometry_rotate_arbitrary" | "geometry_full_stack" | "geometry_after_post_stages" => {
             Equivalence::Bounded(1)
         }
+        // LRPAR-G06-UPRIGHT-15: an enabled upright analysis is the same F-099
+        // perspective homography (explicit crop) — one rounding-tie code max.
+        "upright_perspective_cropped" => Equivalence::Bounded(1),
         // --- GPU-RENDER-PARITY-1 lens-blur wave ---
         // The convolution itself is exact integer accumulation; only the final
         // `f32` lerp differs from the oracle's `f64` (the heuristic weight math

@@ -26,6 +26,7 @@ pub mod render;
 pub mod spot_heal;
 pub mod stage_cache;
 pub mod tone;
+pub mod upright;
 // This module holds real `proptest` properties.
 #[cfg(test)]
 mod tone_props;
@@ -75,6 +76,10 @@ pub use stage_cache::StageFrameCache;
 pub use tone::{
     analyze_tone, analyze_tone_with_histogram, match_total_exposure, match_total_exposure_masked,
     suggest_auto_tone, tone_fingerprint, AutoToneConfig, AutoToneResult, ToneAnalysis,
+};
+pub use upright::{
+    analyze_upright, upright_analysis, upright_input_fingerprint, UprightSuggestion,
+    UPRIGHT_ALGORITHM, UPRIGHT_ALGORITHM_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1232,6 +1237,70 @@ fn validate_generative_edit(g: &lumina_sidecar::GenerativeEdit) -> Result<(), Co
     }
     Ok(())
 }
+/// LRPAR-G06-UPRIGHT-15: validiert die additive Upright-Rezept-Stufe laut.
+/// `enabled` ohne persistierte Analyse wird abgelehnt (kein stiller
+/// Identitäts-Render); die Vorschlagswerte bleiben in der F-099-Domäne.
+pub fn validate_upright(u: &lumina_sidecar::Upright) -> Result<(), CoreError> {
+    let invalid = |name: &str, value: f64, lo: f64, hi: f64| CoreError::InvalidAdjustment {
+        name: name.into(),
+        value,
+        minimum: lo,
+        maximum: hi,
+    };
+    if u.version != 1 {
+        return Err(invalid("upright.version", u.version as f64, 1.0, 1.0));
+    }
+    if u.enabled && u.analysis.is_none() {
+        return Err(CoreError::UnsupportedAdjustment {
+            key: "upright enabled without a persisted analysis".into(),
+        });
+    }
+    if let Some(analysis) = &u.analysis {
+        for (field, value) in [
+            ("vertical", analysis.vertical),
+            ("horizontal", analysis.horizontal),
+            ("rotation", analysis.rotation),
+        ] {
+            if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+                return Err(invalid(
+                    &format!("upright.{field}"),
+                    value as f64,
+                    -1.0,
+                    1.0,
+                ));
+            }
+        }
+        if !analysis.confidence.is_finite() || !(0.0..=1.0).contains(&analysis.confidence) {
+            return Err(invalid(
+                "upright.confidence",
+                analysis.confidence as f64,
+                0.0,
+                1.0,
+            ));
+        }
+        if analysis.line_count > lumina_sidecar::UPRIGHT_MAX_LINE_COUNT {
+            return Err(invalid(
+                "upright.line_count",
+                analysis.line_count as f64,
+                0.0,
+                lumina_sidecar::UPRIGHT_MAX_LINE_COUNT as f64,
+            ));
+        }
+        for (field, value) in [
+            ("algorithm", &analysis.fingerprint.algorithm),
+            ("version", &analysis.fingerprint.version),
+            ("input_fingerprint", &analysis.fingerprint.input_fingerprint),
+        ] {
+            if value.is_empty() {
+                return Err(CoreError::UnsupportedAdjustment {
+                    key: format!("upright fingerprint {field} must not be empty"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_perspective(p: &lumina_sidecar::Perspective) -> Result<(), CoreError> {
     if p.version != 1 {
         return Err(CoreError::InvalidAdjustment {
@@ -1923,6 +1992,9 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
     }
     if let Some(p) = &recipe.perspective {
         validate_perspective(p)?;
+    }
+    if let Some(u) = &recipe.upright {
+        validate_upright(u)?;
     }
     if let Some(g) = &recipe.generative_edit {
         validate_generative_edit(g)?;
@@ -5961,6 +6033,75 @@ mod tests {
             .unwrap()
             .apply_recipe(&candidate)
             .is_err());
+    }
+
+    /// G-14 (L3): dedicated CPU ordering test. Red-Eye is applied *after*
+    /// sharpening (F-095) and *before* the effects (F-097). Using only the
+    /// public `apply_recipe` API, the combined recipe must equal the sequential
+    /// `sharpening → red_eye → effects` composition and differ from both
+    /// reversed boundary orders, so the documented order is material on this
+    /// fixture (not accidentally commutative).
+    #[test]
+    fn red_eye_runs_after_sharpening_and_before_effects() {
+        let (frame, _) = red_eye_frame();
+        let sharpening = lumina_sidecar::Sharpening {
+            version: 1,
+            amount: 2.0,
+            radius: 2.0,
+            detail: 1.0,
+            masking: 0.0,
+        };
+        let red_eye = red_eye_recipe(1.0, 0.6).red_eye.unwrap();
+        let effects = lumina_sidecar::Effects {
+            vignette: None,
+            grain: Some(lumina_sidecar::Grain {
+                version: 1,
+                amount: 0.3,
+                size: 0.5,
+                roughness: 0.5,
+                seed: 7,
+            }),
+        };
+        let run = |recipes: &[EditRecipe]| {
+            let mut frame = frame.clone();
+            for recipe in recipes {
+                frame.apply_recipe(recipe).unwrap();
+            }
+            frame.pixels
+        };
+        let sharp = EditRecipe {
+            sharpening: Some(sharpening),
+            ..Default::default()
+        };
+        let redeye = EditRecipe {
+            red_eye: Some(red_eye.clone()),
+            ..Default::default()
+        };
+        let fx = EditRecipe {
+            effects: Some(effects.clone()),
+            ..Default::default()
+        };
+        let combined = run(&[EditRecipe {
+            sharpening: Some(sharpening),
+            red_eye: Some(red_eye),
+            effects: Some(effects),
+            ..Default::default()
+        }]);
+        let canonical = run(&[sharp.clone(), redeye.clone(), fx.clone()]);
+        assert_eq!(
+            combined, canonical,
+            "combined recipe must compose differently only via the documented order"
+        );
+        assert_ne!(
+            combined,
+            run(&[redeye.clone(), sharp.clone(), fx.clone()]),
+            "red-eye must run after sharpening"
+        );
+        assert_ne!(
+            combined,
+            run(&[sharp.clone(), fx.clone(), redeye.clone()]),
+            "red-eye must run before effects"
+        );
     }
 
     #[test]
