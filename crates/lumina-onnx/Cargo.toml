@@ -31,3 +31,9 @@ default = []
 # Enables the real ONNX Runtime (`ort`) backend. Requires network at build time
 # to fetch prebuilt ONNX Runtime binaries and a real `.onnx` artifact at runtime.
 onnx-rt = ["dep:ort"]
+
+[dev-dependencies]
+# The Core↔Sidecar checksum contract test (LRPAR-G14-DENOISE-IMPL-20, B4) needs
+# the `.lumina.zdata` codec types; test-only, so the library build stays
+# zdata-free.
+lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }

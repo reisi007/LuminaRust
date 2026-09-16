@@ -24,8 +24,10 @@ ONNX inference is a native capability, the browser remains explicitly "offen"
   `ModelCapabilities` (F-080: `subject_segmentation`, `box_prompt`,
   `point_prompt`, `mask_prompt`, `class_detection`, `instance_segmentation`,
   plus the generative `inpaint_heal` (SPOT-REMOVE-1) and `outpaint`
-  (GEN-EXPAND-1) flags). At least one capability must be set; unknown fields
-  are rejected.
+  (GEN-EXPAND-1) flags, the face `face_detect`/`face_embed` flags
+  (LRPAR-G12-FACE-20) and the KI-denoise `denoise` flag
+  (LRPAR-G14-DENOISE-IMPL-20)). At least one capability must be set; unknown
+  fields are rejected.
 - `inpaint.rs` — deterministic `StubInpaintBackend` for spot-heal inpaint
   (`inpaint_heal_manifest`, 512×512, `pending-integration`).
 - `outpaint.rs` — deterministic `StubOutpaintBackend` for generative canvas
@@ -44,6 +46,15 @@ ONNX inference is a native capability, the browser remains explicitly "offen"
   deterministic, tests-only stub backends, the model-free DBSCAN-over-cosine
   clustering with confirm/split/merge, and the real ORT face backends behind
   `onnx-rt` (`face/ort.rs`).
+- `denoise.rs` + `denoise/` — LRPAR-G14-DENOISE-IMPL-20: KI-denoise manifest
+  (`denoise` capability, `pending-integration`), `DenoiseModelSuite`/
+  `DenoiseTileSpec` with the deterministic `input_spec_digest`
+  (resolution + tile/overlap + identity preprocessing), the GEN-ONNX-1-style
+  fixture pin, the tiled producer (`produce_denoise_artifact`, seam-free via
+  the core `assemble_denoise_tiles` contract, provenance persisted through
+  `set_denoise_producer_provenance`), the deterministic, tests-only stub and
+  the real ORT backend behind `onnx-rt` (`denoise/ort.rs`). A
+  `pending-integration` manifest is refused loudly as `ModelUnavailable`.
 - `preprocess.rs` — pure, deterministic, dependency-free resize /
   rescale helpers (nearest-neighbor, documented integer mapping).
 - `backend.rs` — the `SubjectInference` trait and the deterministic

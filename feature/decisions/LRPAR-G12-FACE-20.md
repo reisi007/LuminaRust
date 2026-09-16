@@ -110,6 +110,33 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   betroffenen Feature-Dokument und danach einen headless GUI-Test
   (`cargo test -p lumina-gui`, ohne GPU), analog Agents.md-GUI-Regel.
 
+### 3.1 Umsetzungsnotiz S5 (2026-09-16, Rework F1–F4/F8/F9)
+
+- **Brücke umgesetzt (F1):** Die People-Ansicht (`crates/lumina-gui/src/face_gui.rs`)
+  besitzt jetzt eine Develop-Brücke. `LuminaApp::create_face_mask` wandelt eine
+  **persistierte, gültige Detektions-Box** in eine deterministische Maskenquelle
+  der aktiven virtuellen Kopie um (`MaskPrompt::Box`, geometrisch vom
+  gemeinsamen `lumina-core`-Maskengraph gerastert — derselbe modellfreie Weg wie
+  jede andere Prompt-Maske). Die Provenienz (`detection_id`,
+  `face_identity_digest`) wird im Prompt gespeichert; die Maske ist
+  `MaskStatus::Valid` und modelliert keinen erfundenen Bereich. Die Aktion ist
+  pro Gesicht in der People-Ansicht sichtbar.
+- **Laut statt still (F1):** Eine fehlende (`no analysis`), `stale`, `missing`
+  oder `corrupt` Analyse, eine unbekannte Detektions-ID und ein bereits
+  abgeleiteter Masken-ID-Konflikt werden hart abgelehnt; kein stiller Fallback.
+- **Bekannte Grenze:** Die erzeugte Matte ist die **Detektions-Box-Region**, keine
+  modellproduzierte Gesichts-/Personenmatte (es gibt weiterhin keinen
+  Gesichtsmatte-Modellpfad; das wäre S2/S6). Der generische
+  `AiSelectKind::People`-KI-Selektor bleibt ein **getrennter**, modellabhängiger
+  Pfad (er braucht eine geladene/inferierte Plane) und wird nicht still auf die
+  Detektionsboxen umgebogen.
+- **Statuskontrakt (F2/F4):** `FaceViewStatus` prüft die referenzierten
+  Vektorartefakte mit echtem BLAKE3-Hash der Bundle-Bytes (kein
+  Existenz-Schluss); ein abweichender Hash ist `corrupt`, eine fehlende Datei
+  `missing`. Eine Analyse ohne persistierte Vektoren trägt keine prüfbare
+  Nutzlast und meldet `missing` statt eines falschen `valid` — visuell als
+  veraltet/unvollständig, nie still.
+
 ## 4. Persistenz-Scope (Sidecar-first)
 
 - **Source of truth ist das Sidecar** (`<name>.lumina.json` + `<name>.lumina.zdata`,
@@ -183,6 +210,18 @@ Verifizierungs-Agenten; Reihenfolge seriell bei Schema-/API-Berührung:
 6. **FACE-20-S6 Lizenzen/Fixtures:** Modell-Lizenzen + Pins in
    `fixtures-licensing.md` nachtragen, `THIRD-PARTY-NOTICES.md` ergänzen,
    hash-gepinnte Fixtures ohne Netzwerk.
+7. **Face-Vektor-Persistenz (Folgearbeit, Stand 2026-09-16):** Es existiert
+   noch kein `.lumina.zdata`-RecordKind für Embedding-Vektoren; CLI/GUI
+   persistieren Detektionen/Landmarken/Cluster und melden fehlende Vektoren
+   laut (`missing`, nie fälschlich `valid`; Whole-File-BLAKE3 bis der
+   Record-Kind existiert). Mit dem Record-Kind: echte Record-Checksummen +
+   Umstellung der Evidence-Pfade in CLI/GUI.
+
+**Stand 2026-09-16 (S1–S5, Verifizierung BESTANDEN):** S1 Schema, S2 ONNX,
+S3 Clustering, S4 CLI (Exit-Codes inkl. Usage-2, echte BLAKE3-Evidence),
+S5 GUI (People-Ansicht + Face→Masken-Brücke als Box-Region, kein GPS).
+Offen: S6 Gewichte/Lizenzen, Vektor-Record-Kind (Punkt 7), GUI-/CLI-
+Dedup-Notizen (Face-Evidence-Helper bewusst gespiegelt, byte-identisch).
 
 Jeder Slice braucht: SOLL-Satz im Feature-Dokument vor Code (falls Semantik
 unklar), Tests mit der Implementierung, Verifizierungsbericht mit

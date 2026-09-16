@@ -7496,4 +7496,85 @@ mod denoise_pipeline_tests {
             .unwrap();
         assert_eq!(actual.pixels, expected.pixels);
     }
+
+    /// F3 (Auflage aus der Kern-Verifizierung 2026-09-16): a directly
+    /// constructed (not sidecar-loaded) recipe reaches the CPU render path's
+    /// `validate_nested_adjustments`, which maps every malformed `denoise_ai`
+    /// deviation onto the documented `CoreError::Denoise { status: "invalid" }`
+    /// — loud, before any pixel is written, never a clipped/defaulted stage.
+    ///
+    /// The class is checked across 11 cases (version, model identity,
+    /// digest, bounded strengths and the artifact fields `relative_path`,
+    /// `resolution`, `checksum`); `format`/`channels`/`data_version` remain
+    /// open (Folgearbeit, s. Entscheid §8).
+    #[test]
+    fn malformed_denoise_ai_maps_to_invalid_denoise_error_via_validation() {
+        // (expected reason fragment, mutator) — mirrors the sidecar validation
+        // matrix, exercised through the render entry point instead of the
+        // sidecar loader.
+        type Mutator = fn(&mut DenoiseAi);
+        let cases: [(&str, Mutator); 11] = [
+            ("unsupported denoise_ai.version", |d| d.version = 2),
+            ("denoise_ai.model.name", |d| d.model.name.clear()),
+            ("denoise_ai.model.version", |d| {
+                d.model.version = "  ".into()
+            }),
+            ("denoise_ai.model.model_hash", |d| {
+                d.model.model_hash = "dummy".into()
+            }),
+            ("denoise_ai.input_spec_digest", |d| {
+                d.input_spec_digest = "not-a-digest".into()
+            }),
+            ("denoise_ai.strength", |d| d.strength = 1.5),
+            ("denoise_ai.strength", |d| d.strength = f32::NAN),
+            ("denoise_ai.preserve_detail", |d| d.preserve_detail = -0.1),
+            ("denoise_ai artifact relative_path", |d| {
+                d.artifact.as_mut().unwrap().relative_path = "/abs/out.bin".into()
+            }),
+            ("denoise_ai artifact resolution", |d| {
+                d.artifact.as_mut().unwrap().width = 0
+            }),
+            ("denoise_ai artifact checksum", |d| {
+                d.artifact.as_mut().unwrap().checksum.clear()
+            }),
+        ];
+        let frame = test_frame(6, 5);
+        for (fragment, mutate) in cases {
+            let valid = denoise_ai(1.0, artifact(6, 5, 0).checksum());
+            let mut malformed = valid.clone();
+            mutate(&mut malformed);
+            let mut recipe = EditRecipe {
+                denoise_ai: Some(malformed),
+                ..EditRecipe::default()
+            };
+            let mut candidate = frame.clone();
+            let error = candidate
+                .apply_recipe(&recipe)
+                .expect_err("malformed denoise_ai must be rejected by validation");
+            match error {
+                CoreError::Denoise { status, reason } => {
+                    assert_eq!(
+                        status, "invalid",
+                        "the validation mapping must use the `invalid` status"
+                    );
+                    assert!(
+                        reason.contains(fragment),
+                        "reason must name the offending field `{fragment}`, got: {reason}"
+                    );
+                }
+                other => panic!("expected CoreError::Denoise for `{fragment}`, got {other:?}"),
+            }
+            assert_eq!(
+                candidate.pixels, frame.pixels,
+                "validation must reject before any pixel is written"
+            );
+
+            // Sanity: undoing the mutation through the valid recipe renders.
+            recipe.denoise_ai = Some(valid);
+            let mut rendered = frame.clone();
+            rendered
+                .apply_recipe_with_denoise(&recipe, &DenoiseStageInput::ready(&artifact(6, 5, 0)))
+                .unwrap();
+        }
+    }
 }

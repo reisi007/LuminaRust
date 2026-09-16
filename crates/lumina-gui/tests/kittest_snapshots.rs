@@ -308,6 +308,51 @@ fn develop_section_detail() {
     harness.snapshot("develop_section_detail");
 }
 
+/// LRPAR-G14-DENOISE-IMPL-20 (GUI): the Detail section with the AI-denoise
+/// controls enabled and the honest `unavailable` status badge (no weights
+/// integrated, F-078 gate). Golden; `#[ignore]`d like every GPU snapshot.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn develop_section_denoise() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    // A real on-disk source (not `load_bytes`): enabling the stage arms the
+    // debounced save/render path, and an in-memory source would raise the
+    // "must be loaded via a local path" dialog into the golden.
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("sample.png");
+    std::fs::write(&source, LuminaApp::sample_image_png()).unwrap();
+    harness.state_mut().open_file(source.display().to_string());
+    for _ in 0..400 {
+        harness.run();
+        if harness.state().preview().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    harness
+        .state_mut()
+        .set_denoise_enabled(true)
+        .expect("enabling the denoise stage is a recipe edit");
+    expand_and_scroll_to(&mut harness, SECTION_DETAIL, "AI Denoise");
+    assert_label_on_screen(&mut harness, "AI Denoise");
+    harness.snapshot("develop_section_denoise");
+}
+
+/// LRPAR-G12-FACE-20 (S5): the Library People view (no analysis state) plus
+/// the new Library view selector. Golden; `#[ignore]`d like every GPU snapshot.
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+fn library_people_empty() {
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Library);
+    load_sample(&mut harness);
+    harness.state_mut().set_library_view(LibraryView::People);
+    harness.run();
+    assert_label_on_screen(&mut harness, "People");
+    harness.snapshot("library_people_empty");
+}
+
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn develop_section_effects() {

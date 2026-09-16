@@ -347,9 +347,17 @@ nur native CLI/Desktop.)
 | DNG-Re-Import als Quelle | via bestehendem RAW-Decoder (muss verifiziert werden) | dto. |
 | Cloud-Merge / proprietäre Dienste | nicht geplant | nicht geplant |
 
-Kein stiller Fallback zwischen CLI und GUI: Beide rufen denselben
-Merge-Einstiegspunkt auf; fehlende Capability (z. B. DNG-Writer nicht
-verfügbar) ist auf beiden Pfaden derselbe harte Fehler.
+Kein stiller Fallback zwischen CLI und GUI: Beide durchlaufen dieselbe
+Merge-Schrittfolge (Decode → Exposure → Alignment/Merge → Rezept → Digest →
+Bundle-Gate → Encode → Stage → Sidecar → Publish) auf denselben
+`lumina-merge`-/`lumina-sidecar`-Funktionen; fehlende Capability (z. B.
+DNG-Writer nicht verfügbar) ist auf beiden Pfaden derselbe harte Fehler.
+Offener Punkt (2026-09-16, GUI-Verifizierung F6): Die Orchestrierung ist
+derzeit in `lumina-cli/src/merge.rs` und `lumina-gui/src/merge_gui.rs`
+gespiegelt (Reihenfolge identisch, aber Drift vorhanden: CLI-`--output`
++ `StagedArtifact` vs. GUI-`{pid}.tmp`); keine zweite Bildlogik
+(RGBA8→linear einziger lokaler Schritt). Folgearbeit: in ein gemeinsames
+Modul extrahieren oder als bewusste Duplikation mit Drift-Test festschreiben.
 
 ## Lizenz und Dependencies
 
@@ -424,12 +432,16 @@ unabhängigen Verifizierungs-Agenten bestätigt sind:
   Fixtures ein lineares DNG + Sidecar-Bundle (atomar, relative Pfade);
   Exit-Code 0 bei Erfolg, ≠ 0 mit klarem stderr bei
   `missing`/`stale`/`unsupported`.
-- [ ] GUI-headless: `Cmd/Ctrl+H`/`Cmd/Ctrl+M` rufen denselben
-  Merge-Einstiegspunkt auf; Merge-Status sichtbar (`ok`/`stale`/`missing`);
+- [ ] GUI-headless: `Cmd/Ctrl+H`/`Cmd/Ctrl+M` durchlaufen dieselbe
+  Merge-Schrittfolge wie die CLI (s. §Kein stiller Fallback, F6-Notiz);
+  Merge-Status sichtbar (`ok`/`stale`/`missing`);
   `cargo test -p lumina-gui` grün ohne GPU.
 - [ ] Golden-Gates: HDR-Golden (Belichtungsreihe → erweiterter Dynamikumfang
   messbar) und Panorama-Golden (Überlapp-Geometrie byte-stabil bzw. mit
-  begründeter Toleranz) grün; Toleranzen dokumentiert.
+  begründeter Toleranz) grün; Toleranzen dokumentiert. Umsetzungsstand
+  GUI-Slice (2026-09-16, F7): GUI-Golden als Datenanker (BLAKE3-Hash +
+  Force-Re-Run byte-identisch + Re-Import-Geometrie); die
+  Dynamikumfang-Messung bleibt als Abnahme am CLI/Core-Anker zu verorten.
 - [ ] Re-Import: Merge-DNG ist als Quelle lesbar (Decode-Kontext
   dokumentiert); Rezept/virtuelle Kopien/Export funktionieren darauf wie
   auf jeder anderen Quelle.

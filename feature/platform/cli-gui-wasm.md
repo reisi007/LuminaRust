@@ -143,7 +143,7 @@ Masken-Neuberechnung und Render-Cache werden explizit angeboten.
   | ---- | --------- |
   | 0 | Erfolg (auch „Batch vollständig erfolgreich“) |
   | 1 | Laufzeitfehler eines Befehls (Decode-, Sidecar-, I/O-, Validierungsfehler) |
-  | 2 | CLI-Benutzungsfehler (unbekanntes Flag/falsche Argumente, clap) |
+  | 2 | CLI-Benutzungsfehler (unbekanntes Flag/falsche Argumente — clap **sowie** geprüfte Post-parse-Konflikte wie mutually exclusive Aktionen, `CliError::Usage`) |
   | 3 | Batch teilfehlerhaft: mindestens ein Item failed, Summary und Statusdateien sind dennoch vollständig geschrieben |
 
 - **Konsistenz-Details:** Korrupte `.lumina.zdata`-Bundles melden sich bei
@@ -491,6 +491,23 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Pipette (White Balance Eyedropper), die einen Punkt aus Navigator oder
   Vorschau übernimmt.
 
+### Generative/AI-Neuberechnung pro Modul (F-100, User-Vorgabe 2026-09-16)
+
+- Jede ableitbare AI-/Analysegröße (Denoise-Artefakt, Face-Analyse,
+  Culling-Vorschlag, Merge-DNG, AI-Masken) ist **einzeln neu generierbar**:
+  Jedes Modul besitzt eine eigene explizite Generieren-Aktion (Button/Command
+  pro Modul, z. B. pro Sektion bzw. `denoise`/`face`/`cull`/`merge-hdr`/
+  `merge-pano`), die nur diese Größe neu erzeugt und alle anderen
+  persistierten Artefakte unverändert lässt.
+- **Default ist „alle neu generieren":** Die Sammelaktion (bzw. der Default
+  ohne Modulauswahl) erzeugt alle veralteten/fehlenden Größen neu; die
+  Einzelauswahl schränkt explizit ein. Kein Modul wird je implizit oder
+  automatisch neu berechnet — jede Neuberechnung ist eine ausdrückliche
+  Aktion (kein stiller Fallback, keine Auto-Neuberechnung als einzige Option).
+- **Umfang 1.0 / Erweiterung:** In 1.0 gilt die Konvention für alle dort
+  vorhandenen Module; später hinzukommende Module (Denoise, Face, Culling,
+  Merge) hängen sich in dieselbe Konvention (eigene Aktion + Sammel-Default).
+
 ### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2, Welle 3)
 
 Alle Kürzel werden ignoriert, solange ein Widget Tastatureingaben erwartet
@@ -527,6 +544,7 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `Shift`+Doppelklick auf `Whites`/`Blacks`-Label | Auto-Weißpunkt / Auto-Schwarzpunkt (nur dieses Feld aus `suggest_auto_tone`, kein Zweit-Algorithmus) | G-16; `Shift`+Doppelklick auf anderen Labels = normaler Einzel-Reset; ohne `Shift` = normaler Einzel-Reset |
 | `Alt`+Regler (Track-Drag/Scroll an Ton-Reglern) | Maskierungsvorschau: Clipping-Badge (`J`-Pfad) solange `Alt` gehalten | G-16; Scope: `exposure`/`contrast`/`highlights`/`shadows`/`whites`/`blacks`; Label-`Alt`-Klick bleibt Einzel-Reset, `Alt`-Scroll-Feinjustierung bleibt |
 | `S` | Softproof-Vorschau umschalten (reines Anzeige-Badge, nie Rezept) | G-16 + G-10: klickbarer Schalter zusätzlich im Histogramm-Panel (gleicher `info!`-Pfad); Scope-Entscheid (G-10, ehrlich): MVP ist nur Toggle+Badge — eine echte Druck-/Gamut-Simulation braucht einen Pipeline-Anker in `lumina-core` (Output-Profil-/Gamut-Stufe um `output.profile`, s. `crates/lumina-core/src/pipeline.rs`) und bleibt ein eigener Folge-Slice mit Crate-übergreifendem Schema-/Render-Entscheid, kein GUI-Workaround |
+| `Cmd/Ctrl+H` / `Cmd/Ctrl+M` | HDR-Merge (`merge-hdr`) / Panorama-Merge (`merge-pano`) starten (Jobsteuerung via Poll, Status sichtbar) | G-13, MERGE-GUI; kein `K`-Konflikt (`M` allein bleibt Maske) |
 
 Die Bibliotheks-Rasteransicht zeigt je Datei ein Bewertungs-Badge (Sterne der
 Standardkopie plus Pick-/Reject-Markierung); Details stehen im Hover-Text.
@@ -557,10 +575,10 @@ Bestehende Library-/Metadata-Pfade (Filter, Badges, `apply_batch_op`,
 `save_sidecar`/`load_sidecar`, Smart-Katalog) werden wiederverwendet — kein
 Zweit-Mechanismus.
 
-- **Ansichten:** Das Bibliotheks-Modul kennt vier Ansichten (`LibraryView`):
+- **Ansichten:** Das Bibliotheks-Modul kennt fünf Ansichten (`LibraryView`):
   `Grid` (Miniatur-Raster, Default), `Loupe` (Einzelbild groß: aktive
   Auswahl), `Compare` (Vorher/Nachher-Vergleich des aktiven Bildes über den
-  bestehenden `before_after`-Pfad) und `Survey` (Mehrbild-Vergleich der
+  bestehenden `before_after`-Pfad), `Survey` (Mehrbild-Vergleich der
   Filmstreifen-Auswahl, größere Zellen; bei < 2 ausgewählten Bildern das
   gefilterte Raster). Alle Ansichten teilen dieselbe Auswahl-Buchhaltung
   (`filmstrip_selection`, Pfad-schlüssel, nie Index) und dieselben Filter
@@ -573,6 +591,23 @@ Zweit-Mechanismus.
   Modus). Alle vier werden wie alle F-100-Kürzel ignoriert, solange ein
   Widget Tastatureingaben erwartet. `Cmd/Ctrl+Shift+I` (Bibliothek/Import)
   und `Cmd/Ctrl+Shift+E` (Exportieren) bleiben reine Modulwechsel.
+- **People-Ansicht (G-12, FACE S5, 2026-09-16):** fünfte `LibraryView`-Ansicht
+  `People` (Cluster/Personen aus der persistierten `FaceAnalysis`, Namen
+  vergeben, confirm/split/merge als reine Daten-Ops, `person:`-Filter,
+  Status-Warnungen stale/missing). Kein Karten-Modul/GPS (nie Ziel).
+- **Assisted-Culling-Sektion (G-09, CULL Stufe 1, 2026-09-16):**
+  Library-Badges (keep/review/reject/none/stale via `CullingReadState`) +
+  `cull:`-Filter + explizite Übernahme-Aktion (schreibt nur
+  `document.culling`, nie Rating/Flag/Label/Rezept; kein Auto-Rating).
+- **Merge-Sektion (G-13, MERGE-GUI, 2026-09-16):** `merge-hdr`-/
+  `merge-pano`-Aktionen (gleiche Schrittfolge wie CLI, Jobsteuerung via
+  Poll), DNG-Artefaktstatus (`ok`/`stale`/`missing`/`unsupported`/`none`),
+  Envelope-Konflikte laut + non-destruktiv. Shortcuts `Cmd/Ctrl+H`
+  (HDR-Merge) / `Cmd/Ctrl+M` (Panorama-Merge).
+- **AI-Denoise-Panel (G-14, DENOISE-GUI, 2026-09-16):** Detail-Sektion
+  (enabled/strength/preserve_detail, Modell-Identität lesbar), Status-Badge
+  (`ready`/`stale`/`missing`/`corrupt`/`unavailable`/`inactive`), Strict
+  bricht laut ab, Warn rendert mit sichtbarem Badge.
 - **Auswahl-Semantik:** Einfachklick = Auswahl (ohne Öffnen),
   `Cmd/Ctrl`-Klick = Toggle, `Shift`-Klick = Bereich ab Anker. Öffnen:
   Doppelklick im Grid = Laden + Wechsel zu Develop, Doppelklick in Survey

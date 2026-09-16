@@ -12,8 +12,19 @@
 // controller with background threads + native file IO) live in their own
 // modules without platform gates: the GUI is native-only
 // (`feature/platform/cli-gui-wasm.md` § WASM-ENTFERNT).
+// LRPAR-G14-DENOISE-IMPL-20 (GUI slice): Detail-section denoise controls +
+// status badge; the stage itself runs in the shared core pipeline.
+mod denoise_gui;
+// LRPAR-G09-CULL-25 (GUI slice): Library assisted-culling badges, filter and
+// the explicit adopt action (source-level `document.culling` only).
+mod cull_gui;
+// LRPAR-G12-FACE-20 (FACE-20-S5): Library People view + confirm/split/merge.
+mod face_gui;
+// LRPAR-G13-MERGE-15 (GUI slice): `merge-hdr`/`merge-pano` actions + DNG
+// artifact status (same `lumina-merge` entry points as the CLI).
 mod filmstrip;
 mod i18n;
+mod merge_gui;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
 // PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk
@@ -38,7 +49,7 @@ use lumina_core::{
     analyze_tone, analyze_tone_with_histogram, analyze_upright, apply_visualize_overlay,
     detect_spots_heuristic, distraction_candidates, generative_input_frames,
     generative_variant_seed, has_transparent_pixels, match_total_exposure_masked,
-    prepare_source_base, render_frame_from_base_with_generative, suggest_auto_tone,
+    prepare_source_base, render_frame_from_base_with_generative_and_denoise, suggest_auto_tone,
     tone_fingerprint, upright_analysis, upright_input_fingerprint, AutoToneConfig, AutoToneResult,
     CacheStage, DetectedSpot, DistractionKind, DistractionSetting, DistractionStatus,
     GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeIdentity,
@@ -69,10 +80,11 @@ use lumina_sidecar::{
 };
 use lumina_sidecar::{
     AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
-    CurveChannels, CurvePoint, Curves, EditRecipe, Effects, Flag, FocusRect, GenerativeCanvas,
-    GenerativeEdit, Geometry, Grain, HslAdjustments, HslChannel, LensBlur, LensCorrection,
-    NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset, RedEyeCorrection,
-    RedEyeRegion, Sharpening, SpotDistraction, Upright, Vignette, RED_EYE_MAX_REGIONS,
+    CurveChannels, CurvePoint, Curves, DenoiseModelIdentity, EditRecipe, Effects, Flag, FocusRect,
+    GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments, HslChannel, LensBlur,
+    LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, Preset,
+    RedEyeCorrection, RedEyeRegion, Sharpening, SpotDistraction, Upright, Vignette,
+    RED_EYE_MAX_REGIONS,
 };
 // GEN-ONNX-1 Welle 2b: the GUI resolves and (fixture-)produces the persisted
 // `generative_canvas` artifact through the same documented ONNX/sidecar surface
@@ -618,6 +630,11 @@ pub enum LibraryView {
     Loupe,
     Compare,
     Survey,
+    /// LRPAR-G12-FACE-20 (S5): the Library People view (cluster/person list and
+    /// the confirm/split/merge actions). Display-only selection state; reached
+    /// through the Library view selector (no new global shortcut is reserved —
+    /// FACE-20 §3).
+    People,
 }
 
 /// Maps a Lightroom-style Library view key to its view (G-09): `G` grid,
@@ -817,7 +834,15 @@ fn library_filter_token_matches(
     if token.len() >= 8 && token[..8].eq_ignore_ascii_case("keyword:") {
         return false;
     }
-    for prefix in ["collection:", "camera:", "iso:", "focal:", "focal_length:"] {
+    for prefix in [
+        "collection:",
+        "camera:",
+        "iso:",
+        "focal:",
+        "focal_length:",
+        "cull:",
+        "person:",
+    ] {
         if lowered.starts_with(prefix) {
             return false;
         }
@@ -908,6 +933,28 @@ fn entry_single_token_matches(entry: &FileBrowserEntry, token: &str) -> bool {
         return entry.keywords.iter().any(|k| k == want);
     }
     let lowered = token.to_lowercase();
+    // LRPAR-G12-FACE-20 (S5): `person:<name>` over the scanned source-level
+    // person labels of the sidecar's face analysis (exact, case-insensitive).
+    // An empty value matches nothing (never a silent pass-through).
+    if let Some(rest) = lowered.strip_prefix("person:") {
+        let want = rest.trim();
+        return !want.is_empty()
+            && entry
+                .face_persons
+                .iter()
+                .any(|person| person.to_lowercase() == want);
+    }
+    // LRPAR-G09-CULL-25: `cull:keep|review|reject|none|stale` over the
+    // scan-level assisted-culling badge. An unknown value matches nothing (a
+    // visible empty grid, never a silent pass-through) and is warned loudly.
+    if let Some(rest) = lowered.strip_prefix("cull:") {
+        let rest = rest.trim();
+        if cull_gui::CullBadge::from_token(rest).is_none() {
+            cull_gui::warn_unknown_cull_token(rest);
+            return false;
+        }
+        return cull_gui::cull_filter_token_matches(&lowered, entry.cull_badge).unwrap_or(false);
+    }
     if let Some(rest) = lowered.strip_prefix("iso:") {
         let parsed: Option<f32> = rest.trim().parse().ok();
         let Some(want) = parsed.filter(|v| v.is_finite()) else {
@@ -2162,6 +2209,38 @@ pub struct LuminaApp {
     /// [`TOAST_TIMEOUT_SECONDS`], manually dismissible via its button.
     toast_message: Option<String>,
     toast_until: f64,
+    /// LRPAR-G14-DENOISE-IMPL-20 (GUI slice): resolved status/policy of the
+    /// active `denoise_ai` stage. Session state (never persisted — the recipe
+    /// is); refreshed from recipe + `.lumina.zdata` by
+    /// [`denoise_gui::LuminaApp::refresh_denoise_gui`].
+    denoise_gui: denoise_gui::DenoiseGuiState,
+    /// Explicit integration/test seam for the live denoiser model context.
+    /// Production leaves it `None`: no licence-cleared weights are bundled
+    /// (F-078 gate), so the resolved status is the honest `unavailable`.
+    denoise_live_model: Option<DenoiseModelIdentity>,
+    /// Set by every denoise-relevant edit (recipe/source/copy); the panel and
+    /// the render then refresh the resolved state once instead of reading the
+    /// `.lumina.zdata` bundle every frame.
+    denoise_gui_dirty: bool,
+    /// LRPAR-G09-CULL-25 (GUI slice): session-only People-view filter for the
+    /// Library module (`person:<name>` token). Display state, never persisted.
+    people_filter: String,
+    /// LRPAR-G12-FACE-20 (S5): selected cluster id of the People view (empty =
+    /// none selected). Session-only, never persisted.
+    people_selected_cluster: String,
+    /// LRPAR-G12-FACE-20 (S5): cached face-crop textures of the People view,
+    /// keyed by `"<path>|<detection_id>"` (session-only, rebuilt on demand).
+    face_crop_textures: BTreeMap<String, egui::TextureHandle>,
+    /// LRPAR-G09-CULL-25 (GUI slice): selected cluster/person inputs for the
+    /// People view actions (confirm name, split subset, merge target).
+    /// Session-only panel inputs.
+    people_name_input: String,
+    people_split_subset: String,
+    people_merge_target: String,
+    /// LRPAR-G13-MERGE-15 (GUI slice): running merge job receiver.
+    merge_job: Option<merge_gui::MergeJob>,
+    /// LRPAR-G13-MERGE-15 (GUI slice): last merge outcome text (status line).
+    merge_status: String,
 }
 
 /// Long edge (px) of the cached zoomed-navigator overview render
@@ -2316,6 +2395,15 @@ pub struct FileBrowserEntry {
     /// recursive aggregation shows subfolder images with their relative
     /// folder as badge; flat listings (tree click) always carry `""`.
     folder: String,
+    /// LRPAR-G09-CULL-25 (GUI slice): scan-level assisted-culling badge
+    /// (`None`/`keep`/`review`/`reject`/`stale`) from the sidecar's
+    /// source-level `culling` section. Display only; the authoritative read
+    /// state is computed on demand by `LuminaApp::culling_read_state`.
+    cull_badge: cull_gui::CullBadge,
+    /// LRPAR-G12-FACE-20 (S5): person names of the sidecar's source-level face
+    /// analysis (empty without one). Powers the `person:` Library filter.
+    /// No geotag/GPS data is ever read or stored here.
+    face_persons: Vec<String>,
 }
 
 /// REVIEW-GUI-THUMB-1: stable thumbnail cache key. The canonicalized absolute
@@ -2895,6 +2983,21 @@ impl LuminaApp {
             // GUI-TOAST-OVERLAP-1: no toast until the first background event.
             toast_message: None,
             toast_until: 0.0,
+            // LRPAR-G14-DENOISE-IMPL-20: no active stage until the recipe
+            // carries one; the default policy is `Warn` (CLI parity, §6).
+            denoise_gui: denoise_gui::DenoiseGuiState::inactive(
+                lumina_core::DenoisePolicy::Warn,
+            ),
+            denoise_live_model: None,
+            denoise_gui_dirty: false,
+            people_filter: String::new(),
+            people_selected_cluster: String::new(),
+            face_crop_textures: BTreeMap::new(),
+            people_name_input: String::new(),
+            people_split_subset: String::new(),
+            people_merge_target: String::new(),
+            merge_job: None,
+            merge_status: String::new(),
         }
     }
 
@@ -3322,11 +3425,25 @@ impl LuminaApp {
         // memberships for the extended Library filter / smart evaluation.
         let mut keywords = Vec::new();
         let mut collections = Vec::new();
+        let mut culling_section: Option<lumina_sidecar::CullingSection> = None;
+        let mut face_persons = Vec::new();
         let source_status = if path.is_file() {
             match lumina_sidecar::load_sidecar(&sidecar_path) {
                 Ok(document) => {
                     keywords = document.keywords.clone();
                     collections = document.collections.clone();
+                    culling_section = document.culling.clone();
+                    face_persons = document
+                        .face
+                        .as_ref()
+                        .map(|analysis| {
+                            analysis
+                                .persons
+                                .iter()
+                                .map(|person| person.name.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     virtual_copies = document.virtual_copies.len();
                     if let Some(default) = document
                         .virtual_copies
@@ -3365,6 +3482,7 @@ impl LuminaApp {
         } else {
             SourceStatus::Missing
         };
+        let cull_badge = cull_gui::scan_cull_badge(culling_section.as_ref(), source_status);
         let conflict = has_sidecar && !matches!(source_status, SourceStatus::Unchanged);
         let name = path
             .file_name()
@@ -3405,6 +3523,8 @@ impl LuminaApp {
             iso,
             focal_length,
             folder: String::new(),
+            cull_badge,
+            face_persons,
         })
     }
     pub fn status(&self) -> &str {
@@ -4748,6 +4868,12 @@ impl LuminaApp {
                 self.compare_mode = Some(CompareMode::Compare);
                 self.before_after = true;
                 self.status = Str::CompareOnPattern.format_arg(Str::CompareModeCompare.t());
+            }
+            LibraryView::People => {
+                self.active_module = Module::Library;
+                self.before_after = false;
+                self.compare_mode = None;
+                self.status = Str::FacePeople.t().into();
             }
         }
     }
@@ -11299,10 +11425,13 @@ impl LuminaApp {
         // full-resolution source (its identity and dimensions are defined
         // there). A zoom ROI crop cannot host it, so the full frame is
         // rendered instead of silently skipping the generative stage.
-        let roi = if self.generative_stage_active() {
+        // LRPAR-G14-DENOISE-IMPL-20: the persisted `denoise_rgb` artifact is
+        // likewise full-frame (its checksum/dimensions are defined there), so
+        // an active denoise stage also forces the un-cropped render.
+        let roi = if self.generative_stage_active() || self.denoise_stage_active() {
             if roi.is_some() {
                 trace!(
-                    "GUI render: generative stage active — zoom ROI disabled (absolute canvas geometry)"
+                    "GUI render: absolute-frame stage active (generative/denoise) — zoom ROI disabled"
                 );
             }
             None
@@ -11339,8 +11468,11 @@ impl LuminaApp {
         // auto-fill canvas is source-sized, the expand canvas canvas-sized), so
         // the draft is upgraded to a full render instead of silently skipping
         // the generative stage or compositing mismatched dimensions.
-        if self.generative_stage_active() {
-            trace!("GUI render: generative stage active — draft upgraded to full render");
+        // LRPAR-G14-DENOISE-IMPL-20: the `denoise_rgb` artifact is full-frame
+        // (dimension-checked against the input frame by the core blend), so an
+        // active denoise stage is upgraded to a full render the same way.
+        if self.generative_stage_active() || self.denoise_stage_active() {
+            trace!("GUI render: absolute-frame stage active — draft upgraded to full render");
             return self.render_full(_viewport, roi);
         }
         // Take the pre-allocated draft source so `render_from` borrows a local
@@ -11843,6 +11975,17 @@ impl LuminaApp {
             }
         };
 
+        // LRPAR-G14-DENOISE-IMPL-20: resolve the KI-Denoise stage state (recipe
+        // request + persisted `denoise_rgb` record + producer provenance) once
+        // per render, then feed the resolved input into the shared pipeline.
+        // The state is computed here, before the shared `masks_context` borrow.
+        let denoise_artifact = if self.denoise_stage_active() {
+            self.load_denoise_artifact()
+        } else {
+            None
+        };
+        self.denoise_gui = self.resolve_denoise_state(denoise_artifact.as_ref());
+        self.denoise_gui_dirty = false;
         // Mask artifact planes loaded from the optional `.lumina.zdata` sidecar
         // (native only).  Missing or unreadable zdata is not a hard error:
         // affected layers are reported through the `MaskPolicy::Warn` path.
@@ -11888,7 +12031,8 @@ impl LuminaApp {
         // shared pipeline at the mid-geometry positions
         // (`Lens → [auto-fill] → Perspective → [expand] → Crop`); the core owns
         // the compositing, the GUI never re-implements it.
-        let output = render_frame_from_base_with_generative(
+        let denoise_input = self.denoise_render_input(denoise_artifact.as_ref());
+        let output = render_frame_from_base_with_generative_and_denoise(
             base_frame,
             &RenderContext {
                 recipe: &self.recipe,
@@ -11900,6 +12044,7 @@ impl LuminaApp {
             },
             &mut work,
             generative.input(),
+            &denoise_input,
         )?;
         // GEN-ONNX-1 Welle 2b: `render_frame_from_base_with_generative` already
         // ran the generative stage internally
@@ -12050,7 +12195,8 @@ impl LuminaApp {
                 } else {
                     None
                 };
-                let full_output = render_frame_from_base_with_generative(
+                let full_denoise_input = self.denoise_render_input(denoise_artifact.as_ref());
+                let full_output = render_frame_from_base_with_generative_and_denoise(
                     full_base,
                     &RenderContext {
                         recipe: &self.recipe,
@@ -12062,6 +12208,7 @@ impl LuminaApp {
                     },
                     &mut analysis_work,
                     generative.input(),
+                    &full_denoise_input,
                 )?;
                 analyze_tone_with_histogram(&full_output.frame)
             }
@@ -13675,6 +13822,17 @@ impl LuminaApp {
             .as_ref()
             .map(|frame| (frame.width, frame.height))
             .unwrap_or((0, 0));
+        // LRPAR-G14-DENOISE-IMPL-20: loud export gate before any work. The
+        // shared export entry point has no denoise-stage input yet, so a
+        // `ready` stage or a `Strict` non-ready stage refuses visibly instead
+        // of exporting a frame that diverges from the preview; a `Warn`
+        // fallback is surfaced (log + status below), never silent.
+        if let Err(error) = self.guard_denoise_export() {
+            let message = error.to_string();
+            error!("export refused: {message}");
+            self.show_error(message);
+            return Err(error);
+        }
         // GEN-ONNX-1 Welle 2b: resolve the generative canvases before any
         // shared borrow of `self` (the resolver needs `&mut self` for the
         // corrector cache). Only done when a generative role is active, so a
@@ -15838,6 +15996,9 @@ impl LuminaApp {
             ) {
                 self.set_noise_reduction_value("color", f64::from(col));
             }
+            // LRPAR-G14-DENOISE-IMPL-20: KI-Denoise stage controls + status
+            // badge (the stage runs in the shared core pipeline).
+            self.draw_denoise_section(ui);
             // G-14 Rote Augen (LRPAR-G14-REDEYE-15): explicit region marking.
             // The picker marks a pupil on the preview; every region is persisted
             // by a stable id with its own strength. No automatic detection in
@@ -17419,6 +17580,12 @@ impl LuminaApp {
         self.draw_metadata_history(ui);
         self.draw_metadata_preset(ui);
         self.draw_metadata_sync(ui);
+        // LRPAR-G09-CULL-25: assisted-culling section (Library-only); shows
+        // the read state and the explicit adopt/clear actions.
+        self.draw_culling_section(ui);
+        // LRPAR-G13-MERGE-15: HDR/panorama actions, job state and the visible
+        // merge-bundle status.
+        self.draw_merge_section(ui);
     }
 
     /// Draft field editor: one row per registry field (label + input +
@@ -17992,6 +18159,25 @@ impl LuminaApp {
                 self.library_thumb_size = size.round();
             }
         });
+        // G-09 + FACE-20-S5: explicit Library-view selector (Grid / Loupe /
+        // Compare / Survey / People). The keyboard shortcuts stay the primary
+        // path; People deliberately has no new global shortcut (FACE-20 §3).
+        ui.horizontal_wrapped(|ui| {
+            for (view, label) in [
+                (LibraryView::Grid, Str::LibraryGridOn.t()),
+                (LibraryView::Loupe, Str::LoupeOn.t()),
+                (LibraryView::Compare, Str::CompareModeCompare.t()),
+                (LibraryView::Survey, Str::SurveyOn.t()),
+                (LibraryView::People, Str::FacePeople.t()),
+            ] {
+                if ui
+                    .selectable_label(self.library_view == view, label)
+                    .clicked()
+                {
+                    self.set_library_view(view);
+                }
+            }
+        });
         ui.separator();
         // Welle 3 (LR-13 light): `\` Library drawer — text filter over the
         // scanned entry metadata plus Quick Develop sliders. Hidden by
@@ -18041,6 +18227,13 @@ impl LuminaApp {
         // order narrowed by the active collection view and the `\` query),
         // so painting and keyboard navigation always see the same list.
         let raw_indices: Vec<usize> = self.filtered_library_order();
+        // LRPAR-G12-FACE-20 (S5): the People view is not tied to the RAW-only
+        // grid order (a face analysis of any loaded source is shown), so it
+        // branches before the shared empty state below.
+        if self.library_view == LibraryView::People {
+            self.draw_library_people(ctx, ui);
+            return;
+        }
         // UX-SLICE-2 (F3): one shared empty state for every Library view —
         // Grid, Loupe, Compare and Survey. The check runs before the view
         // branch so the non-grid views can no longer render a second,
@@ -18066,6 +18259,8 @@ impl LuminaApp {
                 self.draw_library_survey(ctx, ui, &raw_indices);
                 return;
             }
+            // Handled above (independent of the RAW-only grid order).
+            LibraryView::People => return,
             LibraryView::Grid => {}
         }
         let thumb = self.library_thumb_size;
@@ -18155,6 +18350,14 @@ impl LuminaApp {
                                     // unflagged + unlabeled cells stay clean.
                                     // UX-SLICE-1: shared with the filmstrip.
                                     paint_entry_badge(ui, rect, &entry);
+                                    // LRPAR-G09-CULL-25: assisted-culling badge
+                                    // (top-right; visually distinct from the
+                                    // manual rating badge at the bottom edge).
+                                    cull_gui::paint_cull_badge(
+                                        ui,
+                                        rect,
+                                        cull_gui::entry_cull_badge(&entry),
+                                    );
                                     // F-100 Library: relative-subfolder badge of
                                     // the recursive aggregation, painted over
                                     // the cell's top edge (display-only, like
@@ -20151,9 +20354,24 @@ impl eframe::App for LuminaApp {
             }
             let shift = ctx.input(|i| i.modifiers.shift);
             for key in [egui::Key::K, egui::Key::M] {
-                if ctx.input(|i| i.key_pressed(key)) {
+                // Cmd/Ctrl+M is the G-13 panorama-merge chord below; the mask
+                // tool is modifier-free (see the F-100 shortcut table).
+                if ctx.input(|i| i.key_pressed(key) && !i.modifiers.ctrl && !i.modifiers.command) {
                     if let Some(tool) = mask_tool_for_key(key, shift) {
                         self.set_mask_tool(tool);
+                    }
+                }
+            }
+            // LRPAR-G13-MERGE-15: `Cmd/Ctrl+H` / `Cmd/Ctrl+M` start the HDR /
+            // panorama merge on the filmstrip selection (job control; the
+            // shared `lumina-merge` entry points, no GUI image logic).
+            for (key, mode) in [
+                (egui::Key::H, lumina_sidecar::MergeMode::Hdr),
+                (egui::Key::M, lumina_sidecar::MergeMode::Panorama),
+            ] {
+                if ctx.input(|i| i.key_pressed(key) && (i.modifiers.ctrl || i.modifiers.command)) {
+                    if let Err(error) = self.start_merge(mode) {
+                        self.show_error(error);
                     }
                 }
             }
@@ -20403,6 +20621,11 @@ impl eframe::App for LuminaApp {
         // insert + visible failure states) on the main thread; the prefetch
         // itself runs on dedicated background workers, never the IdleQueue.
         self.poll_neighbor_previews(&ctx);
+
+        // LRPAR-G13-MERGE-15: job control for the HDR/panorama merge — the
+        // worker thread result is applied on the main thread (status/toast/
+        // error + targeted entry refresh), never silently.
+        self.poll_merge_job(ctx.input(|i| i.time));
 
         // Derive `preview_zoom` from the active mode using the geometry cached by
         // the previous frame's `draw_preview`, so the render's ROI crop matches
@@ -21083,13 +21306,24 @@ mod tests {
     /// preview-interaction tests below.
     fn headless_shapes(
         app: &mut LuminaApp,
+        draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        headless_shapes_sized(app, 720.0, draw)
+    }
+
+    /// `headless_shapes` with an explicit canvas height: panels whose controls
+    /// extend past the 720px fold are fully painted on a taller virtual screen
+    /// (the production panel scrolls; the test asserts the whole content).
+    fn headless_shapes_sized(
+        app: &mut LuminaApp,
+        height: f32,
         mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
     ) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
-                egui::vec2(1024.0, 720.0),
+                egui::vec2(1200.0, height),
             )),
             ..Default::default()
         };
@@ -21334,6 +21568,83 @@ mod tests {
             "Metadata draft actions must not push the panel past its 320px default (got {panel_rect:?})"
         );
     }
+    /// LRPAR-G14-DENOISE-IMPL-20 (GUI): the Detail section paints the denoise
+    /// controls, the readable model identity and the status badge for every
+    /// state; the pending model is the honest `unavailable` badge.
+    #[test]
+    fn denoise_panel_paints_controls_identity_and_status() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_section_open(SECTION_DETAIL, true);
+        app.set_denoise_enabled(true).unwrap();
+        // A tall virtual canvas so the whole Detail section is painted (the
+        // production panel scrolls; there is no scroll driver in a one-shot
+        // headless frame).
+        let shapes = headless_shapes_sized(&mut app, 4096.0, |app, ui| app.draw_develop_panel(ui));
+        for label in [
+            Str::DenoiseAi.t(),
+            Str::DenoiseEnable.t(),
+            Str::DenoiseStrength.t(),
+            Str::DenoisePreserveDetail.t(),
+            Str::DenoiseStatusUnavailable.t(),
+            Str::DenoisePolicyWarn.t(),
+            Str::DenoisePolicyStrict.t(),
+            Str::DenoiseNotReadyWarning.t(),
+        ] {
+            assert_fully_visible(&shapes, label);
+        }
+        // The readable model identity line is painted with the pending hash.
+        assert!(
+            shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Text(text)
+                    if text.galley.text().contains("pending-integration")
+            )),
+            "the model identity must name the persisted hash"
+        );
+    }
+
+    /// LRPAR-G09-CULL-25 + LRPAR-G13-MERGE-15: the Library metadata panel
+    /// carries the assisted-culling and merge sub-sections (collapsed headers
+    /// keep the 320px default width).
+    #[test]
+    fn library_panel_paints_culling_and_merge_sections() {
+        let mut app = new_app();
+        let shapes = headless_shapes(&mut app, |app, ui| app.draw_library_metadata_panel(ui));
+        assert_fully_visible(&shapes, Str::CullingSection.t());
+        assert_fully_visible(&shapes, Str::MergeSection.t());
+    }
+
+    /// LRPAR-G12-FACE-20 (S5): the Library view selector offers the People
+    /// view and the view paints its status + filter for a loaded image.
+    #[test]
+    fn library_people_view_paints_from_the_selector() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.set_library_view(LibraryView::People);
+        assert_eq!(app.library_view(), LibraryView::People);
+        let shapes = headless_shapes(&mut app, |app, ui| {
+            let ctx = ui.ctx().clone();
+            app.draw_library_grid(&ctx, ui)
+        });
+        // Without a face analysis the view paints the status + honest hint
+        // (the filter row only appears once an analysis exists).
+        let status_line = Str::FaceStatusPattern.format_arg(Str::FaceNoAnalysis.t());
+        for label in [
+            Str::FacePeople.t(),
+            status_line.as_str(),
+            Str::FaceNoAnalysisHint.t(),
+        ] {
+            assert_fully_visible(&shapes, label);
+        }
+    }
+
     /// GUI-VISION-1 refactor guard: the outer Develop panel is bottom-up
     /// (pinned footer) but the scroll content must stay top-down in F-100
     /// order — headers paint top-to-bottom Basic → … → Masking.
@@ -33365,6 +33676,8 @@ mod tests {
             iso: None,
             focal_length: None,
             folder: String::new(),
+            cull_badge: cull_gui::CullBadge::None,
+            face_persons: Vec::new(),
         }
     }
 
@@ -34766,6 +35079,8 @@ mod tests {
             iso: Some(400.0),
             focal_length: Some(50.0),
             folder: String::new(),
+            cull_badge: cull_gui::CullBadge::Review,
+            face_persons: vec!["Alex".to_string()],
         }
     }
 

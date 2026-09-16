@@ -639,6 +639,99 @@ pub enum Str {
     MetadataPasteDraft,
     MetadataCopiedPattern,
     MetadataNothingToPaste,
+
+    // LRPAR-G14-DENOISE-IMPL-20 (GUI slice): Detail-section AI denoise
+    // controls, status badge and the loud policy surfaces.
+    DenoiseAi,
+    DenoiseEnable,
+    DenoiseStrength,
+    DenoisePreserveDetail,
+    DenoiseModelPattern,
+    DenoiseModelHint,
+    DenoiseStatusInactive,
+    DenoiseStatusReady,
+    DenoiseStatusUnavailable,
+    DenoiseStatusStale,
+    DenoiseStatusMissing,
+    DenoiseStatusCorrupt,
+    DenoisePolicy,
+    DenoisePolicyWarn,
+    DenoisePolicyStrict,
+    DenoiseNotReadyWarning,
+    DenoiseReasonPattern,
+    DenoiseNoReason,
+    DenoiseExportUnsupported,
+    DenoiseExportStrictPattern,
+
+    // LRPAR-G09-CULL-25 (GUI slice): Library assisted-culling badges, filter
+    // and the explicit adopt/clear actions.
+    CullingSection,
+    CullingKeep,
+    CullingReview,
+    CullingReject,
+    CullingStale,
+    CullingNoProposal,
+    CullingProposalPattern,
+    CullingReasonsPattern,
+    CullingStalePattern,
+    CullingAnalyze,
+    CullingClear,
+    CullingFilterHint,
+    CullingAdoptedPattern,
+    CullingClearedPattern,
+    CullingNoIdentity,
+
+    // LRPAR-G12-FACE-20 (S5): Library People view (clusters, persons, explicit
+    // naming, status warnings). No map/GPS strings exist by design.
+    FacePeople,
+    FaceNoAnalysis,
+    FaceStatusValid,
+    FaceStatusStale,
+    FaceStatusMissing,
+    FaceStatusCorrupt,
+    FaceStatusPattern,
+    FaceNoAnalysisHint,
+    FaceFilterLabel,
+    FaceFilterHint,
+    FaceStaleWarning,
+    FaceMissingWarning,
+    FaceClusterPattern,
+    FaceSelectCluster,
+    FaceNameHint,
+    FaceConfirm,
+    FaceNameRequired,
+    FaceConfirmDonePattern,
+    FaceSplitHint,
+    FaceSplit,
+    FaceSplitDone,
+    FaceMergeHint,
+    FaceMerge,
+    FaceMergeDone,
+    FaceCrops,
+    FaceUseAsMask,
+    FaceMaskCreated,
+    FaceMaskNeedsValidPattern,
+    FaceDetectionNotFound,
+
+    // LRPAR-G13-MERGE-15 (GUI slice): HDR/panorama actions, job state and the
+    // visible merge-bundle status.
+    MergeSection,
+    MergeHdr,
+    MergePano,
+    MergeSelectionPattern,
+    MergeStatusPattern,
+    MergeBundlePattern,
+    MergeStatusNone,
+    MergeStatusOk,
+    MergeStatusStale,
+    MergeStatusMissing,
+    MergeStatusUnsupported,
+    MergeRunningPattern,
+    MergeDonePattern,
+    MergeCurrentPattern,
+    MergeFailed,
+    MergeAlreadyRunning,
+    MergeNeedsSelection,
 }
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
@@ -1244,6 +1337,105 @@ impl Str {
             Str::MetadataCopiedPattern => "Metadata copied ({} field(s))",
             Str::MetadataNothingToPaste => {
                 "Nothing to paste: copy metadata from an image first"
+            }
+            Str::DenoiseAi => "AI Denoise",
+            Str::DenoiseEnable => "Enable AI Denoise",
+            Str::DenoiseStrength => "AI Denoise Strength",
+            Str::DenoisePreserveDetail => "Preserve Detail",
+            Str::DenoiseModelPattern => "Model: {}",
+            Str::DenoiseModelHint => {
+                "Model identity is part of the persisted recipe; changing it invalidates the artifact."
+            }
+            Str::DenoiseStatusInactive => "AI Denoise Inactive",
+            Str::DenoiseStatusReady => "AI Denoise Ready",
+            Str::DenoiseStatusUnavailable => "AI Denoise Unavailable",
+            Str::DenoiseStatusStale => "AI Denoise Stale",
+            Str::DenoiseStatusMissing => "AI Denoise Missing",
+            Str::DenoiseStatusCorrupt => "AI Denoise Corrupt",
+            Str::DenoisePolicy => "On missing artifact",
+            Str::DenoisePolicyWarn => "Warn and use manual NR",
+            Str::DenoisePolicyStrict => "Stop the render",
+            Str::DenoiseNotReadyWarning => {
+                "AI Denoise has no usable artifact — manual noise reduction applies (never silent)."
+            }
+            Str::DenoiseReasonPattern => "Status detail: {}",
+            Str::DenoiseNoReason => "no diagnostic available",
+            Str::DenoiseExportUnsupported => {
+                "Export refused: a verified AI Denoise artifact cannot be applied by the shared export path yet."
+            }
+            Str::DenoiseExportStrictPattern => {
+                "Export refused: AI Denoise is {} and the policy is stop-on-missing."
+            }
+            Str::CullingSection => "Assisted Culling",
+            Str::CullingKeep => "Keep",
+            Str::CullingReview => "Review",
+            Str::CullingReject => "Reject",
+            Str::CullingStale => "Stale",
+            Str::CullingNoProposal => "No proposal",
+            Str::CullingProposalPattern => "Proposal: {}",
+            Str::CullingReasonsPattern => "Reasons: {}",
+            Str::CullingStalePattern => "Outdated/unusable: {}",
+            Str::CullingAnalyze => "Analyze & adopt",
+            Str::CullingClear => "Clear proposal",
+            Str::CullingFilterHint => "Filter: cull:keep|review|reject|none|stale",
+            Str::CullingAdoptedPattern => "Culling proposal recorded for {}",
+            Str::CullingClearedPattern => "Culling proposal cleared for {}",
+            Str::CullingNoIdentity => "Culling analysis needs a loaded image and a sidecar",
+            Str::FacePeople => "People",
+            Str::FaceNoAnalysis => "No face analysis",
+            Str::FaceStatusValid => "Valid",
+            Str::FaceStatusStale => "Stale",
+            Str::FaceStatusMissing => "Missing",
+            Str::FaceStatusCorrupt => "Corrupt",
+            Str::FaceStatusPattern => "Face analysis: {}",
+            Str::FaceNoAnalysisHint => "No face analysis for this image",
+            Str::FaceFilterLabel => "Person filter",
+            Str::FaceFilterHint => "Filter clusters by person name",
+            Str::FaceStaleWarning => {
+                "This face analysis is outdated (source/decode/model context changed) — re-run it explicitly."
+            }
+            Str::FaceMissingWarning => {
+                "This face analysis references a missing artifact — no automatic re-run."
+            }
+            Str::FaceClusterPattern => "{} ",
+            Str::FaceSelectCluster => "Select a cluster to name, split or merge it",
+            Str::FaceNameHint => "Person name",
+            Str::FaceConfirm => "Confirm person",
+            Str::FaceNameRequired => "A person name is required (no automatic naming)",
+            Str::FaceConfirmDonePattern => "Person {} confirmed",
+            Str::FaceSplitHint => "Detection ids to split (comma separated)",
+            Str::FaceSplit => "Split cluster",
+            Str::FaceSplitDone => "Cluster split",
+            Str::FaceMergeHint => "Other cluster id to merge into the selected one",
+            Str::FaceMerge => "Merge clusters",
+            Str::FaceMergeDone => "Clusters merged",
+            Str::FaceCrops => "Faces in cluster",
+            Str::FaceUseAsMask => "Use face as mask",
+            Str::FaceMaskCreated => "Face mask source created",
+            Str::FaceMaskNeedsValidPattern => {
+                "A face mask source needs a valid face analysis (status: {}) — re-run it explicitly"
+            }
+            Str::FaceDetectionNotFound => {
+                "The selected face detection does not exist in this analysis"
+            }
+            Str::MergeSection => "HDR / Panorama Merge",
+            Str::MergeHdr => "Merge HDR (Cmd/Ctrl+H)",
+            Str::MergePano => "Merge Panorama (Cmd/Ctrl+M)",
+            Str::MergeSelectionPattern => "{} source(s) selected",
+            Str::MergeStatusPattern => "Merge: {}",
+            Str::MergeBundlePattern => "Merge bundle: {}",
+            Str::MergeStatusNone => "no merge bundle",
+            Str::MergeStatusOk => "ok",
+            Str::MergeStatusStale => "stale",
+            Str::MergeStatusMissing => "missing",
+            Str::MergeStatusUnsupported => "unsupported",
+            Str::MergeRunningPattern => "{} running…",
+            Str::MergeDonePattern => "merged {}",
+            Str::MergeCurrentPattern => "merge already current: {}",
+            Str::MergeFailed => "merge failed (see the log for the loud reason)",
+            Str::MergeAlreadyRunning => "A merge job is already running",
+            Str::MergeNeedsSelection => {
+                "Select at least {} images in the filmstrip to merge"
             }
         }
     }

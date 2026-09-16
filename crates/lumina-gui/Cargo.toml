@@ -25,6 +25,14 @@ lumina-raw = { path = "../lumina-raw" }
 # missing capability in the Geometry status line.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# LRPAR-G09-CULL-25 (GUI slice): the Library badges/filter/adopt action consume
+# the same deterministic Stage-1 heuristic analyzer the CLI uses — no second
+# culling implementation in the GUI (Agents.md: no GUI-specific image logic).
+lumina-cull = { path = "../lumina-cull" }
+# LRPAR-G13-MERGE-15 (GUI slice): the `Cmd/Ctrl+H`/`Cmd/Ctrl+M` actions call the
+# same `lumina-merge` alignment/merge/DNG entry points as the CLI commands; the
+# GUI owns no merge image logic of its own.
+lumina-merge = { path = "../lumina-merge" }
 # GEN-ONNX-1 Welle 2b: the GUI resolves/produces the persisted
 # `generative_canvas` artifact through the same fixture/identity surface the
 # CLI uses (`fixture_manifest` / `produce_canvas`). Default features are pure

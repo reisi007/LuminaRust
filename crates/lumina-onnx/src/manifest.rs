@@ -61,6 +61,15 @@ impl InputNormalization {
         std: [0.229, 0.224, 0.225],
     };
 
+    /// Identity preprocessing: no mean shift and unit std, i.e. the model sees
+    /// plain `[0, 1]`-scaled RGB. This is the documented KI-Denoise contract
+    /// (`feature/decisions/LRPAR-G14-DENOISE-20.md` §4: denoisers are not
+    /// ImageNet-normalized), and part of the denoise input-spec digest.
+    pub const IDENTITY: InputNormalization = InputNormalization {
+        mean: [0.0, 0.0, 0.0],
+        std: [1.0, 1.0, 1.0],
+    };
+
     /// Default used by `#[serde(default)]`: ImageNet normalization.
     pub fn imagenet() -> Self {
         Self::IMAGENET
@@ -143,6 +152,16 @@ pub struct ModelCapabilities {
     /// it existed keep parsing unchanged.
     #[serde(default)]
     pub face_embed: bool,
+    /// KI-Denoise RGB-to-RGB (LRPAR-G14-DENOISE-IMPL-20, local ONNX).
+    ///
+    /// Declares that the model turns an RGB raster into a denoised RGB raster
+    /// of identical geometry. Required by
+    /// [`crate::denoise::DenoiseInference`] backends; a manifest without this
+    /// flag is refused visibly (never substituted by another model).
+    /// Additive `#[serde(default)]` field: manifests written before it existed
+    /// keep parsing unchanged.
+    #[serde(default)]
+    pub denoise: bool,
 }
 
 impl ModelCapabilities {
@@ -158,6 +177,7 @@ impl ModelCapabilities {
             || self.outpaint
             || self.face_detect
             || self.face_embed
+            || self.denoise
     }
 
     /// Validate that at least one capability is set.
@@ -171,8 +191,8 @@ impl ModelCapabilities {
                 name: name.to_owned(),
                 reason: "no model capabilities declared (at least one of subject_segmentation, \
                      box_prompt, point_prompt, mask_prompt, class_detection, \
-                     instance_segmentation, inpaint_heal, outpaint, face_detect, face_embed \
-                     must be true)"
+                     instance_segmentation, inpaint_heal, outpaint, face_detect, face_embed, \
+                     denoise must be true)"
                     .into(),
             });
         }
@@ -535,6 +555,7 @@ pub fn birefnet_manifest() -> ModelManifest {
             outpaint: false,
             face_detect: false,
             face_embed: false,
+            denoise: false,
         },
     }
 }
@@ -567,6 +588,7 @@ pub fn inpaint_heal_manifest() -> ModelManifest {
             outpaint: false,
             face_detect: false,
             face_embed: false,
+            denoise: false,
         },
     }
 }
@@ -622,6 +644,7 @@ pub fn outpaint_expand_manifest() -> ModelManifest {
             outpaint: true,
             face_detect: false,
             face_embed: false,
+            denoise: false,
         },
     }
 }
@@ -670,6 +693,7 @@ pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
             outpaint: false,
             face_detect: false,
             face_embed: false,
+            denoise: false,
         },
     }
 }

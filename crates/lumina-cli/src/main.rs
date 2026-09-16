@@ -1,13 +1,16 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
-    analyze_upright, detect_spots_heuristic, export_image_with_generative, generative_variant_seed,
-    has_transparent_pixels, match_total_exposure_masked, render_frame,
-    render_frame_with_generative, resolve_mask_planes, suggest_auto_tone, tone_fingerprint,
-    upright_analysis, upright_input_fingerprint, AutoToneConfig, ExportOptions, GenerativeCacheKey,
-    GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole,
-    ImageFileFormat, ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane,
-    MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
+    analyze_upright, denoise_producer_provenance, detect_spots_heuristic,
+    export_image_with_generative, generative_variant_seed, has_transparent_pixels,
+    match_total_exposure_masked, render_frame, render_frame_with_denoise,
+    render_frame_with_generative, resolve_denoise_status, resolve_mask_planes,
+    set_denoise_producer_provenance, suggest_auto_tone, tone_fingerprint, upright_analysis,
+    upright_input_fingerprint, AutoToneConfig, DenoiseIdentity, DenoisePolicy,
+    DenoiseRgbArtifact as CoreDenoiseRgbArtifact, DenoiseStageInput, DenoiseStageStatus,
+    ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput,
+    GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame, MaskContext, MaskInference,
+    MaskLoadContext, MaskPlane, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -21,12 +24,24 @@ use lumina_onnx::generative::{
     produce_canvas, GenerativeCanvasOutput, GenerativeModelSource,
     GenerativeRole as OnnxGenerativeRole,
 };
+// LRPAR-G12-FACE-IMPL-20 / S4: the `face` command resolves the real face
+// engine loudly (`try_load_face_engine`) — never a silent stub fallback — and
+// evaluates a persisted analysis against the live source/decode/model context.
 #[cfg(feature = "onnx-rt")]
 use lumina_onnx::try_load_onnx_engine;
 #[cfg(feature = "onnx-rt")]
 use lumina_onnx::OnnxEngine;
 #[cfg(not(feature = "onnx-rt"))]
 use lumina_onnx::StubBackend;
+#[cfg(feature = "onnx-rt")]
+use lumina_onnx::{
+    cluster_embeddings, clusters_from_labels, detected_face_id, FaceAnalysisOutput,
+    FaceDetectionInference, FaceEmbeddingInference,
+};
+use lumina_onnx::{
+    face_artifact_status, face_identity, try_load_face_engine, FaceArtifactEvidence,
+    FaceClusteringParams, FaceInferenceOptions, FaceModelSuite, FaceOnnxEngine,
+};
 use lumina_raw::{RawError, RawMetadata};
 // F-098-N2: the Lensfun corrector types are only available under the `lensfun`
 // feature (the `native` FFI bindings and `liblensfun` linkage are active then).
@@ -46,26 +61,36 @@ use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairReg
 use lumina_sidecar::{
     apply_batch_op, artifact_status, default_meta_presets_dir, document_revision,
     generative_artifact_status, is_metadata_field, load_meta_preset_file, load_sidecar,
-    now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path, save_generative_canvas,
-    save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir, sidecar_path_for,
-    validate_metadata_field_value, validate_smart_collection_def, AiSelect, AiSelectKind,
-    AnalysisFingerprint, ArtifactStatus, AspectPreset, BatchOp, BokehShape, CollectionMembership,
-    ColorGrading, ColorGradingRange, CoordinateSystem, Crop, CurveChannels, CurvePoint, Curves,
-    DecodeFingerprint, DepthArtifactRef, EditRecipe, ExportRecord, FocusRect,
-    GenerativeArtifactRef, GenerativeArtifactStatus, GenerativeCanvas,
+    now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path, save_denoise_rgb,
+    save_generative_canvas, save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir,
+    sidecar_path_for, validate_metadata_field_value, validate_smart_collection_def, AiSelect,
+    AiSelectKind, AnalysisFingerprint, ArtifactStatus, AspectPreset, BatchOp, BokehShape,
+    CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem, Crop, CurveChannels,
+    CurvePoint, Curves, DecodeFingerprint, DenoiseAi, DenoiseArtifactKind, DenoiseArtifactRef,
+    DenoiseModelIdentity, DenoiseRgbArtifact as SidecarDenoiseRgbArtifact, DepthArtifactRef,
+    EditRecipe, ExportRecord, FaceAnalysis, FaceArtifactStatus, FocusRect, GenerativeArtifactRef,
+    GenerativeArtifactStatus, GenerativeCanvas,
     GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit, Geometry,
     GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, LensCorrection,
     MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
     MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective, PointColor,
-    PointColorEntry, Preprocessing, Preset, PromptTransform, RedEyeCorrection, RedEyeRegion,
-    Resolution, SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction, Upright,
-    MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
-    RED_EYE_MAX_REGIONS, SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    PointColorEntry, Preprocessing, Preset, PromptTransform, RecordSpec, RedEyeCorrection,
+    RedEyeRegion, Resolution, SidecarDocument, SmartCollectionDef, SourceActionArtifactRef,
+    SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction,
+    Upright, DENOISE_AI_VERSION, MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS,
+    MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, RED_EYE_MAX_REGIONS,
+    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
 // LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `meta inspect`.
 // LRPAR-G15-IPTC-S6: `embed_metadata` for the opt-in JPEG export bake-in.
 use lumina_iptc::{embed_metadata, extract_metadata, IptcMetadata};
+// LRPAR-G09-CULL-IMPL-25 (CLI slice): deterministic Stage-1 assisted culling.
+// The command orchestrates `lumina-cull` (analysis + source-level sidecar
+// binding) and never touches rating/flag/label. Reads/writes are explicit.
+use lumina_cull::{
+    analyze_selection, evaluate_culling, heuristic_identity, record_culling, save_culling,
+    CullConfig, CullSourceInput, CullingReadState,
+};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -542,6 +567,25 @@ enum Command {
     /// auto-fills). Loud on a missing model/canvas, a stale identity or a
     /// corrupt bundle. See `feature/product/generative-expand.md`.
     Generative(GenerativeArgs),
+    /// LRPAR-G14-DENOISE-IMPL-20 (CLI slice): inspect the KI-Denoise stage
+    /// status, render through the denoise-aware pipeline, or explicitly record
+    /// an externally produced `denoise_rgb` artifact. Never auto-recomputes and
+    /// never silently falls back (default `Warn` surfaces the manual F-096
+    /// fallback, `--denoise-policy strict` aborts). See
+    /// `feature/decisions/LRPAR-G14-DENOISE-20.md` §6 and
+    /// `feature/architecture/pipeline.md` §F-096a.
+    Denoise(DenoiseArgs),
+    /// LRPAR-G09-CULL-IMPL-25 (CLI slice): explicit Stage-1 assisted-culling
+    /// analysis over a caller-chosen selection (or read-only status). Persists
+    /// only the source-level `culling` proposal — never rating/flag/label.
+    /// See `feature/decisions/LRPAR-G09-CULL-25.md` §2/§5/§7.3.
+    Cull(CullArgs),
+    /// LRPAR-G12-FACE-IMPL-20 / S4: inspect the persisted source-level face
+    /// analysis or run the real face engine loudly. With `onnx-rt` and
+    /// verified artifacts the analysis chain is persisted (sidecar-first);
+    /// without the capability the command refuses loudly (no stub fallback).
+    /// See `feature/decisions/LRPAR-G12-FACE-20.md` §2.3/§4/§6.
+    Face(FaceArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1574,8 +1618,18 @@ enum CliError {
     Core(#[from] lumina_core::CoreError),
     #[error(transparent)]
     Raw(#[from] RawError),
+    /// LRPAR-G09-CULL-IMPL-25: a culling analysis/sidecar failure. Loud, never
+    /// a guessed proposal.
+    #[error(transparent)]
+    Cull(#[from] lumina_cull::CullError),
     #[error("invalid preset JSON: {0}")]
     Preset(String),
+    /// R2-CLI-07: a usage error detected after clap parsing (contradictory or
+    /// mutually exclusive flags, e.g. multiple KI-Denoise actions). Mirrors
+    /// clap's own usage exit code (2) instead of the runtime-failure code (1),
+    /// so scripts can tell "wrong invocation" from "the run failed".
+    #[error("{0}")]
+    Usage(String),
     /// R2-CLI-07: at least one batch item failed while the run itself stayed
     /// structurally sound (summary/status files complete). Distinct process
     /// exit code so scripts can distinguish "nothing worked" (1) from
@@ -1583,16 +1637,25 @@ enum CliError {
     /// `feature/platform/cli-gui-wasm.md`.
     #[error("batch finished with {failed} failed item(s)")]
     BatchPartial { failed: usize },
+    /// Generalized partial-failure exit (3) for multi-item commands that are
+    /// not `batch` but follow the same isolation contract (`cull`).
+    #[error("{command} finished with {failed} failed item(s)")]
+    Partial {
+        command: &'static str,
+        failed: usize,
+    },
 }
 
 impl CliError {
     /// Process exit code for this error (R2-CLI-07): 1 for every runtime
-    /// failure, 3 for a partially failed batch. CLI usage errors exit with 2
-    /// via clap before `run` is ever reached. Documented in
+    /// failure, 2 for a usage error detected after clap parsing, 3 for a
+    /// partially failed batch/multi-item run. CLI usage errors that clap
+    /// itself catches exit with 2 before `run` is ever reached. Documented in
     /// `feature/platform/cli-gui-wasm.md`.
     fn exit_code(&self) -> i32 {
         match self {
-            CliError::BatchPartial { .. } => 3,
+            CliError::Usage(_) => 2,
+            CliError::BatchPartial { .. } | CliError::Partial { .. } => 3,
             _ => 1,
         }
     }
@@ -1636,6 +1699,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::MergePano(args) => merge::merge_pano(args),
         Command::Matrix(args) => matrix::matrix(args),
         Command::Generative(args) => generative(args),
+        Command::Denoise(args) => denoise(args),
+        Command::Cull(args) => cull(args),
+        Command::Face(args) => face(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -9380,13 +9446,19 @@ fn output_format(path: &Path) -> Result<ImageFileFormat, CliError> {
 }
 
 fn validate_format(format: &str) -> Result<(), CliError> {
-    if ImageFileFormat::from_extension(format).is_some() {
-        Ok(())
-    } else {
-        Err(CliError::Message(format!(
+    parse_output_format(format).map(|_| ())
+}
+
+/// Parses the `--format` value into an [`ImageFileFormat`] or returns the same
+/// loud usage error `validate_format` produced. Single source so callers that
+/// must actually encode in the requested format (e.g. `denoise --render`) do
+/// not re-implement the mapping (M1).
+fn parse_output_format(format: &str) -> Result<ImageFileFormat, CliError> {
+    ImageFileFormat::from_extension(format).ok_or_else(|| {
+        CliError::Message(format!(
             "unsupported format `{format}`; use png, jpg, jpeg, or webp"
-        )))
-    }
+        ))
+    })
 }
 
 fn format_extension(format: &str) -> &'static str {
@@ -9625,11 +9697,1247 @@ impl StagedArtifact {
     }
 }
 
+// ===========================================================================
+// Shared helpers for the AI CLI slices (DENOISE / CULL / FACE).
+// ===========================================================================
+
+/// Resolves the active virtual copy. Without `--virtual-copy` the first
+/// (standard) copy is used; an unknown id is a loud error.
+fn active_copy_index(
+    document: &SidecarDocument,
+    virtual_copy: Option<&str>,
+) -> Result<usize, CliError> {
+    match virtual_copy {
+        Some(id) => document
+            .virtual_copies
+            .iter()
+            .position(|copy| copy.id == id)
+            .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`"))),
+        None => {
+            if document.virtual_copies.is_empty() {
+                Err(CliError::Message(
+                    "sidecar has no virtual copies; run `import` first".into(),
+                ))
+            } else {
+                Ok(0)
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// LRPAR-G14-DENOISE-IMPL-20 (CLI slice): `denoise`.
+//
+// SOLL: `feature/decisions/LRPAR-G14-DENOISE-20.md` §6 and
+// `feature/architecture/pipeline.md` §F-096a. The command is the CLI consumer
+// of the core KI-Denoise stage: it reports the visible §6 status, renders
+// through `render_frame_with_denoise` with an explicit `DenoisePolicy` (default
+// `Warn`, so a non-ready stage surfaces a stderr warning and exits 0 — R2) and
+// can explicitly record an externally produced `denoise_rgb` artifact
+// (producer provenance via `set_denoise_producer_provenance` — R1/B2). It never
+// recomputes automatically and never falls back silently.
+// ===========================================================================
+
+/// CLI-facing KI-Denoise fallback policy (R2): `warn` is the §6-Exit-0 default
+/// (visible stderr warning, manual F-096 fallback), `strict` aborts loudly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum CliDenoisePolicy {
+    Warn,
+    Strict,
+}
+
+impl CliDenoisePolicy {
+    fn to_policy(self) -> DenoisePolicy {
+        match self {
+            Self::Warn => DenoisePolicy::Warn,
+            Self::Strict => DenoisePolicy::Strict,
+        }
+    }
+}
+
+/// KI-Denoise stage consumer. Exactly one action may be requested:
+/// `--status` (default, read-only), `--render` or `--record-rgb`. Combining
+/// them is a usage error (exit 2), never a silent precedence pick.
+#[derive(Debug, Args)]
+struct DenoiseArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    /// Report the KI-Denoise stage status and exit (read-only; the default
+    /// when neither `--render` nor `--record-rgb` is given).
+    #[arg(long)]
+    status: bool,
+    /// Render through the KI-Denoise-aware pipeline to `--output`.
+    #[arg(long)]
+    render: bool,
+    #[arg(long)]
+    output: Option<PathBuf>,
+    /// Output format for `--render` (`png|jpg|jpeg|webp`). Drives the output
+    /// extension and the encoder, exactly like `render --format` (M1).
+    #[arg(long, default_value = "png")]
+    format: String,
+    /// Encoder quality for `--render` (`1..=100`).
+    #[arg(long, default_value_t = 90)]
+    quality: u8,
+    /// Explicit producer: import an externally produced denoised RGB image
+    /// (PNG/JPEG/WebP, same geometry as the source) and persist it as the
+    /// `denoise_rgb` bundle record plus the recipe/artifact reference.
+    #[arg(long, value_name = "RGB")]
+    record_rgb: Option<PathBuf>,
+    /// Explicit re-record: replace an existing `denoise_rgb` record.
+    #[arg(long)]
+    force: bool,
+    /// Model name for `--record-rgb` (identity-bearing).
+    #[arg(long)]
+    model_name: Option<String>,
+    /// Model version for `--record-rgb` (identity-bearing).
+    #[arg(long)]
+    model_version: Option<String>,
+    /// Model hash for `--record-rgb` (`sha256:<64 hex>` or
+    /// `pending-integration`).
+    #[arg(long)]
+    model_hash: Option<String>,
+    /// Input-spec digest for `--record-rgb` (`sha256:<64 hex>`).
+    #[arg(long)]
+    input_spec_digest: Option<String>,
+    #[arg(long, default_value_t = 1.0)]
+    strength: f32,
+    #[arg(long, default_value_t = 0.0)]
+    preserve_detail: f32,
+    #[arg(long, value_enum, default_value = "warn")]
+    denoise_policy: CliDenoisePolicy,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Resolved view of the KI-Denoise stage (status + verified artifact + the
+/// identity fields reported to the user).
+struct DenoiseResolution {
+    status: DenoiseStageStatus,
+    reason: String,
+    artifact: Option<CoreDenoiseRgbArtifact>,
+    model_name: String,
+    model_version: String,
+    model_hash: String,
+    input_spec_digest: String,
+    artifact_checksum: Option<String>,
+}
+
+impl DenoiseResolution {
+    fn inactive() -> Self {
+        Self {
+            status: DenoiseStageStatus::Inactive,
+            reason: String::new(),
+            artifact: None,
+            model_name: String::new(),
+            model_version: String::new(),
+            model_hash: String::new(),
+            input_spec_digest: String::new(),
+            artifact_checksum: None,
+        }
+    }
+}
+
+/// String form of the live decode context used by the §6 identity comparison.
+/// Producer (`--record-rgb`) and consumer (`--status`/`--render`) both derive
+/// it from `SidecarDocument::source`, so a moved or re-decoded source is
+/// detectable.
+fn denoise_decode_fingerprint(source: &SourceIdentity) -> String {
+    format!(
+        "{}:{}:{}x{}",
+        source.decode_fingerprint.decoder,
+        source.decode_fingerprint.version,
+        source.geometry_fingerprint.width,
+        source.geometry_fingerprint.height
+    )
+}
+
+/// Deterministic bundle record id for a `denoise_rgb` checksum (content
+/// derived, never positional — same convention as the generative records).
+fn denoise_record_id(checksum: &str) -> String {
+    let prefix = checksum.get(..16).unwrap_or(checksum);
+    format!("denoise_rgb:{prefix}")
+}
+
+fn denoise_status_reason(status: DenoiseStageStatus, zdata: &Path) -> String {
+    match status {
+        DenoiseStageStatus::Inactive | DenoiseStageStatus::Ready => String::new(),
+        DenoiseStageStatus::Unavailable => {
+            "model hash is `pending-integration` (no licence-pinned weights)".into()
+        }
+        DenoiseStageStatus::Missing => {
+            format!("no `denoise_rgb` record in `{}`", zdata.display())
+        }
+        DenoiseStageStatus::Corrupt => {
+            "artifact checksum does not match the recipe reference".into()
+        }
+        DenoiseStageStatus::Stale => {
+            "source/decode/model/input-spec or the persisted producer provenance changed".into()
+        }
+    }
+}
+
+/// Classifies the §6 status of the active `denoise_ai` stage from the recipe
+/// and the `.lumina.zdata` bundle. Pure read; never writes and never
+/// recomputes.
+fn denoise_resolution(
+    input: &Path,
+    document: &SidecarDocument,
+    recipe: &EditRecipe,
+) -> Result<DenoiseResolution, CliError> {
+    let Some(denoise) = recipe.denoise_ai.as_ref() else {
+        return Ok(DenoiseResolution::inactive());
+    };
+    let mut resolution = DenoiseResolution {
+        status: DenoiseStageStatus::Inactive,
+        reason: String::new(),
+        artifact: None,
+        model_name: denoise.model.name.clone(),
+        model_version: denoise.model.version.clone(),
+        model_hash: denoise.model.model_hash.clone(),
+        input_spec_digest: denoise.input_spec_digest.clone(),
+        artifact_checksum: None,
+    };
+    if denoise.is_identity() {
+        return Ok(resolution);
+    }
+
+    let zdata = zdata_path_for(input);
+    let mut artifact_present = false;
+    let mut artifact_checksum = String::new();
+    let mut artifact: Option<CoreDenoiseRgbArtifact> = None;
+    let mut corrupt_reason: Option<String> = None;
+    if zdata.exists() {
+        match load_zdata(&zdata) {
+            Ok(container) => match container.decode_all() {
+                Ok(records) => {
+                    for record in records {
+                        if let RecordSpec::DenoiseRgb(record) = record {
+                            let checksum = record.checksum();
+                            let matches = denoise
+                                .artifact
+                                .as_ref()
+                                .is_some_and(|reference| reference.checksum == checksum);
+                            if !artifact_present || matches {
+                                artifact_present = true;
+                                artifact_checksum = checksum;
+                                artifact = CoreDenoiseRgbArtifact::new(
+                                    record.width,
+                                    record.height,
+                                    record.pixels,
+                                )
+                                .ok();
+                            }
+                            if matches {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(error) => corrupt_reason = Some(error.to_string()),
+            },
+            Err(error) => corrupt_reason = Some(error.to_string()),
+        }
+    }
+    if let Some(error) = corrupt_reason {
+        resolution.status = DenoiseStageStatus::Corrupt;
+        resolution.reason = format!(
+            "`denoise_rgb` bundle `{}` is unreadable or corrupt: {error}",
+            zdata.display()
+        );
+        return Ok(resolution);
+    }
+
+    // R1: `None` producer provenance is the default identity and is therefore
+    // loudly `stale`, never silently `ready`.
+    let current = DenoiseIdentity {
+        source_content_hash: document.source.content_hash.clone(),
+        decode_fingerprint: denoise_decode_fingerprint(&document.source),
+        model_name: denoise.model.name.clone(),
+        model_version: denoise.model.version.clone(),
+        model_hash: denoise.model.model_hash.clone(),
+        input_spec_digest: denoise.input_spec_digest.clone(),
+        artifact_checksum: artifact_checksum.clone(),
+    };
+    let recorded = denoise_producer_provenance(denoise).unwrap_or_default();
+    let status = resolve_denoise_status(denoise, &current, &recorded, artifact_present);
+    resolution.reason = denoise_status_reason(status, &zdata);
+
+    if status == DenoiseStageStatus::Ready {
+        // A ready stage must describe exactly this frame; a dimension mismatch
+        // is corrupt (loud), never a silent drop.
+        match artifact.as_ref() {
+            Some(artifact)
+                if artifact.width != document.source.geometry_fingerprint.width
+                    || artifact.height != document.source.geometry_fingerprint.height =>
+            {
+                resolution.status = DenoiseStageStatus::Corrupt;
+                resolution.reason = format!(
+                    "denoise artifact {}x{} does not match the source geometry {}x{}",
+                    artifact.width,
+                    artifact.height,
+                    document.source.geometry_fingerprint.width,
+                    document.source.geometry_fingerprint.height
+                );
+                return Ok(resolution);
+            }
+            Some(_) => {}
+            None => {
+                resolution.status = DenoiseStageStatus::Corrupt;
+                resolution.reason =
+                    "a `denoise_rgb` record was found but its payload is unusable".into();
+                return Ok(resolution);
+            }
+        }
+    }
+
+    resolution.status = status;
+    resolution.artifact = artifact;
+    resolution.artifact_checksum = (!artifact_checksum.is_empty()).then_some(artifact_checksum);
+    Ok(resolution)
+}
+
+fn denoise(args: DenoiseArgs) -> Result<(), CliError> {
+    // F5: `--status`, `--render` and `--record-rgb` are three alternative
+    // actions. More than one used to win silently by hard-coded precedence
+    // (`--record-rgb` > `--render` > `--status`), so a mistyped invocation
+    // could render or record when the caller only wanted a status report.
+    // Reject the combination as a usage error (exit 2) before any work.
+    let action_count = usize::from(args.status)
+        + usize::from(args.render)
+        + usize::from(args.record_rgb.is_some());
+    if action_count > 1 {
+        return Err(CliError::Usage(
+            "--status, --render and --record-rgb are mutually exclusive; pick exactly one action"
+                .into(),
+        ));
+    }
+    let sidecar = sidecar_path_for(&args.input);
+    let mut document = load_sidecar(&sidecar)?;
+    let copy_index = active_copy_index(&document, args.virtual_copy.as_deref())?;
+
+    if let Some(rgb) = args.record_rgb.clone() {
+        return denoise_record_rgb(&args, &mut document, copy_index, &rgb, &sidecar);
+    }
+
+    let recipe = document.virtual_copies[copy_index].recipe.clone();
+    let resolution = denoise_resolution(&args.input, &document, &recipe)?;
+
+    if args.render {
+        // The denoise-aware entry point takes the whole `RenderContext`; mask
+        // layers are resolved by the shared render path, which is deliberately
+        // not duplicated here. A masked recipe is refused loudly instead of
+        // silently rendering without its masks.
+        if !document.virtual_copies[copy_index].mask_layers.is_empty() {
+            return Err(CliError::Message(
+                "denoise --render does not resolve mask layers; masked denoise rendering \
+                 awaits the shared-path wiring (no silent render without masks)"
+                    .into(),
+            ));
+        }
+        return denoise_render(&args, &recipe, &resolution);
+    }
+
+    let status = resolution.status.as_str();
+    let payload = serde_json::json!({
+        "command": "denoise",
+        "action": "status",
+        "input": args.input,
+        "virtual_copy": document.virtual_copies[copy_index].id,
+        "status": status,
+        "reason": resolution.reason,
+        "model": {
+            "name": resolution.model_name,
+            "version": resolution.model_version,
+            "model_hash": resolution.model_hash,
+            "input_spec_digest": resolution.input_spec_digest,
+        },
+        "artifact_checksum": resolution.artifact_checksum,
+    });
+    let text = if resolution.reason.is_empty() {
+        format!("denoise_ai {status}")
+    } else {
+        format!("denoise_ai {status}: {}", resolution.reason)
+    };
+    emit(args.json, payload, &text)?;
+    if resolution.status == DenoiseStageStatus::Corrupt {
+        return Err(CliError::Message(
+            "denoise_ai artifact is corrupt; explicit re-record/re-inference required (never automatic)"
+                .into(),
+        ));
+    }
+    if matches!(
+        resolution.status,
+        DenoiseStageStatus::Stale | DenoiseStageStatus::Missing | DenoiseStageStatus::Unavailable
+    ) {
+        // §6/R2: visible stderr warning, exit 0 (the render falls back to the
+        // manual F-096 noise reduction). `warn!` also reaches the CLI logger.
+        eprintln!(
+            "warning: denoise_ai is {status}: {}; render falls back to manual noise reduction \
+             (F-096) — visible, not silent",
+            resolution.reason
+        );
+    }
+    Ok(())
+}
+
+fn denoise_render(
+    args: &DenoiseArgs,
+    recipe: &EditRecipe,
+    resolution: &DenoiseResolution,
+) -> Result<(), CliError> {
+    let output = args
+        .output
+        .clone()
+        .ok_or_else(|| CliError::Message("denoise --render requires --output".into()))?;
+    // M1: honor `--format`/`--quality` exactly like the neighboring `render`
+    // command — the requested format drives the output extension AND the
+    // encoder options, instead of being validated and then discarded while the
+    // format is guessed from the output extension.
+    let format = parse_output_format(&args.format)?;
+    validate_quality(args.quality)?;
+    let output = output.with_extension(format_extension(&args.format));
+    reject_protected_output(&args.input, &output)?;
+    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let (frame, raw) = decode_input(&args.input, &bytes)?;
+    let source_actions = resolve_source_actions(recipe, &zdata_path_for(&args.input))?;
+    let camera_white_balance = raw
+        .as_ref()
+        .and_then(|metadata| sanitize_camera_white_balance(metadata.camera_white_balance));
+
+    let policy = args.denoise_policy.to_policy();
+    let stage_input = match resolution.status {
+        DenoiseStageStatus::Ready => match resolution.artifact.as_ref() {
+            Some(artifact) => DenoiseStageInput::ready(artifact).with_policy(policy),
+            None => DenoiseStageInput::non_ready(
+                DenoiseStageStatus::Corrupt,
+                "denoise_ai resolved `ready` but carried no artifact",
+            )
+            .with_policy(policy),
+        },
+        other => DenoiseStageInput::non_ready(other, resolution.reason.clone()).with_policy(policy),
+    };
+    let render_ctx = RenderContext {
+        recipe,
+        camera_white_balance,
+        source_actions: &source_actions,
+        masks: None,
+        lensfun: None,
+        depth: None,
+    };
+    let rendered = render_frame_with_denoise(&frame, &render_ctx, &stage_input)?;
+    if resolution.status != DenoiseStageStatus::Ready {
+        eprintln!(
+            "warning: denoise_ai is {}: {}; rendered with the manual noise-reduction fallback \
+             (F-096) — visible, not silent",
+            resolution.status.as_str(),
+            resolution.reason
+        );
+    }
+    let options = ExportOptions {
+        format,
+        quality: args.quality,
+        dither: false,
+        ..Default::default()
+    };
+    write_atomically(&output, &rendered.frame.encode_with_options(options)?)?;
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "denoise",
+            "action": "render",
+            "output": output,
+            "format": args.format,
+            "quality": args.quality,
+            "status": resolution.status.as_str(),
+            "reason": resolution.reason,
+            "policy": match policy {
+                DenoisePolicy::Warn => "warn",
+                DenoisePolicy::Strict => "strict",
+            },
+        }),
+        "rendered",
+    )
+}
+
+fn denoise_record_rgb(
+    args: &DenoiseArgs,
+    document: &mut SidecarDocument,
+    copy_index: usize,
+    rgb_path: &Path,
+    sidecar: &Path,
+) -> Result<(), CliError> {
+    let require = |value: &Option<String>, flag: &str| {
+        value
+            .clone()
+            .ok_or_else(|| CliError::Message(format!("denoise --record-rgb requires --{flag}")))
+    };
+    let model_name = require(&args.model_name, "model-name")?;
+    let model_version = require(&args.model_version, "model-version")?;
+    let model_hash = require(&args.model_hash, "model-hash")?;
+    let input_spec_digest = require(&args.input_spec_digest, "input-spec-digest")?;
+
+    let source_bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let (frame, _raw) = decode_input(&args.input, &source_bytes)?;
+    let rgb_bytes = fs::read(rgb_path).map_err(|error| io_error(rgb_path, error))?;
+    let rgb_frame = ImageFrame::decode(&rgb_bytes)?;
+    if rgb_frame.width != frame.width || rgb_frame.height != frame.height {
+        return Err(CliError::Message(format!(
+            "--record-rgb artifact is {}x{} but the source is {}x{}; a denoise artifact must \
+             describe exactly the source geometry",
+            rgb_frame.width, rgb_frame.height, frame.width, frame.height
+        )));
+    }
+    let mut pixels = Vec::with_capacity(rgb_frame.pixels.len() / 4 * 3);
+    for pixel in rgb_frame.pixels.as_chunks::<4>().0 {
+        pixels.extend_from_slice(&pixel[..3]);
+    }
+    let core_artifact = CoreDenoiseRgbArtifact::new(rgb_frame.width, rgb_frame.height, pixels)?;
+    let checksum = core_artifact.checksum();
+    let record_id = denoise_record_id(&checksum);
+    let zdata = zdata_path_for(&args.input);
+    let record = SidecarDenoiseRgbArtifact {
+        id: record_id.clone(),
+        width: core_artifact.width,
+        height: core_artifact.height,
+        pixels: core_artifact.pixels.clone(),
+    };
+    save_denoise_rgb(&zdata, record, args.force).map_err(|error| {
+        CliError::Message(format!(
+            "could not write `denoise_rgb` bundle `{}`: {error}",
+            zdata.display()
+        ))
+    })?;
+
+    let relative_path = zdata
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("bundle.lumina.zdata")
+        .to_string();
+    let mut denoise = DenoiseAi {
+        version: DENOISE_AI_VERSION,
+        enabled: true,
+        model: DenoiseModelIdentity {
+            name: model_name.clone(),
+            version: model_version.clone(),
+            model_hash: model_hash.clone(),
+            extras: Default::default(),
+        },
+        input_spec_digest: input_spec_digest.clone(),
+        strength: args.strength,
+        preserve_detail: args.preserve_detail,
+        artifact: Some(DenoiseArtifactRef {
+            kind: DenoiseArtifactKind::DenoiseRgb,
+            relative_path,
+            format: "lumina-zdata".into(),
+            checksum: checksum.clone(),
+            width: core_artifact.width,
+            height: core_artifact.height,
+            channels: "rgb8".into(),
+            data_version: "1".into(),
+            extras: Default::default(),
+        }),
+        extras: Default::default(),
+    };
+    denoise.validate()?;
+    // R1/B2: persist the producer identity (source/decode/model/input-spec +
+    // artifact checksum) so a later consumer proves the artifact belongs to
+    // exactly this context; an absent provenance is loudly `stale`.
+    set_denoise_producer_provenance(
+        &mut denoise,
+        &DenoiseIdentity {
+            source_content_hash: document.source.content_hash.clone(),
+            decode_fingerprint: denoise_decode_fingerprint(&document.source),
+            model_name,
+            model_version,
+            model_hash,
+            input_spec_digest,
+            artifact_checksum: checksum.clone(),
+        },
+    );
+    document.virtual_copies[copy_index].recipe.denoise_ai = Some(denoise);
+    document.validate()?;
+    save_sidecar(sidecar, document)?;
+    info!(
+        "denoise_rgb artifact recorded: bundle={} record={record_id} checksum={checksum}",
+        zdata.display()
+    );
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "denoise",
+            "action": "record-rgb",
+            "input": args.input,
+            "virtual_copy": document.virtual_copies[copy_index].id,
+            "bundle": zdata,
+            "record": record_id,
+            "checksum": checksum,
+            "width": core_artifact.width,
+            "height": core_artifact.height,
+            "status": "ok",
+        }),
+        "recorded denoise_rgb artifact",
+    )
+}
+
+// ===========================================================================
+// LRPAR-G09-CULL-IMPL-25 (CLI slice): `cull`.
+//
+// SOLL: `feature/decisions/LRPAR-G09-CULL-25.md` §2/§5/§7.3. Assisted culling
+// over an explicit selection: `--analyze` runs the deterministic Stage-1
+// heuristic, persists the source-level proposal and never writes
+// rating/flag/label; `--status` reports the persisted state read-only.
+// Multi-item failures are isolated (exit 3), a hard error is exit 1.
+// ===========================================================================
+
+#[derive(Debug, Args)]
+struct CullArgs {
+    /// Explicit selection (repeatable). A file is one item; a directory
+    /// expands to its supported images (sorted, non-recursive).
+    #[arg(long = "input", required = true)]
+    input: Vec<PathBuf>,
+    /// Report the persisted proposal status and exit (read-only; the default
+    /// when `--analyze` is absent).
+    #[arg(long)]
+    status: bool,
+    /// Explicitly analyze the selection and persist the proposals.
+    #[arg(long)]
+    analyze: bool,
+    /// Re-analyze even when a valid, identity-matching proposal already exists.
+    #[arg(long)]
+    force: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Expands the explicit selection (files and directories) and deduplicates by
+/// path while keeping the caller's order. Never walks symlinks/loops.
+fn cull_selection(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, CliError> {
+    let mut selection: Vec<PathBuf> = Vec::new();
+    for input in inputs {
+        if input.is_dir() {
+            let mut entries: Vec<PathBuf> = fs::read_dir(input)
+                .map_err(|error| io_error(input, error))?
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.is_file() && has_image_extension(path))
+                .collect();
+            entries.sort();
+            selection.extend(entries);
+        } else {
+            selection.push(input.clone());
+        }
+    }
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    selection.retain(|path| seen.insert(path.clone()));
+    if selection.is_empty() {
+        return Err(CliError::Message(
+            "cull selection is empty (no supported images found)".into(),
+        ));
+    }
+    Ok(selection)
+}
+
+fn cull_source_fingerprint(document: &SidecarDocument) -> SourceFingerprint {
+    SourceFingerprint {
+        content_hash: document.source.content_hash.clone(),
+        byte_length: document.source.byte_length,
+        extras: Default::default(),
+    }
+}
+
+fn cull(args: CullArgs) -> Result<(), CliError> {
+    if args.status && args.analyze {
+        return Err(CliError::Usage(
+            "--status and --analyze are mutually exclusive".into(),
+        ));
+    }
+    let selection = cull_selection(&args.input)?;
+    if args.analyze {
+        cull_analyze(&args, &selection)
+    } else {
+        cull_status(&args, &selection)
+    }
+}
+
+fn cull_status(args: &CullArgs, selection: &[PathBuf]) -> Result<(), CliError> {
+    let config = CullConfig::default();
+    let mut items = Vec::with_capacity(selection.len());
+    let mut failed = 0usize;
+    for input in selection {
+        match cull_status_one(input, &config) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                failed += 1;
+                eprintln!("error: cull status `{}` failed: {error}", input.display());
+                items.push(serde_json::json!({
+                    "input": input,
+                    "status": "failed",
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
+    emit(
+        args.json,
+        serde_json::json!({"command": "cull", "action": "status", "items": items}),
+        "cull status",
+    )?;
+    if failed > 0 {
+        return Err(CliError::Partial {
+            command: "cull",
+            failed,
+        });
+    }
+    Ok(())
+}
+
+fn cull_status_one(input: &Path, config: &CullConfig) -> Result<serde_json::Value, CliError> {
+    let bytes = fs::read(input).map_err(|error| io_error(input, error))?;
+    let (frame, _raw) = decode_input(input, &bytes)?;
+    let document = load_sidecar(&sidecar_path_for(input))?;
+    let analysis_frame = lumina_core::downscale_bilinear(&frame, config.analysis_max_width)?;
+    let current = heuristic_identity(
+        cull_source_fingerprint(&document),
+        document.source.decode_fingerprint.clone(),
+        document.source.geometry_fingerprint.clone(),
+        Resolution {
+            width: analysis_frame.width,
+            height: analysis_frame.height,
+            extras: Default::default(),
+        },
+    );
+    let (status, section) = match evaluate_culling(&document, &current) {
+        CullingReadState::NoProposal => ("no-proposal", serde_json::json!(null)),
+        CullingReadState::Valid(section) => ("valid", cull_section_json(&section, &[])),
+        CullingReadState::Stale {
+            section,
+            mismatches,
+        } => {
+            let mismatch_labels: Vec<String> =
+                mismatches.iter().map(|m| format!("{m:?}")).collect();
+            ("stale", cull_section_json(&section, &mismatch_labels))
+        }
+        CullingReadState::Unusable { section } => ("unusable", cull_section_json(&section, &[])),
+    };
+    Ok(serde_json::json!({
+        "input": input,
+        "status": status,
+        "proposal": section,
+    }))
+}
+
+fn cull_section_json(
+    section: &lumina_sidecar::CullingSection,
+    mismatches: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "proposal": section.proposal,
+        "score": section.score,
+        "reasons": section.reasons,
+        "created_at": section.created_at,
+        "status": section.status,
+        "analyzer": {
+            "kind": section.identity.analyzer.kind,
+            "name": section.identity.analyzer.name,
+            "version": section.identity.analyzer.version,
+        },
+        "mismatches": mismatches,
+    })
+}
+
+fn cull_analyze(args: &CullArgs, selection: &[PathBuf]) -> Result<(), CliError> {
+    let config = CullConfig::default();
+    let mut frames: Vec<ImageFrame> = Vec::new();
+    let mut isos: Vec<Option<u32>> = Vec::new();
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    let mut failed = 0usize;
+
+    for input in selection {
+        let decoded = fs::read(input)
+            .map_err(|error| io_error(input, error))
+            .and_then(|bytes| decode_input(input, &bytes));
+        match decoded {
+            Ok((frame, raw)) => {
+                isos.push(
+                    raw.as_ref()
+                        .and_then(|metadata| metadata.iso)
+                        .map(|iso| iso.round().max(0.0) as u32),
+                );
+                frames.push(frame);
+                inputs.push(input.clone());
+            }
+            Err(error) => {
+                failed += 1;
+                eprintln!("error: cull analysis `{}` failed: {error}", input.display());
+                items.push(serde_json::json!({
+                    "input": input,
+                    "status": "failed",
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
+    if frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "cull analysis: no decodable inputs ({failed} failed)"
+        )));
+    }
+
+    let sources: Vec<CullSourceInput<'_>> = frames
+        .iter()
+        .zip(isos.iter())
+        .map(|(frame, iso)| CullSourceInput { frame, iso: *iso })
+        .collect();
+    let selection_analysis = analyze_selection(&sources, &config)?;
+
+    for (index, analysis) in selection_analysis.images.iter().enumerate() {
+        let input = inputs[index].clone();
+        match cull_persist_one(&input, analysis, args.force) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                failed += 1;
+                eprintln!("error: cull persist `{}` failed: {error}", input.display());
+                items.push(serde_json::json!({
+                    "input": input,
+                    "status": "failed",
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
+
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "cull",
+            "action": "analyze",
+            "items": items,
+            "groups": selection_analysis.groups,
+        }),
+        "cull analysis",
+    )?;
+    if failed > 0 {
+        return Err(CliError::Partial {
+            command: "cull",
+            failed,
+        });
+    }
+    Ok(())
+}
+
+fn cull_persist_one(
+    input: &Path,
+    analysis: &lumina_cull::HeuristicAnalysis,
+    force: bool,
+) -> Result<serde_json::Value, CliError> {
+    let path = sidecar_path_for(input);
+    let mut document = load_sidecar(&path)?;
+    let source = cull_source_fingerprint(&document);
+    let decode = document.source.decode_fingerprint.clone();
+    let geometry = document.source.geometry_fingerprint.clone();
+    let current = heuristic_identity(
+        source.clone(),
+        decode.clone(),
+        geometry.clone(),
+        analysis.core.analysis_resolution.clone(),
+    );
+    // No automatic re-computation: an existing valid, identity-matching
+    // proposal is kept untouched unless `--force`.
+    if !force
+        && matches!(
+            evaluate_culling(&document, &current),
+            CullingReadState::Valid(_)
+        )
+    {
+        return Ok(serde_json::json!({
+            "input": input,
+            "status": "current",
+            "proposal": analysis.proposal(),
+            "score": analysis.score(),
+            "reasons": analysis.reasons(),
+        }));
+    }
+    let section = analysis
+        .core
+        .to_section(source, decode, geometry, &now_rfc3339_utc())?;
+    record_culling(&mut document, section)?;
+    save_culling(&path, &document)?;
+    Ok(serde_json::json!({
+        "input": input,
+        "status": "analyzed",
+        "proposal": analysis.proposal(),
+        "score": analysis.score(),
+        "reasons": analysis.reasons(),
+        "diagnostics": analysis.diagnostics,
+        "similar_group": analysis.similar_group,
+        "similar_redundant": analysis.similar_redundant,
+    }))
+}
+
+// ===========================================================================
+// LRPAR-G12-FACE-IMPL-20 / S4: `face`.
+//
+// SOLL: `feature/decisions/LRPAR-G12-FACE-20.md` §2.3/§4/§6. `--status`
+// re-evaluates the persisted source-level analysis against the live
+// source/decode/model context (visible valid/stale/missing/corrupt); `--analyze`
+// runs the real ONNX face engine loudly (`try_load_face_engine`) — without the
+// `onnx-rt` capability the command refuses with exit 1 and writes nothing (no
+// silent stub fallback). Person names are never synthesized.
+// ===========================================================================
+
+#[derive(Debug, Args)]
+struct FaceArgs {
+    #[arg(long)]
+    input: PathBuf,
+    /// Report the persisted analysis status and exit (read-only; the default
+    /// when `--analyze` is absent).
+    #[arg(long)]
+    status: bool,
+    /// Run the real face engine and persist the analysis.
+    #[arg(long)]
+    analyze: bool,
+    /// Re-analyze even when a valid, identity-matching analysis already exists.
+    #[arg(long)]
+    force: bool,
+    /// Real detection model artifact (`.onnx`); falls back to
+    /// `LUMINA_FACE_DETECT_MODEL_PATH`.
+    #[arg(long)]
+    detector: Option<PathBuf>,
+    /// Real embedding model artifact (`.onnx`); falls back to
+    /// `LUMINA_FACE_EMBED_MODEL_PATH`.
+    #[arg(long)]
+    embedder: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+fn face_status_str(status: FaceArtifactStatus) -> &'static str {
+    match status {
+        FaceArtifactStatus::Valid => "valid",
+        FaceArtifactStatus::Stale => "stale",
+        FaceArtifactStatus::Missing => "missing",
+        FaceArtifactStatus::Corrupt => "corrupt",
+    }
+}
+
+/// Real evidence about the binary face artifacts a persisted analysis
+/// references, derived from the bundle bytes — never from mere existence.
+///
+/// Mirrors the GUI's `face_gui::face_artifact_evidence` (FACE-20 §4) so CLI and
+/// GUI classify the same sidecar identically; this is the shared status
+/// contract, not a second mechanism:
+///
+/// - a referenced vector file that cannot be read → [`FaceArtifactEvidence::Missing`]
+/// - a readable file whose BLAKE3 digest differs from the persisted checksum →
+///   `Present { checksum_matches: false }` (classified `corrupt`)
+/// - every referenced file hashes to its persisted checksum →
+///   `Present { checksum_matches: true }`
+/// - an analysis with no persisted embedding references has no verifiable
+///   payload at all and is reported `Missing` (loud, never a false `valid` —
+///   the vectors were never written, so validity cannot be proven).
+///
+/// The comparison is deliberately a whole-file BLAKE3 hash: no face-vector
+/// `.lumina.zdata` record kind exists yet, so the referenced payload is the
+/// file itself (FACE-20 §4 "Artefakt-Prüfsumme").
+fn face_artifact_evidence(bundle_root: &Path, analysis: &FaceAnalysis) -> FaceArtifactEvidence {
+    if analysis.embeddings.is_empty() {
+        return FaceArtifactEvidence::Missing;
+    }
+    for embedding in &analysis.embeddings {
+        let path = bundle_root.join(&embedding.vector.relative_path);
+        match fs::read(&path) {
+            Err(_) => return FaceArtifactEvidence::Missing,
+            Ok(bytes) => {
+                let checksum = format!("blake3:{}", blake3::hash(&bytes).to_hex());
+                if checksum != embedding.vector.checksum {
+                    return FaceArtifactEvidence::Present {
+                        checksum_matches: false,
+                    };
+                }
+            }
+        }
+    }
+    FaceArtifactEvidence::Present {
+        checksum_matches: true,
+    }
+}
+
+/// Stable machine label for the artifact evidence reported by `face --status`
+/// (mirrors the GUI's evidence classification).
+fn face_evidence_str(evidence: FaceArtifactEvidence) -> &'static str {
+    match evidence {
+        FaceArtifactEvidence::Missing => "missing",
+        FaceArtifactEvidence::Present {
+            checksum_matches: true,
+        } => "checksum-verified",
+        FaceArtifactEvidence::Present {
+            checksum_matches: false,
+        } => "checksum-mismatch",
+    }
+}
+
+/// Bundle root (directory holding the source and its `.lumina.json`/`.zdata`),
+/// used to resolve the analysis' relative artifact references.
+fn face_bundle_root(input: &Path) -> &Path {
+    input.parent().unwrap_or_else(|| Path::new("."))
+}
+
+/// Builds the live face identity (source/decode/geometry + the shipped
+/// candidate model suite + clustering identity) for the status comparison.
+fn face_current_identity(
+    document: &SidecarDocument,
+) -> Result<lumina_sidecar::FaceIdentity, CliError> {
+    face_identity(
+        &FaceModelSuite::candidate(),
+        SourceFingerprint {
+            content_hash: document.source.content_hash.clone(),
+            byte_length: document.source.byte_length,
+            extras: Default::default(),
+        },
+        document.source.decode_fingerprint.clone(),
+        document.source.geometry_fingerprint.clone(),
+        FaceClusteringParams::default().to_identity(),
+        &FaceInferenceOptions::default(),
+    )
+    .map_err(|error| CliError::Message(format!("face identity error: {error}")))
+}
+
+fn face(args: FaceArgs) -> Result<(), CliError> {
+    if args.status && args.analyze {
+        return Err(CliError::Usage(
+            "--status and --analyze are mutually exclusive".into(),
+        ));
+    }
+    let path = sidecar_path_for(&args.input);
+    let mut document = load_sidecar(&path)?;
+    if args.analyze {
+        face_analyze(&args, &mut document, &path)
+    } else {
+        face_status(&args, &document)
+    }
+}
+
+fn face_status(args: &FaceArgs, document: &SidecarDocument) -> Result<(), CliError> {
+    let Some(analysis) = document.face.as_ref() else {
+        return emit(
+            args.json,
+            serde_json::json!({
+                "command": "face",
+                "action": "status",
+                "input": args.input,
+                "status": "no-analysis",
+                "detections": 0,
+            }),
+            "face analysis: no analysis",
+        );
+    };
+    let current = face_current_identity(document)?;
+    // M2: real evidence from the bundle bytes (BLAKE3 per referenced file),
+    // identical to the GUI classification. A persisted `valid` analysis whose
+    // references are absent/empty/tampered must never be reported `valid`.
+    let evidence = face_artifact_evidence(face_bundle_root(&args.input), analysis);
+    let status = if analysis.status != FaceArtifactStatus::Valid {
+        analysis.status
+    } else {
+        face_artifact_status(&current, &analysis.identity, evidence)
+    };
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "face",
+            "action": "status",
+            "input": args.input,
+            "status": face_status_str(status),
+            "detections": analysis.detections.len(),
+            "embeddings": analysis.embeddings.len(),
+            "clusters": analysis.clusters.len(),
+            "persons": analysis.persons.len(),
+            "created_at": analysis.created_at,
+            "artifact_evidence": face_evidence_str(evidence),
+        }),
+        &format!("face analysis: {}", face_status_str(status)),
+    )?;
+    if status == FaceArtifactStatus::Corrupt {
+        return Err(CliError::Message(
+            "face analysis is corrupt; explicit `--analyze` required (never automatic)".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn face_analyze(
+    args: &FaceArgs,
+    document: &mut SidecarDocument,
+    _sidecar: &Path,
+) -> Result<(), CliError> {
+    let current = face_current_identity(document)?;
+    // No automatic re-inference: a valid, identity-matching analysis with
+    // verified artifact references is kept unless `--force`. M2: the check
+    // uses the same real BLAKE3 evidence as `--status`, so an analysis whose
+    // referenced vectors are missing/empty/tampered is re-run instead of being
+    // reported as an unchanged valid result.
+    if !args.force {
+        if let Some(existing) = document.face.as_ref() {
+            let evidence = face_artifact_evidence(face_bundle_root(&args.input), existing);
+            if existing.status == FaceArtifactStatus::Valid
+                && face_artifact_status(&current, &existing.identity, evidence)
+                    == FaceArtifactStatus::Valid
+            {
+                return emit(
+                    args.json,
+                    serde_json::json!({
+                        "command": "face",
+                        "action": "analyze",
+                        "input": args.input,
+                        "status": "valid",
+                        "changed": false,
+                    }),
+                    "face analysis already valid (use --force to re-run)",
+                );
+            }
+        }
+    }
+
+    let detector = args
+        .detector
+        .clone()
+        .or_else(|| std::env::var_os("LUMINA_FACE_DETECT_MODEL_PATH").map(PathBuf::from))
+        .ok_or_else(|| {
+            CliError::Message(
+                "face --analyze requires --detector or LUMINA_FACE_DETECT_MODEL_PATH".into(),
+            )
+        })?;
+    let embedder = args
+        .embedder
+        .clone()
+        .or_else(|| std::env::var_os("LUMINA_FACE_EMBED_MODEL_PATH").map(PathBuf::from))
+        .ok_or_else(|| {
+            CliError::Message(
+                "face --analyze requires --embedder or LUMINA_FACE_EMBED_MODEL_PATH".into(),
+            )
+        })?;
+    let suite = FaceModelSuite::candidate();
+    let options = FaceInferenceOptions::default();
+    let engine = try_load_face_engine(&detector, &suite, &embedder, &options)
+        .map_err(|error| CliError::Message(format!("face engine load failed: {error}")))?;
+
+    match engine {
+        FaceOnnxEngine::RuntimeDisabled => Err(CliError::Message(
+            "face analysis unavailable: `onnx-rt` is not compiled into this build; \
+             no analysis was produced (no silent stub fallback)"
+                .into(),
+        )),
+        #[cfg(feature = "onnx-rt")]
+        FaceOnnxEngine::OnnxRuntime { detector, embedder } => {
+            let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+            let (frame, _raw) = decode_input(&args.input, &bytes)?;
+            let detections = detector
+                .detect(&frame)
+                .map_err(|error| CliError::Message(format!("face detection failed: {error}")))?;
+            let vectors = embedder
+                .embed(&frame, &detections)
+                .map_err(|error| CliError::Message(format!("face embedding failed: {error}")))?;
+            if vectors.len() != detections.len() {
+                return Err(CliError::Message(format!(
+                    "face embedder returned {} vectors for {} detections",
+                    vectors.len(),
+                    detections.len()
+                )));
+            }
+            let raw_vectors: Vec<Vec<f32>> = vectors
+                .iter()
+                .map(|vector| vector.values().to_vec())
+                .collect();
+            let labels = cluster_embeddings(&raw_vectors, &FaceClusteringParams::default())
+                .map_err(|error| CliError::Message(format!("face clustering failed: {error}")))?;
+            let detection_ids: Vec<String> = detections.iter().map(detected_face_id).collect();
+            let clusters = clusters_from_labels(&detection_ids, &labels).map_err(|error| {
+                CliError::Message(format!("face cluster build failed: {error}"))
+            })?;
+            // No face-vector `.lumina.zdata` record kind exists yet, so the
+            // embedding vectors are not persisted; detections, landmarks and
+            // clusters are. The limitation is surfaced loudly — never a
+            // dangling reference to a payload that was not written.
+            eprintln!(
+                "warning: face embedding vectors are not persisted yet (no face-vector zdata \
+                 record kind); only detections, landmarks and clusters are stored"
+            );
+            let output = FaceAnalysisOutput {
+                identity: current,
+                created_at: now_rfc3339_utc(),
+                detections,
+                embeddings: vec![],
+                clusters,
+                persons: vec![],
+            };
+            let analysis = output.into_sidecar().map_err(|error| {
+                CliError::Message(format!("face analysis build failed: {error}"))
+            })?;
+            document.face = Some(analysis);
+            document.validate()?;
+            save_sidecar(_sidecar, document)?;
+            let analysis = document.face.as_ref().expect("just assigned");
+            info!(
+                "face analysis persisted: detections={} clusters={}",
+                analysis.detections.len(),
+                analysis.clusters.len()
+            );
+            emit(
+                args.json,
+                serde_json::json!({
+                    "command": "face",
+                    "action": "analyze",
+                    "input": args.input,
+                    "status": "valid",
+                    "changed": true,
+                    "detections": analysis.detections.len(),
+                    "clusters": analysis.clusters.len(),
+                    "embeddings_persisted": false,
+                }),
+                "face analysis written",
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // Only the tests still call the plain (no-artifact) export entry point.
     use lumina_core::export_image;
+
+    /// AI-CLI-SLICES (DENOISE): the bundle record id is content-derived (never
+    /// positional) and stable across calls.
+    #[test]
+    fn denoise_record_id_is_content_derived_and_stable() {
+        let checksum = "ab".repeat(32);
+        let id = denoise_record_id(&checksum);
+        assert_eq!(id, format!("denoise_rgb:{}", &checksum[..16]));
+        assert_eq!(id, denoise_record_id(&checksum));
+        assert_ne!(id, denoise_record_id(&"cd".repeat(32)));
+    }
+
+    /// AI-CLI-SLICES (DENOISE): the §6 reason mapping is empty exactly for the
+    /// two non-failing classes and non-empty for every visible non-ready one.
+    #[test]
+    fn denoise_status_reason_covers_every_status_class() {
+        let zdata = Path::new("/tmp/bundle.lumina.zdata");
+        assert!(denoise_status_reason(DenoiseStageStatus::Inactive, zdata).is_empty());
+        assert!(denoise_status_reason(DenoiseStageStatus::Ready, zdata).is_empty());
+        for status in [
+            DenoiseStageStatus::Unavailable,
+            DenoiseStageStatus::Missing,
+            DenoiseStageStatus::Stale,
+            DenoiseStageStatus::Corrupt,
+        ] {
+            assert!(
+                !denoise_status_reason(status, zdata).is_empty(),
+                "{status:?} must carry a visible reason"
+            );
+        }
+    }
 
     /// META-COPYPASTE-1: the clipboard file serializes with the documented
     /// format marker/version, and `load_meta_clipboard` rejects structural
@@ -13415,6 +14723,14 @@ mod tests {
         assert_eq!(error.exit_code(), 3);
         // Every other CLI error keeps the generic code 1.
         assert_eq!(CliError::Message("x".into()).exit_code(), 1);
+    }
+
+    /// R2-CLI-07/F2/F5: a usage error detected after clap parsing (mutually
+    /// exclusive action flags) exits with 2, matching clap's own usage code —
+    /// never the runtime-error code 1.
+    #[test]
+    fn usage_error_maps_to_exit_code_two() {
+        assert_eq!(CliError::Usage("bad flags".into()).exit_code(), 2);
     }
 
     /// R2-CLI-11: batch inputs are deduplicated by filesystem identity so a

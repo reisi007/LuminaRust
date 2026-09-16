@@ -76,6 +76,23 @@ Gewichte *pending integration* (`model_hash = "pending-integration"`)" plus der
 - **Vorverarbeitung:** pro Manifest `ModelInputSpec` (Analogie `ai-masks.md` §Maskenidentität): Normalisierung (vorzugsweise Identität/`[0,1]`-Skalierung statt ImageNet-mean/std — Denoiser sind in der Regel nicht ImageNet-normalisiert; Festlegung mit Modellwahl), Kanal-Layout `Rgb`, Tensor-Format `Nchw`, dokumentierte Tensor-Namen. Nachskalierung: Identität (kein Upsampling — Ausgabegeometrie = Eingabegeometrie; anders als Masken-Resample).
 - **Farbraum-Hinweis:** MVP-Pipeline arbeitet sRGB-codiert (`Rgba8Srgb`); KI-Denoise v1 arbeitet ebenfalls dort. Ein linearer Denoise-Pfad ist erst mit einer linearen Pipelineversion zulässig (getrennt migriert/validiert, kein stiller Wechsel).
 
+> **Umsetzungs-Nachtrag ONNX-Slice (LRPAR-G14-DENOISE-IMPL-20, 2026-09-16):**
+> Die in §4 skizzierte ONNX-Einordnung ist im `lumina-onnx`-Backend umgesetzt:
+> additive, getrennte `denoise`-Capability (`ModelCapabilities.denoise`, Muster
+> `face_detect`/`face_embed`), Deskriptor + `DenoiseModelSuite` mit
+> `DenoiseTileSpec`, deterministischer `input_spec_digest` (Modell-Input-Spec
+> **plus** Kachelgröße/Overlap, Identitäts-/`[0,1]`-Vorverarbeitung und
+> Identitäts-Nachskalierung), Fixture-Pin nach GEN-ONNX-1 (§3.1) sowie der echte
+> ORT-Pfad hinter `onnx-rt` (SHA-256-Verifikation, Tensor-Namen-Gates,
+> `ModelArtifactStale` bei Hash-Abweichung). Ein `pending-integration`-Manifest
+> wird dort **laut** als `ModelUnavailable` abgelehnt — das ist der sichtbare
+> §6-Status `unavailable`, nie ein stiller Stub-Ersatz. Der Producer inferiert
+> gekachelt und assembliert nahtlos über den Core-Vertrag
+> `assemble_denoise_tiles`; die Produzenten-Herkunft wird über
+> `set_denoise_producer_provenance` in `DenoiseAi.extras` persistiert. Die
+> konkreten Werte (Default 512×512, Overlap 32, keine Reskalierung) sind Teil
+> des `input_spec_digest` und damit invalidierungsrelevant.
+
 ## 5. Rezept-Stufen-Vorschlag + Persistenz (noch nicht normativ)
 
 Vorschlag für die Implementierungs-Folgearbeit (erst dort nach `sidecar.md`-Vertrag zu normieren; `pipeline.md` bleibt bis dahin unverändert):
@@ -143,9 +160,31 @@ G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rot
 1. **F-078-Modellfreigabe Denoise:** Kandidat wählen, Gewichts-Lizenz verifizieren, Hash + Input-Spec pinnen, `fixtures-licensing.md` §5 + `THIRD-PARTY-NOTICES.md` ergänzen (Gate für alles Weitere).
 2. **Schema + Persistenz:** `denoise_ai`-Feld (additiv, v2), `kind = "denoise_rgb"` in zdata, JSON-Roundtrip-/Migrations-/Atomic-Write-/Recovery-Tests.
 3. **Pipeline-Stufe:** Einordnung `DenoiseAI → F-096 → F-095` in `pipeline.md` normieren (Version, Reihenfolge, Render-Key), Core-Implementierung + Golden/PSNR-Gates (u. a. `strength: 0` = Identität, Determinismus, Kachel-Blend-Nahtlosigkeit).
-4. **ONNX-Verdrahtung:** `denoise`-Capability in Manifest + Capability-Matrix (`platform/capability-matrix.md`, native CLI/Desktop, Cloud explizit nicht geplant), `lumina-onnx`-Backend, Veraltungs-/Statusmodell aus §6, CLI/GUI-Anbindung (Fehler laut, Badges). Auflagen aus der Kern-Verifizierung (2026-09-16, mitzuziehen): CPU-seitiger `CoreError::Denoise{invalid}`-Mapping-Test (F3), `recorded`-Aufruferkonvention (`None` → `DenoiseIdentity::default()`, R1), CLI wählt explizit `DenoisePolicy::Warn` für §6-Exit-0 (R2), Cross-Crate-Checksum-Test Core↔Sidecar (B4).
+4. **ONNX-Verdrahtung:** `denoise`-Capability in Manifest + Capability-Matrix (`platform/capability-matrix.md`, native CLI/Desktop, Cloud explizit nicht geplant), `lumina-onnx`-Backend, Veraltungs-/Statusmodell aus §6, CLI/GUI-Anbindung (Fehler laut, Badges). Auflagen aus der Kern-Verifizierung (2026-09-16, mitzuziehen): CPU-seitiger `CoreError::Denoise{invalid}`-Mapping-Test (F3, 11 Fälle; `format`/`channels`/`data_version` offen), `recorded`-Aufruferkonvention (`None` → `DenoiseIdentity::default()`, R1), CLI wählt explizit `DenoisePolicy::Warn` für §6-Exit-0 (R2), Cross-Crate-Checksum-Test Core↔Sidecar (B4, umgesetzt). Folgearbeit aus der ONNX-Verifizierung (2026-09-16): Blend-/Assembly-Version in den `input_spec_digest` aufnehmen (F1 — derzeit flippt eine Gewichtungsänderung den Digest nicht; folgenlos solange `pending-integration`, aber SOLL-Abweichung zu §4).
+
+   > **Status ONNX-Slice (2026-09-16):** `denoise`-Capability + Deskriptor +
+   > `DenoiseModelSuite`/`DenoiseTileSpec` + Fixture-Pin (§3.1) +
+   > `input_spec_digest`-Produzent + ORT-Pfad (`onnx-rt`: SHA-256-Gate,
+   > Tensor-Namen-Gates, `pending-integration` → `ModelUnavailable`) +
+   > deterministische, tests-only Stubs + gekachelter Producer über
+   > `assemble_denoise_tiles` + Produzenten-Provenienz sind umgesetzt und
+   > getestet (Capability-/Hash-Gates, Stub-Determinismus, Modellwechsel →
+   > `stale`, `unavailable` ohne stillen Fallback, Kachel-Nahtlosigkeit).
+   > Die Auflagen F3 (Core-Mapping-Test) und B4 (Core↔Sidecar-Checksum) sind
+   > umgesetzt. Offen und damit weiter in `Agents.todo.md`: Capability-Matrix-
+   > Eintrag (native CLI/Desktop, Cloud explizit nein), CLI-Anbindung
+   > (`DenoisePolicy::Warn`, Exit 0, `stderr`), GUI-Badges/Panel, R1/R2-
+   > Aufruferkonvention und Perf-Budgets (Punkt 5).
 5. **Perf-Budgets:** Denoise-Benchmarks nach `performance-benchmarks.md` (F-074), Budgets im selben Commit wie das Feature begründen.
 6. **V1-Modellvergleich (optional):** DnCNN- vs. NAFNet- vs. Transformer-Kandidat an High-ISO-Fixtures messen; Ergebnis als Entscheid-Nachtrag hier dokumentieren.
+
+**Stand 2026-09-16 (Kern + ONNX + CLI + GUI, Verifizierung BESTANDEN):**
+Kern-Stufe (GPU-Refusal, Provenienz-`extras`, zdata `kind = 4`), ONNX-Backend
+(`denoise`-Capability, `pending-integration` → `unavailable`, B4-Kreuzprobe),
+CLI (`--status`/`--render`/`--record-rgb` mutually exclusive, Exit 2 bei
+Konflikt; `--render` honoriert `--format`/`--quality` wie `render`; echte
+Masken-Ablehnung), GUI (Panel + Badges + Persistenz-E2E). Offen: Gewichte
+(S6/F-078), Perf-Budgets F-074, F1-Blend-Digest, F3-Restfelder.
 
 ## 9. Referenzen
 

@@ -152,10 +152,11 @@ Normative Abgrenzungsregeln für 2.5:
    Bekannter Hotspot für diesen Slice: `noise_sigma`-Allokation (~22 MB
    transient pro Bild bei 2048er Analysebreite).
 
-**Stand 2026-09-16 (Slices 1+2, Verifizierung BESTANDEN):** Schema-Slice und
-Heuristik-Slice umgesetzt (`lumina-cull`, 45 Tests, Precision/Recall 1.0 auf
-synthetischen Fixtures, alle 8 Reason-Codes emissions-assertiert). Offen:
-Slices 3–6.
+**Stand 2026-09-16 (Slices 1–4, Verifizierung BESTANDEN):** Schema-Slice,
+Heuristik-Slice (`lumina-cull`, 45 Tests, P/R 1.0, 8/8 Codes),
+CLI-Slice (`--analyze`/`--status`, Exit 0/1/2/3, `--force`, nur
+`document.culling`), GUI-Slice (Badges/`cull:`-Filter/explizite Übernahme).
+Offen: Slices 5–6 (Stufe 2 ONNX, Perf).
 
 ## 8. Abnahme dieses Entscheids
 

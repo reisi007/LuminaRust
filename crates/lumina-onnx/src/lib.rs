@@ -44,8 +44,22 @@
 //! stays `pending-integration` until hash-pinned weights land — there is no
 //! download and no silent fallback. See [`face`] for the licence findings and
 //! the full identity/invalidation contract.
+//!
+//! ## KI-denoise pipeline (LRPAR-G14-DENOISE-IMPL-20)
+//!
+//! The [`denoise`] module is the native producer side of the optional
+//! `recipe.adjustments.denoise_ai` stage (Release 2.0): it declares the new,
+//! separate `denoise` capability, produces the full-frame RGB8 artifact via
+//! tiled inference through the core `assemble_denoise_tiles` contract, records
+//! the reproducible producer provenance (`lumina_core`'s
+//! `set_denoise_producer_provenance`) and resolves the visible §6 status. The
+//! planned weight descriptor keeps `model_hash = "pending-integration"` and is
+//! refused as `unavailable` — never silently substituted by the deterministic,
+//! tests-only stub. See [`denoise`] for the fixture path (GEN-ONNX-1 style) and
+//! the tile/invalidation contract.
 
 pub mod backend;
+pub mod denoise;
 pub mod face;
 pub mod generative;
 pub mod hash;
@@ -60,6 +74,17 @@ pub mod sam2;
 pub mod ort_backend;
 
 pub use backend::{StubBackend, SubjectInference};
+pub use denoise::{
+    decode_denoise_rgb, denoise_manifest, denoise_model_hash_is_pinned, denoise_producer_identity,
+    denoise_stage_status, fixture_denoise_model_hash, fixture_denoise_suite,
+    produce_denoise_artifact, require_pinned_denoise_suite, try_load_denoise_engine,
+    verify_fixture_denoise_suite, DenoiseInference, DenoiseModelSuite, DenoiseOnnxEngine,
+    DenoiseProduced, DenoiseRequest, DenoiseTileSpec, StubDenoiseBackend,
+    DENOISE_FIXTURE_ALGORITHM, DENOISE_INFERENCE_HEIGHT, DENOISE_INFERENCE_WIDTH,
+    DENOISE_MODEL_LICENSE, DENOISE_MODEL_NAME, DENOISE_MODEL_VERSION, DENOISE_PENDING_HASH,
+    DENOISE_PREPROCESSING_NAME, DENOISE_PREPROCESSING_VERSION, DENOISE_RESCALING_METHOD,
+    DENOISE_TILE_HEIGHT, DENOISE_TILE_OVERLAP, DENOISE_TILE_WIDTH,
+};
 pub use face::backend::{
     align_face_to_template, decode_face_detections, decode_face_embedding, FACE_ALIGN_TEMPLATE_5PT,
     FACE_ALIGN_TEMPLATE_BASE,
@@ -174,4 +199,9 @@ pub enum OnnxError {
     /// loudly — never silently clamped, repaired or dropped (FACE-20-S2/S3).
     #[error("invalid face data: {0}")]
     InvalidFaceData(String),
+    /// KI-denoise data violated its documented contract (tile spec, blend
+    /// bounds, produced RGB geometry/decoding). Reported loudly — never
+    /// clamped or silently repaired (LRPAR-G14-DENOISE-IMPL-20).
+    #[error("invalid denoise data: {0}")]
+    InvalidDenoiseData(String),
 }

@@ -20,6 +20,11 @@ lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 lumina-merge = { path = "../lumina-merge" }
 # LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `lumina meta inspect`.
 lumina-iptc = { path = "../lumina-iptc" }
+# LRPAR-G09-CULL-IMPL-25 (CLI slice): the `cull` command orchestrates the
+# deterministic Stage-1 assisted-culling analysis (own crate, pure Rust,
+# read-only core/sidecar consumer) and persists the source-level proposal
+# through the existing sidecar API. No image logic is duplicated here.
+lumina-cull = { path = "../lumina-cull" }
 # F-098-N2: optional Lensfun dependency so the CLI can build a corrector from
 # EXIF metadata. Only compiled/linked when the `lensfun` feature is on.
 lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
