@@ -62,6 +62,15 @@ Repo-weit gilt: kein Merge-Pfad in `lumina-core`/`lumina-cli`/`lumina-gui`
 Ausrichtungsstufe und kein Merge-Rezept im Sidecar-Schema. Dieses Dokument
 ist das normative SOLL für die spätere Umsetzung.
 
+**Stand 2026-09-16 (MERGE-CORE-1-Rework + MERGE-DNG-1, Verifizierung BESTANDEN):**
+`merge_hdr_weighted` linear (Ebenen einmalig), `pano_matrix` zentrumskorrekt,
+`blend_panorama_transformed` rotationsfähig (neu, noch ungenutzt — Interim),
+y-Überlapp-Gate, Subpixel-/64000-Testanker. **Offen für MERGE-CLI-1
+(explizit):** CLI/GUI auf `blend_panorama_transformed` + volle Matrix
+umstellen (derzeit nur `matrix[2]/[5]`-Offsets, Rotation wird end-to-end nicht
+angewandt), inkl. rotiertem E2E-Test; F-074-Merge-Benchmark/Budget nachtragen
+(bis dahin nur In-Crate-Skalierungsanker).
+
 ## Normative Invarianten
 
 Für G-13 gelten die Produktprinzipien und Persistenzregeln aus `Agents.md`

@@ -322,3 +322,24 @@ fn decode_context_documents_pinned_decoder() {
     );
     println!("decode context under test: {version}");
 }
+
+#[test]
+fn dimension_limit_64000_ok_and_64001_rejected() {
+    // DNG-D1 boundary anchor against the LibRaw 0.22.2 dimension limit
+    // (22..=64000 px per axis): exactly 64000 is accepted, one pixel more is
+    // rejected loudly (`Unsupported`, never a silent rescale/crop). A thin
+    // 64000x22 strip exercises the boundary without allocating a square
+    // 64000x64000 frame.
+    let at_limit = LinearImage::solid(64_000, 22, [0.4, 0.4, 0.4]);
+    let encoded = encode_linear_dng(&at_limit, MergeMode::Hdr, &DngExif::default())
+        .expect("64000px must be within the LibRaw limit");
+    assert!(!encoded.is_empty(), "writer must emit the DNG bytes");
+
+    let too_wide = LinearImage::solid(64_001, 22, [0.4, 0.4, 0.4]);
+    let err = encode_linear_dng(&too_wide, MergeMode::Hdr, &DngExif::default()).unwrap_err();
+    assert!(matches!(err, DngError::Unsupported(_)), "got: {err}");
+
+    let too_tall = LinearImage::solid(22, 64_001, [0.4, 0.4, 0.4]);
+    let err = encode_linear_dng(&too_tall, MergeMode::Hdr, &DngExif::default()).unwrap_err();
+    assert!(matches!(err, DngError::Unsupported(_)), "got: {err}");
+}

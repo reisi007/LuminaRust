@@ -12,7 +12,10 @@
 //!   never estimated from pixels.
 
 use crate::{LinearImage, MergeError};
-use lumina_core::merge_geom::{clamp_linear, feather_weight, hdr_hat_weight, sample_bilinear};
+use lumina_core::merge_geom::{
+    apply_matrix_3x3, clamp_linear, feather_weight, hdr_hat_weight, is_translation_rotation_light,
+    sample_bilinear,
+};
 use lumina_sidecar::MergeExposure;
 
 /// Relative linear exposure of one frame from EXIF only:
@@ -81,6 +84,29 @@ pub fn merge_hdr_weighted(
         .iter()
         .map(relative_exposure)
         .collect::<Result<_, _>>()?;
+    // Validate shifts once, before touching pixels (fail fast, same contract).
+    for (i, (dx, dy)) in shifts_px.iter().enumerate() {
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(MergeError::Invalid(format!(
+                "hdr shift #{i} must be finite, got ({dx}, {dy})"
+            )));
+        }
+    }
+    // Extract every channel plane exactly once, before the pixel loop
+    // (O(frames * pixels)); the same pattern as `blend_panorama`. The
+    // previous per-pixel `frame.channel_plane(c)` re-extracted a whole plane
+    // for every pixel/channel/frame, so the merge scaled quadratically in the
+    // pixel count (C1: 512x512x2 was ~54 s release, effectively unusable).
+    let planes: Vec<[Vec<f32>; 3]> = frames
+        .iter()
+        .map(|frame| {
+            [
+                frame.channel_plane(0),
+                frame.channel_plane(1),
+                frame.channel_plane(2),
+            ]
+        })
+        .collect();
     let mut out = vec![0.0f32; w as usize * h as usize * 3];
     for y in 0..h {
         for x in 0..w {
@@ -88,15 +114,11 @@ pub fn merge_hdr_weighted(
                 let mut num = 0.0f64;
                 let mut den = 0.0f64;
                 let mut rad_sum = 0.0f64;
-                for (i, frame) in frames.iter().enumerate() {
-                    let plane = frame.channel_plane(c);
+                for (i, frame_planes) in planes.iter().enumerate() {
                     let (dx, dy) = shifts_px[i];
-                    if !dx.is_finite() || !dy.is_finite() {
-                        return Err(MergeError::Invalid(format!(
-                            "hdr shift #{i} must be finite, got ({dx}, {dy})"
-                        )));
-                    }
-                    let pixel = sample_bilinear(&plane, w, h, x as f64 - dx, y as f64 - dy) as f64;
+                    let pixel =
+                        sample_bilinear(&frame_planes[c], w, h, x as f64 - dx, y as f64 - dy)
+                            as f64;
                     let weight = hdr_hat_weight(pixel as f32) as f64;
                     let radiance = pixel / rel[i];
                     num += weight * radiance;
@@ -123,9 +145,13 @@ pub fn merge_hdr_weighted(
 /// union bounding box. In overlaps, frames blend left-to-right with the
 /// [`feather_weight`] ramp of `blend_width_px` (0 = hard seam, later
 /// frame wins past the centre). Non-overlapping consecutive frames are
-/// `Unsupported` (no silent partial panorama). Output is a convex
-/// combination of inputs, hence range-preserving in `[0, 1]` up to float
-/// error (negatives clamped to 0).
+/// `Unsupported` (no silent partial panorama), checked in **both** axes
+/// (x *and* y). Output is a convex combination of inputs, hence
+/// range-preserving in `[0, 1]` up to float error (negatives clamped to 0).
+///
+/// This path is translation-only (integer offsets, used by the CLI wiring);
+/// rotation must go through [`blend_panorama_transformed`], which applies the
+/// full 3x3 matrix about the frame centre (C3).
 pub fn blend_panorama(
     frames: &[LinearImage],
     offsets_px: &[(i32, i32)],
@@ -169,14 +195,28 @@ pub fn blend_panorama(
         .unwrap_or(h as i32);
     let cw = (max_x - min_x) as u32;
     let ch = (max_y - min_y) as u32;
-    // Loud non-overlap gate between consecutive frames in x.
-    let mut sorted = offsets_px.to_vec();
-    sorted.sort_unstable();
-    for pair in sorted.windows(2) {
+    // Loud non-overlap gate between consecutive frames in x *and* y: after
+    // sorting by an axis, consecutive offsets must be closer than the frame
+    // extent on that axis, else the union is disconnected and the result
+    // would be a silent partial panorama. The previous gate checked x only,
+    // so vertically separated frames produced a gap-filled canvas (C4).
+    let mut sorted_x = offsets_px.to_vec();
+    sorted_x.sort_unstable_by_key(|o| o.0);
+    for pair in sorted_x.windows(2) {
         if pair[1].0 - pair[0].0 >= w as i32 {
             return Err(MergeError::Unsupported(format!(
                 "panorama frames at x={} and x={} do not overlap (width {w}px)",
                 pair[0].0, pair[1].0
+            )));
+        }
+    }
+    let mut sorted_y = offsets_px.to_vec();
+    sorted_y.sort_unstable_by_key(|o| o.1);
+    for pair in sorted_y.windows(2) {
+        if pair[1].1 - pair[0].1 >= h as i32 {
+            return Err(MergeError::Unsupported(format!(
+                "panorama frames at y={} and y={} do not overlap (height {h}px)",
+                pair[0].1, pair[1].1
             )));
         }
     }
@@ -241,6 +281,193 @@ pub fn blend_panorama(
         }
     }
     LinearImage::new(cw, ch, out).map_err(|e| MergeError::Invalid(e.to_string()))
+}
+
+/// Transformation-aware feather-blended panorama (C3).
+///
+/// `matrices[i]` is a row-major 3x3 transform mapping frame `i`'s pixel
+/// coordinates into canvas coordinates (same convention as
+/// [`crate::align::PanoTransform::matrix_3x3`]: translation + rotation about
+/// the frame centre). Unlike [`blend_panorama`], which only honours integer
+/// `offsets_px` and therefore silently dropped rotation, this path samples
+/// each frame through its full inverse matrix, so a rotated frame is placed
+/// rotated.
+///
+/// Canvas and weights: the canvas is the union of the transformed frame
+/// bounding boxes; a canvas pixel is covered by frame `i` when its inverse
+/// transform lands inside the frame. Covering frames are combined with
+/// normalised feather weights ramped from each frame's border by
+/// `blend_width_px` (0 = unweighted average over the covering frames); a
+/// convex combination, hence range-preserving. Pixels covered by no frame
+/// stay 0 (canvas gap). Consecutive frames whose transformed boxes do not
+/// overlap in both axes are [`MergeError::Unsupported`] (no silent partial
+/// panorama).
+pub fn blend_panorama_transformed(
+    frames: &[LinearImage],
+    matrices: &[[f64; 9]],
+    blend_width_px: u32,
+) -> Result<LinearImage, MergeError> {
+    if frames.len() < 2 {
+        return Err(MergeError::Invalid(format!(
+            "panorama blend needs at least 2 frames, got {}",
+            frames.len()
+        )));
+    }
+    if frames.len() != matrices.len() {
+        return Err(MergeError::Invalid(format!(
+            "panorama blend needs one matrix per frame, got {} frames, {} matrices",
+            frames.len(),
+            matrices.len()
+        )));
+    }
+    let (w, h) = (frames[0].width(), frames[0].height());
+    for (i, frame) in frames.iter().enumerate() {
+        if frame.width() != w || frame.height() != h {
+            return Err(MergeError::Invalid(format!(
+                "panorama frame #{i} is {}x{}, expected {w}x{h} (no silent rescale)",
+                frame.width(),
+                frame.height()
+            )));
+        }
+    }
+    // Scope + invertibility: only translation+rotation-light is 1.5 scope
+    // (loud `Unsupported`, never silently approximated).
+    let mut inverses = Vec::with_capacity(matrices.len());
+    for (i, matrix) in matrices.iter().enumerate() {
+        if !is_translation_rotation_light(matrix, 1e-6) {
+            return Err(MergeError::Unsupported(format!(
+                "panorama transform #{i} is not translation+rotation-light (1.5 scope)"
+            )));
+        }
+        let inverse = invert_matrix_3x3(matrix).ok_or_else(|| {
+            MergeError::Invalid(format!("panorama transform #{i} is not invertible"))
+        })?;
+        inverses.push(inverse);
+    }
+    // Transformed frame bounding boxes in canvas space.
+    let mut bounds: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(matrices.len());
+    for (i, matrix) in matrices.iter().enumerate() {
+        let corners = [
+            (0.0, 0.0),
+            (w as f64, 0.0),
+            (0.0, h as f64),
+            (w as f64, h as f64),
+        ];
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for (x, y) in corners {
+            let (ox, oy) = apply_matrix_3x3(matrix, x, y).ok_or_else(|| {
+                MergeError::Invalid(format!("panorama transform #{i} maps no finite corner"))
+            })?;
+            min_x = min_x.min(ox);
+            min_y = min_y.min(oy);
+            max_x = max_x.max(ox);
+            max_y = max_y.max(oy);
+        }
+        bounds.push((min_x.floor(), min_y.floor(), max_x.ceil(), max_y.ceil()));
+    }
+    let canvas_min_x = bounds.iter().map(|b| b.0).fold(f64::INFINITY, f64::min);
+    let canvas_min_y = bounds.iter().map(|b| b.1).fold(f64::INFINITY, f64::min);
+    let canvas_max_x = bounds.iter().map(|b| b.2).fold(f64::NEG_INFINITY, f64::max);
+    let canvas_max_y = bounds.iter().map(|b| b.3).fold(f64::NEG_INFINITY, f64::max);
+    let cw = (canvas_max_x - canvas_min_x).max(0.0) as u32;
+    let ch = (canvas_max_y - canvas_min_y).max(0.0) as u32;
+    if cw == 0 || ch == 0 {
+        return Err(MergeError::Unsupported(
+            "panorama canvas is empty after transforms".into(),
+        ));
+    }
+    // Non-overlap gate on the transformed boxes (chain order), both axes.
+    for pair in bounds.windows(2) {
+        let overlap_x = pair[0].2.min(pair[1].2) - pair[0].0.max(pair[1].0);
+        let overlap_y = pair[0].3.min(pair[1].3) - pair[0].1.max(pair[1].1);
+        if overlap_x <= 0.0 || overlap_y <= 0.0 {
+            return Err(MergeError::Unsupported(format!(
+                "panorama frames do not overlap after transform (overlap {overlap_x}x{overlap_y}px)"
+            )));
+        }
+    }
+    let planes: Vec<Vec<Vec<f32>>> = frames
+        .iter()
+        .map(|frame| (0..3).map(|c| frame.channel_plane(c)).collect())
+        .collect();
+    let mut out = vec![0.0f32; cw as usize * ch as usize * 3];
+    for y in 0..ch {
+        for x in 0..cw {
+            let gx = x as f64 + canvas_min_x;
+            let gy = y as f64 + canvas_min_y;
+            let mut num = [0.0f64; 3];
+            let mut den = [0.0f64; 3];
+            let mut radiance = [0.0f64; 3];
+            let mut covering = 0u32;
+            for (inverse, frame_planes) in inverses.iter().zip(&planes) {
+                let (sx, sy) = apply_matrix_3x3(inverse, gx, gy).ok_or_else(|| {
+                    MergeError::Invalid("panorama inverse transform is singular".into())
+                })?;
+                if sx < 0.0 || sy < 0.0 || sx >= w as f64 || sy >= h as f64 {
+                    continue;
+                }
+                covering += 1;
+                // Feather ramp measured from the frame border (rotation-aware:
+                // it follows the frame's own local axes).
+                let edge = sx.min((w - 1) as f64 - sx).min(sy).min((h - 1) as f64 - sy);
+                let weight = if blend_width_px == 0 {
+                    1.0
+                } else {
+                    (edge.max(0.0) / blend_width_px as f64).clamp(0.0, 1.0)
+                };
+                for c in 0..3 {
+                    let sample = sample_bilinear(&frame_planes[c], w, h, sx, sy) as f64;
+                    num[c] += weight * sample;
+                    den[c] += weight;
+                    radiance[c] += sample;
+                }
+            }
+            if covering == 0 {
+                continue; // Outside every frame: stays 0 (canvas gap).
+            }
+            for c in 0..3 {
+                let value = if den[c] > 0.0 {
+                    num[c] / den[c]
+                } else {
+                    // All covering samples sit on a frame border: mean, never NaN.
+                    radiance[c] / covering as f64
+                };
+                out[(y * cw * 3 + x * 3) as usize + c] = clamp_linear(value as f32);
+            }
+        }
+    }
+    LinearImage::new(cw, ch, out).map_err(|e| MergeError::Invalid(e.to_string()))
+}
+
+/// Inverse of a row-major 3x3 matrix; `None` when numerically singular.
+fn invert_matrix_3x3(matrix: &[f64; 9]) -> Option<[f64; 9]> {
+    let m = matrix;
+    if m.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
+        + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    // Row-major: [inv00, inv01, inv02, inv10, inv11, inv12, inv20, inv21, inv22].
+    Some([
+        (m[4] * m[8] - m[5] * m[7]) * inv_det,
+        (m[2] * m[7] - m[1] * m[8]) * inv_det,
+        (m[1] * m[5] - m[2] * m[4]) * inv_det,
+        (m[5] * m[6] - m[3] * m[8]) * inv_det,
+        (m[0] * m[8] - m[2] * m[6]) * inv_det,
+        (m[2] * m[3] - m[0] * m[5]) * inv_det,
+        (m[3] * m[7] - m[4] * m[6]) * inv_det,
+        (m[1] * m[6] - m[0] * m[7]) * inv_det,
+        (m[0] * m[4] - m[1] * m[3]) * inv_det,
+    ])
 }
 
 #[cfg(test)]
@@ -397,5 +624,156 @@ mod tests {
             matches!(err, MergeError::Unsupported(_)),
             "gap must be unsupported, got: {err}"
         );
+    }
+
+    #[test]
+    fn panorama_vertical_gap_is_unsupported() {
+        // C4: the non-overlap gate must check both axes. These frames overlap
+        // in x (4 < 8) but not in y (8 >= height 8); the previous x-only gate
+        // accepted them and produced a gap-filled canvas.
+        let a = LinearImage::solid(8, 8, [0.2, 0.2, 0.2]);
+        let b = LinearImage::solid(8, 8, [0.8, 0.8, 0.8]);
+        let err = blend_panorama(&[a, b], &[(0, 0), (4, 8)], 4).unwrap_err();
+        assert!(
+            matches!(err, MergeError::Unsupported(_)),
+            "vertical gap must be unsupported, got: {err}"
+        );
+    }
+
+    #[test]
+    fn hdr_merge_scales_with_pixels_not_pixels_squared() {
+        // C1 scaling anchor. The merge must be O(pixels): `channel_plane(c)`
+        // is extracted once per frame/channel, not once per pixel. The
+        // previous implementation re-extracted a full plane for every
+        // pixel/channel/frame (O(pixels^2)); at 512x512x2 that was ~54 s
+        // release and minutes in debug. The budget below is generous for the
+        // linear implementation (well under 30 s even on a slow debug CI
+        // runner) but fails hard for the quadratic one — a real gate.
+        let w = 512u32;
+        let h = 512u32;
+        let mut pa = Vec::with_capacity((w * h * 3) as usize);
+        let mut pb = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = ((x + y) % 251) as f32 / 255.0;
+                pa.extend_from_slice(&[v, v, v]);
+                pb.extend_from_slice(&[v * 0.5, v * 0.5, v * 0.5]);
+            }
+        }
+        let a = LinearImage::new(w, h, pa).unwrap();
+        let b = LinearImage::new(w, h, pb).unwrap();
+        let start = std::time::Instant::now();
+        let out = merge_hdr_weighted(
+            &[a, b],
+            &[exposure(0.01), exposure(0.02)],
+            &[(0.0, 0.0), (0.5, -0.5)],
+        )
+        .unwrap();
+        let elapsed = start.elapsed();
+        println!("hdr merge 512x512x2 (debug) elapsed: {elapsed:?}");
+        assert_eq!((out.width(), out.height()), (w, h));
+        assert!(
+            elapsed < std::time::Duration::from_secs(30),
+            "hdr merge of 512x512x2 took {elapsed:?}; the merge is no longer \
+             O(pixels) (quadratic plane re-extraction regression?)"
+        );
+    }
+
+    #[test]
+    fn invert_matrix_3x3_roundtrip() {
+        let m = crate::pano_matrix(7.0, -3.0, 2.0, 12.0, 8.0);
+        let inv = invert_matrix_3x3(&m).expect("rotation+translation is invertible");
+        for &(x, y) in &[(0.0, 0.0), (24.0, 16.0), (3.5, 9.25), (-2.0, 40.0)] {
+            let (rx, ry) = apply_matrix_3x3(&m, x, y).unwrap();
+            let (bx, by) = apply_matrix_3x3(&inv, rx, ry).unwrap();
+            assert!(
+                (bx - x).abs() < 1e-9 && (by - y).abs() < 1e-9,
+                "({x},{y}) -> ({rx},{ry}) -> ({bx},{by})"
+            );
+        }
+        let singular = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(invert_matrix_3x3(&singular).is_none());
+    }
+
+    #[test]
+    fn pano_blend_transformed_applies_rotation() {
+        // C3: the blend must apply the full transform. Frame B is a
+        // horizontal ramp translated right and rotated 2 deg about its
+        // centre. Canvas pixels covered only by B must equal B sampled
+        // through the matrix's inverse; the offsets-only blend placed B
+        // unrotated and would fail this.
+        let w = 200u32;
+        let h = 120u32;
+        let shade = 170.0f64;
+        let a = LinearImage::solid(w, h, [0.0, 0.0, 0.0]);
+        let mut px = Vec::with_capacity((w * h * 3) as usize);
+        for _y in 0..h {
+            for x in 0..w {
+                let v = x as f32 / (w - 1) as f32;
+                px.extend_from_slice(&[v, v, v]);
+            }
+        }
+        let b = LinearImage::new(w, h, px).unwrap();
+        let matrix_b = crate::pano_matrix(shade, 0.0, 2.0, w as f64 / 2.0, h as f64 / 2.0);
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let out = blend_panorama_transformed(&[a, b.clone()], &[identity, matrix_b], 8).unwrap();
+
+        // Frame A (identity) spans canvas x in [0, w); only B covers x >= w.
+        // Recover the canvas y origin from B's transformed corners.
+        let mut canvas_min_y = 0.0f64;
+        for (cx, cy) in [
+            (0.0, 0.0),
+            (w as f64, 0.0),
+            (0.0, h as f64),
+            (w as f64, h as f64),
+        ] {
+            let (_, oy) = apply_matrix_3x3(&matrix_b, cx, cy).unwrap();
+            canvas_min_y = canvas_min_y.min(oy);
+        }
+        let canvas_min_y = canvas_min_y.floor();
+        let inverse_b = invert_matrix_3x3(&matrix_b).unwrap();
+        let b_plane = b.channel_plane(0);
+        let (mut checked, mut distinguishes) = (0usize, 0usize);
+        for y in 0..out.height() {
+            let gy = y as f64 + canvas_min_y;
+            for gx in w..out.width() {
+                let (sx, sy) = apply_matrix_3x3(&inverse_b, gx as f64, gy).unwrap();
+                if sx < 0.0 || sy < 0.0 || sx >= w as f64 || sy >= h as f64 {
+                    continue;
+                }
+                let expected = sample_bilinear(&b_plane, w, h, sx, sy);
+                let got = out.pixels()[((y * out.width() + gx) * 3) as usize];
+                assert!(
+                    (got - expected).abs() < 1e-6,
+                    "({gx},{gy}): got {got}, want {expected}"
+                );
+                let unrotated = sample_bilinear(&b_plane, w, h, gx as f64 - shade, gy);
+                if (expected - unrotated).abs() > 1e-3 {
+                    distinguishes += 1;
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 1000, "only {checked} B-only pixels checked");
+        assert!(
+            distinguishes > 0,
+            "rotation never changed the sampling (vacuous test)"
+        );
+    }
+
+    #[test]
+    fn pano_blend_transformed_rejects_non_overlap_and_scope() {
+        let a = LinearImage::solid(8, 8, [0.2, 0.2, 0.2]);
+        let b = LinearImage::solid(8, 8, [0.8, 0.8, 0.8]);
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        // Vertical gap: overlap_x > 0 but overlap_y == 0.
+        let shifted_y = [1.0, 0.0, 0.0, 0.0, 1.0, 8.0, 0.0, 0.0, 1.0];
+        let err = blend_panorama_transformed(&[a.clone(), b.clone()], &[identity, shifted_y], 4)
+            .unwrap_err();
+        assert!(matches!(err, MergeError::Unsupported(_)), "got: {err}");
+        // Perspective/shear is outside the 1.5 rotation-light scope.
+        let shear = [1.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let err = blend_panorama_transformed(&[a, b], &[identity, shear], 4).unwrap_err();
+        assert!(matches!(err, MergeError::Unsupported(_)), "got: {err}");
     }
 }

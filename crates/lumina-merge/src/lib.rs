@@ -14,7 +14,10 @@
 //!   No homography, no ghost removal.
 //! - Panorama alignment is a chained translation+rotation-light homography
 //!   with cylindrical projection only (no spherical/fisheye), no bundle
-//!   adjustment, feather blend only (no multi-band).
+//!   adjustment, feather blend only (no multi-band). The blend path
+//!   [`blend_panorama_transformed`] applies the full matrix (rotation about
+//!   the frame centre); the integer-offset [`blend_panorama`] is
+//!   translation-only and gates non-overlap in both axes.
 //! - HDR exposure compensation uses EXIF exposure exclusively
 //!   (`exposure_time_s`, `iso`, `f_number`); missing EXIF exposure is
 //!   [`MergeError::Unsupported`], never guessed from pixels.
@@ -82,7 +85,9 @@ impl AlignStatus {
     }
 }
 
-pub use align::{estimate_hdr_translation, estimate_pano_transform, HdrShift, PanoTransform};
+pub use align::{
+    estimate_hdr_translation, estimate_pano_transform, pano_matrix, HdrShift, PanoTransform,
+};
 pub use digest::merge_inputs_digest;
 pub use dng::{
     encode_linear_dng, exif_timestamp_utc, linear_to_u16, merge_dng_filename,
@@ -91,4 +96,4 @@ pub use dng::{
     DNG_VERSION, HDR_DNG_SUFFIX, PANO_DNG_SUFFIX,
 };
 pub use image::LinearImage;
-pub use merge::{blend_panorama, merge_hdr_weighted};
+pub use merge::{blend_panorama, blend_panorama_transformed, merge_hdr_weighted};

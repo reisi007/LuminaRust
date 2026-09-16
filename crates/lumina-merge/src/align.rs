@@ -7,7 +7,9 @@
 //! - Panorama: cylindrical warp (focal = width) of both frames, then joint
 //!   search over integer translation and small rotations
 //!   (`-2..=+2` degrees, step 1) of the moving frame about its centre.
-//!   Returns a row-major 3x3 matrix `T * R` (translation * rotation).
+//!   Returns a row-major 3x3 matrix mapping moving-frame coordinates into
+//!   the reference frame (`T · R` with the rotation about the frame centre,
+//!   see [`pano_matrix`]).
 //!   Non-overlapping results (overlap `< PANO_MIN_OVERLAP_PX` in either
 //!   axis) are `Unsupported`; spherical/fisheye is out of scope.
 
@@ -26,7 +28,9 @@ pub struct HdrShift {
 /// Panorama transform of one frame into the reference frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanoTransform {
-    /// Row-major 3x3 homogeneous matrix (`T * R`, translation * rotation).
+    /// Row-major 3x3 homogeneous matrix mapping moving-frame coordinates
+    /// into the reference frame: `T(dx, dy) · R_centre` (rotation about the
+    /// frame centre, see [`pano_matrix`]).
     pub matrix_3x3: [f64; 9],
     /// Applied rotation in degrees (from `-2..=+2` search grid).
     pub rotation_deg: f64,
@@ -132,6 +136,26 @@ fn rotate_point(x: f64, y: f64, cx: f64, cy: f64, angle_rad: f64) -> (f64, f64) 
     (cx + dx * c - dy * s, cy + dx * s + dy * c)
 }
 
+/// Row-major 3x3 panorama transform for translation `(dx, dy)` and rotation
+/// `angle_deg` **about the frame centre** `(cx, cy)`:
+///
+/// ```text
+/// T(dx, dy) · Translate(cx, cy) · R(angle_deg) · Translate(-cx, -cy)
+/// ```
+///
+/// The rotation centre is the same one [`sad_pano_at`] searches, so applying
+/// this matrix to the moving frame reproduces exactly where the SAD matched
+/// it. A rotation about the origin (the previous construction) mismatched the
+/// search by `C - R·C` — ~126 px at 6000x4000 / 2 deg (C2).
+#[must_use]
+pub fn pano_matrix(dx: f64, dy: f64, angle_deg: f64, cx: f64, cy: f64) -> [f64; 9] {
+    let (s, c) = angle_deg.to_radians().sin_cos();
+    // R_c(p) = R·(p - C) + C = R·p + (C - R·C); then add the translation.
+    let tx = dx + cx - (c * cx - s * cy);
+    let ty = dy + cy - (s * cx + c * cy);
+    [c, -s, tx, s, c, ty, 0.0, 0.0, 1.0]
+}
+
 fn sad_pano_at(
     ref_luma: &[f32],
     mov_luma: &[f32],
@@ -211,10 +235,16 @@ pub fn estimate_pano_transform(
             PANO_MIN_OVERLAP_PX
         )));
     }
-    let angle_rad = (best.2 as f64).to_radians();
-    let (s, c) = angle_rad.sin_cos();
-    // Matrix is T(dx,dy) * R(angle about origin); rotation-light only.
-    let matrix_3x3 = [c, -s, best.0 as f64, s, c, best.1 as f64, 0.0, 0.0, 1.0];
+    // Rotation is about the frame centre — exactly where `sad_pano_at`
+    // matched it — so the matrix places the moving frame where alignment
+    // found it (C2).
+    let matrix_3x3 = pano_matrix(
+        best.0 as f64,
+        best.1 as f64,
+        best.2 as f64,
+        w as f64 / 2.0,
+        h as f64 / 2.0,
+    );
     let (residual, status) = status_for_shift(best.0 as f64, best.1 as f64);
     Ok(PanoTransform {
         matrix_3x3,
@@ -227,6 +257,7 @@ pub fn estimate_pano_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumina_core::merge_geom::apply_matrix_3x3;
 
     fn shifted_pair() -> (LinearImage, LinearImage) {
         // 8x8 gradient shifted by (+1, 0): moving[x] = ref[x-1].
@@ -351,6 +382,117 @@ mod tests {
         assert!(
             matches!(err, MergeError::Unsupported(_)),
             "non-overlapping pair must be unsupported, got: {err}"
+        );
+    }
+
+    #[test]
+    fn hdr_subpixel_refinement_recovers_half_pixel_shift() {
+        // C5: the subpixel-light refinement must return a non-integer shift.
+        // `moving = a` sampled at `x + 0.5` on a ramp that is linear in both
+        // axes: the SAD minimum sits at dx = +0.5, so the integer coarse
+        // search has to be refined on the 0.5 grid. (The x=0 column carries a
+        // small zero-fill edge error, but the interior match dominates; the
+        // y slope keeps dy = 0 unique.)
+        let w = 16u32;
+        let h = 8u32;
+        let mut pa = Vec::new();
+        let mut pb = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let base = 0.1 + (x as f32 + y as f32) / 64.0;
+                pa.extend_from_slice(&[base, base, base]);
+                let shifted = 0.1 + (x as f32 + 0.5 + y as f32) / 64.0;
+                pb.extend_from_slice(&[shifted, shifted, shifted]);
+            }
+        }
+        let a = LinearImage::new(w, h, pa).unwrap();
+        let b = LinearImage::new(w, h, pb).unwrap();
+        let shift = estimate_hdr_translation(&a, &b, 2).unwrap();
+        assert!(
+            (shift.dx - 0.5).abs() < 1e-9,
+            "expected the half-pixel shift dx = 0.5, got {shift:?}"
+        );
+        assert!(
+            shift.dx.fract().abs() > 1e-9,
+            "shift must be subpixel (non-integer), got {}",
+            shift.dx
+        );
+        assert!(
+            shift.dy.abs() < 1e-9,
+            "vertical shift must stay 0, got {}",
+            shift.dy
+        );
+    }
+
+    #[test]
+    fn pano_matrix_rotates_about_the_frame_centre() {
+        // C2: the matrix must use the same rotation centre as the SAD search.
+        // SAD convention: reference `r` samples moving at
+        // `rotate_center(r - t, -angle)`, so the matrix must map a moving
+        // point `s` to `rotate_center(s, +angle) + t` (<= 1e-6).
+        let (w, h) = (6000.0f64, 4000.0f64);
+        let (cx, cy) = (w / 2.0, h / 2.0);
+        let (dx, dy, angle) = (37.0, -21.0, 2.0);
+        let matrix = pano_matrix(dx, dy, angle, cx, cy);
+        let angle_rad = angle.to_radians();
+        for &(sx, sy) in &[(cx, cy), (0.0, 0.0), (w, h), (1234.0, 3210.0)] {
+            let (ex, ey) = rotate_point(sx, sy, cx, cy, angle_rad);
+            let (want_x, want_y) = (ex + dx, ey + dy);
+            let (got_x, got_y) = apply_matrix_3x3(&matrix, sx, sy).unwrap();
+            assert!(
+                (got_x - want_x).abs() < 1e-6 && (got_y - want_y).abs() < 1e-6,
+                "({sx},{sy}) -> ({got_x},{got_y}), want ({want_x},{want_y})"
+            );
+        }
+        // Regression magnitude: a rotation about the origin would displace the
+        // (0,0) corner by |C - R*C| ~ 126 px at 6000x4000 / 2 deg, far above
+        // the 1e-6 contract.
+        let (got_x, got_y) = apply_matrix_3x3(&matrix, 0.0, 0.0).unwrap();
+        let origin_error = ((got_x - dx).powi(2) + (got_y - dy).powi(2)).sqrt();
+        assert!(
+            origin_error > 100.0,
+            "origin-rotation bug would be undetectable here, error {origin_error}"
+        );
+    }
+
+    #[test]
+    fn pano_estimate_rotation_centre_is_the_frame_centre() {
+        // Estimator anchor: whatever transform is found, its rotation centre
+        // must be the frame centre — with a zero translation window the
+        // centre maps to itself, whereas an origin rotation would displace it
+        // by |C - R*C| (large for a big frame).
+        let w = 400u32;
+        let h = 240u32;
+        let angle = 2.0f64.to_radians();
+        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+        let mut px = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let v = (x as f32 * 0.7 + y as f32 * 3.1) / 256.0;
+                px.extend_from_slice(&[v, v, v]);
+            }
+        }
+        let a = LinearImage::new(w, h, px).unwrap();
+        let a_plane = a.channel_plane(0);
+        let mut pb = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let (sx, sy) = rotate_point(x as f64, y as f64, cx, cy, -angle);
+                let v = sample_bilinear(&a_plane, w, h, sx, sy);
+                pb.extend_from_slice(&[v, v, v]);
+            }
+        }
+        let b = LinearImage::new(w, h, pb).unwrap();
+        let t = estimate_pano_transform(&a, &b, 0).unwrap();
+        assert!(
+            t.rotation_deg.abs() >= 1.0,
+            "expected a nonzero rotation for the rotated pair, got {t:?}"
+        );
+        let (ox, oy) = apply_matrix_3x3(&t.matrix_3x3, cx, cy).unwrap();
+        let centre_error = ((ox - cx).powi(2) + (oy - cy).powi(2)).sqrt();
+        assert!(
+            centre_error < 1e-6,
+            "rotation centre moved by {centre_error}px; origin rotation bug?"
         );
     }
 }
