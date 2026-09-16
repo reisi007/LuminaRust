@@ -1,0 +1,22 @@
+[package]
+name = "lumina-cull"
+version = "0.1.0"
+edition = "2021"
+description = "LRPAR-G09-CULL-25 Stage-1 deterministic assisted-culling heuristics"
+
+[dependencies]
+# Read-only reuse of the shared measurement paths: `analyze_tone_with_histogram`
+# (clipping/exposure) and `downscale_bilinear` (analysis resolution). No second
+# algorithm for the same measurement (decisions §4).
+lumina-core = { path = "../lumina-core" }
+# Read-only use of the source-level `culling` schema (section/identity/status,
+# validation) that this crate fills. The schema is never modified here.
+lumina-sidecar = { path = "../lumina-sidecar" }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"

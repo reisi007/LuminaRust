@@ -25,9 +25,9 @@
 use clap::Args;
 use log::info;
 use lumina_merge::{
-    blend_panorama, encode_linear_dng, estimate_hdr_translation, estimate_pano_transform,
-    merge_dng_filename, merge_hdr_weighted, validate_dng_file_name, DngError, DngExif, LinearImage,
-    MergeError,
+    blend_panorama_transformed, encode_linear_dng, estimate_hdr_translation,
+    estimate_pano_transform, merge_dng_filename, merge_hdr_weighted, validate_dng_file_name,
+    DngError, DngExif, LinearImage, MergeError,
 };
 use lumina_sidecar::{
     load_sidecar, now_rfc3339_utc, save_sidecar, sidecar_path_for, ArtifactReference,
@@ -93,6 +93,10 @@ pub struct MergeArgs {
 const MERGE_DNG_FORMAT: &str = "dng";
 const MERGE_DNG_CHANNELS: &str = "rgb16";
 const MERGE_DNG_DATA_VERSION: &str = "1";
+/// Document-level envelope discriminator of a merge-DNG sidecar
+/// (MERGE-DNG-1): `"type": "merge"`. It lives on the sidecar document, not
+/// in `MergeRecipe` (which rejects an unknown `type` key loudly).
+const MERGE_ENVELOPE_TYPE: &str = "merge";
 /// Pipeline version of the merge-DNG sidecar: the merged DNG re-enters the
 /// normal single-image pipeline, so it carries the same version as `import`.
 const MERGE_PIPELINE_VERSION: &str = "raster-mvp-1";
@@ -102,6 +106,38 @@ const MERGE_PIPELINE_VERSION: &str = "raster-mvp-1";
 const PANO_DEFAULT_EXPOSURE_S: f64 = 0.01;
 const PANO_DEFAULT_ISO: u32 = 100;
 const PANO_DEFAULT_F_NUMBER: f64 = 8.0;
+
+/// Document kind of an existing sidecar at the merge-output sidecar path
+/// (MERGE-DNG-1 envelope discriminator). The merge commands must never
+/// silently overwrite a different document, so `Standard` and `Unknown`
+/// are rejected loudly (only `--force` replaces them explicitly).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MergeDocumentKind {
+    /// No `"type"` key: an ordinary single-image sidecar.
+    Standard,
+    /// `"type": "merge"`: the merge-DNG envelope.
+    Merge,
+    /// Any other `"type"` value: rejected loudly.
+    Unknown(String),
+}
+
+/// Classifies the ENVELOPE of an existing sidecar via its document-level
+/// `"type"` extra. Missing → [`MergeDocumentKind::Standard`],
+/// `"merge"` → [`MergeDocumentKind::Merge`], anything else →
+/// [`MergeDocumentKind::Unknown`] (MERGE-DNG-1).
+fn merge_document_kind(document: &lumina_sidecar::SidecarDocument) -> MergeDocumentKind {
+    match document.extras.get("type") {
+        None => MergeDocumentKind::Standard,
+        Some(value) if value == &serde_json::Value::from(MERGE_ENVELOPE_TYPE) => {
+            MergeDocumentKind::Merge
+        }
+        Some(value) => MergeDocumentKind::Unknown(
+            value
+                .as_str()
+                .map_or_else(|| value.to_string(), str::to_string),
+        ),
+    }
+}
 
 /// One decoded merge source: file-bytes identity plus the linear frame and
 /// the provenance the merge recipe records.
@@ -524,28 +560,36 @@ fn align_and_merge(
             Ok((merged, transforms, residual_px, residual_flag))
         }
         MergeMode::Panorama => {
+            // Full 3x3 matrix per frame (translation + rotation about the
+            // frame centre, `lumina-merge::pano_matrix`). The blend applies
+            // each frame through its **full inverse matrix**
+            // ([`blend_panorama_transformed`]). The previous wiring fed only
+            // `matrix[2]`/`matrix[5]` integer offsets into the
+            // translation-only `blend_panorama`, which silently dropped the
+            // estimated rotation (F1-Auflage, MERGE-CORE-1-Rework).
             let mut matrices = Vec::with_capacity(frames.len());
-            let mut offsets = Vec::with_capacity(frames.len());
             let mut transforms = Vec::new();
             let mut residual_px: f64 = 0.0;
             let mut residual_flag = false;
             matrices.push([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
-            offsets.push((0, 0));
             for (index, frame) in frames.iter().enumerate().skip(1) {
                 let transform = estimate_pano_transform(&frames[0], frame, args.max_shift_px)
                     .map_err(map_merge_error)?;
-                let matrix = transform.matrix_3x3;
-                matrices.push(matrix);
-                offsets.push((matrix[2].round() as i32, matrix[5].round() as i32));
+                matrices.push(transform.matrix_3x3);
                 transforms.push(MergeTransform {
                     source_index: index,
-                    matrix_3x3: matrix,
+                    matrix_3x3: transform.matrix_3x3,
                 });
+                info!(
+                    "merge-pano: source #{index} aligned with rotation {:.3}deg \
+                     (matrix {:?})",
+                    transform.rotation_deg, transform.matrix_3x3
+                );
                 residual_px = residual_px.max(transform.residual_px);
                 residual_flag |= transform.status.residual_flag();
             }
-            let merged =
-                blend_panorama(frames, &offsets, args.blend_width_px).map_err(map_merge_error)?;
+            let merged = blend_panorama_transformed(frames, &matrices, args.blend_width_px)
+                .map_err(map_merge_error)?;
             Ok((merged, transforms, residual_px, residual_flag))
         }
     }
@@ -768,12 +812,26 @@ fn check_existing_bundle(
             sidecar_path.display()
         ))
     })?;
-    if document.extras.get("type") != Some(&serde_json::Value::from("merge")) {
-        return Err(CliError::Message(format!(
-            "merge stale: existing sidecar `{}` is not a merge sidecar \
-             (missing `\"type\": \"merge\"`); run with --force to replace it explicitly",
-            sidecar_path.display()
-        )));
+    match merge_document_kind(&document) {
+        MergeDocumentKind::Merge => {}
+        MergeDocumentKind::Standard => {
+            return Err(CliError::Message(format!(
+                "merge stale: existing sidecar `{}` is a standard sidecar \
+                 (no `\"type\": \"{}\"` envelope); refusing to overwrite it — \
+                 run with --force to replace the bundle explicitly",
+                sidecar_path.display(),
+                MERGE_ENVELOPE_TYPE
+            )));
+        }
+        MergeDocumentKind::Unknown(kind) => {
+            return Err(CliError::Message(format!(
+                "merge stale: existing sidecar `{}` has unknown document type \
+                 `{kind}` (expected `\"type\": \"{}\"`); refusing to overwrite \
+                 it — run with --force to replace the bundle explicitly",
+                sidecar_path.display(),
+                MERGE_ENVELOPE_TYPE
+            )));
+        }
     }
     let stored_recipe_value = document.extras.get("merge_recipe").ok_or_else(|| {
         CliError::Message(format!(
@@ -932,7 +990,7 @@ fn build_merge_document(
         serde_json::to_value(&artifact).map_err(|error| CliError::Message(error.to_string()))?;
     document
         .extras
-        .insert("type".into(), serde_json::Value::from("merge"));
+        .insert("type".into(), serde_json::Value::from(MERGE_ENVELOPE_TYPE));
     document.extras.insert("merge_recipe".into(), recipe_value);
     document
         .extras
@@ -1024,6 +1082,61 @@ mod tests {
         // sources is enforced separately by `bundle_relative_paths`).
         assert_eq!(dng_file_name(&dir.join("sub/x.dng")).unwrap(), "x.dng");
         assert!(dng_file_name(&dir.join("..")).is_err());
+    }
+
+    #[test]
+    fn merge_envelope_classifies_standard_merge_and_unknown() {
+        // MERGE-DNG-1: missing `type` → Standard, `"merge"` → Merge,
+        // anything else → Unknown (each rejected loudly by the command).
+        assert_eq!(
+            merge_document_kind(&envelope_document(None)),
+            MergeDocumentKind::Standard
+        );
+        assert_eq!(
+            merge_document_kind(&envelope_document(Some(MERGE_ENVELOPE_TYPE))),
+            MergeDocumentKind::Merge
+        );
+        assert_eq!(
+            merge_document_kind(&envelope_document(Some("pano"))),
+            MergeDocumentKind::Unknown("pano".into())
+        );
+        assert_eq!(
+            merge_document_kind(&envelope_document(Some("merge-hdr"))),
+            MergeDocumentKind::Unknown("merge-hdr".into())
+        );
+    }
+
+    /// Sidecar document with (or without) a document-level `"type"` extra.
+    fn envelope_document(type_value: Option<&str>) -> lumina_sidecar::SidecarDocument {
+        let source = SourceIdentity {
+            relative_name: "a-HDR.dng".into(),
+            content_hash: format!("blake3:{}", "00".repeat(32)),
+            byte_length: 4,
+            modified_at: None,
+            raw_format: "DNG".into(),
+            orientation: 1,
+            decode_fingerprint: DecodeFingerprint {
+                decoder: "libraw".into(),
+                version: "test".into(),
+                parameters: std::collections::BTreeMap::new(),
+                extras: std::collections::BTreeMap::new(),
+            },
+            geometry_fingerprint: GeometryFingerprint {
+                width: 4,
+                height: 4,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: std::collections::BTreeMap::new(),
+            },
+            extras: std::collections::BTreeMap::new(),
+        };
+        let mut document = lumina_sidecar::SidecarDocument::new(source, MERGE_PIPELINE_VERSION);
+        if let Some(value) = type_value {
+            document
+                .extras
+                .insert("type".into(), serde_json::Value::from(value));
+        }
+        document
     }
 
     #[test]

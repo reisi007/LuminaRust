@@ -2167,6 +2167,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-cull"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "lumina-core",
+ "lumina-sidecar",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "lumina-gpu"
 version = "0.1.0"
 dependencies = [

@@ -154,7 +154,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: niedrig] LRPAR-G09-CULL-IMPL-25 (Release: 2.5)** KI-Culling-Implementierung nach Entscheid `feature/decisions/LRPAR-G09-CULL-25.md` (Schema → Heuristik Stufe 1 → CLI → GUI → optional ONNX Stufe 2 → Perf F-074). Abnahme: CLI-Exit-Codes + GUI-headless + kittest, Vorschlag schreibt nie Rating/Flag/Label.
 
 - [ ] **[PRIO: niedrig] LRPAR-G12-FACE-IMPL-20 (Release: 2.0)** Gesichtserkennung-Implementierung nach Entscheid `feature/decisions/LRPAR-G12-FACE-20.md` (S1 Schema → S2 ONNX → S3 Clustering → S4 CLI → S5 GUI → S6 Lizenzen). Abnahme: CLI + GUI-headless, Sidecar-first, kein stiller Fallback. Karten-Modul/GPS bleibt nie Ziel (kein Task).
-- [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-IMPL-15 (Release: 1.5)** HDR-/Panorama-Merge-Implementierung nach Entscheid `feature/decisions/LRPAR-G13-MERGE-15.md` (Schema ✓, Core `lumina-merge` ✓, DNG-Writer + Re-Import ✓; offen: CLI auf `blend_panorama_transformed` + volle Matrix inkl. Rotation-E2E, GUI, Golden, F-074-Budget). Abnahme: CLI-Exit-Codes + GUI-headless + Golden-Gates mit Toleranzen.
+- [ ] **[PRIO: niedrig] LRPAR-G13-MERGE-IMPL-15 (Release: 1.5)** HDR-/Panorama-Merge-Implementierung nach Entscheid `feature/decisions/LRPAR-G13-MERGE-15.md` (Schema ✓, Core `lumina-merge` ✓, DNG-Writer + Re-Import ✓, CLI mit voller Matrix + Rotation-E2E ✓; offen: GUI, Golden, F-074-Budget). Abnahme: CLI-Exit-Codes + GUI-headless + Golden-Gates mit Toleranzen.
 
 ### PRIO: niedrig (Block A, nicht-LRPAR)
 

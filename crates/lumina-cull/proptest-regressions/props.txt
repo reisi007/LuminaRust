@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8cd828e65da1c4c90dcd9882445042167d06a7b28e96d70c4e12a5256605d0de # shrinks to frame = ImageFrame { width: 2, height: 20, pixels: [0, 0, 14, 0, 0, 1, 4, 0, 0, 0, 14, 0, 0, 0, 14, 0, 0, 0, 14, 0, 0, 0, 14, 0, 0, 0, 14, 0, 1, 175, 102, 23, 238, 64, 193, 157, 84, 138, 235, 128, 233, 163, 230, 236, 111, 144, 241, 252, 33, 199, 81, 23, 136, 83, 200, 82, 191, 17, 152, 91, 145, 112, 18, 53, 132, 106, 252, 232, 200, 46, 151, 159, 134, 84, 231, 231, 199, 175, 199, 189, 75, 89, 80, 254, 244, 62, 164, 62, 104, 95, 245, 70, 76, 75, 222, 249, 29, 106, 53, 203, 194, 156, 212, 128, 48, 92, 51, 215, 110, 19, 93, 139, 71, 129, 41, 57, 15, 206, 187, 16, 75, 103, 228, 8, 68, 99, 36, 39, 97, 74, 211, 104, 139, 122, 213, 43, 228, 2, 215, 236, 102, 253, 207, 73, 55, 112, 50, 33, 71, 120, 60, 151, 138, 112, 207, 145, 135, 249, 27, 105] }

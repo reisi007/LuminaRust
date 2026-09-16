@@ -25,6 +25,8 @@ CLI und nativer Desktop-GUI.
 | IPTC-/XMP-Metadaten in JPEG-Exporte (`--write-metadata`, Opt-in) | ja (LRPAR-G15-IPTC) | ja (Metadaten-Panel) |
 | HDR-Merge → lineares DNG (`merge-hdr`, LRPAR-G13-MERGE-15) | ja (nativ, `lumina-merge` + DNG-Writer, 1.5) | geplant 1.5 (gleicher Einstiegspunkt, Jobsteuerung in GUI) |
 | Panorama-Merge → lineares DNG (`merge-pano`, LRPAR-G13-MERGE-15) | ja (nativ, gleicher Scope wie oben) | geplant 1.5 |
+| KI-Culling Stufe 1 (Heuristik, `lumina-cull`, LRPAR-G09-CULL-25) | geplant 2.5 (nativ, deterministisch, kein Modell) | geplant 2.5 (Library-Badges, gleiche Logik) |
+| KI-Culling Stufe 2 (ONNX-Modell, LRPAR-G09-CULL-25) | nicht geplant — nur mit F-078-Lizenzentscheid | nicht geplant |
 | Optionale zentrale Indizierung (`lumina-index`) | post-MVP (optional) | post-MVP (optional) |
 
 ## RAW-Backend (nativ)

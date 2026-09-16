@@ -62,8 +62,11 @@ Normative Abgrenzungsregeln für 2.5:
 
 ## 4. Modell-/Capability-Scope
 
-- **Stufe 1 (2.5-Basis, entschieden): heuristische Bildqualitätsanalyse in
-  `lumina-core`, ohne ONNX, ohne Gewichte, deterministisch.** Signale:
+- **Stufe 1 (2.5-Basis, entschieden): heuristische Bildqualitätsanalyse im
+  eigenen Crate `lumina-cull`, ohne ONNX, ohne Gewichte, deterministisch.**
+  (Präzisierung 2026-09-16: Der Entscheid nannte `lumina-core`; umgesetzt ist
+  ein eigenes, reines Analyse-Crate, das Core/Sidecar nur lesend konsumiert —
+  Core bleibt dadurch unverändert, keine Architekturgrenz-Verletzung.) Signale:
   Schärfe/Blur-Heuristik, Clipping-/Belichtungsanalyse (bestehende
   `analyze_tone`-/Histogramm-Pfade wiederverwenden, kein Zweit-Algorithmus),
   Rausch-Heuristik, Duplikat-/Serienähnlichkeit (Hash-/Histogramm-Vergleich
@@ -131,8 +134,8 @@ Normative Abgrenzungsregeln für 2.5:
 
 1. **Schema-Slice:** `culling`-Sektion in `lumina-sidecar` (Typen,
    Validierung, Roundtrip, Migration, Atomic-Write, Stale-Regeln) + Tests.
-2. **Heuristik-Slice:** deterministische Stufe-1-Analyse in `lumina-core`
-   (ggf. neuer nicht-GUI-Modulpfad, keine GUI-Bildlogik) + Unit-/Property-
+2. **Heuristik-Slice:** deterministische Stufe-1-Analyse im eigenen Crate
+   `lumina-cull` (reiner Core-/Sidecar-Konsument, keine GUI-Bildlogik) + Unit-/Property-
    Tests (Score-Range `0..=1`, Monotonie, Clipping) + Fixture-Genauigkeit
    (Precision/Recall auf lizenzgeeigneten Fixtures, keine Netzwerk-, keine
    Original-Mutation).
@@ -146,6 +149,13 @@ Normative Abgrenzungsregeln für 2.5:
    fehlendes Modell laut).
 6. **Perf-Slice:** Methodik nach F-074 (Baseline-/Budget-Stores,
    `report`/`warn`/`gate`); Ordner-Scan mit Vorschlägen bleibt interaktiv.
+   Bekannter Hotspot für diesen Slice: `noise_sigma`-Allokation (~22 MB
+   transient pro Bild bei 2048er Analysebreite).
+
+**Stand 2026-09-16 (Slices 1+2, Verifizierung BESTANDEN):** Schema-Slice und
+Heuristik-Slice umgesetzt (`lumina-cull`, 45 Tests, Precision/Recall 1.0 auf
+synthetischen Fixtures, alle 8 Reason-Codes emissions-assertiert). Offen:
+Slices 3–6.
 
 ## 8. Abnahme dieses Entscheids
 
