@@ -10,6 +10,7 @@ use thiserror::Error;
 
 pub mod cache;
 pub mod crop_max_rect;
+pub mod denoise;
 pub mod generative;
 pub mod histogram;
 pub mod lens_blur;
@@ -36,6 +37,12 @@ pub use cache::{
     StaleTracker,
 };
 pub use crop_max_rect::{maximum_content_rect, PixelRect, CONTENT_ALPHA_MIN};
+pub use denoise::{
+    apply_denoise_blend, apply_denoise_stage, assemble_denoise_tiles, denoise_producer_provenance,
+    resolve_denoise_status, set_denoise_producer_provenance, DenoiseIdentity, DenoiseOutcome,
+    DenoisePolicy, DenoiseRgbArtifact, DenoiseStageInput, DenoiseStageStatus, DenoiseTile,
+    DENOISE_DETAIL_SCALE, DENOISE_PRODUCER_PROVENANCE_KEY, DENOISE_RGB_ENCODING_VERSION,
+};
 pub use generative::{
     apply_generative_expand_cached, clear_generative_cache, composite_auto_fill, composite_expand,
     effective_keep as effective_keep_generative, fill_transparent_cached,
@@ -63,9 +70,11 @@ pub use preview_cache::{
 };
 pub use render::{
     apply_spot_heals_from_recipe, generative_input_frames, prepare_source_base, render_frame,
-    render_frame_from_base, render_frame_from_base_with_generative, render_frame_with_generative,
-    LensfunCorrectorRef, MaskContext, MaskLayerResult, MaskPolicy, RenderContext, RenderOutput,
-    SourceActionArtifact, StageWork,
+    render_frame_from_base, render_frame_from_base_with_denoise,
+    render_frame_from_base_with_generative, render_frame_from_base_with_generative_and_denoise,
+    render_frame_with_denoise, render_frame_with_generative,
+    render_frame_with_generative_and_denoise, LensfunCorrectorRef, MaskContext, MaskLayerResult,
+    MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, StageWork,
 };
 pub use spot_heal::{
     apply_spot_heals, apply_visualize_overlay, detect_spots_heuristic, distraction_candidates,
@@ -311,6 +320,11 @@ pub enum CoreError {
     },
     #[error("mask re-inference failed: {reason}")]
     MaskInference { reason: String },
+    /// LRPAR-G14-DENOISE-IMPL-20: an active `denoise_ai` stage whose artifact/
+    /// model is not usable under [`crate::DenoisePolicy::Strict`]. `status` is
+    /// the visible §6 state (`unavailable`/`stale`/`missing`/`corrupt`).
+    #[error("denoise_ai is {status}: {reason}")]
+    Denoise { status: String, reason: String },
 }
 
 /// PERF-GUI-* (CPU quick-wins): iterate over each RGBA pixel of `pixels` (length
@@ -852,7 +866,40 @@ impl ImageFrame {
     }
 
     pub fn apply_recipe(&mut self, recipe: &EditRecipe) -> Result<(), CoreError> {
-        self.apply_recipe_with_scale_and_white_balance(recipe, 1.0, None)
+        self.apply_recipe_with_scale_white_balance_and_denoise(
+            recipe,
+            1.0,
+            None,
+            &crate::DenoiseStageInput::inactive(),
+        )
+    }
+
+    /// LRPAR-G14-DENOISE-IMPL-20: [`Self::apply_recipe`] with a caller-resolved
+    /// KI-Denoise stage (artifact + §6 status + fallback policy). Existing
+    /// entry points pass [`crate::DenoiseStageInput::inactive`], so a recipe
+    /// without `denoise_ai` renders byte-identically.
+    pub fn apply_recipe_with_denoise(
+        &mut self,
+        recipe: &EditRecipe,
+        denoise: &crate::DenoiseStageInput<'_>,
+    ) -> Result<(), CoreError> {
+        self.apply_recipe_with_scale_white_balance_and_denoise(recipe, 1.0, None, denoise)
+    }
+
+    /// LRPAR-G14-DENOISE-IMPL-20: [`Self::apply_recipe_with_scale`] with a
+    /// caller-resolved KI-Denoise stage.
+    pub fn apply_recipe_with_scale_and_denoise(
+        &mut self,
+        recipe: &EditRecipe,
+        effective_scale: f32,
+        denoise: &crate::DenoiseStageInput<'_>,
+    ) -> Result<(), CoreError> {
+        self.apply_recipe_with_scale_white_balance_and_denoise(
+            recipe,
+            effective_scale,
+            None,
+            denoise,
+        )
     }
 
     /// Applies adjustments with an explicit As-Shot white-balance context.
@@ -874,7 +921,28 @@ impl ImageFrame {
         recipe: &EditRecipe,
         camera_white_balance: Option<[f32; 4]>,
     ) -> Result<(), CoreError> {
-        self.apply_recipe_with_scale_and_white_balance(recipe, 1.0, camera_white_balance)
+        self.apply_recipe_with_scale_white_balance_and_denoise(
+            recipe,
+            1.0,
+            camera_white_balance,
+            &crate::DenoiseStageInput::inactive(),
+        )
+    }
+
+    /// LRPAR-G14-DENOISE-IMPL-20: [`Self::apply_recipe_with_white_balance`] with
+    /// a caller-resolved KI-Denoise stage.
+    pub fn apply_recipe_with_white_balance_and_denoise(
+        &mut self,
+        recipe: &EditRecipe,
+        camera_white_balance: Option<[f32; 4]>,
+        denoise: &crate::DenoiseStageInput<'_>,
+    ) -> Result<(), CoreError> {
+        self.apply_recipe_with_scale_white_balance_and_denoise(
+            recipe,
+            1.0,
+            camera_white_balance,
+            denoise,
+        )
     }
 
     /// Applies adjustments at an explicit effective output scale.  Keeping the
@@ -885,14 +953,24 @@ impl ImageFrame {
         recipe: &EditRecipe,
         effective_scale: f32,
     ) -> Result<(), CoreError> {
-        self.apply_recipe_with_scale_and_white_balance(recipe, effective_scale, None)
+        self.apply_recipe_with_scale_white_balance_and_denoise(
+            recipe,
+            effective_scale,
+            None,
+            &crate::DenoiseStageInput::inactive(),
+        )
     }
 
-    fn apply_recipe_with_scale_and_white_balance(
+    /// Shared implementation of every `apply_recipe*` entry point. The
+    /// KI-Denoise stage (`denoise_ai`) runs after the colour stages and
+    /// immediately before the manual F-096 noise reduction; `denoise` is the
+    /// caller-resolved stage state (default: inactive, i.e. identity).
+    pub fn apply_recipe_with_scale_white_balance_and_denoise(
         &mut self,
         recipe: &EditRecipe,
         effective_scale: f32,
         camera_white_balance: Option<[f32; 4]>,
+        denoise: &crate::DenoiseStageInput<'_>,
     ) -> Result<(), CoreError> {
         if !effective_scale.is_finite() || effective_scale <= 0.0 {
             return Err(CoreError::InvalidAdjustment {
@@ -1022,6 +1100,10 @@ impl ImageFrame {
         if let Some(color_grading) = &recipe.color_grading {
             apply_color_grading(&mut self.pixels, color_grading);
         }
+        // LRPAR-G14-DENOISE-IMPL-20: KI-Denoise (optional, additive) runs
+        // immediately before the manual F-096 noise reduction, which stays the
+        // visible fallback anchor. A non-active field is identity.
+        crate::denoise::apply_denoise_stage(self, recipe.denoise_ai.as_ref(), denoise)?;
         if let Some(noise) = &recipe.noise_reduction {
             apply_noise_reduction(&mut self.pixels, self.width, self.height, noise);
         }
@@ -2241,6 +2323,15 @@ fn validate_nested_adjustments(recipe: &EditRecipe) -> Result<(), CoreError> {
                 });
             }
         }
+    }
+    // LRPAR-G14-DENOISE-IMPL-20: `denoise_ai` is validated against the sidecar
+    // contract so a directly constructed (not sidecar-loaded) recipe is
+    // rejected loudly instead of rendering an invalid stage.
+    if let Some(d) = &recipe.denoise_ai {
+        d.validate().map_err(|error| CoreError::Denoise {
+            status: "invalid".into(),
+            reason: error.to_string(),
+        })?;
     }
     if let Some(s) = &recipe.sharpening {
         if s.version != 1 {
@@ -7183,5 +7274,226 @@ mod tests {
                 "corner should deviate from the flat input, got {corner}"
             );
         }
+    }
+}
+
+// LRPAR-G14-DENOISE-IMPL-20: pipeline-level integration tests for the
+// optional `denoise_ai` stage (identity, ordering, fallback, full render path,
+// schema connection). Kernel/status unit tests live in `denoise.rs`.
+#[cfg(test)]
+mod denoise_pipeline_tests {
+    use super::*;
+    use lumina_sidecar::{
+        DenoiseAi, DenoiseArtifactKind, DenoiseArtifactRef, DenoiseModelIdentity, Extras,
+        NoiseReduction, Sharpening, DENOISE_AI_VERSION,
+    };
+
+    fn test_frame(width: u32, height: u32) -> ImageFrame {
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        for (i, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            px[0] = (i * 11 % 256) as u8;
+            px[1] = (i * 17 % 256) as u8;
+            px[2] = (i * 23 % 256) as u8;
+            px[3] = 255;
+        }
+        ImageFrame::new(width, height, pixels).unwrap()
+    }
+
+    fn sha256(fill: u8) -> String {
+        format!("sha256:{}", format!("{fill:02x}").repeat(32))
+    }
+
+    fn artifact(width: u32, height: u32, value: u8) -> DenoiseRgbArtifact {
+        DenoiseRgbArtifact::new(
+            width,
+            height,
+            vec![value; width as usize * height as usize * 3],
+        )
+        .unwrap()
+    }
+
+    fn denoise_ai(strength: f32, artifact_checksum: String) -> DenoiseAi {
+        DenoiseAi {
+            version: DENOISE_AI_VERSION,
+            enabled: true,
+            model: DenoiseModelIdentity {
+                name: "fixture-srgb".into(),
+                version: "1".into(),
+                model_hash: sha256(0x11),
+                extras: Extras::new(),
+            },
+            input_spec_digest: sha256(0x22),
+            strength,
+            preserve_detail: 0.0,
+            artifact: Some(DenoiseArtifactRef {
+                kind: DenoiseArtifactKind::DenoiseRgb,
+                relative_path: "IMG.lumina.zdata".into(),
+                format: "lumina-zdata".into(),
+                checksum: artifact_checksum,
+                width: 6,
+                height: 5,
+                channels: "rgb8".into(),
+                data_version: "1".into(),
+                extras: Extras::new(),
+            }),
+            extras: Extras::new(),
+        }
+    }
+
+    fn context<'a>(recipe: &'a EditRecipe) -> RenderContext<'a> {
+        RenderContext {
+            recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            depth: None,
+            lensfun: None,
+        }
+    }
+
+    #[test]
+    fn identity_denoise_ai_renders_byte_identically_to_the_mvp_recipe() {
+        let frame = test_frame(6, 5);
+        let artifact = artifact(6, 5, 0);
+        let without = EditRecipe {
+            noise_reduction: Some(NoiseReduction {
+                version: 1,
+                luminance: 0.4,
+                color: 0.2,
+            }),
+            ..EditRecipe::default()
+        };
+        let mut with_zero = without.clone();
+        with_zero.denoise_ai = Some(denoise_ai(0.0, artifact.checksum()));
+
+        let plain = render_frame(&frame, &context(&without)).unwrap();
+        let identity = render_frame_with_denoise(
+            &frame,
+            &context(&with_zero),
+            &DenoiseStageInput::ready(&artifact),
+        )
+        .unwrap();
+        assert_eq!(
+            plain.frame.pixels, identity.frame.pixels,
+            "strength:0 denoise_ai must be byte-identical to the MVP recipe"
+        );
+    }
+
+    #[test]
+    fn denoise_runs_before_manual_noise_reduction_and_sharpening() {
+        let frame = test_frame(6, 5);
+        let denoised = artifact(6, 5, 200);
+        let recipe = EditRecipe {
+            noise_reduction: Some(NoiseReduction {
+                version: 1,
+                luminance: 0.6,
+                color: 0.3,
+            }),
+            sharpening: Some(Sharpening {
+                version: 1,
+                amount: 1.0,
+                radius: 1.0,
+                detail: 0.5,
+                masking: 0.0,
+            }),
+            denoise_ai: Some(denoise_ai(1.0, denoised.checksum())),
+            ..EditRecipe::default()
+        };
+
+        let mut combined = frame.clone();
+        combined
+            .apply_recipe_with_denoise(&recipe, &DenoiseStageInput::ready(&denoised))
+            .unwrap();
+
+        // Manual composition: denoise first, then the same recipe without the
+        // KI stage. Identical output proves the stage order DenoiseAI → F-096
+        // → F-095.
+        let mut manual = frame.clone();
+        apply_denoise_blend(&mut manual, &denoised, 1.0, 0.0).unwrap();
+        let mut recipe_without = recipe.clone();
+        recipe_without.denoise_ai = None;
+        manual.apply_recipe(&recipe_without).unwrap();
+        assert_eq!(combined.pixels, manual.pixels);
+    }
+
+    #[test]
+    fn warn_fallback_equals_the_manual_nr_recipe_and_leaves_strict_loud() {
+        let frame = test_frame(6, 5);
+        let denoised = artifact(6, 5, 0);
+        let recipe = EditRecipe {
+            noise_reduction: Some(NoiseReduction {
+                version: 1,
+                luminance: 0.7,
+                color: 0.4,
+            }),
+            denoise_ai: Some(denoise_ai(0.8, denoised.checksum())),
+            ..EditRecipe::default()
+        };
+
+        // Reference: the same recipe with the KI stage removed (manual F-096
+        // only), which is the documented visible fallback anchor.
+        let mut manual_recipe = recipe.clone();
+        manual_recipe.denoise_ai = None;
+        let manual = render_frame(&frame, &context(&manual_recipe)).unwrap();
+
+        // Warn: missing artifact falls through to the manual F-096 result.
+        let fallback = render_frame_with_denoise(
+            &frame,
+            &context(&recipe),
+            &DenoiseStageInput::non_ready(DenoiseStageStatus::Missing, "artifact absent")
+                .with_policy(DenoisePolicy::Warn),
+        )
+        .unwrap();
+        assert_eq!(fallback.frame.pixels, manual.frame.pixels);
+
+        // Strict: the same missing status aborts loudly.
+        let error = render_frame_with_denoise(
+            &frame,
+            &context(&recipe),
+            &DenoiseStageInput::non_ready(DenoiseStageStatus::Missing, "artifact absent"),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CoreError::Denoise { ref status, .. } if status == "missing"
+        ));
+    }
+
+    #[test]
+    fn schema_loaded_denoise_ai_is_applied_by_the_render_path() {
+        // A recipe as it appears nested under `adjustments` in a sidecar.
+        let json = r#"{
+            "adjustments": {
+                "denoise_ai": {
+                    "version": 1,
+                    "enabled": true,
+                    "model": {"name": "fixture-srgb", "version": "1", "model_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+                    "input_spec_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "strength": 1.0,
+                    "preserve_detail": 0.0,
+                    "artifact": {
+                        "kind": "denoise_rgb",
+                        "relative_path": "IMG.lumina.zdata",
+                        "format": "lumina-zdata",
+                        "checksum": "placeholder",
+                        "width": 6,
+                        "height": 5,
+                        "channels": "rgb8",
+                        "data_version": "1"
+                    }
+                }
+            }
+        }"#;
+        let recipe: EditRecipe = serde_json::from_str(json).unwrap();
+        assert!(recipe.denoise_ai.is_some(), "schema field connects");
+        let denoised = artifact(6, 5, 30);
+        // Applied pixels equal an explicit full-strength blend.
+        let mut expected = test_frame(6, 5);
+        apply_denoise_blend(&mut expected, &denoised, 1.0, 0.0).unwrap();
+        let mut actual = test_frame(6, 5);
+        actual
+            .apply_recipe_with_denoise(&recipe, &DenoiseStageInput::ready(&denoised))
+            .unwrap();
+        assert_eq!(actual.pixels, expected.pixels);
     }
 }

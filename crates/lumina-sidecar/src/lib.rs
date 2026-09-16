@@ -16,10 +16,11 @@ use thiserror::Error;
 mod zdata;
 #[cfg(feature = "zdata")]
 pub use zdata::{
-    append_generative_canvas, append_repair_region, append_spot_heal_generative, load_zdata,
-    save_generative_canvas, save_zdata, zdata_path_for, GenerativeCanvasArtifact, MaskTile,
-    RecordKind, RecordSpec, RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer,
-    ZDataError,
+    append_denoise_rgb, append_generative_canvas, append_repair_region,
+    append_spot_heal_generative, load_zdata, save_denoise_rgb, save_generative_canvas, save_zdata,
+    zdata_path_for, DenoiseRgbArtifact, GenerativeCanvasArtifact, MaskTile, RecordKind, RecordSpec,
+    RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer, ZDataError,
+    RGB_ENCODING_VERSION,
 };
 
 // LRPAR-G15-IPTC-S4: file-backed IPTC metadata presets (static + dynamic).

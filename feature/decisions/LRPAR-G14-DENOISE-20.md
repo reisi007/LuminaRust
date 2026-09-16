@@ -34,6 +34,41 @@ Stand: **keine Modellfestlegung, keine Gewichte, kein Download** — dieser Absc
 - **Lizenz-Risiko (offen, Teil der Folgearbeit):** Viele SOTA-Denoise-Checkpoints (Restormer/NAFNet/SCUNet-Varianten aus Community-Repos) haben unklare oder forschungs-/NC-gebundene Gewichtsbedingungen; ein Apache-2.0-/MIT-konformer ONNX-Exportweg ist Zulassungsbedingung (Analogie: SAM-2-Regel in `fixtures-licensing.md` §5). Fällt kein Kandidat durch das F-078-Gate, bleibt Release 2.0 bei manuellem NR — das wird dann als Scope-Entscheid dokumentiert, nicht stillschweigend umgangen.
 - **ORT-Redistribution:** `ort =2.0.0-rc.13` (gepinnt) lädt Prebuilt-Binaries zur Build-Zeit (Netz) — Freigabe des `onnx-rt`-Pfads für 2.0 im Rahmen von F-078-R4 erneut prüfen.
 
+### 3.1 Modellfreigabe-Entscheid (LRPAR-G14-DENOISE-IMPL-20, 2026-09-16)
+
+**Ergebnis der Kandidatenprüfung (Recherche, kein Download, keine Gewichte):**
+
+| Kandidatenfamilie | Code-Lizenz (Quelle) | Gewichts-Lizenz | F-078-Gate |
+| --- | --- | --- | --- |
+| **DnCNN**-artig (KAIR/DnCNN, Zhang et al.) | MIT (cszn/DnCNN, cszn/KAIR) | Gewichte werden über `main_download_pretrained_models.py` von Drittservern geladen; **keine** explizite Gewichts-Lizenzgewährung im Repo | **nicht freigegeben** (Gewichts-Provenienz fehlt) |
+| **NAFNet**-artig (megvii-research/NAFNet, ECCV 2022) | MIT (Repo `LICENSE`), BasicSR-Anteile Apache-2.0 | Pretrained-Modelle nur über Google-Drive/Baidu-Links, **keine** separate Gewichts-Lizenzdatei | **nicht freigegeben** (Gewichts-Provenienz fehlt) |
+| **Restormer/SCUNet**-artig (swz30/Restormer, cszn/SCUNet) | MIT (Repo `LICENSE.md`) | Gewichte als GitHub-Release-Artefakte, **keine** explizite Gewichts-Lizenzgewährung | **nicht freigegeben** (Gewichts-Provenienz fehlt) |
+
+**Entscheid:** Kein Kandidat erfüllt das F-078-Gate vollständig, weil die
+Code-Lizenz permissiv ist, aber für die **Gewichte** keine explizite,
+redistributionsfähige Lizenzgewährung an der Gewichtsquelle vorliegt
+(Analogie zur SAM-2/`ultralytics`-Falle in `fixtures-licensing.md` §5). Daher
+gilt bis auf Weiteres der **Fixture-Weg wie GEN-ONNX-1**:
+
+1. Release 2.0 nutzt ein **deterministisches, hash-gepinntes Fixture-Modell**
+   ohne Gewichte und ohne Netz (programmatisch erzeugter ONNX-Graph,
+   `model_hash` real gepinnt) und lehnt **echte Gewichte laut** ab
+   (`model_hash = "pending-integration"` → Status `unavailable`, never silent).
+2. Erst wenn Quelle + Gewichts-Lizenz + Hash-Pin + `input_spec_digest` +
+   F-078-Audit-Eintrag (`feature/quality/fixtures-licensing.md` §5 +
+   `THIRD-PARTY-NOTICES.md`) vorliegen, wird von `pending-integration` auf den
+   echten Pin umgestellt. Dieser Schritt ist **nicht** Teil des Kern-Slices.
+3. Der Core-Slice (Pipeline-Blend, Statusmodell, zdata-`denoise_rgb`) ist
+   modellunabhängig und benötigt kein ONNX zum Testen — Tests laufen gegen
+   synthetische, deterministische RGB-Artefakte ohne Netz.
+
+**Lizenztext-Vorschlag (nur Meldung, keine Änderung in diesem Slice):** Sobald
+ein Kandidat das Gate passiert, gehört in `fixtures-licensing.md` §5 eine
+Zeile der Form „`<Modell>` | KI-Denoise (RGB) | **MIT** (`<Upstream-Repo>`
+`LICENSE`, Gewichte unter derselben Lizenz — verifiziert `<Datum>`) |
+Gewichte *pending integration* (`model_hash = "pending-integration"`)" plus der
+`THIRD-PARTY-NOTICES.md`-Eintrag mit `sha256:`-Pin und Quell-URL.
+
 ## 4. ONNX-Einordnung (Modellfamilie, Auflösung, Vorverarbeitung)
 
 - **Modellklasse:** RGB-zu-RGB-Denoiser (kein Masken-/Matten-Modell, kein generatives Canvas): Eingang sRGB-codiertes RGB(A)-Raster, Ausgang entrauschtes RGB in gleicher Geometrie. Kandidatenfamilien (alle erst nach F-078-Prüfung zulässig): **DnCNN-artige** CNN-Baseline (klein, schnell, schwache High-ISO-Leistung), **UNet/NAFNet-artige** Encoder-Decoder (ausgewogen, Favorit für v1), **Restormer/SCUNet-artige** Transformer (beste Qualität, schwer, ggf. nur Desktop-GPU/CPU-langsam). Keine Festlegung hier — die Folgearbeit evaluiert genau einen v1-Kandidaten gegen Golden/PSNR-Gates.
@@ -62,8 +97,10 @@ Vorschlag für die Implementierungs-Folgearbeit (erst dort nach `sidecar.md`-Ver
 > Die Skizze oben war Kurzform. Umgesetzt ist die volle `DenoiseArtifactRef`
 > nach Sidecar-Artefaktvertrag (`relative_path`, `format`, `checksum` =
 > BLAKE3 über den unkomprimierten RGB-Strom, `width`/`height`, `channels`,
-> `data_version`, `kind = "denoise_rgb"`); der zdata-`RecordKind` folgt im
-> Persistenz-Slice. Diese Form ist normativ, die Skizze nur illustrativ.
+> `data_version`, `kind = "denoise_rgb"`); der zdata-`RecordKind`
+> (`RecordKind::DenoiseRgb = 4`) ist im Kern-Slice implementiert
+> (Codec + atomarer Write unter `.zdata.lock`, s. `sidecar.md`).
+> Diese Form ist normativ, die Skizze nur illustrativ.
 
 - **Validierung:** `version == 1`, `strength`/`preserve_detail` endlich in `0..=1`, Modell-Identität vollständig (sonst Ablehnung, kein Clipping/Ergänzen); unbekannte Felder bleiben erhalten (Roundtrip-Regel).
 - **Artefakt:** entrauschtes RGB liegt als versionierter Eintrag im `.lumina.zdata`-Bundle (`kind = "denoise_rgb"`, relativer Pfad, Format/Auflösung/Kanäle/Prüfsumme, atomarer Write, `.zdata.lock`-Serialisierung — Muster: `sidecar.md` + `generative-expand.md`/`spot-removal.md`). Kein unkomprimiertes Float-Array im JSON. Pro virtuelle Kopie referenziert (Teilung auf Quellebene zulässig wie bei Masken-Matten; Layer/Invert/lokale Anpassung bleibt Kopien-Sache).
@@ -83,6 +120,20 @@ Analog AI-Masken (`Valid`/`stale`, F-048/F-051) und Spot-Remove/GenerativeEdit:
 
 Gültigkeit verlangt Übereinstimmung von Quell-Hash, Decode-/Geometrie-Kontext, Modellkontext (Name/Version/Hash), `input_spec_digest` und Artefakt-Prüfsumme. `MaskPolicy`-Analogie (`Strict` vs. `Warn`) übernimmt die Folgearbeit.
 
+> **Umsetzungs-Nachtrag (Rework 2026-09-16, B2/B3):** `DenoiseAi` und das
+> zdata-`DenoiseRgbArtifact` persistieren selbst keine Produzenten-Herkunft.
+> Die `recorded`-Identität wird daher additiv über den geflatteten
+> `DenoiseAi.extras`-Schlüssel `producer_identity` gespeichert und
+> zurückgelesen (`set_denoise_producer_provenance` /
+> `denoise_producer_provenance`, `lumina-core`); das ist roundtrip-legal und
+> braucht keine Schema-/Migrationsänderung. `resolve_denoise_status` vergleicht
+> nun **alle** `recorded`-Felder mit dem Live-Kontext und meldet jede
+> Abweichung (inkl. `model_version`, `input_spec_digest`,
+> `artifact_checksum`) als `stale`; eine fehlende/kaputte Provenienz ist nie
+> still `ready`. Der GPU-Pfad ist bis zur WGSL-Stufe nicht verdrahtet: ein
+> aktives `denoise_ai` wird als `denoise_ai (not GPU-wired)` auf die CPU
+> geroutet und bricht dort laut ab (§6, kein stiller Fallback).
+
 ## 7. Abgrenzung Rote Augen (nicht hier gelöst)
 
 G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rote-Augen-Korrektur → LRPAR-G14-REDEYE-15 (Release 1.5)**, KI-Denoise → dieser Entscheid (Release 2.0). Rote Augen (Erkennung + Korrektur als eigene Rezept-Stufe) wird hier bewusst **nicht** spezifiziert; Querverweis genügt. Gemeinsame F-078-/Capability-Muster dürfen wiederverwendet werden, die Stufen bleiben getrennt.
@@ -92,7 +143,7 @@ G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rot
 1. **F-078-Modellfreigabe Denoise:** Kandidat wählen, Gewichts-Lizenz verifizieren, Hash + Input-Spec pinnen, `fixtures-licensing.md` §5 + `THIRD-PARTY-NOTICES.md` ergänzen (Gate für alles Weitere).
 2. **Schema + Persistenz:** `denoise_ai`-Feld (additiv, v2), `kind = "denoise_rgb"` in zdata, JSON-Roundtrip-/Migrations-/Atomic-Write-/Recovery-Tests.
 3. **Pipeline-Stufe:** Einordnung `DenoiseAI → F-096 → F-095` in `pipeline.md` normieren (Version, Reihenfolge, Render-Key), Core-Implementierung + Golden/PSNR-Gates (u. a. `strength: 0` = Identität, Determinismus, Kachel-Blend-Nahtlosigkeit).
-4. **ONNX-Verdrahtung:** `denoise`-Capability in Manifest + Capability-Matrix (`platform/capability-matrix.md`, native CLI/Desktop, Cloud explizit nicht geplant), `lumina-onnx`-Backend, Veraltungs-/Statusmodell aus §6, CLI/GUI-Anbindung (Fehler laut, Badges).
+4. **ONNX-Verdrahtung:** `denoise`-Capability in Manifest + Capability-Matrix (`platform/capability-matrix.md`, native CLI/Desktop, Cloud explizit nicht geplant), `lumina-onnx`-Backend, Veraltungs-/Statusmodell aus §6, CLI/GUI-Anbindung (Fehler laut, Badges). Auflagen aus der Kern-Verifizierung (2026-09-16, mitzuziehen): CPU-seitiger `CoreError::Denoise{invalid}`-Mapping-Test (F3), `recorded`-Aufruferkonvention (`None` → `DenoiseIdentity::default()`, R1), CLI wählt explizit `DenoisePolicy::Warn` für §6-Exit-0 (R2), Cross-Crate-Checksum-Test Core↔Sidecar (B4).
 5. **Perf-Budgets:** Denoise-Benchmarks nach `performance-benchmarks.md` (F-074), Budgets im selben Commit wie das Feature begründen.
 6. **V1-Modellvergleich (optional):** DnCNN- vs. NAFNet- vs. Transformer-Kandidat an High-ISO-Fixtures messen; Ergebnis als Entscheid-Nachtrag hier dokumentieren.
 

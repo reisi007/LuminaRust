@@ -299,6 +299,20 @@ fn validate_nested(recipe: &EditRecipe) -> Result<(), GpuError> {
             }
         }
     }
+    // LRPAR-G14-DENOISE-IMPL-20: mirror the CPU oracle's `denoise_ai`
+    // validation (`lumina_core::validate_nested_adjustments`) so a
+    // directly-constructed (not sidecar-loaded) invalid recipe fails with the
+    // **same** `CoreError::Denoise { status: "invalid" }` on the GPU entry as on
+    // the CPU path — never a clamped/ignored stage. The stage itself is CPU-
+    // routed (routing gate) until a GPU pass exists.
+    if let Some(d) = &recipe.denoise_ai {
+        d.validate().map_err(|error| {
+            GpuError::Core(CoreError::Denoise {
+                status: "invalid".into(),
+                reason: error.to_string(),
+            })
+        })?;
+    }
     if let Some(s) = &recipe.sharpening {
         if s.version != 1 {
             return Err(invalid("sharpening.version", s.version as f64, 1.0, 1.0));
@@ -627,6 +641,52 @@ mod tests {
         let err = validate_gpu_recipe(&recipe).expect_err("radius 12 must be rejected");
         assert!(
             format!("{err}").contains("sharpening.radius"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn denoise_ai(model_hash: &str, strength: f32) -> lumina_sidecar::DenoiseAi {
+        lumina_sidecar::DenoiseAi {
+            version: lumina_sidecar::DENOISE_AI_VERSION,
+            enabled: true,
+            model: lumina_sidecar::DenoiseModelIdentity {
+                name: "fixture-srgb".into(),
+                version: "1".into(),
+                model_hash: model_hash.into(),
+                extras: Default::default(),
+            },
+            input_spec_digest: format!("sha256:{}", "22".repeat(32)),
+            strength,
+            preserve_detail: 0.5,
+            artifact: None,
+            extras: Default::default(),
+        }
+    }
+
+    /// LRPAR-G14-DENOISE-IMPL-20: the GPU entry validates `denoise_ai` with the
+    /// **same** `CoreError::Denoise` the CPU oracle emits, so a
+    /// directly-constructed invalid stage is rejected on both backends instead
+    /// of reaching a shader (or being silently ignored).
+    #[test]
+    fn denoise_ai_is_validated_like_cpu() {
+        let valid = denoise_ai(&format!("sha256:{}", "11".repeat(32)), 0.5);
+        validate_gpu_recipe(&EditRecipe {
+            denoise_ai: Some(valid),
+            ..Default::default()
+        })
+        .expect("a schema-valid denoise_ai passes the GPU entry validation");
+
+        let invalid = denoise_ai("dummy", 0.5);
+        let err = validate_gpu_recipe(&EditRecipe {
+            denoise_ai: Some(invalid),
+            ..Default::default()
+        })
+        .expect_err("a malformed denoise_ai model hash must be rejected");
+        assert!(
+            matches!(
+                err,
+                GpuError::Core(CoreError::Denoise { ref status, .. }) if status == "invalid"
+            ),
             "unexpected error: {err}"
         );
     }

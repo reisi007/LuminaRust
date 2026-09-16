@@ -676,9 +676,98 @@ CPU-Modell statt eines nicht reproduzierbaren KI-Verfahrens.
 Rauschreduzierung liegt in `Adjustments` vor Schärfen, Masken und Crop.
 Felder/Version gehen in den `recipe_hash`; Änderungen invalidieren ab dieser
 Unterstufe. Abnahme: 0-Identität, Kantenbewahrung, Kanaltrennung,
-Determinismus und Schärfen-Reihenfolge. KI-Denoise ist nur eine optionale
-spätere Erweiterung und wird hier nicht spezifiziert. Abhängigkeiten: F-031,
-F-036.
+Determinismus und Schärfen-Reihenfolge. KI-Denoise ist eine optionale,
+additive spätere Erweiterung und wird in F-096a präzisiert (sie ersetzt die
+manuelle Stufe nie). Abhängigkeiten: F-031, F-036.
+
+### F-096a KI-Denoise (DenoiseAI, Release 2.0)
+
+**Status:** Kern-Slice umgesetzt (LRPAR-G14-DENOISE-IMPL-20, 2026-09-16).
+ONNX-Verdrahtung, CLI/GUI-Anbindung und Perf-Budgets folgen als getrennte
+Slices. Entscheid: `feature/decisions/LRPAR-G14-DENOISE-20.md`.
+
+**Ziel:** Optionales, austauschbares KI-Denoise als additive Stufe, die das
+manuelle F-096-NR **nie ersetzt**, sondern davor läuft; `None`/`enabled:false`/
+`strength:0` sind Identität (MVP-Rezepte rendern byte-identisch, keine
+Migration).
+
+**Rezept/Version:** `recipe.adjustments.denoise_ai` (`version` 1,
+`enabled`, `model { name, version, model_hash }`, `input_spec_digest`,
+`strength` `0..=1`, `preserve_detail` `0..=1`, optionaler
+`artifact`-Verweis `kind = "denoise_rgb"`). Additives Schema-v2-Feld, `None`
+ist Identität; `version == 1`, endliche `0..=1`-Werte und vollständige
+Modellidentität werden laut validiert (kein Clipping, keine Defaults).
+Der Denoise-`model_hash` ist bis zur F-078-Freigabe `pending-integration`.
+
+**Reihenfolge (normativ, in `Adjustments`):**
+`… → Farbkorrekturen → DenoiseAI (optional) → NoiseReduction (F-096, manuell)
+→ Sharpening (F-095) → Red-Eye → Effects → Masks → Crop/Output`.
+DenoiseAI arbeitet wie die MVP-Pipeline sRGB-codiert auf RGBA8; Alpha bleibt
+unverändert. Ist die Stufe aktiv, aber nicht verfügbar/veraltet/fehlend/
+korrupt, greift **sichtbar** das manuelle F-096-NR (bzw. Identität) — nie
+stilles Ummappen.
+
+**Blend (deterministisch, CPU + GPU-portabel):**
+`w = strength * (1 - preserve_detail * detail)` mit
+`detail = clamp(|Y - box_mean_3x3(Y)| / 32, 0, 1)` aus der Quell-Luminanz
+(Rec.709); pro Kanal `out = round(clamp(src + w * (artifact - src), 0, 255))`,
+`strength == 0` ist strenge Identität (keine Inferenz, kein Modell nötig).
+Gleiche Eingaben → byte-identisches Ergebnis.
+
+**Getilte Inferenz (Nahtlosigkeit):** Der Kern besitzt die kanonische
+Kachel-Assemblierung: überlappende RGB8-Kacheln werden mit
+`weight = (Abstand zur nächsten Kachelkante + 1)` pro Kachel akkumuliert und
+per Pixel `sum(weight * color) / sum(weight)` normalisiert. Das ist
+deterministisch und nahtlos (konstante Kacheln ⇒ konstante Fläche ohne Naht);
+Kachelgröße/Overlap/Blend-Verfahren sind Teil des `input_spec_digest`, eine
+Änderung invalidiert persistierte Artefakte sichtbar. Eine unvollständige
+Abdeckung ist ein lauter Fehler (nie stiller schwarzer Rest).
+
+**Persistenz/Identität:** Das entrauschte RGB liegt als versionierter
+`.lumina.zdata`-Eintrag `kind = "denoise_rgb"` (RGB8, relativer Pfad, BLAKE3
+über den kanonischen unkomprimierten Strom, atomar unter `.zdata.lock`,
+eager Prüfsumme beim Laden). `strength`, `preserve_detail`, Modell,
+`input_spec_digest` und der Artefakt-Hash fließen in `recipe_hash`/Render-Key;
+eine Änderung invalidiert ab der Denoise-Unterstufe (nicht Decode/AI-Masken).
+Gültigkeit verlangt Übereinstimmung von Quell-Hash, Decode-/Geometrie-Kontext,
+Modellkontext (Name/Version/Hash), `input_spec_digest` und
+Artefakt-Prüfsumme (§6 des Entscheids).
+
+**Produzenten-Provenienz (Nachtrag 2026-09-16):** `DenoiseAi`/das
+zdata-`DenoiseRgbArtifact` tragen selbst keine Produzenten-Herkunft. Die
+`recorded`-Identität (Quell-Hash, Decode-Fingerprint, Modell-Name/-Version/-Hash,
+`input_spec_digest`, Artefakt-Prüfsumme) wird daher additiv und
+roundtrip-legal unter dem Schlüssel `producer_identity` in `DenoiseAi.extras`
+(flatten) persistiert (`set_denoise_producer_provenance` /
+`denoise_producer_provenance`); `resolve_denoise_status` liest **alle**
+`recorded`-Felder und meldet jede Abweichung als `stale` — keine toten Felder,
+kein stilles `ready`. Eine fehlende/kaputte Provenienz wird als nicht-`ready`
+(sichtbar) behandelt.
+
+**Statusmodell (§6, sichtbar, kein stiller Fallback):**
+`unavailable` (Modell/`pending-integration`/kein Pfad), `stale`
+(Quelle/Decode/Modell/Input-Spec geändert), `missing` (Artefakt fehlt),
+`corrupt` (Prüfsumme/Dimension ungültig) und `ready`. Policy analog
+`MaskPolicy`: `Strict` bricht laut ab, `Warn` protokolliert `warn!` und lässt
+das manuelle F-096-NR als ausgewiesenen Fallback laufen. Eine
+Neuberechnung ist nur explizit (Button/Flag), nie die einzige Option.
+
+**Abnahme:** Schema-Anbindung/Roundtrip, `strength:0`/`enabled:false`/`None`
+= Identität (byte-identisch), Determinismus/BLAKE3, Veraltung je
+Identitätsfeld, Kachel-Nahtlosigkeit, PSNR-Gates (Golden-Images folgen im
+CLI/GUI-Slice), `recipe_hash`/
+Render-Key. **GPU:** die Stufe ist per Definition elementar (Punkt-/3×3-
+Nachbarschaft, keine dynamische Dispatch), also voll GPU-tauglich; ein
+WGSL-Pass ist noch nicht verdrahtet. Um kein CPU-only-stilles Verhalten
+zuzulassen, ist die Routing-Gate-Erweiterung umgesetzt (2026-09-16): ein
+**aktives** `denoise_ai` wird von `unsupported_gpu_stages` als
+`denoise_ai (not GPU-wired)` gemeldet, `validate_gpu_recipe` validiert die
+Stufe mit demselben `CoreError::Denoise { status: "invalid" }` wie die CPU, und
+der GPU-Eingang routet aktive Rezepte auf die CPU, wo die Stufe unter
+`DenoisePolicy::Strict` laut abbricht (kein stiller, pixelgleicher Render).
+Identität/`enabled:false`/`strength:0` bleiben GPU-eligibel. Inventory-/
+Parity-Tests decken beides ab. Abhängigkeiten: F-031, F-036, F-078, F-095,
+F-096.
 
 ### G-14 Rote Augen (RedEye, Release 1.5)
 

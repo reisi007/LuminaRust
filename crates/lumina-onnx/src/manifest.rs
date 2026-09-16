@@ -96,8 +96,9 @@ pub struct ModelInputSpec {
 /// segmentation, e.g. BiRefNet) with no prompts. The box/point/mask/class/
 /// instance flags are the interactive/advanced capabilities enumerated in
 /// F-080; `inpaint_heal` (SPOT-REMOVE-1) and `outpaint` (GEN-EXPAND-1) are the
-/// generative capabilities. **At least one capability must be set** — see
-/// [`ModelCapabilities::validate`].
+/// generative capabilities; `face_detect`/`face_embed` are the face-pipeline
+/// capabilities (LRPAR-G12-FACE-20). **At least one capability must be set** —
+/// see [`ModelCapabilities::validate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCapabilities {
@@ -124,6 +125,24 @@ pub struct ModelCapabilities {
     /// rejected visibly (no silent substitution by another model).
     #[serde(default)]
     pub outpaint: bool,
+    /// Face detection (LRPAR-G12-FACE-20 / FACE-20-S2, local ONNX).
+    ///
+    /// Declares that the model turns an RGB input into detected face boxes +
+    /// scores + landmarks. Required by
+    /// [`crate::face::FaceDetectionInference`] backends; a manifest without
+    /// this flag is refused visibly (never substituted by another model).
+    /// Additive `#[serde(default)]` field: manifests written before it existed
+    /// keep parsing unchanged.
+    #[serde(default)]
+    pub face_detect: bool,
+    /// Face embedding (LRPAR-G12-FACE-20 / FACE-20-S2, local ONNX).
+    ///
+    /// Declares that the model turns an aligned face crop into a normalized
+    /// identity vector. Required by [`crate::face::FaceEmbeddingInference`]
+    /// backends. Additive `#[serde(default)]` field: manifests written before
+    /// it existed keep parsing unchanged.
+    #[serde(default)]
+    pub face_embed: bool,
 }
 
 impl ModelCapabilities {
@@ -137,6 +156,8 @@ impl ModelCapabilities {
             || self.instance_segmentation
             || self.inpaint_heal
             || self.outpaint
+            || self.face_detect
+            || self.face_embed
     }
 
     /// Validate that at least one capability is set.
@@ -150,7 +171,8 @@ impl ModelCapabilities {
                 name: name.to_owned(),
                 reason: "no model capabilities declared (at least one of subject_segmentation, \
                      box_prompt, point_prompt, mask_prompt, class_detection, \
-                     instance_segmentation, inpaint_heal, outpaint must be true)"
+                     instance_segmentation, inpaint_heal, outpaint, face_detect, face_embed \
+                     must be true)"
                     .into(),
             });
         }
@@ -511,6 +533,8 @@ pub fn birefnet_manifest() -> ModelManifest {
             instance_segmentation: false,
             inpaint_heal: false,
             outpaint: false,
+            face_detect: false,
+            face_embed: false,
         },
     }
 }
@@ -541,6 +565,8 @@ pub fn inpaint_heal_manifest() -> ModelManifest {
             instance_segmentation: false,
             inpaint_heal: true,
             outpaint: false,
+            face_detect: false,
+            face_embed: false,
         },
     }
 }
@@ -594,6 +620,8 @@ pub fn outpaint_expand_manifest() -> ModelManifest {
             instance_segmentation: false,
             inpaint_heal: false,
             outpaint: true,
+            face_detect: false,
+            face_embed: false,
         },
     }
 }
@@ -640,6 +668,8 @@ pub fn sam2_1_manifest(variant: Sam2Variant) -> ModelManifest {
             instance_segmentation: false,
             inpaint_heal: false,
             outpaint: false,
+            face_detect: false,
+            face_embed: false,
         },
     }
 }

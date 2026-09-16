@@ -1244,4 +1244,85 @@ mod tests {
             b.stage_digest(crate::cache::CacheStage::Decode)
         );
     }
+
+    // LRPAR-G14-DENOISE-IMPL-20: `denoise_ai` (incl. strength, model,
+    // input-spec digest and artifact checksum) is part of the recipe and
+    // therefore of `recipe_hash`/render digest. Denoise sits upstream of masks
+    // (inside Adjustments), so it must invalidate the mask digest too — while
+    // decode stays shareable.
+    fn recipe_with_denoise(strength: f32, checksum: &str) -> EditRecipe {
+        use lumina_sidecar::{
+            DenoiseAi, DenoiseArtifactKind, DenoiseArtifactRef, DenoiseModelIdentity, Extras,
+            DENOISE_AI_VERSION,
+        };
+        EditRecipe {
+            denoise_ai: Some(DenoiseAi {
+                version: DENOISE_AI_VERSION,
+                enabled: true,
+                model: DenoiseModelIdentity {
+                    name: "fixture-srgb".into(),
+                    version: "1".into(),
+                    model_hash:
+                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                            .into(),
+                    extras: Extras::new(),
+                },
+                input_spec_digest:
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222".into(),
+                strength,
+                preserve_detail: 0.0,
+                artifact: Some(DenoiseArtifactRef {
+                    kind: DenoiseArtifactKind::DenoiseRgb,
+                    relative_path: "IMG.lumina.zdata".into(),
+                    format: "lumina-zdata".into(),
+                    checksum: checksum.into(),
+                    width: 10,
+                    height: 10,
+                    channels: "rgb8".into(),
+                    data_version: "1".into(),
+                    extras: Extras::new(),
+                }),
+                extras: Extras::new(),
+            }),
+            ..EditRecipe::default()
+        }
+    }
+
+    #[test]
+    fn denoise_ai_fields_change_render_and_mask_digests_but_not_decode() {
+        let output = OutputSpec {
+            profile: "sRGB".into(),
+            width: 10,
+            height: 10,
+            format: "png".into(),
+        };
+        let base = RenderKey::new(
+            "s",
+            "d",
+            "p",
+            "v",
+            &recipe_with_denoise(0.5, "aa"),
+            vec![],
+            output.clone(),
+        );
+        for other in [
+            recipe_with_denoise(0.9, "aa"),
+            recipe_with_denoise(0.5, "bb"),
+            EditRecipe::default(),
+        ] {
+            let key = RenderKey::new("s", "d", "p", "v", &other, vec![], output.clone());
+            assert_ne!(base.recipe_hash, key.recipe_hash);
+            assert_ne!(base.digest(), key.digest());
+            assert_ne!(
+                base.stage_digest(crate::cache::CacheStage::Mask),
+                key.stage_digest(crate::cache::CacheStage::Mask),
+                "denoise is upstream of masks"
+            );
+            assert_eq!(
+                base.stage_digest(crate::cache::CacheStage::Decode),
+                key.stage_digest(crate::cache::CacheStage::Decode),
+                "denoise is downstream of decode"
+            );
+        }
+    }
 }

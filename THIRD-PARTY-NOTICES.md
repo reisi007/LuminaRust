@@ -142,6 +142,18 @@ obligations that MUST be honored in any distributed build:
      `ultralytics` PyPI package (AGPL-3.0); ONNX comes from the Meta checkpoints
      via the MIT-licensed Microsoft ORT export tooling or Apache-2.0
      redistributed community artifacts.
+   - **YuNet / SFace** (face detection / embedding, LRPAR-G12-FACE-20 /
+     FACE-20-S2): candidate descriptors `face_detect_manifest`
+     (`face_detection_yunet`) and `face_embed_manifest`
+     (`face_recognition_sface`, MobileFaceNet) in `lumina-onnx` (`face.rs`),
+     both `model_hash = "pending-integration"`, **no weights committed and no
+     download**. Declared licences — **MIT** (YuNet) and **Apache-2.0**
+     (SFace) — come from the OpenCV Zoo model-directory `LICENSE`, which covers
+     the *code* and is **not** by itself a grant for the model **weights**
+     (directory-LICENSE ≠ weight grant). The weight licence plus the exact
+     release/commit must be verified against the actual weight source before
+     any hash pin or bundling (**FACE-20-S6**, open; see
+     `feature/quality/fixtures-licensing.md` §5 and §3.4).
    - **ONNX Runtime** (`ort` 2.0.0-rc.13): **MIT OR Apache-2.0** (`ort`,
      `ort-sys`); optional `onnx-rt` feature, not in default builds. ORT
      prebuilt-binary redistribution terms to be re-checked before release

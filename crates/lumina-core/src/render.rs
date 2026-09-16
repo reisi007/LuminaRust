@@ -179,9 +179,44 @@ pub fn render_frame_with_generative(
     context: &RenderContext<'_>,
     generative: crate::generative::GenerativeCanvasInput<'_>,
 ) -> Result<RenderOutput, CoreError> {
+    render_frame_with_generative_and_denoise(
+        frame,
+        context,
+        generative,
+        &crate::DenoiseStageInput::inactive(),
+    )
+}
+
+/// LRPAR-G14-DENOISE-IMPL-20: [`render_frame`] with a caller-resolved
+/// KI-Denoise stage (artifact + §6 status + fallback policy). `inactive` on an
+/// active `denoise_ai` is a loud `unavailable` under the default `Strict`
+/// policy — never a silent no-op.
+pub fn render_frame_with_denoise(
+    frame: &ImageFrame,
+    context: &RenderContext<'_>,
+    denoise: &crate::DenoiseStageInput<'_>,
+) -> Result<RenderOutput, CoreError> {
+    render_frame_with_generative_and_denoise(
+        frame,
+        context,
+        crate::generative::GenerativeCanvasInput::default(),
+        denoise,
+    )
+}
+
+/// GEN-ONNX-1 + LRPAR-G14-DENOISE-IMPL-20: [`render_frame`] with both a
+/// caller-supplied generative canvas and a caller-resolved KI-Denoise stage.
+pub fn render_frame_with_generative_and_denoise(
+    frame: &ImageFrame,
+    context: &RenderContext<'_>,
+    generative: crate::generative::GenerativeCanvasInput<'_>,
+    denoise: &crate::DenoiseStageInput<'_>,
+) -> Result<RenderOutput, CoreError> {
     let mut work = StageWork::default();
     let base = prepare_source_base(frame, context.source_actions, &mut work)?;
-    render_frame_from_base_with_generative(base, context, &mut work, generative)
+    render_frame_from_base_with_generative_and_denoise(
+        base, context, &mut work, generative, denoise,
+    )
 }
 
 /// GEN-ONNX-1: compute the frames entering the generative stage, mirroring the
@@ -459,24 +494,69 @@ pub fn render_frame_from_base(
     context: &RenderContext<'_>,
     work: &mut StageWork,
 ) -> Result<RenderOutput, CoreError> {
-    render_frame_from_base_with_generative(
+    render_frame_from_base_with_generative_and_denoise(
         base,
         context,
         work,
         crate::generative::GenerativeCanvasInput::default(),
+        &crate::DenoiseStageInput::inactive(),
+    )
+}
+
+/// LRPAR-G14-DENOISE-IMPL-20: [`render_frame_from_base`] with a caller-resolved
+/// KI-Denoise stage.
+pub fn render_frame_from_base_with_denoise(
+    base: ImageFrame,
+    context: &RenderContext<'_>,
+    work: &mut StageWork,
+    denoise: &crate::DenoiseStageInput<'_>,
+) -> Result<RenderOutput, CoreError> {
+    render_frame_from_base_with_generative_and_denoise(
+        base,
+        context,
+        work,
+        crate::generative::GenerativeCanvasInput::default(),
+        denoise,
     )
 }
 
 /// GEN-ONNX-1: [`render_frame_from_base`] with caller-supplied generative
 /// canvas artifacts (see [`render_frame_with_generative`] for the contract).
 pub fn render_frame_from_base_with_generative(
-    mut base: ImageFrame,
+    base: ImageFrame,
     context: &RenderContext<'_>,
     work: &mut StageWork,
     generative: crate::generative::GenerativeCanvasInput<'_>,
 ) -> Result<RenderOutput, CoreError> {
+    render_frame_from_base_with_generative_and_denoise(
+        base,
+        context,
+        work,
+        generative,
+        &crate::DenoiseStageInput::inactive(),
+    )
+}
+
+/// GEN-ONNX-1 + LRPAR-G14-DENOISE-IMPL-20: [`render_frame_from_base`] with both
+/// a caller-supplied generative canvas and a caller-resolved KI-Denoise stage.
+///
+/// The KI-Denoise stage runs inside the `Adjustments` pass immediately before
+/// the manual F-096 noise reduction (see
+/// [`ImageFrame::apply_recipe_with_scale_white_balance_and_denoise`]).
+pub fn render_frame_from_base_with_generative_and_denoise(
+    mut base: ImageFrame,
+    context: &RenderContext<'_>,
+    work: &mut StageWork,
+    generative: crate::generative::GenerativeCanvasInput<'_>,
+    denoise: &crate::DenoiseStageInput<'_>,
+) -> Result<RenderOutput, CoreError> {
     apply_spot_heals_from_recipe(&mut base, context.recipe)?;
-    base.apply_recipe_with_white_balance(context.recipe, context.camera_white_balance)?;
+    base.apply_recipe_with_scale_white_balance_and_denoise(
+        context.recipe,
+        1.0,
+        context.camera_white_balance,
+        denoise,
+    )?;
     work.adjustments_passes += 1;
 
     // GEN-PIPELINE-DECOUPLE: decoupled geometry order

@@ -34,8 +34,19 @@
 //! happens via [`ModelManifest::to_model_identity`] (F-048; `lumina-sidecar`
 //! is a dependency solely for that identity type — no native/ONNX concern
 //! leaks into the platform-neutral core).
+//!
+//! ## Face pipeline (LRPAR-G12-FACE-20, S2 + S3)
+//!
+//! The [`face`] module adds the native face-detection/embedding stages
+//! (deterministic, tests-only stubs by default; a real ORT path behind
+//! `onnx-rt`) and the model-free, deterministic clustering stage, plus the
+//! mapping onto the S1 sidecar `face` schema. Every planned weight descriptor
+//! stays `pending-integration` until hash-pinned weights land — there is no
+//! download and no silent fallback. See [`face`] for the licence findings and
+//! the full identity/invalidation contract.
 
 pub mod backend;
+pub mod face;
 pub mod generative;
 pub mod hash;
 pub mod inpaint;
@@ -49,6 +60,29 @@ pub mod sam2;
 pub mod ort_backend;
 
 pub use backend::{StubBackend, SubjectInference};
+pub use face::backend::{
+    align_face_to_template, decode_face_detections, decode_face_embedding, FACE_ALIGN_TEMPLATE_5PT,
+    FACE_ALIGN_TEMPLATE_BASE,
+};
+pub use face::cluster::{
+    cluster_embeddings, cluster_id_for, clusters_from_labels, confirm_person, merge_clusters,
+    split_cluster, FaceClusteringParams, FACE_CLUSTERING_EPS_DEFAULT, FACE_CLUSTERING_METHOD,
+    FACE_CLUSTERING_MIN_SAMPLES_DEFAULT, FACE_CLUSTERING_VERSION,
+};
+pub use face::{
+    detected_face_id, embedding_id_for, face_artifact_status, face_detect_manifest,
+    face_embed_manifest, face_identity, face_identity_digest, face_identity_with_digest,
+    face_model_hash_is_pinned, try_load_face_engine, DetectedFace, FaceAnalysisOutput,
+    FaceArtifactEvidence, FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
+    FaceEmbeddingVector, FaceInferenceOptions, FaceModelSuite, FaceOnnxEngine, StubFaceDetector,
+    StubFaceEmbedder, FACE_DETECTION_SCORE_THRESHOLD_DEFAULT, FACE_DETECT_INFERENCE_HEIGHT,
+    FACE_DETECT_INFERENCE_WIDTH, FACE_DETECT_LICENSE, FACE_DETECT_MODEL_NAME,
+    FACE_DETECT_MODEL_VERSION, FACE_EMBEDDING_NORMALIZATION, FACE_EMBED_DIMENSION,
+    FACE_EMBED_INFERENCE_HEIGHT, FACE_EMBED_INFERENCE_WIDTH, FACE_EMBED_LICENSE,
+    FACE_EMBED_MODEL_NAME, FACE_EMBED_MODEL_VERSION, FACE_IDENTITY_DIGEST_KEY,
+    FACE_LANDMARK_NAMES_5PT, FACE_PREPROCESSING_NAME, FACE_PREPROCESSING_VERSION,
+    FACE_RESCALING_METHOD,
+};
 pub use generative::{
     fixture_manifest, fixture_model_hash, manifest_hash_is_pinned, outpaint_canvas_from_sidecar,
     produce_canvas, role_from_core, transparent_mask, verify_fixture_manifest,
@@ -135,4 +169,9 @@ pub enum OnnxError {
     /// The manifest could not be (de)serialized or failed validation.
     #[error("invalid model manifest: {0}")]
     InvalidManifest(String),
+    /// Face-analysis data violated its documented contract (embedding/box
+    /// validation, clustering thresholds, cluster/person operations). Reported
+    /// loudly — never silently clamped, repaired or dropped (FACE-20-S2/S3).
+    #[error("invalid face data: {0}")]
+    InvalidFaceData(String),
 }

@@ -280,7 +280,9 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   `FaceVectorRef`, Cluster, Personen mit stabilen IDs, Identität/Status;
   kein Float-Array im JSON), `denoise_ai: Option<DenoiseAi>` (additiv v2,
   `None`/`enabled:false`/`strength:0` = Identität, `kind = "denoise_rgb"`;
-  der zdata-`RecordKind` folgt im Persistenz-Slice), `culling:
+  der zdata-`RecordKind` ist implementiert: `kind = 4` / `"denoise_rgb"`,
+  RGB8-Codec mit kanonischem `encoding_version || width || height || RGB8`-
+  Strom und BLAKE3-Prüfsumme, atomar unter `.zdata.lock`), `culling:
   Option<CullingSection>` (Quellebene, fehlend = gültig „kein Vorschlag",
   offene `reasons[]`-Registry nur formvalidiert). Alle additiv-optional,
   `schema_version` 2 unverändert, Roundtrip/Migration/Atomic/Recovery getestet

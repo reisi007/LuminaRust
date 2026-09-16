@@ -301,6 +301,11 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   their neutral default back into the recipe map; at that value the CPU
 ///   stage is pixel-identical to not having the key, so it must not block the
 ///   GPU route; keys outside the schema have no neutral value and always flag);
+/// - an **active** `recipe.adjustments.denoise_ai` (`denoise_ai (not
+///   GPU-wired)`, LRPAR-G14-DENOISE-IMPL-20): the KI-Denoise stage has no WGSL
+///   pass yet, and the CPU oracle aborts an active stage loudly under the
+///   default `Strict` policy. Routing to the CPU propagates that abort; an
+///   identity/disabled/zero-strength stage is pixel-neutral and stays eligible;
 /// - non-empty SourceActions **unless** matching GPU source-action artifacts are
 ///   bound (see [`unsupported_gpu_stages_with_context`]);
 /// - an **invalid** `red_eye` (out-of-range/NaN/duplicate id): a schema-valid
@@ -419,6 +424,21 @@ pub fn unsupported_gpu_stages_with_context(
     if let Some(red_eye) = recipe.red_eye.as_ref() {
         if !red_eye_is_valid(red_eye) {
             reasons.push("red_eye (invalid)".into());
+        }
+    }
+    // LRPAR-G14-DENOISE-IMPL-20: the additive KI-Denoise stage
+    // (`recipe.adjustments.denoise_ai`) is **not GPU-wired** yet. The CPU
+    // oracle rejects an active stage loudly under the default
+    // [`lumina_core::DenoisePolicy::Strict`] (`CoreError::Denoise`), so the GPU
+    // gate must list it as an explicit CPU-routing reason: the routable
+    // `render_with_gpu` path then reaches that same loud abort instead of
+    // rendering pixel-equal to the source while silently dropping the stage.
+    // An identity stage (`None`/`enabled:false`/`strength:0`) leaves every pixel
+    // unchanged on both backends and is therefore GPU-eligible — exactly like a
+    // neutral adjustment key above.
+    if let Some(denoise) = recipe.denoise_ai.as_ref() {
+        if !denoise.is_identity() {
+            reasons.push("denoise_ai (not GPU-wired)".into());
         }
     }
     // GPU-RENDER-PARITY-1 follow-up (item 7): the former `MAX_SOURCE_ACTIONS`

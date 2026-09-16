@@ -38,6 +38,12 @@ ONNX inference is a native capability, the browser remains explicitly "offen"
   persisted `GenerativeEdit` flags, capability + hash gated), the real
   hash-pinned `fixture_manifest`/`verify_fixture_manifest`, and the documented
   real-weight attachment surface `GenerativeModelSource::artifact`.
+- `face.rs` + `face/` — LRPAR-G12-FACE-20 S2/S3: face detection/embedding
+  manifests (`face_detect`/`face_embed` capabilities, `pending-integration`),
+  the shared inference identity + digest onto the S1 sidecar schema, the
+  deterministic, tests-only stub backends, the model-free DBSCAN-over-cosine
+  clustering with confirm/split/merge, and the real ORT face backends behind
+  `onnx-rt` (`face/ort.rs`).
 - `preprocess.rs` — pure, deterministic, dependency-free resize /
   rescale helpers (nearest-neighbor, documented integer mapping).
 - `backend.rs` — the `SubjectInference` trait and the deterministic
@@ -131,9 +137,51 @@ identity. Real BiRefNet/SAM-2 model weights remain `pending-integration`
 - **Browser:** outpaint is unavailable (native `StubOutpaintBackend`
   reports `ModelUnavailable`, engine resolves to `RuntimeDisabled`).
 
+## Face detection (LRPAR-G12-FACE-20, S2 + S3)
+
+The decision `feature/decisions/LRPAR-G12-FACE-20.md` splits face recognition
+into three independently versioned stages; `crates/lumina-onnx` implements the
+native detection/embedding stages (S2) and the model-free clustering stage (S3).
+
+- **Candidates (proposal, pending S6; not yet weight-verified):**
+  `face_detect_manifest()` = **YuNet** candidate (OpenCV Zoo
+  `face_detection_yunet`, declared **MIT**); `face_embed_manifest()` =
+  **SFace/MobileFaceNet** candidate (OpenCV Zoo `face_recognition_sface`,
+  declared **Apache-2.0**). Those licence values come from the OpenCV Zoo
+  model-directory `LICENSE`, which is **not** by itself a grant for the model
+  **weights**: the weight licence and the exact release must be verified
+  against the actual weight source before any hash pin lands (`FACE-20-S6`,
+  `feature/quality/fixtures-licensing.md` §5). The InsightFace/ArcFace
+  non-commercial weight licence and the AGPL `ultralytics` tooling are
+  explicitly avoided. **No weights are committed and nothing is downloaded**;
+  every descriptor carries `model_hash = "pending-integration"` and can never
+  report `Verified`.
+- **Capabilities:** `ModelCapabilities.face_detect` / `face_embed`
+  (additive, `#[serde(default)]`; manifests written before them keep parsing).
+- **Identity (`face_identity`, `face_identity_digest`):** source + decode +
+  geometry + both model identities (each carrying its input-spec digest) +
+  inference resolution + shared preprocessing (alignment, normalization, score
+  threshold, embedding dimension) + clustering method/version/thresholds. A
+  model, preprocessing or clustering change makes a persisted analysis `stale`;
+  a missing/corrupt artifact is `missing`/`corrupt`
+  (`face_artifact_status`). Clustering is image-local — no cross-catalogue
+  person identity, no cloud, no telemetry.
+- **Backends:** deterministic, tests-only stubs (`StubFaceDetector`,
+  `StubFaceEmbedder`) are the default, network-free surface; the real ORT path
+  (`face/ort.rs`) verifies the artifact SHA-256 and the declared tensor names
+  and fails loudly (`MissingModel` / `ModelArtifactStale` / `InferenceFailed`) —
+  never a silent stub substitution. `try_load_face_engine` is the consumer
+  surface (`OnnxRuntime` / `RuntimeDisabled`).
+- **Clustering:** deterministic DBSCAN over cosine distance
+  (`FACE_CLUSTERING_METHOD`/`_VERSION`, versioned `eps`/`min_samples`);
+  permutation-invariant via canonical ordering, image-local, plus pure
+  confirm/split/merge operations on sidecar clusters/persons.
+
 ## Error handling
 
 `OnnxError` (`thiserror`) distinguishes `UnsupportedModel` (manifest/license/
-capability mismatch), `InferenceFailed`, `InvalidDimensions`, and `MissingModel`.
+capability mismatch), `InferenceFailed`, `InvalidDimensions`, `MissingModel`,
+`ModelArtifactStale` and `InvalidFaceData` (face clustering/embedding/box
+contract violations).
 There are **no silent fallbacks**: a missing or mismatched artifact is reported,
 never guessed.

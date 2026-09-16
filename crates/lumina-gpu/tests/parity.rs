@@ -24,22 +24,22 @@
 #![cfg(feature = "gpu")]
 
 use lumina_core::{
-    render_frame, render_frame_with_generative, DepthPlane, GenerativeCanvasArtifact,
+    render_frame, render_frame_with_generative, CoreError, DepthPlane, GenerativeCanvasArtifact,
     GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFrame, MaskPlane,
     RenderContext, SourceActionArtifact,
 };
 use lumina_gpu::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
-    GpuContext, MAX_SOURCE_ACTIONS,
+    GpuContext, GpuError, MAX_SOURCE_ACTIONS,
 };
 use lumina_sidecar::{
     AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
-    CurveChannels, CurvePoint, Curves, DepthArtifactRef, EditRecipe, Effects, FocusRect,
-    GenerativeCanvas, GenerativeEdit, Geometry, Grain, HslAdjustments, HslChannel, LensBlur,
-    LensCorrection, NoiseReduction, Perspective, PointColor, PointColorEntry, Presence,
-    RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef, SourceActionKind,
-    SourceActionSpec, SpotRemoval, SpotRemovalMode, Upright, UprightAnalysis, Vignette,
-    SOURCE_ACTION_VERSION,
+    CurveChannels, CurvePoint, Curves, DenoiseAi, DenoiseModelIdentity, DepthArtifactRef,
+    EditRecipe, Effects, FocusRect, GenerativeCanvas, GenerativeEdit, Geometry, Grain,
+    HslAdjustments, HslChannel, LensBlur, LensCorrection, NoiseReduction, Perspective, PointColor,
+    PointColorEntry, Presence, RedEyeCorrection, RedEyeRegion, Sharpening, SourceActionArtifactRef,
+    SourceActionKind, SourceActionSpec, SpotRemoval, SpotRemovalMode, Upright, UprightAnalysis,
+    Vignette, DENOISE_AI_VERSION, SOURCE_ACTION_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -1479,6 +1479,56 @@ fn default_content_crop_routes_to_cpu_with_parity() {
     }
 }
 
+/// LRPAR-G14-DENOISE-IMPL-20: an active `denoise_ai` stage must never be
+/// silently dropped by the GPU path. The routing gate flags it, so
+/// `render_with_gpu` routes to the CPU oracle, which rejects the active stage
+/// loudly under the default `Strict` policy (`CoreError::Denoise`). The GPU
+/// path must propagate that abort instead of returning pixel-equal-to-source
+/// output (no silent fallback, no GPU parity break).
+#[test]
+fn denoise_ai_routes_to_cpu_and_aborts_loudly() {
+    let ctx = match GpuContext::new() {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("GPU context init failed ({err}) - skipped denoise routing check");
+            return;
+        }
+    };
+    let frame = gradient_frame(32, 32);
+    let recipe = denoise_ai_recipe(0.5);
+    let reasons = unsupported_gpu_stages(&recipe);
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("denoise_ai (not GPU-wired)")),
+        "an active denoise_ai must be flagged for CPU routing, got {reasons:?}"
+    );
+    // The CPU oracle rejects the active stage loudly (default Strict policy).
+    let cpu_error = render_frame(
+        &frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+    )
+    .expect_err("the CPU oracle must reject an unresolved active denoise_ai");
+    assert!(
+        matches!(cpu_error, CoreError::Denoise { .. }),
+        "unexpected CPU error: {cpu_error}"
+    );
+    // The GPU entry routes to that same CPU path and propagates the abort; it
+    // must not return pixels that silently omit the stage.
+    match ctx.render_with_gpu(&frame, &recipe) {
+        Err(GpuError::Core(CoreError::Denoise { .. })) => {}
+        Err(other) => panic!("unexpected GPU error (expected the routed CPU abort): {other}"),
+        Ok(_) => panic!("an active denoise_ai must not render on the GPU path silently"),
+    }
+}
+
 /// GPU-RENDER-PARITY-1 stage 3 (G-14): the red-eye pass must be pixel-effective
 /// and match the CPU oracle on a frame whose redness actually triggers the
 /// correction (the gradient/noise frames barely exercise it).
@@ -2408,6 +2458,30 @@ fn red_eye_recipe() -> EditRecipe {
                 desaturate: 0.8,
                 darken: 0.3,
             }],
+        }),
+        ..Default::default()
+    }
+}
+
+/// LRPAR-G14-DENOISE-IMPL-20: an **active** additive KI-Denoise stage. The
+/// stage has no WGSL pass yet, so the GPU gate must CPU-route it; the CPU oracle
+/// then aborts loudly (`CoreError::Denoise`) under the default `Strict` policy.
+fn denoise_ai_recipe(strength: f32) -> EditRecipe {
+    EditRecipe {
+        denoise_ai: Some(DenoiseAi {
+            version: DENOISE_AI_VERSION,
+            enabled: true,
+            model: DenoiseModelIdentity {
+                name: "fixture-srgb".into(),
+                version: "1".into(),
+                model_hash: format!("sha256:{}", "11".repeat(32)),
+                extras: Default::default(),
+            },
+            input_spec_digest: format!("sha256:{}", "22".repeat(32)),
+            strength,
+            preserve_detail: 0.5,
+            artifact: None,
+            extras: Default::default(),
         }),
         ..Default::default()
     }
@@ -3421,6 +3495,12 @@ fn cpu_routing_inventory_is_complete() {
         ),
         ("red_eye", unsupported_gpu_stages(&invalid_red_eye_recipe())),
         (
+            // LRPAR-G14-DENOISE-IMPL-20: the additive KI-Denoise stage is not
+            // GPU-wired; an active stage must route to the CPU loudly.
+            "denoise_ai (not GPU-wired)",
+            unsupported_gpu_stages(&denoise_ai_recipe(0.5)),
+        ),
+        (
             "adjustment `clarity_v2` not implemented on GPU",
             unsupported_gpu_stages(&unknown_key),
         ),
@@ -3537,6 +3617,19 @@ fn cpu_routing_inventory_is_complete() {
     assert!(unsupported_gpu_stages(&EditRecipe::default()).is_empty());
     assert!(unsupported_gpu_stages_for(&source_actions(1), true).is_empty());
     assert!(unsupported_gpu_stages_with_context(&EditRecipe::default(), false, None).is_empty());
+    // LRPAR-G14-DENOISE-IMPL-20: an identity KI-Denoise stage (`enabled:false`
+    // or `strength:0`) is pixel-neutral on both backends and must stay
+    // GPU-eligible, exactly like a neutral adjustment key.
+    let mut disabled_denoise = denoise_ai_recipe(0.5);
+    disabled_denoise.denoise_ai.as_mut().unwrap().enabled = false;
+    assert!(
+        unsupported_gpu_stages(&disabled_denoise).is_empty(),
+        "a disabled denoise_ai is pixel-identity and must be GPU-eligible"
+    );
+    assert!(
+        unsupported_gpu_stages(&denoise_ai_recipe(0.0)).is_empty(),
+        "strength:0 denoise_ai is pixel-identity and must be GPU-eligible"
+    );
     // CAMERA-WB-WELLE: a *valid* As-Shot context is GPU-carried, so it must not
     // be flagged (its parity is asserted by `as_shot_wb_gains_match_cpu_oracle_across_recipe_wb`).
     assert!(unsupported_gpu_stages_with_context(

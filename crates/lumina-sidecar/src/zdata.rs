@@ -17,7 +17,8 @@
 //!     RECORD_HEADER (68 bytes):
 //!       id_len      : u16 LE
 //!       kind       : u16 LE   (0 = mask tile, 1 = repair region,
-//!                              2 = generative canvas, 3 = spot heal generative)
+//!                              2 = generative canvas, 3 = spot heal generative,
+//!                              4 = denoise RGB)
 //!       tile_x     : u32 LE   (non-tile records always use 0/0)
 //!       tile_y     : u32 LE
 //!       width      : u32 LE
@@ -85,6 +86,26 @@
 //! only a portable `ArtifactReference` (relative path, format, checksum,
 //! resolution, channel type, data version) — never absolute paths, never raw
 //! pixels.
+//!
+//! ## KI-Denoise RGB payload (before zstd)
+//!
+//! `DenoiseRgbArtifact` (`kind = 4`, LRPAR-G14-DENOISE-IMPL-20
+//! `denoise_ai` → `kind = "denoise_rgb"`) stores the full-frame denoised RGB
+//! result as row-major **RGB8** (no alpha), mirroring the generative RGBA
+//! layout but with three bytes per pixel:
+//!
+//! ```text
+//!   encoding_version : u32 LE  (= 1)
+//!   width            : u32 LE
+//!   height           : u32 LE
+//!   pixels           : width*height*3 RGB8 bytes, row-major
+//! ```
+//!
+//! The canonical raw stream (header + pixels) is BLAKE3-checksummed; this is
+//! the exact digest the recipe's `DenoiseArtifactRef.checksum` carries, so
+//! recipe and bundle stay aligned. The core artifact type
+//! (`lumina_core::DenoiseRgbArtifact`) uses the identical canonical encoding
+//! (`DENOISE_RGB_ENCODING_VERSION`), so the two checksums are interchangeable.
 
 use std::collections::HashSet;
 use std::fs;
@@ -98,6 +119,10 @@ const VERSION: u16 = 1;
 const HEADER_LEN: usize = 40;
 const REPAIR_ENCODING_VERSION: u32 = 1;
 const RGBA_ENCODING_VERSION: u32 = 1;
+/// KI-Denoise RGB8 payload encoding version. Mirrors
+/// `lumina_core::DENOISE_RGB_ENCODING_VERSION`; a change invalidates every
+/// persisted `denoise_rgb` record visibly.
+pub const RGB_ENCODING_VERSION: u32 = 1;
 const RECORD_HEADER_LEN: usize = 68;
 const INDEX_ENTRY_FIXED_LEN: usize = 36;
 const MAX_CONTAINER_BYTES: usize = 512 * 1024 * 1024;
@@ -150,6 +175,8 @@ pub enum RecordKind {
     GenerativeCanvas = 2,
     /// A SPOT-REMOVE-1 generative spot-heal tile (RGBA8, no canvas expansion).
     SpotHealGenerative = 3,
+    /// A LRPAR-G14-DENOISE-IMPL-20 KI-denoise result (full-frame RGB8).
+    DenoiseRgb = 4,
 }
 
 impl RecordKind {
@@ -159,6 +186,7 @@ impl RecordKind {
             1 => Ok(RecordKind::RepairRegion),
             2 => Ok(RecordKind::GenerativeCanvas),
             3 => Ok(RecordKind::SpotHealGenerative),
+            4 => Ok(RecordKind::DenoiseRgb),
             other => Err(invalid(format!("unsupported zdata record kind {other}"))),
         }
     }
@@ -169,6 +197,7 @@ impl RecordKind {
             RecordKind::RepairRegion => "repair_region",
             RecordKind::GenerativeCanvas => "generative_canvas",
             RecordKind::SpotHealGenerative => "spot_heal_generative",
+            RecordKind::DenoiseRgb => "denoise_rgb",
         }
     }
 }
@@ -449,6 +478,119 @@ impl SpotHealGenerativeArtifact {
     }
 }
 
+/// Shared validation for RGB8 denoise payloads: non-empty portable id,
+/// non-zero dimensions within [`MAX_DIMENSION`], and exactly
+/// `width*height*3` pixel bytes inside the container size budget.
+fn validate_rgb_payload(
+    id: &str,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<(), ZDataError> {
+    if id.is_empty() || id.len() > MAX_ID_LEN || !id.is_char_boundary(id.len()) {
+        return Err(invalid("invalid denoise artifact id"));
+    }
+    if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(invalid("invalid denoise artifact dimensions"));
+    }
+    let count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| invalid("denoise artifact dimensions overflow"))?;
+    if count > MAX_UNCOMPRESSED / 3 {
+        return Err(invalid("denoise artifact exceeds payload size limit"));
+    }
+    if pixels.len() != count as usize * 3 {
+        return Err(invalid("denoise artifact pixels do not match dimensions"));
+    }
+    Ok(())
+}
+
+/// Shared canonical RGB8 encoding (`encoding_version + width + height +
+/// pixels`).  Exactly what the container checksum and
+/// [`DenoiseRgbArtifact::checksum`] cover, and byte-identical to
+/// `lumina_core::DenoiseRgbArtifact::encode_raw`.
+fn encode_rgb_raw(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity(12 + pixels.len());
+    raw.extend_from_slice(&RGB_ENCODING_VERSION.to_le_bytes());
+    raw.extend_from_slice(&width.to_le_bytes());
+    raw.extend_from_slice(&height.to_le_bytes());
+    raw.extend_from_slice(pixels);
+    raw
+}
+
+/// Shared RGB8 decoding: verifies the encoding version and that the payload
+/// splits exactly into `width*height*3` bytes.
+fn decode_rgb_raw(raw: &[u8]) -> Result<(u32, u32, Vec<u8>), ZDataError> {
+    if raw.len() < 12 {
+        return Err(invalid("denoise artifact payload is truncated"));
+    }
+    let version = u32::from_le_bytes(raw[0..4].try_into().unwrap());
+    if version != RGB_ENCODING_VERSION {
+        return Err(invalid("unsupported denoise artifact encoding version"));
+    }
+    let width = u32::from_le_bytes(raw[4..8].try_into().unwrap());
+    let height = u32::from_le_bytes(raw[8..12].try_into().unwrap());
+    let count = width as usize * height as usize;
+    if raw.len() != 12 + count * 3 {
+        return Err(invalid(
+            "denoise artifact payload length does not match dimensions",
+        ));
+    }
+    Ok((width, height, raw[12..].to_vec()))
+}
+
+/// A LRPAR-G14-DENOISE-IMPL-20 KI-denoise result stored in the
+/// `.lumina.zdata` bundle.
+///
+/// `pixels` is the full-frame denoised result as row-major **RGB8**
+/// (`width*height*3` bytes, no alpha — the source alpha is preserved by the
+/// render pipeline).  The JSON recipe keeps only a portable
+/// `DenoiseArtifactRef` (relative path, format, BLAKE3 checksum over the
+/// canonical uncompressed stream, resolution, channel type, data version).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DenoiseRgbArtifact {
+    pub id: String,
+    pub width: u32,
+    pub height: u32,
+    /// Row-major RGB8 pixels, `width * height * 3` long.
+    pub pixels: Vec<u8>,
+}
+
+impl DenoiseRgbArtifact {
+    /// Validates id, dimensions and pixel-byte count.
+    pub fn validate(&self) -> Result<(), ZDataError> {
+        validate_rgb_payload(&self.id, self.width, self.height, &self.pixels)
+    }
+
+    fn encode_raw(&self) -> Vec<u8> {
+        encode_rgb_raw(self.width, self.height, &self.pixels)
+    }
+
+    fn decode_raw(id: String, raw: &[u8]) -> Result<Self, ZDataError> {
+        let (width, height, pixels) = decode_rgb_raw(raw)?;
+        let artifact = DenoiseRgbArtifact {
+            id,
+            width,
+            height,
+            pixels,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    /// BLAKE3 hex digest of the canonical raw payload (uncompressed RGB8
+    /// stream).  Stored in the recipe's `DenoiseArtifactRef.checksum`; equal to
+    /// the core artifact's `checksum()` for the same dimensions/pixels.
+    pub fn checksum(&self) -> String {
+        blake3::hash(&self.encode_raw()).to_hex().to_string()
+    }
+
+    /// Stable kind string used by diagnostics (`denoise_rgb`).
+    pub fn kind_str(&self) -> &'static str {
+        RecordKind::DenoiseRgb.as_str()
+    }
+}
+
 /// A single bundle entry, used by the unified constructor and re-reads.
 #[derive(Debug, Clone)]
 pub enum RecordSpec {
@@ -456,6 +598,7 @@ pub enum RecordSpec {
     RepairRegion(RepairRegionArtifact),
     GenerativeCanvas(GenerativeCanvasArtifact),
     SpotHealGenerative(SpotHealGenerativeArtifact),
+    DenoiseRgb(DenoiseRgbArtifact),
 }
 
 #[derive(Debug, Clone)]
@@ -576,6 +719,24 @@ impl ZDataContainer {
                         spot.id.len(),
                     )?;
                 }
+                RecordSpec::DenoiseRgb(denoise) => {
+                    denoise.validate()?;
+                    if !ids.insert(denoise.id.clone()) {
+                        return Err(ZDataError::DuplicateId(denoise.id.clone()));
+                    }
+                    let count = u64::from(denoise.width)
+                        .checked_mul(u64::from(denoise.height))
+                        .ok_or_else(|| invalid("denoise dimensions overflow"))?;
+                    conservative_size = add_conservative_size(
+                        conservative_size,
+                        // raw payload = 12-byte header + RGB8 (3 bytes/px)
+                        count
+                            .checked_mul(3)
+                            .and_then(|pixels| pixels.checked_add(12))
+                            .ok_or_else(|| invalid("denoise dimensions overflow"))?,
+                        denoise.id.len(),
+                    )?;
+                }
             }
         }
         ensure_container_size(conservative_size)?;
@@ -635,6 +796,19 @@ impl ZDataContainer {
                         0,
                         spot.width,
                         spot.height,
+                        raw,
+                    )
+                }
+                RecordSpec::DenoiseRgb(denoise) => {
+                    let raw = denoise.encode_raw();
+                    let id = denoise.id;
+                    (
+                        RecordKind::DenoiseRgb,
+                        id,
+                        0,
+                        0,
+                        denoise.width,
+                        denoise.height,
                         raw,
                     )
                 }
@@ -919,6 +1093,10 @@ impl ZDataContainer {
                 RecordKind::SpotHealGenerative => RecordSpec::SpotHealGenerative(
                     SpotHealGenerativeArtifact::decode_raw(record.mask_id.clone(), &raw)?,
                 ),
+                RecordKind::DenoiseRgb => RecordSpec::DenoiseRgb(DenoiseRgbArtifact::decode_raw(
+                    record.mask_id.clone(),
+                    &raw,
+                )?),
             };
             specs.push(spec);
         }
@@ -960,6 +1138,7 @@ impl ZDataContainer {
             RecordSpec::RepairRegion(existing) => existing.id == region.id,
             RecordSpec::GenerativeCanvas(existing) => existing.id == region.id,
             RecordSpec::SpotHealGenerative(existing) => existing.id == region.id,
+            RecordSpec::DenoiseRgb(existing) => existing.id == region.id,
         }) {
             return Err(ZDataError::DuplicateId(region.id));
         }
@@ -1017,12 +1196,41 @@ impl ZDataContainer {
         Ok(artifact)
     }
 
+    /// Reads a LRPAR-G14-DENOISE-IMPL-20 `denoise_rgb` record by id.  Kind
+    /// separation is strict: records of any other kind with the same id are
+    /// never returned here.  Returns [`ZDataError::Invalid`] when no such
+    /// record exists and [`ZDataError::Checksum`] when the stored payload
+    /// fails its BLAKE3 check.  The decoded dimensions must agree with the
+    /// container record.
+    pub fn denoise_rgb(&self, id: &str) -> Result<DenoiseRgbArtifact, ZDataError> {
+        let record = self
+            .records
+            .iter()
+            .find(|r| r.kind == RecordKind::DenoiseRgb && r.mask_id == id)
+            .ok_or_else(|| invalid("denoise artifact not found"))?;
+        let payload_start = record.offset + RECORD_HEADER_LEN + record.mask_id.len();
+        let payload_end = payload_start + record.compressed_len as usize;
+        let raw = decode_payload(
+            &self.bytes[payload_start..payload_end],
+            record.uncompressed_len,
+        )?;
+        if blake3::hash(&raw).as_bytes() != &record.checksum {
+            return Err(ZDataError::Checksum(id.into()));
+        }
+        let artifact = DenoiseRgbArtifact::decode_raw(id.to_string(), &raw)?;
+        if artifact.width != record.width || artifact.height != record.height {
+            return Err(invalid("denoise dimensions disagree with record"));
+        }
+        Ok(artifact)
+    }
+
     fn has_id(&self, specs: &[RecordSpec], id: &str) -> bool {
         specs.iter().any(|spec| match spec {
             RecordSpec::MaskTile(tile) => tile.mask_id == id,
             RecordSpec::RepairRegion(existing) => existing.id == id,
             RecordSpec::GenerativeCanvas(existing) => existing.id == id,
             RecordSpec::SpotHealGenerative(existing) => existing.id == id,
+            RecordSpec::DenoiseRgb(existing) => existing.id == id,
         })
     }
 
@@ -1076,6 +1284,34 @@ impl ZDataContainer {
             return Err(ZDataError::DuplicateId(spot.id));
         }
         specs.push(RecordSpec::SpotHealGenerative(spot));
+        Self::new_with(specs)
+    }
+
+    /// Returns a new container with `denoise` appended.  Existing records of
+    /// every kind are preserved; a duplicate id (across all kinds) is
+    /// rejected.
+    pub fn add_denoise_rgb(&self, denoise: DenoiseRgbArtifact) -> Result<Self, ZDataError> {
+        let mut specs = self.decode_all()?;
+        if self.has_id(&specs, &denoise.id) {
+            return Err(ZDataError::DuplicateId(denoise.id));
+        }
+        specs.push(RecordSpec::DenoiseRgb(denoise));
+        Self::new_with(specs)
+    }
+
+    /// Explicit regeneration path for a `denoise_rgb` record: replaces the
+    /// record `denoise.id` and only that record, never silently touching other
+    /// kinds.  An id collision with a different kind is still rejected.
+    pub fn replace_denoise_rgb(&self, denoise: DenoiseRgbArtifact) -> Result<Self, ZDataError> {
+        denoise.validate()?;
+        let mut specs = self.decode_all()?;
+        specs.retain(
+            |spec| !matches!(spec, RecordSpec::DenoiseRgb(existing) if existing.id == denoise.id),
+        );
+        if self.has_id(&specs, &denoise.id) {
+            return Err(ZDataError::DuplicateId(denoise.id));
+        }
+        specs.push(RecordSpec::DenoiseRgb(denoise));
         Self::new_with(specs)
     }
 }
@@ -1203,6 +1439,52 @@ pub fn append_spot_heal_generative(
     let container = match existing {
         Some(container) => container.add_spot_heal_generative(spot)?,
         None => ZDataContainer::new(vec![])?.add_spot_heal_generative(spot)?,
+    };
+    save_zdata_locked(path, &container)
+}
+
+/// Appends a LRPAR-G14-DENOISE-IMPL-20 `denoise_rgb` artifact to the bundle at
+/// `path` (creating it if needed), preserving every pre-existing record.  Runs
+/// under the bundle's `.zdata.lock` and writes atomically (Temp + Rename); a
+/// duplicate id or a pixel/dimension mismatch is reported as an error.  Same
+/// contract as [`append_generative_canvas`]; `load_zdata` verifies every
+/// record checksum eagerly, so a corrupt denoise record is visible at load.
+pub fn append_denoise_rgb(path: &Path, denoise: DenoiseRgbArtifact) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let container = match existing {
+        Some(container) => container.add_denoise_rgb(denoise)?,
+        None => ZDataContainer::new(vec![])?.add_denoise_rgb(denoise)?,
+    };
+    save_zdata_locked(path, &container)
+}
+
+/// Writes a `denoise_rgb` artifact to the bundle at `path` (creating it if
+/// needed) under the `.zdata.lock`.
+///
+/// `replace = false` appends and rejects a duplicate id (the default,
+/// non-destructive path); `replace = true` is the explicit regeneration path
+/// ([`ZDataContainer::replace_denoise_rgb`]).  Both write atomically
+/// (Temp + Rename) and preserve pre-existing records of every kind.
+pub fn save_denoise_rgb(
+    path: &Path,
+    denoise: DenoiseRgbArtifact,
+    replace: bool,
+) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let container = match existing {
+        Some(container) if replace => container.replace_denoise_rgb(denoise)?,
+        Some(container) => container.add_denoise_rgb(denoise)?,
+        None => ZDataContainer::new(vec![])?.add_denoise_rgb(denoise)?,
     };
     save_zdata_locked(path, &container)
 }
@@ -1335,6 +1617,14 @@ fn parse_record(
                 return Err(invalid(
                     "generative payload length disagrees with dimensions",
                 ));
+            }
+        }
+        RecordKind::DenoiseRgb => {
+            // raw = 12-byte encoding header + RGB8 (3 bytes/px); the exact
+            // split is verified in the RGB `decode_raw` helper.
+            let expected = 12u64 + u64::from(width) * u64::from(height) * 3;
+            if uncompressed_len != expected {
+                return Err(invalid("denoise payload length disagrees with dimensions"));
             }
         }
     }
@@ -2206,5 +2496,249 @@ mod tests {
         // Missing bundle file surfaces as I/O, never as an empty container.
         let missing = directory.path().join("absent.lumina.zdata");
         assert!(matches!(load_zdata(&missing), Err(ZDataError::Io { .. })));
+    }
+
+    // =====================================================================
+    // LRPAR-G14-DENOISE-IMPL-20: denoise_rgb (kind 4) RGB8 codec.
+    // =====================================================================
+
+    fn denoise_rgb() -> DenoiseRgbArtifact {
+        DenoiseRgbArtifact {
+            id: "denoise-1".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+        }
+    }
+
+    #[test]
+    fn denoise_rgb_roundtrip_through_bundle() {
+        let artifact = denoise_rgb();
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(artifact.clone())]).unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 1);
+        assert_eq!(decoded.denoise_rgb("denoise-1").unwrap(), artifact);
+        // Strict kind separation: never visible as any other kind.
+        assert!(decoded.tile("denoise-1", 0, 0).is_err());
+        assert!(decoded.repair_region("denoise-1").is_err());
+        assert!(decoded.generative_canvas("denoise-1").is_err());
+        assert!(decoded.spot_heal_generative("denoise-1").is_err());
+        // Container VERSION stays 1: kind discriminator, not a format bump.
+        let bytes = container.to_bytes();
+        assert_eq!(
+            u16::from_le_bytes(bytes[8..10].try_into().unwrap()),
+            VERSION
+        );
+    }
+
+    #[test]
+    fn denoise_rgb_coexists_with_all_other_kinds() {
+        let container = ZDataContainer::new_with(vec![
+            RecordSpec::MaskTile(tiles()[0].clone()),
+            RecordSpec::RepairRegion(repair_region()),
+            RecordSpec::GenerativeCanvas(generative_canvas()),
+            RecordSpec::SpotHealGenerative(spot_heal()),
+            RecordSpec::DenoiseRgb(denoise_rgb()),
+        ])
+        .unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 5);
+        assert_eq!(decoded.denoise_rgb("denoise-1").unwrap(), denoise_rgb());
+        assert_eq!(decoded.tile("subject", 0, 0).unwrap(), tiles()[0]);
+        assert_eq!(decoded.repair_region("repair-1").unwrap(), repair_region());
+        assert_eq!(
+            decoded.generative_canvas("gen-canvas-1").unwrap(),
+            generative_canvas()
+        );
+        assert_eq!(
+            decoded.spot_heal_generative("spot-heal-1").unwrap(),
+            spot_heal()
+        );
+    }
+
+    #[test]
+    fn denoise_rgb_checksum_is_canonical_and_covers_pixels_not_ids() {
+        let artifact = denoise_rgb();
+        let first = artifact.checksum();
+        assert_eq!(first.len(), 64, "BLAKE3 hex digest");
+        assert_eq!(first, artifact.checksum());
+        // id/kind do not enter the digest; a pixel change does.
+        let mut renamed = artifact.clone();
+        renamed.id = "denoise-2".into();
+        assert_eq!(first, renamed.checksum());
+        let mut changed = artifact.clone();
+        changed.pixels[0] ^= 0xff;
+        assert_ne!(first, changed.checksum());
+        assert_eq!(artifact.kind_str(), "denoise_rgb");
+        assert_eq!(
+            RecordKind::DenoiseRgb.as_str(),
+            crate::DENOISE_ARTIFACT_KIND,
+            "zdata kind string matches the recipe kind"
+        );
+    }
+
+    /// Cross-crate layout guard: the canonical raw stream is
+    /// `encoding_version(1) || width || height || RGB8`; the literal below is
+    /// the pre-compression byte sequence and its BLAKE3 digest. The core crate
+    /// (`lumina_core::DenoiseRgbArtifact`) asserts the **same** digest, so a
+    /// silent layout drift between core and sidecar fails a test instead of
+    /// producing mismatching recipe/bundle checksums.
+    #[test]
+    fn denoise_rgb_canonical_bytes_and_digest_are_stable() {
+        let artifact = denoise_rgb();
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(&1u32.to_le_bytes());
+        canonical.extend_from_slice(&2u32.to_le_bytes());
+        canonical.extend_from_slice(&2u32.to_le_bytes());
+        canonical.extend_from_slice(&artifact.pixels);
+        assert_eq!(canonical, artifact.encode_raw());
+        assert_eq!(
+            artifact.checksum(),
+            blake3::hash(&canonical).to_hex().to_string()
+        );
+    }
+
+    #[test]
+    fn denoise_rgb_dimension_mismatch_and_empty_id_rejected_on_write() {
+        let bad = DenoiseRgbArtifact {
+            id: "bad".into(),
+            width: 2,
+            height: 2,
+            pixels: vec![0; 11],
+        };
+        assert!(bad.validate().is_err());
+        assert!(ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(bad)]).is_err());
+
+        let empty = DenoiseRgbArtifact {
+            id: String::new(),
+            width: 1,
+            height: 1,
+            pixels: vec![0; 3],
+        };
+        assert!(empty.validate().is_err());
+        assert!(ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(empty)]).is_err());
+    }
+
+    #[test]
+    fn denoise_rgb_missing_id_returns_invalid() {
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(denoise_rgb())]).unwrap();
+        assert!(matches!(
+            container.denoise_rgb("absent"),
+            Err(ZDataError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn denoise_rgb_checksum_corruption_detected_eagerly_and_lazily() {
+        let mut bytes = ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(denoise_rgb())])
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        let index = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        let record = u64::from_le_bytes(bytes[index + 20..index + 28].try_into().unwrap()) as usize;
+        bytes[record + 36] ^= 1;
+        let corrupt = ZDataContainer::from_bytes(&bytes).unwrap();
+        assert!(matches!(
+            corrupt.denoise_rgb("denoise-1"),
+            Err(ZDataError::Checksum(_))
+        ));
+
+        // Eager path: corrupt the compressed payload on disk so `load_zdata`
+        // fails up front instead of handing out a container lazily.
+        let directory = tempfile::tempdir().unwrap();
+        let path = zdata_path_for(&directory.path().join("image.raw"));
+        save_zdata(
+            &path,
+            &ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(denoise_rgb())]).unwrap(),
+        )
+        .unwrap();
+        let mut on_disk = fs::read(&path).unwrap();
+        let index_offset = u64::from_le_bytes(on_disk[16..24].try_into().unwrap()) as usize;
+        on_disk[index_offset - 1] ^= 0xff;
+        fs::write(&path, &on_disk).unwrap();
+        assert!(
+            load_zdata(&path).is_err(),
+            "corrupt denoise payload must fail at load time"
+        );
+    }
+
+    #[test]
+    fn denoise_rgb_duplicate_id_rejected_across_all_kinds() {
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::DenoiseRgb(denoise_rgb())]).unwrap();
+        assert!(matches!(
+            container.add_denoise_rgb(denoise_rgb()),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        let mut clash = spot_heal();
+        clash.id = "denoise-1".into();
+        assert!(matches!(
+            container.add_spot_heal_generative(clash),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        let tile_clash = MaskTile {
+            mask_id: "denoise-1".into(),
+            tile_x: 0,
+            tile_y: 0,
+            width: 1,
+            height: 1,
+            values: vec![0],
+        };
+        assert!(matches!(
+            ZDataContainer::new_with(vec![
+                RecordSpec::MaskTile(tile_clash),
+                RecordSpec::DenoiseRgb(denoise_rgb()),
+            ]),
+            Err(ZDataError::DuplicateId(_))
+        ));
+    }
+
+    #[test]
+    fn denoise_rgb_atomic_append_preserves_bundle_and_honors_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("image.raw");
+        let path = zdata_path_for(&source);
+        save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
+        append_denoise_rgb(&path, denoise_rgb()).unwrap();
+
+        let reloaded = load_zdata(&path).unwrap();
+        assert_eq!(reloaded.tile_count(), 3);
+        assert_eq!(reloaded.tile("subject", 0, 0).unwrap(), tiles()[0]);
+        assert_eq!(reloaded.denoise_rgb("denoise-1").unwrap(), denoise_rgb());
+
+        // A held lock blocks the append explicitly and leaves the bundle.
+        let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
+        std::fs::File::create(&lock_path).unwrap();
+        let mut blocked = denoise_rgb();
+        blocked.id = "blocked".into();
+        let error = append_denoise_rgb(&path, blocked).unwrap_err();
+        assert!(
+            matches!(&error, ZDataError::Io { operation, .. } if operation.contains("lock")),
+            "denoise append must report the held lock, got {error}"
+        );
+        assert_eq!(load_zdata(&path).unwrap().tile_count(), 3);
+        drop(fs::remove_file(&lock_path));
+
+        // Explicit replace regenerates the same record without duplication.
+        let mut regenerated = denoise_rgb();
+        regenerated.pixels[0] = 200;
+        save_denoise_rgb(&path, regenerated.clone(), true).unwrap();
+        let replaced = load_zdata(&path).unwrap();
+        assert_eq!(replaced.tile_count(), 3, "replace must not duplicate");
+        assert_eq!(replaced.denoise_rgb("denoise-1").unwrap(), regenerated);
+
+        // No temp/lock files may leak.
+        let leftovers: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-") || name.ends_with(".lock"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp/lock files, found {leftovers:?}"
+        );
     }
 }
