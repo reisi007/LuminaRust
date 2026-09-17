@@ -85,3 +85,17 @@ beantwortet sind:
 5. Welche Spez-Aussagen wurden auf welche Tests gemappt?
 6. Gates: `cargo test`, `clippy -D warnings`, `fmt --check` — Kommandos +
    Ergebnis im Bericht.
+7. Dateigrößen-Regel: `sh scripts/check_file_sizes.sh` grün, neue Logik in
+   neuen/kohärenten Dateien, keine Kompensations-Löschung (Diff-Beleg)?
+
+## 8. Dateigröße / Anti-Gaming (User-Vorgabe 2026-09-17)
+
+- Eine `.rs`-Datei mit mehr als 500 Zeilen darf nicht wachsen (CI-Ratchet
+  gegen `scripts/file_size_baseline.txt`). Neue Logik gehört in neue oder
+  passende kleine Dateien (Umdesign-Pflicht); Kleinstverdrahtung an bestehenden
+  Aufrufstellen darf bleiben.
+- Das Löschen von Kommentaren, Doku oder Tests zur Kompensation von Wachstum
+  gilt als Regel-Umgehung (Goodhart) und wird abgelehnt: Die Verifizierung
+  prüft den Diff (Logik-Wachstum bei gleichzeitigem Kommentar-Schwund =
+  Befund) und weist das Ergebnis in der BESTANDEN-Checkliste (§7, Punkt 7)
+  explizit aus.

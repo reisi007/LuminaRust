@@ -212,6 +212,9 @@ Implementierungs-Agent arbeiten. Er:
   Persistenzfolgen;
 - führt relevante Tests, Clippy, Formatprüfung und gegebenenfalls Builds aus;
 - prüft ausdrücklich, ob die Tests die neue Funktion tatsächlich abdecken;
+- prüft ausdrücklich die Dateigrößen-Regel (Anti-Gaming): `sh scripts/check_file_sizes.sh`
+  grün, neue Logik in neuen/kohärenten Dateien (kein Wachstum in >500-Zeilen-Dateien),
+  keine Kommentar-/Doku-/Test-Löschung zur Kompensation (Diff-Prüfung);
 - darf eine Aufgabe als nicht bestanden zurückweisen;
 - liefert einen kurzen Prüfbericht mit bestanden/nicht bestanden, Befunden,
   Testkommandos und verbleibenden Risiken.
