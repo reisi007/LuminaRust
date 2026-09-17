@@ -17180,12 +17180,9 @@ impl LuminaApp {
                         }
                     }
                 }
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "Rahmen ziehen: Preview shows expand frame when active",
-                );
+                ui.colored_label(egui::Color32::YELLOW, Str::ExpandDragFrameHint.t());
             } else {
-                ui.label("auf Bild beschneiden — kein Expand.");
+                ui.label(Str::ExpandCropToImage.t());
             }
             // GEN-ONNX-1 Welle 2b: the explicit generation action (visible for
             // either active role). It produces the deterministic fixture canvas,

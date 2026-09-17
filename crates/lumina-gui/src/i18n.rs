@@ -395,6 +395,8 @@ pub enum Str {
     // GEN-ONNX-1 Welle 2b: auto-fill toggle + the explicit generation action.
     AutoFillTransparent,
     GenerateCanvas,
+    ExpandDragFrameHint,
+    ExpandCropToImage,
 
     HuePattern,
     SatPattern,
@@ -1132,6 +1134,9 @@ impl Str {
             Str::ExpandCanvasInvalid => "Invalid canvas",
             Str::AutoFillTransparent => "Auto-fill transparent pixels (after lens)",
             Str::GenerateCanvas => "Generate",
+            Str::ExpandDragFrameHint =>
+                "Drag a frame: the preview shows the expand frame when active",
+            Str::ExpandCropToImage => "Crop to image — no expand.",
 
             Str::HuePattern => "{} Hue",
             Str::SatPattern => "{} Sat",

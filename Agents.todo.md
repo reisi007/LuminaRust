@@ -78,9 +78,9 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-12:
-15 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 11,
-Block B: 1, Block C: 3 (Stand 2026-09-14).
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-17:
+13 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 6,
+Block B: 1, Block C: 6.
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -215,9 +215,11 @@ User-Test". Die implementierten Slices (Module, Develop-Sektionen, interaktive
 Maskenwerkzeuge, Exportmodul, i18n, Presence/Vibrance, kittest-Snapshots) sind
 unabhängig verifiziert; Details in Git-Historie und Feature-Dokument.
 
-Vor F-103-N6 empfohlen: kleine Stabilitäts-Fixes aus den Review-Befunden
-(z. B. REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1),
-damit der manuelle Test aussagekräftig ist.
+Vor F-103-N6 empfohlen: nichts mehr offen — die Review-Befunde
+(REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1) sind mit
+Marker-Kommentaren im Code implementiert; die F-103-N6-Runde 1 hat eigene
+Befunde erzeugt (GUI-CLICK-ALL-17, GUI-ROUTING-N6, GUI-INSTRDBG-17 — alle
+BESTANDEN verifiziert).
 
 - [ ] **[PRIO: mittel] GUI-INSTRDBG-17b (Release: 1.0)** Restliche GUI-Sektions-Aktionen instrumentieren, Teil 1 BESTANDEN-verifiziert am 2026-09-17 (Compare/Geometrie/Masken-Layer/Metadaten = 66 `GuiAction`s, Gates grün; Verifizierung NICHT BESTANDEN wegen Restfläche H-1). Teil 2 siehe GUI-INSTRDBG-17b-REST. Abnahme Teil 1: 66 Varianten je genau einmal verdrahtet, `instrdbg_rest_actions_log_exactly_one_line` grün, Release-Nachweis per `strings`.
 - [ ] **[PRIO: mittel] GUI-INSTRDBG-17b-REST (Release: 1.0)** Restliche user-sichtbare Schaltflächen instrumentieren (Fortsetzung von GUI-INSTRDBG-17b, H-1: ~18–22 Buttons in Spot-Extras, Detail/Red-Eye, Optics, Tone-Curve, Presets; gleiche Mechanik: `GuiAction`-Variante + `instrument_gui_action!` als erste Anweisung, Debug-only via `GuiActionTimer`). Pflicht: `ALL_GUI_ACTIONS` + `tests/instrdbg.rs` erweitern, `f100_action_button`-Match (ohne `_`-Arm) + auditierte Surfaces ergänzen, **Klick-Test** je neuem Button (Button → instrumentierte Methode → genau eine Logzeile) + No-op-Log-Regressionstest. Abnahme: 66+N `GuiAction`s, `cargo test -p lumina-gui` (debug+release) / `clippy -D warnings` (debug+release) grün, `strings`-Nachweis release-frei, File-Size-Ratchet gehalten. **Stand 2026-09-17: 83 `GuiAction`s umgesetzt + verifiziert BESTANDEN im REST-Umfang (18 Klick-Tests, No-op-Test, Gates grün); letzte Restfläche siehe GUI-INSTRDBG-17c.**

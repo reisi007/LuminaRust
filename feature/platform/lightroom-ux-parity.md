@@ -1,8 +1,11 @@
-# Lightroom-UX-Parität (1:1-Klon-Ziel, UI/UX)
+# Lightroom-UX-Parität (UI/UX; Zielbild 2026-09-17 präzisiert)
 
-**Status (2026-09-12):** Bestandsaufnahme + Zielbild. User-Entscheid: Die
-Oberfläche soll ein 1:1-Klon von Adobe Lightroom Classic werden (UI/UX;
-Engine-Parität läuft weiter über die LRPAR-Tasks). Dieses Dokument ersetzt
+**Status (2026-09-17):** Bestandsaufnahme + Zielbild. User-Entscheide: 2026-09-12
+1:1-Klon von Adobe Lightroom Classic (UI/UX); **Präzisierung 2026-09-17: kein
+reines 1:1, sondern leicht modernerer Feinschliff — jeder Lightroom-Nutzer soll
+sich sofort zu Hause fühlen** (gleiche Orte, Begriffe, Abläufe; Modernisierung
+nur im Feinschliff, kein Umlernen). Engine-Parität läuft weiter über die
+LRPAR-Tasks. Dieses Dokument ersetzt
 nicht die F-100-Konventionen
 (`platform/cli-gui-wasm.md`), sondern inventarisiert die Lücken dagegen und
 definiert die Slices zum Schließen. Jede Slice-Implementierung beginnt mit
@@ -32,6 +35,9 @@ read-only, 2026-09-12), `.goal/Goal.md` G-01…G-16,
 | UXG-13 | Kürzel `O`/`Z`/`Shift+L`/`I` fehlen; `E`-Alias unsauber | `lib.rs:135` | nein (F-100 erweitern) | LRPAR-G16-POWER |
 | UXG-14 | Keine Canvas-Cursor; keine Stepper/Reset-Affordanz | Grep `CursorIcon` leer | nein | neu |
 | UXG-15 | Navigator-Rail: Größe/Drag-Affordanz schwach (Duplikat-These visuell nicht belegt, niedrig prior) | `lib.rs:17347` | ja (Layout) | neu |
+| UXG-16 | Tone Curve ohne Kurvengrafik (P0/P1-Slider + Add-Point statt Punkte setzen/ziehen; Vision 2026-09-17: „bitterste Umlernstelle") | `lib.rs:15832`, `develop_section_tone_curve.png` | ja (Interaktion/Kanal) | neu |
+| UXG-17 | Hardcodierte UI-Literale statt `Str::` (F-100: englisch, 0 deutsche UI-Literale); Generative-Panels 2026-09-17 behoben (`ExpandDragFrameHint`/`ExpandCropToImage`), Spot-Panel (`draw_spot_heal`) offen | `i18n.rs`, `lib.rs:17185/17188` (behoben), `lib.rs:17680–17719` (offen) | nein | neu |
+| UXG-18 | Vision-Feinschliff 2026-09-17 (je einzeln entscheidbar): HSL ohne 8 Color-Mixer-Farbfelder; Compare/Survey-Tiles unausgerichtet; Toast überdeckt Toolbar-Kante; Preset-Dialog unzentriert/beschnitten; Meta-History als Rohdaten-Dump (ISO/Pipe); Histogramm ohne RGB-Kanäle/Clipping-Dreiecke/EXIF-Zeile; kein EXIF-Overlay über dem Bild; Slider-Blau ohne Akzent-Disziplin | Goldens + Vision-Urteil 2026-09-17 | teils | neu |
 
 ## Gap-Inventory Dust Removal (UXD, G-04)
 

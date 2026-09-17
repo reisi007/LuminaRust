@@ -290,12 +290,12 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 > F-094 und Vibrance/Saturation F-092 in der Color-Sektion in F-100-Reihenfolge
 > Color Grading → Presence → Vibrance/Saturation, über bestehenden
 > set_adjustment-/Rezeptpfad; Pipeline-Stufen vorhanden) implementiert
-> (2026-08-21). Offen: F-103-N6 (erster visueller User-Test), F-103-N8
-> (CLI-Doppelrender). F-103-N9 (kittest-Screenshot-Regressionen) ist
-> umgesetzt (2026-08-21, siehe unten).
-> Browser-Dateispeichern, ONNX,
-> Masken-Inferenz, Cache-Synchronisierung und Mehrbild-Bearbeitung bleiben
-> bewusst Post-MVP.
+> (2026-08-21). Offen: F-103-N6 (visueller User-Test, Runde 1 am 2026-09-17
+> durchgeführt mit Befunden GUI-CLICK-ALL-17/GUI-ROUTING-N6/GUI-INSTRDBG-17).
+> F-103-N8 (CLI-Doppelrender) und F-103-N9 (kittest-Regressionen) sind
+> umgesetzt. Historisch (2026-08-21, überholt): Browser-Dateispeichern bleibt
+> Post-MVP; ONNX/Masken-Inferenz/Mehrbild-Bearbeitung sind seit F-082 bzw.
+> Sync/Match/Previous implementiert (s. Feature-Docs).
 
 > **Export-Determinismus (GUI ↔ CLI, 2026-08-21):** Die Desktop-GUI erzeugt über
 > das Export-Modul exakt denselben Bytestrom wie die CLI, weil beide den
@@ -336,13 +336,15 @@ einer späteren Architekturentscheidung erneut bewertet werden.
 > BESTANDEN, HEAD 711fe09):** `lumina-gui` 185p, `lumina-core` 328p,
 > `lumina-sidecar` 101p (`--lib`, 139p mit `zdata`-Feature). Die 5 kittest-Goldens
 > bleiben `#[ignore]` (headless GPU noetig); ein Rebaseline nach den Wellen 2/3
-> steht aus (siehe `Agents.todo.md` GUI-KIT-01-REFRESH, `UPDATE_SNAPSHOTS=true`
+> steht aus (`UPDATE_SNAPSHOTS=true`
 > nur bei beabsichtigtem Diff auf einer GPU-Maschine).
 
 ## UI-Konventionen (F-100)
 
-Die Desktop-GUI folgt verbindlich den UI-Konventionen von **Lightroom Desktop**
-als Referenz. Diese Vorgaben beschreiben die Bedien- und Anordnungssemantik,
+Die Desktop-GUI folgt verbindlich den UI-Konventionen von **Lightroom Classic**
+als Referenz (User-Vorgabe 2026-09-17: kein reines 1:1, sondern leicht
+modernerer Feinschliff — jeder Lightroom-Nutzer fühlt sich sofort zu Hause;
+Details: `platform/lightroom-ux-parity.md`). Diese Vorgaben beschreiben die Bedien- und Anordnungssemantik,
 nicht eine pixelgenaue Kopie der Adobe-Oberfläche. Abweichungen von den
 folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 
