@@ -464,6 +464,25 @@ pub enum Str {
     GotoLibraryImport,
     GotoExport,
 
+    // F-100 Klickbarkeit (GUI-CLICK-ALL-17, User-Vorgabe 2026-09-17): every
+    // keyboard-bound view/tool action also has a clickable button. The labels
+    // name the action and its shortcut so the manual test finds them; the
+    // tooltip repeats the shortcut via `ShortcutHint`.
+    ViewToolbarCrop,
+    ViewToolbarClipping,
+    ViewToolbarLightsOut,
+    ViewToolbarPanels,
+    ViewToolbarAllPanels,
+    ViewToolbarFullscreen,
+    ViewToolbarSplit,
+    ShortcutHint,
+    DuplicateCopy,
+    CopySettings,
+    PasteSettings,
+    SnapshotButton,
+    StackGroup,
+    StackUngroup,
+
     // G-09 Library parity (LRPAR-G09-LIB): Grid/Loupe/Compare/Survey views,
     // keyboard navigation, folder/catalog management with sidecar company.
     LibraryGridOn,
@@ -1179,6 +1198,20 @@ impl Str {
             Str::QuickDevelopAppliedPattern => "Quick develop applied: {}",
             Str::GotoLibraryImport => "Library (import shortcut)",
             Str::GotoExport => "Export (export shortcut)",
+            Str::ViewToolbarCrop => "Crop (R)",
+            Str::ViewToolbarClipping => "Clipping (J)",
+            Str::ViewToolbarLightsOut => "Lights Out (L)",
+            Str::ViewToolbarPanels => "Panels (Tab)",
+            Str::ViewToolbarAllPanels => "All Panels (Shift+Tab)",
+            Str::ViewToolbarFullscreen => "Fullscreen (F)",
+            Str::ViewToolbarSplit => "Split (Shift+Y)",
+            Str::ShortcutHint => "Keyboard shortcut: {}",
+            Str::DuplicateCopy => "Duplicate Copy",
+            Str::CopySettings => "Copy Settings",
+            Str::PasteSettings => "Paste Settings",
+            Str::SnapshotButton => "Snapshot",
+            Str::StackGroup => "Stack",
+            Str::StackUngroup => "Unstack",
             Str::LibraryGridOn => "Library grid (G)",
             Str::LoupeOn => "Loupe (E): single image",
             Str::FolderExistsPattern => "Folder already exists: {}",

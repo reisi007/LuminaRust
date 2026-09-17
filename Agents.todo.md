@@ -109,6 +109,8 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
+| 1.0 | GUI-ROUTING-N6 | alle G | Routing-Fallback-Fix |
+| 1.0 | GUI-INSTRDBG-17b | alle G | Rest-Instrumentierung |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
@@ -212,6 +214,8 @@ Vor F-103-N6 empfohlen: kleine Stabilitäts-Fixes aus den Review-Befunden
 (z. B. REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1),
 damit der manuelle Test aussagekräftig ist.
 
+- [ ] **[PRIO: mittel] GUI-INSTRDBG-17b (Release: 1.0)** Restliche GUI-Sektions-/Metadaten-/Geometrie-Aktionen instrumentieren (Folge zu GUI-INSTRDBG-17): jenseits der 34 `GuiAction`s fehlen u. a. Geometrie- und Metadaten-Buttons sowie `toggle_compare_mode` (`C`/`N`). Je user-sichtbarer Schaltfläche eine `GuiAction`-Variante + `instrument_gui_action!` nach bestehendem Muster (Debug-only, `GuiActionTimer`). Abnahme: je Aktion genau eine Debug-Logzeile, Release-Clippy/Tests grün, Format-/Namenstests decken die neuen Varianten.
+- [ ] **[PRIO: hoch] GUI-ROUTING-N6 (Release: 1.0)** Routing-Fallback aus F-103-N6-Runde 1 (2026-09-17): Badge erschien im manuellen Test (Gründe nicht notiert); klären welche Rezeptteile die GPU-Route verweigerten (Paritäts-Fail mit Fix-Pflicht vs. dokumentierte Ausnahme), reproduzieren + fixen. Abnahme: betroffene Rezepte ohne Badge (oder dokumentierte Ausnahme), Test deckt den Fall ab.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04b (→ G-10, Release: 1.0)** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04c (→ G-10, Release: 1.0)** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).
 

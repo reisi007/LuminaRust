@@ -763,6 +763,247 @@ pub fn softproof_for_key(key: egui::Key, ctrl_or_command: bool, alt: bool, shift
     matches!(key, egui::Key::S) && !ctrl_or_command && !alt && !shift
 }
 
+// ---------------------------------------------------------------------------
+// GUI-INSTRDBG-17 (User-Vorgabe 2026-09-17): debug instrumentation of GUI
+// actions. Every user-level command emits exactly one line in debug builds:
+//
+//     action=<name> duration_ms=<n> gpu_route=<present|cpu-fallback|n/a>
+//
+// The line is emitted by the RAII guard [`GuiActionTimer`] when the outermost
+// instrumented action scope ends. Nested instrumentation (an action calling
+// another instrumented command) is suppressed, so exactly one line per
+// user-visible action is logged — never one per internal sub-step. In release
+// builds the timer, the log and (via dead-code elimination) the guard are
+// compiled out: no logging, no timers, no behaviour difference.
+// ---------------------------------------------------------------------------
+
+/// GPU-route label: the frame used the VRAM present path (a GPU context is
+/// bound and no route fallback is recorded).
+pub const GPU_ROUTE_PRESENT: &str = "present";
+/// GPU-route label: a GPU context is bound but the preview was routed to the
+/// CPU (the visible `gpu_route_fallback` state).
+pub const GPU_ROUTE_CPU_FALLBACK: &str = "cpu-fallback";
+/// GPU-route label: no GPU context is bound (or the `gpu` feature is off).
+pub const GPU_ROUTE_NA: &str = "n/a";
+
+/// Central action-name table for the debug instrumentation (GUI-INSTRDBG-17).
+///
+/// Action names are snake_case and live here exactly once, so the button/
+/// shortcut call sites carry no free-form literals. The table is the single
+/// source of truth for both the log line and the headless format test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuiAction {
+    ToggleBeforeAfter,
+    ToggleSplitView,
+    ToggleCropMode,
+    ToggleClipping,
+    ToggleSoftproof,
+    ToggleOriginalHistogram,
+    ToggleLightsOut,
+    TogglePanelsHidden,
+    ToggleAllPanelsHidden,
+    ToggleFullscreen,
+    ToggleFilterBar,
+    ToggleBlackWhite,
+    ToggleStackGroup,
+    CreateSnapshot,
+    DuplicateCopy,
+    CopySettings,
+    PasteSettings,
+    SetRating,
+    SetFlag,
+    SetColorLabel,
+    SetMaskTool,
+    SetSpotTool,
+    SetTreatment,
+    SetModule,
+    SetLibraryView,
+    SetZoomMode,
+    RegenerateStale,
+    MatchExposure,
+    AutoTone,
+    SaveRecipe,
+    Reset,
+    Render,
+    Export,
+    StartMerge,
+}
+
+impl GuiAction {
+    /// snake_case action name for the debug log line (GUI-INSTRDBG-17).
+    pub const fn name(self) -> &'static str {
+        match self {
+            GuiAction::ToggleBeforeAfter => "toggle_before_after",
+            GuiAction::ToggleSplitView => "toggle_split_view",
+            GuiAction::ToggleCropMode => "toggle_crop_mode",
+            GuiAction::ToggleClipping => "toggle_clipping",
+            GuiAction::ToggleSoftproof => "toggle_softproof",
+            GuiAction::ToggleOriginalHistogram => "toggle_original_histogram",
+            GuiAction::ToggleLightsOut => "toggle_lights_out",
+            GuiAction::TogglePanelsHidden => "toggle_panels_hidden",
+            GuiAction::ToggleAllPanelsHidden => "toggle_all_panels_hidden",
+            GuiAction::ToggleFullscreen => "toggle_fullscreen",
+            GuiAction::ToggleFilterBar => "toggle_filter_bar",
+            GuiAction::ToggleBlackWhite => "toggle_black_white",
+            GuiAction::ToggleStackGroup => "toggle_stack_group",
+            GuiAction::CreateSnapshot => "create_snapshot",
+            GuiAction::DuplicateCopy => "duplicate_copy",
+            GuiAction::CopySettings => "copy_settings",
+            GuiAction::PasteSettings => "paste_settings",
+            GuiAction::SetRating => "set_rating",
+            GuiAction::SetFlag => "set_flag",
+            GuiAction::SetColorLabel => "set_color_label",
+            GuiAction::SetMaskTool => "set_mask_tool",
+            GuiAction::SetSpotTool => "set_spot_tool",
+            GuiAction::SetTreatment => "set_treatment",
+            GuiAction::SetModule => "set_module",
+            GuiAction::SetLibraryView => "set_library_view",
+            GuiAction::SetZoomMode => "set_zoom_mode",
+            GuiAction::RegenerateStale => "regenerate_stale",
+            GuiAction::MatchExposure => "match_total_exposure",
+            GuiAction::AutoTone => "auto_tone",
+            GuiAction::SaveRecipe => "save_recipe",
+            GuiAction::Reset => "reset",
+            GuiAction::Render => "render",
+            GuiAction::Export => "export",
+            GuiAction::StartMerge => "start_merge",
+        }
+    }
+}
+
+/// Every instrumented GUI action, in the order of [`GuiAction`]. Used by the
+/// debug instrumentation test to pin the name table (uniqueness, snake_case).
+pub const ALL_GUI_ACTIONS: &[GuiAction] = &[
+    GuiAction::ToggleBeforeAfter,
+    GuiAction::ToggleSplitView,
+    GuiAction::ToggleCropMode,
+    GuiAction::ToggleClipping,
+    GuiAction::ToggleSoftproof,
+    GuiAction::ToggleOriginalHistogram,
+    GuiAction::ToggleLightsOut,
+    GuiAction::TogglePanelsHidden,
+    GuiAction::ToggleAllPanelsHidden,
+    GuiAction::ToggleFullscreen,
+    GuiAction::ToggleFilterBar,
+    GuiAction::ToggleBlackWhite,
+    GuiAction::ToggleStackGroup,
+    GuiAction::CreateSnapshot,
+    GuiAction::DuplicateCopy,
+    GuiAction::CopySettings,
+    GuiAction::PasteSettings,
+    GuiAction::SetRating,
+    GuiAction::SetFlag,
+    GuiAction::SetColorLabel,
+    GuiAction::SetMaskTool,
+    GuiAction::SetSpotTool,
+    GuiAction::SetTreatment,
+    GuiAction::SetModule,
+    GuiAction::SetLibraryView,
+    GuiAction::SetZoomMode,
+    GuiAction::RegenerateStale,
+    GuiAction::MatchExposure,
+    GuiAction::AutoTone,
+    GuiAction::SaveRecipe,
+    GuiAction::Reset,
+    GuiAction::Render,
+    GuiAction::Export,
+    GuiAction::StartMerge,
+];
+
+/// Formats the single debug action line (GUI-INSTRDBG-17). Pure, so the
+/// headless test can pin the exact format without a logger.
+#[cfg(debug_assertions)]
+pub fn gui_action_log_line(action: GuiAction, duration_ms: u128, gpu_route: &str) -> String {
+    format!(
+        "action={} duration_ms={duration_ms} gpu_route={gpu_route}",
+        action.name()
+    )
+}
+
+/// Debug-only sink for the instrumented action line: the `debug!` log plus,
+/// under `cfg(test)`, a thread-local capture the headless tests drain to prove
+/// exactly one line per action.
+#[cfg(debug_assertions)]
+fn emit_gui_action_log(line: String) {
+    log::debug!("{line}");
+    #[cfg(test)]
+    GUI_ACTION_LOG.with(|log| log.borrow_mut().push(line));
+}
+
+// Thread-local capture of the debug action lines for headless tests.
+#[cfg(all(debug_assertions, test))]
+thread_local! {
+    static GUI_ACTION_LOG: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drains and returns the captured debug action lines of the current test
+/// thread (headless instrumentation test helper).
+#[cfg(all(debug_assertions, test))]
+fn take_gui_action_log() -> Vec<String> {
+    GUI_ACTION_LOG.with(|log| std::mem::take(&mut *log.borrow_mut()))
+}
+
+// Outermost-action depth guard: nested instrumented commands are part of the
+// enclosing action and must not log their own line (GUI-INSTRDBG-17).
+#[cfg(debug_assertions)]
+thread_local! {
+    static GUI_ACTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII timer for one instrumented GUI action (GUI-INSTRDBG-17). Construction
+/// marks the action active on the current thread; `Drop` emits exactly one
+/// line for the outermost action and releases the depth. Debug builds only.
+#[cfg(debug_assertions)]
+struct GuiActionTimer {
+    action: GuiAction,
+    start: std::time::Instant,
+    gpu_route: &'static str,
+    outermost: bool,
+}
+
+#[cfg(debug_assertions)]
+impl GuiActionTimer {
+    fn new(action: GuiAction, gpu_route: &'static str) -> Self {
+        let outermost = GUI_ACTION_DEPTH.with(|depth| {
+            let was = depth.get();
+            depth.set(was + 1);
+            was == 0
+        });
+        Self {
+            action,
+            start: std::time::Instant::now(),
+            gpu_route,
+            outermost,
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for GuiActionTimer {
+    fn drop(&mut self) {
+        GUI_ACTION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        if self.outermost {
+            emit_gui_action_log(gui_action_log_line(
+                self.action,
+                self.start.elapsed().as_millis(),
+                self.gpu_route,
+            ));
+        }
+    }
+}
+
+/// GUI-INSTRDBG-17: opens the debug action timer for `action` in the current
+/// scope using the frame's GPU route. Expands to nothing in release builds
+/// (no timer, no log, no binding), so the instrumented call sites are identical
+/// in both profiles without per-button copy-paste.
+macro_rules! instrument_gui_action {
+    ($app:expr, $action:expr) => {
+        #[cfg(debug_assertions)]
+        let _gui_action_timer = $app.begin_gui_action($action);
+    };
+}
+
 /// Simple Library filter match (Welle 3, LR-13 light) over metadata the
 /// directory scan already holds — no index, no extra IO. An empty query
 /// matches everything. Tokens (whitespace-separated) combine with AND; each
@@ -2689,6 +2930,7 @@ impl LuminaApp {
     /// headless snapshot tests (F-103-N9) to render a specific module; this is a
     /// pure state assignment with no recipe/sidecar side effects.
     pub fn set_module(&mut self, module: Module) {
+        instrument_gui_action!(self, GuiAction::SetModule);
         trace!("GUI interaction: set_module {:?}", module);
         self.active_module = module;
     }
@@ -3771,6 +4013,7 @@ impl LuminaApp {
     /// (LR-01). Persists through [`Self::save_sidecar`] so the value survives
     /// restarts; values `> 5` are rejected loudly, never clamped.
     pub fn set_rating(&mut self, rating: u8) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetRating);
         if rating > 5 {
             return Err(GuiError::Io(Str::InvalidRating.t().to_string()));
         }
@@ -3784,6 +4027,7 @@ impl LuminaApp {
     /// Set the pick flag of the active virtual copy (LR-01). Persists through
     /// [`Self::save_sidecar`] so the value survives restarts.
     pub fn set_flag(&mut self, flag: Flag) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetFlag);
         self.ensure_document_loaded()?;
         self.active_copy_mut()?.flag = flag;
         self.save_sidecar();
@@ -3811,6 +4055,7 @@ impl LuminaApp {
     /// [`Self::save_sidecar`] so the value survives restarts; values `> 4`
     /// are rejected loudly, never clamped.
     pub fn set_color_label(&mut self, label: u8) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetColorLabel);
         if label > 4 {
             return Err(GuiError::Io(Str::InvalidColorLabel.t().to_string()));
         }
@@ -3827,10 +4072,11 @@ impl LuminaApp {
     /// `Cmd/Ctrl+Shift+C`). Session-only — never persisted. Fails loudly
     /// when no image is loaded so an empty copy can never silently succeed.
     pub fn copy_settings(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::CopySettings);
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         }
-        trace!("GUI interaction: copy_settings");
+        info!("GUI interaction: copy_settings");
         self.settings_clipboard = Some(self.recipe.clone());
         self.status = Str::SettingsCopied.t().into();
         Ok(())
@@ -3848,6 +4094,7 @@ impl LuminaApp {
     /// result. Fails loudly on an empty clipboard or without a loaded image —
     /// never a silent no-op.
     pub fn paste_settings(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::PasteSettings);
         let Some(snapshot) = self.settings_clipboard.clone() else {
             return Err(GuiError::Io(Str::ClipboardEmpty.t().to_string()));
         };
@@ -3855,7 +4102,7 @@ impl LuminaApp {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         }
         self.ensure_document_loaded()?;
-        trace!("GUI interaction: paste_settings");
+        info!("GUI interaction: paste_settings");
         self.recipe = snapshot;
         self.mark_dirty();
         self.save_sidecar();
@@ -3897,6 +4144,7 @@ impl LuminaApp {
     /// [`lumina_sidecar::EditRecipe::apply_treatment`] path (same as
     /// `lumina develop --treatment` and the Treatment selector).
     pub fn toggle_black_white(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::ToggleBlackWhite);
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         }
@@ -3939,8 +4187,9 @@ impl LuminaApp {
     /// fractions computed from the displayed pixels (see
     /// [`clip_fractions`]). Never mutates the recipe.
     pub fn toggle_clipping_overlay(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleClipping);
         self.clipping_overlay = !self.clipping_overlay;
-        trace!(
+        info!(
             "GUI interaction: toggle_clipping_overlay -> {}",
             self.clipping_overlay
         );
@@ -3975,6 +4224,7 @@ impl LuminaApp {
     /// mutates the recipe or the sidecar. This reserves the `S` binding for
     /// LRPAR-G10-VIEWER (full print/gamut simulation is G-10 follow-up).
     pub fn toggle_softproof_preview(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleSoftproof);
         self.softproof_preview = !self.softproof_preview;
         info!(
             "GUI interaction: toggle_softproof_preview -> {}",
@@ -3993,11 +4243,40 @@ impl LuminaApp {
         self.softproof_preview
     }
 
+    /// GUI-INSTRDBG-17: the GPU route of the last painted frame for the debug
+    /// action log. `present` when a GPU context is bound and the VRAM present
+    /// path was used, `cpu-fallback` when the bound context routed the preview
+    /// to the CPU, `n/a` when no context exists (or the `gpu` feature is off).
+    /// Diagnostic only; never consulted for routing.
+    #[cfg(debug_assertions)]
+    fn gpu_route_label(&self) -> &'static str {
+        #[cfg(feature = "gpu")]
+        {
+            if self.gpu.is_some() {
+                return if self.gpu_route_fallback.is_some() {
+                    GPU_ROUTE_CPU_FALLBACK
+                } else {
+                    GPU_ROUTE_PRESENT
+                };
+            }
+        }
+        GPU_ROUTE_NA
+    }
+
+    /// GUI-INSTRDBG-17: starts the debug action timer for `action` (see the
+    /// [`GuiActionTimer`] RAII guard). Debug builds only; release expands the
+    /// `instrument_gui_action!` call site to nothing.
+    #[cfg(debug_assertions)]
+    fn begin_gui_action(&self, action: GuiAction) -> GuiActionTimer {
+        GuiActionTimer::new(action, self.gpu_route_label())
+    }
+
     /// Toggle the G-10 "Original Photo" histogram compare (histogram-panel
     /// switch). Display-only session state: shows the unedited
     /// Original-Decode measurement instead of the edited render, never
     /// mutates the recipe or the sidecar.
     pub fn toggle_original_histogram(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleOriginalHistogram);
         self.show_original_histogram = !self.show_original_histogram;
         info!(
             "GUI interaction: toggle_original_histogram -> {}",
@@ -4067,6 +4346,7 @@ impl LuminaApp {
     /// save/render path (history, `preview_generation`-bump, `info!`-log).
     /// A no-change call succeeds without saving.
     pub fn set_treatment(&mut self, treatment: &str) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetTreatment);
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         }
@@ -4505,8 +4785,9 @@ impl LuminaApp {
     /// and the filmstrip; header, module bar and preview stay so status and
     /// errors remain visible. Never mutates the recipe.
     pub fn toggle_lights_out(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleLightsOut);
         self.lights_out = !self.lights_out;
-        trace!("GUI interaction: toggle_lights_out -> {}", self.lights_out);
+        info!("GUI interaction: toggle_lights_out -> {}", self.lights_out);
         self.status = if self.lights_out {
             Str::LightsOutOn.t().into()
         } else {
@@ -4518,8 +4799,9 @@ impl LuminaApp {
     /// left/right panels; the filmstrip stays (unlike `L` lights-out).
     /// Never mutates the recipe.
     pub fn toggle_panels_hidden(&mut self) {
+        instrument_gui_action!(self, GuiAction::TogglePanelsHidden);
         self.panels_hidden = !self.panels_hidden;
-        trace!(
+        info!(
             "GUI interaction: toggle_panels_hidden -> {}",
             self.panels_hidden
         );
@@ -4535,6 +4817,7 @@ impl LuminaApp {
     /// preview stay so status and errors remain visible. Never mutates the
     /// recipe or the sidecar (session-only like `Tab`).
     pub fn toggle_all_panels_hidden(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleAllPanelsHidden);
         self.all_panels_hidden = !self.all_panels_hidden;
         log::info!(
             "GUI interaction: toggle_all_panels_hidden -> {}",
@@ -4763,6 +5046,7 @@ impl LuminaApp {
     /// the preview header advertises the mode; edits stay in the Geometry
     /// Crop controls. Never mutates the recipe.
     pub fn toggle_crop_mode(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleCropMode);
         self.crop_mode = !self.crop_mode;
         info!("GUI interaction: toggle_crop_mode -> {}", self.crop_mode);
         self.status = if self.crop_mode {
@@ -4776,8 +5060,9 @@ impl LuminaApp {
     /// Display-only: shows/hides the text filter + Quick Develop sliders in
     /// the Library grid. Never mutates the recipe.
     pub fn toggle_filter_bar(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleFilterBar);
         self.filter_bar_visible = !self.filter_bar_visible;
-        trace!(
+        info!(
             "GUI interaction: toggle_filter_bar -> {}",
             self.filter_bar_visible
         );
@@ -4852,6 +5137,7 @@ impl LuminaApp {
     /// `Survey` and `Grid` and `Loupe` all live in the Library module, so
     /// they switch `active_module` there. Never mutates the recipe.
     pub fn set_library_view(&mut self, view: LibraryView) {
+        instrument_gui_action!(self, GuiAction::SetLibraryView);
         trace!("GUI interaction: set_library_view {:?}", view);
         self.library_view = view;
         match view {
@@ -5218,11 +5504,12 @@ impl LuminaApp {
     /// side-by-side split render is documented follow-up work, see
     /// `feature/platform/cli-gui-wasm.md`). Never mutates the recipe.
     pub fn toggle_split_view(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleSplitView);
         self.before_after_split = !self.before_after_split;
         if self.before_after_split {
             self.before_after = true;
         }
-        trace!(
+        info!(
             "GUI interaction: toggle_split_view -> {}",
             self.before_after_split
         );
@@ -5238,8 +5525,9 @@ impl LuminaApp {
     /// the zoom on Fit when enabling, so the previous `F`-zoom-to-fit
     /// behaviour is preserved on entry. Never mutates the recipe.
     pub fn toggle_fullscreen(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleFullscreen);
         self.fullscreen = !self.fullscreen;
-        trace!("GUI interaction: toggle_fullscreen -> {}", self.fullscreen);
+        info!("GUI interaction: toggle_fullscreen -> {}", self.fullscreen);
         if self.fullscreen {
             self.set_zoom_mode(ZoomMode::Fit);
         }
@@ -5324,11 +5612,13 @@ impl LuminaApp {
     /// document's copies) into the copy's `extras["stack_group"]`, the second
     /// press removes it again. Persists through [`Self::save_sidecar`].
     pub fn toggle_stack_group(&mut self) -> Result<Option<String>, GuiError> {
+        instrument_gui_action!(self, GuiAction::ToggleStackGroup);
         self.ensure_document_loaded()?;
         if stack_id_of(&self.active_copy_mut()?.extras).is_some() {
             self.active_copy_mut()?.extras.remove("stack_group");
             self.save_sidecar();
             self.status = Str::StackUngrouped.t().into();
+            info!("GUI interaction: toggle_stack_group -> ungrouped");
             return Ok(None);
         }
         let mut counter = 0usize;
@@ -5366,6 +5656,7 @@ impl LuminaApp {
             .insert("stack_group".into(), Value::String(new_id.clone()));
         self.save_sidecar();
         self.status = Str::StackGroupedPattern.format_arg(&new_id);
+        info!("GUI interaction: toggle_stack_group -> {new_id}");
         Ok(Some(new_id))
     }
 
@@ -6597,12 +6888,23 @@ impl LuminaApp {
             .unwrap_or_default()
     }
 
+    /// GUI-CLICK-ALL-17 + GUI-INSTRDBG-17: the shared auto-named snapshot
+    /// action behind the `Cmd/Ctrl+Alt+S` shortcut and the History-section
+    /// Snapshot button. Single path, so button and keyboard cannot diverge.
+    fn create_snapshot_auto(&mut self) {
+        let name = Str::SnapshotNamePattern.format_arg(&(self.snapshots().len() + 1).to_string());
+        if let Err(error) = self.create_snapshot(name).map(|_| ()) {
+            self.show_error(error);
+        }
+    }
+
     /// Freeze the session recipe as a named snapshot (`Cmd/Ctrl+Alt+S`,
     /// Welle 3, LR-12 light). Snapshots are history entries with an
     /// `extras["snapshot"]` marker — unlike plain history they are named and
     /// meant to be kept. Persists through [`Self::save_sidecar`]; an empty
     /// name fails loudly, never silently.
     pub fn create_snapshot(&mut self, name: impl Into<String>) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::CreateSnapshot);
         let name = name.into();
         if name.trim().is_empty() {
             return Err(GuiError::Io(Str::InvalidSnapshotName.t().to_string()));
@@ -6638,6 +6940,7 @@ impl LuminaApp {
         // `save_sidecar` overwrites the status ("Sidecar saved"); restore the
         // snapshot message so the freeze stays visible.
         self.status = Str::SnapshotCreatedPattern.format_arg(&name);
+        info!("GUI interaction: create_snapshot -> {new_id} ({name})");
         Ok(new_id)
     }
 
@@ -6717,6 +7020,7 @@ impl LuminaApp {
     /// last saved one; the new copy is then selected (Lightroom behaviour).
     /// Fails loudly when no image/document is loaded.
     pub fn duplicate_active_copy(&mut self) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::DuplicateCopy);
         if self.original.is_none() {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         }
@@ -6759,6 +7063,7 @@ impl LuminaApp {
         self.save_sidecar();
         self.select_virtual_copy(&new_id)?;
         self.status = Str::VirtualCopyDuplicatedPattern.format_arg(&new_id);
+        info!("GUI interaction: duplicate_active_copy -> {new_id}");
         Ok(new_id)
     }
 
@@ -7627,6 +7932,7 @@ impl LuminaApp {
     /// It is only reachable from the explicit button — never implicit. Returns
     /// the module names that were regenerated (empty when nothing was stale).
     pub fn regenerate_stale(&mut self) -> Result<Vec<&'static str>, GuiError> {
+        instrument_gui_action!(self, GuiAction::RegenerateStale);
         let mut regenerated: Vec<&'static str> = Vec::new();
         // Module `masks`: every non-`Valid` source mask is stale or missing.
         // Range masks are deterministic and always `Valid`; they are skipped
@@ -7734,6 +8040,7 @@ impl LuminaApp {
     /// [`Self::geometry_blocks_source_mapping`]. No silent fallback into
     /// transformed-wrong marks.
     pub fn set_mask_tool(&mut self, tool: MaskTool) {
+        instrument_gui_action!(self, GuiAction::SetMaskTool);
         if tool != MaskTool::None && self.geometry_blocks_source_mapping() {
             warn!("mask tool {tool:?} refused while recipe geometry is active");
             self.mask_tool = MaskTool::None;
@@ -7794,6 +8101,7 @@ impl LuminaApp {
     }
 
     pub fn set_spot_tool(&mut self, tool: SpotTool) {
+        instrument_gui_action!(self, GuiAction::SetSpotTool);
         self.spot_tool = tool;
         if tool != SpotTool::None {
             self.mask_tool = MaskTool::None;
@@ -11452,6 +11760,7 @@ impl LuminaApp {
     }
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::AutoTone);
         if self.original.is_none() {
             return Ok(());
         }
@@ -11501,6 +11810,7 @@ impl LuminaApp {
     }
 
     pub fn match_total_exposure(&mut self, target: f64) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::MatchExposure);
         // REVIEW-GUI-N5: never measure a draft. If the preview is currently a
         // low-resolution drag draft, commit the pending full-quality render
         // first so the measurement domain is the final visible render.
@@ -11547,6 +11857,7 @@ impl LuminaApp {
     }
 
     pub fn reset(&mut self) {
+        instrument_gui_action!(self, GuiAction::Reset);
         self.recipe = EditRecipe::default();
         // GUI-SIDECAR-READ-1: the recipe was replaced wholesale — a commit
         // armed by a pre-reset edit is stale (its `<key>=<value> saved` log
@@ -11896,6 +12207,7 @@ impl LuminaApp {
     /// under Fit — `mark_dirty` arms its replacement, and `draw_preview`
     /// neutralizes any stale pan in non-`Custom` modes until it lands).
     pub fn set_zoom_mode(&mut self, mode: ZoomMode) {
+        instrument_gui_action!(self, GuiAction::SetZoomMode);
         trace!("GUI interaction: set_zoom_mode {:?}", mode);
         self.zoom_mode = mode;
         self.preview_pan = egui::Vec2::ZERO;
@@ -13809,6 +14121,26 @@ impl LuminaApp {
         }
     }
 
+    /// GUI-CLICK-ALL-17 + GUI-INSTRDBG-17: the Save Recipe footer button's
+    /// action. Instrumented separately from the shared [`Self::save_sidecar`]
+    /// helper because slider-debounce commits call that helper too, and a
+    /// slider commit is not a button action.
+    fn save_recipe_action(&mut self) {
+        instrument_gui_action!(self, GuiAction::SaveRecipe);
+        self.save_sidecar();
+    }
+
+    /// GUI-CLICK-ALL-17 + GUI-INSTRDBG-17: the Render/Apply footer button's
+    /// action. Instrumented separately from [`Self::render`] because many
+    /// section actions call `render` as a sub-step (they are instrumented
+    /// themselves; nested suppression keeps exactly one line per action).
+    fn render_action(&mut self) {
+        instrument_gui_action!(self, GuiAction::Render);
+        if let Err(error) = self.render() {
+            self.show_error(error);
+        }
+    }
+
     /// REVIEW-GUI-SAVEMSG-1: the "Sidecar saved" status is set **only** on
     /// success; a failed write keeps the error visible instead of being
     /// overwritten by a success message.
@@ -13986,6 +14318,7 @@ impl LuminaApp {
     /// recipe/sidecar is left untouched by the export itself (the user saves
     /// the recipe explicitly via "Save Recipe / Sidecar").
     pub fn export_to(&mut self, output: PathBuf) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::Export);
         // G-06: read the source dimensions BEFORE borrowing `original` —
         // the Lensfun cache refresh below needs `&mut`.
         let (export_w, export_h) = self
@@ -15233,6 +15566,7 @@ impl LuminaApp {
 
     /// Toggle Before/After. Deliberately does not touch the recipe.
     pub fn toggle_before_after(&mut self) {
+        instrument_gui_action!(self, GuiAction::ToggleBeforeAfter);
         self.before_after = !self.before_after;
         trace!(
             "GUI interaction: toggle_before_after -> {}",
@@ -18354,6 +18688,16 @@ impl LuminaApp {
             {
                 self.library_thumb_size = size.round();
             }
+            // F-100 Klickbarkeit (GUI-CLICK-ALL-17): the `\` filter drawer had
+            // no clickable access; this button toggles the same path.
+            ui.separator();
+            if ui
+                .selectable_label(self.filter_bar_visible, Str::FilterBar.t())
+                .on_hover_text(Str::ShortcutHint.format_arg("\\"))
+                .clicked()
+            {
+                self.toggle_filter_bar();
+            }
         });
         // G-09 + FACE-20-S5: explicit Library-view selector (Grid / Loupe /
         // Compare / Survey / People). The keyboard shortcuts stay the primary
@@ -18937,6 +19281,61 @@ impl LuminaApp {
     /// the session recipe (non-destructive until Save Recipe / Sidecar).
     fn draw_history_section(&mut self, ui: &mut egui::Ui) {
         ui.collapsing(Str::History.t(), |ui| {
+            // F-100 Klickbarkeit (GUI-CLICK-ALL-17): the copy/history actions
+            // that used to be keyboard-only get clickable buttons here. Every
+            // button routes through the same method as its shortcut.
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(Str::DuplicateCopy.t())
+                    .on_hover_text(Str::ShortcutHint.format_arg("Cmd/Ctrl+'"))
+                    .clicked()
+                {
+                    if let Err(error) = self.duplicate_active_copy() {
+                        self.show_error(error);
+                    }
+                }
+                if ui
+                    .button(Str::CopySettings.t())
+                    .on_hover_text(Str::ShortcutHint.format_arg("Cmd/Ctrl+Shift+C"))
+                    .clicked()
+                {
+                    if let Err(error) = self.copy_settings() {
+                        self.show_error(error);
+                    }
+                }
+                if ui
+                    .button(Str::PasteSettings.t())
+                    .on_hover_text(Str::ShortcutHint.format_arg("Cmd/Ctrl+Shift+V"))
+                    .clicked()
+                {
+                    if let Err(error) = self.paste_settings() {
+                        self.show_error(error);
+                    }
+                }
+                if ui
+                    .button(Str::SnapshotButton.t())
+                    .on_hover_text(Str::ShortcutHint.format_arg("Cmd/Ctrl+Alt+S"))
+                    .clicked()
+                {
+                    self.create_snapshot_auto();
+                }
+                let stacked = self.stack_group_id().is_some();
+                let stack_label = if stacked {
+                    Str::StackUngroup
+                } else {
+                    Str::StackGroup
+                };
+                if ui
+                    .selectable_label(stacked, stack_label.t())
+                    .on_hover_text(Str::ShortcutHint.format_arg("Cmd/Ctrl+G"))
+                    .clicked()
+                {
+                    if let Err(error) = self.toggle_stack_group() {
+                        self.show_error(error);
+                    }
+                }
+            });
+            ui.separator();
             let Some(document) = self.document.clone() else {
                 ui.label(Str::NoSidecarLoaded.t());
                 return;
@@ -19086,16 +19485,14 @@ impl LuminaApp {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(2.0);
             if ui.button(Str::SaveRecipe.t()).clicked() {
-                self.save_sidecar();
+                self.save_recipe_action();
             }
             ui.horizontal(|ui| {
                 if ui.button(Str::Reset.t()).clicked() {
                     self.reset();
                 }
                 if ui.button(Str::RenderApply.t()).clicked() {
-                    if let Err(error) = self.render() {
-                        self.show_error(error);
-                    }
+                    self.render_action();
                 }
             });
             if ui.button(Str::MatchExposure.t()).clicked() {
@@ -19527,6 +19924,9 @@ impl LuminaApp {
             ui.separator();
             self.zoom_toolbar(ui);
         });
+        // F-100 Klickbarkeit (GUI-CLICK-ALL-17): the view toggles that used to
+        // be keyboard-only get a clickable button row under the zoom toolbar.
+        self.draw_view_toolbar(ui);
         self.update_texture(ctx);
         self.draw_preview(ui);
         // UX-SLICE-1 (UXG-07): the render hash moved to the app status line
@@ -19591,6 +19991,93 @@ impl LuminaApp {
             )
             .on_hover_text(Str::CpuFallbackTooltip.t().to_string());
         }
+    }
+
+    /// Top module bar (Library / Develop / Export) plus the Before/After
+    /// toggle, extracted from the app layout so the headless F-100 shortcut →
+    /// button audit can paint it without an `eframe::Frame`. The module labels
+    /// advertise their Lightroom shortcuts (`G`, `D`).
+    fn draw_module_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for (module, label) in [
+                (Module::Library, Str::LibraryShortcut.format_arg("G")),
+                (Module::Develop, Str::DevelopShortcut.format_arg("D")),
+                (Module::Export, Str::Export.t().to_string()),
+            ] {
+                if ui
+                    .selectable_label(self.active_module == module, label)
+                    .clicked()
+                {
+                    self.set_module(module);
+                }
+            }
+            ui.separator();
+            if ui.button(Str::BeforeAfter.t()).clicked() {
+                self.toggle_before_after();
+            }
+        });
+    }
+
+    /// F-100 Klickbarkeit (GUI-CLICK-ALL-17, User-Vorgabe 2026-09-17): the
+    /// preview view toolbar. Every display-only view/tool toggle that used to
+    /// be reachable only by keyboard (`PanelToggle` crop/panels, `ViewToggle`
+    /// clipping/lights-out, split, fullscreen) gets a clickable button here.
+    /// Each button routes through the same `toggle_*` path as its shortcut, so
+    /// button and keyboard can never diverge (one `info!`/status per flip) and
+    /// the audit test can pin the coverage.
+    fn draw_view_toolbar(&mut self, ui: &mut egui::Ui) {
+        let shortcut = |key: &str| Str::ShortcutHint.format_arg(key);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .selectable_label(self.crop_mode, Str::ViewToolbarCrop.t())
+                .on_hover_text(shortcut("R"))
+                .clicked()
+            {
+                self.toggle_crop_mode();
+            }
+            if ui
+                .selectable_label(self.clipping_overlay, Str::ViewToolbarClipping.t())
+                .on_hover_text(shortcut("J"))
+                .clicked()
+            {
+                self.toggle_clipping_overlay();
+            }
+            if ui
+                .selectable_label(self.before_after_split, Str::ViewToolbarSplit.t())
+                .on_hover_text(shortcut("Shift+Y"))
+                .clicked()
+            {
+                self.toggle_split_view();
+            }
+            if ui
+                .selectable_label(self.lights_out, Str::ViewToolbarLightsOut.t())
+                .on_hover_text(shortcut("L"))
+                .clicked()
+            {
+                self.toggle_lights_out();
+            }
+            if ui
+                .selectable_label(self.panels_hidden, Str::ViewToolbarPanels.t())
+                .on_hover_text(shortcut("Tab"))
+                .clicked()
+            {
+                self.toggle_panels_hidden();
+            }
+            if ui
+                .selectable_label(self.all_panels_hidden, Str::ViewToolbarAllPanels.t())
+                .on_hover_text(shortcut("Shift+Tab"))
+                .clicked()
+            {
+                self.toggle_all_panels_hidden();
+            }
+            if ui
+                .selectable_label(self.fullscreen, Str::ViewToolbarFullscreen.t())
+                .on_hover_text(shortcut("F"))
+                .clicked()
+            {
+                self.toggle_fullscreen();
+            }
+        });
     }
 
     /// Lightroom-like zoom toolbar: absolute zoom modes (re-derived each frame
@@ -20477,7 +20964,7 @@ impl eframe::App for LuminaApp {
                 } else if ctx.input(|i| i.key_pressed(egui::Key::G)) {
                     self.set_library_view(LibraryView::Grid);
                 } else {
-                    self.active_module = module;
+                    self.set_module(module);
                 }
             }
         }
@@ -20667,12 +21154,7 @@ impl eframe::App for LuminaApp {
                     && (i.modifiers.ctrl || i.modifiers.command)
                     && i.modifiers.alt
             }) {
-                let name =
-                    Str::SnapshotNamePattern.format_arg(&(self.snapshots().len() + 1).to_string());
-                match self.create_snapshot(name).map(|_| ()) {
-                    Ok(()) => {}
-                    Err(error) => self.show_error(error),
-                }
+                self.create_snapshot_auto();
             }
         }
 
@@ -20948,26 +21430,7 @@ impl eframe::App for LuminaApp {
         // The histogram lives in its own collapsible Develop-panel section
         // (GUI-HISTOGRAM-1), not in the module bar. The module
         // labels advertise their Lightroom keyboard shortcuts (`G`, `D`).
-        egui::Panel::top("modules").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (module, label) in [
-                    (Module::Library, Str::LibraryShortcut.format_arg("G")),
-                    (Module::Develop, Str::DevelopShortcut.format_arg("D")),
-                    (Module::Export, Str::Export.t().to_string()),
-                ] {
-                    if ui
-                        .selectable_label(self.active_module == module, label)
-                        .clicked()
-                    {
-                        self.active_module = module;
-                    }
-                }
-                ui.separator();
-                if ui.button(Str::BeforeAfter.t()).clicked() {
-                    self.toggle_before_after();
-                }
-            });
-        });
+        egui::Panel::top("modules").show(ui, |ui| self.draw_module_bar(ui));
 
         // Left: Lightroom-like Library folder tree. Develop/Export leave the
         // left edge to the navigator/preview working area. Hidden under `Tab`
@@ -21569,7 +22032,11 @@ mod tests {
     /// inside its clip rect (1px tolerance for rounding).
     fn assert_fully_visible(shapes: &[egui::epaint::ClippedShape], needle: &str) {
         let hits = text_shapes_for(shapes, needle);
-        assert!(!hits.is_empty(), "{needle:?} must be painted");
+        assert!(
+            !hits.is_empty(),
+            "{needle:?} must be painted; painted texts: {:?}",
+            painted_texts(shapes)
+        );
         for (rect, clip) in &hits {
             assert!(
                 clip.expand(1.0).contains_rect(*rect),
@@ -21577,6 +22044,883 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------------
+    // F-100 Klickbarkeit (GUI-CLICK-ALL-17) audit + button tests.
+    // -----------------------------------------------------------------------
+
+    /// F-100 Klickbarkeit: exhaustive mapping of every keyboard-toggle enum
+    /// variant to the `Str` label of its clickable button. No `_` arm — a new
+    /// `ViewToggle`/`PanelToggle` variant fails compilation here, so a new
+    /// keyboard toggle cannot land without its button and audit entry.
+    fn view_toggle_button_label(toggle: ViewToggle) -> Str {
+        match toggle {
+            ViewToggle::BlackWhite => Str::TreatmentBlackWhite,
+            ViewToggle::Clipping => Str::ViewToolbarClipping,
+            ViewToggle::LightsOut => Str::ViewToolbarLightsOut,
+        }
+    }
+
+    /// Exhaustive mapping of every `PanelToggle` variant to its button label
+    /// (see [`view_toggle_button_label`]).
+    fn panel_toggle_button_label(toggle: PanelToggle) -> Str {
+        match toggle {
+            PanelToggle::CropMode => Str::ViewToolbarCrop,
+            PanelToggle::PanelsHidden => Str::ViewToolbarPanels,
+        }
+    }
+
+    /// Draw only the preview area (the view-toolbar host) in a headless pass.
+    fn draw_preview_area_only(app: &mut LuminaApp, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        app.draw_preview_area(&ctx, ui);
+    }
+
+    /// Paint the preview area once (no GPU) and return the painted shapes.
+    fn preview_area_shapes(app: &mut LuminaApp) -> Vec<egui::epaint::ClippedShape> {
+        headless_shapes(app, draw_preview_area_only)
+    }
+
+    /// Tall variant for the state badges painted *after* the preview image
+    /// (below the 720px fold in the normal harness).
+    fn preview_area_badge_shapes(app: &mut LuminaApp) -> Vec<egui::epaint::ClippedShape> {
+        headless_shapes_sized(app, 2000.0, draw_preview_area_only)
+    }
+
+    /// Paint `draw` headless, locate the button painted with `label`, click it
+    /// (press + release on the text centre) and return the settled frame's
+    /// shapes. A single persistent `egui::Context` across frames is what makes
+    /// the click register (same pattern as `masking_new_button_fully_inside_panel`).
+    fn headless_click_label(
+        app: &mut LuminaApp,
+        label: &str,
+        draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        headless_click_labels(app, &[label], draw)
+    }
+
+    /// Like [`headless_click_label`], but clicks several labels in order inside
+    /// one persistent `egui::Context`: the first click can open a collapsing
+    /// section (History/Rating/Dust Removal), the next clicks its buttons. The
+    /// returned shapes are the last settled frame.
+    fn headless_click_labels(
+        app: &mut LuminaApp,
+        labels: &[&str],
+        mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 720.0));
+        let mut time = 0.0_f64;
+        let mut run = |app: &mut LuminaApp, events: Vec<egui::Event>| {
+            time += 1.0 / 60.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| draw(app, ui),
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        let mut shapes = run(app, vec![]);
+        for label in labels {
+            assert_fully_visible(&shapes, label);
+            let pos = text_shapes_for(&shapes, label)
+                .into_iter()
+                .next()
+                .expect("button label painted")
+                .0
+                .center();
+            let click = |pressed: bool| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            run(app, vec![egui::Event::PointerMoved(pos), click(true)]);
+            run(app, vec![egui::Event::PointerMoved(pos), click(false)]);
+            // 30 frames settle the collapse/expand animation (~0.5 s).
+            shapes = Vec::new();
+            for _ in 0..30 {
+                shapes = run(app, vec![]);
+            }
+        }
+        shapes
+    }
+
+    #[test]
+    fn f100_panel_and_view_toggle_labels_are_exhaustive_and_distinct() {
+        let mut labels: Vec<Str> = [
+            ViewToggle::BlackWhite,
+            ViewToggle::Clipping,
+            ViewToggle::LightsOut,
+        ]
+        .into_iter()
+        .map(view_toggle_button_label)
+        .collect();
+        labels.extend(
+            [PanelToggle::CropMode, PanelToggle::PanelsHidden]
+                .into_iter()
+                .map(panel_toggle_button_label),
+        );
+        for label in &labels {
+            assert!(!label.t().is_empty(), "button label must not be empty");
+        }
+        let mut texts: Vec<&str> = labels.iter().map(|label| label.t()).collect();
+        let count = texts.len();
+        texts.sort_unstable();
+        texts.dedup();
+        assert_eq!(
+            texts.len(),
+            count,
+            "button labels must be distinct: {labels:?}"
+        );
+        assert_eq!(
+            view_toggle_button_label(ViewToggle::BlackWhite),
+            Str::TreatmentBlackWhite
+        );
+        assert_eq!(
+            panel_toggle_button_label(PanelToggle::CropMode),
+            Str::ViewToolbarCrop
+        );
+        assert_eq!(
+            panel_toggle_button_label(PanelToggle::PanelsHidden),
+            Str::ViewToolbarPanels
+        );
+    }
+
+    /// Every display toggle that was keyboard-only must be painted as a button
+    /// in the preview view toolbar (`PanelToggle` + `ViewToggle` except the
+    /// already-buttoned B&W treatment, whose button lives in the Basic section).
+    #[test]
+    fn f100_view_toolbar_paints_every_display_toggle_button() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        let shapes = preview_area_shapes(&mut app);
+        for label in [
+            Str::ViewToolbarCrop,
+            Str::ViewToolbarClipping,
+            Str::ViewToolbarLightsOut,
+            Str::ViewToolbarPanels,
+            Str::ViewToolbarAllPanels,
+            Str::ViewToolbarFullscreen,
+            Str::ViewToolbarSplit,
+        ] {
+            assert_fully_visible(&shapes, label.t());
+        }
+        for toggle in [PanelToggle::CropMode, PanelToggle::PanelsHidden] {
+            assert_fully_visible(&shapes, panel_toggle_button_label(toggle).t());
+        }
+        for toggle in [ViewToggle::Clipping, ViewToggle::LightsOut] {
+            assert_fully_visible(&shapes, view_toggle_button_label(toggle).t());
+        }
+        // `V` B&W: button lives in the Basic section, not the preview toolbar.
+        app.set_section_open(SECTION_BASIC, true);
+        let basic = headless_shapes(&mut app, |app, ui| app.draw_basic(ui));
+        assert_fully_visible(&basic, view_toggle_button_label(ViewToggle::BlackWhite).t());
+    }
+
+    /// Whether any painted text shape's galley contains `needle` (robust to
+    /// label wrapping, unlike the exact `text_shapes_for`).
+    fn text_contains(shapes: &[egui::epaint::ClippedShape], needle: &str) -> bool {
+        shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => text.galley.text().contains(needle),
+            _ => false,
+        })
+    }
+
+    /// The known gap (F-103-N6): the crop mode was only reachable via `R`.
+    /// The new preview-toolbar button must toggle the mode and paint the badge.
+    #[test]
+    fn f100_crop_button_toggles_crop_mode_and_badge() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        let shapes =
+            headless_click_label(&mut app, Str::ViewToolbarCrop.t(), draw_preview_area_only);
+        assert!(app.crop_mode, "crop button must toggle crop mode on");
+        assert_eq!(app.status, Str::CropModeOn.t());
+        assert_fully_visible(&shapes, Str::ViewToolbarCrop.t());
+        // The state badge is painted after the preview image; use the tall
+        // harness so it is inside the visible canvas (below the 720px fold in
+        // the normal layout, exactly like the production status row).
+        let badge = preview_area_badge_shapes(&mut app);
+        assert!(
+            text_contains(&badge, Str::CropModeOn.t()),
+            "the crop-mode badge must be visible after the button click"
+        );
+        // Second click turns it off again (same path as `R`).
+        let shapes =
+            headless_click_label(&mut app, Str::ViewToolbarCrop.t(), draw_preview_area_only);
+        assert!(!app.crop_mode, "crop button must toggle crop mode off");
+        assert_eq!(app.status, Str::CropModeOff.t());
+        assert_fully_visible(&shapes, Str::ViewToolbarCrop.t());
+        let badge = preview_area_badge_shapes(&mut app);
+        assert!(
+            !text_contains(&badge, Str::CropModeOn.t()),
+            "the crop-mode badge must disappear when toggled off"
+        );
+    }
+
+    /// The lights-out button must be clickable even while the chrome it hides
+    /// is hidden (it stays visible in the central preview area) and toggles the
+    /// same state as `L`.
+    #[test]
+    fn f100_lights_out_button_toggles_and_stays_reachable() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        let shapes = headless_click_label(
+            &mut app,
+            Str::ViewToolbarLightsOut.t(),
+            draw_preview_area_only,
+        );
+        assert!(app.lights_out, "lights-out button must arm lights-out");
+        assert_fully_visible(&shapes, Str::ViewToolbarLightsOut.t());
+        let shapes = headless_click_label(
+            &mut app,
+            Str::ViewToolbarLightsOut.t(),
+            draw_preview_area_only,
+        );
+        assert!(!app.lights_out, "lights-out button must disarm again");
+        assert_fully_visible(&shapes, Str::ViewToolbarLightsOut.t());
+    }
+
+    /// The remaining keyboard-only actions get buttons: `\` filter drawer,
+    /// `Shift+Y` split, `F` fullscreen, `Shift+Tab` all-panels, and the
+    /// copy/history chords.
+    #[test]
+    fn f100_keyboard_only_actions_have_buttons() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        let preview = preview_area_shapes(&mut app);
+        for label in [
+            Str::ViewToolbarSplit,
+            Str::ViewToolbarFullscreen,
+            Str::ViewToolbarAllPanels,
+        ] {
+            assert_fully_visible(&preview, label.t());
+        }
+        // `\` filter drawer: button in the Library grid toolbar.
+        let library = headless_shapes(&mut app, |app, ui| {
+            let ctx = ui.ctx().clone();
+            app.draw_library_grid(&ctx, ui);
+        });
+        assert_fully_visible(&library, Str::FilterBar.t());
+        // Copy/history chords: buttons in the (opened) History section.
+        let history = headless_click_label(&mut app, Str::History.t(), |app, ui| {
+            app.draw_history_section(ui)
+        });
+        for label in [
+            Str::DuplicateCopy,
+            Str::CopySettings,
+            Str::PasteSettings,
+            Str::SnapshotButton,
+            Str::StackGroup,
+        ] {
+            assert_fully_visible(&history, label.t());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // F-100 Klickbarkeit (GUI-CLICK-ALL-17): per-button click/toggle tests.
+    // Paint-only is not enough (DoD §3/§5): every new button must flip its
+    // state on a real headless click, exactly like the Crop/Lights-Out anchors.
+    // -----------------------------------------------------------------------
+
+    /// Load the in-memory sample used by the display-only toolbar tests.
+    fn toolbar_app() -> LuminaApp {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app
+    }
+
+    /// Click `label` twice in the preview toolbar; assert the state flips to
+    /// `on`, then back off, with the expected status text each time.
+    fn assert_preview_button_toggles(
+        app: &mut LuminaApp,
+        label: &str,
+        on: impl Fn(&LuminaApp) -> bool,
+        on_status: &str,
+        off_status: &str,
+    ) {
+        let shapes = headless_click_label(app, label, draw_preview_area_only);
+        assert!(on(app), "{label:?} click must arm the state");
+        assert_eq!(app.status, on_status, "{label:?} on status");
+        assert_fully_visible(&shapes, label);
+        let shapes = headless_click_label(app, label, draw_preview_area_only);
+        assert!(!on(app), "{label:?} second click must disarm the state");
+        assert_eq!(app.status, off_status, "{label:?} off status");
+        assert_fully_visible(&shapes, label);
+    }
+
+    #[test]
+    fn f100_clipping_button_toggles_overlay() {
+        let mut app = toolbar_app();
+        assert_preview_button_toggles(
+            &mut app,
+            Str::ViewToolbarClipping.t(),
+            |app| app.clipping_overlay,
+            Str::ClippingOn.t(),
+            Str::ClippingOff.t(),
+        );
+    }
+
+    #[test]
+    fn f100_split_button_toggles_and_holds_before() {
+        let mut app = toolbar_app();
+        let shapes =
+            headless_click_label(&mut app, Str::ViewToolbarSplit.t(), draw_preview_area_only);
+        assert!(app.before_after_split, "split button must arm the marker");
+        assert!(app.before_after, "split keeps the Before image held");
+        assert_eq!(app.status, Str::SplitViewOn.t());
+        assert_fully_visible(&shapes, Str::ViewToolbarSplit.t());
+        let shapes =
+            headless_click_label(&mut app, Str::ViewToolbarSplit.t(), draw_preview_area_only);
+        assert!(!app.before_after_split, "split button must disarm again");
+        assert_eq!(app.status, Str::SplitViewOff.t());
+        assert_fully_visible(&shapes, Str::ViewToolbarSplit.t());
+    }
+
+    #[test]
+    fn f100_panels_button_toggles_side_panels() {
+        let mut app = toolbar_app();
+        assert_preview_button_toggles(
+            &mut app,
+            Str::ViewToolbarPanels.t(),
+            |app| app.panels_hidden,
+            Str::PanelsHiddenOn.t(),
+            Str::PanelsHiddenOff.t(),
+        );
+    }
+
+    #[test]
+    fn f100_all_panels_button_toggles_all_panels() {
+        let mut app = toolbar_app();
+        assert_preview_button_toggles(
+            &mut app,
+            Str::ViewToolbarAllPanels.t(),
+            |app| app.all_panels_hidden(),
+            Str::AllPanelsHiddenOn.t(),
+            Str::AllPanelsHiddenOff.t(),
+        );
+    }
+
+    #[test]
+    fn f100_fullscreen_button_toggles_and_settles_fit() {
+        let mut app = toolbar_app();
+        let shapes = headless_click_label(
+            &mut app,
+            Str::ViewToolbarFullscreen.t(),
+            draw_preview_area_only,
+        );
+        assert!(app.fullscreen, "fullscreen button must arm fullscreen");
+        assert_eq!(app.zoom_mode, ZoomMode::Fit);
+        assert_eq!(app.status, Str::FullscreenOn.t());
+        assert_fully_visible(&shapes, Str::ViewToolbarFullscreen.t());
+        let shapes = headless_click_label(
+            &mut app,
+            Str::ViewToolbarFullscreen.t(),
+            draw_preview_area_only,
+        );
+        assert!(!app.fullscreen, "fullscreen button must disarm again");
+        assert_eq!(app.status, Str::FullscreenOff.t());
+        assert_fully_visible(&shapes, Str::ViewToolbarFullscreen.t());
+    }
+
+    #[test]
+    fn f100_filter_button_toggles_drawer() {
+        let mut app = toolbar_app();
+        let draw_library_grid = |app: &mut LuminaApp, ui: &mut egui::Ui| {
+            let ctx = ui.ctx().clone();
+            app.draw_library_grid(&ctx, ui);
+        };
+        let shapes = headless_click_label(&mut app, Str::FilterBar.t(), draw_library_grid);
+        assert!(app.filter_bar_visible, "filter button must show the drawer");
+        assert_eq!(app.status, Str::FilterShown.t());
+        assert_fully_visible(&shapes, Str::FilterBar.t());
+        let shapes = headless_click_label(&mut app, Str::FilterBar.t(), draw_library_grid);
+        assert!(
+            !app.filter_bar_visible,
+            "filter button must hide the drawer"
+        );
+        assert_eq!(app.status, Str::FilterHidden.t());
+        assert_fully_visible(&shapes, Str::FilterBar.t());
+    }
+
+    /// A real file on disk so the persisting History buttons (duplicate,
+    /// snapshot, stack) can save their sidecar.
+    fn persistent_app() -> (tempfile::TempDir, LuminaApp) {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.ensure_document_loaded().unwrap();
+        (directory, app)
+    }
+
+    #[test]
+    fn f100_history_duplicate_copy_button_duplicates() {
+        let (_directory, mut app) = persistent_app();
+        let before = app.document.as_ref().unwrap().virtual_copies.len();
+        let shapes = headless_click_labels(
+            &mut app,
+            &[Str::History.t(), Str::DuplicateCopy.t()],
+            |app, ui| app.draw_history_section(ui),
+        );
+        let after = app.document.as_ref().unwrap().virtual_copies.len();
+        assert_eq!(
+            after,
+            before + 1,
+            "duplicate button must add a virtual copy"
+        );
+        assert_fully_visible(&shapes, Str::DuplicateCopy.t());
+    }
+
+    #[test]
+    fn f100_history_copy_and_paste_buttons_roundtrip() {
+        // Clipboard state lives in the session; both clicks run in their own
+        // headless pass, exactly like a user closing and reopening the drawer.
+        let (_directory, mut app) = persistent_app();
+        let draw_history = |app: &mut LuminaApp, ui: &mut egui::Ui| app.draw_history_section(ui);
+        app.set_adjustment("exposure", 2.0);
+        let shapes = headless_click_labels(
+            &mut app,
+            &[Str::History.t(), Str::CopySettings.t()],
+            draw_history,
+        );
+        assert!(
+            app.clipboard_has_settings(),
+            "copy button must fill the clipboard"
+        );
+        assert_fully_visible(&shapes, Str::CopySettings.t());
+        app.set_adjustment("exposure", -1.0);
+        let shapes = headless_click_labels(
+            &mut app,
+            &[Str::History.t(), Str::PasteSettings.t()],
+            draw_history,
+        );
+        assert_eq!(app.recipe().adjustments["exposure"], 2.0);
+        assert_fully_visible(&shapes, Str::PasteSettings.t());
+    }
+
+    #[test]
+    fn f100_history_snapshot_button_freezes() {
+        let (_directory, mut app) = persistent_app();
+        assert!(app.snapshots().is_empty());
+        let shapes = headless_click_labels(
+            &mut app,
+            &[Str::History.t(), Str::SnapshotButton.t()],
+            |app, ui| app.draw_history_section(ui),
+        );
+        assert_eq!(
+            app.snapshots().len(),
+            1,
+            "snapshot button must freeze history"
+        );
+        assert_fully_visible(&shapes, Str::SnapshotButton.t());
+    }
+
+    #[test]
+    fn f100_history_stack_button_toggles_group() {
+        let (_directory, mut app) = persistent_app();
+        assert_eq!(app.stack_group_id(), None);
+        let shapes = headless_click_labels(
+            &mut app,
+            &[Str::History.t(), Str::StackGroup.t()],
+            |app, ui| app.draw_history_section(ui),
+        );
+        assert!(
+            app.stack_group_id().is_some(),
+            "stack button must group the copy"
+        );
+        // The same button relabels to "Unstack" after the grouping click.
+        assert_fully_visible(&shapes, Str::StackUngroup.t());
+        // A second click on the relabelled button ungroups again. Both clicks
+        // share one context so the drawer stays open.
+        let shapes = headless_click_labels(
+            &mut app,
+            &[Str::History.t(), Str::StackUngroup.t()],
+            |app, ui| app.draw_history_section(ui),
+        );
+        assert_eq!(app.stack_group_id(), None, "unstack button must ungroup");
+        assert_fully_visible(&shapes, Str::StackGroup.t());
+    }
+
+    // -----------------------------------------------------------------------
+    // F-100 Shortcut → Button audit (GUI-CLICK-ALL-17): no shortcut without a
+    // button. The central `GuiAction` table is the shortcut registry (every
+    // user shortcut is instrumented); this match is exhaustive over the enum,
+    // so a future shortcut fails compilation until its button is mapped, and
+    // the audit then fails unless that button is actually painted.
+    // -----------------------------------------------------------------------
+
+    /// The headless draw surface that hosts an action's clickable button.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum F100Surface {
+        Preview,
+        Histogram,
+        Rating,
+        LibraryGrid,
+        History,
+        ModuleBar,
+        Develop,
+        Export,
+        Basic,
+        Masking,
+        Spot,
+        Merge,
+    }
+
+    /// Exhaustive `GuiAction` → (`surface`, `button label`). No `_` arm.
+    fn f100_action_button(action: GuiAction) -> (F100Surface, String) {
+        match action {
+            GuiAction::ToggleBeforeAfter => (F100Surface::ModuleBar, Str::BeforeAfter.t().into()),
+            GuiAction::ToggleSplitView => (F100Surface::Preview, Str::ViewToolbarSplit.t().into()),
+            GuiAction::ToggleCropMode => (F100Surface::Preview, Str::ViewToolbarCrop.t().into()),
+            GuiAction::ToggleClipping => {
+                (F100Surface::Preview, Str::ViewToolbarClipping.t().into())
+            }
+            GuiAction::ToggleSoftproof => (F100Surface::Histogram, Str::SoftproofToggle.t().into()),
+            GuiAction::ToggleOriginalHistogram => (
+                F100Surface::Histogram,
+                Str::HistogramShowOriginal.t().into(),
+            ),
+            GuiAction::ToggleLightsOut => {
+                (F100Surface::Preview, Str::ViewToolbarLightsOut.t().into())
+            }
+            GuiAction::TogglePanelsHidden => {
+                (F100Surface::Preview, Str::ViewToolbarPanels.t().into())
+            }
+            GuiAction::ToggleAllPanelsHidden => {
+                (F100Surface::Preview, Str::ViewToolbarAllPanels.t().into())
+            }
+            GuiAction::ToggleFullscreen => {
+                (F100Surface::Preview, Str::ViewToolbarFullscreen.t().into())
+            }
+            GuiAction::ToggleFilterBar => (F100Surface::LibraryGrid, Str::FilterBar.t().into()),
+            GuiAction::ToggleBlackWhite => {
+                (F100Surface::Basic, Str::TreatmentBlackWhite.t().into())
+            }
+            GuiAction::ToggleStackGroup => (F100Surface::History, Str::StackGroup.t().into()),
+            GuiAction::CreateSnapshot => (F100Surface::History, Str::SnapshotButton.t().into()),
+            GuiAction::DuplicateCopy => (F100Surface::History, Str::DuplicateCopy.t().into()),
+            GuiAction::CopySettings => (F100Surface::History, Str::CopySettings.t().into()),
+            GuiAction::PasteSettings => (F100Surface::History, Str::PasteSettings.t().into()),
+            GuiAction::SetRating => (F100Surface::Rating, "1".into()),
+            GuiAction::SetFlag => (F100Surface::Rating, flag_label(Flag::Pick).into()),
+            GuiAction::SetColorLabel => (F100Surface::Rating, format!("1 {}", color_label_name(1))),
+            GuiAction::SetMaskTool => (F100Surface::Masking, Str::MaskToolBrush.t().into()),
+            GuiAction::SetSpotTool => (F100Surface::Spot, "Heal (Q)".into()),
+            GuiAction::SetTreatment => (F100Surface::Basic, Str::TreatmentColor.t().into()),
+            GuiAction::SetModule => (F100Surface::ModuleBar, Str::DevelopShortcut.format_arg("D")),
+            GuiAction::SetLibraryView => (F100Surface::LibraryGrid, Str::LibraryGridOn.t().into()),
+            GuiAction::SetZoomMode => (F100Surface::Preview, Str::ZoomFit.t().into()),
+            GuiAction::RegenerateStale => (F100Surface::Develop, Str::RegenerateStale.t().into()),
+            GuiAction::MatchExposure => (F100Surface::Develop, Str::MatchExposure.t().into()),
+            GuiAction::AutoTone => (F100Surface::Basic, Str::Auto.t().into()),
+            GuiAction::SaveRecipe => (F100Surface::Develop, Str::SaveRecipe.t().into()),
+            GuiAction::Reset => (F100Surface::Develop, Str::Reset.t().into()),
+            GuiAction::Render => (F100Surface::Develop, Str::RenderApply.t().into()),
+            GuiAction::Export => (F100Surface::Export, Str::ExportRun.t().into()),
+            GuiAction::StartMerge => (F100Surface::Merge, Str::MergeHdr.t().into()),
+        }
+    }
+
+    /// Paint one F-100 button surface headless. `Develop` is painted before
+    /// `Basic`/`Masking` open their sections, so the footer surface cannot
+    /// gain extra section "Reset" texts.
+    fn f100_surface_shapes(
+        app: &mut LuminaApp,
+        surface: F100Surface,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        match surface {
+            F100Surface::Preview => preview_area_shapes(app),
+            F100Surface::Histogram => {
+                headless_shapes(app, |app, ui| app.draw_histogram_section(ui))
+            }
+            F100Surface::Rating => headless_click_labels(app, &[Str::Rating.t()], |app, ui| {
+                app.draw_rating_section(ui)
+            }),
+            F100Surface::LibraryGrid => headless_shapes(app, |app, ui| {
+                let ctx = ui.ctx().clone();
+                app.draw_library_grid(&ctx, ui);
+            }),
+            F100Surface::History => headless_click_labels(app, &[Str::History.t()], |app, ui| {
+                app.draw_history_section(ui)
+            }),
+            F100Surface::ModuleBar => headless_shapes(app, |app, ui| app.draw_module_bar(ui)),
+            F100Surface::Develop => {
+                headless_shapes_sized(app, 4096.0, |app, ui| app.draw_develop_panel(ui))
+            }
+            F100Surface::Export => {
+                headless_shapes_sized(app, 2000.0, |app, ui| app.draw_export_panel(ui))
+            }
+            F100Surface::Basic => {
+                app.set_section_open(SECTION_BASIC, true);
+                headless_shapes_sized(app, 4096.0, |app, ui| app.draw_basic(ui))
+            }
+            F100Surface::Masking => {
+                app.set_section_open(SECTION_MASKING, true);
+                headless_shapes_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
+            }
+            F100Surface::Spot => {
+                headless_click_labels(app, &["Dust Removal (Q)"], |app, ui| app.draw_spot_heal(ui))
+            }
+            F100Surface::Merge => {
+                headless_click_labels(app, &[Str::MergeSection.t()], |app, ui| {
+                    app.draw_merge_section(ui)
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn f100_shortcut_audit_every_action_has_a_button() {
+        let (_directory, mut app) = persistent_app();
+        // Keep the Develop footer surface before Basic/Masking open sections.
+        let order = [
+            F100Surface::Preview,
+            F100Surface::Histogram,
+            F100Surface::Rating,
+            F100Surface::LibraryGrid,
+            F100Surface::History,
+            F100Surface::ModuleBar,
+            F100Surface::Develop,
+            F100Surface::Export,
+            F100Surface::Basic,
+            F100Surface::Masking,
+            F100Surface::Spot,
+            F100Surface::Merge,
+        ];
+        for surface in order {
+            let shapes = f100_surface_shapes(&mut app, surface);
+            for action in ALL_GUI_ACTIONS {
+                let (action_surface, label) = f100_action_button(*action);
+                assert!(!label.is_empty(), "{action:?} must map to a button label");
+                if action_surface == surface {
+                    assert_fully_visible(&shapes, &label);
+                }
+            }
+        }
+        // Every instrumented action is in the audit table (paired with the
+        // exhaustive match above: a new shortcut cannot compile unmapped).
+        for action in ALL_GUI_ACTIONS {
+            let (_, label) = f100_action_button(*action);
+            assert!(!label.is_empty(), "{action:?} has no button");
+        }
+    }
+
+    // Exhaustive per-enum shortcut → button maps (no `_` arm). Together with
+    // the `GuiAction` audit above these cover every F-100 shortcut: `G`/`D`/`E`
+    // (Module/LibraryView), `C`/`N` (CompareMode), `K`/`M`/`Shift+M`
+    // (MaskTool) and `P`/`X`/`U` (Flag). Numeric rating/color-label shortcuts
+    // share their `GuiAction` buttons (`1`–`5`/`0` → SetRating, `6`–`9` →
+    // SetColorLabel), covered by the audit above.
+
+    fn f100_view_toggle_surface(toggle: ViewToggle) -> F100Surface {
+        match toggle {
+            ViewToggle::BlackWhite => F100Surface::Basic,
+            ViewToggle::Clipping | ViewToggle::LightsOut => F100Surface::Preview,
+        }
+    }
+
+    fn f100_panel_toggle_surface(toggle: PanelToggle) -> F100Surface {
+        match toggle {
+            PanelToggle::CropMode | PanelToggle::PanelsHidden => F100Surface::Preview,
+        }
+    }
+
+    fn f100_module_button_label(module: Module) -> (F100Surface, String) {
+        match module {
+            Module::Library => (F100Surface::ModuleBar, Str::LibraryShortcut.format_arg("G")),
+            Module::Develop => (F100Surface::ModuleBar, Str::DevelopShortcut.format_arg("D")),
+            Module::Export => (F100Surface::ModuleBar, Str::Export.t().into()),
+        }
+    }
+
+    fn f100_library_view_button_label(view: LibraryView) -> (F100Surface, String) {
+        let label = match view {
+            LibraryView::Grid => Str::LibraryGridOn.t(),
+            LibraryView::Loupe => Str::LoupeOn.t(),
+            LibraryView::Compare => Str::CompareModeCompare.t(),
+            LibraryView::Survey => Str::SurveyOn.t(),
+            LibraryView::People => Str::FacePeople.t(),
+        };
+        (F100Surface::LibraryGrid, label.into())
+    }
+
+    fn f100_compare_mode_button_label(mode: CompareMode) -> (F100Surface, String) {
+        // The clickable alias lives in the Library view selector (`C` compares,
+        // `N` surveys the grid), never as a second, diverging button.
+        let label = match mode {
+            CompareMode::Compare => Str::CompareModeCompare.t(),
+            CompareMode::Survey => Str::SurveyOn.t(),
+        };
+        (F100Surface::LibraryGrid, label.into())
+    }
+
+    fn f100_mask_tool_button_label(tool: MaskTool) -> (F100Surface, String) {
+        let label = match tool {
+            MaskTool::None => Str::MaskToolNone.t(),
+            MaskTool::Brush => Str::MaskToolBrush.t(),
+            MaskTool::LinearGradient => Str::MaskToolGradient.t(),
+            MaskTool::Radial => Str::MaskToolRadial.t(),
+        };
+        (F100Surface::Masking, label.into())
+    }
+
+    fn f100_flag_button_label(flag: Flag) -> (F100Surface, String) {
+        (F100Surface::Rating, flag_label(flag).into())
+    }
+
+    #[test]
+    fn f100_shortcut_enum_variants_have_buttons() {
+        let (_directory, mut app) = persistent_app();
+        let mut entries: Vec<(F100Surface, String)> = Vec::new();
+        for toggle in [
+            ViewToggle::BlackWhite,
+            ViewToggle::Clipping,
+            ViewToggle::LightsOut,
+        ] {
+            entries.push((
+                f100_view_toggle_surface(toggle),
+                view_toggle_button_label(toggle).t().into(),
+            ));
+        }
+        for toggle in [PanelToggle::CropMode, PanelToggle::PanelsHidden] {
+            entries.push((
+                f100_panel_toggle_surface(toggle),
+                panel_toggle_button_label(toggle).t().into(),
+            ));
+        }
+        for module in [Module::Library, Module::Develop, Module::Export] {
+            entries.push(f100_module_button_label(module));
+        }
+        for view in [
+            LibraryView::Grid,
+            LibraryView::Loupe,
+            LibraryView::Compare,
+            LibraryView::Survey,
+            LibraryView::People,
+        ] {
+            entries.push(f100_library_view_button_label(view));
+        }
+        for mode in [CompareMode::Compare, CompareMode::Survey] {
+            entries.push(f100_compare_mode_button_label(mode));
+        }
+        for tool in [
+            MaskTool::None,
+            MaskTool::Brush,
+            MaskTool::LinearGradient,
+            MaskTool::Radial,
+        ] {
+            entries.push(f100_mask_tool_button_label(tool));
+        }
+        for flag in [Flag::Pick, Flag::Reject, Flag::Unflagged] {
+            entries.push(f100_flag_button_label(flag));
+        }
+        for surface in [
+            F100Surface::Preview,
+            F100Surface::Rating,
+            F100Surface::LibraryGrid,
+            F100Surface::ModuleBar,
+            F100Surface::Basic,
+            F100Surface::Masking,
+        ] {
+            let shapes = f100_surface_shapes(&mut app, surface);
+            for (entry_surface, label) in &entries {
+                if *entry_surface == surface {
+                    assert_fully_visible(&shapes, label);
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // GUI-INSTRDBG-17: debug action instrumentation tests.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn instrdbg_action_log_line_format_and_single_line() {
+        let mut app = new_app();
+        let _ = take_gui_action_log();
+        app.toggle_crop_mode();
+        let lines = take_gui_action_log();
+        assert_eq!(lines.len(), 1, "exactly one line per action, got {lines:?}");
+        let line = &lines[0];
+        assert!(line.starts_with("action=toggle_crop_mode "), "{line}");
+        assert!(line.contains(" duration_ms="), "{line}");
+        let route = line.rsplit_once("gpu_route=").expect("gpu_route field").1;
+        assert!(
+            route == GPU_ROUTE_PRESENT || route == GPU_ROUTE_CPU_FALLBACK || route == GPU_ROUTE_NA,
+            "unexpected gpu_route in {line}"
+        );
+        assert_eq!(
+            gui_action_log_line(GuiAction::ToggleCropMode, 3, GPU_ROUTE_NA),
+            "action=toggle_crop_mode duration_ms=3 gpu_route=n/a"
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn instrdbg_nested_action_logs_once_for_the_outer_action() {
+        let mut app = new_app();
+        let _ = take_gui_action_log();
+        // `toggle_fullscreen` calls the instrumented `set_zoom_mode`; the
+        // nested call must not add a second line.
+        app.toggle_fullscreen();
+        let lines = take_gui_action_log();
+        assert_eq!(
+            lines.len(),
+            1,
+            "nested instrumentation must not add a line: {lines:?}"
+        );
+        assert!(
+            lines[0].starts_with("action=toggle_fullscreen "),
+            "{}",
+            lines[0]
+        );
+    }
+
+    /// The central action-name table stays unique and snake_case (the format
+    /// contract of `action=<name>`).
+    #[test]
+    fn instrdbg_action_names_are_unique_and_snake_case() {
+        let mut names: Vec<&str> = ALL_GUI_ACTIONS.iter().map(|action| action.name()).collect();
+        for name in &names {
+            assert!(!name.is_empty());
+            assert!(
+                name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{name} is not snake_case"
+            );
+            assert!(!name.starts_with('_') && !name.ends_with('_'), "{name}");
+        }
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "action names must be unique");
+    }
+
+    /// Release builds compile the timer, the log and the capture buffer out.
+    /// This test only exists in non-debug builds so `cargo test --release`
+    /// proves the action still runs without instrumentation.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn instrdbg_release_action_is_uninstrumented() {
+        let mut app = new_app();
+        app.toggle_crop_mode();
+        assert!(app.crop_mode);
+    }
+
     /// GUI-VISION-1: the Export "Choose…" button must not overflow the right
     /// panel edge (kittest `export_module` golden).
     #[test]

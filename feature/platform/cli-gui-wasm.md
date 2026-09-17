@@ -428,6 +428,73 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     kein OS-Vollbild). Eine Persistenz der letzten Sitzung (Modul/Ansicht)
     gibt es in v1 bewusst nicht (Sidecar-first, keine zentrale Session-DB).
   - `Modulwechsel mutieren niemals Rezept oder Sidecar` (bleibt).
+- **Klickbarkeit (F-100, User-Vorgabe 2026-09-17, F-103-N6-Befund):** Jedes
+  sichtbare Feature besitzt einen **klickbaren Button** (Werkzeugleiste, Panel
+  oder Sektion) — Tastaturkürzel sind nur Alias, nie der einzige Zugang.
+  Befund: Crop-Modus war nur per `R` erreichbar (kein Button) und im manuellen
+  Test nicht auffindbar.
+  **Ist-Stand 2026-09-17 (GUI-CLICK-ALL-17, verifiziert BESTANDEN):** Alle Kürzel ohne vorherigen Button haben jetzt einen
+  klickbaren Button mit derselben Aktion (Button und Kürzel rufen dieselbe
+  Methode auf), einem Kürzel-Tooltip (`Str::ShortcutHint`) und `info!`-Log
+  (DoD §4; die betroffenen View-Toggles loggten vorher `trace!` und wurden in
+  diesem Slice auf `info!` angehoben — Ausnahme: reine Modul-/Ansichtswechsel
+  (`set_module`/`set_library_view`) bleiben per G-09 bewusst `trace!` (reiner
+  Session-Display-State)):
+  - **Vorschau-Werkzeugleiste** (`LuminaApp::draw_view_toolbar`, sichtbar wie die
+    Zoom-Controls): Crop (`R`), Clipping (`J`), Split (`Shift+Y`), Lights Out
+    (`L`), Panels (`Tab`), All Panels (`Shift+Tab`), Fullscreen (`F`). Die
+    B&W-Behandlung (`V`) hat den vorhandenen Treatment-Button in der
+    Basic-Sektion.
+  - **Library-Raster-Werkzeugleiste:** Filter-Drawer (`\`, Label `Str::FilterBar`).
+  - **History-Sektion:** Duplicate Copy (`Cmd/Ctrl+'`), Copy Settings
+    (`Cmd/Ctrl+Shift+C`), Paste Settings (`Cmd/Ctrl+Shift+V`), Snapshot
+    (`Cmd/Ctrl+Alt+S`), Stack/Unstack (`Cmd/Ctrl+G`).
+  Audit-Tests (headless): `f100_view_toolbar_paints_every_display_toggle_button`
+  (malt), die Klick-/Toggle-Tests je neuem Button
+  (`f100_crop_button_toggles_crop_mode_and_badge`,
+  `f100_lights_out_button_toggles_and_stays_reachable`,
+  `f100_clipping_button_toggles_overlay`,
+  `f100_split_button_toggles_and_holds_before`,
+  `f100_panels_button_toggles_side_panels`,
+  `f100_all_panels_button_toggles_all_panels`,
+  `f100_fullscreen_button_toggles_and_settles_fit`,
+  `f100_filter_button_toggles_drawer`,
+  `f100_history_duplicate_copy_button_duplicates`,
+  `f100_history_copy_and_paste_buttons_roundtrip`,
+  `f100_history_snapshot_button_freezes`,
+  `f100_history_stack_button_toggles_group` — jeder Klick schaltet
+  nachweisbar), `f100_keyboard_only_actions_have_buttons` (malt
+  Filter/History/Split/Fullscreen/All-Panels),
+  `f100_panel_and_view_toggle_labels_are_exhaustive_and_distinct` und der
+  zentrale Shortcut→Button-Audit
+  `f100_shortcut_audit_every_action_has_a_button`: er mappt **jede**
+  `GuiAction` per erschöpfendem Match (ohne `_`-Arm) auf ihre Button-Oberfläche
+  und ihren Button-Text und prüft, dass alle 34 Actions tatsächlich gemalt
+  werden. `f100_shortcut_enum_variants_have_buttons` deckt zusätzlich die
+  übrigen kürzel-tragenden Enums erschöpfend ab (`Module`, `LibraryView`,
+  `CompareMode` für `C`/`N`, `MaskTool`, `Flag`). Ein künftiges Kürzel ohne
+  Button kompiliert damit nicht mehr (neue `GuiAction`/Enum-Variante erzwingt
+  den Match-Arm) bzw. fällt im Audit durch. Die
+  kittest-Goldens wurden rebaselined (neue Werkzeugleisten-Zeile + Filter-Button).
+- **Debug-Instrumentierung (GUI-INSTRDBG-17, User-Vorgabe 2026-09-17,
+  verifiziert BESTANDEN):** Jede instrumentierte
+  GUI-Aktion loggt in Debug-Builds genau eine Zeile
+  `action=<name> duration_ms=<n> gpu_route=<present|cpu-fallback|n/a>`.
+  Zentraler RAII-Helfer `GuiActionTimer` + Makro `instrument_gui_action!` +
+  `GuiAction`-Namenstabelle; der GPU-Routenwert kommt aus dem vorhandenen
+  `gpu_route_fallback`-State (present = Kontext gebunden ohne Fallback).
+  Verschachtelte instrumentierte Aufrufe sind Teil der äußeren Aktion und
+  erzeugen keine zweite Zeile. In Release-Builds sind Timer, Log-Aufruf und
+  Test-Capture per `#[cfg(debug_assertions)]` wegkompiliert (Nachweis:
+  `cargo clippy -p lumina-gui --release --all-targets -- -D warnings` sowie
+  `cargo test -p lumina-gui --release --lib -- instrdbg_`, wo nur der
+  Release-Passthrough-Test existiert). Instrumentiert ist die F-100-Aktionsfläche
+  (alle Shortcut-Aktionen, die in diesem Slice ergänzten Buttons sowie
+  Save/Reset/Render/Export); `set_mask_tool` und `set_spot_tool` sind bereits
+  als eigene `GuiAction`s instrumentiert. **Noch nicht instrumentiert** sind die
+  übrigen Sektions-Schaltflächen jenseits der 34 `GuiAction`s (z. B. Geometrie-,
+  Metadaten- und Masken-Layer-Aktionen); sie folgen mechanisch nach demselben
+  Muster als eigene offene Folgeaufgabe (`GUI-INSTRDBG-17b` in `Agents.todo.md`).
 - **Ist-Stand 2026-09-04:** Auto-Select (erstes Bild alle Formate, Selektion nie
   leer), `--module`/`--fullscreen`-Flags umgesetzt + verifiziert BESTANDEN
   (281p lib, 7p bins, kittest 11/11, Vision Golden-BESTANDEN); Folgearbeit:

@@ -163,6 +163,12 @@ jobs:
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
 
+      # File-size ratchet (2026-09-17): .rs files over 500 lines must not
+      # grow (baseline in scripts/file_size_baseline.txt); shrink/extract
+      # freely and lower the baseline afterwards.
+      - name: Check file-size ratchet
+        run: sh scripts/check_file_sizes.sh
+
   bench:
     name: Benchmarks (optional)
     needs: detect
