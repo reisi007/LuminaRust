@@ -3,213 +3,213 @@
   "budgets": [
     {
       "id": "core/render_frame__512",
-      "budget_ns": 14154444,
+      "budget_ns": 7957146,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 7077222 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 3978573 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/render_frame__1024",
-      "budget_ns": 55108522,
+      "budget_ns": 32716028,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 27554261 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 16358014 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/render_frame__2048",
-      "budget_ns": 213330084,
+      "budget_ns": 131516708,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 106665042 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 65758354 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/apply_recipe_with_white_balance__512",
-      "budget_ns": 12930870,
+      "budget_ns": 6777176,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6465435 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 3388588 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/apply_recipe_with_white_balance__1024",
-      "budget_ns": 50275938,
+      "budget_ns": 28045236,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 25137969 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 14022618 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/apply_recipe_with_white_balance__2048",
-      "budget_ns": 194894708,
+      "budget_ns": 112783084,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 97447354 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 56391542 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/mask_graph_eval__512",
-      "budget_ns": 13666,
+      "budget_ns": 62618,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6833 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 31309 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/mask_graph_eval__1024",
-      "budget_ns": 48556,
+      "budget_ns": 103746,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 24278 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 51873 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/mask_graph_eval__2048",
-      "budget_ns": 211542,
+      "budget_ns": 448514,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 105771 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 224257 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/analyze_tone__512",
-      "budget_ns": 6670702,
+      "budget_ns": 374342,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 3335351 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 187171 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/analyze_tone__1024",
-      "budget_ns": 32561666,
+      "budget_ns": 1498130,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 16280833 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 749065 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/analyze_tone__2048",
-      "budget_ns": 137967084,
+      "budget_ns": 6000496,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 68983542 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 3000248 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/suggest_auto_tone__512",
-      "budget_ns": 6672092,
+      "budget_ns": 374462,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 3336046 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 187231 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/suggest_auto_tone__1024",
-      "budget_ns": 32495904,
+      "budget_ns": 1499302,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 16247952 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 749651 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/suggest_auto_tone__2048",
-      "budget_ns": 137399210,
+      "budget_ns": 6002390,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 68699605 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 3001195 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/match_total_exposure__512",
-      "budget_ns": 6684126,
+      "budget_ns": 382798,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 3342063 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 191399 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/match_total_exposure__1024",
-      "budget_ns": 32695612,
+      "budget_ns": 1527606,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 16347806 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 763803 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/match_total_exposure__2048",
-      "budget_ns": 137424376,
+      "budget_ns": 6123642,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 68712188 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 3061821 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/histogram__512",
-      "budget_ns": 353688,
+      "budget_ns": 357180,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 176844 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 178590 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/histogram__1024",
-      "budget_ns": 1488666,
+      "budget_ns": 1432730,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 744333 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 716365 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/histogram__2048",
-      "budget_ns": 5524462,
+      "budget_ns": 5739896,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 2762231 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 2869948 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/cache_hit__512",
-      "budget_ns": 18,
-      "tolerance_ratio": 1.2,
-      "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 9 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
-    },
-    {
-      "id": "core/cache_hit__1024",
-      "budget_ns": 18,
-      "tolerance_ratio": 1.2,
-      "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 9 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
-    },
-    {
-      "id": "core/cache_hit__2048",
       "budget_ns": 16,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 8 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 8 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_hit__1024",
+      "budget_ns": 16,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 8 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "core/cache_hit__2048",
+      "budget_ns": 18,
+      "tolerance_ratio": 1.2,
+      "gate": true,
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 9 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/cache_miss__512",
       "budget_ns": 12,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 6 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/cache_miss__1024",
       "budget_ns": 12,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 6 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "core/cache_miss__2048",
       "budget_ns": 12,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 6 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 6 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "batch/render_export_png__512",
-      "budget_ns": 20002958,
+      "budget_ns": 12230538,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 10001479 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 6115269 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "batch/render_export_png__1024",
-      "budget_ns": 83501522,
+      "budget_ns": 50967458,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 41750761 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 25483729 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "batch/render_export_png__2048",
-      "budget_ns": 333542042,
+      "budget_ns": 207322376,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "Calibrated 2026-08-19 against captured baseline (median_ns = 166771021 ns, budget_ns = 2x). tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate) to avoid noisy-runner false failures; gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): captured on the same machine under rustc 1.98.0 against median_ns = 103661188 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "decode/raw__aircraft-landscape",
@@ -227,45 +227,115 @@
     },
     {
       "id": "gpu/render_with_gpu__512",
-      "budget_ns": 6588474,
+      "budget_ns": 514614,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 3294237 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): GPU path recaptured on the capture machine (rustc 1.98.0) against median_ns = 257307 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/render_with_gpu__1024",
-      "budget_ns": 27710612,
+      "budget_ns": 708326,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 13855306 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): GPU path recaptured on the capture machine (rustc 1.98.0) against median_ns = 354163 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/render_with_gpu__2048",
-      "budget_ns": 111434166,
+      "budget_ns": 2152540,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 55717083 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): GPU path recaptured on the capture machine (rustc 1.98.0) against median_ns = 1076270 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/update_uniforms__recipe",
-      "budget_ns": 26808,
+      "budget_ns": 27026,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 13404 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): GPU path recaptured on the capture machine (rustc 1.98.0) against median_ns = 13513 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/cpu_vs_gpu__cpu__2048",
-      "budget_ns": 110603918,
+      "budget_ns": 110987168,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 55301959 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): GPU path recaptured on the capture machine (rustc 1.98.0) against median_ns = 55493584 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
     },
     {
       "id": "gpu/cpu_vs_gpu__gpu__2048",
-      "budget_ns": 111132792,
+      "budget_ns": 2212338,
       "tolerance_ratio": 1.2,
       "gate": true,
-      "note": "GPU-path stabilised 2026-08-26 (post PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1, wgpu renderer). Captured 2026-08-26 against baseline median_ns = 55566396 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+      "note": "F-074 re-baseline 2026-09-17 (MERGE-IMPL-15): GPU path recaptured on the capture machine (rustc 1.98.0) against median_ns = 1106169 ns, budget_ns = 2x. tolerance_ratio 1.2 absorbs same-machine run noise. CI bench job runs compare.mjs in report/warn only (never this hard gate); gate:true enables a controlled local regression gate on the capture machine."
+    },
+    {
+      "id": "merge/hdr_weighted__512",
+      "budget_ns": 13867902,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 6933951 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/hdr_weighted__1024",
+      "budget_ns": 55998194,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 27999097 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/hdr_weighted__2048",
+      "budget_ns": 226733624,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 113366812 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/pano_blend__512",
+      "budget_ns": 15649754,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 7824877 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/pano_blend__1024",
+      "budget_ns": 64397320,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 32198660 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/pano_blend__2048",
+      "budget_ns": 254680708,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 127340354 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/encode_dng__512",
+      "budget_ns": 391834,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 195917 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/encode_dng__1024",
+      "budget_ns": 1401470,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 700735 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/encode_dng__2048",
+      "budget_ns": 5828716,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 2914358 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "merge/align_hdr__512",
+      "budget_ns": 450222044,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 225111022 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
     }
   ]
 }

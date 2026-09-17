@@ -696,11 +696,14 @@ Zweit-Mechanismus.
   Library-Badges (keep/review/reject/none/stale via `CullingReadState`) +
   `cull:`-Filter + explizite Übernahme-Aktion (schreibt nur
   `document.culling`, nie Rating/Flag/Label/Rezept; kein Auto-Rating).
-- **Merge-Sektion (G-13, MERGE-GUI, 2026-09-16):** `merge-hdr`-/
-  `merge-pano`-Aktionen (gleiche Schrittfolge wie CLI, Jobsteuerung via
-  Poll), DNG-Artefaktstatus (`ok`/`stale`/`missing`/`unsupported`/`none`),
-  Envelope-Konflikte laut + non-destruktiv. Shortcuts `Cmd/Ctrl+H`
-  (HDR-Merge) / `Cmd/Ctrl+M` (Panorama-Merge).
+- **Merge-Sektion (G-13, MERGE-GUI, 2026-09-16; F6-Dedup 2026-09-17):**
+  `merge-hdr`-/`merge-pano`-Aktionen, Jobsteuerung via Poll, DNG-Artefaktstatus
+  (`ok`/`stale`/`missing`/`unsupported`/`none`), Envelope-Konflikte laut +
+  non-destruktiv. Seit MERGE-IMPL-15 ruft die GUI **denselben** gemeinsamen Pfad
+  `lumina_merge::bundle::run_merge` wie die CLI auf (keine GUI-eigene
+  Merge-Schrittfolge; nur Decode-Adapter + Exposure-Policy bleiben frontend-
+  spezifisch), Paritätsanker via `lumina-cli/tests/merge_parity.rs`. Shortcuts
+  `Cmd/Ctrl+H` (HDR-Merge) / `Cmd/Ctrl+M` (Panorama-Merge).
 - **AI-Denoise-Panel (G-14, DENOISE-GUI, 2026-09-16):** Detail-Sektion
   (enabled/strength/preserve_detail, Modell-Identität lesbar), Status-Badge
   (`ready`/`stale`/`missing`/`corrupt`/`unavailable`/`inactive`), Strict

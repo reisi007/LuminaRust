@@ -4,9 +4,11 @@
 //! §Ausrichtung, Folge-Tasks Nr. 2). This crate is the Mehrbild-Vorlauf
 //! before the single-image pipeline: it consumes decoded linear frames
 //! plus EXIF exposure values and produces one merged linear frame with a
-//! deterministic digest. It performs **no** filesystem or DNG IO (that is
-//! MERGE-DNG-1) and touches neither `Pipeline::default()` nor
-//! `apply_recipe`.
+//! deterministic digest. The [`bundle`] module adds the **shared**
+//! orchestration (linear-DNG writing, sidecar persistence, atomic
+//! publication) that both the CLI commands and the GUI actions call — the
+//! frontends only supply a decode adapter and an exposure policy. Neither
+//! touches `Pipeline::default()` nor `apply_recipe`.
 //!
 //! Scope (1.5, loudly enforced):
 //!
@@ -38,6 +40,7 @@
 //! and desktop; no capability gate).
 
 pub mod align;
+pub mod bundle;
 pub mod digest;
 pub mod dng;
 pub mod image;

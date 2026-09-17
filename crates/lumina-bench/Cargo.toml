@@ -8,6 +8,10 @@ publish = false
 [dependencies]
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
+# F-074 / MERGE-IMPL-15: the merge benchmark class (`bench/merge.rs`) measures
+# the shared `lumina-merge` alignment/merge/DNG entry points. Pure Rust, no
+# native dependency, so it is a normal (non-optional) harness dependency.
+lumina-merge = { path = "../lumina-merge" }
 # Optional: enables the GPU render-path benchmarks. Kept optional so a
 # `--no-default-features` build stays free of the wgpu/Metal native stack, but
 # enabled by default so `cargo bench` measures the GPU path natively (F-074-N6).
@@ -48,6 +52,13 @@ required-features = ["gpu"]
 name = "batch"
 harness = false
 path = "bench/batch.rs"
+
+# F-074 / MERGE-IMPL-15: HDR/panorama merge class (alignment, blend, DNG
+# writer) on deterministic synthetic linear frames.
+[[bench]]
+name = "merge"
+harness = false
+path = "bench/merge.rs"
 
 # RAW decode benchmarks link LibRaw and are therefore kept behind the
 # `raw-bench` feature so the default harness stays lightweight (ADR 0003).

@@ -69,8 +69,21 @@ y-Überlapp-Gate, Subpixel-/64000-Testanker. **MERGE-CLI-1 (2026-09-16,
 Verifizierung BESTANDEN):** CLI nutzt die volle Matrix
 (`blend_panorama_transformed`, Rotation wirkt end-to-end, rotierter
 E2E-Test), Envelope-`\"type\": \"merge\"`-Diskriminator, HDR-Residual-Warnung.
-**Offen (explizit):** GUI, Golden-Gates, F-074-Merge-Benchmark/Budget
-(bis dahin nur In-Crate-Skalierungsanker).
+**Stand 2026-09-17 (MERGE-IMPL-15, F6-Dedup + F-074-N7, Verifizierung
+ausstehend):** Die früher in `lumina-cli/src/merge.rs` und
+`lumina-gui/src/merge_gui.rs` gespiegelte Orchestrierung ist in
+`lumina-merge::bundle` zusammengeführt: `run_merge` ist der eine Pfad
+(Validierung → Decode-Adapter → Exposure-Policy → Alignment → Blend → Rezept →
+Digest → Envelope-/Stale-/Missing-Gate → linearer DNG → atomare
+DNG+Sidecar-Publikation), den CLI und GUI aufrufen; die Frontends liefern nur
+noch Decode-Adapter und Exposure-Policy sowie ihre Oberfläche (CLI-Exit-Codes/
+JSON, GUI-Jobsteuerung via Poll/Status). Zusätzlich: Merge-Benchmark-Klasse
+`merge/*` (F-074-N7) mit Baseline/Budget in den Stores (`gate: false`,
+report-only) und Re-Baseline aller messbaren Core-/Batch-/GPU-IDs
+(`feature/quality/performance-benchmarks.md`).
+
+**Offen (explizit):** unabhängige Verifizierung der F6-Dedup + F-074-N7;
+Golden-Gates unverändert (Hasher/Re-Import-Anker).
 
 ## Normative Invarianten
 
@@ -348,16 +361,24 @@ nur native CLI/Desktop.)
 | Cloud-Merge / proprietäre Dienste | nicht geplant | nicht geplant |
 
 Kein stiller Fallback zwischen CLI und GUI: Beide durchlaufen dieselbe
-Merge-Schrittfolge (Decode → Exposure → Alignment/Merge → Rezept → Digest →
-Bundle-Gate → Encode → Stage → Sidecar → Publish) auf denselben
-`lumina-merge`-/`lumina-sidecar`-Funktionen; fehlende Capability (z. B.
-DNG-Writer nicht verfügbar) ist auf beiden Pfaden derselbe harte Fehler.
-Offener Punkt (2026-09-16, GUI-Verifizierung F6): Die Orchestrierung ist
-derzeit in `lumina-cli/src/merge.rs` und `lumina-gui/src/merge_gui.rs`
-gespiegelt (Reihenfolge identisch, aber Drift vorhanden: CLI-`--output`
-+ `StagedArtifact` vs. GUI-`{pid}.tmp`); keine zweite Bildlogik
-(RGBA8→linear einziger lokaler Schritt). Folgearbeit: in ein gemeinsames
-Modul extrahieren oder als bewusste Duplikation mit Drift-Test festschreiben.
+Merge-Schrittfolge (Decode-Adapter → Exposure-Policy → Alignment/Merge →
+Rezept → Digest → Bundle-Gate → Encode → Stage → Sidecar → Publish) — seit
+MERGE-IMPL-15 (2026-09-17, F6) in **einem** gemeinsamen Pfad
+`lumina_merge::bundle::run_merge`; fehlende Capability (z. B. DNG-Writer nicht
+verfügbar) ist auf beiden Pfaden derselbe harte Fehler. Die Fehlertexte nutzen
+beide dieselben kanonischen Präfixe (`merge missing:` / `merge stale:` /
+`merge unsupported:` / `merge failed:`) mit neutralem Hinweis „regenerate the
+bundle explicitly with force"; die CLI-Exit-Codes (0 Erfolg/bereits aktuell, 1
+lauter Fehler, 2 clap) und ihr `--json`-Report bleiben unverändert. Der frühere F6-Befund
+(gespiegelte Orchestrierung mit Drift: CLI-`--output` + `StagedArtifact` vs.
+GUI-`{pid}.tmp`) ist damit geschlossen: die CLI- und GUI-Module enthalten nur
+noch ihren Decode-Adapter und ihre Exposure-Policy; DNG-Pfadauflösung,
+Rezept/Digest, Envelope-Gate und atomare Publikation liegen genau einmal im
+gemeinsamen Modul. Verbleibende (bewusste, kleine) Frontend-Duplikation ist
+allein der Decode-Aufruf (`decode_input` vs. `decode_selection_frame`) und die
+Flag-/`Option`-Exposure-Policy; ein Paritätstest (`lumina-cli/tests/
+merge_parity.rs`) belegt denselben Digest/Checksum-Anker für denselben
+Raster-Input über beide Verträge.
 
 ## Lizenz und Dependencies
 
@@ -470,5 +491,9 @@ unabhängigen Verifizierungs-Agenten bestätigt sind:
   erzeugen Geister; 1.5 meldet nur Residuen, entfernt sie nicht per KI.
   KI-Deghosting wäre ein eigener Modell-/Lizenz-Entscheid (Post-1.5).
 - **Performance großer Panoramen (niedrig):** Volle Auflösung × N Quellen
-  sprengt ggf. interaktive Budgets; F-074-Budget-Einordnung im Folge-Task,
-  keine harte Garantie in diesem Entscheid.
+  sprengt ggf. interaktive Budgets. F-074-Einordnung ist erfolgt (F-074-N7,
+  2026-09-17): die Merge-Klasse ist gemessen und in `perf/baseline.json` /
+  `perf/budgets.json` mit `gate: false` registriert (report-only, bis
+  unabhängig kalibriert); eine harte interaktive Garantie bleibt außerhalb
+  dieses Entscheids. `estimate_pano_transform` ist bewusst als interaktiver
+  Latenzpfad (nicht als Per-Frame-Kernel) nicht budgetiert.

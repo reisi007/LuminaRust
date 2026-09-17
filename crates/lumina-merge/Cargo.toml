@@ -2,13 +2,20 @@
 name = "lumina-merge"
 version = "0.1.0"
 edition = "2021"
-description = "HDR/panorama merge: alignment + linear merge (LRPAR-G13-MERGE-15, MERGE-CORE-1)"
+description = "HDR/panorama merge: alignment, linear merge, shared CLI/GUI orchestration (LRPAR-G13-MERGE-15)"
 
 [dependencies]
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 blake3 = "1"
+serde_json = "1"
 thiserror = "2"
+# MERGE-IMPL-15 (F6): the shared bundle orchestration logs the same
+# informational step trace the CLI/GUI emitted before the dedup.
+log = { version = "0.4", features = ["std"] }
+# MERGE-IMPL-15 (F6): same-directory atomic staging (NamedTempFile + persist)
+# for the DNG publication. Pure Rust, already in the workspace tree.
+tempfile = "3"
 # MERGE-DNG-1: pure-Rust TIFF/DNG writer backend (MIT, no native code;
 # already in the workspace tree via `image`, so no new transitive deps).
 # Pinned exact: writer bytes must stay deterministic across builds.
@@ -16,7 +23,8 @@ tiff = "=0.11.3"
 
 [dev-dependencies]
 proptest = "1"
-tempfile = "3"
-serde_json = "1"
+# `tempfile` and `serde_json` are normal dependencies (shared orchestration) and
+# therefore already available to the tests; only the RAW re-import gate needs an
+# extra dev-dependency.
 # Re-import gate only (tests): written DNG must decode via lumina-raw/LibRaw.
 lumina-raw = { path = "../lumina-raw" }

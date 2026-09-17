@@ -4,153 +4,153 @@
     "host": "MacBook-Pro-von-Florian.local",
     "os": "Darwin",
     "arch": "arm64",
-    "rustc": "1.97.1",
+    "rustc": "1.98.0",
     "libraw": "0.22.2",
-    "recorded_at": "2026-08-19T15:19:34.477Z"
+    "recorded_at": "2026-09-17T12:35:47.673Z"
   },
   "benchmarks": [
     {
       "id": "core/render_frame__512",
-      "median_ns": 7077222,
-      "p95_ns": 7554315,
+      "median_ns": 3978573,
+      "p95_ns": 4002500,
       "unit": "ns"
     },
     {
       "id": "core/render_frame__1024",
-      "median_ns": 27554261,
-      "p95_ns": 27760244,
+      "median_ns": 16358014,
+      "p95_ns": 16478055,
       "unit": "ns"
     },
     {
       "id": "core/render_frame__2048",
-      "median_ns": 106665042,
-      "p95_ns": 107577388,
+      "median_ns": 65758354,
+      "p95_ns": 66044125,
       "unit": "ns"
     },
     {
       "id": "core/apply_recipe_with_white_balance__512",
-      "median_ns": 6465435,
-      "p95_ns": 10247067,
+      "median_ns": 3388588,
+      "p95_ns": 3433101,
       "unit": "ns"
     },
     {
       "id": "core/apply_recipe_with_white_balance__1024",
-      "median_ns": 25137969,
-      "p95_ns": 25508409,
+      "median_ns": 14022618,
+      "p95_ns": 14087431,
       "unit": "ns"
     },
     {
       "id": "core/apply_recipe_with_white_balance__2048",
-      "median_ns": 97447354,
-      "p95_ns": 98060919,
+      "median_ns": 56391542,
+      "p95_ns": 56807042,
       "unit": "ns"
     },
     {
       "id": "core/mask_graph_eval__512",
-      "median_ns": 6833,
-      "p95_ns": 7780,
+      "median_ns": 31309,
+      "p95_ns": 31417,
       "unit": "ns"
     },
     {
       "id": "core/mask_graph_eval__1024",
-      "median_ns": 24278,
-      "p95_ns": 24653,
+      "median_ns": 51873,
+      "p95_ns": 54859,
       "unit": "ns"
     },
     {
       "id": "core/mask_graph_eval__2048",
-      "median_ns": 105771,
-      "p95_ns": 118092,
+      "median_ns": 224257,
+      "p95_ns": 227241,
       "unit": "ns"
     },
     {
       "id": "core/analyze_tone__512",
-      "median_ns": 3335351,
-      "p95_ns": 3568090,
+      "median_ns": 187171,
+      "p95_ns": 187919,
       "unit": "ns"
     },
     {
       "id": "core/analyze_tone__1024",
-      "median_ns": 16280833,
-      "p95_ns": 16784084,
+      "median_ns": 749065,
+      "p95_ns": 752732,
       "unit": "ns"
     },
     {
       "id": "core/analyze_tone__2048",
-      "median_ns": 68983542,
-      "p95_ns": 71546071,
+      "median_ns": 3000248,
+      "p95_ns": 3014685,
       "unit": "ns"
     },
     {
       "id": "core/suggest_auto_tone__512",
-      "median_ns": 3336046,
-      "p95_ns": 3379502,
+      "median_ns": 187231,
+      "p95_ns": 187877,
       "unit": "ns"
     },
     {
       "id": "core/suggest_auto_tone__1024",
-      "median_ns": 16247952,
-      "p95_ns": 16416525,
+      "median_ns": 749651,
+      "p95_ns": 751548,
       "unit": "ns"
     },
     {
       "id": "core/suggest_auto_tone__2048",
-      "median_ns": 68699605,
-      "p95_ns": 70052638,
+      "median_ns": 3001195,
+      "p95_ns": 3005912,
       "unit": "ns"
     },
     {
       "id": "core/match_total_exposure__512",
-      "median_ns": 3342063,
-      "p95_ns": 3421564,
+      "median_ns": 191399,
+      "p95_ns": 192124,
       "unit": "ns"
     },
     {
       "id": "core/match_total_exposure__1024",
-      "median_ns": 16347806,
-      "p95_ns": 16594903,
+      "median_ns": 763803,
+      "p95_ns": 766007,
       "unit": "ns"
     },
     {
       "id": "core/match_total_exposure__2048",
-      "median_ns": 68712188,
-      "p95_ns": 69378809,
+      "median_ns": 3061821,
+      "p95_ns": 3070051,
       "unit": "ns"
     },
     {
       "id": "core/histogram__512",
-      "median_ns": 176844,
-      "p95_ns": 177426,
+      "median_ns": 178590,
+      "p95_ns": 179046,
       "unit": "ns"
     },
     {
       "id": "core/histogram__1024",
-      "median_ns": 744333,
-      "p95_ns": 888385,
+      "median_ns": 716365,
+      "p95_ns": 718850,
       "unit": "ns"
     },
     {
       "id": "core/histogram__2048",
-      "median_ns": 2762231,
-      "p95_ns": 2795143,
+      "median_ns": 2869948,
+      "p95_ns": 2880512,
       "unit": "ns"
     },
     {
       "id": "core/cache_hit__512",
-      "median_ns": 9,
-      "p95_ns": 9,
+      "median_ns": 8,
+      "p95_ns": 8,
       "unit": "ns"
     },
     {
       "id": "core/cache_hit__1024",
-      "median_ns": 9,
-      "p95_ns": 9,
+      "median_ns": 8,
+      "p95_ns": 8,
       "unit": "ns"
     },
     {
       "id": "core/cache_hit__2048",
-      "median_ns": 8,
-      "p95_ns": 8,
+      "median_ns": 9,
+      "p95_ns": 9,
       "unit": "ns"
     },
     {
@@ -173,20 +173,20 @@
     },
     {
       "id": "batch/render_export_png__512",
-      "median_ns": 10001479,
-      "p95_ns": 10224169,
+      "median_ns": 6115269,
+      "p95_ns": 6143381,
       "unit": "ns"
     },
     {
       "id": "batch/render_export_png__1024",
-      "median_ns": 41750761,
-      "p95_ns": 42546072,
+      "median_ns": 25483729,
+      "p95_ns": 25556833,
       "unit": "ns"
     },
     {
       "id": "batch/render_export_png__2048",
-      "median_ns": 166771021,
-      "p95_ns": 180583733,
+      "median_ns": 103661188,
+      "p95_ns": 104233333,
       "unit": "ns"
     },
     {
@@ -203,38 +203,98 @@
     },
     {
       "id": "gpu/render_with_gpu__512",
-      "median_ns": 3294237,
-      "p95_ns": 3297691,
+      "median_ns": 257307,
+      "p95_ns": 263427,
       "unit": "ns"
     },
     {
       "id": "gpu/render_with_gpu__1024",
-      "median_ns": 13855306,
-      "p95_ns": 13963340,
+      "median_ns": 354163,
+      "p95_ns": 366306,
       "unit": "ns"
     },
     {
       "id": "gpu/render_with_gpu__2048",
-      "median_ns": 55717083,
-      "p95_ns": 55773813,
+      "median_ns": 1076270,
+      "p95_ns": 1086394,
       "unit": "ns"
     },
     {
       "id": "gpu/update_uniforms__recipe",
-      "median_ns": 13404,
-      "p95_ns": 13978,
+      "median_ns": 13513,
+      "p95_ns": 15653,
       "unit": "ns"
     },
     {
       "id": "gpu/cpu_vs_gpu__cpu__2048",
-      "median_ns": 55301959,
-      "p95_ns": 55416042,
+      "median_ns": 55493584,
+      "p95_ns": 55884875,
       "unit": "ns"
     },
     {
       "id": "gpu/cpu_vs_gpu__gpu__2048",
-      "median_ns": 55566396,
-      "p95_ns": 55619875,
+      "median_ns": 1106169,
+      "p95_ns": 1116948,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/hdr_weighted__512",
+      "median_ns": 6933951,
+      "p95_ns": 6965912,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/hdr_weighted__1024",
+      "median_ns": 27999097,
+      "p95_ns": 28148667,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/hdr_weighted__2048",
+      "median_ns": 113366812,
+      "p95_ns": 113762750,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/pano_blend__512",
+      "median_ns": 7824877,
+      "p95_ns": 7843153,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/pano_blend__1024",
+      "median_ns": 32198660,
+      "p95_ns": 32246931,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/pano_blend__2048",
+      "median_ns": 127340354,
+      "p95_ns": 127635125,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/encode_dng__512",
+      "median_ns": 195917,
+      "p95_ns": 196584,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/encode_dng__1024",
+      "median_ns": 700735,
+      "p95_ns": 710668,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/encode_dng__2048",
+      "median_ns": 2914358,
+      "p95_ns": 2919900,
+      "unit": "ns"
+    },
+    {
+      "id": "merge/align_hdr__512",
+      "median_ns": 225111022,
+      "p95_ns": 225441208,
       "unit": "ns"
     }
   ]

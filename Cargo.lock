@@ -2123,6 +2123,7 @@ dependencies = [
  "criterion",
  "lumina-core",
  "lumina-gpu",
+ "lumina-merge",
  "lumina-raw",
  "lumina-sidecar",
 ]
@@ -2265,6 +2266,7 @@ name = "lumina-merge"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "log",
  "lumina-core",
  "lumina-raw",
  "lumina-sidecar",

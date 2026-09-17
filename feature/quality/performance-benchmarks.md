@@ -39,8 +39,9 @@ Werkzeuge zur Entscheidungsfindung und Regressionsfrüherkennung.
 
 ## Benchmark-Klassen
 
-Die Klassen definieren, *was* gemessen wird. Die konkrete Umsetzung erfolgt
-in F-074-N3; in diesem Stand (F-074-N1/N2) existieren noch keine Messungen.
+Die Klassen definieren, *was* gemessen wird. Die konkrete Umsetzung und die
+Messwerte folgen in F-074-N3 (Core/Decode/Batch), F-074-N6 (GPU) und
+F-074-N7 (Merge); die Messungen stehen in `perf/baseline.json`.
 
 ### Core/Pipeline (lumina-core)
 
@@ -74,6 +75,25 @@ in F-074-N3; in diesem Stand (F-074-N1/N2) existieren noch keine Messungen.
 - Optional ist später ein CLI-Level-Benchmark mit hyperfine vorgesehen
   (Prozessstart, Datei-I/O, kompletter Exportlauf); er ist kein Ersatz für die
   Criterion-Messungen, sondern ergänzt sie um den Prozess-Overhead.
+
+### Merge (lumina-merge, F-074-N7, MERGE-IMPL-15)
+
+- **HDR-Merge:** `merge_hdr_weighted` (gewichtetes lineares Merge) auf zwei
+  deterministischen linearen Gradienten (Referenz + halb belichtete Kopie).
+- **Panorama-Blend:** `blend_panorama_transformed` über die volle 3×3-Matrix
+  (Translation, keine Rotation im Bench-Fixture), Federbreite 64.
+- **DNG-Writer:** `encode_linear_dng` (lineares 16-Bit-DNG) auf dem
+  Referenzframe.
+- **Alignment:** `estimate_hdr_translation` mit dokumentiertem Suchradius
+  `max_shift_px = 8` (die exhaustive SAD-Suche ist quadratisch im Radius; der
+  Radius steht im Budget-`note`, nicht in der Fixture-Größe).
+- Der Panorama-*Schätzer* (`estimate_pano_transform`, gemeinsame
+  Translations-/Rotationssuche) wird bewusst nicht als Per-Frame-Kernel
+  gemessen: er ist ein interaktiver Latenzpfad, den CLI/GUI-Status sichtbar
+  macht; gemessen wird der Blend, den er speist.
+- Fixtures: `bench/common/mod.rs` (`make_linear_gradient`,
+  `make_linear_gradient_shifted`, `scale_linear`), kein Netzwerk, kein
+  Commit großer Daten.
 
 ## Fixtures und Daten
 
@@ -245,7 +265,10 @@ priorisierte Performance-Feature-IDs (siehe unten). F-074-N5 umgesetzt:
 korrekten Exit-Codes, ein kalibriertes `gate: true`-Subset (30 deterministische
 Core-/Batch-Benchmarks) ist in `perf/budgets.json` registriert, und ein
 optionaler, nicht-blockierender `bench`-Job erzeugt ein Report-Artefakt und
-läuft CI-seitig nur im `warn`-Modus.
+läuft CI-seitig nur im `warn`-Modus. F-074-N6 (GPU-Klasse) und F-074-N7
+(Merge-Klasse, MERGE-IMPL-15) sind ergänzt; die Re-Baseline vom 2026-09-17
+erfasste alle messbaren Core-/Batch-/GPU-IDs neu und registrierte die zehn
+Merge-IDs (siehe unten).
 
 ### F-074-N3 — umgesetzte Benchmarks
 
@@ -393,27 +416,64 @@ der Meldung `GPU adapter unavailable - skipped equivalence check` — kein Panic
 kein Netzwerk, keine erfundene Zahl. Liegt ein Metal-Adapter vor, läuft der echte
 Shader-Pfad; andernfalls misst `render_with_gpu` transparent den CPU-Fallback.
 
-**Budgets (Stand 2026-08-22):** Alle sechs GPU-IDs sind in `perf/budgets.json`
-mit `gate: false` registriert (report-only) — neue Benchmarks starten per
-F-074-Methodik im Report-Modus, bis der GPU-Pfad stabilisiert und unabhängig
-kalibriert ist. `budget_ns` ≈ 2× Median, `tolerance_ratio` 1.2. Eine Baseline
-(`perf/baseline.json`) für die GPU-IDs ist **noch nicht** erfasst; `compare.mjs`
-meldet im `report`/`warn`-Modus korrekt „KEINE BASELINE" (kein stiller Fallback).
-Erfasste Mediane (dieser M5-Pro-Lauf, ns):
+**Budgets (Stand 2026-09-17):** Die sechs GPU-IDs sind in `perf/budgets.json`
+mit `gate: true` registriert (Commit BENCH-BASELINE-1, 2026-08-26: der GPU-Pfad
+wurde nach PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1 stabilisiert und
+kalibriert). `budget_ns` ≈ 2× Median, `tolerance_ratio` 1.2; die
+Kalibrier-Notiz steht im `note`-Feld. Die Re-Baseline vom 2026-09-17 hat die
+GPU-Messwerte neu erfasst (readback-freier Present-Pfad: `cpu_vs_gpu__gpu__2048`
+jetzt ~1,1 ms statt ~55,6 ms, ~50× schneller als CPU).
 
-| Benchmark-ID | Median (ns) | Verhältnis GPU/CPU @2048 |
+Der frühere Stand (2026-08-22, `gate: false`, ohne Baseline) ist überholt; die
+damaligen M5-Pro-Zahlen (z. B. `gpu/render_with_gpu__2048` = 5 057 014 ns,
+`gpu/cpu_vs_gpu__gpu__2048` = 5 383 811 ns, ~11× schneller als CPU) sind
+historisch. Maßgeblich sind die committeten Stores.
+
+Hinweis zur GPU-Benchmark-Ausführung: Ohne Metal/Vulkan-Adapter überspringt die
+Gruppe sauber (siehe Adapter-Gating oben); `compare.mjs` meldet dann „NICHT
+GEMESSEN" statt einer erfundenen Zahl.
+
+### F-074-N7 — Merge-Klasse + Re-Baseline (2026-09-17, MERGE-IMPL-15)
+
+Mit der Merge-Implementierung (LRPAR-G13-MERGE-15) kommt eine eigene
+Benchmark-Klasse für die gemeinsame Merge-Orchestrierung (`lumina-merge`).
+Implementiert in `crates/lumina-bench/bench/merge.rs` (Criterion-Gruppe
+`merge`, `harness = false`), Fixtures in `bench/common/mod.rs`
+(`make_linear_gradient`, `make_linear_gradient_shifted`, `scale_linear`);
+deterministisch, kein Netzwerk, keine committeten Daten.
+
+Zehn neue IDs (alle `gate: false`, report-only, bis sie unabhängig kalibriert
+sind — F-074-Methodik wie bei der GPU-Klasse). Mediane der Erfassung
+2026-09-17 (gleiche Maschine, rustc 1.98.0; `merge/align_hdr__512` mit
+`max_shift_px = 8`):
+
+| Benchmark-ID | Median (ns) | P95 (ns) |
 | --- | ---: | ---: |
-| `gpu/render_with_gpu__512` | 1 527 623 | — |
-| `gpu/render_with_gpu__1024` | 1 971 147 | — |
-| `gpu/render_with_gpu__2048` | 5 057 014 | — |
-| `gpu/update_uniforms__recipe` | 5 324 | — |
-| `gpu/cpu_vs_gpu__cpu__2048` | 59 425 792 | — |
-| `gpu/cpu_vs_gpu__gpu__2048` | 5 383 811 | **~11,0× schneller** als CPU |
+| `merge/hdr_weighted__512` | 6 933 951 | 6 965 912 |
+| `merge/hdr_weighted__1024` | 27 999 097 | 28 148 667 |
+| `merge/hdr_weighted__2048` | 113 366 812 | 113 762 750 |
+| `merge/pano_blend__512` | 7 824 877 | 7 843 153 |
+| `merge/pano_blend__1024` | 32 198 660 | 32 246 931 |
+| `merge/pano_blend__2048` | 127 340 354 | 127 635 125 |
+| `merge/encode_dng__512` | 195 917 | 196 584 |
+| `merge/encode_dng__1024` | 700 735 | 710 668 |
+| `merge/encode_dng__2048` | 2 914 358 | 2 919 900 |
+| `merge/align_hdr__512` | 225 111 022 | 225 441 208 |
 
-Hinweis: Die GPU-Pipeline liest aktuell via `map_async` in einen CPU-Puffer zurück
-(siehe `TODO(PERF)` in `lumina-gpu/src/lib.rs`); dieser Copy ist in den
-GPU-Zahlen enthalten. Sobald der GPU-Pfad final ist, wird `gate: true` nach
-unabhängiger Kalibrierung aktiviert und die Baseline ergänzt.
+**Re-Baseline-Begründung:** Die committete Baseline (2026-08-19, rustc 1.97.1)
+war gegenüber dem heutigen Code veraltet — die F-074-A1/A3-Optimierungen
+(`apply_recipe_with_white_balance`, Auto-Tone/Exposure-Match) und der
+readback-freie GPU-Present-Pfad hatten die gemessenen Mediane deutlich
+verändert, und `core/mask_graph_eval__*` verletzte den lokalen `gate`-Modus um
++112 % bis +358 %. Nach F-074-Methodik („geänderte Toolchains erzeugen eine
+neue Baseline") und wegen der neuen Merge-Klasse wurden **alle messbaren
+Core-/Batch-/GPU-IDs am 2026-09-17 auf derselben Maschine (rustc 1.98.0) neu
+erfasst**; der `environment`-Block in `perf/baseline.json` beschreibt diesen
+Lauf. Budgets wurden auf das 2-fache des neuen Medians nachgezogen,
+`tolerance_ratio` 1.2 und die `gate`-Flags unverändert; die env-gated
+`decode/raw__*`-IDs bleiben unangetastet. Verifikation:
+`node scripts/perf/compare.mjs --mode report|warn|gate` (Exit 0 in allen drei
+Modi).
 
 ## F-075 Speicherbudgets und Abbruchverhalten
 

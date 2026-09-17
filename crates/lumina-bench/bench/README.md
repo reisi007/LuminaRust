@@ -30,6 +30,10 @@ Beispiele:
 | `core/cache_hit__2048` | `FolderCache`-Hit-Pfad |
 | `decode/raw__aircraft-landscape` | RAW-Decode Fixture `aircraft-landscape.cr3` |
 | `batch/render_export_png__2048` | `render_frame` + `encode_with_options` |
+| `merge/hdr_weighted__2048` | gewichteter linearer HDR-Merge (`lumina-merge`) |
+| `merge/pano_blend__2048` | Panorama-Blend über die volle 3×3-Matrix |
+| `merge/encode_dng__2048` | linearer 16-Bit-DNG-Writer |
+| `merge/align_hdr__512` | HDR-Translations-Suche (`max_shift_px = 8`) |
 
 Regeln:
 
@@ -77,8 +81,9 @@ Neue Benchmarks werden so angelegt:
 
 ## Stand
 
-Stand 2026-08-19 (F-074-N3 umgesetzt): Es existieren Benchmarks für die
-definierten Klassen Core/Pipeline, Decode (env-gated) und Batch/End-to-End.
+Stand 2026-09-17 (F-074-N3 + Re-Baseline MERGE-IMPL-15): Es existieren
+Benchmarks für die definierten Klassen Core/Pipeline, Decode (env-gated),
+Batch/End-to-End, GPU (F-074-N6) und Merge (`bench/merge.rs`, F-074-N7).
 Alle synthetischen Fixtures werden deterministisch mit dem festen Seed
 `0x5EED` in `bench/common/mod.rs` erzeugt (Größen 512 / 1024 / 2048). Die
 RAW-Decode-Benchmarks sind über `LUMINA_RAW_FIXTURE` und das Feature
@@ -92,9 +97,15 @@ Registrierte Benchmark-IDs (jede in `perf/baseline.json` und
 | Core/Pipeline | `core/render_frame__<512\|1024\|2048>`, `core/apply_recipe_with_white_balance__<512\|1024\|2048>`, `core/mask_graph_eval__<512\|1024\|2048>`, `core/analyze_tone__<512\|1024\|2048>`, `core/suggest_auto_tone__<512\|1024\|2048>`, `core/match_total_exposure__<512\|1024\|2048>`, `core/histogram__<512\|1024\|2048>`, `core/cache_hit__<512\|1024\|2048>`, `core/cache_miss__<512\|1024\|2048>` |
 | Decode | `decode/raw__aircraft-landscape`, `decode/raw__aircraft-portrait` (env-gated) |
 | Batch/End-to-End | `batch/render_export_png__<512\|1024\|2048>` |
+| GPU (F-074-N6) | `gpu/render_with_gpu__<512\|1024\|2048>`, `gpu/update_uniforms__recipe`, `gpu/cpu_vs_gpu__{cpu,gpu}__2048` |
+| Merge (F-074-N7) | `merge/hdr_weighted__<512\|1024\|2048>`, `merge/pano_blend__<512\|1024\|2048>`, `merge/encode_dng__<512\|1024\|2048>`, `merge/align_hdr__512` |
 
-Die tatsächlich gemessenen Mediane/P95 stehen in `perf/baseline.json`
-(Erfassung 2026-08-19, Umgebung eintragen). Budgets sind mit dem 2-fachen
-Median und `tolerance_ratio` 1.2 angelegt; `gate` ist `true` für 30
-Core/Batch-Benchmarks und `false` für 2 Decode-Benchmarks (F-074-N5
-kalibriert).
+Die tatsächlich gemessenen Mediane/P95 stehen in `perf/baseline.json`. Die
+Erfassung vom 2026-09-17 (Umgebung: rustc 1.98.0, gleiche Maschine) hat alle
+messbaren Core-/Batch-/GPU-IDs neu erfasst (die alte Baseline war seit den
+F-074-A1/A3-/GPU-Optimierungen veraltet) und die neue Merge-Klasse ergänzt;
+die env-gated `decode/raw__*`-IDs bleiben unangetastet. Budgets sind mit dem
+2-fachen Median und `tolerance_ratio` 1.2 angelegt. `gate` ist `true` für
+Core-/Batch-/GPU-Benchmarks und `false` für die 2 Decode- und die 10
+Merge-Benchmarks (neue Klassen starten report-only, bis sie unabhängig
+kalibriert sind).

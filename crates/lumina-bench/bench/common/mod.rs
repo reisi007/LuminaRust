@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use lumina_core::{FolderCache, ImageFileFormat, ImageFrame, MaskPlane};
+use lumina_merge::LinearImage;
 use lumina_sidecar::{
     CoordinateSystem, DecodeFingerprint, EditRecipe, Extras, GeometryFingerprint, MaskDefinition,
     MaskLayer, MaskOperation, MaskReference, MaskStatus, ModelIdentity, Preprocessing, Resolution,
@@ -221,4 +222,47 @@ pub fn make_cache_fixture(size: u32) -> (FolderCache, String, String) {
     cache.store(hit_key.clone(), bytes);
     let miss_key = "absent".to_string();
     (cache, hit_key, miss_key)
+}
+
+/// Deterministic `size × size` linear-RGB gradient for the merge benchmark
+/// class (F-074 / MERGE-IMPL-15): `v = (x*0.7 + y*3.1) / (2*size)`, clamped
+/// to 1. Non-periodic, so the SAD alignment has a unique minimum. Derived
+/// from the frozen [`FIXTURE_SEED`] regime (no randomness; documented sizes
+/// 512/1024/2048).
+pub fn make_linear_gradient(size: u32) -> LinearImage {
+    linear_gradient(size, 0.0)
+}
+
+/// [`make_linear_gradient`] resampled with a horizontal subpixel shift (zero
+/// fill on the vacated edge) — the HDR/pano alignment stand-in.
+pub fn make_linear_gradient_shifted(size: u32, shift_x: f32) -> LinearImage {
+    linear_gradient(size, shift_x)
+}
+
+fn linear_gradient(size: u32, shift_x: f32) -> LinearImage {
+    let denom = (size as f32 * 2.0).max(1.0);
+    let mut pixels = Vec::with_capacity(size as usize * size as usize * 3);
+    for y in 0..size {
+        for x in 0..size {
+            let sample_x = x as f32 - shift_x;
+            let value = if sample_x < 0.0 {
+                0.0
+            } else {
+                ((sample_x * 0.7 + y as f32 * 3.1) / denom).min(1.0)
+            };
+            pixels.extend_from_slice(&[value, value, value]);
+        }
+    }
+    LinearImage::new(size, size, pixels).expect("deterministic linear frame")
+}
+
+/// Scales every linear sample by `factor` (clamped to 1) — the HDR bracket
+/// under-exposure stand-in; geometry is preserved.
+pub fn scale_linear(image: &LinearImage, factor: f32) -> LinearImage {
+    let pixels: Vec<f32> = image
+        .pixels()
+        .iter()
+        .map(|value| (value * factor).min(1.0))
+        .collect();
+    LinearImage::new(image.width(), image.height(), pixels).expect("scaled frame keeps geometry")
 }
