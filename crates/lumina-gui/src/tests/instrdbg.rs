@@ -1,15 +1,18 @@
-//! GUI-INSTRDBG-17b: headless tests for the remaining section actions
+//! GUI-INSTRDBG: headless tests for the remaining section actions
 //! (Library compare, Geometry, Masking-layer, Metadata). Each logs exactly
-//! one line. The core format/name/release tests live in `gui_action.rs`
-//! next to the extracted action table.
+//! one line. The core format/name/release tests live in
+//! `tests/instrdbg_core.rs` next to the extracted action table.
 #![cfg(debug_assertions)]
 
 use super::*;
 
-/// GUI-INSTRDBG-17b / -17b-REST: the 49 actions added by the follow-up slices
-/// (Library compare, Geometry, Masking-layer, Metadata, Spot extras, Detail,
-/// Optics, Tone Curve, Presets).
-const INSTRDBG_REST_ACTIONS: [GuiAction; 49] = [
+/// GUI-INSTRDBG-17b / -17b-REST / -17c / -17c-Rework: the 65 actions added by
+/// the follow-up slices (Library compare, Geometry, Masking-layer, Metadata,
+/// Spot extras, Detail, Optics, Tone Curve, Presets, WB eyedropper, Point
+/// Color, Spot distraction, Red-Eye picker, generative canvas, the generative
+/// checkboxes, the shared per-section Previous/Reset row, the lens-blur enable
+/// and the three filmstrip selection buttons).
+const INSTRDBG_REST_ACTIONS: [GuiAction; 65] = [
     GuiAction::ToggleCompareMode,
     GuiAction::ClearCrop,
     GuiAction::SetCropAspect,
@@ -59,6 +62,25 @@ const INSTRDBG_REST_ACTIONS: [GuiAction; 49] = [
     GuiAction::RemoveCurvePoint,
     GuiAction::ApplyPreset,
     GuiAction::SavePresetFile,
+    // GUI-INSTRDBG-17c.
+    GuiAction::SetSpotDistraction,
+    GuiAction::SetRedEyePickMode,
+    GuiAction::ReloadPresetEntries,
+    GuiAction::ArmWbEyedropper,
+    GuiAction::AddPointColor,
+    GuiAction::RemovePointColor,
+    GuiAction::SetExpandCanvas,
+    GuiAction::GenerateCanvas,
+    // GUI-INSTRDBG-17c-Rework.
+    GuiAction::SetExpandBeyondImage,
+    GuiAction::SetAutoFillTransparent,
+    GuiAction::RestoreSectionPrevious,
+    GuiAction::ResetSection,
+    GuiAction::SetLensBlurEnabled,
+    // GUI-INSTRDBG-17c-Rework F-1.
+    GuiAction::SyncSettingsToSelection,
+    GuiAction::MatchExposuresOfSelection,
+    GuiAction::ApplyPreviousToSelection,
 ];
 
 /// State an action needs before its trigger. Runs *before* the capture is
@@ -92,6 +114,14 @@ fn prepare_rest_action(app: &mut LuminaApp, action: GuiAction) -> Option<String>
         }
         GuiAction::SavePresetFile => {
             app.preset_name = "instrdbg-preset".into();
+            None
+        }
+        GuiAction::RemovePointColor => {
+            app.add_point_color();
+            None
+        }
+        GuiAction::GenerateCanvas => {
+            let _ = app.set_expand_beyond_image(true);
             None
         }
         _ => None,
@@ -230,6 +260,51 @@ fn trigger_rest_action(app: &mut LuminaApp, action: GuiAction, mask_id: Option<&
         }
         GuiAction::SavePresetFile => {
             let _ = app.save_current_selection_as_preset_file();
+        }
+        GuiAction::SetSpotDistraction => app.set_spot_distraction(SpotDistraction {
+            reflections: true,
+            people: false,
+            dust: true,
+            auto_mode: false,
+        }),
+        GuiAction::SetRedEyePickMode => app.set_red_eye_pick_mode(true),
+        GuiAction::ReloadPresetEntries => app.reload_preset_entries(),
+        GuiAction::ArmWbEyedropper => app.arm_wb_picker(),
+        GuiAction::AddPointColor => app.add_point_color(),
+        GuiAction::RemovePointColor => app.remove_point_color("pc-1"),
+        GuiAction::SetExpandCanvas => {
+            let _ = app.set_expand_canvas(GenerativeCanvas {
+                output_width: 12,
+                output_height: 12,
+                source_offset_x: 2,
+                source_offset_y: 2,
+                extras: Default::default(),
+            });
+        }
+        GuiAction::GenerateCanvas => {
+            let _ = app.generate_generative_canvas();
+        }
+        GuiAction::SetExpandBeyondImage => {
+            let _ = app.set_expand_beyond_image(true);
+        }
+        GuiAction::SetAutoFillTransparent => {
+            let _ = app.set_auto_fill_transparent(false);
+        }
+        GuiAction::RestoreSectionPrevious => {
+            let _ = app.restore_section_previous(SECTION_BASIC);
+        }
+        GuiAction::ResetSection => {
+            let _ = app.reset_section(SECTION_BASIC);
+        }
+        GuiAction::SetLensBlurEnabled => app.set_lens_blur_enabled(false),
+        GuiAction::SyncSettingsToSelection => {
+            let _ = app.sync_settings_to_selection();
+        }
+        GuiAction::MatchExposuresOfSelection => {
+            let _ = app.match_exposures_of_selection();
+        }
+        GuiAction::ApplyPreviousToSelection => {
+            let _ = app.apply_previous_to_selection();
         }
         _ => panic!("not a GUI-INSTRDBG-17b action: {action:?}"),
     }

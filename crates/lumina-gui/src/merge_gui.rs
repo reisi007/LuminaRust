@@ -341,8 +341,7 @@ impl crate::LuminaApp {
     /// Starts a merge on the current selection as a background job (job
     /// control: the UI stays responsive; `poll_merge_job` reports the result).
     pub fn start_merge(&mut self, mode: MergeMode) -> Result<(), GuiError> {
-        #[cfg(debug_assertions)]
-        let _gui_action_timer = self.begin_gui_action(GuiAction::StartMerge);
+        instrument_gui_action!(self, GuiAction::StartMerge);
         if self.merge_job.is_some() {
             return Err(GuiError::Io(Str::MergeAlreadyRunning.t().to_string()));
         }

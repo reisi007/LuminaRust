@@ -529,14 +529,119 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   `crates/lumina-gui/src/tests/instrdbg_rest.rs` (Button → instrumentierte
   Methode → genau eine Logzeile) plus No-op-Log-Regressionstest; der Audit
   prüft die neuen Oberflächen `Detail`, `Optics`, `Tone Curve` und `Presets`
-  mit. **Noch nicht instrumentiert** sind die übrigen Sektions-Schaltflächen
-  jenseits dieser 83 (`GuiAction`s): Weißabgleich-Eyedropper, Punktfarbe
-  (Add/Remove) in Basic/Color, generative Canvas-Buttons, Spot-Distraction-
-  Checkboxen (`set_spot_distraction`), Red-Eye-Pick-Toggle
-  (`set_red_eye_pick_mode`), Presets-Refresh (`reload_preset_entries`);
-  Tone-Curve-Kanalwahl ist reiner Session-State (grenzwertig, keine
-  Rezept-Aktion). Sie folgen mechanisch nach demselben Muster als eigene
-  Folgeaufgabe (`GUI-INSTRDBG-17c`).
+  mit. **GUI-INSTRDBG-17c (Rework 2026-09-17, Verifizierung offen):** Über die
+  83 `GuiAction`s aus 17b-REST hinaus sind die user-sichtbaren Schaltflächen
+  der Sektions-/Dialog- und Filmstreifen-Fläche instrumentiert (insgesamt 101
+  `GuiAction`s) — `set_spot_distraction` (die vier Distraction-Checkboxen),
+  `set_red_eye_pick_mode` (Red-Eye-Region-Pick-Toggle), `reload_preset_entries`
+  (Presets-Refresh), `arm_wb_eyedropper` (Weißabgleich-Eyedropper),
+  `add_point_color`/`remove_point_color`, `set_expand_canvas` (Apply Frame/Set
+  default), `generate_generative_canvas` sowie die im 17c-Rework nachgezogenen
+  rezept-mutierenden Controls `set_expand_beyond_image`/
+  `set_auto_fill_transparent` (generative Canvas-Checkboxen),
+  `restore_section_previous`/`reset_section` (die von allen acht
+  Develop-Panels geteilte Previous/Reset-Zeile), `set_lens_blur_enabled`
+  (Optics „Enable lens blur") sowie die drei Filmstreifen-Auswahlbuttons
+  `sync_settings_to_selection` (Sync Settings), `match_exposures_of_selection`
+  (Match Total Exposures) und `apply_previous_to_selection` (Previous Image,
+  Rework F-1) sowie die KI-Denoise-Enable-Checkbox `set_denoise_enabled`
+  (Detail-Sektion, Rework F-A: das Control ist bereits sichtbar, obwohl das
+  Denoise-Feature erst Release 2.0 ist, und wird daher instrumentiert statt
+  ausgenommen) sowie der People-View-Button „Use as mask" `create_face_mask`
+  (Rework-Rest GUI-INSTRDBG-17c: legt über `push_mask_definition` eine
+  Maskendefinition in der aktiven virtuellen Kopie an und schreibt das
+  Sidecar). Jede dieser Methoden trägt
+  `instrument_gui_action!` als erste Anweisung; `start_merge` nutzt als einzige
+  Stelle den identischen Debug-Pfad explizit, und beide Merge-Buttons
+  (HDR/Panorama) laufen durch denselben instrumentierten Handler — kein
+  zweiter, ungetracter Pfad. Klick-Tests je Button liegen in
+  `crates/lumina-gui/src/tests/instrdbg_last.rs` (17c) und
+  `crates/lumina-gui/src/tests/instrdbg_rework.rs` (Rework: generative
+  Checkboxen, Previous/Reset aller acht Panels, Lens-Blur-Enable, beide
+  Merge-Buttons, die drei Filmstreifen-Buttons, die KI-Denoise-Enable-Checkbox
+  (F-A)) plus No-op-Log-Regressionstests; der Audit prüft die neuen
+  Oberflächen `Color` (Point Color), `Generative` und `Filmstrip` mit, die Klick-Tests der
+  ersten Slices in `instrdbg_rest.rs` und die Kern-Tests (Format,
+  Nested-Suppression, Namenstabelle, Release-Passthrough) in
+  `crates/lumina-gui/src/tests/instrdbg_core.rs` (aus `gui_action.rs`
+  extrahiert, File-Size-Ratchet). Die beiden WB-Abbruch-Affordanzen
+  (`WbEyedropperActive`/`Cancel` setzen nur `wb_pick_mode = false`) bleiben wie
+  `disarm_preview_pickers`/`Esc` bewusster reiner Session-State ohne eigene
+  `GuiAction`. Tone-Curve-Kanalwahl ist ebenfalls reiner Session-State
+  (keine Rezept-Aktion) und bleibt bewusst uninstrumentiert. Die drei
+  Filmstreifen-Handler und ihre CAS-Sidecar-Helfer sind für den File-Size-
+  Ratchet nach `crates/lumina-gui/src/selection_actions.rs` extrahiert; dort
+  steht `instrument_gui_action!` als erste Anweisung, `lib.rs` wächst nicht.
+  Analog ist das Detail-Denoise-Panel nach
+  `crates/lumina-gui/src/denoise_panel.rs` extrahiert (Ratchet); die
+  Instrumentierung steht in `denoise_gui.rs` als erste Anweisung in
+  `set_denoise_enabled`.
+  **H-1-Schlussbeleg Rework F-1 + F-A + Rest (2026-09-17, eigene Zählung):**
+  Im Scope der 17b/17c-Rework-Flächen bleibt kein user-sichtbarer, das
+  Edit-Rezept oder Masken mutierender `ui.button`/`ui.checkbox` ohne
+  `GuiAction`.
+  Vollständige Klassenprüfung: alle 101
+  `GuiAction`s sind über den Audit (`f100_action_button`, ohne `_`-Arm)
+  einer gezeichneten Oberfläche zugeordnet, und jede instrumentierte Methode
+  trägt das Makro als erste Anweisung (Klick-Tests je Button/Checkbox).
+  Verbleibende, bewusst nicht instrumentierte Beobachtungen außerhalb der
+  Button-/Checkbox-Klasse:
+  (a) `F-2` — die Lens-Profil-Auswahl ist eine Radio-/Listenfläche, kein
+  `ui.button` (der instrumentierte Handler `set_lens_profile` wird beim Klick
+  auf einen Eintrag gerufen); (b) das Klicken einer History-Listenzeile
+  (`restore_history`, `selectable_label`) setzt das Rezept auf den
+  History-Stand zurück und ist ebenfalls keine Schaltfläche (Session-nahe
+  Auswahl-/Restore-Liste, nicht instrumentiert); (c) Batch-/Sammlungs-/
+  Smart-Collection-Aktionen (`apply_metadata_batch`, `add_to_collection`,
+  `create_smart_collection`, …) sowie die Face-Cluster-Operationen
+  (Confirm/Split/Merge) und das Culling-Adopt mutieren
+  Metadaten/Katalog-/Dokumentdaten, nicht das `EditRecipe`; (d) die
+  Entwicklungs-Profil-Auswahl (`set_profile`) ist eine `ComboBox`/
+  `selectable_value`-Liste, kein Button; (e) die Preview-Klick-Edits
+  (`set_white_balance_from_point` nach instrumentiertem
+  `arm_wb_eyedropper`, `add_red_eye_region` nach instrumentiertem
+  `set_red_eye_pick_mode`) sind Canvas-Klicks, keine Schaltflächen;
+  (f) Slider-Klasse: alle `set_*_value`-Setter (inkl. der KI-Denoise-Slider
+  `set_denoise_strength`/`set_denoise_preserve_detail`) und die
+  Shift-Sliderlabel-Geste `apply_auto_endpoint`; (g) reiner Session-State:
+  `set_denoise_policy`, Brush-Eraser, Metadaten-Draft-Auswahl, Export-Optionen,
+  Reset-Sliders-Präferenz und Masken-Preview.
+  **People-View-Rest geschlossen (Rework-Rest GUI-INSTRDBG-17c, 2026-09-17):**
+  Der People-View-Button „Use as mask" (`create_face_mask`,
+  `crates/lumina-gui/src/face_gui.rs`) ist jetzt eine `GuiAction`
+  (`create_face_mask`) mit `instrument_gui_action!` als erster Anweisung,
+  eigener Audit-Oberfläche `People` (`f100_action_button`, ohne `_`-Arm) und
+  Klick-Test (`crates/lumina-gui/src/tests/instrdbg_face.rs`: Button → genau
+  eine Logzeile → Maskendefinition im Rezept und im Sidecar). Das People-Panel
+  ist für den File-Size-Ratchet nach
+  `crates/lumina-gui/src/people_panel.rs` extrahiert (`face_gui.rs`
+  1095→899); die H-1-Aussage „kein user-sichtbarer Edit-Rezept-/Masken-
+  mutierender Button/Checkbox ohne `GuiAction`" ist damit vollständig belegt.
+  In Release-Builds
+  ist die Instrumentierung wegkompiliert: `strings target/release/lumina-gui`
+  enthält weder `action=`/`duration_ms=`/`gpu_route=` noch
+  instrumentierungs-eigene Aktionsnamen. Einzelne Aktionsnamen erscheinen in
+  Release-Strings weiterhin, weil sie in (nicht wegkompilierten)
+  `info!`/`warn!`-Interaktionszeilen stehen — etwa
+  `set_auto_fill_transparent`, `set_lens_blur_enabled`,
+  `restore_section_previous`, `reset_section`, `reload_preset_entries` sowie
+  nach Rework F-1 auch `set_expand_beyond_image`/`set_expand_canvas`
+  (Verifikationsbefund F-4: die beiden fehlenden `info!`-Interaktionszeilen
+  wurden nach DoD §4 ergänzt). Das ist keine Instrumentierung
+  und kein Widerspruch zur Wegkompilierung (Nachweis 2026-09-17).
+- **Kittest-Gate-Befund (GUI-INSTRDBG-17c-Rework, 2026-09-17):**
+  `generative_expand_panel_ready` ist load-abhängig flaky. In Isolation
+  (8/8) und bei Standard-Parallelität (8/8) grün, bei hoher Parallelität
+  (`--test-threads=64`) reproduzierbar rot (8/8; Standardlauf 1/3). Der Diff
+  liegt im asynchron gerenderten Generative-Preview (bei geringer Last nur im
+  zeitbasierten `Preview ready`-Overlay-Toast), nicht in Panel-Layout oder
+  Text. Die i18n-Rebaseline `8de5585` ist vollständig (das Golden-Update ist
+  im Commit), und die 17c-Instrumentierung ist debug-only und damit
+  pixelneutral (kein UI-Draw-Code geändert; Release-`strings`-Nachweis).
+  Daher kein Rebaseline; eine Stabilisierung (Render-Synchronisation vor dem
+  Snapshot) ist ein eigener Folge-Task. Die `kittest_parity`-Goldens
+  `parity_paths_*` bleiben separat als `GUI-PARITY-GOLDENS-18` verplant
+  (2/4 Parity-Testfunktionen rot bestätigt, nicht Teil dieses Reworks).
 - **Routing-Badge-Befund (GUI-ROUTING-N6, F-103-N6-Runde 1, 2026-09-17):**
   Der gelbe Badge im manuellen Test (`Render routed to CPU: …`) wurde
   reproduziert. Für die committeten RAW-Fixtures mit einem harmlosen

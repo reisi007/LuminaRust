@@ -19,11 +19,17 @@ mod gui_action;
 // LRPAR-G14-DENOISE-IMPL-20 (GUI slice): Detail-section denoise controls +
 // status badge; the stage itself runs in the shared core pipeline.
 mod denoise_gui;
+// GUI-INSTRDBG-17c-Rework F-A: the Detail-section denoise panel is extracted
+// (file-size ratchet) while the enable checkbox gains its `GuiAction`.
+mod denoise_panel;
 // LRPAR-G09-CULL-25 (GUI slice): Library assisted-culling badges, filter and
 // the explicit adopt action (source-level `document.culling` only).
 mod cull_gui;
 // LRPAR-G12-FACE-20 (FACE-20-S5): Library People view + confirm/split/merge.
 mod face_gui;
+// GUI-INSTRDBG-17c-Rest: the People view panel is extracted (file-size
+// ratchet) while the per-face "Use as mask" bridge gains its `GuiAction`.
+mod people_panel;
 // LRPAR-G13-MERGE-15 (GUI slice): `merge-hdr`/`merge-pano` actions + DNG
 // artifact status (same `lumina-merge` entry points as the CLI).
 mod filmstrip;
@@ -31,6 +37,9 @@ mod i18n;
 mod merge_gui;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
+// LRPAR-G08-PREVIOUS / GUI-FILMSTRIP-SYNC-1: the filmstrip selection actions
+// (Lightroom "Sync Settings", "Match Total Exposures", "Previous Image").
+mod selection_actions;
 // PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk
 // LRU).
 mod preview_ctrl;
@@ -4203,6 +4212,7 @@ impl LuminaApp {
     /// indices and a missing baseline fail loudly. Commits through the
     /// normal save/render path.
     pub fn restore_section_previous(&mut self, index: usize) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::RestoreSectionPrevious);
         let label = section_name(index)
             .ok_or_else(|| GuiError::Io(format!("unknown develop section {index}")))?;
         let baseline = self
@@ -4243,6 +4253,7 @@ impl LuminaApp {
     /// leaves B&W-owned `-1` values untouched while the treatment is active
     /// (ownership of the toggle). Commits through the normal save/render path.
     pub fn reset_section(&mut self, index: usize) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::ResetSection);
         let label = section_name(index)
             .ok_or_else(|| GuiError::Io(format!("unknown develop section {index}")))?;
         if self.original.is_none() {
@@ -7868,6 +7879,7 @@ impl LuminaApp {
     /// exclusive — a single click must never sample a white balance *and* mark
     /// a pupil.
     fn arm_wb_picker(&mut self) {
+        instrument_gui_action!(self, GuiAction::ArmWbEyedropper);
         self.wb_pick_mode = true;
         self.red_eye_pick_mode = false;
         info!("GUI interaction: white-balance pick mode armed");
@@ -7876,6 +7888,7 @@ impl LuminaApp {
     /// G-14 (H1): arm/disarm the red-eye region picker. Arming disarms the WB
     /// eyedropper (see [`Self::arm_wb_picker`]).
     fn set_red_eye_pick_mode(&mut self, armed: bool) {
+        instrument_gui_action!(self, GuiAction::SetRedEyePickMode);
         self.red_eye_pick_mode = armed;
         if armed {
             self.wb_pick_mode = false;
@@ -8165,6 +8178,7 @@ impl LuminaApp {
     }
 
     pub fn set_spot_distraction(&mut self, setting: SpotDistraction) {
+        instrument_gui_action!(self, GuiAction::SetSpotDistraction);
         self.recipe.set_spot_distraction(setting);
         self.mark_recipe_dirty(
             "spot.distraction",
@@ -8353,6 +8367,7 @@ impl LuminaApp {
     }
 
     pub fn set_expand_beyond_image(&mut self, expand: bool) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetExpandBeyondImage);
         let mut ge = self
             .recipe
             .generative_edit
@@ -8430,6 +8445,7 @@ impl LuminaApp {
                 self.save_sidecar();
             }
         }
+        info!("GUI interaction: set_expand_beyond_image -> {expand}");
         if self.original.is_some() {
             // GEN-ONNX-1 Welle 2b (F4): propagate the render result instead of
             // swallowing it. An active `expand_beyond_image` without a matching
@@ -8442,6 +8458,7 @@ impl LuminaApp {
     }
 
     pub fn set_expand_canvas(&mut self, canvas: GenerativeCanvas) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetExpandCanvas);
         let mut ge = self
             .recipe
             .generative_edit
@@ -8465,6 +8482,7 @@ impl LuminaApp {
             canvas.validate().map_err(|e| GuiError::Io(e.to_string()))?;
         }
         ge.expand_beyond_image = Some(true);
+        let (out_width, out_height) = (canvas.output_width, canvas.output_height);
         ge.canvas = Some(canvas);
         self.recipe.generative_edit = Some(ge);
         self.mark_dirty();
@@ -8473,6 +8491,7 @@ impl LuminaApp {
                 self.save_sidecar();
             }
         }
+        info!("GUI interaction: set_expand_canvas -> {out_width}x{out_height}");
         if self.original.is_some() {
             // GEN-ONNX-1 Welle 2b (F4): loud render result, never swallowed.
             self.render()?;
@@ -8504,6 +8523,7 @@ impl LuminaApp {
     /// (press "Generate"), and an opaque post-lens frame needs no artifact
     /// (caller convention). Persisted like every other recipe edit.
     pub fn set_auto_fill_transparent(&mut self, auto_fill: bool) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetAutoFillTransparent);
         let mut ge = self
             .recipe
             .generative_edit
@@ -8698,6 +8718,7 @@ impl LuminaApp {
     ///   `artifact` field (the auto-fill record stays addressable by its
     ///   deterministic bundle id).
     pub fn generate_generative_canvas(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::GenerateCanvas);
         let frame = self
             .original
             .clone()
@@ -9437,405 +9458,8 @@ impl LuminaApp {
         self.open_file(path);
     }
 
-    /// GUI-FILMSTRIP-SYNC-1: apply the active copy's recipe to every selected
-    /// image (Lightroom "Sync Settings"). Each target keeps its own sidecar
-    /// (created when missing) written via CAS; per-image failures are loud
-    /// (`error!` + report entry) and never abort the remaining targets. Every
-    /// applied image logs `info!` and bumps `preview_generation`.
-    pub fn sync_settings_to_selection(&mut self) -> SelectionSyncReport {
-        let targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
-        let mut report = SelectionSyncReport::default();
-        if targets.is_empty() {
-            self.status = "No images selected".into();
-            return report;
-        }
-        let recipe = self.recipe.clone();
-        for (index, target) in targets.iter().enumerate() {
-            match self.apply_recipe_to_path(
-                target,
-                &recipe,
-                &format!("sync-{index}"),
-                BTreeMap::new(),
-            ) {
-                Ok(()) => {
-                    info!("sync settings: {target} updated");
-                    self.preview_generation += 1;
-                    self.refresh_entry(Path::new(target));
-                    report.applied.push(target.clone());
-                }
-                Err(message) => {
-                    error!("sync settings failed for {target}: {message}");
-                    report.failed.push((target.clone(), message));
-                }
-            }
-        }
-        if report.failed.is_empty() {
-            self.status = format!("Synced settings to {} image(s)", report.applied.len());
-        } else {
-            let joined = report
-                .failed
-                .iter()
-                .map(|(path, message)| format!("{path}: {message}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            self.show_error(format!(
-                "Sync failed for {} image(s): {joined}",
-                report.failed.len()
-            ));
-        }
-        report
-    }
-
-    /// GUI-FILMSTRIP-SYNC-1: equalize exposure over the selection (Lightroom
-    /// "Match Total Exposures"). Each selected image is measured with Core's
-    /// [`analyze_tone`](lumina_core::analyze_tone); the selection median of
-    /// those means is the common target, and each image receives its own Core
-    /// [`match_total_exposure`](lumina_core::match_total_exposure) delta on
-    /// top of its current exposure (read-only Core use — no Core change).
-    /// Persistence, logging and `preview_generation` behave like
-    /// [`Self::sync_settings_to_selection`].
-    pub fn match_exposures_of_selection(&mut self) -> SelectionSyncReport {
-        let targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
-        let mut report = SelectionSyncReport::default();
-        if targets.is_empty() {
-            self.status = "No images selected".into();
-            return report;
-        }
-        // Pass 1 (measure): decode every target and read its mean luminance.
-        // A decode failure is a loud per-image entry, never an abort.
-        let mut measured: Vec<(String, ImageFrame, f64)> = Vec::new();
-        for target in &targets {
-            match decode_selection_frame(Path::new(target)) {
-                Ok((_, frame, _)) => {
-                    let mean = analyze_tone(&frame).mean;
-                    measured.push((target.clone(), frame, mean));
-                }
-                Err(message) => {
-                    error!("match exposures: cannot decode {target}: {message}");
-                    report.failed.push((target.clone(), message));
-                }
-            }
-        }
-        if measured.is_empty() {
-            self.show_error("Match exposures: no selectable image could be decoded");
-            return report;
-        }
-        let mut means: Vec<f64> = measured.iter().map(|(_, _, mean)| *mean).collect();
-        means.sort_by(f64::total_cmp);
-        let middle = means.len() / 2;
-        let median = if means.len() % 2 == 1 {
-            means[middle]
-        } else {
-            (means[middle - 1] + means[middle]) / 2.0
-        }
-        .clamp(0.0, 1.0);
-        // Pass 2 (apply): one Core delta per image against the median.
-        for (index, (target, frame, _)) in measured.iter().enumerate() {
-            let delta = match lumina_core::match_total_exposure(frame, median) {
-                Ok(delta) => delta,
-                Err(error) => {
-                    let message = error.to_string();
-                    error!("match exposures failed for {target}: {message}");
-                    report.failed.push((target.clone(), message));
-                    continue;
-                }
-            };
-            match self.apply_match_delta_to_path(target, delta, median, &format!("match-{index}")) {
-                Ok((old, new)) => {
-                    info!(
-                        "match exposures: {target} exposure {old:+.3} -> {new:+.3} (median luminance {median:.4})"
-                    );
-                    self.preview_generation += 1;
-                    self.refresh_entry(Path::new(target));
-                    report.applied.push(target.clone());
-                }
-                Err(message) => {
-                    error!("match exposures failed for {target}: {message}");
-                    report.failed.push((target.clone(), message));
-                }
-            }
-        }
-        if report.failed.is_empty() {
-            self.status = format!(
-                "Matched exposures of {} image(s) to median luminance {median:.4}",
-                report.applied.len()
-            );
-        } else {
-            let joined = report
-                .failed
-                .iter()
-                .map(|(path, message)| format!("{path}: {message}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            self.show_error(format!(
-                "Match exposures failed for {} image(s): {joined}",
-                report.failed.len()
-            ));
-        }
-        report
-    }
-
-    /// Previous reference path (read-only accessor for headless tests).
-    pub fn previous_source_path(&self) -> Option<&str> {
-        self.previous_reference
-            .as_ref()
-            .map(|reference| reference.path.as_str())
-    }
-
-    /// LRPAR-G08-PREVIOUS: apply the Previous reference (the image edited
-    /// immediately before the current one, Lightroom "Previous") to the
-    /// filmstrip selection — the same full-recipe Sync mechanism as
-    /// [`Self::sync_settings_to_selection`] (each target keeps its own
-    /// sidecar written via CAS, one `previous-{index}` history step each,
-    /// per-image failures loud via `error!` + report entry, never aborting
-    /// the rest). With an empty selection the currently loaded image is the
-    /// single target (Previous on the active photo); with neither selection
-    /// nor loaded image — or without any reference — the call is a loud
-    /// no-op (empty report + visible error, no sidecar write). Every applied
-    /// image logs `info!` and bumps `preview_generation`. Unlike Sync, the
-    /// currently loaded target additionally adopts the reference in memory
-    /// (recipe + document + baseline + re-render) so preview and sidecar
-    /// stay consistent.
-    pub fn apply_previous_to_selection(&mut self) -> SelectionSyncReport {
-        let mut report = SelectionSyncReport::default();
-        let Some(reference) = self.previous_reference.clone() else {
-            self.show_error("Previous unavailable: no previously edited image in this session");
-            return report;
-        };
-        let mut targets: Vec<String> = self.filmstrip_selection.iter().cloned().collect();
-        if targets.is_empty() {
-            if self.original.is_none() || self.path.trim().is_empty() {
-                self.show_error("Previous unavailable: no image loaded");
-                return report;
-            }
-            targets.push(self.path.clone());
-        }
-        let reference_name = Path::new(&reference.path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&reference.path)
-            .to_string();
-        for (index, target) in targets.iter().enumerate() {
-            let history_id = format!("previous-{index}");
-            let history_extras = previous_history_extras(&reference.path);
-            let generation_before = self.preview_generation;
-            let applied = if *target == self.path && self.original.is_some() {
-                self.apply_previous_to_current(&reference.recipe, &history_id, history_extras)
-            } else {
-                self.apply_recipe_to_path(target, &reference.recipe, &history_id, history_extras)
-            };
-            match applied {
-                Ok(()) => {
-                    info!(
-                        "previous settings: {target} updated from {}",
-                        reference.path
-                    );
-                    // Exactly one generation step per applied image: the
-                    // current-image path re-rendered above (which bumps
-                    // itself), the file-only path did not.
-                    if self.preview_generation == generation_before {
-                        self.preview_generation += 1;
-                    }
-                    self.refresh_entry(Path::new(target));
-                    report.applied.push(target.clone());
-                }
-                Err(message) => {
-                    error!("previous settings failed for {target}: {message}");
-                    report.failed.push((target.clone(), message));
-                }
-            }
-        }
-        if report.failed.is_empty() {
-            self.status = format!(
-                "Applied previous settings from {reference_name} to {} image(s)",
-                report.applied.len()
-            );
-        } else {
-            let joined = report
-                .failed
-                .iter()
-                .map(|(path, message)| format!("{path}: {message}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            self.show_error(format!(
-                "Previous failed for {} image(s): {joined}",
-                report.failed.len()
-            ));
-        }
-        report
-    }
-
-    /// Write the Previous `reference` recipe into the currently loaded image:
-    /// same disk write as [`Self::apply_recipe_to_path`] (CAS sidecar +
-    /// history step), then adopt the persisted state in memory (recipe +
-    /// document + revision + Previous baseline) and re-render, so the visible
-    /// preview matches the sidecar. A save that did not land is a loud
-    /// per-target failure, never a silent divergence.
-    fn apply_previous_to_current(
-        &mut self,
-        recipe: &EditRecipe,
-        history_id: &str,
-        history_extras: BTreeMap<String, Value>,
-    ) -> Result<(), String> {
-        self.ensure_document_loaded()
-            .map_err(|error| error.to_string())?;
-        self.recipe = recipe.clone();
-        let id = self.virtual_copy_id.clone();
-        let document = self
-            .document
-            .as_mut()
-            .ok_or_else(|| "no sidecar document loaded".to_string())?;
-        let copy = document
-            .virtual_copies
-            .iter_mut()
-            .find(|copy| copy.id == id)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        copy.recipe = recipe.clone();
-        copy.history.push(HistoryEntry {
-            id: history_id.into(),
-            recipe: recipe.clone(),
-            recorded_at: None,
-            extras: history_extras,
-        });
-        self.mark_dirty();
-        self.save_sidecar();
-        self.render().map_err(|error| error.to_string())?;
-        // Reload anchor: the sidecar on disk is the truth — confirm the write
-        // landed and adopt it, so a failed save can never leave preview and
-        // sidecar silently diverged.
-        let sidecar_path = lumina_sidecar::sidecar_path_for(Path::new(&self.path));
-        let document =
-            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?;
-        let revision =
-            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
-        let persisted = document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == self.virtual_copy_id)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        if persisted.recipe != *recipe {
-            return Err("sidecar save did not persist the previous recipe".to_string());
-        }
-        self.recipe = persisted.recipe.clone();
-        self.sidecar_revision = Some(revision);
-        self.document = Some(document);
-        self.capture_section_baselines();
-        Ok(())
-    }
-
-    /// Write `recipe` into the default copy of `target`'s sidecar (creating
-    /// the sidecar when missing) through the CAS API. The source is decoded
-    /// first so a missing/unreadable image fails loudly before any write.
-    fn apply_recipe_to_path(
-        &self,
-        target: &str,
-        recipe: &EditRecipe,
-        history_id: &str,
-        history_extras: BTreeMap<String, Value>,
-    ) -> Result<(), String> {
-        let path = PathBuf::from(target);
-        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
-        let (bytes, frame, orientation) = decode_selection_frame(&path)?;
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(target);
-        let mut document = if sidecar_path.exists() {
-            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?
-        } else {
-            SidecarDocument::new(
-                selection_source_identity(name, &bytes, &frame, orientation, is_raw_name(name)),
-                "raster-mvp-1",
-            )
-        };
-        let expected =
-            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
-        // CAS against the revision just read: an external modification between
-        // our load and this write surfaces as a loud conflict instead of being
-        // silently overwritten. A missing file expects `None` (fresh lineage).
-        let expected_revision = if sidecar_path.exists() {
-            Some(expected)
-        } else {
-            None
-        };
-        let copy = default_copy_mut(&mut document)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        copy.recipe = recipe.clone();
-        copy.history.push(HistoryEntry {
-            id: history_id.into(),
-            recipe: recipe.clone(),
-            recorded_at: None,
-            extras: history_extras,
-        });
-        lumina_sidecar::save_sidecar_if_unchanged(
-            &sidecar_path,
-            &document,
-            expected_revision.as_deref(),
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    /// Add `delta` to the current exposure of `target`'s default copy and tag
-    /// the match state (`target_luminance` = selection median). Returns
-    /// `(old_exposure, new_exposure)` for the per-image `info!` log.
-    fn apply_match_delta_to_path(
-        &self,
-        target: &str,
-        delta: f64,
-        median: f64,
-        history_id: &str,
-    ) -> Result<(f64, f64), String> {
-        let path = PathBuf::from(target);
-        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
-        let (bytes, frame, orientation) = decode_selection_frame(&path)?;
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(target);
-        let mut document = if sidecar_path.exists() {
-            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?
-        } else {
-            SidecarDocument::new(
-                selection_source_identity(name, &bytes, &frame, orientation, is_raw_name(name)),
-                "raster-mvp-1",
-            )
-        };
-        let expected =
-            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
-        let expected_revision = if sidecar_path.exists() {
-            Some(expected)
-        } else {
-            None
-        };
-        let copy = default_copy_mut(&mut document)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        let old = copy
-            .recipe
-            .adjustments
-            .get("exposure")
-            .copied()
-            .unwrap_or(0.0);
-        let new = old + delta;
-        copy.recipe.adjustments.insert("exposure".into(), new);
-        copy.recipe.auto_features.match_total_exposure = true;
-        copy.recipe.auto_features.target_luminance = median;
-        copy.recipe.auto_features.matched_exposure = Some(delta);
-        copy.history.push(HistoryEntry {
-            id: history_id.into(),
-            recipe: copy.recipe.clone(),
-            recorded_at: None,
-            extras: BTreeMap::new(),
-        });
-        lumina_sidecar::save_sidecar_if_unchanged(
-            &sidecar_path,
-            &document,
-            expected_revision.as_deref(),
-        )
-        .map_err(|error| error.to_string())?;
-        Ok((old, new))
-    }
-
+    // LRPAR-G08-PREVIOUS: the filmstrip selection actions (Sync/Match/Previous)
+    // and their sidecar helpers moved to `crate::selection_actions`.
     pub fn load_bytes(&mut self, bytes: Vec<u8>, name: impl Into<String>) -> Result<(), GuiError> {
         let name = name.into();
         // GUI-SIDECAR-READ-1: same flush as `open_file` — a dropped file
@@ -10431,6 +10055,7 @@ impl LuminaApp {
     /// recipe state (never positional). At most 8 entries; a ninth is
     /// refused loudly via the status line.
     fn add_point_color(&mut self) {
+        instrument_gui_action!(self, GuiAction::AddPointColor);
         let mut block = self.recipe.point_color.clone().unwrap_or(PointColor {
             version: 1,
             entries: Vec::new(),
@@ -10465,6 +10090,7 @@ impl LuminaApp {
     /// refused loudly; removing the last entry drops the whole block
     /// (absent = identity).
     fn remove_point_color(&mut self, id: &str) {
+        instrument_gui_action!(self, GuiAction::RemovePointColor);
         let Some(block) = self.recipe.point_color.clone() else {
             warn!("remove_point_color: no point_color block for id {id}");
             return;
@@ -10966,6 +10592,7 @@ impl LuminaApp {
     /// Recipe-backed: persists through the debounced slider-save path
     /// ([`Self::commit_pending_slider_save`], `info!`-logged).
     pub fn set_lens_blur_enabled(&mut self, enabled: bool) {
+        instrument_gui_action!(self, GuiAction::SetLensBlurEnabled);
         self.lens_blur_mut().enabled = enabled;
         self.mark_recipe_dirty("lens_blur.enabled", f64::from(enabled as u8));
         info!("GUI interaction: set_lens_blur_enabled -> {enabled}");
@@ -19091,9 +18718,14 @@ impl LuminaApp {
     /// F-009: rescans the user presets directory. Scan problems surface as
     /// failed entries inside the list, never as silent drops.
     fn reload_preset_entries(&mut self) {
+        instrument_gui_action!(self, GuiAction::ReloadPresetEntries);
         if let Some(directory) = self.presets_dir.as_deref() {
             self.preset_entries = presets::scan_presets_dir(directory);
         }
+        info!(
+            "GUI interaction: reload_preset_entries -> {} entries",
+            self.preset_entries.len()
+        );
     }
 
     /// F-009: persists the currently selected preset fields as
@@ -21401,6 +21033,14 @@ mod tests {
     // GUI-INSTRDBG-17b-REST: the click tests for the Spot/Detail/Optics/
     // Tone-Curve/Presets buttons (second extracted slice).
     mod instrdbg_rest;
+    // GUI-INSTRDBG-17c: core instrumentation tests (moved out of gui_action.rs)
+    // plus the last-button click tests (WB eyedropper, Point Color, Spot
+    // distraction, Red-Eye picker, Presets refresh, generative canvas).
+    mod instrdbg_core;
+    mod instrdbg_last;
+    mod instrdbg_rework;
+    // GUI-INSTRDBG-17c-Rest: the People-view "Use as mask" click test.
+    mod instrdbg_face;
     use lumina_core::ImageFileFormat;
     use lumina_sidecar::{
         BokehShape, BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint,
@@ -22439,6 +22079,16 @@ mod tests {
         Optics,
         ToneCurve,
         Presets,
+        // GUI-INSTRDBG-17c: Color (Point Color) and the generative canvas
+        // buttons.
+        Color,
+        Generative,
+        // GUI-INSTRDBG-17c-Rework F-1: the filmstrip selection buttons
+        // (Sync Settings / Match Total Exposures / Previous Image).
+        Filmstrip,
+        // GUI-INSTRDBG-17c-Rest: the Library People view (per-face
+        // "Use as mask" Develop bridge).
+        People,
     }
 
     /// Exhaustive `GuiAction` → (`surface`, `button label`). No `_` arm.
@@ -22570,6 +22220,46 @@ mod tests {
             }
             GuiAction::ApplyPreset => (F100Surface::Presets, Str::ApplyPreset.t().into()),
             GuiAction::SavePresetFile => (F100Surface::Presets, Str::SavePresetFile.t().into()),
+            // GUI-INSTRDBG-17c: WB eyedropper, Point Color, Spot distraction,
+            // Red-Eye picker, Presets refresh and the generative canvas.
+            GuiAction::SetSpotDistraction => (F100Surface::Spot, "Dust".into()),
+            GuiAction::SetRedEyePickMode => (F100Surface::Detail, Str::RedEyePickMode.t().into()),
+            GuiAction::ReloadPresetEntries => (F100Surface::Presets, Str::Refresh.t().into()),
+            GuiAction::ArmWbEyedropper => (F100Surface::Basic, Str::WbEyedropper.t().into()),
+            GuiAction::AddPointColor => (F100Surface::Color, Str::PointColorAdd.t().into()),
+            GuiAction::RemovePointColor => (F100Surface::Color, Str::PointColorRemove.t().into()),
+            GuiAction::SetExpandCanvas => (
+                F100Surface::Generative,
+                "Apply Frame (drag) → Canvas".into(),
+            ),
+            GuiAction::GenerateCanvas => (F100Surface::Generative, Str::GenerateCanvas.t().into()),
+            // GUI-INSTRDBG-17c-Rework: generative checkboxes, per-section
+            // Previous/Reset and the lens-blur enable checkbox.
+            GuiAction::SetExpandBeyondImage => {
+                (F100Surface::Generative, Str::ExpandBeyondImage.t().into())
+            }
+            GuiAction::SetAutoFillTransparent => {
+                (F100Surface::Generative, Str::AutoFillTransparent.t().into())
+            }
+            GuiAction::RestoreSectionPrevious => (F100Surface::Basic, Str::Previous.t().into()),
+            GuiAction::ResetSection => (F100Surface::Basic, Str::Reset.t().into()),
+            GuiAction::SetLensBlurEnabled => (F100Surface::Optics, Str::LensBlurEnable.t().into()),
+            // GUI-INSTRDBG-17c-Rework F-1: the filmstrip selection-action row.
+            GuiAction::SyncSettingsToSelection => {
+                (F100Surface::Filmstrip, Str::SyncSettings.t().into())
+            }
+            GuiAction::MatchExposuresOfSelection => {
+                (F100Surface::Filmstrip, Str::MatchSelection.t().into())
+            }
+            GuiAction::ApplyPreviousToSelection => {
+                (F100Surface::Filmstrip, Str::PreviousImage.t().into())
+            }
+            // GUI-INSTRDBG-17c-Rework F-A: the KI-Denoise enable checkbox
+            // (Detail section; recipe-mutating).
+            GuiAction::SetDenoiseEnabled => (F100Surface::Detail, Str::DenoiseEnable.t().into()),
+            // GUI-INSTRDBG-17c-Rest: the People-view per-face mask-source
+            // button (creates a mask definition on the active virtual copy).
+            GuiAction::CreateFaceMask => (F100Surface::People, Str::FaceUseAsMask.t().into()),
         }
     }
 
@@ -22616,7 +22306,7 @@ mod tests {
                 headless_shapes_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
             }
             F100Surface::Spot => {
-                headless_click_labels_sized(app, 4096.0, &["Dust Removal (Q)"], |app, ui| {
+                headless_click_labels_sized(app, 6000.0, &["Dust Removal (Q)"], |app, ui| {
                     app.draw_spot_heal(ui)
                 })
             }
@@ -22673,11 +22363,52 @@ mod tests {
                 headless_shapes_sized(app, 8000.0, |app, ui| app.draw_tone_curve(ui))
             }
             F100Surface::Presets => {
-                // `None` keeps the audit deterministic (no real user presets
-                // directory is scanned); the Apply/Save buttons always paint.
-                app.presets_dir = None;
+                // A path keeps the Refresh button painted while no real user
+                // presets directory is scanned during the audit frame; the
+                // Apply/Save buttons always paint.
+                app.presets_dir = Some(std::path::PathBuf::from("instrdbg-presets"));
                 headless_click_labels(app, &[Str::PresetsSection.t()], |app, ui| {
                     app.draw_presets_section(ui)
+                })
+            }
+            F100Surface::Color => {
+                // One Point Color entry paints the per-entry "Remove" button;
+                // the trailing "Add color" button always paints.
+                app.set_section_open(SECTION_COLOR, true);
+                app.add_point_color();
+                headless_shapes_sized(app, 8000.0, |app, ui| app.draw_color(ui))
+            }
+            F100Surface::Generative => {
+                // An active expand role with a canvas paints the "Apply Frame"
+                // button; `generative_stage_active` then paints "Generate".
+                let _ = app.set_expand_beyond_image(true);
+                headless_click_labels_sized(app, 2000.0, &["Generative Expand"], |app, ui| {
+                    app.draw_generative_expand(ui)
+                })
+            }
+            F100Surface::Filmstrip => {
+                // The selection row paints with or without a selection; clear
+                // the startup auto-selection so the plain (counter-free) Sync
+                // label is audited, mirroring `f100_action_button`.
+                app.filmstrip_selection.clear();
+                headless_shapes(app, |app, ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_filmstrip(&ctx, ui);
+                })
+            }
+            F100Surface::People => {
+                // GUI-INSTRDBG-17c-Rest: the People view needs a persisted,
+                // valid face analysis (selected cluster + detection) and a
+                // loaded frame so the per-face "Use as mask" button paints.
+                // `seed_face` writes the exact embedding records the persisted
+                // checksums reference, so the analysis is `valid` (not a
+                // presence-only false positive).
+                crate::face_gui::tests::seed_face(app);
+                app.set_library_view(LibraryView::People);
+                app.people_selected_cluster = "cluster-a".into();
+                headless_shapes_sized(app, 4096.0, |app, ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_library_grid(&ctx, ui);
                 })
             }
         }
@@ -22706,6 +22437,10 @@ mod tests {
             F100Surface::Optics,
             F100Surface::ToneCurve,
             F100Surface::Presets,
+            F100Surface::Color,
+            F100Surface::Generative,
+            F100Surface::Filmstrip,
+            F100Surface::People,
         ];
         for surface in order {
             let shapes = f100_surface_shapes(&mut app, surface);

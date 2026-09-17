@@ -121,6 +121,42 @@ pub enum GuiAction {
     RemoveCurvePoint,
     ApplyPreset,
     SavePresetFile,
+    // GUI-INSTRDBG-17c (WB eyedropper, Point Color, Spot distraction,
+    // Red-Eye region picker, Presets refresh, generative canvas).
+    SetSpotDistraction,
+    SetRedEyePickMode,
+    ReloadPresetEntries,
+    ArmWbEyedropper,
+    AddPointColor,
+    RemovePointColor,
+    SetExpandCanvas,
+    GenerateCanvas,
+    // GUI-INSTRDBG-17c-Rework: the remaining recipe-mutating controls the
+    // verifier flagged (generative checkboxes, per-section Previous/Reset, the
+    // lens-blur enable checkbox).
+    SetExpandBeyondImage,
+    SetAutoFillTransparent,
+    RestoreSectionPrevious,
+    ResetSection,
+    SetLensBlurEnabled,
+    // GUI-INSTRDBG-17c-Rework F-1: the three user-visible filmstrip buttons
+    // that mutate the selected images' recipes (Lightroom "Sync Settings",
+    // "Match Total Exposures", "Previous Image").
+    SyncSettingsToSelection,
+    MatchExposuresOfSelection,
+    ApplyPreviousToSelection,
+    // GUI-INSTRDBG-17c-Rework F-A: the KI-Denoise enable checkbox (Detail
+    // section; recipe-mutating). The two denoise sliders
+    // (`set_denoise_strength`/`set_denoise_preserve_detail`) are slider-class
+    // and the fallback policy switch is session-only — both stay
+    // uninstrumented by design.
+    SetDenoiseEnabled,
+    // GUI-INSTRDBG-17c REST (People view): the per-face "Use as mask" Develop
+    // bridge. `create_face_mask` (`face_gui.rs`) turns a persisted, valid face
+    // detection box into a mask definition on the active virtual copy
+    // (`push_mask_definition`) and writes the sidecar — user-visible,
+    // mask-/recipe-mutating.
+    CreateFaceMask,
 }
 
 impl GuiAction {
@@ -210,6 +246,24 @@ impl GuiAction {
             GuiAction::RemoveCurvePoint => "remove_curve_point",
             GuiAction::ApplyPreset => "apply_preset",
             GuiAction::SavePresetFile => "save_preset_file",
+            GuiAction::SetSpotDistraction => "set_spot_distraction",
+            GuiAction::SetRedEyePickMode => "set_red_eye_pick_mode",
+            GuiAction::ReloadPresetEntries => "reload_preset_entries",
+            GuiAction::ArmWbEyedropper => "arm_wb_eyedropper",
+            GuiAction::AddPointColor => "add_point_color",
+            GuiAction::RemovePointColor => "remove_point_color",
+            GuiAction::SetExpandCanvas => "set_expand_canvas",
+            GuiAction::GenerateCanvas => "generate_generative_canvas",
+            GuiAction::SetExpandBeyondImage => "set_expand_beyond_image",
+            GuiAction::SetAutoFillTransparent => "set_auto_fill_transparent",
+            GuiAction::RestoreSectionPrevious => "restore_section_previous",
+            GuiAction::ResetSection => "reset_section",
+            GuiAction::SetLensBlurEnabled => "set_lens_blur_enabled",
+            GuiAction::SyncSettingsToSelection => "sync_settings_to_selection",
+            GuiAction::MatchExposuresOfSelection => "match_exposures_of_selection",
+            GuiAction::ApplyPreviousToSelection => "apply_previous_to_selection",
+            GuiAction::SetDenoiseEnabled => "set_denoise_enabled",
+            GuiAction::CreateFaceMask => "create_face_mask",
         }
     }
 }
@@ -300,6 +354,24 @@ pub const ALL_GUI_ACTIONS: &[GuiAction] = &[
     GuiAction::RemoveCurvePoint,
     GuiAction::ApplyPreset,
     GuiAction::SavePresetFile,
+    GuiAction::SetSpotDistraction,
+    GuiAction::SetRedEyePickMode,
+    GuiAction::ReloadPresetEntries,
+    GuiAction::ArmWbEyedropper,
+    GuiAction::AddPointColor,
+    GuiAction::RemovePointColor,
+    GuiAction::SetExpandCanvas,
+    GuiAction::GenerateCanvas,
+    GuiAction::SetExpandBeyondImage,
+    GuiAction::SetAutoFillTransparent,
+    GuiAction::RestoreSectionPrevious,
+    GuiAction::ResetSection,
+    GuiAction::SetLensBlurEnabled,
+    GuiAction::SyncSettingsToSelection,
+    GuiAction::MatchExposuresOfSelection,
+    GuiAction::ApplyPreviousToSelection,
+    GuiAction::SetDenoiseEnabled,
+    GuiAction::CreateFaceMask,
 ];
 
 /// Formats the single debug action line (GUI-INSTRDBG-17). Pure, so the
@@ -396,95 +468,7 @@ macro_rules! instrument_gui_action {
     };
 }
 
-// ---------------------------------------------------------------------------
-// GUI-INSTRDBG-17: debug action instrumentation tests.
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    #[cfg(debug_assertions)]
-    use super::*;
-    use crate::LuminaApp;
-
-    fn new_app() -> LuminaApp {
-        LuminaApp::new(egui_context())
-    }
-
-    fn egui_context() -> eframe::egui::Context {
-        eframe::egui::Context::default()
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn instrdbg_action_log_line_format_and_single_line() {
-        let mut app = new_app();
-        let _ = take_gui_action_log();
-        app.toggle_crop_mode();
-        let lines = take_gui_action_log();
-        assert_eq!(lines.len(), 1, "exactly one line per action, got {lines:?}");
-        let line = &lines[0];
-        assert!(line.starts_with("action=toggle_crop_mode "), "{line}");
-        assert!(line.contains(" duration_ms="), "{line}");
-        let route = line.rsplit_once("gpu_route=").expect("gpu_route field").1;
-        assert!(
-            route == GPU_ROUTE_PRESENT || route == GPU_ROUTE_CPU_FALLBACK || route == GPU_ROUTE_NA,
-            "unexpected gpu_route in {line}"
-        );
-        assert_eq!(
-            gui_action_log_line(GuiAction::ToggleCropMode, 3, GPU_ROUTE_NA),
-            "action=toggle_crop_mode duration_ms=3 gpu_route=n/a"
-        );
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn instrdbg_nested_action_logs_once_for_the_outer_action() {
-        let mut app = new_app();
-        let _ = take_gui_action_log();
-        // `toggle_fullscreen` calls the instrumented `set_zoom_mode`; the
-        // nested call must not add a second line.
-        app.toggle_fullscreen();
-        let lines = take_gui_action_log();
-        assert_eq!(
-            lines.len(),
-            1,
-            "nested instrumentation must not add a line: {lines:?}"
-        );
-        assert!(
-            lines[0].starts_with("action=toggle_fullscreen "),
-            "{}",
-            lines[0]
-        );
-    }
-
-    /// The central action-name table stays unique and snake_case (the format
-    /// contract of `action=<name>`).
-    #[test]
-    #[cfg(debug_assertions)]
-    fn instrdbg_action_names_are_unique_and_snake_case() {
-        let mut names: Vec<&str> = ALL_GUI_ACTIONS.iter().map(|action| action.name()).collect();
-        for name in &names {
-            assert!(!name.is_empty());
-            assert!(
-                name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                "{name} is not snake_case"
-            );
-            assert!(!name.starts_with('_') && !name.ends_with('_'), "{name}");
-        }
-        let count = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), count, "action names must be unique");
-    }
-
-    /// Release builds compile the timer, the log and the capture buffer out.
-    /// This test only exists in non-debug builds so `cargo test --release`
-    /// proves the action still runs without instrumentation.
-    #[test]
-    #[cfg(not(debug_assertions))]
-    fn instrdbg_release_action_is_uninstrumented() {
-        let mut app = new_app();
-        app.toggle_crop_mode();
-        assert!(app.crop_mode);
-    }
-}
+// GUI-INSTRDBG-17: the debug instrumentation tests (format, nested suppression,
+// name-table contract, release passthrough) live in
+// `crate::tests::instrdbg_core` — extracted together with GUI-INSTRDBG-17c to
+// keep this name-table module inside the file-size ratchet.
