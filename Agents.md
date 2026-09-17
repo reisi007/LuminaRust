@@ -335,13 +335,19 @@ erst fertig, wenn:
 - Keine GUI-spezifische Bildlogik außerhalb der gemeinsamen Pipeline.
 - Keine native Dependency ohne dokumentierte
   Capability-Entscheidung.
-- Dateigröße (Ratchet, User-Vorgabe 2026-09-17): Eine `.rs`-Datei mit mehr als
+- Dateigröße (Ratchet, User-Vorgabe 2026-09-17, verschärft 2026-09-17): Eine `.rs`-Datei mit mehr als
   500 Zeilen darf nicht wachsen (CI: `scripts/check_file_sizes.sh` gegen
   `scripts/file_size_baseline.txt`). Verkleinern und Extrahieren jederzeit;
   danach den Baseline-Eintrag senken (bzw. entfernen, sobald die Datei wieder
   bei ≤ 500 Zeilen steht). Neue Dateien über 500 Zeilen nur mit bewusstem
   Baseline-Eintrag. Kein willkürliches Splitten ohne Kohäsion — Extraktion
-  folgt Modulgrenzen.
+  folgt Modulgrenzen. **Anti-Gaming (Pflicht):** Kommt neue Logik hinzu, gehört
+  sie in neue oder passende kleine Dateien (Umdesign-Pflicht) — nicht in die
+  übergroße Bestandsdatei. Kleinstverdrahtung an bestehenden Aufrufstellen
+  (z. B. ein Makro-Aufruf je Methode) darf bleiben. Das Löschen von Kommentaren,
+  Doku oder Tests zur Kompensation von Wachstum gilt als Regel-Umgehung und wird
+  in der Verifizierung abgelehnt (Diff-Prüfung: Logik-Wachstum bei gleichzeitigem
+  Kommentar-Schwund = Befund).
 - Volle GPU-Parität (User-Entscheid 2026-09-12, GUI-Bedarf): Jede
   Renderstufe muss auch GPU-tauglich sein — nichts darf CPU-only bleiben.
   Ein Rezept, das wegen einer nicht implementierten GPU-Stufe auf CPU
