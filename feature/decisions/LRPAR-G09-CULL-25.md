@@ -151,12 +151,24 @@ Normative Abgrenzungsregeln für 2.5:
    `report`/`warn`/`gate`); Ordner-Scan mit Vorschlägen bleibt interaktiv.
    Bekannter Hotspot für diesen Slice: `noise_sigma`-Allokation (~22 MB
    transient pro Bild bei 2048er Analysebreite).
+   > **Status Perf-Slice (F-074-N8, 2026-09-17):** Umgesetzt. Die
+   > Culling-Klasse (`cull/analyze__*`, `cull/noise_sigma__*`,
+   > `cull/similarity_signature__*`, `cull/analyze_selection__4x512`,
+   > `cull/status_evaluate__valid`) ist in `crates/lumina-bench/bench/cull.rs`
+   > implementiert und in `perf/baseline.json`/`perf/budgets.json` registriert
+   > (report-only, `gate: false`, `budget_ns` ≈ 2× Median). Die Messung
+   > bestätigt den `noise_sigma`-Hotspot: bei 2048 ≈ 15,0 ms von ≈ 33,8 ms
+   > Gesamtanalyse (~44 %). Details: `performance-benchmarks.md` §F-074-N8.
 
 **Stand 2026-09-16 (Slices 1–4, Verifizierung BESTANDEN):** Schema-Slice,
 Heuristik-Slice (`lumina-cull`, 45 Tests, P/R 1.0, 8/8 Codes),
 CLI-Slice (`--analyze`/`--status`, Exit 0/1/2/3, `--force`, nur
 `document.culling`), GUI-Slice (Badges/`cull:`-Filter/explizite Übernahme).
-Offen: Slices 5–6 (Stufe 2 ONNX, Perf).
+Offen: Slice 5 (Stufe 2 ONNX).
+
+**Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung ausstehend):** Die in
+§7 Punkt 6 geforderten Culling-Budgets sind registriert (`cull/*`,
+report-only). Offen bleibt nur noch Slice 5 (Stufe 2 ONNX).
 
 ## 8. Abnahme dieses Entscheids
 

@@ -2122,6 +2122,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "lumina-core",
+ "lumina-cull",
  "lumina-gpu",
  "lumina-merge",
  "lumina-raw",

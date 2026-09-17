@@ -12,6 +12,10 @@ lumina-sidecar = { path = "../lumina-sidecar" }
 # the shared `lumina-merge` alignment/merge/DNG entry points. Pure Rust, no
 # native dependency, so it is a normal (non-optional) harness dependency.
 lumina-merge = { path = "../lumina-merge" }
+# F-074 / LRPAR-G09-CULL-25: the cull benchmark class (`bench/cull.rs`) measures
+# the deterministic, model-free Stage-1 heuristic in `lumina-cull`. Pure Rust,
+# no ONNX/native dependency, so it is a normal harness dependency.
+lumina-cull = { path = "../lumina-cull" }
 # Optional: enables the GPU render-path benchmarks. Kept optional so a
 # `--no-default-features` build stays free of the wgpu/Metal native stack, but
 # enabled by default so `cargo bench` measures the GPU path natively (F-074-N6).
@@ -59,6 +63,23 @@ path = "bench/batch.rs"
 name = "merge"
 harness = false
 path = "bench/merge.rs"
+
+# F-074 / LRPAR-G14-DENOISE-IMPL-20: KI-Denoise class (core blend, tile
+# assembly, denoise-aware render, artifact status/checksum). Model-free: it
+# measures the deterministic fixture path, not real ONNX inference (weights are
+# still `pending-integration`, see the decision doc §3.1).
+[[bench]]
+name = "denoise"
+harness = false
+path = "bench/denoise.rs"
+
+# F-074 / LRPAR-G09-CULL-25: assisted-culling class (Stage-1 heuristic analysis,
+# noise/structural kernels, similarity signatures, explicit-selection grouping,
+# status classification). Pure Rust, deterministic, no ONNX, no weights.
+[[bench]]
+name = "cull"
+harness = false
+path = "bench/cull.rs"
 
 # RAW decode benchmarks link LibRaw and are therefore kept behind the
 # `raw-bench` feature so the default harness stays lightweight (ADR 0003).

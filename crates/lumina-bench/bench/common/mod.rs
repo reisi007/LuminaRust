@@ -14,12 +14,18 @@
 // `-D warnings` gate (F-072 / ADR 0003) passes for each consumer.
 #![allow(dead_code)]
 
-use lumina_core::{FolderCache, ImageFileFormat, ImageFrame, MaskPlane};
+use lumina_core::{
+    DenoiseIdentity, DenoiseRgbArtifact, FolderCache, ImageFileFormat, ImageFrame, MaskPlane,
+    DENOISE_RGB_ENCODING_VERSION,
+};
+use lumina_cull::{analyze_heuristic, record_culling, CullConfig, CullSourceInput};
 use lumina_merge::LinearImage;
 use lumina_sidecar::{
-    CoordinateSystem, DecodeFingerprint, EditRecipe, Extras, GeometryFingerprint, MaskDefinition,
-    MaskLayer, MaskOperation, MaskReference, MaskStatus, ModelIdentity, Preprocessing, Resolution,
-    SourceFingerprint, VirtualCopy,
+    CoordinateSystem, CullingIdentity, DecodeFingerprint, DenoiseAi, DenoiseArtifactKind,
+    DenoiseArtifactRef, DenoiseModelIdentity, EditRecipe, Extras, GeometryFingerprint,
+    MaskDefinition, MaskLayer, MaskOperation, MaskReference, MaskStatus, ModelIdentity,
+    Preprocessing, Resolution, SidecarDocument, SourceFingerprint, SourceIdentity, VirtualCopy,
+    DENOISE_AI_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -265,4 +271,146 @@ pub fn scale_linear(image: &LinearImage, factor: f32) -> LinearImage {
         .map(|value| (value * factor).min(1.0))
         .collect();
     LinearImage::new(image.width(), image.height(), pixels).expect("scaled frame keeps geometry")
+}
+
+// ---------------------------------------------------------------------------
+// KI-Denoise fixtures (F-074 / LRPAR-G14-DENOISE-IMPL-20)
+// ---------------------------------------------------------------------------
+
+/// Fixed `sha256:<64 hex>` model pin used by the denoise fixtures. It is
+/// deliberately **not** `pending-integration`: the deterministic, weight-free
+/// fixture path must resolve as an active/`ready` stage, while real ONNX
+/// weights stay absent by design (decision §3.1). The value is a documented
+/// filler, not a real model hash.
+pub fn bench_model_hash() -> String {
+    format!("sha256:{}", "11".repeat(32))
+}
+
+/// Fixed input-spec digest matching [`bench_model_hash`] (same documented-filler
+/// contract).
+fn bench_input_spec_digest() -> String {
+    format!("sha256:{}", "22".repeat(32))
+}
+
+/// Deterministic `size × size` denoised RGB8 artifact derived from the same
+/// frozen seed regime as [`make_frame`] (every source byte halved). Geometry
+/// matches the frame exactly, so the blend/render benchmarks accept it without
+/// a loud `corrupt` mismatch.
+pub fn make_denoise_artifact(size: u32) -> DenoiseRgbArtifact {
+    let frame = make_frame(size);
+    let pixels = frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|pixel| [pixel[0] / 2, pixel[1] / 2, pixel[2] / 2])
+        .collect();
+    DenoiseRgbArtifact::new(size, size, pixels).expect("deterministic artifact geometry")
+}
+
+/// The active (non-identity) `denoise_ai` recipe stage used by the benchmark
+/// fixtures: pinned model hash, fixed input-spec digest, external artifact ref.
+pub fn make_denoise_ai(
+    size: u32,
+    strength: f32,
+    preserve_detail: f32,
+    artifact_checksum: &str,
+) -> DenoiseAi {
+    DenoiseAi {
+        version: DENOISE_AI_VERSION,
+        enabled: true,
+        model: DenoiseModelIdentity {
+            name: "bench-fixture-srgb".into(),
+            version: "1".into(),
+            model_hash: bench_model_hash(),
+            extras: default_extras(),
+        },
+        input_spec_digest: bench_input_spec_digest(),
+        strength,
+        preserve_detail,
+        artifact: Some(DenoiseArtifactRef {
+            kind: DenoiseArtifactKind::DenoiseRgb,
+            relative_path: "bench.lumina.zdata".into(),
+            format: "lumina-zdata".into(),
+            checksum: artifact_checksum.into(),
+            width: size,
+            height: size,
+            channels: "rgb8".into(),
+            data_version: DENOISE_RGB_ENCODING_VERSION.to_string(),
+            extras: default_extras(),
+        }),
+        extras: default_extras(),
+    }
+}
+
+/// Recorded producer identity matching [`make_denoise_ai`], for the `ready`
+/// §6 status-classification benchmark.
+pub fn make_denoise_identity(artifact_checksum: &str) -> DenoiseIdentity {
+    DenoiseIdentity {
+        source_content_hash: "blake3:bench-source".into(),
+        decode_fingerprint: "libraw:1:bench".into(),
+        model_name: "bench-fixture-srgb".into(),
+        model_version: "1".into(),
+        model_hash: bench_model_hash(),
+        input_spec_digest: bench_input_spec_digest(),
+        artifact_checksum: artifact_checksum.into(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Assisted-culling fixtures (F-074 / LRPAR-G09-CULL-25)
+// ---------------------------------------------------------------------------
+
+/// Sidecar document + live identity for the culling status-classification
+/// benchmark (`evaluate_culling`, the CLI `--status` / GUI badge read path).
+/// Built from a deterministic analysis; no file I/O, no model, no network.
+pub fn make_culling_status_fixture(size: u32) -> (SidecarDocument, CullingIdentity) {
+    let frame = make_frame(size);
+    let decode = DecodeFingerprint {
+        decoder: "libraw".into(),
+        version: "1".into(),
+        parameters: BTreeMap::new(),
+        extras: default_extras(),
+    };
+    let geometry = GeometryFingerprint {
+        width: size,
+        height: size,
+        orientation: 1,
+        pixel_aspect_ratio: 1.0,
+        extras: default_extras(),
+    };
+    let source = SourceFingerprint {
+        content_hash: "blake3:bench-source".into(),
+        byte_length: 1,
+        extras: default_extras(),
+    };
+    let source_identity = SourceIdentity {
+        relative_name: "BENCH.ARW".into(),
+        content_hash: "blake3:bench-source".into(),
+        byte_length: 1,
+        modified_at: None,
+        raw_format: "ARW".into(),
+        orientation: 1,
+        decode_fingerprint: decode.clone(),
+        geometry_fingerprint: geometry.clone(),
+        extras: default_extras(),
+    };
+    let analysis = analyze_heuristic(
+        &CullSourceInput {
+            frame: &frame,
+            iso: None,
+        },
+        &CullConfig::default(),
+    )
+    .expect("deterministic culling analysis");
+    let identity = analysis
+        .core
+        .identity(source.clone(), decode.clone(), geometry.clone());
+    let section = analysis
+        .core
+        .to_section(source, decode, geometry, "2026-09-17T00:00:00Z")
+        .expect("deterministic culling section");
+    let mut document = SidecarDocument::new(source_identity, "bench-pipeline");
+    record_culling(&mut document, section).expect("recording a valid proposal");
+    (document, identity)
 }

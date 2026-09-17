@@ -336,6 +336,153 @@
       "tolerance_ratio": 1.2,
       "gate": false,
       "note": "New merge class (LRPAR-G13-MERGE-15 / MERGE-IMPL-15), measured with `cargo bench -p lumina-bench --bench merge`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 225111022 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new benchmarks start in report mode, like the GPU class). tolerance_ratio 1.2 absorbs same-machine run noise. Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. merge/align_hdr__512 uses max_shift_px = 8 (exhaustive SAD search radius, documented in bench/merge.rs)."
+    },
+    {
+      "id": "denoise/blend__512",
+      "budget_ns": 2983396,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 1491698 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/blend__1024",
+      "budget_ns": 11963172,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 5981586 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/blend__2048",
+      "budget_ns": 48180354,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 24090177 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/assemble_tiles__512",
+      "budget_ns": 1559964,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 779982 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/assemble_tiles__1024",
+      "budget_ns": 9970732,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 4985366 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/assemble_tiles__2048",
+      "budget_ns": 33697664,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 16848832 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/render_ready__512",
+      "budget_ns": 9382716,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 4691358 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/render_ready__1024",
+      "budget_ns": 39353232,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 19676616 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/render_ready__2048",
+      "budget_ns": 160542688,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 80271344 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "denoise/status_resolve__ready",
+      "budget_ns": 42,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New denoise class (LRPAR-G14-DENOISE-IMPL-20 / F-074), measured with `cargo bench -p lumina-bench --bench denoise`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 21 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic synthetic fixtures (seed regime of bench/common/mod.rs), no network. NOT a model benchmark: ONNX weights are `pending-integration` (decision §3.1), so this measures the model-free fixture path only, never denoiser throughput."
+    },
+    {
+      "id": "cull/analyze__512",
+      "budget_ns": 4095692,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 2047846 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/analyze__1024",
+      "budget_ns": 16736114,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 8368057 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/analyze__2048",
+      "budget_ns": 67522136,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 33761068 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/noise_sigma__512",
+      "budget_ns": 1791872,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 895936 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/noise_sigma__1024",
+      "budget_ns": 7462338,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 3731169 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/noise_sigma__2048",
+      "budget_ns": 30041162,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 15020581 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/similarity_signature__512",
+      "budget_ns": 773600,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 386800 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/similarity_signature__1024",
+      "budget_ns": 3158398,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 1579199 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/similarity_signature__2048",
+      "budget_ns": 12806970,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 6403485 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/analyze_selection__4x512",
+      "budget_ns": 16584276,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 8292138 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
+    },
+    {
+      "id": "cull/status_evaluate__valid",
+      "budget_ns": 288,
+      "tolerance_ratio": 1.2,
+      "gate": false,
+      "note": "New assisted-culling class (LRPAR-G09-CULL-25 / F-074), measured with `cargo bench -p lumina-bench --bench cull`. Captured 2026-09-17 on the capture machine (rustc 1.98.0) against baseline median_ns = 144 ns, budget_ns = 2x. gate:false (report-only) until the class is independently calibrated (F-074 methodology: new classes start in report mode, like the GPU/Merge classes). Deterministic, model-free Stage-1 heuristic, no ONNX/weights, no network (seed regime of bench/common/mod.rs). The `cull/noise_sigma__*` kernel carries the ~22 MB transient-allocation hotspot noted in the decision doc §9."
     }
   ]
 }

@@ -296,6 +296,132 @@
       "median_ns": 225111022,
       "p95_ns": 225441208,
       "unit": "ns"
+    },
+    {
+      "id": "denoise/blend__512",
+      "median_ns": 1491698,
+      "p95_ns": 1493266,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/blend__1024",
+      "median_ns": 5981586,
+      "p95_ns": 6005229,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/blend__2048",
+      "median_ns": 24090177,
+      "p95_ns": 24161686,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/assemble_tiles__512",
+      "median_ns": 779982,
+      "p95_ns": 781714,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/assemble_tiles__1024",
+      "median_ns": 4985366,
+      "p95_ns": 5004000,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/assemble_tiles__2048",
+      "median_ns": 16848832,
+      "p95_ns": 16988148,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/render_ready__512",
+      "median_ns": 4691358,
+      "p95_ns": 4726853,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/render_ready__1024",
+      "median_ns": 19676616,
+      "p95_ns": 19793742,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/render_ready__2048",
+      "median_ns": 80271344,
+      "p95_ns": 80793289,
+      "unit": "ns"
+    },
+    {
+      "id": "denoise/status_resolve__ready",
+      "median_ns": 21,
+      "p95_ns": 22,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/analyze__512",
+      "median_ns": 2047846,
+      "p95_ns": 2050754,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/analyze__1024",
+      "median_ns": 8368057,
+      "p95_ns": 8386535,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/analyze__2048",
+      "median_ns": 33761068,
+      "p95_ns": 33814698,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/noise_sigma__512",
+      "median_ns": 895936,
+      "p95_ns": 898871,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/noise_sigma__1024",
+      "median_ns": 3731169,
+      "p95_ns": 3733522,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/noise_sigma__2048",
+      "median_ns": 15020581,
+      "p95_ns": 15083664,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/similarity_signature__512",
+      "median_ns": 386800,
+      "p95_ns": 387820,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/similarity_signature__1024",
+      "median_ns": 1579199,
+      "p95_ns": 1581161,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/similarity_signature__2048",
+      "median_ns": 6403485,
+      "p95_ns": 6445375,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/analyze_selection__4x512",
+      "median_ns": 8292138,
+      "p95_ns": 8335121,
+      "unit": "ns"
+    },
+    {
+      "id": "cull/status_evaluate__valid",
+      "median_ns": 144,
+      "p95_ns": 145,
+      "unit": "ns"
     }
   ]
 }

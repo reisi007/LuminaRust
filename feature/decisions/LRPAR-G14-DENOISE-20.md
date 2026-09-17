@@ -176,6 +176,14 @@ G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rot
    > (`DenoisePolicy::Warn`, Exit 0, `stderr`), GUI-Badges/Panel, R1/R2-
    > Aufruferkonvention und Perf-Budgets (Punkt 5).
 5. **Perf-Budgets:** Denoise-Benchmarks nach `performance-benchmarks.md` (F-074), Budgets im selben Commit wie das Feature begründen.
+   > **Status Perf-Slice (F-074-N8, 2026-09-17):** Umgesetzt. Die Denoise-Klasse
+   > (`denoise/blend__*`, `denoise/assemble_tiles__*`, `denoise/render_ready__*`,
+   > `denoise/status_resolve__ready`) ist in `crates/lumina-bench/bench/denoise.rs`
+   > implementiert und in `perf/baseline.json`/`perf/budgets.json` registriert
+   > (report-only, `gate: false`, `budget_ns` ≈ 2× Median). Da die Gewichte
+   > `pending-integration` sind (§3.1), ist das **kein Modell-Benchmark**: gemessen
+   > wird der deterministische Fixture-Pfad. Details: `performance-benchmarks.md`
+   > §F-074-N8.
 6. **V1-Modellvergleich (optional):** DnCNN- vs. NAFNet- vs. Transformer-Kandidat an High-ISO-Fixtures messen; Ergebnis als Entscheid-Nachtrag hier dokumentieren.
 
 **Stand 2026-09-16 (Kern + ONNX + CLI + GUI, Verifizierung BESTANDEN):**
@@ -184,7 +192,13 @@ Kern-Stufe (GPU-Refusal, Provenienz-`extras`, zdata `kind = 4`), ONNX-Backend
 CLI (`--status`/`--render`/`--record-rgb` mutually exclusive, Exit 2 bei
 Konflikt; `--render` honoriert `--format`/`--quality` wie `render`; echte
 Masken-Ablehnung), GUI (Panel + Badges + Persistenz-E2E). Offen: Gewichte
-(S6/F-078), Perf-Budgets F-074, F1-Blend-Digest, F3-Restfelder.
+(S6/F-078), F1-Blend-Digest, F3-Restfelder.
+
+**Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung ausstehend):** Die in
+§8 Punkt 5 geforderten Denoise-Budgets sind registriert
+(`denoise/*`, report-only). Damit ist der Perf-Punkt dieses Entscheids
+erledigt; offen bleiben nur noch Gewichte (S6/F-078), F1-Blend-Digest und die
+F3-Restfelder.
 
 ## 9. Referenzen
 

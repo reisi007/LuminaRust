@@ -40,8 +40,9 @@ Werkzeuge zur Entscheidungsfindung und Regressionsfrüherkennung.
 ## Benchmark-Klassen
 
 Die Klassen definieren, *was* gemessen wird. Die konkrete Umsetzung und die
-Messwerte folgen in F-074-N3 (Core/Decode/Batch), F-074-N6 (GPU) und
-F-074-N7 (Merge); die Messungen stehen in `perf/baseline.json`.
+Messwerte folgen in F-074-N3 (Core/Decode/Batch), F-074-N6 (GPU),
+F-074-N7 (Merge) und F-074-N8 (Denoise/Cull); die Messungen stehen in
+`perf/baseline.json`.
 
 ### Core/Pipeline (lumina-core)
 
@@ -94,6 +95,38 @@ F-074-N7 (Merge); die Messungen stehen in `perf/baseline.json`.
 - Fixtures: `bench/common/mod.rs` (`make_linear_gradient`,
   `make_linear_gradient_shifted`, `scale_linear`), kein Netzwerk, kein
   Commit großer Daten.
+
+### Denoise (lumina-core, F-074-N8, LRPAR-G14-DENOISE-IMPL-20)
+
+- **Kernstufe/Blend:** `apply_denoise_blend` (deterministischer
+  `strength`/`preserve_detail`-Blend der `Adjustments`-Unterstufe).
+- **Assembly:** `assemble_denoise_tiles` mit der dokumentierten Default-Kachel
+  (512 px, 32 px Overlap), die Teil des `input_spec_digest` ist.
+- **Render-Pfad:** `render_frame_with_denoise` mit einem aktiven `denoise_ai`
+  und `ready`-Artefakt — der Pfad, den CLI `denoise --render` und der
+  GUI-Preview nutzen.
+- **Status:** `resolve_denoise_status` (reine §6-Klassifikation hinter CLI
+  `--status` und GUI-Badge; der Sidecar-Datei-Read ist kein Core-Kernel).
+
+### Culling (lumina-cull, F-074-N8, LRPAR-G09-CULL-25)
+
+- **Heuristik:** `analyze_heuristic` (Downscale + Luminanz/Struktur +
+  Rauschschätzung + Belichtung/Clipping + Signatur).
+- **Kernel:** `noise_sigma` (Immerkaer auf der vorgeblurrten Ebene — der in
+  §9 des Entscheids benannte Hotspot mit ~22 MB transienter Allokation bei
+  2048er Analysebreite) und `similarity_signature` (dHash/Histogramm).
+- **Auswahl:** `analyze_selection` über eine explizite 4-Bild-Auswahl
+  (Per-Bild-Analyse + begrenzter Duplikat-/Serien-Pass, kein Ordner-Scan).
+- **Status:** `evaluate_culling` (Identitäts-/Statusklassifikation hinter CLI
+  `--status` und GUI-Badge; der Sidecar-Datei-Read ist kein Cull-Kernel).
+
+Beide Klassen sind **modellfrei**: ONNX-Gewichte sind weiterhin
+`pending-integration` (G-14-Entscheid §3.1), und Stufe 2 (ONNX-Culling) ist
+nicht implementiert. Die Benchmarks messen deshalb ausschließlich den
+deterministischen Fixture-Pfad und sind **keine** Modell-Durchsatzmessungen.
+Fixtures: vorhandene Seed-Regime-Helfer in `bench/common/mod.rs`
+(`make_frame`, `make_denoise_artifact`, `make_denoise_ai`,
+`make_culling_status_fixture`), kein Netzwerk, keine committeten Daten.
 
 ## Fixtures und Daten
 
@@ -268,7 +301,8 @@ optionaler, nicht-blockierender `bench`-Job erzeugt ein Report-Artefakt und
 läuft CI-seitig nur im `warn`-Modus. F-074-N6 (GPU-Klasse) und F-074-N7
 (Merge-Klasse, MERGE-IMPL-15) sind ergänzt; die Re-Baseline vom 2026-09-17
 erfasste alle messbaren Core-/Batch-/GPU-IDs neu und registrierte die zehn
-Merge-IDs (siehe unten).
+Merge-IDs (siehe unten). F-074-N8 (2026-09-17) ergänzt die Denoise- und
+Culling-Klasse mit 21 report-only IDs (siehe unten).
 
 ### F-074-N3 — umgesetzte Benchmarks
 
@@ -474,6 +508,76 @@ Lauf. Budgets wurden auf das 2-fache des neuen Medians nachgezogen,
 `decode/raw__*`-IDs bleiben unangetastet. Verifikation:
 `node scripts/perf/compare.mjs --mode report|warn|gate` (Exit 0 in allen drei
 Modi).
+
+### F-074-N8 — Denoise- und Cull-Klasse (2026-09-17, LRPAR-G14-DENOISE-IMPL-20 / LRPAR-G09-CULL-25)
+
+Mit den KI-Denoise- und Assisted-Culling-Slices entstehen zwei neue
+Benchmark-Klassen. Implementiert in `crates/lumina-bench/bench/denoise.rs`
+(Gruppe `denoise`) bzw. `bench/cull.rs` (Gruppe `cull`), `harness = false`;
+Fixtures in `bench/common/mod.rs`; deterministisch, kein Netzwerk, keine
+committeten Daten, keine Gewichte.
+
+**21 neue IDs, alle `gate: false` (report-only).** Neue Klassen starten nach
+F-074-Methodik im Report-Modus und werden erst nach unabhängiger Kalibrierung
+auf `gate: true` gesetzt (Präzedenz: GPU-/Merge-Klasse). Die Denoise-Klasse
+ist ausdrücklich **kein Modell-Benchmark**: Da die ONNX-Gewichte
+`pending-integration` sind (G-14-Entscheid §3.1), existiert keine echte
+Inferenz zu messen; die IDs messen den deterministischen, modellfreien
+Fixture-Pfad exakt wie die Tests. Die Culling-Klasse misst die modellfreie
+Stufe-1-Heuristik (kein ONNX, kein Gewicht).
+
+Mediane der Erfassung 2026-09-17 (dieselbe Maschine, rustc 1.98.0; Denoise
+`sample_size = 20`, cull `sample_size = 10`, damit der Lauf tragbar bleibt):
+
+| Benchmark-ID | Median (ns) | P95 (ns) |
+| --- | ---: | ---: |
+| `denoise/blend__512` | 1 491 698 | 1 493 266 |
+| `denoise/blend__1024` | 5 981 586 | 6 005 229 |
+| `denoise/blend__2048` | 24 090 177 | 24 161 686 |
+| `denoise/assemble_tiles__512` | 779 982 | 781 714 |
+| `denoise/assemble_tiles__1024` | 4 985 366 | 5 004 000 |
+| `denoise/assemble_tiles__2048` | 16 848 832 | 16 988 148 |
+| `denoise/render_ready__512` | 4 691 358 | 4 726 853 |
+| `denoise/render_ready__1024` | 19 676 616 | 19 793 742 |
+| `denoise/render_ready__2048` | 80 271 344 | 80 793 289 |
+| `denoise/status_resolve__ready` | 21 | 22 |
+| `cull/analyze__512` | 2 047 846 | 2 050 754 |
+| `cull/analyze__1024` | 8 368 057 | 8 386 535 |
+| `cull/analyze__2048` | 33 761 068 | 33 814 698 |
+| `cull/noise_sigma__512` | 895 936 | 898 871 |
+| `cull/noise_sigma__1024` | 3 731 169 | 3 733 522 |
+| `cull/noise_sigma__2048` | 15 020 581 | 15 083 664 |
+| `cull/similarity_signature__512` | 386 800 | 387 820 |
+| `cull/similarity_signature__1024` | 1 579 199 | 1 581 161 |
+| `cull/similarity_signature__2048` | 6 403 485 | 6 445 375 |
+| `cull/analyze_selection__4x512` | 8 292 138 | 8 335 121 |
+| `cull/status_evaluate__valid` | 144 | 145 |
+
+**Kostenverteilung (informativ, @2048):** `denoise/blend` ≈ 24,1 ms ist der
+reine Blend-Kernel in `render_ready` (80,3 ms inkl. der übrigen
+Adjustments-Stufe). `denoise/assemble_tiles` ≈ 16,8 ms ist die
+Knotenzeit des Produzenten-Assemblys. `cull/analyze` ≈ 33,8 ms wird zu
+~44 % von der Rauschschätzung (`noise_sigma` ≈ 15,0 ms) dominiert — das
+bestätigt den in `LRPAR-G09-CULL-25.md` §9 benannten Hotspot (~22 MB
+transiente Allokation pro Bild bei 2048er Analysebreite) als Kandidaten für
+einen späteren Performance-Task; die Signatur (`similarity_signature`
+≈ 6,4 ms) und die Belichtungsmessung (Rest) sind nachrangig.
+
+**GUI-Headless:** Bewusst **nicht** als eigene IDs gemessen. GUI und CLI
+orchestrieren ausschließlich die hier gemessenen `lumina-core`-/
+`lumina-cull`-Einstiegspunkte (Agents.md: keine zweite Bildlogik in der GUI);
+ein headless egui-Benchmark würde den UI-Frame-/Widget-Overhead messen, nicht
+die Denoise-/Cull-Arbeit. Prozessstart-/Frame-Overhead bleibt, wie in
+„Batch/Ende-zu-Ende“ beschrieben, einem separaten CLI-/GUI-Lauf vorbehalten.
+
+**Budgets:** `budget_ns` ≈ 2× Median, `tolerance_ratio` 1.2, `gate: false`,
+Begründung im `note`-Feld des jeweiligen Budget-Eintrags. Keine bestehende
+Budget-ID wurde angepasst; die Re-Baseline vom 2026-09-17 (MERGE-IMPL-15)
+bleibt für Core/Batch/GPU/Decode/Merge unverändert. Verifikation:
+`node scripts/perf/compare.mjs --mode report|warn|gate` (Exit 0 in allen drei
+Modi; der `gate`-Modus ignoriert die neuen report-only-IDs).
+Store-Integrität: jede der 69 IDs existiert in beiden Stores, ohne Duplikate
+und ohne einseitige Einträge.
 
 ## F-075 Speicherbudgets und Abbruchverhalten
 

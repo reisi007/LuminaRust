@@ -34,6 +34,15 @@ Beispiele:
 | `merge/pano_blend__2048` | Panorama-Blend über die volle 3×3-Matrix |
 | `merge/encode_dng__2048` | linearer 16-Bit-DNG-Writer |
 | `merge/align_hdr__512` | HDR-Translations-Suche (`max_shift_px = 8`) |
+| `denoise/blend__2048` | `strength`/`preserve_detail`-Blend-Kernel |
+| `denoise/assemble_tiles__2048` | nahtlose Kachel-Assembly (512/32-Overlap) |
+| `denoise/render_ready__2048` | `render_frame_with_denoise` mit `ready`-Artefakt |
+| `denoise/status_resolve__ready` | §6-Statusklassifikation |
+| `cull/analyze__2048` | vollständige Stufe-1-Heuristik |
+| `cull/noise_sigma__2048` | Immerkaer-Rauschkernel (dokumentierter Hotspot) |
+| `cull/similarity_signature__2048` | dHash/Histogramm-Signatur |
+| `cull/analyze_selection__4x512` | explizite 4-Bild-Auswahl inkl. Gruppierung |
+| `cull/status_evaluate__valid` | Identitäts-/Statusklassifikation |
 
 Regeln:
 
@@ -81,13 +90,16 @@ Neue Benchmarks werden so angelegt:
 
 ## Stand
 
-Stand 2026-09-17 (F-074-N3 + Re-Baseline MERGE-IMPL-15): Es existieren
-Benchmarks für die definierten Klassen Core/Pipeline, Decode (env-gated),
-Batch/End-to-End, GPU (F-074-N6) und Merge (`bench/merge.rs`, F-074-N7).
-Alle synthetischen Fixtures werden deterministisch mit dem festen Seed
-`0x5EED` in `bench/common/mod.rs` erzeugt (Größen 512 / 1024 / 2048). Die
-RAW-Decode-Benchmarks sind über `LUMINA_RAW_FIXTURE` und das Feature
-`raw-bench` gegated.
+Stand 2026-09-17 (F-074-N3 + Re-Baseline MERGE-IMPL-15 + F-074-N8): Es
+existieren Benchmarks für die definierten Klassen Core/Pipeline, Decode
+(env-gated), Batch/End-to-End, GPU (F-074-N6), Merge (`bench/merge.rs`,
+F-074-N7) sowie Denoise (`bench/denoise.rs`) und Culling (`bench/cull.rs`,
+beide F-074-N8). Alle synthetischen Fixtures werden deterministisch mit dem
+festen Seed `0x5EED` in `bench/common/mod.rs` erzeugt (Größen 512 / 1024 /
+2048). Die RAW-Decode-Benchmarks sind über `LUMINA_RAW_FIXTURE` und das
+Feature `raw-bench` gegated. Die Denoise-Klasse ist kein Modell-Benchmark:
+Die ONNX-Gewichte sind `pending-integration`, gemessen wird ausschließlich
+der deterministische Fixture-Pfad.
 
 Registrierte Benchmark-IDs (jede in `perf/baseline.json` und
 `perf/budgets.json`):
@@ -99,13 +111,16 @@ Registrierte Benchmark-IDs (jede in `perf/baseline.json` und
 | Batch/End-to-End | `batch/render_export_png__<512\|1024\|2048>` |
 | GPU (F-074-N6) | `gpu/render_with_gpu__<512\|1024\|2048>`, `gpu/update_uniforms__recipe`, `gpu/cpu_vs_gpu__{cpu,gpu}__2048` |
 | Merge (F-074-N7) | `merge/hdr_weighted__<512\|1024\|2048>`, `merge/pano_blend__<512\|1024\|2048>`, `merge/encode_dng__<512\|1024\|2048>`, `merge/align_hdr__512` |
+| Denoise (F-074-N8) | `denoise/blend__<512\|1024\|2048>`, `denoise/assemble_tiles__<512\|1024\|2048>`, `denoise/render_ready__<512\|1024\|2048>`, `denoise/status_resolve__ready` |
+| Culling (F-074-N8) | `cull/analyze__<512\|1024\|2048>`, `cull/noise_sigma__<512\|1024\|2048>`, `cull/similarity_signature__<512\|1024\|2048>`, `cull/analyze_selection__4x512`, `cull/status_evaluate__valid` |
 
 Die tatsächlich gemessenen Mediane/P95 stehen in `perf/baseline.json`. Die
 Erfassung vom 2026-09-17 (Umgebung: rustc 1.98.0, gleiche Maschine) hat alle
 messbaren Core-/Batch-/GPU-IDs neu erfasst (die alte Baseline war seit den
 F-074-A1/A3-/GPU-Optimierungen veraltet) und die neue Merge-Klasse ergänzt;
-die env-gated `decode/raw__*`-IDs bleiben unangetastet. Budgets sind mit dem
+die env-gated `decode/raw__*`-IDs bleiben unangetastet. F-074-N8 hat die 21
+Denoise-/Culling-IDs (Erfassung 2026-09-17) ergänzt. Budgets sind mit dem
 2-fachen Median und `tolerance_ratio` 1.2 angelegt. `gate` ist `true` für
-Core-/Batch-/GPU-Benchmarks und `false` für die 2 Decode- und die 10
-Merge-Benchmarks (neue Klassen starten report-only, bis sie unabhängig
-kalibriert sind).
+Core-/Batch-/GPU-Benchmarks und `false` für die 2 Decode-, die 10
+Merge- sowie die 21 Denoise-/Culling-Benchmarks (neue Klassen starten
+report-only, bis sie unabhängig kalibriert sind).
