@@ -15,7 +15,7 @@
 1564 crates/lumina-core/src/tone.rs
 1502 crates/lumina-gpu/src/geometry.rs
 1501 crates/lumina-gui/src/preview_ctrl.rs
-1487 crates/lumina-gui/src/i18n.rs
+1492 crates/lumina-gui/src/i18n.rs  # +5 am 2026-09-17: ExpandDragFrameHint/ExpandCropToImage (i18n-Fix UXG-17)
 1351 crates/lumina-merge/src/bundle.rs
 1328 crates/lumina-core/src/pipeline.rs
 1281 crates/lumina-onnx/src/denoise.rs
