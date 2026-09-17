@@ -227,6 +227,110 @@ pub struct FaceAnalysis {
     pub extras: Extras,
 }
 
+/// Evidence about the persisted binary face artifacts backing an analysis
+/// (FACE-20 §3.2/§4). Shared by every consumer (CLI `face --status`,
+/// `face --analyze` short-circuit, GUI `FaceViewStatus`), so one sidecar is
+/// classified identically everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceArtifactEvidence {
+    /// No verifiable payload: the analysis references no embeddings, the
+    /// bundle/record is absent, or a referenced file cannot be read.
+    Missing,
+    /// Every referenced payload resolved; `checksum_matches` reports whether
+    /// all digests equalled the persisted record checksums.
+    Present {
+        /// Whether every on-disk payload hashes to its persisted checksum.
+        checksum_matches: bool,
+    },
+}
+
+/// Resolve the real evidence of a persisted face analysis from the
+/// `.lumina.zdata` bundle.
+///
+/// This is the single status contract of the face feature — never existence
+/// alone, never a second implementation:
+///
+/// - `analysis.embeddings` empty → [`FaceArtifactEvidence::Missing`]: there is
+///   no verifiable payload, so a `valid` status could not be proven.
+/// - a referenced bundle file that cannot be read → `Missing`.
+/// - a readable file that is not a loadable `.lumina.zdata` container (parse,
+///   bound or record-checksum failure) → `Present { false }` (`corrupt`): the
+///   payload exists but is not usable.
+/// - a `face_embedding` record with the embedding's stable id absent →
+///   `Missing` (the reference dangles).
+/// - a present record whose record checksum differs from
+///   [`FaceVectorRef::checksum`] or whose dimension differs from
+///   [`FaceVectorRef::dimension`] → `Present { false }` (`corrupt`).
+/// - every reference resolved and verified → `Present { true }` (the caller's
+///   identity comparison then decides `valid` vs `stale`).
+#[cfg(feature = "zdata")]
+#[must_use]
+pub fn face_artifact_evidence(
+    bundle_root: &std::path::Path,
+    analysis: &FaceAnalysis,
+) -> FaceArtifactEvidence {
+    use std::collections::HashMap;
+
+    if analysis.embeddings.is_empty() {
+        return FaceArtifactEvidence::Missing;
+    }
+    let mut containers: HashMap<&str, Option<crate::ZDataContainer>> = HashMap::new();
+    for embedding in &analysis.embeddings {
+        let relative = embedding.vector.relative_path.as_str();
+        let container = containers
+            .entry(relative)
+            .or_insert_with(|| crate::load_zdata(&bundle_root.join(relative)).ok());
+        let Some(container) = container else {
+            // The bundle is absent, unreadable or not a loadable container.
+            // Distinguish "file missing" (`missing`) from "unusable file"
+            // (`corrupt`) by the file itself, never by an error string.
+            let path = bundle_root.join(relative);
+            return if path.is_file() {
+                FaceArtifactEvidence::Present {
+                    checksum_matches: false,
+                }
+            } else {
+                FaceArtifactEvidence::Missing
+            };
+        };
+        if !container.has_record(crate::RecordKind::FaceEmbedding, &embedding.id) {
+            return FaceArtifactEvidence::Missing;
+        }
+        match container.face_embedding(&embedding.id) {
+            Ok(artifact) => {
+                if artifact.checksum() != embedding.vector.checksum
+                    || artifact.dimension != embedding.vector.dimension
+                {
+                    return FaceArtifactEvidence::Present {
+                        checksum_matches: false,
+                    };
+                }
+            }
+            Err(_) => {
+                return FaceArtifactEvidence::Present {
+                    checksum_matches: false,
+                }
+            }
+        }
+    }
+    FaceArtifactEvidence::Present {
+        checksum_matches: true,
+    }
+}
+
+/// Without the `zdata` feature the binary bundle cannot be decoded at all, so
+/// no payload is verifiable: the analysis is always visibly `missing` — never
+/// a silently trusted `valid` (documented capability limit, no silent
+/// fallback).
+#[cfg(not(feature = "zdata"))]
+#[must_use]
+pub fn face_artifact_evidence(
+    _bundle_root: &std::path::Path,
+    _analysis: &FaceAnalysis,
+) -> FaceArtifactEvidence {
+    FaceArtifactEvidence::Missing
+}
+
 fn validate_face_id(field: &str, value: &str) -> Result<(), SidecarError> {
     if value.is_empty() || value.trim() != value {
         return invalid(format!(

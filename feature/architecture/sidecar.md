@@ -287,6 +287,23 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   offene `reasons[]`-Registry nur formvalidiert). Alle additiv-optional,
   `schema_version` 2 unverändert, Roundtrip/Migration/Atomic/Recovery getestet
   (sidecar `199p` ohne / `239p` mit `zdata`).
+- **zdata `face_embedding` (FACE-20-IMPL-20-REST, 2026-09-17, Verifizierung
+  ausstehend):** `RecordKind::FaceEmbedding` (`kind = 5`, Container-`VERSION`
+  bleibt 1) speichert einen normierten Gesichts-Identitätsvektor. Kanonischer
+  Rohstrom: `encoding_version u32 LE (= 1) || dimension u32 LE ||
+  dimension × f32 LE`; BLAKE3 über den unkomprimierten Strom ist die
+  Record-Checksum und exakt der Wert in `FaceVectorRef.checksum` (ohne
+  Präfix). Record-ID ist die stabile `FaceEmbedding.id`; der Index führt
+  `width = dimension`, `height = 1`. Der gemeinsame Helper
+  `lumina_sidecar::face_artifact_evidence` löst pro Analyse den Record auf und
+  klassifiziert `missing` (keine Referenzen / Datei oder Record fehlt) vs.
+  `corrupt` (nicht ladbarer Container oder Record-Checksumme/Dimension
+  abweichend) vs. `Present{true}`; CLI und GUI nutzen exakt diesen Helper
+  (keine zweite Kopie). `save_face_embeddings` schreibt unter `.zdata.lock`
+  einmalig atomar (Temp + Rename), erhält alle anderen Kinds und ersetzt
+  vorhandene `face_embedding`-Records gleicher ID im expliziten
+  Re-Analyse-Pfad idempotent; ein ID-Konflikt mit anderem Kind wird laut
+  abgelehnt, Duplikat-IDs gelten über alle Kinds. Keine absoluten Pfade.
 
 ## Metadaten: Keywords, Sammlungen, Stapel-Ops (G-15 META-MVP, Slice 1)
 

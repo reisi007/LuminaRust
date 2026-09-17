@@ -29,8 +29,9 @@
 //! `corrupt`. `stale`/`missing`/`corrupt` are classified by the shared
 //! [`lumina_onnx::face_artifact_status`] against the live source/decode/
 //! geometry context and **real evidence** from the referenced embedding
-//! artefacts: every referenced vector file is read and hashed (BLAKE3), and
-//! the digest is compared with the persisted checksum. A file that exists but
+//! artefacts: every referenced `face_embedding` record payload is read and
+//! hashed (BLAKE3), and the digest is compared with the persisted record
+//! checksum. A record that exists but
 //! does not hash to the persisted checksum is `corrupt` (never a false
 //! `valid`); a missing file is `missing`; an analysis whose vectors were never
 //! persisted carries no verifiable payload and is reported `missing` rather
@@ -528,41 +529,23 @@ impl LuminaApp {
 }
 
 /// Real evidence about the binary face artifacts a persisted analysis
-/// references, derived from the bundle bytes — never from mere existence.
+/// references, derived from the `.lumina.zdata` records themselves — never
+/// from mere existence.
 ///
-/// - a referenced vector file that cannot be read → [`FaceArtifactEvidence::Missing`]
-/// - a readable file whose BLAKE3 digest differs from the persisted checksum →
-///   `Present { checksum_matches: false }` (classified `corrupt`)
-/// - every referenced file hashes to its persisted checksum →
-///   `Present { checksum_matches: true }`
-/// - an analysis with no persisted embedding references has no verifiable
-///   payload at all and is reported `Missing` (loud, never a false `valid` —
-///   the vectors were never written, so validity cannot be proven).
+/// This delegates to the shared `lumina_sidecar::face_artifact_evidence`
+/// contract (FACE-20 §3.2), used verbatim by the CLI too, so both classify the
+/// same sidecar identically:
 ///
-/// The comparison is deliberately a whole-file BLAKE3 hash: no face-vector
-/// `.lumina.zdata` record kind exists yet, so the referenced payload is the
-/// file itself (FACE-20 §4 "Artefakt-Prüfsumme").
+/// - an analysis with no persisted embedding references, a missing bundle, a
+///   missing `face_embedding` record or an unreadable file →
+///   [`FaceArtifactEvidence::Missing`]
+/// - a present record whose record checksum differs from the persisted
+///   `FaceVectorRef.checksum`, or whose dimension differs, or a bundle that is
+///   not loadable → `Present { checksum_matches: false }` (classified
+///   `corrupt`)
+/// - every referenced record verified → `Present { checksum_matches: true }`
 fn face_artifact_evidence(bundle_root: &Path, analysis: &FaceAnalysis) -> FaceArtifactEvidence {
-    if analysis.embeddings.is_empty() {
-        return FaceArtifactEvidence::Missing;
-    }
-    for embedding in &analysis.embeddings {
-        let path = bundle_root.join(&embedding.vector.relative_path);
-        match std::fs::read(&path) {
-            Err(_) => return FaceArtifactEvidence::Missing,
-            Ok(bytes) => {
-                let checksum = format!("blake3:{}", blake3::hash(&bytes).to_hex());
-                if checksum != embedding.vector.checksum {
-                    return FaceArtifactEvidence::Present {
-                        checksum_matches: false,
-                    };
-                }
-            }
-        }
-    }
-    FaceArtifactEvidence::Present {
-        checksum_matches: true,
-    }
+    lumina_sidecar::face_artifact_evidence(bundle_root, analysis)
 }
 
 /// Crops the normalized face box out of `frame` and downscales it to
@@ -605,16 +588,6 @@ mod tests {
 
     fn new_app() -> LuminaApp {
         LuminaApp::new(crate::egui::Context::default())
-    }
-
-    /// Deterministic payload for the referenced face-vector artifact. The
-    /// fixture persists exactly these bytes and stores their real BLAKE3
-    /// digest, so the analysis starts `valid` because the checksum genuinely
-    /// matches — not because a file merely exists.
-    const FACE_VECTOR_PAYLOAD: &[u8] = b"lumina-face-vector-fixture";
-
-    fn face_vector_checksum() -> String {
-        format!("blake3:{}", blake3::hash(FACE_VECTOR_PAYLOAD).to_hex())
     }
 
     fn save_png(path: &Path) {
@@ -679,6 +652,7 @@ mod tests {
             }],
         };
         let detections = vec![detection("left_eye", 0.1), detection("left_eye", 0.5)];
+        let records = face_vector_records();
         let embeddings = detections
             .iter()
             .enumerate()
@@ -693,7 +667,9 @@ mod tests {
                 reference: FaceVectorRef {
                     relative_path: "photo.png.lumina.zdata".into(),
                     format: "lumina-zdata".into(),
-                    checksum: face_vector_checksum(),
+                    // Exactly the digest of the record written by `seed_face`:
+                    // a fabricated checksum would (correctly) read `corrupt`.
+                    checksum: records[index].checksum(),
                     dimension: 2,
                     channels: "f32".into(),
                     data_version: "1".into(),
@@ -728,14 +704,40 @@ mod tests {
         .unwrap()
     }
 
+    /// Builds the exact `face_embedding` records `face_analysis` references.
+    fn face_vector_records() -> Vec<lumina_sidecar::FaceEmbeddingArtifact> {
+        [(0.1f32, vec![1.0f32, 0.0]), (0.5, vec![0.0, 1.0])]
+            .into_iter()
+            .map(|(x, values)| lumina_sidecar::FaceEmbeddingArtifact {
+                id: lumina_onnx::embedding_id_for(&lumina_onnx::detected_face_id(&DetectedFace {
+                    bbox: FaceBoundingBox {
+                        x,
+                        y: 0.2,
+                        width: 0.2,
+                        height: 0.2,
+                    },
+                    score: 0.9,
+                    landmarks: vec![FaceLandmark {
+                        name: "left_eye".into(),
+                        x,
+                        y: 0.25,
+                    }],
+                })),
+                dimension: 2,
+                values,
+            })
+            .collect()
+    }
+
     fn seed_face(app: &mut LuminaApp) {
         app.ensure_document_loaded().unwrap();
         // The fixture's vector references point into the source bundle; write
-        // the exact payload whose BLAKE3 digest the references store, so the
-        // status is `valid` because the checksum matches (not by existence).
-        std::fs::write(
-            lumina_sidecar::zdata_path_for(Path::new(&app.path)),
-            FACE_VECTOR_PAYLOAD,
+        // the exact `face_embedding` records whose checksums the references
+        // store, so the status is `valid` because the record checksum matches
+        // (not by existence).
+        lumina_sidecar::save_face_embeddings(
+            &lumina_sidecar::zdata_path_for(Path::new(&app.path)),
+            face_vector_records(),
         )
         .unwrap();
         let (source, decode, geometry) = {
@@ -933,8 +935,8 @@ mod tests {
         assert!(painted(Str::FaceUseAsMask.t()));
     }
 
-    /// F2/F4/B2: a tampered vector payload is classified `corrupt` from the
-    /// real BLAKE3 checksum of the bundle bytes (not presence-only), and the
+    /// F2/F4/B2: a tampered vector record payload is classified `corrupt`
+    /// from the real BLAKE3 record checksum (not presence-only), and the
     /// Develop bridge refuses a `corrupt` analysis loudly.
     #[test]
     fn tampered_vector_bundle_is_corrupt() {

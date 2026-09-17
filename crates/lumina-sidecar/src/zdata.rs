@@ -18,7 +18,7 @@
 //!       id_len      : u16 LE
 //!       kind       : u16 LE   (0 = mask tile, 1 = repair region,
 //!                              2 = generative canvas, 3 = spot heal generative,
-//!                              4 = denoise RGB)
+//!                              4 = denoise RGB, 5 = face embedding)
 //!       tile_x     : u32 LE   (non-tile records always use 0/0)
 //!       tile_y     : u32 LE
 //!       width      : u32 LE
@@ -106,6 +106,23 @@
 //! recipe and bundle stay aligned. The core artifact type
 //! (`lumina_core::DenoiseRgbArtifact`) uses the identical canonical encoding
 //! (`DENOISE_RGB_ENCODING_VERSION`), so the two checksums are interchangeable.
+//!
+//! ## Face embedding payload (before zstd)
+//!
+//! `FaceEmbeddingArtifact` (`kind = 5`, LRPAR-G12-FACE-20 `face_embedding`)
+//! stores one L2-normalized face identity vector as row-major little-endian
+//! `f32` values:
+//!
+//! ```text
+//!   encoding_version : u32 LE  (= 1)
+//!   dimension        : u32 LE
+//!   values           : dimension × f32 LE
+//! ```
+//!
+//! The canonical raw stream is BLAKE3-checksummed; the digest is exactly what
+//! `FaceVectorRef.checksum` carries (no prefix), so analysis and bundle stay
+//! aligned. The record id is the stable `FaceEmbedding.id`; the index stores
+//! `width = dimension`, `height = 1`.
 
 use std::collections::HashSet;
 use std::fs;
@@ -123,6 +140,12 @@ const RGBA_ENCODING_VERSION: u32 = 1;
 /// `lumina_core::DENOISE_RGB_ENCODING_VERSION`; a change invalidates every
 /// persisted `denoise_rgb` record visibly.
 pub const RGB_ENCODING_VERSION: u32 = 1;
+/// Face-embedding `f32` payload encoding version (kind 5). A change
+/// invalidates every persisted `face_embedding` record visibly.
+pub const FACE_EMBEDDING_ENCODING_VERSION: u32 = 1;
+/// Upper bound on a face-embedding dimension (guards allocations; real
+/// descriptors are 128/192/512).
+pub const MAX_FACE_EMBEDDING_DIMENSION: u32 = 16_384;
 const RECORD_HEADER_LEN: usize = 68;
 const INDEX_ENTRY_FIXED_LEN: usize = 36;
 const MAX_CONTAINER_BYTES: usize = 512 * 1024 * 1024;
@@ -177,6 +200,8 @@ pub enum RecordKind {
     SpotHealGenerative = 3,
     /// A LRPAR-G14-DENOISE-IMPL-20 KI-denoise result (full-frame RGB8).
     DenoiseRgb = 4,
+    /// A LRPAR-G12-FACE-20 face identity vector (`face_embedding`).
+    FaceEmbedding = 5,
 }
 
 impl RecordKind {
@@ -187,6 +212,7 @@ impl RecordKind {
             2 => Ok(RecordKind::GenerativeCanvas),
             3 => Ok(RecordKind::SpotHealGenerative),
             4 => Ok(RecordKind::DenoiseRgb),
+            5 => Ok(RecordKind::FaceEmbedding),
             other => Err(invalid(format!("unsupported zdata record kind {other}"))),
         }
     }
@@ -198,6 +224,7 @@ impl RecordKind {
             RecordKind::GenerativeCanvas => "generative_canvas",
             RecordKind::SpotHealGenerative => "spot_heal_generative",
             RecordKind::DenoiseRgb => "denoise_rgb",
+            RecordKind::FaceEmbedding => "face_embedding",
         }
     }
 }
@@ -591,6 +618,98 @@ impl DenoiseRgbArtifact {
     }
 }
 
+/// A LRPAR-G12-FACE-20 face identity vector stored in the `.lumina.zdata`
+/// bundle.
+///
+/// `values` is one L2-normalized descriptor (`dimension` long). The JSON
+/// sidecar keeps only a portable `FaceVectorRef` (relative path, format,
+/// BLAKE3 checksum over the canonical uncompressed stream, dimension, channel
+/// type, data version); the numbers never appear in the JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceEmbeddingArtifact {
+    pub id: String,
+    pub dimension: u32,
+    /// Row-major little-endian `f32` values, `dimension` long.
+    pub values: Vec<f32>,
+}
+
+impl FaceEmbeddingArtifact {
+    /// Validates the id, the dimension bounds and the value count. Non-finite
+    /// values are rejected loudly: a `NaN`/`Inf` descriptor would poison every
+    /// downstream distance computation.
+    pub fn validate(&self) -> Result<(), ZDataError> {
+        if self.id.is_empty()
+            || self.id.len() > MAX_ID_LEN
+            || !self.id.is_char_boundary(self.id.len())
+        {
+            return Err(invalid("invalid face embedding id"));
+        }
+        if self.dimension == 0 || self.dimension > MAX_FACE_EMBEDDING_DIMENSION {
+            return Err(invalid("invalid face embedding dimension"));
+        }
+        if self.values.len() != self.dimension as usize {
+            return Err(invalid(
+                "face embedding values do not match the declared dimension",
+            ));
+        }
+        if self.values.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("face embedding values must be finite"));
+        }
+        Ok(())
+    }
+
+    fn encode_raw(&self) -> Vec<u8> {
+        let mut raw = Vec::with_capacity(8 + self.values.len() * 4);
+        raw.extend_from_slice(&FACE_EMBEDDING_ENCODING_VERSION.to_le_bytes());
+        raw.extend_from_slice(&self.dimension.to_le_bytes());
+        for value in &self.values {
+            raw.extend_from_slice(&value.to_le_bytes());
+        }
+        raw
+    }
+
+    fn decode_raw(id: String, raw: &[u8]) -> Result<Self, ZDataError> {
+        if raw.len() < 8 {
+            return Err(invalid("face embedding payload is truncated"));
+        }
+        let version = u32::from_le_bytes(raw[0..4].try_into().unwrap());
+        if version != FACE_EMBEDDING_ENCODING_VERSION {
+            return Err(invalid("unsupported face embedding encoding version"));
+        }
+        let dimension = u32::from_le_bytes(raw[4..8].try_into().unwrap());
+        if raw.len() != 8 + dimension as usize * 4 {
+            return Err(invalid(
+                "face embedding payload length does not match the dimension",
+            ));
+        }
+        let values = raw[8..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect();
+        let artifact = FaceEmbeddingArtifact {
+            id,
+            dimension,
+            values,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    /// BLAKE3 hex digest of the canonical raw payload (uncompressed
+    /// `encoding_version || dimension || f32` stream). Stored in the analysis'
+    /// `FaceVectorRef.checksum` — the exact value the evidence helper verifies.
+    pub fn checksum(&self) -> String {
+        blake3::hash(&self.encode_raw()).to_hex().to_string()
+    }
+
+    /// Stable kind string used by diagnostics (`face_embedding`).
+    pub fn kind_str(&self) -> &'static str {
+        RecordKind::FaceEmbedding.as_str()
+    }
+}
+
 /// A single bundle entry, used by the unified constructor and re-reads.
 #[derive(Debug, Clone)]
 pub enum RecordSpec {
@@ -599,6 +718,19 @@ pub enum RecordSpec {
     GenerativeCanvas(GenerativeCanvasArtifact),
     SpotHealGenerative(SpotHealGenerativeArtifact),
     DenoiseRgb(DenoiseRgbArtifact),
+    FaceEmbedding(FaceEmbeddingArtifact),
+}
+
+/// Stable record id of a [`RecordSpec`] of any kind.
+fn spec_id(spec: &RecordSpec) -> &str {
+    match spec {
+        RecordSpec::MaskTile(tile) => &tile.mask_id,
+        RecordSpec::RepairRegion(artifact) => &artifact.id,
+        RecordSpec::GenerativeCanvas(artifact) => &artifact.id,
+        RecordSpec::SpotHealGenerative(artifact) => &artifact.id,
+        RecordSpec::DenoiseRgb(artifact) => &artifact.id,
+        RecordSpec::FaceEmbedding(artifact) => &artifact.id,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -737,6 +869,21 @@ impl ZDataContainer {
                         denoise.id.len(),
                     )?;
                 }
+                RecordSpec::FaceEmbedding(embedding) => {
+                    embedding.validate()?;
+                    if !ids.insert(embedding.id.clone()) {
+                        return Err(ZDataError::DuplicateId(embedding.id.clone()));
+                    }
+                    conservative_size = add_conservative_size(
+                        conservative_size,
+                        // raw payload = 8-byte header + f32 (4 bytes/value)
+                        u64::from(embedding.dimension)
+                            .checked_mul(4)
+                            .and_then(|bytes| bytes.checked_add(8))
+                            .ok_or_else(|| invalid("face embedding dimension overflow"))?,
+                        embedding.id.len(),
+                    )?;
+                }
             }
         }
         ensure_container_size(conservative_size)?;
@@ -809,6 +956,19 @@ impl ZDataContainer {
                         0,
                         denoise.width,
                         denoise.height,
+                        raw,
+                    )
+                }
+                RecordSpec::FaceEmbedding(embedding) => {
+                    let raw = embedding.encode_raw();
+                    let id = embedding.id;
+                    (
+                        RecordKind::FaceEmbedding,
+                        id,
+                        0,
+                        0,
+                        embedding.dimension,
+                        1,
                         raw,
                     )
                 }
@@ -1097,6 +1257,9 @@ impl ZDataContainer {
                     record.mask_id.clone(),
                     &raw,
                 )?),
+                RecordKind::FaceEmbedding => RecordSpec::FaceEmbedding(
+                    FaceEmbeddingArtifact::decode_raw(record.mask_id.clone(), &raw)?,
+                ),
             };
             specs.push(spec);
         }
@@ -1133,13 +1296,7 @@ impl ZDataContainer {
     /// mask tiles and repair regions.  A duplicate id is rejected.
     pub fn add_repair_region(&self, region: RepairRegionArtifact) -> Result<Self, ZDataError> {
         let mut specs = self.decode_all()?;
-        if specs.iter().any(|spec| match spec {
-            RecordSpec::MaskTile(tile) => tile.mask_id == region.id,
-            RecordSpec::RepairRegion(existing) => existing.id == region.id,
-            RecordSpec::GenerativeCanvas(existing) => existing.id == region.id,
-            RecordSpec::SpotHealGenerative(existing) => existing.id == region.id,
-            RecordSpec::DenoiseRgb(existing) => existing.id == region.id,
-        }) {
+        if self.has_id(&specs, &region.id) {
             return Err(ZDataError::DuplicateId(region.id));
         }
         specs.push(RecordSpec::RepairRegion(region));
@@ -1224,14 +1381,46 @@ impl ZDataContainer {
         Ok(artifact)
     }
 
+    /// Reads a LRPAR-G12-FACE-20 `face_embedding` record by id.  Kind
+    /// separation is strict: records of any other kind with the same id are
+    /// never returned here.  Returns [`ZDataError::Invalid`] when no such
+    /// record exists and [`ZDataError::Checksum`] when the stored payload
+    /// fails its BLAKE3 check.  The decoded dimension must agree with the
+    /// container record (`width`).
+    pub fn face_embedding(&self, id: &str) -> Result<FaceEmbeddingArtifact, ZDataError> {
+        let record = self
+            .records
+            .iter()
+            .find(|r| r.kind == RecordKind::FaceEmbedding && r.mask_id == id)
+            .ok_or_else(|| invalid("face embedding not found"))?;
+        let payload_start = record.offset + RECORD_HEADER_LEN + record.mask_id.len();
+        let payload_end = payload_start + record.compressed_len as usize;
+        let raw = decode_payload(
+            &self.bytes[payload_start..payload_end],
+            record.uncompressed_len,
+        )?;
+        if blake3::hash(&raw).as_bytes() != &record.checksum {
+            return Err(ZDataError::Checksum(id.into()));
+        }
+        let artifact = FaceEmbeddingArtifact::decode_raw(id.to_string(), &raw)?;
+        if artifact.dimension != record.width || record.height != 1 {
+            return Err(invalid("face embedding dimension disagrees with record"));
+        }
+        Ok(artifact)
+    }
+
+    /// Whether a record of `kind` with `id` exists. Used by the face evidence
+    /// contract to distinguish an absent payload (`missing`) from a corrupt
+    /// one (`corrupt`) without interpreting error strings.
+    #[must_use]
+    pub fn has_record(&self, kind: RecordKind, id: &str) -> bool {
+        self.records
+            .iter()
+            .any(|record| record.kind == kind && record.mask_id == id)
+    }
+
     fn has_id(&self, specs: &[RecordSpec], id: &str) -> bool {
-        specs.iter().any(|spec| match spec {
-            RecordSpec::MaskTile(tile) => tile.mask_id == id,
-            RecordSpec::RepairRegion(existing) => existing.id == id,
-            RecordSpec::GenerativeCanvas(existing) => existing.id == id,
-            RecordSpec::SpotHealGenerative(existing) => existing.id == id,
-            RecordSpec::DenoiseRgb(existing) => existing.id == id,
-        })
+        specs.iter().any(|spec| spec_id(spec) == id)
     }
 
     /// Returns a new container with `canvas` appended.  Existing records of
@@ -1312,6 +1501,37 @@ impl ZDataContainer {
             return Err(ZDataError::DuplicateId(denoise.id));
         }
         specs.push(RecordSpec::DenoiseRgb(denoise));
+        Self::new_with(specs)
+    }
+
+    /// Returns a new container with `embedding` appended.  Existing records of
+    /// every kind are preserved; a duplicate id (across all kinds) is
+    /// rejected.
+    pub fn add_face_embedding(&self, embedding: FaceEmbeddingArtifact) -> Result<Self, ZDataError> {
+        let mut specs = self.decode_all()?;
+        if self.has_id(&specs, &embedding.id) {
+            return Err(ZDataError::DuplicateId(embedding.id));
+        }
+        specs.push(RecordSpec::FaceEmbedding(embedding));
+        Self::new_with(specs)
+    }
+
+    /// Explicit replacement path for a `face_embedding` record: replaces only
+    /// the record with the same id, never silently touching other records or
+    /// kinds.  An id collision with a different kind is still rejected.
+    pub fn replace_face_embedding(
+        &self,
+        embedding: FaceEmbeddingArtifact,
+    ) -> Result<Self, ZDataError> {
+        embedding.validate()?;
+        let mut specs = self.decode_all()?;
+        specs.retain(
+            |spec| !matches!(spec, RecordSpec::FaceEmbedding(existing) if existing.id == embedding.id),
+        );
+        if self.has_id(&specs, &embedding.id) {
+            return Err(ZDataError::DuplicateId(embedding.id));
+        }
+        specs.push(RecordSpec::FaceEmbedding(embedding));
         Self::new_with(specs)
     }
 }
@@ -1489,6 +1709,75 @@ pub fn save_denoise_rgb(
     save_zdata_locked(path, &container)
 }
 
+/// Writes a `face_embedding` artifact to the bundle at `path` (creating it if
+/// needed) under the `.zdata.lock`.
+///
+/// `replace = false` appends and rejects a duplicate id (the default,
+/// non-destructive path); `replace = true` is the explicit re-analysis path
+/// ([`ZDataContainer::replace_face_embedding`]).  Both write atomically
+/// (Temp + Rename) and preserve pre-existing records of every kind.
+pub fn save_face_embedding(
+    path: &Path,
+    embedding: FaceEmbeddingArtifact,
+    replace: bool,
+) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let container = match existing {
+        Some(container) if replace => container.replace_face_embedding(embedding)?,
+        Some(container) => container.add_face_embedding(embedding)?,
+        None => ZDataContainer::new(vec![])?.add_face_embedding(embedding)?,
+    };
+    save_zdata_locked(path, &container)
+}
+
+/// Writes a whole set of `face_embedding` records in one atomic bundle write
+/// under a single `.zdata.lock`.
+///
+/// This is the face-analysis write path: every record of the batch is
+/// upserted (an existing `face_embedding` record with the same id is replaced,
+/// so an explicit `--force` re-analysis is idempotent), records of every other
+/// kind and `face_embedding` records with other ids are preserved.  Duplicate
+/// ids within the batch and id collisions with a different kind are rejected
+/// loudly.  Because the references are only recorded in the JSON sidecar after
+/// this write returns, a failure can never leave a dangling reference.
+pub fn save_face_embeddings(
+    path: &Path,
+    embeddings: Vec<FaceEmbeddingArtifact>,
+) -> Result<(), ZDataError> {
+    let _lock = crate::acquire_write_lock(path).map_err(|error| lock_error(path, error))?;
+    let existing = if path.exists() {
+        Some(load_zdata(path)?)
+    } else {
+        None
+    };
+    let mut specs = match existing {
+        Some(container) => container.decode_all()?,
+        None => Vec::new(),
+    };
+    let mut batch_ids = HashSet::new();
+    for embedding in embeddings {
+        embedding.validate()?;
+        if !batch_ids.insert(embedding.id.clone()) {
+            return Err(ZDataError::DuplicateId(embedding.id));
+        }
+        // Replace only this id; a collision with another kind stays an error.
+        specs.retain(
+            |spec| !matches!(spec, RecordSpec::FaceEmbedding(existing) if existing.id == embedding.id),
+        );
+        if specs.iter().any(|spec| spec_id(spec) == embedding.id) {
+            return Err(ZDataError::DuplicateId(embedding.id));
+        }
+        specs.push(RecordSpec::FaceEmbedding(embedding));
+    }
+    let container = ZDataContainer::new_with(specs)?;
+    save_zdata_locked(path, &container)
+}
+
 pub fn save_zdata(path: &Path, container: &ZDataContainer) -> Result<(), ZDataError> {
     // REVIEW-SIDECAR-ZDATA-1: plain saves take the same `.zdata.lock` as
     // `append_repair_region`, so an append can never be overwritten mid-flight
@@ -1625,6 +1914,16 @@ fn parse_record(
             let expected = 12u64 + u64::from(width) * u64::from(height) * 3;
             if uncompressed_len != expected {
                 return Err(invalid("denoise payload length disagrees with dimensions"));
+            }
+        }
+        RecordKind::FaceEmbedding => {
+            // raw = 8-byte encoding header + f32 (4 bytes/value); the index
+            // stores width = dimension, height = 1.
+            let expected = 8u64 + u64::from(width) * u64::from(height) * 4;
+            if height != 1 || width == 0 || uncompressed_len != expected {
+                return Err(invalid(
+                    "face embedding payload length disagrees with dimensions",
+                ));
             }
         }
     }
@@ -2728,6 +3027,296 @@ mod tests {
         let replaced = load_zdata(&path).unwrap();
         assert_eq!(replaced.tile_count(), 3, "replace must not duplicate");
         assert_eq!(replaced.denoise_rgb("denoise-1").unwrap(), regenerated);
+
+        // No temp/lock files may leak.
+        let leftovers: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-") || name.ends_with(".lock"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp/lock files, found {leftovers:?}"
+        );
+    }
+
+    // =====================================================================
+    // FACE-20-IMPL-20-REST: face_embedding (kind 5) f32 codec.
+    // =====================================================================
+
+    fn face_embedding() -> FaceEmbeddingArtifact {
+        FaceEmbeddingArtifact {
+            id: "emb-test".into(),
+            dimension: 4,
+            values: vec![0.5, -0.25, 0.125, 0.75],
+        }
+    }
+
+    #[test]
+    fn face_embedding_roundtrip_through_bundle() {
+        let artifact = face_embedding();
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::FaceEmbedding(artifact.clone())]).unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 1);
+        assert_eq!(decoded.face_embedding("emb-test").unwrap(), artifact);
+        assert!(decoded.has_record(RecordKind::FaceEmbedding, "emb-test"));
+        assert!(!decoded.has_record(RecordKind::FaceEmbedding, "absent"));
+        // Strict kind separation: never visible as any other kind.
+        assert!(decoded.tile("emb-test", 0, 0).is_err());
+        assert!(decoded.repair_region("emb-test").is_err());
+        assert!(decoded.generative_canvas("emb-test").is_err());
+        assert!(decoded.spot_heal_generative("emb-test").is_err());
+        assert!(decoded.denoise_rgb("emb-test").is_err());
+        // Container VERSION stays 1: kind discriminator, not a format bump.
+        let bytes = container.to_bytes();
+        assert_eq!(
+            u16::from_le_bytes(bytes[8..10].try_into().unwrap()),
+            VERSION
+        );
+    }
+
+    #[test]
+    fn face_embedding_coexists_with_all_other_kinds() {
+        let container = ZDataContainer::new_with(vec![
+            RecordSpec::MaskTile(tiles()[0].clone()),
+            RecordSpec::RepairRegion(repair_region()),
+            RecordSpec::GenerativeCanvas(generative_canvas()),
+            RecordSpec::SpotHealGenerative(spot_heal()),
+            RecordSpec::DenoiseRgb(denoise_rgb()),
+            RecordSpec::FaceEmbedding(face_embedding()),
+        ])
+        .unwrap();
+        let decoded = ZDataContainer::from_bytes(container.to_bytes()).unwrap();
+        assert_eq!(decoded.tile_count(), 6);
+        assert_eq!(
+            decoded.face_embedding("emb-test").unwrap(),
+            face_embedding()
+        );
+        assert_eq!(decoded.denoise_rgb("denoise-1").unwrap(), denoise_rgb());
+        assert_eq!(decoded.tile("subject", 0, 0).unwrap(), tiles()[0]);
+    }
+
+    /// The canonical raw stream is
+    /// `encoding_version(1) || dimension || f32 LE values`; the digest is
+    /// dimension/value dependent but identity-independent (id/kind do not enter
+    /// it), so the persisted `FaceVectorRef.checksum` stays reproducible.
+    #[test]
+    fn face_embedding_canonical_bytes_and_checksum_are_stable() {
+        let artifact = face_embedding();
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(&1u32.to_le_bytes());
+        canonical.extend_from_slice(&4u32.to_le_bytes());
+        for value in &artifact.values {
+            canonical.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(canonical, artifact.encode_raw());
+        assert_eq!(
+            artifact.checksum(),
+            blake3::hash(&canonical).to_hex().to_string()
+        );
+        assert_eq!(artifact.checksum().len(), 64, "BLAKE3 hex digest");
+        let mut renamed = artifact.clone();
+        renamed.id = "emb-other".into();
+        assert_eq!(artifact.checksum(), renamed.checksum());
+        let mut changed = artifact.clone();
+        changed.values[0] += 0.5;
+        assert_ne!(artifact.checksum(), changed.checksum());
+        assert_eq!(artifact.kind_str(), "face_embedding");
+        assert_eq!(RecordKind::FaceEmbedding.as_str(), "face_embedding");
+    }
+
+    #[test]
+    fn face_embedding_invalid_payloads_rejected_on_write() {
+        // Value count disagrees with the declared dimension.
+        let bad = FaceEmbeddingArtifact {
+            id: "bad".into(),
+            dimension: 4,
+            values: vec![0.0, 1.0],
+        };
+        assert!(bad.validate().is_err());
+        assert!(ZDataContainer::new_with(vec![RecordSpec::FaceEmbedding(bad)]).is_err());
+        // Zero dimension.
+        let empty = FaceEmbeddingArtifact {
+            id: "empty".into(),
+            dimension: 0,
+            values: vec![],
+        };
+        assert!(empty.validate().is_err());
+        // Empty id.
+        let unnamed = FaceEmbeddingArtifact {
+            id: String::new(),
+            dimension: 1,
+            values: vec![1.0],
+        };
+        assert!(unnamed.validate().is_err());
+        // Non-finite values must never be persisted silently.
+        let nan = FaceEmbeddingArtifact {
+            id: "nan".into(),
+            dimension: 2,
+            values: vec![f32::NAN, 0.0],
+        };
+        assert!(nan.validate().is_err());
+        let infinite = FaceEmbeddingArtifact {
+            id: "inf".into(),
+            dimension: 2,
+            values: vec![f32::INFINITY, 0.0],
+        };
+        assert!(infinite.validate().is_err());
+    }
+
+    #[test]
+    fn face_embedding_missing_id_returns_invalid() {
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::FaceEmbedding(face_embedding())]).unwrap();
+        assert!(matches!(
+            container.face_embedding("absent"),
+            Err(ZDataError::Invalid(_))
+        ));
+        // Strict kind separation: never returned by another kind's accessor.
+        assert!(matches!(
+            container.denoise_rgb("emb-test"),
+            Err(ZDataError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn face_embedding_checksum_corruption_detected_eagerly() {
+        // Tamper the *raw* (uncompressed) payload of the record: rebuild the
+        // same container from a value-mutated artifact (same dimensions, so the
+        // record sizes match), then transplant the pristine record checksum.
+        // The payload no longer hashes to it, and both the lazy accessor and
+        // the eager `load_zdata` path must catch it.
+        let mutate_minus_one = |value: f32| {
+            // Adjacent f32 with identical little-endian byte length.
+            f32::from_bits(value.to_bits() - 1)
+        };
+        let mut tampered = face_embedding();
+        tampered.values[0] = mutate_minus_one(tampered.values[0]);
+        let pristine_bytes =
+            ZDataContainer::new_with(vec![RecordSpec::FaceEmbedding(face_embedding())])
+                .unwrap()
+                .to_bytes()
+                .to_vec();
+        let mut bytes = ZDataContainer::new_with(vec![RecordSpec::FaceEmbedding(tampered)])
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        assert_eq!(
+            bytes.len(),
+            pristine_bytes.len(),
+            "same dimensions must produce the same record size"
+        );
+        let index = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        let record = u64::from_le_bytes(bytes[index + 20..index + 28].try_into().unwrap()) as usize;
+        // Checksum lives in the record header at offset 36.
+        bytes[record + 36..record + 68].copy_from_slice(&pristine_bytes[record + 36..record + 68]);
+
+        let corrupt = ZDataContainer::from_bytes(&bytes).unwrap();
+        assert!(matches!(
+            corrupt.face_embedding("emb-test"),
+            Err(ZDataError::Checksum(_))
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let path = zdata_path_for(&directory.path().join("image.raw"));
+        fs::write(&path, &bytes).unwrap();
+        assert!(
+            load_zdata(&path).is_err(),
+            "corrupt face embedding payload must fail at load time"
+        );
+    }
+
+    #[test]
+    fn face_embedding_duplicate_id_rejected_across_all_kinds() {
+        let container =
+            ZDataContainer::new_with(vec![RecordSpec::FaceEmbedding(face_embedding())]).unwrap();
+        assert!(matches!(
+            container.add_face_embedding(face_embedding()),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        let mut clash = denoise_rgb();
+        clash.id = "emb-test".into();
+        assert!(matches!(
+            container.add_denoise_rgb(clash),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        assert!(matches!(
+            ZDataContainer::new_with(vec![
+                RecordSpec::FaceEmbedding(face_embedding()),
+                RecordSpec::FaceEmbedding(face_embedding()),
+            ]),
+            Err(ZDataError::DuplicateId(_))
+        ));
+    }
+
+    #[test]
+    fn face_embeddings_batch_write_is_atomic_replaceable_and_locked() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("image.raw");
+        let path = zdata_path_for(&source);
+        save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
+
+        let mut second = face_embedding();
+        second.id = "emb-two".into();
+        save_face_embeddings(&path, vec![face_embedding(), second.clone()]).unwrap();
+        let reloaded = load_zdata(&path).unwrap();
+        assert_eq!(
+            reloaded.tile_count(),
+            4,
+            "two face records + two mask tiles"
+        );
+        assert_eq!(reloaded.tile("subject", 0, 0).unwrap(), tiles()[0]);
+        assert_eq!(
+            reloaded.face_embedding("emb-test").unwrap(),
+            face_embedding()
+        );
+        assert_eq!(reloaded.face_embedding("emb-two").unwrap(), second);
+
+        // The explicit re-analysis path upserts by id instead of duplicating.
+        let mut regenerated = face_embedding();
+        regenerated.values[0] = -0.5;
+        save_face_embeddings(&path, vec![regenerated.clone()]).unwrap();
+        let replaced = load_zdata(&path).unwrap();
+        assert_eq!(replaced.tile_count(), 4, "upsert must not duplicate");
+        assert_eq!(replaced.face_embedding("emb-test").unwrap(), regenerated);
+        assert_eq!(
+            replaced.face_embedding("emb-two").unwrap(),
+            second,
+            "other ids stay untouched"
+        );
+
+        // A duplicate id inside one batch is rejected, and an id collision with
+        // a record of a different kind is rejected too.
+        assert!(matches!(
+            save_face_embeddings(&path, vec![face_embedding(), face_embedding()]),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        let mut collide = face_embedding();
+        collide.id = "subject".into();
+        assert!(matches!(
+            save_face_embeddings(&path, vec![collide]),
+            Err(ZDataError::DuplicateId(_))
+        ));
+        assert!(!load_zdata(&path)
+            .unwrap()
+            .has_record(RecordKind::FaceEmbedding, "subject"));
+
+        let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
+        std::fs::File::create(&lock_path).unwrap();
+        let mut blocked = face_embedding();
+        blocked.id = "emb-blocked".into();
+        let error = save_face_embeddings(&path, vec![blocked]).unwrap_err();
+        assert!(
+            matches!(&error, ZDataError::Io { operation, .. } if operation.contains("lock")),
+            "batch write must report the held lock, got {error}"
+        );
+        drop(fs::remove_file(&lock_path));
+
+        // Belt and braces: the clash record did not enter the bundle.
+        assert!(!load_zdata(&path)
+            .unwrap()
+            .has_record(RecordKind::FaceEmbedding, "denoise-1"));
 
         // No temp/lock files may leak.
         let leftovers: Vec<_> = fs::read_dir(directory.path())

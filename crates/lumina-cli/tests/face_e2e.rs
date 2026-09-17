@@ -1,29 +1,27 @@
 //! LRPAR-G12-FACE-IMPL-20 / S4: end-to-end tests for `lumina face`.
 //!
-//! SOLL: `feature/decisions/LRPAR-G12-FACE-20.md` §2.3/§4/§6. The tests close
-//! the S2/S3 file-level gap: a full detection → embedding → clustering →
+//! SOLL: `feature/decisions/LRPAR-G12-FACE-20.md` §2.3/§3.2/§4/§6. The tests
+//! close the S2/S3 file-level gap: a full detection → embedding → clustering →
 //! `into_sidecar` analysis is written to a real sidecar file (`save_sidecar`)
-//! and reloaded through the CLI status path. Without the `onnx-rt` capability
-//! `--analyze` refuses loudly and writes nothing (never a stub fallback).
+//! with its vectors persisted as `face_embedding` records
+//! (`save_face_embeddings`) and reloaded through the CLI status path. Without
+//! the `onnx-rt` capability `--analyze` refuses loudly and writes nothing
+//! (never a stub fallback).
 
 use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_onnx::{
-    cluster_embeddings, clusters_from_labels, detected_face_id, face_identity, FaceAnalysisOutput,
-    FaceClusteringParams, FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
-    FaceInferenceOptions, FaceModelSuite, StubFaceDetector, StubFaceEmbedder,
+    cluster_embeddings, clusters_from_labels, detected_face_id, embedding_id_for, face_identity,
+    FaceAnalysisOutput, FaceClusteringParams, FaceDetectionInference, FaceEmbeddingInference,
+    FaceEmbeddingRecord, FaceInferenceOptions, FaceModelSuite, StubFaceDetector, StubFaceEmbedder,
 };
 use lumina_sidecar::{
-    load_sidecar, save_sidecar, sidecar_path_for, zdata_path_for, FaceAnalysis, FaceArtifactStatus,
-    FaceVectorRef, SidecarDocument, SourceFingerprint,
+    load_sidecar, load_zdata, save_face_embeddings, save_sidecar, sidecar_path_for, zdata_path_for,
+    FaceAnalysis, FaceArtifactStatus, FaceEmbeddingArtifact, FaceVectorRef, SidecarDocument,
+    SourceFingerprint, ZDataContainer,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// Real bytes written as the referenced face-vector artifact for the fixture.
-/// The CLI and GUI verify a referenced artifact by whole-file BLAKE3, so the
-/// fixture must write real bytes and persist their digest (M2).
-const VECTOR_PAYLOAD: &[u8] = b"lumina-face-vector-fixture";
 
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_lumina-cli"))
@@ -60,14 +58,13 @@ fn import(input: &Path) {
 /// clustering) and bridges it through `into_sidecar` using the exact live
 /// identity the CLI derives from `document.source`.
 ///
-/// The referenced vector artifact is written next to the source and its real
-/// BLAKE3 digest is persisted (M2): the CLI verifies that digest, so a fixture
-/// with a fake checksum or no file would (correctly) classify as
-/// `corrupt`/`missing` instead of `valid`.
+/// The vectors are persisted as real `face_embedding` records and the
+/// references carry exactly their record checksums (FACE-20 §3.2): the CLI
+/// verifies that checksum, so a fixture with a fabricated checksum or without
+/// records would (correctly) classify as `corrupt`/`missing` instead of
+/// `valid`.
 fn build_analysis(document: &SidecarDocument, frame: &ImageFrame, input: &Path) -> FaceAnalysis {
     let vector_path = zdata_path_for(input);
-    fs::write(&vector_path, VECTOR_PAYLOAD).unwrap();
-    let vector_checksum = format!("blake3:{}", blake3::hash(VECTOR_PAYLOAD).to_hex());
     let relative_path = vector_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -86,6 +83,15 @@ fn build_analysis(document: &SidecarDocument, frame: &ImageFrame, input: &Path) 
     let labels = cluster_embeddings(&raw, &FaceClusteringParams::default()).unwrap();
     let detection_ids: Vec<String> = detections.iter().map(detected_face_id).collect();
     let clusters = clusters_from_labels(&detection_ids, &labels).unwrap();
+    let records: Vec<FaceEmbeddingArtifact> = vectors
+        .iter()
+        .enumerate()
+        .map(|(index, vector)| FaceEmbeddingArtifact {
+            id: embedding_id_for(&detection_ids[index]),
+            dimension: vector.dimension() as u32,
+            values: vector.values().to_vec(),
+        })
+        .collect();
     let embeddings: Vec<FaceEmbeddingRecord> = vectors
         .iter()
         .enumerate()
@@ -95,7 +101,7 @@ fn build_analysis(document: &SidecarDocument, frame: &ImageFrame, input: &Path) 
             reference: FaceVectorRef {
                 relative_path: relative_path.clone(),
                 format: "lumina-zdata".into(),
-                checksum: vector_checksum.clone(),
+                checksum: records[index].checksum(),
                 dimension: vector.dimension() as u32,
                 channels: "f32".into(),
                 data_version: "1".into(),
@@ -103,6 +109,7 @@ fn build_analysis(document: &SidecarDocument, frame: &ImageFrame, input: &Path) 
             },
         })
         .collect();
+    save_face_embeddings(&vector_path, records).unwrap();
     let identity = face_identity(
         &suite,
         SourceFingerprint {
@@ -228,10 +235,45 @@ fn persisted_missing_and_corrupt_states_are_visible() {
     assert!(stdout.contains("\"status\":\"corrupt\""));
 }
 
-/// M2: a referenced vector file whose bytes no longer hash to the persisted
-/// checksum is a hard `corrupt` (exit 1) — never a silently trusted `valid`.
+/// FACE-20 §3.2: a referenced `face_embedding` record whose payload no longer
+/// hashes to the persisted checksum is a hard `corrupt` (exit 1) — never a
+/// silently trusted `valid`.
 #[test]
-fn tampered_vector_artifact_is_corrupt() {
+fn tampered_vector_record_is_corrupt() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = gradient_png(&dir);
+    import(&input);
+    let path = sidecar_path_for(&input);
+    let frame = ImageFrame::decode(&fs::read(&input).unwrap()).unwrap();
+    let mut document = load_sidecar(&path).unwrap();
+    let analysis = build_analysis(&document, &frame, &input);
+    let embedding_id = analysis.embeddings[0].id.clone();
+    document.face = Some(analysis);
+    save_sidecar(&path, &document).unwrap();
+
+    // Persist exactly the mutated vector under the referenced id: the payload
+    // no longer hashes to the persisted reference checksum.
+    let vector_path = zdata_path_for(&input);
+    let mut record = load_zdata(&vector_path)
+        .unwrap()
+        .face_embedding(&embedding_id)
+        .unwrap();
+    let original_checksum = record.checksum();
+    record.values[0] = f32::from_bits(record.values[0].to_bits() - 1);
+    assert_ne!(record.checksum(), original_checksum);
+    lumina_sidecar::save_face_embeddings(&vector_path, vec![record]).unwrap();
+
+    let (ok, stdout) = status_json(&input);
+    assert!(!ok, "a checksum mismatch must be a hard corrupt");
+    assert!(stdout.contains("\"status\":\"corrupt\""));
+    assert!(stdout.contains("\"artifact_evidence\":\"checksum-mismatch\""));
+}
+
+/// FACE-20 §3.2: a bundle that is not a loadable container while the referenced
+/// file exists is `corrupt` (the payload exists but is unusable), never a
+/// false `valid`.
+#[test]
+fn unusable_bundle_is_corrupt_not_valid() {
     let dir = tempfile::tempdir().unwrap();
     let input = gradient_png(&dir);
     import(&input);
@@ -241,19 +283,19 @@ fn tampered_vector_artifact_is_corrupt() {
     document.face = Some(build_analysis(&document, &frame, &input));
     save_sidecar(&path, &document).unwrap();
 
-    // Tamper with the referenced artifact after the analysis was persisted.
     fs::write(zdata_path_for(&input), b"tampered-face-vectors").unwrap();
 
     let (ok, stdout) = status_json(&input);
-    assert!(!ok, "a checksum mismatch must be a hard corrupt");
+    assert!(!ok, "an unloadable bundle must be a hard corrupt");
     assert!(stdout.contains("\"status\":\"corrupt\""));
     assert!(stdout.contains("\"artifact_evidence\":\"checksum-mismatch\""));
 }
 
-/// M2: a missing referenced vector file is visibly `missing` (exit 0), never a
-/// false `valid`.
+/// FACE-20 §3.2: an analysis whose records were never written (the pre-record
+/// layout: references exist, the bundle does not) is `missing` (exit 0), never
+/// a false `valid`.
 #[test]
-fn missing_vector_artifact_is_missing_not_valid() {
+fn missing_vector_records_are_missing_not_valid() {
     let dir = tempfile::tempdir().unwrap();
     let input = gradient_png(&dir);
     import(&input);
@@ -267,6 +309,41 @@ fn missing_vector_artifact_is_missing_not_valid() {
 
     let (ok, stdout) = status_json(&input);
     assert!(ok, "a missing artifact is not a hard error");
+    assert!(stdout.contains("\"status\":\"missing\""));
+    assert!(stdout.contains("\"artifact_evidence\":\"missing\""));
+}
+
+/// FACE-20 §3.2: a bundle that exists but holds no `face_embedding` record for
+/// the reference (e.g. only mask tiles) is `missing` — the reference dangles,
+/// so validity cannot be proven.
+#[test]
+fn dangling_embedding_reference_is_missing_not_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = gradient_png(&dir);
+    import(&input);
+    let path = sidecar_path_for(&input);
+    let frame = ImageFrame::decode(&fs::read(&input).unwrap()).unwrap();
+    let mut document = load_sidecar(&path).unwrap();
+    document.face = Some(build_analysis(&document, &frame, &input));
+    save_sidecar(&path, &document).unwrap();
+
+    // Keep the bundle, drop every face record.
+    let tiles = vec![lumina_sidecar::MaskTile {
+        mask_id: "subject".into(),
+        tile_x: 0,
+        tile_y: 0,
+        width: 1,
+        height: 1,
+        values: vec![32768],
+    }];
+    lumina_sidecar::save_zdata(
+        &zdata_path_for(&input),
+        &ZDataContainer::new(tiles).unwrap(),
+    )
+    .unwrap();
+
+    let (ok, stdout) = status_json(&input);
+    assert!(ok);
     assert!(stdout.contains("\"status\":\"missing\""));
     assert!(stdout.contains("\"artifact_evidence\":\"missing\""));
 }

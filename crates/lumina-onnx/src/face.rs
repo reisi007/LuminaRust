@@ -70,6 +70,12 @@ use lumina_sidecar::{
     FaceIdentity, FacePerson, FaceVectorRef, GeometryFingerprint, Preprocessing, SourceFingerprint,
 };
 
+/// Evidence about the persisted binary face artifacts, owned by the sidecar
+/// layer (`lumina_sidecar::face_artifact_evidence`) so CLI, GUI and this
+/// status mapping share exactly one contract. Re-exported here because
+/// [`face_artifact_status`] consumes it.
+pub use lumina_sidecar::FaceArtifactEvidence;
+
 use crate::hash::{compute_sha256_hex, PENDING_INTEGRATION_HASH};
 use crate::manifest::{
     ChannelLayout, InputNormalization, ModelCapabilities, ModelInputSpec, ModelManifest,
@@ -573,19 +579,6 @@ pub fn face_identity_with_digest(
         serde_json::Value::String(digest),
     );
     Ok(identity)
-}
-
-/// Evidence about the persisted binary face artifact backing an analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FaceArtifactEvidence {
-    /// The referenced artifact does not exist.
-    Missing,
-    /// The artifact exists; `checksum_matches` reports whether its digest
-    /// equals the persisted checksum.
-    Present {
-        /// Whether the on-disk payload hashes to the persisted checksum.
-        checksum_matches: bool,
-    },
 }
 
 /// Resolve the visible status of a persisted face analysis (FACE-20 §4).

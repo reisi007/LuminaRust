@@ -17,10 +17,11 @@ mod zdata;
 #[cfg(feature = "zdata")]
 pub use zdata::{
     append_denoise_rgb, append_generative_canvas, append_repair_region,
-    append_spot_heal_generative, load_zdata, save_denoise_rgb, save_generative_canvas, save_zdata,
-    zdata_path_for, DenoiseRgbArtifact, GenerativeCanvasArtifact, MaskTile, RecordKind, RecordSpec,
+    append_spot_heal_generative, load_zdata, save_denoise_rgb, save_face_embedding,
+    save_face_embeddings, save_generative_canvas, save_zdata, zdata_path_for, DenoiseRgbArtifact,
+    FaceEmbeddingArtifact, GenerativeCanvasArtifact, MaskTile, RecordKind, RecordSpec,
     RepairRegionArtifact, SpotHealGenerativeArtifact, ZDataContainer, ZDataError,
-    RGB_ENCODING_VERSION,
+    FACE_EMBEDDING_ENCODING_VERSION, MAX_FACE_EMBEDDING_DIMENSION, RGB_ENCODING_VERSION,
 };
 
 // LRPAR-G15-IPTC-S4: file-backed IPTC metadata presets (static + dynamic).
@@ -48,12 +49,13 @@ pub use merge_recipe::{
 // identity/status; no models, no clustering evaluation, no CLI/GUI).
 mod face;
 pub use face::{
-    validate_face_analysis, validate_face_sha256, FaceAnalysis, FaceArtifactStatus,
-    FaceBoundingBox, FaceCluster, FaceClusteringIdentity, FaceDetection, FaceEmbedding,
-    FaceIdentity, FaceLandmark, FacePerson, FaceVectorRef, FACE_HASH_HEX_LEN,
-    FACE_PENDING_MODEL_HASH, FACE_SCHEMA_VERSION, FACE_SHA256_PREFIX, MAX_FACE_CLUSTERS,
-    MAX_FACE_CLUSTER_MEMBERS, MAX_FACE_DETECTIONS, MAX_FACE_EMBEDDINGS, MAX_FACE_ERROR_CHARS,
-    MAX_FACE_ID_CHARS, MAX_FACE_LANDMARKS, MAX_FACE_NAME_CHARS, MAX_FACE_PERSONS,
+    face_artifact_evidence, validate_face_analysis, validate_face_sha256, FaceAnalysis,
+    FaceArtifactEvidence, FaceArtifactStatus, FaceBoundingBox, FaceCluster, FaceClusteringIdentity,
+    FaceDetection, FaceEmbedding, FaceIdentity, FaceLandmark, FacePerson, FaceVectorRef,
+    FACE_HASH_HEX_LEN, FACE_PENDING_MODEL_HASH, FACE_SCHEMA_VERSION, FACE_SHA256_PREFIX,
+    MAX_FACE_CLUSTERS, MAX_FACE_CLUSTER_MEMBERS, MAX_FACE_DETECTIONS, MAX_FACE_EMBEDDINGS,
+    MAX_FACE_ERROR_CHARS, MAX_FACE_ID_CHARS, MAX_FACE_LANDMARKS, MAX_FACE_NAME_CHARS,
+    MAX_FACE_PERSONS,
 };
 
 // LRPAR-G14-DENOISE-20: additive `recipe.adjustments.denoise_ai` schema

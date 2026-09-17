@@ -36,8 +36,8 @@ use lumina_onnx::OnnxEngine;
 use lumina_onnx::StubBackend;
 #[cfg(feature = "onnx-rt")]
 use lumina_onnx::{
-    cluster_embeddings, clusters_from_labels, detected_face_id, FaceAnalysisOutput,
-    FaceDetectionInference, FaceEmbeddingInference,
+    cluster_embeddings, clusters_from_labels, detected_face_id, embedding_id_for,
+    FaceAnalysisOutput, FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
 };
 use lumina_onnx::{
     face_artifact_status, face_identity, try_load_face_engine, FaceArtifactEvidence,
@@ -59,6 +59,8 @@ use lumina_gpu::{unsupported_gpu_stages_with_context, Frame, GpuContext};
 use log::info;
 #[allow(unused_imports)]
 use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
+// LRPAR-G12-FACE-IMPL-20-REST: the `face_embedding` write path only exists in
+// the `onnx-rt` build (the only build that can produce real vectors).
 use lumina_sidecar::{
     apply_batch_op, artifact_status, default_meta_presets_dir, document_revision,
     generative_artifact_status, is_metadata_field, load_meta_preset_file, load_sidecar,
@@ -82,6 +84,8 @@ use lumina_sidecar::{
     MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, RED_EYE_MAX_REGIONS,
     SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
 };
+#[cfg(feature = "onnx-rt")]
+use lumina_sidecar::{save_face_embeddings, FaceEmbeddingArtifact as SidecarFaceEmbeddingArtifact};
 // LRPAR-G15-IPTC-S3: embedded IPTC read (JPEG IIM/XMP) for `meta inspect`.
 // LRPAR-G15-IPTC-S6: `embed_metadata` for the opt-in JPEG export bake-in.
 use lumina_iptc::{embed_metadata, extract_metadata, IptcMetadata};
@@ -11225,45 +11229,24 @@ fn face_status_str(status: FaceArtifactStatus) -> &'static str {
 }
 
 /// Real evidence about the binary face artifacts a persisted analysis
-/// references, derived from the bundle bytes — never from mere existence.
+/// references, derived from the `.lumina.zdata` records themselves — never
+/// from mere existence.
 ///
-/// Mirrors the GUI's `face_gui::face_artifact_evidence` (FACE-20 §4) so CLI and
-/// GUI classify the same sidecar identically; this is the shared status
-/// contract, not a second mechanism:
+/// This is the shared `lumina_sidecar::face_artifact_evidence` contract (FACE-20
+/// §3.2), used verbatim by CLI and GUI, so both classify the same sidecar
+/// identically:
 ///
-/// - a referenced vector file that cannot be read → [`FaceArtifactEvidence::Missing`]
-/// - a readable file whose BLAKE3 digest differs from the persisted checksum →
-///   `Present { checksum_matches: false }` (classified `corrupt`)
-/// - every referenced file hashes to its persisted checksum →
-///   `Present { checksum_matches: true }`
-/// - an analysis with no persisted embedding references has no verifiable
-///   payload at all and is reported `Missing` (loud, never a false `valid` —
-///   the vectors were never written, so validity cannot be proven).
-///
-/// The comparison is deliberately a whole-file BLAKE3 hash: no face-vector
-/// `.lumina.zdata` record kind exists yet, so the referenced payload is the
-/// file itself (FACE-20 §4 "Artefakt-Prüfsumme").
+/// - an analysis with no persisted embedding references, a missing bundle, a
+///   missing `face_embedding` record or an unreadable file →
+///   [`FaceArtifactEvidence::Missing`]
+/// - a present record whose record checksum (BLAKE3 over the canonical
+///   `encoding_version || dimension || f32` stream) differs from the persisted
+///   `FaceVectorRef.checksum`, or whose dimension differs, or a bundle that is
+///   not loadable → `Present { checksum_matches: false }` (classified
+///   `corrupt`)
+/// - every referenced record verified → `Present { checksum_matches: true }`
 fn face_artifact_evidence(bundle_root: &Path, analysis: &FaceAnalysis) -> FaceArtifactEvidence {
-    if analysis.embeddings.is_empty() {
-        return FaceArtifactEvidence::Missing;
-    }
-    for embedding in &analysis.embeddings {
-        let path = bundle_root.join(&embedding.vector.relative_path);
-        match fs::read(&path) {
-            Err(_) => return FaceArtifactEvidence::Missing,
-            Ok(bytes) => {
-                let checksum = format!("blake3:{}", blake3::hash(&bytes).to_hex());
-                if checksum != embedding.vector.checksum {
-                    return FaceArtifactEvidence::Present {
-                        checksum_matches: false,
-                    };
-                }
-            }
-        }
-    }
-    FaceArtifactEvidence::Present {
-        checksum_matches: true,
-    }
+    lumina_sidecar::face_artifact_evidence(bundle_root, analysis)
 }
 
 /// Stable machine label for the artifact evidence reported by `face --status`
@@ -11336,8 +11319,9 @@ fn face_status(args: &FaceArgs, document: &SidecarDocument) -> Result<(), CliErr
         );
     };
     let current = face_current_identity(document)?;
-    // M2: real evidence from the bundle bytes (BLAKE3 per referenced file),
-    // identical to the GUI classification. A persisted `valid` analysis whose
+    // M2: real evidence from the record checksums (BLAKE3 per referenced
+    // `face_embedding` record), identical to the GUI classification. A
+    // persisted `valid` analysis whose
     // references are absent/empty/tampered must never be reported `valid`.
     let evidence = face_artifact_evidence(face_bundle_root(&args.input), analysis);
     let status = if analysis.status != FaceArtifactStatus::Valid {
@@ -11458,19 +11442,55 @@ fn face_analyze(
             let clusters = clusters_from_labels(&detection_ids, &labels).map_err(|error| {
                 CliError::Message(format!("face cluster build failed: {error}"))
             })?;
-            // No face-vector `.lumina.zdata` record kind exists yet, so the
-            // embedding vectors are not persisted; detections, landmarks and
-            // clusters are. The limitation is surfaced loudly — never a
-            // dangling reference to a payload that was not written.
-            eprintln!(
-                "warning: face embedding vectors are not persisted yet (no face-vector zdata \
-                 record kind); only detections, landmarks and clusters are stored"
-            );
+            // FACE-20 §3.2: persist the normalized vectors as `face_embedding`
+            // records in the shared bundle *before* the JSON sidecar records
+            // their references, so a failure can never leave a dangling
+            // reference. The record checksum is the persisted reference
+            // checksum (BLAKE3 over the canonical raw vector stream).
+            let zdata_path = zdata_path_for(&args.input);
+            let relative_path = zdata_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| CliError::Message("face bundle path is not valid UTF-8".into()))?
+                .to_string();
+            let mut records = Vec::with_capacity(detections.len());
+            let mut embeddings = Vec::with_capacity(detections.len());
+            for (index, vector) in vectors.iter().enumerate() {
+                let detection_id = detection_ids
+                    .get(index)
+                    .expect("one vector per detection, checked above");
+                let embedding_id = embedding_id_for(detection_id);
+                let dimension = vector.dimension() as u32;
+                let record = SidecarFaceEmbeddingArtifact {
+                    id: embedding_id.clone(),
+                    dimension,
+                    values: vector.values().to_vec(),
+                };
+                embeddings.push(FaceEmbeddingRecord {
+                    detection_index: index,
+                    vector: vector.clone(),
+                    reference: lumina_sidecar::FaceVectorRef {
+                        relative_path: relative_path.clone(),
+                        format: "lumina-zdata".into(),
+                        checksum: record.checksum(),
+                        dimension,
+                        channels: "f32".into(),
+                        data_version: "1".into(),
+                        extras: Default::default(),
+                    },
+                });
+                records.push(record);
+            }
+            if !records.is_empty() {
+                save_face_embeddings(&zdata_path, records).map_err(|error| {
+                    CliError::Message(format!("face vector persistence failed: {error}"))
+                })?;
+            }
             let output = FaceAnalysisOutput {
                 identity: current,
                 created_at: now_rfc3339_utc(),
                 detections,
-                embeddings: vec![],
+                embeddings,
                 clusters,
                 persons: vec![],
             };
@@ -11482,8 +11502,9 @@ fn face_analyze(
             save_sidecar(_sidecar, document)?;
             let analysis = document.face.as_ref().expect("just assigned");
             info!(
-                "face analysis persisted: detections={} clusters={}",
+                "face analysis persisted: detections={} embeddings={} clusters={}",
                 analysis.detections.len(),
+                analysis.embeddings.len(),
                 analysis.clusters.len()
             );
             emit(
@@ -11496,7 +11517,7 @@ fn face_analyze(
                     "changed": true,
                     "detections": analysis.detections.len(),
                     "clusters": analysis.clusters.len(),
-                    "embeddings_persisted": false,
+                    "embeddings_persisted": !analysis.embeddings.is_empty(),
                 }),
                 "face analysis written",
             )
@@ -11509,6 +11530,157 @@ mod tests {
     use super::*;
     // Only the tests still call the plain (no-artifact) export entry point.
     use lumina_core::export_image;
+
+    /// FACE-20-IMPL-20-REST: `face --analyze` must treat a persisted analysis
+    /// with verified `face_embedding` records as already valid and refuse to
+    /// re-run without `--force` — *before* it needs any ONNX artifact, which is
+    /// exactly why this is observable without `onnx-rt`.
+    #[test]
+    fn face_analyze_short_circuits_on_a_verified_record_analysis() {
+        use lumina_onnx::{
+            detected_face_id, embedding_id_for, FaceAnalysisOutput, FaceClusteringParams,
+            FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
+            FaceInferenceOptions, FaceModelSuite, StubFaceDetector, StubFaceEmbedder,
+        };
+        use lumina_sidecar::{
+            load_sidecar, load_zdata, save_face_embeddings, sidecar_path_for, zdata_path_for,
+            FaceEmbeddingArtifact, FaceVectorRef, SidecarDocument, SourceFingerprint,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let frame = lumina_core::ImageFrame::new(8, 6, vec![0u8; 8 * 6 * 4]).unwrap();
+        fs::write(
+            &input,
+            frame.encode(lumina_core::ImageFileFormat::Png).unwrap(),
+        )
+        .unwrap();
+        let sidecar = sidecar_path_for(&input);
+        let mut document = SidecarDocument::new(
+            lumina_sidecar::SourceIdentity {
+                relative_name: "input.png".into(),
+                content_hash: "blake3:fixture".into(),
+                byte_length: fs::metadata(&input).unwrap().len(),
+                modified_at: None,
+                raw_format: "PNG".into(),
+                orientation: 1,
+                decode_fingerprint: lumina_sidecar::DecodeFingerprint {
+                    decoder: "image".into(),
+                    version: "1".into(),
+                    parameters: std::collections::BTreeMap::new(),
+                    extras: Default::default(),
+                },
+                geometry_fingerprint: lumina_sidecar::GeometryFingerprint {
+                    width: 8,
+                    height: 6,
+                    orientation: 1,
+                    pixel_aspect_ratio: 1.0,
+                    extras: Default::default(),
+                },
+                extras: Default::default(),
+            },
+            "pipeline-1",
+        );
+        save_sidecar(&sidecar, &document).unwrap();
+
+        let suite = FaceModelSuite::candidate();
+        let detector = StubFaceDetector::new(suite.detection.clone()).unwrap();
+        let detections = detector.detect(&frame).unwrap();
+        let embedder =
+            StubFaceEmbedder::new(suite.embedding.clone(), suite.embedding_dimension).unwrap();
+        let vectors = embedder.embed(&frame, &detections).unwrap();
+        let detection_ids: Vec<String> = detections.iter().map(detected_face_id).collect();
+        let records: Vec<FaceEmbeddingArtifact> = vectors
+            .iter()
+            .enumerate()
+            .map(|(index, vector)| FaceEmbeddingArtifact {
+                id: embedding_id_for(&detection_ids[index]),
+                dimension: vector.dimension() as u32,
+                values: vector.values().to_vec(),
+            })
+            .collect();
+        save_face_embeddings(&zdata_path_for(&input), records.clone()).unwrap();
+        let embeddings: Vec<FaceEmbeddingRecord> = vectors
+            .iter()
+            .enumerate()
+            .map(|(index, vector)| FaceEmbeddingRecord {
+                detection_index: index,
+                vector: vector.clone(),
+                reference: FaceVectorRef {
+                    relative_path: "input.png.lumina.zdata".into(),
+                    format: "lumina-zdata".into(),
+                    checksum: records[index].checksum(),
+                    dimension: vector.dimension() as u32,
+                    channels: "f32".into(),
+                    data_version: "1".into(),
+                    extras: Default::default(),
+                },
+            })
+            .collect();
+        let identity = lumina_onnx::face_identity(
+            &suite,
+            SourceFingerprint {
+                content_hash: document.source.content_hash.clone(),
+                byte_length: document.source.byte_length,
+                extras: Default::default(),
+            },
+            document.source.decode_fingerprint.clone(),
+            document.source.geometry_fingerprint.clone(),
+            FaceClusteringParams::default().to_identity(),
+            &FaceInferenceOptions::default(),
+        )
+        .unwrap();
+        let analysis = FaceAnalysisOutput {
+            identity,
+            created_at: now_rfc3339_utc(),
+            detections,
+            embeddings,
+            clusters: vec![],
+            persons: vec![],
+        }
+        .into_sidecar()
+        .unwrap();
+        document.face = Some(analysis);
+        save_sidecar(&sidecar, &document).unwrap();
+
+        // The bundle really holds verified records for the persisted analysis.
+        let reloaded = load_sidecar(&sidecar).unwrap();
+        let analysis = reloaded.face.as_ref().unwrap();
+        let evidence = face_artifact_evidence(directory.path(), analysis);
+        assert_eq!(
+            evidence,
+            FaceArtifactEvidence::Present {
+                checksum_matches: true
+            }
+        );
+        let bundle = load_zdata(&zdata_path_for(&input)).unwrap();
+        for embedding in &analysis.embeddings {
+            assert!(bundle.has_record(lumina_sidecar::RecordKind::FaceEmbedding, &embedding.id));
+        }
+        let loaded = load_zdata(&zdata_path_for(&input))
+            .unwrap()
+            .face_embedding(&analysis.embeddings[0].id)
+            .unwrap();
+        assert_eq!(loaded.checksum(), analysis.embeddings[0].vector.checksum);
+
+        // `--analyze` without `--force` short-circuits before the engine load,
+        // so it succeeds even without `onnx-rt` and without artifacts.
+        let mut reloaded = load_sidecar(&sidecar).unwrap();
+        face_analyze(
+            &FaceArgs {
+                input: input.clone(),
+                status: false,
+                analyze: true,
+                force: false,
+                detector: None,
+                embedder: None,
+                json: true,
+            },
+            &mut reloaded,
+            &sidecar,
+        )
+        .expect("a verified analysis short-circuits as already valid");
+    }
 
     /// AI-CLI-SLICES (DENOISE): the bundle record id is content-derived (never
     /// positional) and stable across calls.

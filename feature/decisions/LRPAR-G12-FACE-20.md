@@ -131,11 +131,56 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   Pfad (er braucht eine geladene/inferierte Plane) und wird nicht still auf die
   Detektionsboxen umgebogen.
 - **Statuskontrakt (F2/F4):** `FaceViewStatus` prüft die referenzierten
-  Vektorartefakte mit echtem BLAKE3-Hash der Bundle-Bytes (kein
-  Existenz-Schluss); ein abweichender Hash ist `corrupt`, eine fehlende Datei
-  `missing`. Eine Analyse ohne persistierte Vektoren trägt keine prüfbare
-  Nutzlast und meldet `missing` statt eines falschen `valid` — visuell als
-  veraltet/unvollständig, nie still.
+  Vektorartefakte mit echtem BLAKE3-Hash (kein Existenz-Schluss); ein
+  abweichender Hash ist `corrupt`, eine fehlende Datei `missing`. Eine Analyse
+  ohne persistierte Vektoren trägt keine prüfbare Nutzlast und meldet `missing`
+  statt eines falschen `valid` — visuell als veraltet/unvollständig, nie still.
+  Seit `FACE-20-IMPL-20-REST` (unten) ist der Hash der **Record-Checksum** des
+  `.lumina.zdata`-Records, nicht mehr der Whole-File-Hash (siehe §3.2).
+
+### 3.2 Umsetzungsnotiz Vektor-Record-Kind (2026-09-17, FACE-20-IMPL-20-REST)
+
+- **Record-Kind `face_embedding` (zdata `kind = 5`, Container-`VERSION` bleibt
+  1):** Ein Detektions-Embedding wird als eigener Record im gemeinsamen
+  `<original>.lumina.zdata`-Bundle persistiert. Record-ID ist die stabile
+  `FaceEmbedding.id` (`emb-<content>`, aus der Detektions-ID abgeleitet); der
+  Record-Index führt `width = dimension`, `height = 1`.
+- **Kanonischer Rohstrom (vor Zstd):**
+  `encoding_version: u32 LE (= 1) || dimension: u32 LE || dimension × f32 LE`.
+  Der BLAKE3-Hex-Digest dieses Stroms ist die **Record-Checksum** und exakt der
+  Wert in `FaceVectorRef.checksum` (ohne Präfix, wie bei `denoise_rgb`). Er ist
+  dimensional und wertabhängig, aber identitätsunabhängig (ID/Kind gehen nicht
+  ein). `FaceVectorRef` bleibt unverändert: `relative_path` = zdata-Dateiname,
+  `format = "lumina-zdata"`, `channels = "f32"`, `data_version = "1"`,
+  `dimension = Vektorlänge`.
+- **Evidence-Vertrag (gemeinsamer Helper in `lumina-sidecar`):** CLI und GUI
+  rufen exakt dieselbe Funktion `face_artifact_evidence(bundle_root, analysis)`
+  auf; es gibt keine zweite Kopie mehr.
+  - Analyse ohne Embedding-Referenzen → `missing` (keine prüfbare Nutzlast).
+  - Datei fehlt/ist nicht lesbar → `missing`.
+  - Datei vorhanden, aber kein ladbarer zdata-Container (Parse-/Checksum-Fehler)
+    → `corrupt`.
+  - Record `face_embedding` mit der `FaceEmbedding.id` fehlt → `missing`.
+  - Record vorhanden, aber Record-Checksum ≠ `FaceVectorRef.checksum` oder
+    Record-Dimension ≠ `FaceVectorRef.dimension` → `corrupt`.
+  - Alle Referenzen auflösbar und checksum-korrekt → `Present{true}`; erst dann
+    klassifiziert die Identitätsprüfung `valid`/`stale`. Kein stilles `valid`.
+- **Schreibpfad:** `face --analyze` schreibt zuerst alle Vektor-Records atomar
+  unter `.zdata.lock` (`save_face_embeddings`, ein Temp-+-Rename pro Bundle)
+  und speichert danach das JSON-Sidecar. Bestehende Records anderer Kinds
+  bleiben erhalten; ein bereits vorhandener `face_embedding`-Record gleicher ID
+  wird im expliziten Re-Analyse-Pfad ersetzt (idempotent), ein ID-Konflikt mit
+  einem anderen Kind wird laut abgelehnt. Keine Dangling-Refs: die Referenz
+  entsteht erst nach erfolgreichem Write.
+- **Kein stiller Stub:** Der produktive `--analyze`-Pfad nutzt weiterhin nur den
+  echten ORT-Engine-Pfad; ohne `onnx-rt` bricht er laut ab. Die deterministischen
+  `StubFaceDetector`/`StubFaceEmbedder` bleiben tests-only und liefern die
+  E2E-Vektoren für den Nachweis, dass frische, persistierte Vektoren `valid`
+  melden.
+- **Altbestand:** Sidecars ohne `face_embedding`-Records (leere
+  `embeddings`-Liste oder alte Whole-File-Referenzen) laden weiterhin und
+  melden `missing` bzw. `corrupt` — nie ein stiller `valid` und kein Crash.
+  Pre-MVP ist das ein bewusster, dokumentierter Bruch; `schema_version` bleibt 2.
 
 ## 4. Persistenz-Scope (Sidecar-first)
 
@@ -210,18 +255,25 @@ Verifizierungs-Agenten; Reihenfolge seriell bei Schema-/API-Berührung:
 6. **FACE-20-S6 Lizenzen/Fixtures:** Modell-Lizenzen + Pins in
    `fixtures-licensing.md` nachtragen, `THIRD-PARTY-NOTICES.md` ergänzen,
    hash-gepinnte Fixtures ohne Netzwerk.
-7. **Face-Vektor-Persistenz (Folgearbeit, Stand 2026-09-16):** Es existiert
-   noch kein `.lumina.zdata`-RecordKind für Embedding-Vektoren; CLI/GUI
-   persistieren Detektionen/Landmarken/Cluster und melden fehlende Vektoren
-   laut (`missing`, nie fälschlich `valid`; Whole-File-BLAKE3 bis der
-   Record-Kind existiert). Mit dem Record-Kind: echte Record-Checksummen +
-   Umstellung der Evidence-Pfade in CLI/GUI.
+7. **Face-Vektor-Persistenz (Folgearbeit, umgesetzt 2026-09-17):** Der
+   `.lumina.zdata`-RecordKind `face_embedding` (`kind = 5`) existiert; CLI/GUI
+   persistieren Detektionen/Landmarken/Cluster **und** die normierten
+   Embedding-Vektoren und verwenden die echte Record-Checksumme (statt
+   Whole-File-BLAKE3) über einen gemeinsamen Evidence-Helper. Semantik und
+   Evidence-Regeln: §3.2. Alte Sidecars ohne Vektor-Records bleiben lesbar und
+   melden `missing` (nie still `valid`, kein Crash).
 
-**Stand 2026-09-16 (S1–S5, Verifizierung BESTANDEN):** S1 Schema, S2 ONNX,
-S3 Clustering, S4 CLI (Exit-Codes inkl. Usage-2, echte BLAKE3-Evidence),
-S5 GUI (People-Ansicht + Face→Masken-Brücke als Box-Region, kein GPS).
-Offen: S6 Gewichte/Lizenzen, Vektor-Record-Kind (Punkt 7), GUI-/CLI-
-Dedup-Notizen (Face-Evidence-Helper bewusst gespiegelt, byte-identisch).
+**Stand 2026-09-17 (S1–S5 + Vektor-Record-Kind, Verifizierung BESTANDEN):**
+S1 Schema, S2 ONNX, S3 Clustering, S4 CLI (Exit-Codes inkl. Usage-2), S5 GUI
+(People-Ansicht + Face→Masken-Brücke als Box-Region, kein GPS). Offen: S6
+Gewichte/Lizenzen. Der Vektor-Record-Kind (§3.2) ist umgesetzt; der
+Face-Evidence-Helper liegt jetzt genau einmal in `lumina-sidecar` und wird von
+CLI und GUI gemeinsam genutzt. **Abdeckungsgrenze (B1, dokumentiert):** Die
+CLI-Schreib-Orchestrierung (`face_analyze` ohne `onnx-rt` nicht kompiliert, mit
+`onnx-rt` nur mit echten Modellen ausführbar) ist code-review-verifiziert, nicht
+prozess-E2E; der Record-/Codec-/Checksum-/Evidence-Vertrag ist vollständig
+getestet. Ein stubbarer `FaceOnnxEngine`-Injektionspunkt wäre der Weg zu voller
+Prozess-Abdeckung.
 
 Jeder Slice braucht: SOLL-Satz im Feature-Dokument vor Code (falls Semantik
 unklar), Tests mit der Implementierung, Verifizierungsbericht mit
