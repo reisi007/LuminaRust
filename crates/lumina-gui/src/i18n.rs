@@ -246,6 +246,8 @@ pub enum Str {
     RedEyeRadius,
     RedEyeCountPattern,
     RedEyeRadiusDefault,
+    RedEyeDetect,
+    RedEyeApplyDetected,
 
     // Masking
     NewMask,
@@ -979,6 +981,8 @@ impl Str {
             Str::RedEyeRadius => "Radius",
             Str::RedEyeCountPattern => "{} region(s)",
             Str::RedEyeRadiusDefault => "0.05",
+            Str::RedEyeDetect => "Detect pupils",
+            Str::RedEyeApplyDetected => "Apply detected",
 
             Str::NewMask => "New Mask",
             Str::SelectMask => "Select Mask",

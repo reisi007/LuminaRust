@@ -1,16 +1,17 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
-    analyze_upright, denoise_producer_provenance, detect_spots_heuristic,
+    analyze_upright, denoise_producer_provenance, detect_red_eyes, detect_spots_heuristic,
     export_image_with_generative, generative_variant_seed, has_transparent_pixels,
     match_total_exposure_masked, render_frame, render_frame_with_denoise,
     render_frame_with_generative, resolve_denoise_status, resolve_mask_planes,
     set_denoise_producer_provenance, suggest_auto_tone, tone_fingerprint, upright_analysis,
     upright_input_fingerprint, AutoToneConfig, DenoiseIdentity, DenoisePolicy,
     DenoiseRgbArtifact as CoreDenoiseRgbArtifact, DenoiseStageInput, DenoiseStageStatus,
-    ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput,
-    GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame, MaskContext, MaskInference,
-    MaskLoadContext, MaskPlane, MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact,
+    DetectedRedEye, ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact,
+    GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame,
+    MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
+    RenderOutput, SourceActionArtifact, RED_EYE_DETECT_ID_PREFIX,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -506,12 +507,14 @@ enum Command {
     /// stale fingerprints are reported, never silently recomputed). See
     /// `feature/architecture/pipeline.md` § F-099.
     Upright(UprightArgs),
-    /// G-14 Rote Augen (LRPAR-G14-REDEYE-15, Release 1.5): inspect and edit
-    /// the persisted red-eye regions of one virtual copy. "Erkennung" in this
-    /// release is explicit marking (`--set ID:x,y,radius,desaturate,darken`);
-    /// the correction itself is the deterministic, model-free G-14 formula,
-    /// applied on CPU and GPU with oracle parity. See
-    /// `feature/architecture/pipeline.md` § G-14.
+    /// G-14 Rote Augen (LRPAR-G14-REDEYE-15/‑AUTO-15, Release 1.5/2.0):
+    /// inspect and edit the persisted red-eye regions of one virtual copy.
+    /// Region marking is explicit (`--set ID:x,y,radius,desaturate,darken`);
+    /// LRPAR-G14-REDEYE-AUTO-15 adds the deterministic, model-free pupil
+    /// detection (`--detect` lists candidates read-only, `--detect-apply`
+    /// persists them explicitly — never implicit). The correction itself is
+    /// the deterministic, model-free G-14 formula, applied on CPU and GPU with
+    /// oracle parity. See `feature/architecture/pipeline.md` § G-14.
     RedEye(RedEyeArgs),
     /// G-15 META-MVP (Slice 2): list and mutate source-level keywords of one
     /// sidecar. See `feature/platform/cli-gui-wasm.md` (Metadaten-MVP).
@@ -1596,6 +1599,17 @@ struct RedEyeArgs {
     /// Remove the whole red-eye stage (identity).
     #[arg(long)]
     clear: bool,
+    /// LRPAR-G14-REDEYE-AUTO-15: run the deterministic, model-free pupil
+    /// detection on the decoded source pixels and list the candidates. This is
+    /// read-only; nothing is persisted until `--detect-apply` is passed.
+    #[arg(long)]
+    detect: bool,
+    /// Persist the candidates found by `--detect` (`auto-re-` regions).
+    /// Requires `--detect`; replaces only previously auto-detected regions and
+    /// leaves manual regions untouched. Loud when the 32-region cap would be
+    /// exceeded (no silent truncation).
+    #[arg(long)]
+    detect_apply: bool,
 }
 
 /// G-06 Geometrie-Parität (LRPAR-G06-GEO): inspect and edit the geometry
@@ -6910,17 +6924,59 @@ fn upright_list(
 }
 
 /// G-14: inspect/edit the persisted red-eye regions of one virtual copy.
+///
+/// LRPAR-G14-REDEYE-AUTO-15 (2.0): `--detect` runs the deterministic,
+/// model-free pupil heuristic on the decoded source pixels and lists the
+/// candidates read-only; `--detect-apply` persists them explicitly. Detection
+/// never runs implicitly and never prefills a recipe on its own.
 fn red_eye(args: RedEyeArgs) -> Result<(), CliError> {
-    let wants_mutation = !args.set.is_empty() || !args.remove.is_empty() || args.clear;
+    if args.detect_apply && !args.detect {
+        return Err(CliError::Message(
+            "--detect-apply requires --detect (detection is never implicit)".into(),
+        ));
+    }
+    if args.clear && (!args.set.is_empty() || !args.remove.is_empty() || args.detect_apply) {
+        return Err(CliError::Message(
+            "--clear contradicts --set/--remove/--detect-apply".into(),
+        ));
+    }
+    let wants_mutation =
+        !args.set.is_empty() || !args.remove.is_empty() || args.clear || args.detect_apply;
     if args.list && wants_mutation {
         return Err(CliError::Message(
             "--list is read-only; pass no mutation flags with it".into(),
         ));
     }
-    if args.clear && (!args.set.is_empty() || !args.remove.is_empty()) {
-        return Err(CliError::Message(
-            "--clear contradicts --set/--remove".into(),
-        ));
+    // `--set`/`--remove`/`--clear` are explicit edits and always record a
+    // history step (unchanged behaviour); `--detect-apply` only writes when it
+    // actually changed the persisted regions (idempotent re-application).
+    let mut changed = !args.set.is_empty() || !args.remove.is_empty() || args.clear;
+    // Detection runs on the decoded source before any recipe stage. It is
+    // computed once, before the mutation, so `--detect-apply` persists exactly
+    // what `--detect` listed.
+    let mut detected: Vec<DetectedRedEye> = Vec::new();
+    let mut dropped = 0usize;
+    if args.detect {
+        let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+        let (frame, _) = decode_input(&args.input, &bytes)?;
+        let detection = detect_red_eyes(&frame);
+        detected = detection.candidates;
+        dropped = detection.dropped;
+        if dropped > 0 {
+            // Loud, deterministic cap handling: the strongest candidates are
+            // kept, the rest are reported — never silently discarded.
+            eprintln!(
+                "lumina: warning: red-eye detection found {} candidate(s); keeping the \
+                 {RED_EYE_MAX_REGIONS} strongest and dropping {dropped}",
+                detected.len() + dropped
+            );
+        }
+        info!(
+            "red-eye: detected {} candidate(s) ({} dropped) on `{}`",
+            detected.len(),
+            dropped,
+            args.input.display()
+        );
     }
     let path = sidecar_path_for(&args.input);
     let mut document = match load_sidecar(&path) {
@@ -6977,7 +7033,57 @@ fn red_eye(args: RedEyeArgs) -> Result<(), CliError> {
         }
     }
 
-    if wants_mutation {
+    if args.detect_apply {
+        // Replace only the automatically detected regions; manually marked
+        // regions are never touched (deterministic, idempotent apply).
+        let before_stage = mask_copy_mut(&mut document, &copy_id)?
+            .recipe
+            .red_eye
+            .clone();
+        let applied = {
+            let correction = red_eye_mut(&mut document, &copy_id)?;
+            correction
+                .regions
+                .retain(|region| !region.id.starts_with(RED_EYE_DETECT_ID_PREFIX));
+            if correction.regions.len() + detected.len() > RED_EYE_MAX_REGIONS {
+                return Err(CliError::Message(format!(
+                    "red-eye detection would exceed the {RED_EYE_MAX_REGIONS}-region cap: \
+                     {} manual region(s) + {} detected; remove regions or clear the stage \
+                     (nothing was written)",
+                    correction.regions.len(),
+                    detected.len()
+                )));
+            }
+            for candidate in &detected {
+                let region = candidate.to_region();
+                match correction
+                    .regions
+                    .iter_mut()
+                    .find(|existing| existing.id == region.id)
+                {
+                    Some(existing) => *existing = region,
+                    None => correction.regions.push(region),
+                }
+            }
+            correction.regions.len()
+        };
+        if applied == 0 {
+            // A fresh detection that found nothing removes only stale auto
+            // regions; an empty stage is stored as absence (identity).
+            mask_copy_mut(&mut document, &copy_id)?.recipe.red_eye = None;
+        }
+        changed |= before_stage != mask_copy_mut(&mut document, &copy_id)?.recipe.red_eye;
+        info!(
+            "red-eye: applied {} detected region(s) on copy `{copy_id}`",
+            detected.len()
+        );
+        actions.push(format!("detect-apply:{}", detected.len()));
+        if dropped > 0 {
+            actions.push(format!("detect-dropped:{dropped}"));
+        }
+    }
+
+    if changed {
         // Loud gate: ranges, ids and the 32-region cap are rejected before
         // anything is written (the sidecar validator re-checks after the edit).
         document
@@ -7005,7 +7111,7 @@ fn red_eye(args: RedEyeArgs) -> Result<(), CliError> {
         });
         save_sidecar(&path, &document)?;
     }
-    red_eye_list(&args, &document, &copy_id, &actions)
+    red_eye_list(&args, &document, &copy_id, &detected, dropped, &actions)
 }
 
 /// Mutable access to one virtual copy's red-eye stage, creating an empty
@@ -7084,6 +7190,8 @@ fn red_eye_list(
     args: &RedEyeArgs,
     document: &SidecarDocument,
     copy_id: &str,
+    detected: &[DetectedRedEye],
+    dropped: usize,
     actions: &[String],
 ) -> Result<(), CliError> {
     let copy = document
@@ -7094,6 +7202,18 @@ fn red_eye_list(
     let correction = copy.recipe.red_eye.as_ref();
     let regions = correction.map(|c| c.regions.as_slice()).unwrap_or(&[]);
     if args.json {
+        let detected_json: Vec<serde_json::Value> = detected
+            .iter()
+            .map(|candidate| {
+                serde_json::json!({
+                    "id": candidate.id,
+                    "x": candidate.x,
+                    "y": candidate.y,
+                    "radius": candidate.radius,
+                    "confidence": candidate.confidence,
+                })
+            })
+            .collect();
         emit(
             true,
             serde_json::json!({
@@ -7102,6 +7222,8 @@ fn red_eye_list(
                 "copy": copy_id,
                 "count": regions.len(),
                 "red_eye": correction,
+                "detected": detected_json,
+                "dropped": dropped,
                 "actions": actions,
             }),
             "red-eye status listed",
@@ -7115,6 +7237,29 @@ fn red_eye_list(
                 println!(
                     "    {} x={} y={} radius={} desaturate={} darken={}",
                     region.id, region.x, region.y, region.radius, region.desaturate, region.darken
+                );
+            }
+        }
+        if args.detect {
+            if detected.is_empty() {
+                println!("  red-eye detection: no red pupils found");
+            } else {
+                println!("  red-eye detection: {} candidate(s)", detected.len());
+                for candidate in detected {
+                    println!(
+                        "    {} x={} y={} radius={} confidence={}",
+                        candidate.id,
+                        candidate.x,
+                        candidate.y,
+                        candidate.radius,
+                        candidate.confidence
+                    );
+                }
+            }
+            if dropped > 0 {
+                println!(
+                    "  red-eye detection: {dropped} candidate(s) dropped above the \
+                     {RED_EYE_MAX_REGIONS}-region cap"
                 );
             }
         }
@@ -15164,6 +15309,8 @@ mod tests {
             set: Vec::new(),
             remove: Vec::new(),
             clear: false,
+            detect: false,
+            detect_apply: false,
         }
     }
 
@@ -15427,6 +15574,167 @@ mod tests {
             );
         }
         assert!(parse_red_eye_region("re-1:0.25,0.35,0.05,0.8,0.4").is_ok());
+    }
+
+    /// Grey RGBA PNG with solid red rectangles at the given pixel bounds — the
+    /// deterministic fixture for LRPAR-G14-REDEYE-AUTO-15.
+    fn red_pupil_png(width: u32, height: u32, pupils: &[(u32, u32, u32, u32)]) -> Vec<u8> {
+        let mut frame = ImageFrame::new(
+            width,
+            height,
+            [120u8, 120, 120, 255]
+                .iter()
+                .copied()
+                .cycle()
+                .take((width * height * 4) as usize)
+                .collect(),
+        )
+        .unwrap();
+        for &(x0, y0, x1, y1) in pupils {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let index = ((y * width + x) as usize) * 4;
+                    frame.pixels[index..index + 4].copy_from_slice(&[220, 30, 40, 255]);
+                }
+            }
+        }
+        frame.encode(ImageFileFormat::Png).unwrap()
+    }
+
+    /// LRPAR-G14-REDEYE-AUTO-15: `--detect` is read-only, `--detect-apply`
+    /// persists `auto-re-` regions idempotently, replaces only auto regions and
+    /// leaves manually marked ones untouched. The original stays byte-identical.
+    #[test]
+    fn red_eye_detect_lists_readonly_and_applies_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("pupil.png");
+        fs::write(&input, red_pupil_png(64, 64, &[(30, 30, 36, 36)])).unwrap();
+        let original_bytes = fs::read(&input).unwrap();
+        import_sidecar_for(&input);
+        let sidecar_path = sidecar_path_for(&input);
+
+        // `--detect` alone is read-only: sidecar byte-identical, stage absent.
+        let before = fs::read(&sidecar_path).unwrap();
+        let mut detect = red_eye_base_args(input.clone());
+        detect.detect = true;
+        red_eye(detect).unwrap();
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before);
+        assert!(load_sidecar(&sidecar_path).unwrap().virtual_copies[0]
+            .recipe
+            .red_eye
+            .is_none());
+
+        // `--detect-apply` persists exactly the listed candidates.
+        let mut apply = red_eye_base_args(input.clone());
+        apply.detect = true;
+        apply.detect_apply = true;
+        red_eye(apply).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        let regions = &document.virtual_copies[0]
+            .recipe
+            .red_eye
+            .as_ref()
+            .unwrap()
+            .regions;
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        assert!(regions[0].id.starts_with(RED_EYE_DETECT_ID_PREFIX));
+        assert_eq!(regions[0].desaturate, 0.8);
+        assert_eq!(regions[0].darken, 0.4);
+        assert!(regions[0].x > 0.4 && regions[0].x < 0.6, "{regions:?}");
+        assert!(regions[0].y > 0.4 && regions[0].y < 0.6, "{regions:?}");
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+
+        // Re-running is state-idempotent: no duplicate and no new history step.
+        let mut again = red_eye_base_args(input.clone());
+        again.detect = true;
+        again.detect_apply = true;
+        red_eye(again).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert_eq!(
+            document.virtual_copies[0]
+                .recipe
+                .red_eye
+                .as_ref()
+                .unwrap()
+                .regions
+                .len(),
+            1
+        );
+        assert_eq!(document.virtual_copies[0].history.len(), 1);
+
+        // Manual regions survive a re-detection (only `auto-re-` is replaced).
+        let mut manual = red_eye_base_args(input.clone());
+        manual.set = vec!["re-1:0.1,0.1,0.05,0.8,0.4".into()];
+        red_eye(manual).unwrap();
+        let mut apply_again = red_eye_base_args(input.clone());
+        apply_again.detect = true;
+        apply_again.detect_apply = true;
+        red_eye(apply_again).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        let regions = &document.virtual_copies[0]
+            .recipe
+            .red_eye
+            .as_ref()
+            .unwrap()
+            .regions;
+        assert_eq!(regions.len(), 2);
+        assert!(regions.iter().any(|region| region.id == "re-1"));
+        assert!(regions
+            .iter()
+            .any(|region| region.id.starts_with(RED_EYE_DETECT_ID_PREFIX)));
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
+    /// LRPAR-G14-REDEYE-AUTO-15: detection never runs implicitly, finds no
+    /// stage when there are no red pupils, requires `--detect` for
+    /// `--detect-apply` and refuses a cap overflow loudly without writing.
+    #[test]
+    fn red_eye_detect_requires_detect_for_apply_and_never_prefills() {
+        let directory = tempfile::tempdir().unwrap();
+        // No red pupils: detection finds nothing and never creates a stage.
+        let grey = directory.path().join("grey.png");
+        fs::write(&grey, red_pupil_png(64, 64, &[])).unwrap();
+        import_sidecar_for(&grey);
+        let sidecar_path = sidecar_path_for(&grey);
+        let before = fs::read(&sidecar_path).unwrap();
+        let mut apply = red_eye_base_args(grey.clone());
+        apply.detect = true;
+        apply.detect_apply = true;
+        red_eye(apply).unwrap();
+        let document = load_sidecar(&sidecar_path).unwrap();
+        assert!(document.virtual_copies[0].recipe.red_eye.is_none());
+        // Nothing changed, so not even a history step is written.
+        assert!(document.virtual_copies[0].history.is_empty());
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before);
+
+        // `--detect-apply` without `--detect` is loudly refused, writes nothing.
+        let mut lonely = red_eye_base_args(grey.clone());
+        lonely.detect_apply = true;
+        assert!(red_eye(lonely)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --detect"));
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before);
+
+        // Cap: 32 manual regions + one detection would exceed the limit →
+        // loud refusal, no silent truncation, nothing written.
+        let pupil = directory.path().join("pupil.png");
+        fs::write(&pupil, red_pupil_png(64, 64, &[(30, 30, 36, 36)])).unwrap();
+        import_sidecar_for(&pupil);
+        let specs: Vec<String> = (0..RED_EYE_MAX_REGIONS)
+            .map(|index| format!("re-{index}:0.5,0.5,0.02,0.8,0.4"))
+            .collect();
+        let mut fill = red_eye_base_args(pupil.clone());
+        fill.set = specs;
+        red_eye(fill).unwrap();
+        let sidecar_path = sidecar_path_for(&pupil);
+        let before = fs::read(&sidecar_path).unwrap();
+        let mut overflow = red_eye_base_args(pupil.clone());
+        overflow.detect = true;
+        overflow.detect_apply = true;
+        let error = red_eye(overflow).unwrap_err().to_string();
+        assert!(error.contains("exceed the"), "{error}");
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before);
     }
 
     /// G-06: free-crop rects and the straighten alias round-trip; `--list`

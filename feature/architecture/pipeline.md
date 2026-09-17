@@ -812,6 +812,53 @@ automatische Rot-Dominanz-Pupillenerkennung bleibt ausdrücklich Folgearbeit
 CPU-Oracle-Parität (Stage 3, siehe GPU-Status); ungültige Regionen bleiben
 laut CPU-geroutet.
 
+**Automatische Pupillen-Erkennung (LRPAR-G14-REDEYE-AUTO-15, Release 2.0):**
+Die Erkennung bleibt eine **ausdrückliche Aktion** und ist nie eine stille
+Vorbefüllung. Die Heuristik ist deterministisch und modellfrei (kein ONNX,
+kein Zufall, kein Seed) und arbeitet auf den dekodierten RGBA8-Quellpixeln vor
+jeder Rezeptstufe:
+
+1. Rot-Dominanz je Pixel exakt wie die Korrektur:
+   `redness = clamp((R - max(G, B)) / max(R, ε), 0, 1)`. Ein Pixel gilt als
+   rot, wenn `redness >= RED_EYE_DETECT_REDNESS_THRESHOLD = 0.5`.
+2. Zusammenhängende Rot-Komponenten (4-Nachbarschaft, zeilenweise
+   deterministische Scan-Reihenfolge) mit mindestens
+   `RED_EYE_DETECT_MIN_PIXELS = 4` Pixeln. Komponenten, deren
+   einschließender Radius (maximaler Abstand eines Komponentenpixels vom
+   Schwerpunkt, normiert auf `min(Breite, Höhe)`) größer als
+   `RED_EYE_DETECT_MAX_RADIUS = 0.1` ist, werden verworfen: das sind flächige
+   rote Bildteile (Lippen, Kleidung), keine Pupillen.
+3. Kandidat: Zentrum = Komponenten-Schwerpunkt (Pixelmitten), normiert auf
+   `x * Breite`/`y * Höhe`; `radius = clamp(enclosing_radius_norm *
+   RED_EYE_DETECT_RADIUS_MARGIN (1.25), > 0, <= 1)`; `confidence` = mittlere
+   `redness` der Komponente in `0..=1`; Korrektur-Defaults
+   `desaturate = 0.8`, `darken = 0.4`.
+4. `id` ist inhaltsstabil: `auto-re-<8 hex BLAKE3 über x,y,radius>`
+   (quantisiert auf `1e-6`, Kollisionen deterministisch mit Suffix). Gleiche
+   Quelle und gleiche Pixel ergeben damit byte-identische Regionen.
+5. Kandidaten werden nach `confidence` absteigend, dann `y`, dann `x`
+   sortiert (deterministisch) und auf `RED_EYE_MAX_REGIONS = 32` begrenzt.
+   Überschüssige Funde werden **laut gemeldet** (Feld `dropped`), nie still
+   verworfen.
+
+**Aktionsfläche (explizit):** CLI `lumina red-eye --detect` listet die
+Kandidaten schreibfrei; `--detect-apply` persistiert sie als
+`recipe.adjustments.red_eye` (verlangt `--detect`). Die GUI zeigt in der
+Detail-Sektion „Detect pupils" (listet) und „Apply detected" (persistiert).
+Ohne rote Pupillen liefert die Erkennung eine leere Liste und ändert den
+vorhandenen Stand nicht. `--detect-apply` **ersetzt ausschließlich die
+automatisch erzeugten Regionen** (id-Präfix `auto-re-`) durch den frischen
+Fund und lässt manuell markierte Regionen unberührt; die Aktion ist damit
+idempotent. Übersteigt die Vereinigung aus manuellen und erkannten Regionen
+32, bricht die Aktion **laut** ab (kein stilles Kürzen). Eine Erweiterung des
+`lumina regenerate`-Modulsatzes um `redeye` ist bewusst **nicht** Teil dieses
+Entscheids: `regenerate` ist der Sammel-Default für veraltete/fehlende
+*aktivierte* Artefakte, und eine Erkennung im Sammel-Default würde Regionen
+ohne ausdrückliche Aktion vorbefüllen. Die Aktion folgt dem Muster
+`upright --analyze` / `spot --detect-objects`/`--detect-apply`. Die Heuristik
+läuft auf dekodierten Pixeln und ist kein Render-/GPU-Pfad; die GPU-Parität
+der eigentlichen Korrektur (Stage 3) bleibt unverändert.
+
 **Platzierung, Cache und Abnahme:** In `Adjustments` nach Schärfen (F-095)
 und vor Effekten (F-097)/Masken/Crop; das Format-Tupel bleibt unverändert.
 Feld, Version und alle Regionen gehen in den `recipe_hash` (BLAKE3 über das
@@ -820,9 +867,14 @@ Abnahme: JSON-Roundtrip, Validierungsablehnung (Out-of-Range/NaN),
 Identität bei leerer Liste/Null-Stärken, Lokalität (Pixel außerhalb von
 Regionen und nicht-rote Pixel unverändert), Monotonie (größeres
 `desaturate`/`darken` verstärkt oder erhält die Korrektur), Determinismus
-(zwei Läufe byte-identisch), Alpha-Erhalt und Clipping. MVP-Grenze: keine
-automatische Pupillen-Erkennung — Regionen werden explizit persistiert
-(Erkennung bleibt Folgearbeit); Abhängigkeiten: F-031, F-036.
+(zwei Läufe byte-identisch), Alpha-Erhalt und Clipping. Erkennungs-Abnahme
+(2.0): Determinismus (gleiche Quelle ⇒ byte-identische Regionen), Schwelle
+(keine roten Pixel ⇒ keine Regionen), Kap-Handling > 32 laut+deterministisch,
+Property (stärkere Rot-Dominanz ⇒ höhere Konfidenz), Golden (synthetische
+Fixtures mit/ohne rote Pupillen), CLI-E2E und GUI-headless (Aktion vorhanden,
+explizit, kein Auto-Lauf). MVP-Grenze 1.5: Regionen wurden nur explizit
+markiert; 2.0 ergänzt die Erkennung ausschließlich als ausdrückliche Aktion.
+Abhängigkeiten: F-031, F-036.
 
 ### F-097 Vignettierung und Körnung (niedrige Priorität)
 

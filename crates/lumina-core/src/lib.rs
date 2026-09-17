@@ -23,6 +23,7 @@ pub mod merge_geom;
 pub mod pipeline;
 pub mod preview_cache;
 pub mod range_masks;
+pub mod red_eye;
 pub mod render;
 pub mod spot_heal;
 pub mod stage_cache;
@@ -67,6 +68,12 @@ pub use preview_cache::PreviewDiskCache;
 pub use preview_cache::{
     decode_webp, encode_webp_lossless, prefetch_window, LruPreviewCache, PrefetchSlot,
     PreviewEncode, PreviewKey, PreviewKind,
+};
+pub use red_eye::{
+    detect_red_eyes, DetectedRedEye, RedEyeDetection, RED_EYE_DETECT_DEFAULT_DARKEN,
+    RED_EYE_DETECT_DEFAULT_DESATURATE, RED_EYE_DETECT_ID_PREFIX, RED_EYE_DETECT_MAX_RADIUS,
+    RED_EYE_DETECT_MAX_REGIONS, RED_EYE_DETECT_MIN_PIXELS, RED_EYE_DETECT_RADIUS_MARGIN,
+    RED_EYE_DETECT_REDNESS_THRESHOLD,
 };
 pub use render::{
     apply_spot_heals_from_recipe, generative_input_frames, prepare_source_base, render_frame,

@@ -595,6 +595,15 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Modulaktionen, laute Render-Re-Inferenz, `info!`-Logs; 9 CLI-E2E + GUI-/Core-
   Tests grün. Offen: F-048-Revision, `process`-Vereinheitlichung, Byte-Roundtrip
   (s. o.), Auto-WB-Aktion bei Implementierung.
+- **Abgrenzung: Rote-Augen-Erkennung (LRPAR-G14-REDEYE-AUTO-15, 2.0)** ist
+  bewusst **kein** `regenerate`-Modul. `regenerate` regeneriert veraltete oder
+  fehlende *aktivierte* analysierbare Größen; die rote-Augen-Erkennung ist eine
+  einmalige, explizite Analyse, die sonst im Sammel-Default Regionen ohne
+  Nutzeraktion vorbefüllen würde (stille Vorbefüllung). Sie folgt daher dem
+  Muster `upright --analyze` bzw. `spot --detect-objects`/`--detect-apply`:
+  CLI `lumina red-eye --detect` (listen) / `--detect-apply` (persistieren),
+  GUI „Detect pupils" / „Apply detected". Details und Schwellen:
+  `architecture/pipeline.md` § G-14.
 
 ### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2, Welle 3)
 

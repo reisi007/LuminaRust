@@ -47,14 +47,15 @@ use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
     analyze_tone, analyze_tone_with_histogram, analyze_upright, apply_visualize_overlay,
-    detect_spots_heuristic, distraction_candidates, generative_input_frames,
+    detect_red_eyes, detect_spots_heuristic, distraction_candidates, generative_input_frames,
     generative_variant_seed, has_transparent_pixels, match_total_exposure_masked,
     prepare_source_base, render_frame_from_base_with_generative_and_denoise, suggest_auto_tone,
     tone_fingerprint, upright_analysis, upright_input_fingerprint, AutoToneConfig, AutoToneResult,
-    CacheStage, DetectedSpot, DistractionKind, DistractionSetting, DistractionStatus,
-    GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeIdentity,
-    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
-    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
+    CacheStage, DetectedRedEye, DetectedSpot, DistractionKind, DistractionSetting,
+    DistractionStatus, GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput,
+    GenerativeIdentity, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext,
+    MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
+    RED_EYE_DETECT_ID_PREFIX,
 };
 // PERF-FILMSTRIP (thumbnail worker).
 use lumina_core::render_frame;
@@ -1878,6 +1879,9 @@ pub struct LuminaApp {
     /// LRPAR-G14-REDEYE-15: red-eye region picker armed state (click the
     /// preview to mark a pupil; regions are persisted explicitly).
     red_eye_pick_mode: bool,
+    /// LRPAR-G14-REDEYE-AUTO-15: last detection outcome text (candidates
+    /// listed, never silently applied).
+    red_eye_detect_status: String,
     /// Generated filmstrip thumbnail textures.
     thumbnails: ThumbnailManager,
     /// GUI-FILMSTRIP-SYNC-1: multi-selection of filmstrip entries
@@ -2871,6 +2875,7 @@ impl LuminaApp {
             mask_baseline: Vec::new(),
             wb_pick_mode: false,
             red_eye_pick_mode: false,
+            red_eye_detect_status: String::new(),
             thumbnails: ThumbnailManager::new(),
             filmstrip_selection: BTreeSet::new(),
             filmstrip_anchor: None,
@@ -11357,6 +11362,95 @@ impl LuminaApp {
         info!("GUI interaction: clear_red_eye");
     }
 
+    /// LRPAR-G14-REDEYE-AUTO-15: run the deterministic, model-free pupil
+    /// detection on the loaded source frame and list the candidates. This is
+    /// display-only and never persists anything; the outcome text lands in
+    /// `red_eye_detect_status` (visible, never silent). Applying stays explicit
+    /// via [`Self::apply_detected_red_eyes`].
+    pub fn detect_red_eye_candidates(&mut self) -> Result<Vec<DetectedRedEye>, GuiError> {
+        let frame = self
+            .original
+            .as_ref()
+            .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?
+            .clone();
+        let detection = detect_red_eyes(&frame);
+        let count = detection.candidates.len();
+        let dropped = detection.dropped;
+        info!(
+            "GUI interaction: detect_red_eye_candidates -> {count} candidate(s), {dropped} dropped"
+        );
+        self.red_eye_detect_status = if count == 0 {
+            "No red pupils detected".into()
+        } else if dropped > 0 {
+            format!(
+                "Detected {count} pupil candidate(s); {dropped} dropped above the \
+                 {RED_EYE_MAX_REGIONS}-region cap (not applied — use Apply)"
+            )
+        } else {
+            format!("Detected {count} pupil candidate(s) (not applied — use Apply)")
+        };
+        Ok(detection.candidates)
+    }
+
+    /// LRPAR-G14-REDEYE-AUTO-15: persist detected pupils (explicit only). The
+    /// automatic `auto-re-` regions are replaced by the fresh detection;
+    /// manually marked regions are never touched. Loud when the 32-region cap
+    /// would be exceeded (no silent truncation). One recipe edit + the shared
+    /// debounced save/history path, exactly like [`Self::add_red_eye_region`].
+    pub fn apply_detected_red_eyes(
+        &mut self,
+        candidates: &[DetectedRedEye],
+    ) -> Result<usize, GuiError> {
+        let before = self.recipe.red_eye.clone();
+        let mut correction = before.clone().unwrap_or(RedEyeCorrection {
+            version: 1,
+            regions: Vec::new(),
+        });
+        correction
+            .regions
+            .retain(|region| !region.id.starts_with(RED_EYE_DETECT_ID_PREFIX));
+        if correction.regions.len() + candidates.len() > RED_EYE_MAX_REGIONS {
+            return Err(GuiError::Io(format!(
+                "red-eye detection would exceed the {RED_EYE_MAX_REGIONS}-region cap: \
+                 {} manual region(s) + {} detected",
+                correction.regions.len(),
+                candidates.len()
+            )));
+        }
+        for candidate in candidates {
+            let region = candidate.to_region();
+            match correction
+                .regions
+                .iter_mut()
+                .find(|existing| existing.id == region.id)
+            {
+                Some(existing) => *existing = region,
+                None => correction.regions.push(region),
+            }
+        }
+        let after = if correction.regions.is_empty() {
+            None
+        } else {
+            Some(correction)
+        };
+        if before == after {
+            self.red_eye_detect_status = format!(
+                "No change: {} auto region(s) already applied",
+                candidates.len()
+            );
+            return Ok(0);
+        }
+        self.recipe.red_eye = after;
+        self.mark_recipe_dirty("red_eye.detect_apply", candidates.len() as f64);
+        self.pending_history_step = Some("red_eye.detect_apply".into());
+        self.red_eye_detect_status = format!("Applied {} detected pupil(s)", candidates.len());
+        info!(
+            "GUI interaction: apply_detected_red_eyes -> {} region(s)",
+            candidates.len()
+        );
+        Ok(candidates.len())
+    }
+
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
         if self.original.is_none() {
             return Ok(());
@@ -16088,6 +16182,31 @@ impl LuminaApp {
                 .changed()
             {
                 self.set_red_eye_pick_mode(pick);
+            }
+            // LRPAR-G14-REDEYE-AUTO-15: detection is explicit only. "Detect
+            // pupils" lists candidates; "Apply detected" persists them. No
+            // automatic run ever happens while loading or rendering.
+            ui.horizontal(|ui| {
+                if ui.button(Str::RedEyeDetect.t()).clicked() {
+                    if let Err(error) = self.detect_red_eye_candidates().map(|_| ()) {
+                        self.show_error(error);
+                    }
+                }
+                if ui.button(Str::RedEyeApplyDetected.t()).clicked() {
+                    match self.detect_red_eye_candidates() {
+                        Ok(candidates) => {
+                            if let Err(error) =
+                                self.apply_detected_red_eyes(&candidates).map(|_| ())
+                            {
+                                self.show_error(error);
+                            }
+                        }
+                        Err(error) => self.show_error(error),
+                    }
+                }
+            });
+            if !self.red_eye_detect_status.is_empty() {
+                ui.label(&self.red_eye_detect_status);
             }
             let regions = self
                 .recipe
@@ -27090,6 +27209,130 @@ mod tests {
         }
         let error = app.add_red_eye_region(0.5, 0.5).unwrap_err().to_string();
         assert!(error.contains("region limit"), "{error}");
+        assert_eq!(
+            app.recipe().red_eye.as_ref().unwrap().regions.len(),
+            RED_EYE_MAX_REGIONS
+        );
+    }
+
+    /// Grey RGBA PNG with solid red rectangles — the deterministic GUI fixture
+    /// for LRPAR-G14-REDEYE-AUTO-15.
+    fn save_red_pupil_png(path: &Path, width: u32, height: u32, pupils: &[(u32, u32, u32, u32)]) {
+        let mut frame = ImageFrame::new(
+            width,
+            height,
+            [120u8, 120, 120, 255]
+                .iter()
+                .copied()
+                .cycle()
+                .take((width * height * 4) as usize)
+                .collect(),
+        )
+        .unwrap();
+        for &(x0, y0, x1, y1) in pupils {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let index = ((y * width + x) as usize) * 4;
+                    frame.pixels[index..index + 4].copy_from_slice(&[220, 30, 40, 255]);
+                }
+            }
+        }
+        std::fs::write(path, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+    }
+
+    /// LRPAR-G14-REDEYE-AUTO-15: loading/rendering never prefills regions;
+    /// detection lists without persisting; the explicit apply persists through
+    /// the shared save path and survives a reload.
+    #[test]
+    fn g14_red_eye_detect_lists_then_applies_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pupil.png");
+        save_red_pupil_png(&source, 64, 64, &[(30, 30, 36, 36)]);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // No automatic prefill just from loading.
+        assert!(app.recipe().red_eye.is_none());
+        assert!(app.red_eye_detect_status.is_empty());
+
+        let candidates = app.detect_red_eye_candidates().unwrap();
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert!(!app.red_eye_detect_status.is_empty());
+        // Listing persisted nothing.
+        assert!(app.recipe().red_eye.is_none());
+
+        let applied = app.apply_detected_red_eyes(&candidates).unwrap();
+        assert_eq!(applied, 1);
+        let regions = &app.recipe().red_eye.as_ref().unwrap().regions;
+        assert_eq!(regions.len(), 1);
+        assert!(regions[0].id.starts_with(RED_EYE_DETECT_ID_PREFIX));
+        assert_eq!(regions[0].desaturate, 0.8);
+        assert_eq!(regions[0].darken, 0.4);
+
+        // Manual region is preserved by a re-detection; auto region is replaced.
+        app.add_red_eye_region(0.1, 0.1).unwrap();
+        let candidates = app.detect_red_eye_candidates().unwrap();
+        assert_eq!(app.apply_detected_red_eyes(&candidates).unwrap(), 1);
+        let regions = &app.recipe().red_eye.as_ref().unwrap().regions;
+        assert_eq!(regions.len(), 2);
+        assert!(regions.iter().any(|region| region.id == "re-1"));
+        assert!(regions
+            .iter()
+            .any(|region| region.id.starts_with(RED_EYE_DETECT_ID_PREFIX)));
+
+        // Explicit apply commits through the shared save path; reload restores.
+        let document = commit_and_load_doc(&mut app, &source);
+        let regions = &document.virtual_copies[0]
+            .recipe
+            .red_eye
+            .as_ref()
+            .unwrap()
+            .regions;
+        assert_eq!(regions.len(), 2);
+        let reopened = reopen_app(&source);
+        assert_eq!(reopened.recipe().red_eye.as_ref().unwrap().regions.len(), 2);
+    }
+
+    /// LRPAR-G14-REDEYE-AUTO-15: no red pupils → no candidates, never a stage;
+    /// applying nothing is a loud no-op that writes no sidecar/history.
+    #[test]
+    fn g14_red_eye_detect_without_pupils_never_prefills() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("grey.png");
+        save_red_pupil_png(&source, 64, 64, &[]);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        let candidates = app.detect_red_eye_candidates().unwrap();
+        assert!(candidates.is_empty());
+        assert_eq!(app.apply_detected_red_eyes(&candidates).unwrap(), 0);
+        assert!(app.recipe().red_eye.is_none());
+        // The no-op does not arm a save, so no sidecar is written.
+        app.commit_pending_slider_save([0, 0]);
+        assert!(
+            !lumina_sidecar::sidecar_path_for(&source).is_file(),
+            "a no-op detection must not write a sidecar"
+        );
+    }
+
+    /// LRPAR-G14-REDEYE-AUTO-15: the 32-region cap is enforced loudly on the
+    /// detection apply path (no silent truncation).
+    #[test]
+    fn g14_red_eye_detect_apply_enforces_region_cap() {
+        let mut app = new_app();
+        for _ in 0..RED_EYE_MAX_REGIONS {
+            app.add_red_eye_region(0.5, 0.5).unwrap();
+        }
+        let candidate = DetectedRedEye {
+            id: format!("{RED_EYE_DETECT_ID_PREFIX}deadbeef"),
+            x: 0.5,
+            y: 0.5,
+            radius: 0.05,
+            confidence: 0.9,
+        };
+        let error = app
+            .apply_detected_red_eyes(&[candidate])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exceed the"), "{error}");
         assert_eq!(
             app.recipe().red_eye.as_ref().unwrap().regions.len(),
             RED_EYE_MAX_REGIONS
