@@ -106,9 +106,6 @@ mod ffi {
     pub const LF_MODIFY_VIGNETTING: c_int = 0x0000_0002;
     pub const LF_MODIFY_TCA: c_int = 0x0000_0001;
 
-    // ---- database search flags ----
-    pub const LF_SEARCH_LOOSE: c_int = 1;
-
     // ---- pixel format (lfPixelFormat): U8=0, U16=1, U32=2, F32=3, F64=4 ----
     pub const LF_PF_F32: c_int = 3;
 
@@ -450,6 +447,8 @@ mod ffi {
         /// (in which case the manual LuminaRust model is preferred — graceful
         /// fallback).
         ///
+        /// **Strict matching (GUI-ROUTING-N6):** no fabricated camera/lens profile.
+        ///
         /// A corrector may be *vignetting-only* (`has_distortion() == false`,
         /// `has_vignetting() == true`) when the profile has no distortion
         /// calibration for these parameters. Such a corrector must only be
@@ -479,12 +478,8 @@ mod ffi {
 
                 let make_c = CString::new(make).ok()?;
                 let model_c = CString::new(model).ok()?;
-                let cameras = lf_db_find_cameras_ext(
-                    db.db,
-                    make_c.as_ptr(),
-                    model_c.as_ptr(),
-                    LF_SEARCH_LOOSE,
-                );
+                // GUI-ROUTING-N6: strict matching — no fabricated camera/lens.
+                let cameras = lf_db_find_cameras_ext(db.db, make_c.as_ptr(), model_c.as_ptr(), 0);
                 if cameras.is_null() {
                     return None;
                 }
@@ -495,13 +490,16 @@ mod ffi {
                 }
                 let crop = lf_camera_crop_factor(camera);
 
-                let lens_c = lens_name.and_then(|n| CString::new(n).ok());
+                // A named lens must exist; `None` keeps the body/mount fallback.
+                let lens_c = lens_name
+                    .filter(|name| !name.trim().is_empty())
+                    .and_then(|n| CString::new(n).ok());
                 let lenses = lf_db_find_lenses_hd(
                     db.db,
                     camera,
                     ptr::null(),
                     lens_c.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null()),
-                    LF_SEARCH_LOOSE,
+                    0,
                 );
                 if lenses.is_null() {
                     return None;
@@ -982,6 +980,8 @@ mod ffi {
 #[cfg(all(test, feature = "native"))]
 mod tests {
     use super::ffi::{lf_camera_crop_factor, Corrector, LensfunDb};
+
+    mod strict_match; // GUI-ROUTING-N6: strict matching; see src/tests/strict_match.rs
 
     // These tests exercise the real system database. They only compile/run with
     // `--features native`, so the default `cargo test -p lumina-lensfun` (no

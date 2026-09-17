@@ -8305,14 +8305,14 @@ fn load_persisted_mask_planes(
 /// `None` is returned and the manual LuminaRust model (or identity) applies
 /// instead — never a guessed correction.
 ///
-/// # Lens identification (G-06 EXIF-Erkennung)
-/// `RawMetadata.lens` (EXIF `LensModel`/Makernote, REVIEW-RAW-N2) is passed
-/// as the Lensfun lens name when present, so an exact lens match wins;
-/// without it (or when the named lens is unknown to the DB) Lensfun falls
-/// back to the body/mount match via `GuessParameters` (`LF_SEARCH_LOOSE`).
-/// A wrong-but-confident lens name can therefore still resolve to the body
-/// profile instead of failing — the `--lensfun-status` report and the
-/// render `info!` log name the matched correction explicitly.
+/// # Lens identification (G-06 EXIF-Erkennung, GUI-ROUTING-N6)
+/// `RawMetadata.lens` (REVIEW-RAW-N2) is passed as the Lensfun lens name. A
+/// **named** lens must exist in the database (strict, no `LF_SEARCH_LOOSE`);
+/// otherwise `None` and the manual model apply. Loose matching fabricated
+/// profiles (`EOS R1`→`EOS R`, `RF200-800mm`→`RF 24-240mm`) and applied wrong
+/// corrections — forbidden ("nie ein geratenes Profil"). Without a lens name
+/// the documented body/mount fallback applies; `--lensfun-status` and the
+/// render `info!` log name the match explicitly.
 ///
 /// # Subject (focus) distance
 /// `RawMetadata` carries no subject-distance field, so a documented default of

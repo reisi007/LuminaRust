@@ -109,7 +109,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | GUI-ROUTING-N6 | alle G | Routing-Fallback-Fix |
+| 1.0 | GPU-LENSFUN-PARITY-1 | G-06 | Lensfun-GPU-Pass (dokumentierte Ausnahme bis dahin) |
 | 1.0 | GUI-INSTRDBG-17b | alle G | Rest-Instrumentierung |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
@@ -144,6 +144,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
+- [ ] **[PRIO: mittel] GPU-LENSFUN-PARITY-1 (→ G-06, Release: 1.0)** GPU-Pass für den (korrekt, strikt gematchten) Lensfun-Corrector. Befund GUI-ROUTING-N6 (2026-09-17): Ein aktiver Lensfun-Corrector hat keinen WGSL-Pass; GUI/CLI routen laut auf CPU (Badge `lens_correction (Lensfun corrector)`) — bis zur Umsetzung als dokumentierte Ausnahme in `feature/architecture/pipeline.md` § GPU-Pfad und `feature/platform/cli-gui-wasm.md` festgeschrieben. Scope: Lensfun liefert beliebige Distortion-/TCA-/Vignette-Modelle als per-Pixel-Koordinaten-/Gewinnfunktion; daher vorberechnete Warp-/Gain-Map (CPU-Aufbau pro Quelle/Dimensionen, GPU-Resample-Pass analog `depth_plane`) statt WGSL-Nachbau der Modelle. Abnahme: Oracle-vs-GPU-Paritätstest (`lumina-gpu/tests/parity.rs`, maxAbsDiff/PSNR nach F-043), GUI-headless ohne Badge für das Rezept, CPU-Referenz bleibt vollständig. Hinweis: Die **falsche** Profilzuordnung (lose Suche) ist mit GUI-ROUTING-N6 bereits behoben; hier geht es nur um die Pixel-Parität eines korrekten Correctors.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
@@ -215,7 +216,6 @@ Vor F-103-N6 empfohlen: kleine Stabilitäts-Fixes aus den Review-Befunden
 damit der manuelle Test aussagekräftig ist.
 
 - [ ] **[PRIO: mittel] GUI-INSTRDBG-17b (Release: 1.0)** Restliche GUI-Sektions-/Metadaten-/Geometrie-Aktionen instrumentieren (Folge zu GUI-INSTRDBG-17): jenseits der 34 `GuiAction`s fehlen u. a. Geometrie- und Metadaten-Buttons sowie `toggle_compare_mode` (`C`/`N`). Je user-sichtbarer Schaltfläche eine `GuiAction`-Variante + `instrument_gui_action!` nach bestehendem Muster (Debug-only, `GuiActionTimer`). Abnahme: je Aktion genau eine Debug-Logzeile, Release-Clippy/Tests grün, Format-/Namenstests decken die neuen Varianten.
-- [ ] **[PRIO: hoch] GUI-ROUTING-N6 (Release: 1.0)** Routing-Fallback aus F-103-N6-Runde 1 (2026-09-17): Badge erschien im manuellen Test (Gründe nicht notiert); klären welche Rezeptteile die GPU-Route verweigerten (Paritäts-Fail mit Fix-Pflicht vs. dokumentierte Ausnahme), reproduzieren + fixen. Abnahme: betroffene Rezepte ohne Badge (oder dokumentierte Ausnahme), Test deckt den Fall ab.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04b (→ G-10, Release: 1.0)** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04c (→ G-10, Release: 1.0)** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).
 

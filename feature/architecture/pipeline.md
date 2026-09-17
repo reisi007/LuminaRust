@@ -943,8 +943,16 @@ manuelle Koeffizienten > Identität); sonst greift das manuelle Modell
 - **EXIF-Profil-Erkennung:** Der Corrector wird aus `camera_make`/
   `camera_model` (Pflicht, endlich vorhanden) plus `focal_length`/`aperture`
   aufgebaut; `RawMetadata.lens` (EXIF-LensModel/Makernote) wird als
-  Lensfun-Lens-Name durchgereicht, wenn vorhanden (Body-Match als Fallback,
-  nie ein geratenes Profil). Fehlt ein Pflichtfeld, die System-DB oder ein
+  Lensfun-Lens-Name durchgereicht, wenn vorhanden. **Strikte Erkennung
+  (GUI-ROUTING-N6, 2026-09-17):** Kamera und ein **benannter** Objektivname
+  müssen tatsächlich in der Datenbank existieren (Groß-/Kleinschreibung egal,
+  Maker-Präfix optional) — kein `LF_SEARCH_LOOSE` mehr. Vorher hat die lose
+  Suche Profile erfunden (`EOS R1` → `EOS R`, `RF200-800mm F6.3-9 IS USM` →
+  `RF 24-240mm F4-6.3 IS USM`) und damit eine **falsche** Korrektur still auf
+  echte Fotos angewendet. Ohne Treffer gilt strikt der manuelle Pfad (kein
+  geratenes Profil, Status sichtbar). Ohne Objektivnamen bleibt der
+  dokumentierte Body-/Mount-Fallback (`lens_name = None` → mount-kompatibles
+  Objektiv). Fehlt ein Pflichtfeld, die System-DB oder ein
   nicht-identisches Profil, gilt strikt der manuelle Pfad (kein stiller
   Fallback, Status sichtbar).
 - **TCA via Lensfun:** Ist das Profil TCA-kalibriert (`LF_MODIFY_TCA`), sampled
@@ -1595,6 +1603,34 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   die vollständige Referenz (kein GPU-only-Weg). Lebendes Inventar der noch
   nicht GPU-tauglichen Rezept-Konfigurationen:
   `cpu_routing_inventory_is_complete` (`crates/lumina-gpu/tests/parity.rs`).
+- **GUI-ROUTING-N6 (F-103-N6-Runde 1, 2026-09-17):** Der gelbe Badge im
+  manuellen Test wurde reproduziert: Mit den committeten RAW-Fixtures
+  (`aircraft-landscape.cr3`, `aircraft-portrait.cr3`) und einem harmlosen
+  Basis-Rezept (Exposure/Contrast, Zoom) erschien
+  `lens_correction (Lensfun corrector)`. Ursache war **kein** fehlender
+  GPU-Pass, sondern eine **lose Lensfun-Profil-Suche** (`LF_SEARCH_LOOSE`):
+  Für das nicht in der Datenbank vorhandene Paar `Canon EOS R1` +
+  `RF200-800mm F6.3-9 IS USM` hat lensfun ein **fremdes** Objektiv
+  (`Canon RF 24-240mm F4-6.3 IS USM`) bzw. eine falsche Kamera (`EOS R`)
+  geliefert und damit eine falsche Korrektur samt CPU-Route/Badge erzeugt.
+  Fix: `Corrector::for_camera` sucht strikt (kein `LF_SEARCH_LOOSE`); ein
+  benannter Kameratyp/Objektivname ohne echten DB-Eintrag ergibt `None` und
+  der manuelle Pfad greift (SOLL: „nie ein geratenes Profil"). Damit
+  verschwindet der Badge für die Fixtures, und eine reale Fehlkorrektur ist
+  behoben. Der dokumentierte Body-/Mount-Fallback für `lens_name = None`
+  bleibt erhalten. Tests: `named_lens_matches_exactly_and_reports_flags`,
+  `absent_named_lens_is_never_substituted`,
+  `absent_camera_model_is_never_fabricated`,
+  `absent_lens_name_keeps_body_mount_fallback` (hermetische Fixture-DB).
+  **Verbleibende, bewusst dokumentierte CPU-Route:** Ein **korrekt** (strikt)
+  gematchter Lensfun-Corrector hat weiterhin **keinen WGSL-Pass**. Lensfun
+  liefert beliebige Distortion-/TCA-/Vignette-Modelle als per-Pixel-Koordinaten-
+  und Gewinnfunktion; eine GPU-Parität braucht eine vorberechnete Warp-/Gain-Map
+  (CPU-Aufbau, GPU-Resample) als eigenes, crate-übergreifendes Slice. Bis dahin
+  bleibt die Route laut sichtbar (Badge mit präzisem Grund,
+  `active_lensfun_corrector_forces_gpu_fallback_without_stale_memo_hit`) — die
+  Ausnahme ist hier festgeschrieben; die GPU-Umsetzung ist als Folgeaufgabe
+  `GPU-LENSFUN-PARITY-1` in `Agents.todo.md` getrackt.
 
 ### G-01 Develop-Basis: Treatment, Profil, Reset-Automatik, Panel-Previous
 (LRPAR-G01-BASIC, Release 1.0)

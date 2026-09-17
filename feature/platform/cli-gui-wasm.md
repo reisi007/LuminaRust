@@ -495,6 +495,22 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   übrigen Sektions-Schaltflächen jenseits der 34 `GuiAction`s (z. B. Geometrie-,
   Metadaten- und Masken-Layer-Aktionen); sie folgen mechanisch nach demselben
   Muster als eigene offene Folgeaufgabe (`GUI-INSTRDBG-17b` in `Agents.todo.md`).
+- **Routing-Badge-Befund (GUI-ROUTING-N6, F-103-N6-Runde 1, 2026-09-17):**
+  Der gelbe Badge im manuellen Test (`Render routed to CPU: …`) wurde
+  reproduziert. Für die committeten RAW-Fixtures mit einem harmlosen
+  Basis-Rezept (Exposure/Contrast, Zoom) war der Grund
+  `lens_correction (Lensfun corrector)`. Ursache war keine fehlende GPU-Stufe,
+  sondern eine **lose Lensfun-Profil-Suche**: Für das nicht in der Datenbank
+  vorhandene Paar `Canon EOS R1` + `RF200-800mm F6.3-9 IS USM` hat lensfun ein
+  fremdes Objektiv (`RF 24-240mm F4-6.3 IS USM`) bzw. eine falsche Kamera
+  (`EOS R`) geliefert. `Corrector::for_camera` sucht jetzt **strikt** (kein
+  `LF_SEARCH_LOOSE`); ohne echten DB-Eintrag greift der manuelle Pfad
+  („nie ein geratenes Profil"). Damit ist der Badge für die Fixtures weg und
+  eine reale Fehlkorrektur behoben. Ein **korrekt gematchter** Lensfun-Corrector
+  hat weiterhin keinen WGSL-Pass und bleibt die eine bewusst dokumentierte,
+  laute CPU-Route (Badge nennt den präzisen Grund); die GPU-Umsetzung ist als
+  `GPU-LENSFUN-PARITY-1` in `Agents.todo.md` getrackt. Details/Testanker:
+  `feature/architecture/pipeline.md` § Implementierungsstatus GPU-Pfad.
 - **Ist-Stand 2026-09-04:** Auto-Select (erstes Bild alle Formate, Selektion nie
   leer), `--module`/`--fullscreen`-Flags umgesetzt + verifiziert BESTANDEN
   (281p lib, 7p bins, kittest 11/11, Vision Golden-BESTANDEN); Folgearbeit:
