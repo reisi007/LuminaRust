@@ -109,7 +109,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | GUI-GEN-GRANULAR-10 | alle G | Pro-Modul-Neuberechnung |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 1.5 | LRPAR-G13-MERGE-IMPL-15 | G-13 | HDR/Panorama-Merge-Impl |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
@@ -150,7 +149,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: niedrig
 
-- [ ] **[PRIO: niedrig] GUI-GEN-GRANULAR-10 (Release: 1.0)** Pro-Modul-Neuberechnung nach `feature/platform/cli-gui-wasm.md` (F-100, User-Vorgabe 2026-09-16): jede in 1.0 vorhandene AI-/Analysegröße einzeln explizit neu generierbar, Default „alle neu generieren", nie implizit/automatisch; später hinzukommende Module (Denoise/Face/Culling/Merge) hängen sich in dieselbe Konvention. Abnahme: GUI-headless + CLI je Modul, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G14-REDEYE-AUTO-15 (Release: 2.0)** Automatische Pupillen-Erkennung als Folgearbeit zu LRPAR-G14-REDEYE-15 (SOLL: Regionen derzeit explizit markiert, keine stille Vorbefüllung): deterministische Heuristik (kein Modell) oder Entscheid-Delta in `feature/architecture/pipeline.md` §G-14. Abnahme: CLI + GUI-headless, Golden-Gates, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-IMPL-20 (Release: 2.0)** KI-Denoise-Implementierung nach Entscheid `feature/decisions/LRPAR-G14-DENOISE-20.md` (F-078-Fixture-Entscheid ✓, Schema ✓, Pipeline-Stufe + Persistenz + GPU-Refusal ✓, ONNX-Backend ✓, CLI ✓, GUI ✓; offen: Gewichte → Perf-Budgets F-074). Abnahme: CLI + GUI-headless + Golden/PSNR, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G09-CULL-IMPL-25 (Release: 2.5)** KI-Culling-Implementierung nach Entscheid `feature/decisions/LRPAR-G09-CULL-25.md` (Schema ✓, Heuristik `lumina-cull` ✓, CLI ✓, GUI ✓; offen: optional ONNX Stufe 2 → Perf F-074). Abnahme: CLI-Exit-Codes + GUI-headless + kittest, Vorschlag schreibt nie Rating/Flag/Label.

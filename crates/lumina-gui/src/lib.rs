@@ -7582,6 +7582,18 @@ impl LuminaApp {
             .selected_mask_id
             .clone()
             .ok_or_else(|| GuiError::Io(Str::NoMaskSelected.t().to_string()))?;
+        self.mark_mask_pending(&mask_id)?;
+        self.status = Str::RecalcRequested.t().into();
+        Ok(())
+    }
+
+    /// Marks exactly one mask as explicitly pending re-inference.
+    ///
+    /// GUI-GEN-GRANULAR-10: the shared primitive of the per-mask button
+    /// ([`Self::mark_mask_for_recalculation`]) and the collective regeneration
+    /// ([`Self::regenerate_stale`]). It never runs inference itself: the
+    /// request is visible (`Pending` + explanation) and consumed explicitly.
+    fn mark_mask_pending(&mut self, mask_id: &str) -> Result<(), GuiError> {
         let mask = self
             .active_copy_mut()?
             .mask_library
@@ -7592,15 +7604,80 @@ impl LuminaApp {
         mask.error_text = Some(Str::ExplicitRecalcRequested.t().to_string());
         let queued = self.idle_queue.enqueue(
             IdleTask::MaskInference {
-                mask_id: mask_id.clone(),
+                mask_id: mask_id.to_string(),
             },
             100,
         );
         if queued.is_none() {
             return Err(GuiError::Io(Str::IdleQueueFull.t().to_string()));
         }
-        self.status = Str::RecalcRequested.t().into();
         Ok(())
+    }
+
+    /// The collective regeneration action of F-100 ("alle veralteten/fehlenden
+    /// neu generieren").
+    ///
+    /// Runs exactly the per-module actions for the values that are stale or
+    /// missing and skips everything fresh, so a fully fresh state is a no-op.
+    /// It is only reachable from the explicit button — never implicit. Returns
+    /// the module names that were regenerated (empty when nothing was stale).
+    pub fn regenerate_stale(&mut self) -> Result<Vec<&'static str>, GuiError> {
+        let mut regenerated: Vec<&'static str> = Vec::new();
+        // Module `masks`: every non-`Valid` source mask is stale or missing.
+        // Range masks are deterministic and always `Valid`; they are skipped
+        // automatically by the status filter.
+        let stale_masks: Vec<String> = self
+            .document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == self.virtual_copy_id)
+            })
+            .map(|copy| {
+                copy.mask_library
+                    .iter()
+                    .filter(|mask| matches!(mask.operation, MaskOperation::Source))
+                    .filter(|mask| !matches!(mask.status, MaskStatus::Valid))
+                    .map(|mask| mask.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !stale_masks.is_empty() {
+            for mask_id in &stale_masks {
+                self.mark_mask_pending(mask_id)?;
+            }
+            regenerated.push("masks");
+        }
+        // Module `auto-tone`: stale = enabled, but the full AUTO-TONE-2
+        // six-mirror contract is not persisted (e.g. a stale fingerprint
+        // cleared it, or a historic two-slider `process --auto-tone` artifact
+        // is loaded). Mirrors are the marker of auto-written values, so an
+        // incomplete set means regenerate.
+        let auto_tone_stale = {
+            let auto = &self.recipe.auto_features;
+            auto.enable_auto_tone
+                && (auto.auto_exposure.is_none()
+                    || auto.auto_contrast.is_none()
+                    || auto.auto_whites.is_none()
+                    || auto.auto_blacks.is_none()
+                    || auto.auto_highlights.is_none()
+                    || auto.auto_shadows.is_none())
+        };
+        if auto_tone_stale {
+            self.auto_tone()?;
+            regenerated.push("auto-tone");
+        }
+        // Module `matching`: missing = enabled, but no persisted value.
+        if self.recipe.auto_features.match_total_exposure
+            && self.recipe.auto_features.matched_exposure.is_none()
+        {
+            self.match_total_exposure(0.5)?;
+            regenerated.push("matching");
+        }
+        info!("GUI interaction: regenerate_stale -> {regenerated:?}");
+        Ok(regenerated)
     }
 
     // ---- F-103-N4: interactive mask tools (Brush / Linear / Radial) ----
@@ -18907,6 +18984,20 @@ impl LuminaApp {
                     self.show_error(error);
                 }
             }
+            // GUI-GEN-GRANULAR-10 (F-100): the collective default — regenerate
+            // every stale/missing AI/analysis value (masks, auto-tone,
+            // matching) and skip the fresh ones. Explicit only, never implicit.
+            if ui.button(Str::RegenerateStale.t()).clicked() {
+                match self.regenerate_stale() {
+                    Ok(done) if done.is_empty() => {
+                        self.status = Str::NothingStale.t().to_string();
+                    }
+                    Ok(done) => {
+                        self.status = Str::RegeneratedStale.format_arg(&done.join(", "));
+                    }
+                    Err(error) => self.show_error(error),
+                }
+            }
             // LRPAR-G01-BASIC: "Reset Sliders Automatically" — folder-inherited
             // edit behaviour (see `set_reset_sliders_automatically`).
             let mut reset_auto = self.reset_sliders_automatically;
@@ -24197,6 +24288,116 @@ mod tests {
         assert!(app.status().contains("recalculation"));
         app.mark_mask_for_recalculation().unwrap();
         assert!(app.status().contains("requested"));
+    }
+
+    /// GUI-GEN-GRANULAR-10 (F-100): the collective regeneration is a no-op on a
+    /// fully fresh document — no module is recomputed implicitly.
+    #[test]
+    fn collective_regenerate_is_a_noop_on_a_fresh_document() {
+        let mut app = new_app();
+        app.load_bytes(png(), "fresh.png").unwrap();
+        let done = app.regenerate_stale().unwrap();
+        assert!(done.is_empty(), "fresh document regenerated {done:?}");
+    }
+
+    /// GUI-GEN-GRANULAR-10: the collective action runs exactly the stale module
+    /// actions (stale mask + enabled-but-stale Auto-Tone) and leaves the
+    /// disabled module (`matching`) alone.
+    #[test]
+    fn collective_regenerate_runs_stale_modules_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        // A freshly created mask is `Pending` (stale/missing artifact).
+        app.create_mask("Subject").unwrap();
+        // Enabled Auto-Tone without values/fingerprint is stale.
+        app.recipe.auto_features.enable_auto_tone = true;
+
+        let done = app.regenerate_stale().unwrap();
+
+        assert!(done.contains(&"masks"), "{done:?}");
+        assert!(done.contains(&"auto-tone"), "{done:?}");
+        assert!(
+            !done.contains(&"matching"),
+            "matching is disabled: {done:?}"
+        );
+        assert!(app.recipe.auto_features.auto_exposure.is_some());
+        let status = app.document.as_ref().unwrap().virtual_copies[0].mask_library[0]
+            .status
+            .clone();
+        assert_eq!(status, MaskStatus::Pending);
+    }
+
+    /// GUI-GEN-GRANULAR-10 / M1: a two-slider Auto-Tone artifact (historic
+    /// `process --auto-tone`) is completed to the full AUTO-TONE-2 contract by
+    /// the collective action.
+    #[test]
+    fn collective_regenerate_completes_two_slider_auto_tone() {
+        let mut app = new_app();
+        app.load_bytes(png(), "two-slider.png").unwrap();
+        {
+            let auto = &mut app.recipe.auto_features;
+            auto.enable_auto_tone = true;
+            auto.auto_exposure = Some(0.1);
+            auto.auto_contrast = Some(0.1);
+        }
+
+        let done = app.regenerate_stale().unwrap();
+
+        assert_eq!(done, vec!["auto-tone"]);
+        assert!(app.recipe.auto_features.auto_whites.is_some());
+        assert!(app.recipe.auto_features.auto_blacks.is_some());
+        assert!(app.recipe.auto_features.auto_highlights.is_some());
+        assert!(app.recipe.auto_features.auto_shadows.is_some());
+    }
+
+    /// GUI-GEN-GRANULAR-10: every stale mask is marked — the collective action
+    /// is not limited to the currently selected mask.
+    #[test]
+    fn collective_regenerate_marks_every_stale_mask() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.png");
+        save_png(&source);
+        let mut app = new_app();
+        open_and_decode(&mut app, source.display().to_string());
+        app.create_mask("Sky").unwrap();
+        app.create_mask("Tree").unwrap();
+
+        let done = app.regenerate_stale().unwrap();
+
+        // The module is reported once (deduplicated status message), even
+        // though both masks were marked.
+        assert_eq!(done, vec!["masks"]);
+        for mask in &app.document.as_ref().unwrap().virtual_copies[0].mask_library {
+            assert_eq!(mask.status, MaskStatus::Pending, "mask `{}`", mask.id);
+        }
+    }
+
+    /// GUI-GEN-GRANULAR-10: each module action (Auto, Match Exposure) and the
+    /// collective default are reachable through painted, fully visible Develop
+    /// controls.
+    #[test]
+    fn per_module_and_collective_regenerate_actions_are_painted() {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Develop);
+        // The Auto-Tone action lives in the collapsible Basic section body.
+        app.set_section_open(SECTION_BASIC, true);
+        let shapes = headless_shapes_sized(&mut app, 4096.0, |app, ctx| {
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ctx, |ui| app.draw_develop_panel(ui));
+        });
+        // Auto-Tone module action (Basic section).
+        assert_fully_visible(&shapes, Str::Auto.t());
+        // Matching module action (footer).
+        assert_fully_visible(&shapes, Str::MatchExposure.t());
+        // Collective default (footer).
+        assert_fully_visible(&shapes, Str::RegenerateStale.t());
     }
 
     #[test]

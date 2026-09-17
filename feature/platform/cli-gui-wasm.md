@@ -508,6 +508,94 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   vorhandenen Module; später hinzukommende Module (Denoise, Face, Culling,
   Merge) hängen sich in dieselbe Konvention (eigene Aktion + Sammel-Default).
 
+#### 1.0-Inventar und konkrete Aktionsfläche (GUI-GEN-GRANULAR-10)
+
+- **1.0-Module (Ist-Stand 2026-09-17, verifiziert am Code):** ableitbare,
+  persistierte Analysegrößen sind `masks` (AI-Masken-Inferenz), `auto-tone`
+  (Auto-Tone: sechs Regler + `analysis_fingerprint`, enthält „Auto-Exposure“
+  als `auto_exposure`) und `matching` (F-008 Exposure Matching /
+  `matched_exposure`). **Auto-WB** ist in `architecture/pipeline.md` normativ
+  in der optionalen Reihenfolge genannt, aber in 1.0 **nicht implementiert**
+  (es gibt nur den As-Shot-WB-Kontext aus RAW-Metadaten, keine persistierte
+  Auto-WB-Analyse); es erhält daher noch keine eigene Aktion und hängt sich
+  beim Implementieren in dieselbe Konvention. Nicht Teil dieses Slices sind
+  die späteren Module laut Releaseplan: Merge (1.5), KI-Denoise (2.0), Face
+  (2.0), Culling (2.5) sowie GenerativeEdit/Spot-generativ (Post-MVP).
+- **CLI (eine Sammel- und Modulaktion):**
+  `lumina regenerate --input <DATEI> [--virtual-copy <ID>] [--json]
+  [--module masks|auto-tone|matching]…`.
+  Ohne `--module` ist es die **Sammelaktion** und erzeugt **nur veraltete oder
+  fehlende** Größen neu (die drei Module werden unabhängig geprüft). Ein
+  explizites `--module` **erzwingt** genau dieses Modul (auch wenn der aktuelle
+  Wert frisch aussieht) und lässt alle anderen Größen unangetastet. Die
+  Aktion ist idempotent und schreibt nur bei tatsächlicher Änderung atomar.
+  Die Auto-Tone-Frischeprüfung verlangt den **vollen** AUTO-TONE-2-Vertrag
+  (sechs Adjustments + sechs Spiegel + Fingerprint). **Offen (bewusst nicht in
+  diesem Slice):** `process --auto-tone` persistiert weiterhin nur
+  `exposure`/`contrast` (`process`-Artefakt); `regenerate` erkennt diesen
+  unvollständigen Stand deshalb als stale und regeneriert ihn. Eine
+  Vereinheitlichung von `process` ist ein eigener Folgeentscheid.
+- **GUI:** Die Modulaktionen sind die vorhandenen Buttons `Auto`
+  (Grundtonung, `auto_tone`), `Match Exposure` (Footer, `match_total_exposure`)
+  und `Recalculation` je Maske. Die fehlende **Sammelaktion** ist der Button
+  „Regenerate stale/missing“ im Develop-Footer: er führt genau die
+  Modulaktionen für alle veralteten/fehlenden Größen aus und überspringt
+  frische (idempotent, nie implizit).
+- **Kein impliziter Re-Compute:** `regenerate` (CLI) bzw. die Sammelaktion
+  (GUI) ist der einzige *Sammel*-Pfad. Die bestehende Render-Zeit-Auflösung
+  der Maske (F-048/F-051: veraltete/fehlende Maske wird bei aktivem Modell
+  re-inferiert) bleibt funktional, wird aber jetzt **laut** gemeldet: die
+  Entscheidungsschicht hängt für jede *nicht ausdrücklich angeforderte*
+  Re-Inferenz (`refresh == false` **und** kein persistierter `Pending`-Marker)
+  eine Warnung an `MaskLoadResult.warnings`, die die CLI als
+  `warning: …`/`mask_warnings` ausgibt. Eine explizite Refresh-Anforderung
+  bleibt bewusst leise — sie ist die gewollte, sichtbare Aktion. **Drei
+  Ausprägungen expliziter Masken-Anforderung sind zu unterscheiden:**
+  `develop`/`export`/`batch --update-masks` setzen den kopweiten One-Shot-
+  Schalter `recipe.options["update_masks"] = "true"` (der Render konsumiert und
+  entfernt ihn wieder; er übersteuert den Persisted-Valid-Fastpath für **alle**
+  erreichbaren Quellmasken). `mask --update-masks` und `regenerate --module
+  masks` markieren die betroffenen Masken als `Pending` **und** armen denselben
+  kopweiten Schalter, damit der Render die Re-Inferenz als ausdrücklich
+  angefordert erkennt und nicht als implizit meldet. Die **Sammelaktion** (kein
+  `--module`) armiert den kopweiten Schalter dagegen **nicht**: sie markiert
+  ausschließlich die veralteten/fehlenden Quellmasken als `Pending`; deren
+  persistierter `Pending`-Marker gilt der Entscheidungsschicht als
+  ausdrückliche Anforderung (leise Re-Inferenz nur dieser Masken), während
+  frische `Valid`-Masken unberührt auf dem Persisted-Valid-Fastpath bleiben.
+  Ohne diese Trennung würde die Sammelaktion über den kopweiten Schalter auch
+  frische Masken re-inferieren und damit dem SOLL „nur veraltete oder fehlende"
+  widersprechen. Auto-Tone/Auto-Exposure/Matching werden nie als
+  Render-Nebeneffekt neu berechnet.
+  **Offene SOLL-Spannung (Entscheid nötig):** Die reine F-100-Lesart („nie
+  implizit") würde die F-048-Render-Zeit-Re-Inferenz ganz verbieten und nur
+  noch bei `refresh == true` erlauben. Dieser Slice macht sie stattdessen
+  laut (User-Vorgabe „ggf. laut machen oder entfernen", 2026-09-17). Eine
+  strikte Variante ist eine bewusste F-048-Revision (Render verweigert statt
+  zu re-inferieren) und bleibt eine eigene Entscheidung, keine stille
+  Nebenänderung.
+- **GUI-Sammelstatus:** Die Sammelaktion gibt **genau eine** zusammengefasste
+  Statusmeldung aus; die Modulliste ist dedupliziert (ein Modul erscheint
+  höchstens einmal), auch wenn mehrere Masken markiert wurden.
+- **Masken-Artefakt-Persistenz (bewusste Grenze):** Die `.lumina.zdata`-Persistenz
+  re-inferierter Matten ist die dokumentierte offene F-082-Grenze
+  (`feature/product/ai-masks.md`). `regenerate --module masks` fordert daher
+  eine ausdrückliche Refresh-Resolution an (Status `Pending` + armer
+  One-Shot-Schalter, s. o.); der nächste Render
+  konsumiert sie und verweigert ohne Engine laut. Es wird **kein**
+  Stub-Ergebnis als gültiges Artefakt persistiert. Sobald F-082 geschlossen
+  ist, wird die Matte direkt persistiert, ohne die Aktionsfläche zu ändern.
+- **Byte-Identität (bekannte Grenze, 2026-09-17):** „Unangetastet" gilt
+  strukturell (kein Modul schreibt fremde Felder), nicht streng byteweise:
+  der serde_json-Load/Save-Roundtrip kann fremde Float-Felder um 1 ULP
+  verschieben (ohne `float_roundtrip`, vorbestehend). Exakter Byte-Roundtrip
+  ist ein eigener Folgeentscheid.
+- **Stand 2026-09-17 (GUI-GEN-GRANULAR-10, Verifizierung BESTANDEN):**
+  `lumina regenerate` (CLI, je Modul + Sammel-Default), GUI-Sammel-Button +
+  Modulaktionen, laute Render-Re-Inferenz, `info!`-Logs; 9 CLI-E2E + GUI-/Core-
+  Tests grün. Offen: F-048-Revision, `process`-Vereinheitlichung, Byte-Roundtrip
+  (s. o.), Auto-WB-Aktion bei Implementierung.
+
 ### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2, Welle 3)
 
 Alle Kürzel werden ignoriert, solange ein Widget Tastatureingaben erwartet

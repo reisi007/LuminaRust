@@ -586,6 +586,13 @@ enum Command {
     /// without the capability the command refuses loudly (no stub fallback).
     /// See `feature/decisions/LRPAR-G12-FACE-20.md` §2.3/§4/§6.
     Face(FaceArgs),
+    /// GUI-GEN-GRANULAR-10 (F-100, Release 1.0): explicit per-module
+    /// regeneration of the 1.0 derivable AI/analysis values (AI masks,
+    /// Auto-Tone, Exposure Matching). No `--module` is the collective default
+    /// (`alle veralteten/fehlenden neu generieren`); an explicit module forces
+    /// exactly that value and leaves every other artifact untouched. Never
+    /// implicit. See `feature/platform/cli-gui-wasm.md` § F-100.
+    Regenerate(RegenerateArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -636,6 +643,60 @@ struct DevelopArgs {
     update_masks: bool,
     #[arg(long)]
     migrate: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+/// GUI-GEN-GRANULAR-10 (F-100, Release 1.0): the derivable AI/analysis values
+/// present in 1.0 that each have their own explicit regeneration action. The
+/// list is the `--module` value set of `lumina regenerate`; later modules
+/// (denoise/face/cull/merge) extend it without changing the convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum RegenerateModule {
+    /// AI mask inference. Regeneration is an explicit refresh request
+    /// (status `Pending`) consumed by the next render; the `.lumina.zdata`
+    /// artifact persistence is the documented F-082 open item, so no stub
+    /// matte is ever persisted as a valid artifact.
+    Masks,
+    /// Auto-Tone: the six sliders (`exposure`/`contrast` plus the AUTO-TONE-2
+    /// end/balance mirrors) and the `analysis_fingerprint`.
+    #[value(name = "auto-tone")]
+    AutoTone,
+    /// F-008 Exposure Matching (the persisted `matched_exposure`).
+    Matching,
+}
+
+impl RegenerateModule {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Masks => "masks",
+            Self::AutoTone => "auto-tone",
+            Self::Matching => "matching",
+        }
+    }
+}
+
+/// GUI-GEN-GRANULAR-10 (F-100): explicit per-module regeneration of the 1.0
+/// derivable AI/analysis values.
+///
+/// Without `--module` the command is the F-100 **collective default** and
+/// regenerates only stale or missing values (independent per module). An
+/// explicit `--module` **forces** exactly that module, even when its current
+/// value looks fresh, and leaves every other persisted artifact untouched.
+/// Nothing is ever recomputed implicitly; the sidecar is written atomically
+/// and only when something actually changed.
+#[derive(Debug, Args)]
+struct RegenerateArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    virtual_copy: Option<String>,
+    /// Modules to regenerate (repeatable): `masks`, `auto-tone`, `matching`.
+    /// Omitted = regenerate every stale/missing module.
+    #[arg(long = "module", value_enum)]
+    modules: Vec<RegenerateModule>,
+    #[arg(long, default_value_t = 0.5)]
+    target_luminance: f64,
     #[arg(long)]
     json: bool,
 }
@@ -1702,6 +1763,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Denoise(args) => denoise(args),
         Command::Cull(args) => cull(args),
         Command::Face(args) => face(args),
+        Command::Regenerate(args) => regenerate(args),
         #[cfg(feature = "mcp")]
         // F-101-F1: byte-identical stdio loop as the `lumina-mcp` binary
         // (shared `lumina_mcp::run_stdio`); logging goes to stderr so the
@@ -2011,6 +2073,392 @@ fn mark_masks_pending_refresh(input: &Path, virtual_copy: Option<&str>) -> Resul
     Ok(())
 }
 
+/// GUI-GEN-GRANULAR-10 (F-100): does this source mask need a fresh artifact?
+///
+/// Conservative pre-filter for the *collective* default only; an explicit
+/// `--module masks` forces the refresh regardless (range prompts excluded by
+/// the caller, see `regenerate`). It checks the cheap, CLI-owned parts of the
+/// decision-layer validity rule (status, source content hash, artifact
+/// availability). The **authoritative** identity check stays in
+/// `lumina-core::mask_loader` — decode context, model identity and plane
+/// dimensions are deliberately *not* duplicated here, because that module is
+/// the single owner of the inference contract. A fresh-looking value that is
+/// actually stale on those dimensions is still caught (and reported loudly) by
+/// the decision layer at render time.
+fn mask_needs_regeneration(
+    root: &Path,
+    current: &lumina_sidecar::SourceIdentity,
+    mask: &lumina_sidecar::MaskDefinition,
+) -> bool {
+    if !matches!(mask.status, MaskStatus::Valid) {
+        return true;
+    }
+    if mask.source_fingerprint.content_hash != current.content_hash {
+        return true;
+    }
+    match mask.artifact.as_ref() {
+        None => true,
+        Some(artifact) => artifact_status(root, artifact) != ArtifactStatus::Available,
+    }
+}
+
+/// The six AUTO-TONE-2 sliders (adjustment keys) written by Auto-Tone. Shared
+/// by the writer ([`apply_auto_tone_result`]) and the freshness predicate of
+/// `regenerate`, so a value written by either path is recognized as complete.
+const AUTO_TONE_ADJUSTMENT_KEYS: [&str; 6] = [
+    "exposure",
+    "contrast",
+    "whites",
+    "blacks",
+    "highlights",
+    "shadows",
+];
+
+/// Writes the full AUTO-TONE-2 result into `recipe`: six sliders plus the six
+/// `auto_features` mirrors and the analysis fingerprint. Single source of
+/// truth for `lumina regenerate --module auto-tone` (the GUI writes the same
+/// six-slider contract in `LuminaApp::auto_tone`).
+fn apply_auto_tone_result(
+    recipe: &mut EditRecipe,
+    frame: &ImageFrame,
+    target_luminance: f64,
+) -> Result<(), CliError> {
+    let config = AutoToneConfig {
+        target_luminance,
+        ..Default::default()
+    };
+    let input_fingerprint = tone_fingerprint(frame, config);
+    let result = suggest_auto_tone(frame, config)?;
+    for (key, value) in [
+        (AUTO_TONE_ADJUSTMENT_KEYS[0], result.exposure),
+        (AUTO_TONE_ADJUSTMENT_KEYS[1], result.contrast),
+        (AUTO_TONE_ADJUSTMENT_KEYS[2], result.whites),
+        (AUTO_TONE_ADJUSTMENT_KEYS[3], result.blacks),
+        (AUTO_TONE_ADJUSTMENT_KEYS[4], result.highlights),
+        (AUTO_TONE_ADJUSTMENT_KEYS[5], result.shadows),
+    ] {
+        recipe.adjustments.insert(key.into(), value);
+    }
+    recipe.auto_features.enable_auto_tone = true;
+    recipe.auto_features.target_luminance = target_luminance;
+    recipe.auto_features.auto_exposure = Some(result.exposure);
+    recipe.auto_features.auto_contrast = Some(result.contrast);
+    recipe.auto_features.auto_whites = Some(result.whites);
+    recipe.auto_features.auto_blacks = Some(result.blacks);
+    recipe.auto_features.auto_highlights = Some(result.highlights);
+    recipe.auto_features.auto_shadows = Some(result.shadows);
+    recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
+        algorithm: "tone-rgba8-rec709".into(),
+        version: "1".into(),
+        input_fingerprint,
+        extras: BTreeMap::new(),
+    });
+    Ok(())
+}
+
+/// GUI-GEN-GRANULAR-10: explicit per-module regeneration of the 1.0 derivable
+/// AI/analysis values (F-100). See [`RegenerateArgs`] and
+/// `feature/platform/cli-gui-wasm.md` § F-100.
+///
+/// The three modules are handled in dependency order (masks, auto-tone,
+/// matching) and each one is independent: a single-module call never touches
+/// another module's persisted state, the collective call only touches
+/// stale/missing values, and nothing is recomputed without an explicit request.
+fn regenerate(args: RegenerateArgs) -> Result<(), CliError> {
+    if !args.target_luminance.is_finite() || !(0.0..=1.0).contains(&args.target_luminance) {
+        return Err(CliError::Message(
+            "invalid target-luminance: must be finite and in 0..=1".into(),
+        ));
+    }
+    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
+    let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
+    let wb = raw_metadata.as_ref().and_then(|m| {
+        let sanitized = sanitize_camera_white_balance(m.camera_white_balance);
+        if sanitized.is_none() {
+            eprintln!(
+                "lumina: warning: As-Shot white balance invalid {:?} for `{}` — dropping to None (recipe WB remains, image renders)",
+                m.camera_white_balance,
+                args.input.display()
+            );
+        }
+        sanitized
+    });
+    #[cfg(feature = "lensfun")]
+    let (_lensfun_db, lensfun_corrector) = build_lensfun_corrector(raw_metadata.as_ref())
+        .map(|(db, corrector)| (Some(db), Some(corrector)))
+        .unwrap_or((None, None));
+    let sidecar_path = sidecar_path_for(&args.input);
+    // Current source identity, reused for a freshly created sidecar and for
+    // the mask stale pre-filter (N1).
+    let current_identity = source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?;
+    let mut document = match load_sidecar(&sidecar_path) {
+        Ok(document) => document,
+        Err(lumina_sidecar::SidecarError::Missing(_)) => {
+            SidecarDocument::new(current_identity.clone(), "raster-mvp-1")
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let copy_index = args
+        .virtual_copy
+        .as_deref()
+        .map(|id| {
+            document
+                .virtual_copies
+                .iter()
+                .position(|copy| copy.id == id)
+                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let copy_id = document.virtual_copies[copy_index].id.clone();
+    // `all` = collective default (no `--module`); otherwise only the named
+    // modules run, and those are forced (the explicit user request).
+    let collective = args.modules.is_empty();
+    let selected = |module: RegenerateModule| args.modules.contains(&module);
+    let wants = |module: RegenerateModule| collective || selected(module);
+    let forced = |module: RegenerateModule| selected(module);
+    let mut changed = false;
+    let mut report: Vec<serde_json::Value> = Vec::new();
+
+    // ---- Module `masks` ----
+    if wants(RegenerateModule::Masks) {
+        let root = args.input.parent().unwrap_or_else(|| Path::new("."));
+        let mask_ids: Vec<String> = document.virtual_copies[copy_index]
+            .mask_library
+            .iter()
+            // N2: deterministic range prompts carry no artifact and are always
+            // reproducible from pixels — they are excluded even by the forced
+            // `--module masks` path (a refresh request for them is meaningless).
+            .filter(|mask| {
+                matches!(mask.operation, MaskOperation::Source)
+                    && !lumina_core::range_masks::is_range_prompt(mask.prompt.as_ref())
+            })
+            .filter(|mask| {
+                forced(RegenerateModule::Masks)
+                    || mask_needs_regeneration(root, &current_identity, mask)
+            })
+            .map(|mask| mask.id.clone())
+            .collect();
+        if mask_ids.is_empty() {
+            report.push(serde_json::json!({
+                "module": RegenerateModule::Masks.as_str(),
+                "action": "skipped",
+                "reason": if forced(RegenerateModule::Masks) {
+                    "no source masks"
+                } else {
+                    "fresh"
+                },
+            }));
+        } else {
+            let mut masks_changed = false;
+            for mask in document.virtual_copies[copy_index].mask_library.iter_mut() {
+                if mask_ids.contains(&mask.id) && mask.status != MaskStatus::Pending {
+                    // An explicit, persisted refresh request. The actual
+                    // re-inference is consumed by the next render; the zdata
+                    // artifact persistence is the documented F-082 open item,
+                    // so no stub matte is ever written as a valid artifact.
+                    mask.status = MaskStatus::Pending;
+                    masks_changed = true;
+                }
+            }
+            // M2: an explicit `--module masks` additionally arms the copy-wide
+            // ONE-SHOT refresh in the recipe so the next render's decision layer
+            // re-infers the complete module with `refresh == true` and does NOT
+            // report the deliberately requested work as an implicit
+            // re-inference. `process_selected` consumes and removes the flag
+            // after the successful render (REVIEW-CLI-MASKFLAG-1).
+            //
+            // M2b: the collective default deliberately does NOT arm it. The
+            // copy-wide flag overrides the persisted-valid fastpath for *every*
+            // reachable source mask, so arming it here would also re-infer fresh
+            // `Valid` masks — contradicting "nur veraltete oder fehlende" and
+            // the GUI (`regenerate_stale` marks only stale masks). The `Pending`
+            // markers set above are the per-mask refresh request; the decision
+            // layer treats a persisted `Pending` marker as explicitly requested
+            // and stays quiet for it.
+            if forced(RegenerateModule::Masks) {
+                let options = &mut document.virtual_copies[copy_index].recipe.options;
+                if options.get("update_masks").map(String::as_str) != Some("true") {
+                    options.insert("update_masks".into(), "true".into());
+                    masks_changed = true;
+                }
+            }
+            // An already-outstanding `Pending` request is idempotent: the
+            // sidecar is not rewritten when nothing transitions.
+            changed |= masks_changed;
+            report.push(serde_json::json!({
+                "module": RegenerateModule::Masks.as_str(),
+                "action": "requested",
+                "reason": if forced(RegenerateModule::Masks) { "explicit" } else { "stale-or-missing" },
+                "masks": mask_ids,
+            }));
+        }
+    }
+
+    // ---- Module `auto-tone` ----
+    if wants(RegenerateModule::AutoTone) {
+        let current = &document.virtual_copies[copy_index].recipe.auto_features;
+        let config = AutoToneConfig {
+            target_luminance: args.target_luminance,
+            ..Default::default()
+        };
+        let fingerprint = tone_fingerprint(&frame, config);
+        // Fresh = enabled AND the *full* AUTO-TONE-2 contract is persisted:
+        // all six sliders, all six `auto_features` mirrors and the analysis
+        // fingerprint. A recipe that only carries the historic
+        // `process --auto-tone` two-slider subset (exposure/contrast without
+        // the end/balance mirrors) is therefore stale and regenerated by the
+        // collective default.
+        let adjustments = &document.virtual_copies[copy_index].recipe.adjustments;
+        let fresh = current.enable_auto_tone
+            && current.auto_exposure.is_some()
+            && current.auto_contrast.is_some()
+            && current.auto_whites.is_some()
+            && current.auto_blacks.is_some()
+            && current.auto_highlights.is_some()
+            && current.auto_shadows.is_some()
+            && AUTO_TONE_ADJUSTMENT_KEYS
+                .iter()
+                .all(|key| adjustments.contains_key(*key))
+            && current.analysis_fingerprint.as_ref().is_some_and(|f| {
+                f.algorithm == "tone-rgba8-rec709" && f.input_fingerprint == fingerprint
+            });
+        if fresh && !forced(RegenerateModule::AutoTone) {
+            report.push(serde_json::json!({
+                "module": RegenerateModule::AutoTone.as_str(),
+                "action": "skipped",
+                "reason": "fresh",
+            }));
+        } else if !current.enable_auto_tone && !forced(RegenerateModule::AutoTone) {
+            // Deliberately disabled by the user: the collective default never
+            // turns it on behind their back.
+            report.push(serde_json::json!({
+                "module": RegenerateModule::AutoTone.as_str(),
+                "action": "skipped",
+                "reason": "not-enabled",
+            }));
+        } else {
+            let mut recipe = document.virtual_copies[copy_index].recipe.clone();
+            apply_auto_tone_result(&mut recipe, &frame, args.target_luminance)?;
+            document.virtual_copies[copy_index].recipe = recipe;
+            changed = true;
+            report.push(serde_json::json!({
+                "module": RegenerateModule::AutoTone.as_str(),
+                "action": "generated",
+                "reason": if forced(RegenerateModule::AutoTone) { "explicit" } else { "stale-or-missing" },
+            }));
+        }
+    }
+
+    // ---- Module `matching` ----
+    if wants(RegenerateModule::Matching) {
+        let current = &document.virtual_copies[copy_index].recipe.auto_features;
+        let fresh = current.match_total_exposure && current.matched_exposure.is_some();
+        if fresh && !forced(RegenerateModule::Matching) {
+            report.push(serde_json::json!({
+                "module": RegenerateModule::Matching.as_str(),
+                "action": "skipped",
+                "reason": "fresh",
+            }));
+        } else if !current.match_total_exposure && !forced(RegenerateModule::Matching) {
+            report.push(serde_json::json!({
+                "module": RegenerateModule::Matching.as_str(),
+                "action": "skipped",
+                "reason": "not-enabled",
+            }));
+        } else {
+            let mut recipe = document.virtual_copies[copy_index].recipe.clone();
+            let zdata_path = zdata_path_for(&args.input);
+            let mut ignored_warnings = Vec::new();
+            // Deliberately no mask decision layer here: regenerating the
+            // matching value must not re-infer masks (that is the `masks`
+            // module). All persisted planes are handed to the render, but
+            // `MaskContext`/`render_frame` evaluates only `MaskStatus::Valid`
+            // definitions, so stale/missing masks are skipped (with a
+            // `MaskPolicy::Warn` note) instead of being recomputed.
+            let loaded_planes =
+                load_persisted_mask_planes(&document, &zdata_path, &mut ignored_warnings);
+            let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
+            let copies = document.virtual_copies.clone();
+            let render_ctx = RenderContext {
+                recipe: &recipe,
+                camera_white_balance: wb,
+                source_actions: &source_actions,
+                masks: Some(MaskContext {
+                    copies: &copies,
+                    active_copy_id: &copy_id,
+                    planes: loaded_planes,
+                    policy: MaskPolicy::Warn,
+                }),
+                depth: None,
+                #[cfg(feature = "lensfun")]
+                lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
+                #[cfg(not(feature = "lensfun"))]
+                lensfun: None,
+            };
+            let output = render_standard_with_generative(
+                &frame,
+                &recipe,
+                &render_ctx,
+                GenerativeCanvasInput::default(),
+            )?;
+            let mask_planes: Vec<MaskPlane> = output
+                .mask_layers
+                .iter()
+                .map(|layer| layer.plane.clone())
+                .collect();
+            let matching =
+                match_total_exposure_masked(&output.frame, args.target_luminance, &mask_planes)?;
+            recipe.auto_features.match_total_exposure = true;
+            recipe.auto_features.target_luminance = args.target_luminance;
+            recipe.auto_features.matched_exposure = Some(matching);
+            let total_exposure = (recipe.adjustments.get("exposure").copied().unwrap_or(0.0)
+                + matching)
+                .clamp(-10.0, 10.0);
+            recipe.adjustments.insert("exposure".into(), total_exposure);
+            document.virtual_copies[copy_index].recipe = recipe;
+            changed = true;
+            report.push(serde_json::json!({
+                "module": RegenerateModule::Matching.as_str(),
+                "action": "generated",
+                "reason": if forced(RegenerateModule::Matching) { "explicit" } else { "stale-or-missing" },
+                "matched_exposure": matching,
+            }));
+        }
+    }
+
+    if changed {
+        document.validate()?;
+        save_sidecar(&sidecar_path, &document)?;
+    }
+    let text = report
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}={}",
+                entry["module"].as_str().unwrap_or("?"),
+                entry["action"].as_str().unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    info!(
+        "regenerate: copy `{copy_id}` {} [{text}]",
+        if changed { "updated" } else { "unchanged" }
+    );
+    emit(
+        args.json,
+        serde_json::json!({
+            "command": "regenerate",
+            "input": args.input,
+            "virtual_copy": copy_id,
+            "status": if changed { "updated" } else { "unchanged" },
+            "modules": report,
+        }),
+        &format!("regenerated: {text}"),
+    )
+}
+
 fn mask(args: MaskArgs) -> Result<(), CliError> {
     let path = sidecar_path_for(&args.input);
     let mut document = load_sidecar(&path)?;
@@ -2139,6 +2587,15 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
             for mask in &mut copy.mask_library {
                 mask.status = lumina_sidecar::MaskStatus::Pending;
             }
+            // GUI-GEN-GRANULAR-10 / M2: arm the ONE-SHOT explicit refresh in
+            // the recipe as well. Without it the next render would re-infer the
+            // pending masks with `refresh == false` and report the deliberately
+            // requested work as an implicit re-inference. `process_selected`
+            // consumes and removes the flag after the successful render
+            // (REVIEW-CLI-MASKFLAG-1).
+            copy.recipe
+                .options
+                .insert("update_masks".into(), "true".into());
         }
         info!("mask: marked masks pending (update_masks)");
         actions.push("update-masks".into());
@@ -12417,8 +12874,9 @@ mod tests {
         fs::write(&input, &bytes).unwrap();
         write_sidecar_with_valid_layer(&input, &bytes, &frame);
         // No zdata file on purpose. With the inference model wired (F-048), the
-        // missing artifact is (re-)inferred rather than reported as a warning;
-        // the render succeeds with a produced mask.
+        // missing artifact is (re-)inferred; the render succeeds with a
+        // produced mask. F-100/GUI-GEN-GRANULAR-10: that implicit re-inference
+        // is surfaced loudly (it was previously silent).
 
         let mut warnings = Vec::new();
         process_selected(
@@ -12442,7 +12900,438 @@ mod tests {
         )
         .unwrap();
         assert!(output.is_file());
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1, "implicit re-inference must be loud");
+        assert!(warnings[0].contains("re-inferred"), "{warnings:?}");
+    }
+
+    // ---- GUI-GEN-GRANULAR-10 (F-100): explicit per-module regeneration ----
+
+    /// 4x4 gray-gradient PNG used by the regenerate tests (non-uniform so
+    /// Auto-Tone and Exposure Matching produce real, non-identity values).
+    fn regenerate_input(directory: &Path, name: &str) -> (PathBuf, ImageFrame) {
+        let input = directory.join(name);
+        let mut pixels = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let value = ((x * 40 + y * 20) % 256) as u8;
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let frame = ImageFrame::new(4, 4, pixels).unwrap();
+        fs::write(&input, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
+        (input, frame)
+    }
+
+    fn regenerate_args(input: &Path, modules: Vec<RegenerateModule>) -> RegenerateArgs {
+        RegenerateArgs {
+            input: input.to_path_buf(),
+            virtual_copy: None,
+            modules,
+            target_luminance: 0.5,
+            json: true,
+        }
+    }
+
+    /// Explicit `--module auto-tone` writes the full six-slider contract and
+    /// leaves the mask artifacts and the matching value untouched.
+    #[test]
+    fn regenerate_auto_tone_module_is_independent_and_persisted() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-auto-tone.png");
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        let sidecar_path = sidecar_path_for(&input);
+        let before = load_sidecar(&sidecar_path).unwrap();
+
+        regenerate(regenerate_args(&input, vec![RegenerateModule::AutoTone])).unwrap();
+
+        let after = load_sidecar(&sidecar_path).unwrap();
+        let auto = &after.virtual_copies[0].recipe.auto_features;
+        assert!(auto.enable_auto_tone);
+        assert!(auto.auto_exposure.is_some());
+        assert!(auto.auto_whites.is_some());
+        assert!(auto.analysis_fingerprint.is_some());
+        for key in [
+            "exposure",
+            "contrast",
+            "whites",
+            "blacks",
+            "highlights",
+            "shadows",
+        ] {
+            assert!(
+                after.virtual_copies[0].recipe.adjustments.contains_key(key),
+                "Auto-Tone must persist the `{key}` slider"
+            );
+        }
+        // Only the auto-tone module ran: masks keep their exact definition and
+        // no matching value appears.
+        assert_eq!(
+            after.virtual_copies[0].mask_library,
+            before.virtual_copies[0].mask_library
+        );
+        assert!(!auto.match_total_exposure);
+    }
+
+    /// Explicit `--module matching` persists `matched_exposure` and never runs
+    /// Auto-Tone or touches the masks.
+    #[test]
+    fn regenerate_matching_module_persists_matched_exposure_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-matching.png");
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        let before = load_sidecar(&sidecar_path_for(&input)).unwrap();
+
+        regenerate(regenerate_args(&input, vec![RegenerateModule::Matching])).unwrap();
+
+        let after = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        let auto = &after.virtual_copies[0].recipe.auto_features;
+        assert!(auto.match_total_exposure);
+        assert!(auto.matched_exposure.is_some());
+        assert!(!auto.enable_auto_tone, "matching must not run Auto-Tone");
+        assert_eq!(
+            after.virtual_copies[0].mask_library,
+            before.virtual_copies[0].mask_library
+        );
+    }
+
+    /// Explicit `--module masks` marks the stale mask `Pending` **and** arms
+    /// the one-shot `update_masks` refresh so the next render recognizes the
+    /// work as deliberately requested (M2). Everything else stays unchanged.
+    #[test]
+    fn regenerate_masks_module_arms_the_explicit_refresh() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-masks.png");
+        let bytes = fs::read(&input).unwrap();
+        let before = write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // No `.lumina.zdata` artifact exists → the persisted mask is missing.
+        assert_eq!(
+            before.virtual_copies[0].mask_library[0].status,
+            MaskStatus::Valid
+        );
+
+        regenerate(regenerate_args(&input, vec![RegenerateModule::Masks])).unwrap();
+
+        let after = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            after.virtual_copies[0].mask_library[0].status,
+            MaskStatus::Pending
+        );
+        // The recipe differs from `before` *only* by the armed one-shot flag.
+        let mut expected = before.virtual_copies[0].recipe.clone();
+        expected
+            .options
+            .insert("update_masks".into(), "true".into());
+        assert_eq!(after.virtual_copies[0].recipe, expected);
+    }
+
+    /// M2: an explicit `regenerate --module masks` refresh is not reported as
+    /// an implicit re-inference by the following render.
+    #[test]
+    fn explicit_mask_refresh_render_has_no_implicit_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-explicit.png");
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // No zdata → the persisted mask is missing until a refresh runs.
+        regenerate(regenerate_args(&input, vec![RegenerateModule::Masks])).unwrap();
+
+        let output = directory.path().join("out.png");
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output,
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+                write_metadata: false,
+            },
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "an explicit refresh must not warn as implicit: {warnings:?}"
+        );
+    }
+
+    /// M2: the same holds for the `mask --update-masks` path (it must arm the
+    /// one-shot flag alongside the `Pending` statuses).
+    #[test]
+    fn mask_update_masks_render_has_no_implicit_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "mask-explicit.png");
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        let mut args = mask_args(input.clone());
+        args.update_masks = true;
+        mask(args).unwrap();
+
+        let output = directory.path().join("out.png");
+        let mut warnings = Vec::new();
+        process_selected(
+            ProcessArgs {
+                input: input.clone(),
+                output,
+                preset: None,
+                exposure: None,
+                contrast: None,
+                highlights: None,
+                shadows: None,
+                auto_tone: false,
+                match_total_exposure: false,
+                target_luminance: 0.5,
+                write_metadata: false,
+            },
+            90,
+            None,
+            MaskPolicy::Warn,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "an explicit `mask --update-masks` must not warn as implicit: {warnings:?}"
+        );
+    }
+
+    /// The collective default (no `--module`) regenerates an enabled
+    /// stale Auto-Tone value.
+    #[test]
+    fn regenerate_collective_generates_enabled_stale_auto_tone() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-collective.png");
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        let sidecar_path = sidecar_path_for(&input);
+        let mut document = load_sidecar(&sidecar_path).unwrap();
+        // Enabled but without values/fingerprint → stale/missing.
+        document.virtual_copies[0]
+            .recipe
+            .auto_features
+            .enable_auto_tone = true;
+        save_sidecar(&sidecar_path, &document).unwrap();
+
+        regenerate(regenerate_args(&input, Vec::new())).unwrap();
+
+        let after = load_sidecar(&sidecar_path).unwrap();
+        let auto = &after.virtual_copies[0].recipe.auto_features;
+        assert!(auto.enable_auto_tone);
+        assert!(auto.auto_exposure.is_some());
+        assert!(auto.analysis_fingerprint.is_some());
+    }
+
+    /// N2: even the forced `--module masks` excludes deterministic range masks
+    /// (they carry no artifact and are always reproducible from pixels).
+    #[test]
+    fn regenerate_masks_module_excludes_range_masks_when_forced() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _frame) = regenerate_input(directory.path(), "regen-range.png");
+        import_file(ImportArgs {
+            input: input.clone(),
+            json: true,
+            migrate: false,
+        })
+        .unwrap();
+        let mut add = mask_args(input.clone());
+        add.add_luminance_range = true;
+        add.name = Some("Bright".into());
+        add.range_min = Some(0.0);
+        add.range_max = Some(1.0);
+        mask(add).unwrap();
+
+        regenerate(regenerate_args(&input, vec![RegenerateModule::Masks])).unwrap();
+
+        let after = load_sidecar(&sidecar_path_for(&input)).unwrap();
+        assert_eq!(
+            after.virtual_copies[0].mask_library[0].status,
+            MaskStatus::Valid,
+            "a range mask must never be marked pending"
+        );
+        assert!(
+            !after.virtual_copies[0]
+                .recipe
+                .options
+                .contains_key("update_masks"),
+            "no refresh may be armed when only range masks exist"
+        );
+    }
+
+    /// M1: a two-slider Auto-Tone artifact (the historic
+    /// `process --auto-tone` subset with a matching fingerprint) is treated as
+    /// stale by the collective default and regenerated to the full contract.
+    #[test]
+    fn regenerate_collective_completes_two_slider_auto_tone_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-two-slider.png");
+        let bytes = fs::read(&input).unwrap();
+        write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        let sidecar_path = sidecar_path_for(&input);
+        let mut document = load_sidecar(&sidecar_path).unwrap();
+        let config = AutoToneConfig {
+            target_luminance: 0.5,
+            ..Default::default()
+        };
+        let input_fingerprint = tone_fingerprint(&frame, config);
+        {
+            let auto = &mut document.virtual_copies[0].recipe.auto_features;
+            auto.enable_auto_tone = true;
+            auto.auto_exposure = Some(0.1);
+            auto.auto_contrast = Some(0.1);
+            auto.analysis_fingerprint = Some(AnalysisFingerprint {
+                algorithm: "tone-rgba8-rec709".into(),
+                version: "1".into(),
+                input_fingerprint,
+                extras: BTreeMap::new(),
+            });
+        }
+        document.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("exposure".into(), 0.1);
+        document.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("contrast".into(), 0.1);
+        save_sidecar(&sidecar_path, &document).unwrap();
+
+        regenerate(regenerate_args(&input, Vec::new())).unwrap();
+
+        let after = load_sidecar(&sidecar_path).unwrap();
+        let auto = &after.virtual_copies[0].recipe.auto_features;
+        assert!(
+            auto.auto_whites.is_some() && auto.auto_blacks.is_some(),
+            "the two-slider artifact must be completed to the full contract"
+        );
+        for key in ["whites", "blacks", "highlights", "shadows"] {
+            assert!(
+                after.virtual_copies[0].recipe.adjustments.contains_key(key),
+                "missing regenerated slider `{key}`"
+            );
+        }
+    }
+
+    /// The collective default is a pure read (byte-identical sidecar) when no
+    /// module is stale or missing — no implicit recomputation.
+    #[test]
+    fn regenerate_collective_is_a_noop_when_nothing_is_stale() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _frame) = regenerate_input(directory.path(), "regen-fresh.png");
+        import_file(ImportArgs {
+            input: input.clone(),
+            json: true,
+            migrate: false,
+        })
+        .unwrap();
+        // A deterministic range mask never needs an artifact and is never
+        // stale; Auto-Tone/Matching stay disabled.
+        let mut add = mask_args(input.clone());
+        add.add_luminance_range = true;
+        add.name = Some("Bright".into());
+        add.range_min = Some(0.0);
+        add.range_max = Some(1.0);
+        mask(add).unwrap();
+        let sidecar_path = sidecar_path_for(&input);
+        let before = fs::read(&sidecar_path).unwrap();
+
+        regenerate(regenerate_args(&input, Vec::new())).unwrap();
+
+        assert_eq!(
+            fs::read(&sidecar_path).unwrap(),
+            before,
+            "the collective default must not rewrite a fully fresh sidecar"
+        );
+    }
+
+    /// M2b + N1: the collective default re-infers **only** the stale/missing
+    /// source masks. A fresh `Valid` mask (matching source hash, available
+    /// artifact) stays untouched on the persisted-valid fastpath, and the
+    /// copy-wide `update_masks` switch is never armed — otherwise the next
+    /// render would re-infer the fresh mask too. The second mask is made stale
+    /// purely by a changed source content hash (N1 branch), so the test pins
+    /// that branch as well.
+    #[test]
+    fn regenerate_collective_marks_only_stale_masks() {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, frame) = regenerate_input(directory.path(), "regen-partial.png");
+        let bytes = fs::read(&input).unwrap();
+        let mut document = write_sidecar_with_valid_layer(&input, &bytes, &frame);
+        // A second source mask, identical but with an outdated source hash →
+        // stale only through the N1 hash branch.
+        let mut stale = document.virtual_copies[0].mask_library[0].clone();
+        stale.id = "stale-subject".into();
+        stale.name = "stale-subject".into();
+        stale.source_fingerprint.content_hash = "blake3:old-source".into();
+        document.virtual_copies[0].mask_library.push(stale.clone());
+        let copy_id = document.virtual_copies[0].id.clone();
+        document.virtual_copies[0].mask_layers.push(MaskLayer {
+            id: "layer-stale".into(),
+            mask: MaskReference {
+                copy_id,
+                mask_id: stale.id.clone(),
+                extras: BTreeMap::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: BTreeMap::new(),
+            visible: true,
+        });
+        let sidecar_path = sidecar_path_for(&input);
+        save_sidecar(&sidecar_path, &document).unwrap();
+        // Materialize the artifact both definitions reference so the fresh mask
+        // counts as available (the stale one is stale regardless).
+        let tile = lumina_sidecar::MaskTile {
+            mask_id: zdata_mask_tile_id("vc-original", "subject"),
+            tile_x: 0,
+            tile_y: 0,
+            width: frame.width,
+            height: frame.height,
+            values: vec![0; (frame.width * frame.height) as usize],
+        };
+        let container = lumina_sidecar::ZDataContainer::new(vec![tile]).unwrap();
+        lumina_sidecar::save_zdata(&directory.path().join("x.zdata"), &container).unwrap();
+
+        regenerate(regenerate_args(&input, Vec::new())).unwrap();
+
+        let after = load_sidecar(&sidecar_path).unwrap();
+        let status = |id: &str| {
+            after.virtual_copies[0]
+                .mask_library
+                .iter()
+                .find(|mask| mask.id == id)
+                .unwrap()
+                .status
+                .clone()
+        };
+        assert_eq!(
+            status("subject"),
+            MaskStatus::Valid,
+            "a fresh Valid mask must stay untouched by the collective default"
+        );
+        assert_eq!(
+            status("stale-subject"),
+            MaskStatus::Pending,
+            "a mask with a changed source hash must be marked for refresh (N1)"
+        );
+        assert!(
+            !after.virtual_copies[0]
+                .recipe
+                .options
+                .contains_key("update_masks"),
+            "the collective default must not arm the copy-wide refresh switch (M2b)"
+        );
     }
 
     // ---- Review fixes (2026-08 wave): one-shot mask flags, per-copy zdata

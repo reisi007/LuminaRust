@@ -112,6 +112,13 @@ pub struct MaskLoadContext<'a> {
     /// Used to detect a model change against the persisted mask identity.
     pub model_identity: Option<&'a ModelIdentity>,
     /// Force re-inference even when a confirmably valid persisted mask exists.
+    ///
+    /// This is the *copy-wide* one-shot switch (`update_masks`, armed by
+    /// `develop`/`export`/`batch --update-masks`, `mask --update-masks` and the
+    /// forced `regenerate --module masks`). It overrides the persisted-valid
+    /// fastpath for every reachable source mask. A persisted per-mask
+    /// [`MaskStatus::Pending`] marker is a *narrower* explicit request: it
+    /// re-infers only that mask and is likewise not reported as implicit.
     pub refresh: bool,
     /// How the subsequent render stage treats unresolved layers. The
     /// decision layer itself always fails hard when no model **and** no cache
@@ -264,6 +271,23 @@ pub fn resolve_mask_planes(
                 mask_id: key.1.clone(),
                 from: MaskResolvedFrom::ReInferred,
             });
+            // F-100/GUI-GEN-GRANULAR-10: an *implicit* re-inference (the
+            // persisted artifact was missing/stale, no explicit refresh was
+            // requested) is never silent — surface it loudly so no module is
+            // recomputed behind the user's back. An explicit refresh is either
+            // the copy-wide `refresh` switch (`--update-masks` /
+            // `regenerate --module masks`) or a persisted per-mask `Pending`
+            // marker; the collective `regenerate` default uses the latter so it
+            // re-infers exactly the stale/missing masks it marked and stays
+            // quiet for that deliberately requested work.
+            if !ctx.refresh && definition.status != MaskStatus::Pending {
+                warnings.push(format!(
+                    "mask `{}/{}` was re-inferred during the render because its persisted \
+                     artifact was missing or stale; persisted artifacts of other modules are \
+                     untouched (use the explicit regeneration action to refresh deliberately)",
+                    key.0, key.1
+                ));
+            }
             continue;
         }
 
@@ -886,6 +910,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        // No explicit request (no `refresh`, no `Pending` marker): the
+        // re-inference stays loud.
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("re-inferred"));
+    }
+
+    /// F-100/GUI-GEN-GRANULAR-10 (M2b): a persisted per-mask `Pending` marker is
+    /// itself an explicit refresh request — the collective `regenerate` default
+    /// marks exactly the stale/missing masks this way (without the copy-wide
+    /// `update_masks` switch). Its re-inference must stay quiet, unlike the
+    /// implicit stale re-inference above.
+    #[test]
+    fn pending_mask_reinference_is_not_reported_as_implicit() {
+        let definition = source_definition(
+            "vc",
+            "subject",
+            MaskStatus::Pending,
+            "src",
+            model_identity(),
+            decode_context(),
+            true,
+        );
+        let result = resolve_one(
+            definition,
+            Some(PERSISTED_VALUE),
+            Some(&FakeInference {
+                available: true,
+                value: INFERRED_VALUE,
+            }),
+            Some(model_identity()),
+            false,
+            "src",
+        )
+        .unwrap();
+        assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
+        assert!(
+            result.warnings.is_empty(),
+            "an explicitly requested (Pending) re-inference must be quiet: {:?}",
+            result.warnings
+        );
     }
 
     /// Build a [`ModelIdentity`] whose `extras` optionally carries the
@@ -1161,7 +1225,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.outcomes[0].from, MaskResolvedFrom::ReInferred);
         assert!(!result.model_unavailable);
-        assert!(result.warnings.is_empty());
+        // F-100/GUI-GEN-GRANULAR-10: the re-inference is surfaced loudly.
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("re-inferred"));
     }
 
     #[test]

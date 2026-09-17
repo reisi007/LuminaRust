@@ -327,6 +327,11 @@ pub enum Str {
     ExplicitRecalcRequested,
     IdleQueueFull,
     RecalcRequested,
+    /// GUI-GEN-GRANULAR-10 (F-100): collective regeneration action and its
+    /// outcomes.
+    RegenerateStale,
+    NothingStale,
+    RegeneratedStale,
     ChangePending,
     PreviewCurrent,
     Error,
@@ -1040,6 +1045,9 @@ impl Str {
             Str::ExplicitRecalcRequested => "Explicit recalculation requested",
             Str::IdleQueueFull => "Idle queue is full",
             Str::RecalcRequested => "Recalculation requested; job control required",
+            Str::RegenerateStale => "Regenerate Stale / Missing",
+            Str::NothingStale => "Nothing stale or missing",
+            Str::RegeneratedStale => "Regenerated: {}",
             Str::ChangePending => "Change pending",
             Str::PreviewCurrent => "Preview current",
             Str::Error => "Error",
