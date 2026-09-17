@@ -491,10 +491,30 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Release-Passthrough-Test existiert). Instrumentiert ist die F-100-Aktionsfläche
   (alle Shortcut-Aktionen, die in diesem Slice ergänzten Buttons sowie
   Save/Reset/Render/Export); `set_mask_tool` und `set_spot_tool` sind bereits
-  als eigene `GuiAction`s instrumentiert. **Noch nicht instrumentiert** sind die
-  übrigen Sektions-Schaltflächen jenseits der 34 `GuiAction`s (z. B. Geometrie-,
-  Metadaten- und Masken-Layer-Aktionen); sie folgen mechanisch nach demselben
-  Muster als eigene offene Folgeaufgabe (`GUI-INSTRDBG-17b` in `Agents.todo.md`).
+  als eigene `GuiAction`s instrumentiert.
+  **GUI-INSTRDBG-17b (implementiert, Verifizierung offen):** Über die 34
+  Ausgangs-Aktionen hinaus sind 32 weitere user-sichtbare Schaltflächen aus
+  Library-Compare, Geometrie, Masken-Layer und Metadaten instrumentiert
+  (insgesamt 66 `GuiAction`s) — `toggle_compare_mode` (`C`/`N`),
+  `clear_crop`/`set_crop_aspect`/`rotate_step`/`set_geometry_mirror`/
+  `analyze_upright`/`set_upright_enabled`/`clear_upright`,
+  `create_mask`/`select_mask`/`set_mask_visible`/`set_show_mask_overlay`/
+  `set_overlay_color`/`create_ai_mask`/`create_luminance_range_mask`/
+  `create_color_range_mask`/`combine_masks`/`duplicate_mask`/`set_overlay_mode`/
+  `set_pin_visibility`/`set_solo_mode`/`set_mask_inverted`/
+  `offer_mask_recalculation` sowie
+  `add_keyword`/`remove_keyword`/`commit_metadata_draft`/
+  `clear_metadata_draft`/`copy_metadata_draft`/`paste_metadata_draft`/
+  `clear_metadata_history`/`apply_meta_preset`/`sync_metadata`. Der
+  Instrumentierungs-Kern (Namenstabelle, RAII-Timer, Makro) ist dazu in
+  `crates/lumina-gui/src/gui_action.rs` extrahiert (File-Size-Ratchet), die
+  Rest-Sektions-Log-Tests liegen in `crates/lumina-gui/src/tests/instrdbg.rs`
+  (der Audit liegt in `lib.rs`: `f100_action_button` ohne `_`-Arm).
+  **Noch nicht instrumentiert** sind die übrigen Sektions-Schaltflächen jenseits
+  dieser 66 (`GuiAction`s) (z. B. Optics-, Detail-/Effects- und
+  Spot-Sektionsbuttons sowie Tone-Curve-/Color-Sektion); sie folgen mechanisch
+  nach demselben Muster als eigene offene Folgeaufgabe (`GUI-INSTRDBG-17b` in
+  `Agents.todo.md` bleibt dafür offen).
 - **Routing-Badge-Befund (GUI-ROUTING-N6, F-103-N6-Runde 1, 2026-09-17):**
   Der gelbe Badge im manuellen Test (`Render routed to CPU: …`) wurde
   reproduziert. Für die committeten RAW-Fixtures mit einem harmlosen

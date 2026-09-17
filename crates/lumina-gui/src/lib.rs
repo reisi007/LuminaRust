@@ -12,6 +12,10 @@
 // controller with background threads + native file IO) live in their own
 // modules without platform gates: the GUI is native-only
 // (`feature/platform/cli-gui-wasm.md` § WASM-ENTFERNT).
+// GUI-INSTRDBG-17/-17b: debug action instrumentation (name table, RAII timer,
+// `instrument_gui_action!`). `#[macro_use]` re-exports the macro crate-wide.
+#[macro_use]
+mod gui_action;
 // LRPAR-G14-DENOISE-IMPL-20 (GUI slice): Detail-section denoise controls +
 // status badge; the stage itself runs in the shared core pipeline.
 mod denoise_gui;
@@ -39,6 +43,17 @@ mod viewport;
 // no window/GPU renderer.
 #[cfg(test)]
 mod matrix;
+
+// GUI-INSTRDBG-17/-17b: re-exported instrumentation API (moved to `gui_action`).
+#[cfg(debug_assertions)]
+pub use gui_action::gui_action_log_line;
+#[cfg(all(debug_assertions, test))]
+pub(crate) use gui_action::take_gui_action_log;
+#[cfg(debug_assertions)]
+pub(crate) use gui_action::GuiActionTimer;
+pub use gui_action::{
+    GuiAction, ALL_GUI_ACTIONS, GPU_ROUTE_CPU_FALLBACK, GPU_ROUTE_NA, GPU_ROUTE_PRESENT,
+};
 
 use eframe::egui;
 use lumina_core::cache::disk::DiskFolderCache;
@@ -763,246 +778,10 @@ pub fn softproof_for_key(key: egui::Key, ctrl_or_command: bool, alt: bool, shift
     matches!(key, egui::Key::S) && !ctrl_or_command && !alt && !shift
 }
 
-// ---------------------------------------------------------------------------
-// GUI-INSTRDBG-17 (User-Vorgabe 2026-09-17): debug instrumentation of GUI
-// actions. Every user-level command emits exactly one line in debug builds:
-//
-//     action=<name> duration_ms=<n> gpu_route=<present|cpu-fallback|n/a>
-//
-// The line is emitted by the RAII guard [`GuiActionTimer`] when the outermost
-// instrumented action scope ends. Nested instrumentation (an action calling
-// another instrumented command) is suppressed, so exactly one line per
-// user-visible action is logged — never one per internal sub-step. In release
-// builds the timer, the log and (via dead-code elimination) the guard are
-// compiled out: no logging, no timers, no behaviour difference.
-// ---------------------------------------------------------------------------
-
-/// GPU-route label: the frame used the VRAM present path (a GPU context is
-/// bound and no route fallback is recorded).
-pub const GPU_ROUTE_PRESENT: &str = "present";
-/// GPU-route label: a GPU context is bound but the preview was routed to the
-/// CPU (the visible `gpu_route_fallback` state).
-pub const GPU_ROUTE_CPU_FALLBACK: &str = "cpu-fallback";
-/// GPU-route label: no GPU context is bound (or the `gpu` feature is off).
-pub const GPU_ROUTE_NA: &str = "n/a";
-
-/// Central action-name table for the debug instrumentation (GUI-INSTRDBG-17).
-///
-/// Action names are snake_case and live here exactly once, so the button/
-/// shortcut call sites carry no free-form literals. The table is the single
-/// source of truth for both the log line and the headless format test.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuiAction {
-    ToggleBeforeAfter,
-    ToggleSplitView,
-    ToggleCropMode,
-    ToggleClipping,
-    ToggleSoftproof,
-    ToggleOriginalHistogram,
-    ToggleLightsOut,
-    TogglePanelsHidden,
-    ToggleAllPanelsHidden,
-    ToggleFullscreen,
-    ToggleFilterBar,
-    ToggleBlackWhite,
-    ToggleStackGroup,
-    CreateSnapshot,
-    DuplicateCopy,
-    CopySettings,
-    PasteSettings,
-    SetRating,
-    SetFlag,
-    SetColorLabel,
-    SetMaskTool,
-    SetSpotTool,
-    SetTreatment,
-    SetModule,
-    SetLibraryView,
-    SetZoomMode,
-    RegenerateStale,
-    MatchExposure,
-    AutoTone,
-    SaveRecipe,
-    Reset,
-    Render,
-    Export,
-    StartMerge,
-}
-
-impl GuiAction {
-    /// snake_case action name for the debug log line (GUI-INSTRDBG-17).
-    pub const fn name(self) -> &'static str {
-        match self {
-            GuiAction::ToggleBeforeAfter => "toggle_before_after",
-            GuiAction::ToggleSplitView => "toggle_split_view",
-            GuiAction::ToggleCropMode => "toggle_crop_mode",
-            GuiAction::ToggleClipping => "toggle_clipping",
-            GuiAction::ToggleSoftproof => "toggle_softproof",
-            GuiAction::ToggleOriginalHistogram => "toggle_original_histogram",
-            GuiAction::ToggleLightsOut => "toggle_lights_out",
-            GuiAction::TogglePanelsHidden => "toggle_panels_hidden",
-            GuiAction::ToggleAllPanelsHidden => "toggle_all_panels_hidden",
-            GuiAction::ToggleFullscreen => "toggle_fullscreen",
-            GuiAction::ToggleFilterBar => "toggle_filter_bar",
-            GuiAction::ToggleBlackWhite => "toggle_black_white",
-            GuiAction::ToggleStackGroup => "toggle_stack_group",
-            GuiAction::CreateSnapshot => "create_snapshot",
-            GuiAction::DuplicateCopy => "duplicate_copy",
-            GuiAction::CopySettings => "copy_settings",
-            GuiAction::PasteSettings => "paste_settings",
-            GuiAction::SetRating => "set_rating",
-            GuiAction::SetFlag => "set_flag",
-            GuiAction::SetColorLabel => "set_color_label",
-            GuiAction::SetMaskTool => "set_mask_tool",
-            GuiAction::SetSpotTool => "set_spot_tool",
-            GuiAction::SetTreatment => "set_treatment",
-            GuiAction::SetModule => "set_module",
-            GuiAction::SetLibraryView => "set_library_view",
-            GuiAction::SetZoomMode => "set_zoom_mode",
-            GuiAction::RegenerateStale => "regenerate_stale",
-            GuiAction::MatchExposure => "match_total_exposure",
-            GuiAction::AutoTone => "auto_tone",
-            GuiAction::SaveRecipe => "save_recipe",
-            GuiAction::Reset => "reset",
-            GuiAction::Render => "render",
-            GuiAction::Export => "export",
-            GuiAction::StartMerge => "start_merge",
-        }
-    }
-}
-
-/// Every instrumented GUI action, in the order of [`GuiAction`]. Used by the
-/// debug instrumentation test to pin the name table (uniqueness, snake_case).
-pub const ALL_GUI_ACTIONS: &[GuiAction] = &[
-    GuiAction::ToggleBeforeAfter,
-    GuiAction::ToggleSplitView,
-    GuiAction::ToggleCropMode,
-    GuiAction::ToggleClipping,
-    GuiAction::ToggleSoftproof,
-    GuiAction::ToggleOriginalHistogram,
-    GuiAction::ToggleLightsOut,
-    GuiAction::TogglePanelsHidden,
-    GuiAction::ToggleAllPanelsHidden,
-    GuiAction::ToggleFullscreen,
-    GuiAction::ToggleFilterBar,
-    GuiAction::ToggleBlackWhite,
-    GuiAction::ToggleStackGroup,
-    GuiAction::CreateSnapshot,
-    GuiAction::DuplicateCopy,
-    GuiAction::CopySettings,
-    GuiAction::PasteSettings,
-    GuiAction::SetRating,
-    GuiAction::SetFlag,
-    GuiAction::SetColorLabel,
-    GuiAction::SetMaskTool,
-    GuiAction::SetSpotTool,
-    GuiAction::SetTreatment,
-    GuiAction::SetModule,
-    GuiAction::SetLibraryView,
-    GuiAction::SetZoomMode,
-    GuiAction::RegenerateStale,
-    GuiAction::MatchExposure,
-    GuiAction::AutoTone,
-    GuiAction::SaveRecipe,
-    GuiAction::Reset,
-    GuiAction::Render,
-    GuiAction::Export,
-    GuiAction::StartMerge,
-];
-
-/// Formats the single debug action line (GUI-INSTRDBG-17). Pure, so the
-/// headless test can pin the exact format without a logger.
-#[cfg(debug_assertions)]
-pub fn gui_action_log_line(action: GuiAction, duration_ms: u128, gpu_route: &str) -> String {
-    format!(
-        "action={} duration_ms={duration_ms} gpu_route={gpu_route}",
-        action.name()
-    )
-}
-
-/// Debug-only sink for the instrumented action line: the `debug!` log plus,
-/// under `cfg(test)`, a thread-local capture the headless tests drain to prove
-/// exactly one line per action.
-#[cfg(debug_assertions)]
-fn emit_gui_action_log(line: String) {
-    log::debug!("{line}");
-    #[cfg(test)]
-    GUI_ACTION_LOG.with(|log| log.borrow_mut().push(line));
-}
-
-// Thread-local capture of the debug action lines for headless tests.
-#[cfg(all(debug_assertions, test))]
-thread_local! {
-    static GUI_ACTION_LOG: std::cell::RefCell<Vec<String>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Drains and returns the captured debug action lines of the current test
-/// thread (headless instrumentation test helper).
-#[cfg(all(debug_assertions, test))]
-fn take_gui_action_log() -> Vec<String> {
-    GUI_ACTION_LOG.with(|log| std::mem::take(&mut *log.borrow_mut()))
-}
-
-// Outermost-action depth guard: nested instrumented commands are part of the
-// enclosing action and must not log their own line (GUI-INSTRDBG-17).
-#[cfg(debug_assertions)]
-thread_local! {
-    static GUI_ACTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// RAII timer for one instrumented GUI action (GUI-INSTRDBG-17). Construction
-/// marks the action active on the current thread; `Drop` emits exactly one
-/// line for the outermost action and releases the depth. Debug builds only.
-#[cfg(debug_assertions)]
-struct GuiActionTimer {
-    action: GuiAction,
-    start: std::time::Instant,
-    gpu_route: &'static str,
-    outermost: bool,
-}
-
-#[cfg(debug_assertions)]
-impl GuiActionTimer {
-    fn new(action: GuiAction, gpu_route: &'static str) -> Self {
-        let outermost = GUI_ACTION_DEPTH.with(|depth| {
-            let was = depth.get();
-            depth.set(was + 1);
-            was == 0
-        });
-        Self {
-            action,
-            start: std::time::Instant::now(),
-            gpu_route,
-            outermost,
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-impl Drop for GuiActionTimer {
-    fn drop(&mut self) {
-        GUI_ACTION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-        if self.outermost {
-            emit_gui_action_log(gui_action_log_line(
-                self.action,
-                self.start.elapsed().as_millis(),
-                self.gpu_route,
-            ));
-        }
-    }
-}
-
-/// GUI-INSTRDBG-17: opens the debug action timer for `action` in the current
-/// scope using the frame's GPU route. Expands to nothing in release builds
-/// (no timer, no log, no binding), so the instrumented call sites are identical
-/// in both profiles without per-button copy-paste.
-macro_rules! instrument_gui_action {
-    ($app:expr, $action:expr) => {
-        #[cfg(debug_assertions)]
-        let _gui_action_timer = $app.begin_gui_action($action);
-    };
-}
+// GUI-INSTRDBG-17/-17b: the debug action instrumentation core (GuiAction
+// table, RAII `GuiActionTimer`, `instrument_gui_action!`) now lives in
+// `gui_action.rs` (extracted to respect the file-size ratchet); the macro
+// is imported with `#[macro_use]` below.
 
 /// Simple Library filter match (Welle 3, LR-13 light) over metadata the
 /// directory scan already holds — no index, no extra IO. An empty query
@@ -4852,6 +4631,7 @@ impl LuminaApp {
     /// Set the tool-overlay mode (G-11). Display-only session state: never
     /// touches the recipe or the sidecar.
     pub fn set_overlay_mode(&mut self, mode: OverlayMode) {
+        instrument_gui_action!(self, GuiAction::SetOverlayMode);
         if self.overlay_mode == mode {
             return;
         }
@@ -4894,6 +4674,7 @@ impl LuminaApp {
     /// Set the edit-pin visibility (G-11). Display-only session state: never
     /// touches the recipe or the sidecar.
     pub fn set_pin_visibility(&mut self, visibility: PinVisibility) {
+        instrument_gui_action!(self, GuiAction::SetPinVisibility);
         if self.pin_visibility == visibility {
             return;
         }
@@ -4997,6 +4778,7 @@ impl LuminaApp {
     /// open sections deterministically keeps the first (lowest index) and
     /// closes the rest.
     pub fn set_solo_mode(&mut self, enabled: bool) {
+        instrument_gui_action!(self, GuiAction::SetSoloMode);
         if self.solo_mode == enabled {
             return;
         }
@@ -5096,6 +4878,7 @@ impl LuminaApp {
     /// proxy over the file-browser entries) and clears Before/After. A repeat
     /// press leaves the view. Never mutates the recipe.
     pub fn toggle_compare_mode(&mut self, mode: CompareMode) {
+        instrument_gui_action!(self, GuiAction::ToggleCompareMode);
         trace!("GUI interaction: toggle_compare_mode {:?}", mode);
         match mode {
             CompareMode::Compare => {
@@ -5675,6 +5458,7 @@ impl LuminaApp {
     /// (CAS, atomar). Idempotent: an existing keyword succeeds unchanged.
     /// Invalid keywords fail loudly, never silently normalised.
     pub fn add_keyword(&mut self, keyword: &str) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::AddKeyword);
         self.ensure_document_loaded()?;
         let Some(document) = &mut self.document else {
             return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
@@ -5703,6 +5487,7 @@ impl LuminaApp {
     /// Remove a keyword from the loaded image (G-15 META-MVP, Slice 3),
     /// mirroring [`Self::add_keyword`]. Absent keywords succeed unchanged.
     pub fn remove_keyword(&mut self, keyword: &str) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::RemoveKeyword);
         self.ensure_document_loaded()?;
         let Some(document) = &mut self.document else {
             return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
@@ -6173,6 +5958,7 @@ impl LuminaApp {
     /// (CAS, atomar). Returns `Ok(true)` on update, `Ok(false)` for
     /// idempotent no-ops. Loud on invalid values — nothing is written then.
     pub fn commit_metadata_draft(&mut self) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::CommitMetadataDraft);
         self.ensure_document_loaded()?;
         self.ensure_meta_buffers();
         let current = self.metadata_draft();
@@ -6230,6 +6016,7 @@ impl LuminaApp {
     /// keystrokes) into the metadata panel's own session clipboard. Pure
     /// session state: never touches the sidecar. Returns the field count.
     pub fn copy_metadata_draft(&mut self) -> Result<usize, GuiError> {
+        instrument_gui_action!(self, GuiAction::CopyMetadataDraft);
         self.ensure_document_loaded()?;
         self.ensure_meta_buffers();
         let copied: BTreeMap<String, String> = METADATA_FIELD_IDS
@@ -6252,6 +6039,7 @@ impl LuminaApp {
     /// buffers first so the panel shows them. Loud without a prior copy —
     /// never a silent no-op.
     pub fn paste_metadata_draft(&mut self) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::PasteMetadataDraft);
         let clipboard = self
             .meta_clipboard
             .clone()
@@ -6277,6 +6065,7 @@ impl LuminaApp {
     /// all-or-nothing semantics; already-absent fields are an idempotent
     /// no-op. Returns `Ok(true)` on update.
     pub fn clear_metadata_fields(&mut self, fields: &[String]) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::ClearMetadataDraft);
         for id in fields {
             if id != "keywords" && !is_metadata_field(id) {
                 return Err(GuiError::Io(
@@ -6369,6 +6158,7 @@ impl LuminaApp {
     /// Explicitly clear the whole metadata history (the only way to empty
     /// it; draft values are kept). Returns the number of removed entries.
     pub fn clear_metadata_history_gui(&mut self) -> Result<usize, GuiError> {
+        instrument_gui_action!(self, GuiAction::ClearMetadataHistory);
         self.ensure_document_loaded()?;
         let removed = {
             let document = self.document.as_mut().expect("document was ensured");
@@ -6527,6 +6317,7 @@ impl LuminaApp {
         spec: &str,
         vars: &BTreeMap<String, String>,
     ) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::ApplyMetaPreset);
         let (path, preset) = self.load_gui_meta_preset(spec)?;
         let resolved = render_meta_preset(&preset, vars, &path.display().to_string())
             .map_err(|error| GuiError::Io(format!("meta preset apply rejected: {error}")))?;
@@ -6600,6 +6391,7 @@ impl LuminaApp {
     /// target) is a loud error ("first open/import the image"), never a
     /// silent creation. Recipes, masks and edit history are never touched.
     pub fn sync_metadata_to_selection(&mut self, fields: &BTreeSet<String>) -> SelectionSyncReport {
+        instrument_gui_action!(self, GuiAction::SyncMetadata);
         let report = SelectionSyncReport::default();
         if fields.is_empty() {
             self.show_error(Str::MetadataSyncNeedsFields.t());
@@ -7146,6 +6938,7 @@ impl LuminaApp {
     /// Select a mask from the active copy's library and make it the active layer.
     /// The matte is only referenced; no payload is copied or modified.
     pub fn select_mask(&mut self, mask_id: &str) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SelectMask);
         self.ensure_document_loaded()?;
         let document = self.document.as_mut().expect("document was ensured");
         let copy = document
@@ -7190,6 +6983,7 @@ impl LuminaApp {
 
     /// Create a pending library entry. Inference is deliberately not started here.
     pub fn create_mask(&mut self, name: impl Into<String>) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::CreateMask);
         self.ensure_document_loaded()?;
         let name = name.into();
         if name.trim().is_empty() {
@@ -7418,6 +7212,7 @@ impl LuminaApp {
         detail: Option<String>,
         name: impl Into<String>,
     ) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::CreateAiMask);
         let name = name.into();
         if name.trim().is_empty() {
             return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
@@ -7460,6 +7255,7 @@ impl LuminaApp {
         feather: f32,
         name: impl Into<String>,
     ) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::CreateLuminanceRangeMask);
         let name = name.into();
         if name.trim().is_empty() {
             return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
@@ -7496,6 +7292,7 @@ impl LuminaApp {
         feather: f32,
         name: impl Into<String>,
     ) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::CreateColorRangeMask);
         let name = name.into();
         if name.trim().is_empty() {
             return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
@@ -7533,6 +7330,7 @@ impl LuminaApp {
         other_id: &str,
         name: impl Into<String>,
     ) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::CombineMasks);
         // The panel combines with Add (union), Subtract and Invert; source
         // masks are created, not combined, and intersect stays CLI-only.
         if !matches!(
@@ -7624,6 +7422,7 @@ impl LuminaApp {
         mask_id: &str,
         name: impl Into<String>,
     ) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::DuplicateMask);
         let name = name.into();
         if name.trim().is_empty() {
             return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
@@ -7669,6 +7468,7 @@ impl LuminaApp {
     /// it yet, a layer is created (never an invented matte — only the
     /// reference). Persisted per virtual copy, loud on unknown masks.
     pub fn set_mask_visible(&mut self, mask_id: &str, visible: bool) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetMaskVisible);
         self.ensure_document_loaded()?;
         let copy_id = self.virtual_copy_id.clone();
         {
@@ -7785,6 +7585,7 @@ impl LuminaApp {
     }
 
     pub fn set_show_mask_overlay(&mut self, shown: bool) {
+        instrument_gui_action!(self, GuiAction::SetShowMaskOverlay);
         if self.show_mask_overlay == shown {
             return;
         }
@@ -7798,6 +7599,7 @@ impl LuminaApp {
     }
 
     pub fn set_overlay_color(&mut self, color: [u8; 3]) {
+        instrument_gui_action!(self, GuiAction::SetOverlayColor);
         if self.overlay_color == color {
             return;
         }
@@ -7827,6 +7629,7 @@ impl LuminaApp {
     }
 
     pub fn set_mask_inverted(&mut self, inverted: bool) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetMaskInverted);
         let layer = self.active_layer_mut()?;
         layer.inverted = inverted;
         // REVIEW-GUI-MASKRENDER-1: layer edits change the evaluated matte, so
@@ -7867,6 +7670,7 @@ impl LuminaApp {
     }
 
     pub fn offer_mask_recalculation(&mut self) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::OfferMaskRecalculation);
         let mask_id = self
             .selected_mask_id
             .clone()
@@ -11276,6 +11080,7 @@ impl LuminaApp {
     /// Set the crop to an aspect preset (G-06). Unknown names are rejected
     /// loudly without touching the recipe. Arms one G-06 history step.
     pub fn set_crop_aspect(&mut self, preset: &str) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetCropAspect);
         let parsed = match preset {
             "original" => AspectPreset::Original,
             "1:1" => AspectPreset::OneToOne,
@@ -11349,6 +11154,7 @@ impl LuminaApp {
     /// Remove the crop (back to the full frame, keeps rotation/mirrors).
     /// Arms one G-06 history step.
     pub fn clear_crop(&mut self) {
+        instrument_gui_action!(self, GuiAction::ClearCrop);
         if let Some(geo) = self.recipe.geometry.as_mut() {
             geo.crop = None;
         }
@@ -11395,6 +11201,7 @@ impl LuminaApp {
     /// [`Self::set_geometry_rotation`] so button, slider and (future)
     /// shortcut share one save path.
     pub fn rotate_step(&mut self, delta_degrees: f64) {
+        instrument_gui_action!(self, GuiAction::RotateStep);
         let current = self
             .recipe
             .geometry
@@ -11415,6 +11222,7 @@ impl LuminaApp {
     /// (GUI-SLIDER-SAVE-1). Public for the same reason as
     /// [`Self::set_geometry_rotation`]. Arms one G-06 history step.
     pub fn set_geometry_mirror(&mut self, horizontal: bool, vertical: bool) {
+        instrument_gui_action!(self, GuiAction::SetGeometryMirror);
         let mut geo = self.recipe.geometry.clone().unwrap_or(Geometry {
             version: 1,
             crop: None,
@@ -11472,6 +11280,7 @@ impl LuminaApp {
     /// identity fingerprint. Enables the stage (the analysis is meant to be
     /// applied); the manual perspective stays persisted and returns on disable.
     pub fn analyze_upright_now(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::AnalyzeUpright);
         let Some(frame) = self.original.clone() else {
             return Ok(());
         };
@@ -11512,6 +11321,7 @@ impl LuminaApp {
     /// Enabling without an analysis is refused loudly (no silent identity
     /// render); the manual perspective is authoritative while disabled.
     pub fn set_upright_enabled(&mut self, enabled: bool) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetUprightEnabled);
         let stage = self.recipe.upright.clone().unwrap_or(Upright {
             version: 1,
             enabled: false,
@@ -11534,6 +11344,7 @@ impl LuminaApp {
     /// LRPAR-G06-UPRIGHT-15: remove the whole upright stage (the manual
     /// perspective, if any, becomes authoritative again).
     pub fn clear_upright(&mut self) {
+        instrument_gui_action!(self, GuiAction::ClearUpright);
         self.recipe.upright = None;
         self.mark_recipe_dirty("upright.clear", 0.0);
         self.pending_history_step = Some("upright.clear".into());
@@ -21557,6 +21368,9 @@ impl eframe::App for LuminaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // GUI-INSTRDBG-17b: the remaining section-action logging tests, extracted
+    // to keep this root test module within the file-size ratchet.
+    mod instrdbg;
     use lumina_core::ImageFileFormat;
     use lumina_sidecar::{
         BokehShape, BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint,
@@ -22106,10 +21920,22 @@ mod tests {
     fn headless_click_labels(
         app: &mut LuminaApp,
         labels: &[&str],
+        draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        headless_click_labels_sized(app, 720.0, labels, draw)
+    }
+
+    /// [`headless_click_labels`] with an explicit canvas height: panels whose
+    /// sub-sections extend past the 720px fold (the Metadata panel) are fully
+    /// clickable on a taller virtual screen.
+    fn headless_click_labels_sized(
+        app: &mut LuminaApp,
+        height: f32,
+        labels: &[&str],
         mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
     ) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 720.0));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, height));
         let mut time = 0.0_f64;
         let mut run = |app: &mut LuminaApp, events: Vec<egui::Event>| {
             time += 1.0 / 60.0;
@@ -22577,6 +22403,8 @@ mod tests {
         Masking,
         Spot,
         Merge,
+        Geometry,
+        Metadata,
     }
 
     /// Exhaustive `GuiAction` → (`surface`, `button label`). No `_` arm.
@@ -22631,6 +22459,58 @@ mod tests {
             GuiAction::Render => (F100Surface::Develop, Str::RenderApply.t().into()),
             GuiAction::Export => (F100Surface::Export, Str::ExportRun.t().into()),
             GuiAction::StartMerge => (F100Surface::Merge, Str::MergeHdr.t().into()),
+            // GUI-INSTRDBG-17b: Library compare, Geometry, Masking-layer and
+            // Metadata section actions.
+            GuiAction::ToggleCompareMode => {
+                (F100Surface::LibraryGrid, Str::CompareModeCompare.t().into())
+            }
+            GuiAction::ClearCrop => (F100Surface::Geometry, Str::ClearCrop.t().into()),
+            GuiAction::SetCropAspect => (F100Surface::Geometry, Str::Aspect.t().into()),
+            GuiAction::RotateStep => (F100Surface::Geometry, Str::RotateLeft.t().into()),
+            GuiAction::SetGeometryMirror => {
+                (F100Surface::Geometry, Str::MirrorHorizontal.t().into())
+            }
+            GuiAction::AnalyzeUpright => (F100Surface::Geometry, Str::UprightAnalyze.t().into()),
+            GuiAction::SetUprightEnabled => (F100Surface::Geometry, Str::UprightEnable.t().into()),
+            GuiAction::ClearUpright => (F100Surface::Geometry, Str::UprightClear.t().into()),
+            GuiAction::CreateMask => (F100Surface::Masking, Str::NewMask.t().into()),
+            GuiAction::SelectMask => (F100Surface::Masking, Str::SelectMask.t().into()),
+            GuiAction::SetMaskVisible => (F100Surface::Masking, Str::MaskEye.t().into()),
+            GuiAction::SetShowMaskOverlay => (F100Surface::Masking, Str::ShowOverlay.t().into()),
+            GuiAction::SetOverlayColor => (F100Surface::Masking, Str::OverlayColor.t().into()),
+            GuiAction::CreateAiMask => (F100Surface::Masking, Str::AddAiMask.t().into()),
+            GuiAction::CreateLuminanceRangeMask => (F100Surface::Masking, Str::AddRange.t().into()),
+            GuiAction::CreateColorRangeMask => (F100Surface::Masking, Str::AddRange.t().into()),
+            GuiAction::CombineMasks => (F100Surface::Masking, Str::CombineAdd.t().into()),
+            GuiAction::DuplicateMask => (F100Surface::Masking, Str::DuplicateMask.t().into()),
+            GuiAction::SetOverlayMode => (F100Surface::Masking, Str::OverlayAlways.t().into()),
+            GuiAction::SetPinVisibility => (F100Surface::Masking, Str::OverlayAlways.t().into()),
+            GuiAction::SetSoloMode => (F100Surface::Masking, Str::SoloMode.t().into()),
+            GuiAction::SetMaskInverted => (F100Surface::Masking, Str::Invert.t().into()),
+            GuiAction::OfferMaskRecalculation => {
+                (F100Surface::Masking, Str::OfferRecalculation.t().into())
+            }
+            GuiAction::AddKeyword => (F100Surface::Metadata, Str::AddKeyword.t().into()),
+            GuiAction::RemoveKeyword => (F100Surface::Metadata, "✕".into()),
+            GuiAction::CommitMetadataDraft => {
+                (F100Surface::Metadata, Str::MetadataSaveDraft.t().into())
+            }
+            GuiAction::ClearMetadataDraft => {
+                (F100Surface::Metadata, Str::MetadataClearDraft.t().into())
+            }
+            GuiAction::CopyMetadataDraft => {
+                (F100Surface::Metadata, Str::MetadataCopyDraft.t().into())
+            }
+            GuiAction::PasteMetadataDraft => {
+                (F100Surface::Metadata, Str::MetadataPasteDraft.t().into())
+            }
+            GuiAction::ClearMetadataHistory => {
+                (F100Surface::Metadata, Str::MetadataHistoryClear.t().into())
+            }
+            GuiAction::ApplyMetaPreset => {
+                (F100Surface::Metadata, Str::MetadataPresetApply.t().into())
+            }
+            GuiAction::SyncMetadata => (F100Surface::Metadata, Str::MetadataSyncButton.t().into()),
         }
     }
 
@@ -22668,6 +22548,11 @@ mod tests {
                 headless_shapes_sized(app, 4096.0, |app, ui| app.draw_basic(ui))
             }
             F100Surface::Masking => {
+                // Prepare the buttons that need a selected mask (the eye and
+                // the recalculation offer). Selection is idempotent per frame.
+                if let Ok(id) = app.create_mask("audit-mask") {
+                    let _ = app.select_mask(&id);
+                }
                 app.set_section_open(SECTION_MASKING, true);
                 headless_shapes_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
             }
@@ -22677,6 +22562,30 @@ mod tests {
             F100Surface::Merge => {
                 headless_click_labels(app, &[Str::MergeSection.t()], |app, ui| {
                     app.draw_merge_section(ui)
+                })
+            }
+            F100Surface::Geometry => {
+                // Prepare the conditional buttons: an active crop (Clear Crop)
+                // and a persisted upright analysis (Clear Upright).
+                let _ = app.set_crop_aspect("1:1");
+                let _ = app.analyze_upright_now();
+                app.set_section_open(SECTION_GEOMETRY, true);
+                headless_shapes_sized(app, 4096.0, |app, ui| app.draw_geometry(ui))
+            }
+            F100Surface::Metadata => {
+                // The panel's sub-sections start collapsed; open the ones that
+                // host the audited buttons and add a keyword so the per-keyword
+                // remove button paints.
+                let _ = app.add_keyword("audit");
+                let labels = [
+                    Str::MetadataDraftSection.t(),
+                    Str::KeywordsSection.t(),
+                    Str::History.t(),
+                    Str::MetadataPresetSection.t(),
+                    Str::MetadataSyncSection.t(),
+                ];
+                headless_click_labels_sized(app, 4096.0, &labels, |app, ui| {
+                    app.draw_library_metadata_panel(ui)
                 })
             }
         }
@@ -22699,6 +22608,8 @@ mod tests {
             F100Surface::Masking,
             F100Surface::Spot,
             F100Surface::Merge,
+            F100Surface::Geometry,
+            F100Surface::Metadata,
         ];
         for surface in order {
             let shapes = f100_surface_shapes(&mut app, surface);
@@ -22842,83 +22753,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // GUI-INSTRDBG-17: debug action instrumentation tests.
-    // -----------------------------------------------------------------------
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn instrdbg_action_log_line_format_and_single_line() {
-        let mut app = new_app();
-        let _ = take_gui_action_log();
-        app.toggle_crop_mode();
-        let lines = take_gui_action_log();
-        assert_eq!(lines.len(), 1, "exactly one line per action, got {lines:?}");
-        let line = &lines[0];
-        assert!(line.starts_with("action=toggle_crop_mode "), "{line}");
-        assert!(line.contains(" duration_ms="), "{line}");
-        let route = line.rsplit_once("gpu_route=").expect("gpu_route field").1;
-        assert!(
-            route == GPU_ROUTE_PRESENT || route == GPU_ROUTE_CPU_FALLBACK || route == GPU_ROUTE_NA,
-            "unexpected gpu_route in {line}"
-        );
-        assert_eq!(
-            gui_action_log_line(GuiAction::ToggleCropMode, 3, GPU_ROUTE_NA),
-            "action=toggle_crop_mode duration_ms=3 gpu_route=n/a"
-        );
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn instrdbg_nested_action_logs_once_for_the_outer_action() {
-        let mut app = new_app();
-        let _ = take_gui_action_log();
-        // `toggle_fullscreen` calls the instrumented `set_zoom_mode`; the
-        // nested call must not add a second line.
-        app.toggle_fullscreen();
-        let lines = take_gui_action_log();
-        assert_eq!(
-            lines.len(),
-            1,
-            "nested instrumentation must not add a line: {lines:?}"
-        );
-        assert!(
-            lines[0].starts_with("action=toggle_fullscreen "),
-            "{}",
-            lines[0]
-        );
-    }
-
-    /// The central action-name table stays unique and snake_case (the format
-    /// contract of `action=<name>`).
-    #[test]
-    fn instrdbg_action_names_are_unique_and_snake_case() {
-        let mut names: Vec<&str> = ALL_GUI_ACTIONS.iter().map(|action| action.name()).collect();
-        for name in &names {
-            assert!(!name.is_empty());
-            assert!(
-                name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                "{name} is not snake_case"
-            );
-            assert!(!name.starts_with('_') && !name.ends_with('_'), "{name}");
-        }
-        let count = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), count, "action names must be unique");
-    }
-
-    /// Release builds compile the timer, the log and the capture buffer out.
-    /// This test only exists in non-debug builds so `cargo test --release`
-    /// proves the action still runs without instrumentation.
-    #[test]
-    #[cfg(not(debug_assertions))]
-    fn instrdbg_release_action_is_uninstrumented() {
-        let mut app = new_app();
-        app.toggle_crop_mode();
-        assert!(app.crop_mode);
     }
 
     /// GUI-VISION-1: the Export "Choose…" button must not overflow the right
