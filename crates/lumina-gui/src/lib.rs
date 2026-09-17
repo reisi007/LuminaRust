@@ -3707,6 +3707,7 @@ impl LuminaApp {
     }
 
     pub fn apply_preset(&mut self, preset: &Preset) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::ApplyPreset);
         trace!("GUI interaction: apply_preset {}", preset.name);
         if preset
             .recipe
@@ -7915,6 +7916,7 @@ impl LuminaApp {
         self.spot_tool
     }
     pub fn set_spot_mode(&mut self, mode: SpotMode) {
+        instrument_gui_action!(self, GuiAction::SetSpotMode);
         self.spot_mode = mode;
     }
     pub fn spot_mode(&self) -> SpotMode {
@@ -7971,6 +7973,7 @@ impl LuminaApp {
         Ok(())
     }
     pub fn clear_spot_heals(&mut self) {
+        instrument_gui_action!(self, GuiAction::ClearSpotHeals);
         self.recipe.extras.remove("spot_removals");
         self.mark_dirty();
         self.save_sidecar();
@@ -8007,6 +8010,15 @@ impl LuminaApp {
         }
         info!("GUI interaction: set_spot_visualize -> {threshold:?}");
         Ok(())
+    }
+
+    /// GUI-INSTRDBG-17b-REST: the "Visualize off" button command. Instrumented
+    /// separately from [`Self::set_spot_visualize`] because the visualize
+    /// *slider* commits through the same setter and a slider drag is not a
+    /// button action (same split as `save_recipe_action`).
+    fn clear_spot_visualize(&mut self) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::ClearSpotVisualize);
+        self.set_spot_visualize(None)
     }
 
     /// Active visualize threshold for the preview gate (G04-FOLLOWUP-1):
@@ -8051,6 +8063,7 @@ impl LuminaApp {
     /// `spot_detect_status` (visible, never silent); the candidates are
     /// returned for an explicit [`Self::apply_detected_spots`].
     pub fn detect_spot_candidates(&mut self) -> Result<Vec<DetectedSpot>, GuiError> {
+        instrument_gui_action!(self, GuiAction::DetectSpotCandidates);
         let frame = self
             .original
             .as_ref()
@@ -8134,6 +8147,16 @@ impl LuminaApp {
         Ok(applied)
     }
 
+    /// GUI-INSTRDBG-17b-REST: the "Apply detected" button command. One outer
+    /// instrumented action around the detector + persistence: the nested
+    /// `detect_spot_candidates` is part of this action and must not add a
+    /// second log line (the depth guard suppresses it).
+    fn apply_detected_spot_objects(&mut self) -> Result<usize, GuiError> {
+        instrument_gui_action!(self, GuiAction::ApplyDetectedSpots);
+        let candidates = self.detect_spot_candidates()?;
+        self.apply_detected_spots(&candidates)
+    }
+
     /// Recipe-backed distraction switches (G-04). `auto_mode` only lists —
     /// applying stays explicit via [`Self::apply_detected_spots`] (the panel
     /// Apply button); enabling `auto` never persists spots by itself.
@@ -8206,6 +8229,7 @@ impl LuminaApp {
     /// named extras entry, then saves. Heuristic entries and unknown ids fail
     /// loudly — a variant never silently retargets another spot.
     pub fn regenerate_spot_variant(&mut self, spot_id: &str) -> Result<u64, GuiError> {
+        instrument_gui_action!(self, GuiAction::RegenerateSpotVariant);
         let derived = generative_variant_seed(self.spot_gen_seed, self.spot_gen_variant);
         let mut spots: Vec<serde_json::Value> = self
             .recipe
@@ -10223,6 +10247,7 @@ impl LuminaApp {
     /// sorted by input. Refuses invalid/duplicate inputs loudly (status +
     /// no save). Replaces that channel's parametric list (Last-Write-Wins).
     fn add_curve_point(&mut self, channel: &str, input: f64, output: f64) {
+        instrument_gui_action!(self, GuiAction::AddCurvePoint);
         if !matches!(channel, "master" | "red" | "green" | "blue") {
             warn!("add_curve_point: unknown channel {channel}");
             return;
@@ -10267,6 +10292,7 @@ impl LuminaApp {
     /// Refuses loudly when fewer than 3 points remain or an endpoint
     /// (`(0,0)`/`(1,1)`) is targeted — endpoints are mandatory.
     fn remove_curve_point(&mut self, channel: &str, index: usize) {
+        instrument_gui_action!(self, GuiAction::RemoveCurvePoint);
         if !matches!(channel, "master" | "red" | "green" | "blue") {
             warn!("remove_curve_point: unknown channel {channel}");
             return;
@@ -10621,6 +10647,7 @@ impl LuminaApp {
     /// Remove the manual lens profile (keeps the coefficients). Arms one
     /// G-06 history step.
     pub fn clear_lens_profile(&mut self) {
+        instrument_gui_action!(self, GuiAction::ClearLensProfile);
         if let Some(lens) = self.recipe.lens_correction.as_mut() {
             lens.profile = None;
         }
@@ -10986,6 +11013,7 @@ impl LuminaApp {
     /// Set the bokeh kernel shape (G-05). All three shapes are deterministic
     /// integer kernels (no randomness).
     pub fn set_lens_blur_bokeh(&mut self, bokeh: BokehShape) {
+        instrument_gui_action!(self, GuiAction::SetLensBlurBokeh);
         self.lens_blur_mut().bokeh = bokeh;
         self.mark_recipe_dirty(
             "lens_blur.bokeh",
@@ -11167,6 +11195,7 @@ impl LuminaApp {
     /// is accepted; anything else is rejected loudly without touching the
     /// recipe (the sidecar validator is the second gate at save time).
     pub fn set_lens_profile(&mut self, profile: &str) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::SetLensProfile);
         if !matches!(profile, "wide-light" | "tele-light" | "standard-neutral") {
             return Err(GuiError::Io(format!(
                 "Unknown lens profile `{profile}` (expected wide-light|tele-light|standard-neutral)"
@@ -11459,6 +11488,7 @@ impl LuminaApp {
 
     /// G-14: remove one persisted region by id. Unknown ids are ignored loudly.
     pub fn remove_red_eye_region(&mut self, id: &str) {
+        instrument_gui_action!(self, GuiAction::RemoveRedEyeRegion);
         let Some(correction) = self.recipe.red_eye.as_mut() else {
             return;
         };
@@ -11475,6 +11505,7 @@ impl LuminaApp {
 
     /// G-14: remove the whole red-eye stage (identity).
     pub fn clear_red_eye(&mut self) {
+        instrument_gui_action!(self, GuiAction::ClearRedEye);
         self.recipe.red_eye = None;
         self.mark_recipe_dirty("red_eye.clear", 0.0);
         self.pending_history_step = Some("red_eye.clear".into());
@@ -11487,6 +11518,7 @@ impl LuminaApp {
     /// `red_eye_detect_status` (visible, never silent). Applying stays explicit
     /// via [`Self::apply_detected_red_eyes`].
     pub fn detect_red_eye_candidates(&mut self) -> Result<Vec<DetectedRedEye>, GuiError> {
+        instrument_gui_action!(self, GuiAction::DetectRedEye);
         let frame = self
             .original
             .as_ref()
@@ -11568,6 +11600,15 @@ impl LuminaApp {
             candidates.len()
         );
         Ok(candidates.len())
+    }
+
+    /// GUI-INSTRDBG-17b-REST: the red-eye "Apply detected" button command. One
+    /// outer instrumented action around detection + persistence; the nested
+    /// `detect_red_eye_candidates` must not add a second log line (depth guard).
+    fn apply_detected_red_eye_objects(&mut self) -> Result<usize, GuiError> {
+        instrument_gui_action!(self, GuiAction::ApplyDetectedRedEyes);
+        let candidates = self.detect_red_eye_candidates()?;
+        self.apply_detected_red_eyes(&candidates)
     }
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
@@ -16338,15 +16379,8 @@ impl LuminaApp {
                     }
                 }
                 if ui.button(Str::RedEyeApplyDetected.t()).clicked() {
-                    match self.detect_red_eye_candidates() {
-                        Ok(candidates) => {
-                            if let Err(error) =
-                                self.apply_detected_red_eyes(&candidates).map(|_| ())
-                            {
-                                self.show_error(error);
-                            }
-                        }
-                        Err(error) => self.show_error(error),
+                    if let Err(error) = self.apply_detected_red_eye_objects().map(|_| ()) {
+                        self.show_error(error);
                     }
                 }
             });
@@ -17673,7 +17707,7 @@ impl LuminaApp {
                 ui.horizontal(|ui| {
                     ui.label(if current.is_some() { format!("Visualize: {:.2}", current.unwrap_or(0.0)) } else { "Visualize: off".into() });
                     if ui.button("Visualize off").clicked() {
-                        if let Err(error) = self.set_spot_visualize(None) { self.show_error(error); }
+                        if let Err(error) = self.clear_spot_visualize() { self.show_error(error); }
                     }
                 });
             }
@@ -17688,12 +17722,7 @@ impl LuminaApp {
                         if let Err(error) = self.detect_spot_candidates().map(|_| ()) { self.show_error(error); }
                     }
                     if ui.button("Apply detected").clicked() {
-                        match self.detect_spot_candidates() {
-                            Ok(candidates) => {
-                                if let Err(error) = self.apply_detected_spots(&candidates).map(|_| ()) { self.show_error(error); }
-                            }
-                            Err(error) => self.show_error(error),
-                        }
+                        if let Err(error) = self.apply_detected_spot_objects().map(|_| ()) { self.show_error(error); }
                     }
                 });
                 if !self.spot_detect_status.is_empty() {
@@ -19076,6 +19105,7 @@ impl LuminaApp {
     /// semantics (the display name is the identity and the list above shows
     /// the names before replacement); validation failures are loud errors.
     fn save_current_selection_as_preset_file(&mut self) -> Result<std::path::PathBuf, GuiError> {
+        instrument_gui_action!(self, GuiAction::SavePresetFile);
         let directory = self
             .presets_dir
             .clone()
@@ -21371,6 +21401,9 @@ mod tests {
     // GUI-INSTRDBG-17b: the remaining section-action logging tests, extracted
     // to keep this root test module within the file-size ratchet.
     mod instrdbg;
+    // GUI-INSTRDBG-17b-REST: the click tests for the Spot/Detail/Optics/
+    // Tone-Curve/Presets buttons (second extracted slice).
+    mod instrdbg_rest;
     use lumina_core::ImageFileFormat;
     use lumina_sidecar::{
         BokehShape, BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint,
@@ -22405,6 +22438,10 @@ mod tests {
         Merge,
         Geometry,
         Metadata,
+        Detail,
+        Optics,
+        ToneCurve,
+        Presets,
     }
 
     /// Exhaustive `GuiAction` → (`surface`, `button label`). No `_` arm.
@@ -22511,6 +22548,31 @@ mod tests {
                 (F100Surface::Metadata, Str::MetadataPresetApply.t().into())
             }
             GuiAction::SyncMetadata => (F100Surface::Metadata, Str::MetadataSyncButton.t().into()),
+            // GUI-INSTRDBG-17b-REST: Spot extras, Detail/red-eye, Optics,
+            // Tone Curve and Presets.
+            GuiAction::SetSpotMode => (F100Surface::Spot, "Quick".into()),
+            GuiAction::ClearSpotVisualize => (F100Surface::Spot, "Visualize off".into()),
+            GuiAction::DetectSpotCandidates => (F100Surface::Spot, "Detect objects".into()),
+            GuiAction::ApplyDetectedSpots => (F100Surface::Spot, "Apply detected".into()),
+            GuiAction::RegenerateSpotVariant => (F100Surface::Spot, "Regenerate variant".into()),
+            GuiAction::ClearSpotHeals => (F100Surface::Spot, "Clear spots".into()),
+            GuiAction::DetectRedEye => (F100Surface::Detail, Str::RedEyeDetect.t().into()),
+            GuiAction::ApplyDetectedRedEyes => {
+                (F100Surface::Detail, Str::RedEyeApplyDetected.t().into())
+            }
+            GuiAction::RemoveRedEyeRegion => (F100Surface::Detail, Str::RedEyeRemove.t().into()),
+            GuiAction::ClearRedEye => (F100Surface::Detail, Str::RedEyeClear.t().into()),
+            GuiAction::SetLensProfile => (F100Surface::Optics, Str::LensProfile.t().into()),
+            GuiAction::ClearLensProfile => (F100Surface::Optics, Str::LensProfile.t().into()),
+            GuiAction::SetLensBlurBokeh => {
+                (F100Surface::Optics, Str::LensBlurBokehRound.t().into())
+            }
+            GuiAction::AddCurvePoint => (F100Surface::ToneCurve, Str::ToneCurveAddPoint.t().into()),
+            GuiAction::RemoveCurvePoint => {
+                (F100Surface::ToneCurve, Str::ToneCurveRemovePoint.t().into())
+            }
+            GuiAction::ApplyPreset => (F100Surface::Presets, Str::ApplyPreset.t().into()),
+            GuiAction::SavePresetFile => (F100Surface::Presets, Str::SavePresetFile.t().into()),
         }
     }
 
@@ -22557,7 +22619,9 @@ mod tests {
                 headless_shapes_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
             }
             F100Surface::Spot => {
-                headless_click_labels(app, &["Dust Removal (Q)"], |app, ui| app.draw_spot_heal(ui))
+                headless_click_labels_sized(app, 4096.0, &["Dust Removal (Q)"], |app, ui| {
+                    app.draw_spot_heal(ui)
+                })
             }
             F100Surface::Merge => {
                 headless_click_labels(app, &[Str::MergeSection.t()], |app, ui| {
@@ -22588,6 +22652,37 @@ mod tests {
                     app.draw_library_metadata_panel(ui)
                 })
             }
+            F100Surface::Detail => {
+                // A persisted red-eye region paints the per-region remove and
+                // the "Clear all" button; the section is opened via state so the
+                // tall panel keeps every control in one pass.
+                let _ = app.add_red_eye_region(0.5, 0.5);
+                app.set_section_open(SECTION_DETAIL, true);
+                headless_shapes_sized(app, 8000.0, |app, ui| app.draw_detail(ui))
+            }
+            F100Surface::Optics => {
+                // The bokeh radios live in the collapsed "Lens Blur" subgroup,
+                // so click it open before asserting the shape of the panel.
+                app.set_section_open(SECTION_OPTICS, true);
+                headless_click_labels_sized(app, 8000.0, &[Str::LensBlur.t()], |app, ui| {
+                    app.draw_optics(ui)
+                })
+            }
+            F100Surface::ToneCurve => {
+                // One interior control point paints the per-point "Remove"
+                // button (endpoints are mandatory and never removable).
+                app.set_section_open(SECTION_TONE_CURVE, true);
+                app.add_curve_point("master", 0.5, 0.5);
+                headless_shapes_sized(app, 8000.0, |app, ui| app.draw_tone_curve(ui))
+            }
+            F100Surface::Presets => {
+                // `None` keeps the audit deterministic (no real user presets
+                // directory is scanned); the Apply/Save buttons always paint.
+                app.presets_dir = None;
+                headless_click_labels(app, &[Str::PresetsSection.t()], |app, ui| {
+                    app.draw_presets_section(ui)
+                })
+            }
         }
     }
 
@@ -22610,6 +22705,10 @@ mod tests {
             F100Surface::Merge,
             F100Surface::Geometry,
             F100Surface::Metadata,
+            F100Surface::Detail,
+            F100Surface::Optics,
+            F100Surface::ToneCurve,
+            F100Surface::Presets,
         ];
         for surface in order {
             let shapes = f100_surface_shapes(&mut app, surface);

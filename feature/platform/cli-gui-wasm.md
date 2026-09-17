@@ -510,11 +510,31 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   `crates/lumina-gui/src/gui_action.rs` extrahiert (File-Size-Ratchet), die
   Rest-Sektions-Log-Tests liegen in `crates/lumina-gui/src/tests/instrdbg.rs`
   (der Audit liegt in `lib.rs`: `f100_action_button` ohne `_`-Arm).
-  **Noch nicht instrumentiert** sind die übrigen Sektions-Schaltflächen jenseits
-  dieser 66 (`GuiAction`s) (z. B. Optics-, Detail-/Effects- und
-  Spot-Sektionsbuttons sowie Tone-Curve-/Color-Sektion); sie folgen mechanisch
-  nach demselben Muster als eigene offene Folgeaufgabe (`GUI-INSTRDBG-17b` in
-  `Agents.todo.md` bleibt dafür offen).
+  **GUI-INSTRDBG-17b-REST (implementiert, Verifizierung offen):** Über die 66
+  `GuiAction`s aus Teil 1 hinaus sind 17 weitere user-sichtbare Schaltflächen
+  aus Spot-Extras, Detail/Rote Augen, Optics, Tone Curve und Presets
+  instrumentiert (insgesamt 83 `GuiAction`s) — `set_spot_mode`,
+  `clear_spot_visualize`, `detect_spot_candidates`, `apply_detected_spots`,
+  `regenerate_spot_variant`, `clear_spot_heals`, `detect_red_eye_candidates`,
+  `apply_detected_red_eyes`, `remove_red_eye_region`, `clear_red_eye`,
+  `set_lens_profile`, `clear_lens_profile`, `set_lens_blur_bokeh`,
+  `add_curve_point`, `remove_curve_point`, `apply_preset`, `save_preset_file`.
+  Buttons, deren Handler einen Teil-Schritt (`detect_*` in
+  `apply_detected_*`) oder einen mit Slidern geteilten Commit
+  (`set_spot_visualize`) aufrufen, laufen über eine eigene instrumentierte
+  Button-Methode; verschachtelte Instrumentierung unterdrückt der Tiefen-Guard
+  (genau eine Zeile). Klick-Tests je Button liegen in
+  `crates/lumina-gui/src/tests/instrdbg_rest.rs` (Button → instrumentierte
+  Methode → genau eine Logzeile) plus No-op-Log-Regressionstest; der Audit
+  prüft die neuen Oberflächen `Detail`, `Optics`, `Tone Curve` und `Presets`
+  mit. **Noch nicht instrumentiert** sind die übrigen Sektions-Schaltflächen
+  jenseits dieser 83 (`GuiAction`s): Weißabgleich-Eyedropper, Punktfarbe
+  (Add/Remove) in Basic/Color, generative Canvas-Buttons, Spot-Distraction-
+  Checkboxen (`set_spot_distraction`), Red-Eye-Pick-Toggle
+  (`set_red_eye_pick_mode`), Presets-Refresh (`reload_preset_entries`);
+  Tone-Curve-Kanalwahl ist reiner Session-State (grenzwertig, keine
+  Rezept-Aktion). Sie folgen mechanisch nach demselben Muster als eigene
+  Folgeaufgabe (`GUI-INSTRDBG-17c`).
 - **Routing-Badge-Befund (GUI-ROUTING-N6, F-103-N6-Runde 1, 2026-09-17):**
   Der gelbe Badge im manuellen Test (`Render routed to CPU: …`) wurde
   reproduziert. Für die committeten RAW-Fixtures mit einem harmlosen
