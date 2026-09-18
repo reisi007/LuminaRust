@@ -12,6 +12,10 @@ description = "GPU-first rendering path for Lumina (wgpu/Metal), with a CPU fall
 # dependency per `Agents.md`.
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
+# GPU-LENSFUN-PARITY-1: the strict Lensfun corrector map builder (hermetic tests)
+# and the parity harness need the native wrapper only under the `lensfun`
+# feature; default builds stay dependency-free of liblensfun.
+lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features = false }
 thiserror = "2"
 # Logging for the bootstrap stubs (no-op unless a logger is installed).
 log = "0.4"
@@ -33,6 +37,10 @@ pollster = { version = "1.0", optional = true }
 # `--no-default-features` to get a pure-CPU build.
 default = ["gpu"]
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+# GPU-LENSFUN-PARITY-1 hermetic tests: enables the `lumina-core` `lensfun`
+# feature (the `LensfunMap::from_corrector` builder) and the native
+# `lumina-lensfun` wrapper. NOT default — default builds never link liblensfun.
+lensfun = ["lumina-core/lensfun", "dep:lumina-lensfun", "lumina-lensfun/native"]
 
 [dev-dependencies]
 # Used by the golden-image equivalence harness to report a blake3 content hash

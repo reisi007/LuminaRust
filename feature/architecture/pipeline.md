@@ -1580,8 +1580,10 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Oracle-Parität und exakten Output-Maßen; Lens/Perspective OHNE expliziten
   Crop routen seit CROP-MAXRECT-1 laut auf CPU (Reason `geometry (default
   content crop)` — datenabhängiges MaxRect); dimensionändernde Rezepte werden
-  vom VRAM-Pfad laut verweigert; bei aktivem Lensfun-Corrector routet das
-  GUI-Gate (CLI-Reason-Mirror) laut auf CPU). Erledigt (Teilwelle,
+  vom VRAM-Pfad laut verweigert; ein korrekt gematchter Lensfun-Corrector läuft
+  seit GPU-LENSFUN-PARITY-1 (2026-09-18) über die gebundene Warp-/Gain-Map auf
+  GPU — nur der Distortion-Fall ohne expliziten Crop routet weiter laut auf
+  CPU). Erledigt (Teilwelle,
   BESTANDEN, Commit 2026-09-14): LENSFUN-GATE-2 — Badge nennt präzisen Grund
   (`format_routing_fallback_reason`: Headline + [Gründe], inkl. Lensfun-Reason
   und `geometry (default content crop)`; Gründe memoized statt bool);
@@ -1622,15 +1624,42 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   `absent_named_lens_is_never_substituted`,
   `absent_camera_model_is_never_fabricated`,
   `absent_lens_name_keeps_body_mount_fallback` (hermetische Fixture-DB).
-  **Verbleibende, bewusst dokumentierte CPU-Route:** Ein **korrekt** (strikt)
-  gematchter Lensfun-Corrector hat weiterhin **keinen WGSL-Pass**. Lensfun
-  liefert beliebige Distortion-/TCA-/Vignette-Modelle als per-Pixel-Koordinaten-
-  und Gewinnfunktion; eine GPU-Parität braucht eine vorberechnete Warp-/Gain-Map
-  (CPU-Aufbau, GPU-Resample) als eigenes, crate-übergreifendes Slice. Bis dahin
-  bleibt die Route laut sichtbar (Badge mit präzisem Grund,
-  `active_lensfun_corrector_forces_gpu_fallback_without_stale_memo_hit`) — die
-  Ausnahme ist hier festgeschrieben; die GPU-Umsetzung ist als Folgeaufgabe
-  `GPU-LENSFUN-PARITY-1` in `Agents.todo.md` getrackt.
+  **GPU-LENSFUN-PARITY-1 (2026-09-18):** Ein **korrekt** (strikt) gematchter
+  Lensfun-Corrector hat jetzt einen GPU-Pfad. Weil Lensfun beliebige
+  Distortion-/TCA-/Vignette-Modelle nur als per-Pixel-Koordinaten- und
+  Gewinnfunktion liefert (kein WGSL-Nachbau), baut der CPU-Aufbau pro
+  Quelle/Dimensionen einmalig eine `lumina_core::LensfunMap` (Warp-Koordinaten
+  R/G/B + Vignette-Gain, exakt über die Row-Batch-Wrapper des CPU-Orakels) und
+  der `lumina-gpu`-Resample-Pass (`lensfun`, analog `depth_plane`) tastet die
+  Quelle damit orakelkonform ab (`sample`-Semantik; TCA über getrennte
+  R/G/B-Koordinaten). Die Map ist ein Caller-Input
+  (`GpuContext::set_lensfun_map`), wird beim Bind laut validiert
+  (Dimensionen/Längen/TCA-Paarung/Endlichkeit) und ersetzt den manuellen
+  Lens-Schritt in der Geometriekette. Abnahme (lokal, Metal):
+  Oracle-vs-GPU-Parität byte-identisch (`maxAbsDiff == 0`, PSNR ∞) für
+  Nicht-TCA- und TCA-Profile auf Gradient+Rauschen
+  (`lensfun_corrector_map_matches_cpu_oracle`, `lumina-gpu/tests/parity.rs`;
+  Test-Feature `lumina-gpu/lensfun`, Default aus — Default-Builds linken kein
+  liblensfun; CI kompiliert den GPU-Pfad nur, der lokale Metal-Lauf ist der
+  Beleg). Die CPU bleibt vollständige Referenz. **Verbleibende, bewusst
+  dokumentierte CPU-Routen:** (a) eine Map, deren Dimensionen nicht zum Frame passen, und (b)
+  ein Distortion-Corrector **ohne** expliziten `geometry.crop` (der CPU-Orakel
+  erzeugt dann den inhaltsbasierten Default-Crop, dessen Rechteck vom
+  resampelten Alpha abhängt und nicht planbar ist). Beide werden laut
+  verweigert/geroutet (kein stiller divergenter Render). Ein Distortion-/TCA-
+  Profil mit explizitem Crop sowie Vignettierungs-Only-Profile laufen auf GPU.
+  Der frühere Badge-Zwang für den Corrector entfällt damit; die GUI-seitige
+  Verdrahtung (`bind_test_lensfun_corrector` → Map-Bau → Present-Gate) und der
+  headless Badge-Abwesenheitstest sind Teil desselben Tasks in `lumina-gui`.
+- **GUI-GPU-AUDIT-17 (Release 1.0, verifiziert-offen 2026-09-18):** Der
+  automatisierte headless Routing-Audit fährt alle 101 `GuiAction`s mit echtem
+  Metal-Kontext und prüft `gpu_routing_fallback_badge() == None` außer den hier
+  und in `feature/platform/cli-gui-wasm.md` § GUI-GPU-AUDIT-17 gelisteten
+  dokumentierten CPU-Ausnahmen (default content crop, dimension-changing
+  output, generative_edit, denoise_ai not GPU-wired, Lensfun-Corrector). Der
+  adapter-unabhängige Vollständigkeitstest läuft in `cargo test -p lumina-gui`;
+  der Metal-Lauf ist `cargo test -p lumina-gui --lib gpu_audit -- --ignored`
+  (lokales Timing report-only, kein Gate).
 
 ### G-01 Develop-Basis: Treatment, Profil, Reset-Automatik, Panel-Previous
 (LRPAR-G01-BASIC, Release 1.0)

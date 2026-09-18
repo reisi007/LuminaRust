@@ -2191,6 +2191,7 @@ dependencies = [
  "bytemuck",
  "log",
  "lumina-core",
+ "lumina-lensfun",
  "lumina-sidecar",
  "pollster 1.0.1",
  "serde_json",

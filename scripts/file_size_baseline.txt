@@ -1,9 +1,9 @@
 38046 crates/lumina-gui/src/lib.rs
 17709 crates/lumina-cli/src/main.rs
 10715 crates/lumina-sidecar/src/lib.rs
-7587 crates/lumina-core/src/lib.rs
-5310 crates/lumina-gpu/src/lib.rs
-3840 crates/lumina-gpu/tests/parity.rs
+7336 crates/lumina-core/src/lib.rs  # 7587 -> 7336 am 2026-09-18: lensfun_row-Tests nach lens_row_tests.rs extrahiert (Lensfun-Map)
+5250 crates/lumina-gpu/src/lib.rs  # 5310 -> 5250 am 2026-09-18: GPU-LENSFUN-PARITY-1 (Map-Verdrahtung, Doku) + gpu_util-Extraktion
+3825 crates/lumina-gpu/tests/parity.rs  # 3840 -> 3825 am 2026-09-18: Helper nach parity_support extrahiert, Lensfun-Paritaets-/VRAM-Test (GPU-LENSFUN-PARITY-1)
 3505 crates/lumina-core/src/render.rs
 3333 crates/lumina-sidecar/src/zdata.rs
 3264 crates/lumina-gpu/src/stages.rs
@@ -13,7 +13,9 @@
 1665 crates/lumina-core/src/generative.rs
 1572 crates/lumina-raw/src/lib.rs
 1564 crates/lumina-core/src/tone.rs
-1502 crates/lumina-gpu/src/geometry.rs
+1050 crates/lumina-gpu/src/geometry.rs  # 1502 -> 1050 am 2026-09-18: WGSL/Param-Bloecke nach geometry_shaders.rs extrahiert
+516 crates/lumina-gpu/src/lensfun.rs  # neu 2026-09-18: GPU-LENSFUN-PARITY-1 Resample-Pass (kein Split ohne Kohaesion)
+512 crates/lumina-gpu/src/geometry_shaders.rs  # neu 2026-09-18: aus geometry.rs extrahierte WGSL/Uniform-Bloecke
 1501 crates/lumina-gui/src/preview_ctrl.rs
 1492 crates/lumina-gui/src/i18n.rs  # +5 am 2026-09-17: ExpandDragFrameHint/ExpandCropToImage (i18n-Fix UXG-17)
 1351 crates/lumina-merge/src/bundle.rs

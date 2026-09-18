@@ -84,12 +84,13 @@
 //! the manual lens correction (distortion + vignette + CA) and perspective are
 //! rendered by the [`geometry`] passes in the CPU oracle's order
 //! (`lens → perspective → CA → crop → rotation → mirror`) and reproduce the
-//! oracle's **output dimensions** exactly. A Lensfun corrector is still
-//! render-context state the recipe-only API does not carry — the caller owns
-//! that decision just like the mask layers (the CLI/MCP routing
-//! mirrors gate on it). The readback-free VRAM present texture is source-sized,
+//! oracle's **output dimensions** exactly. A strictly matched Lensfun corrector
+//! is rendered by the [`lensfun`] resample pass over a caller-bound
+//! [`lumina_core::LensfunMap`] (CPU-precomputed warp/gain map; see
+//! [`GpuContext::set_lensfun_map`]), so a corrector recipe is no longer a
+//! blanket CPU route. The readback-free VRAM present texture is source-sized,
 //! so [`GpuContext::render_to_vram`] renders dimension-**preserving** geometry
-//! (lens, identity crop/rotation) into the resident output and refuses a
+//! (lens/Lensfun, identity crop/rotation) into the resident output and refuses a
 //! dimension-changing chain loudly (the caller uses the exact CPU present path).
 //!
 //! **GPU-MAXRECT-WELLE (CROP-MAXRECT-1).** When a lens or perspective
@@ -119,8 +120,10 @@
 //!
 //! [`unsupported_gpu_stages_with_context`] extends that verdict with the
 //! render-context features the routing mirrors (`lumina-cli`, `lumina-mcp`)
-//! must honor — an unbound/invalid As-Shot white balance (R2-MCP-01), mask
-//! layers and an active Lensfun corrector.
+//! must honor — an unbound/invalid As-Shot white balance (R2-MCP-01) and mask
+//! layers. A caller-bound Lensfun map is GPU-carried
+//! ([`GpuContext::set_lensfun_map`]) and is only refused when it is
+//! dimension-mismatched or would need the CPU content default crop.
 //!
 //! The public API is therefore stable and always
 //! returns a [`Frame`], which keeps the CPU and GPU return types identical for
@@ -155,13 +158,28 @@ pub mod stages;
 // — including the dimension-changing output the oracle produces.
 #[cfg(feature = "gpu")]
 mod geometry;
+// WGSL sources/uniform blocks for [`geometry`] (extracted, file-size ratchet §8).
+#[cfg(feature = "gpu")]
+mod geometry_shaders;
 // GPU G-05 lens-blur pass (GPU-RENDER-PARITY-1, lens-blur wave): deterministic
 // depth bokeh (focus-rect heuristic or a caller-supplied external depth plane)
 // as the sub-stage of Crop, after geometry and before masks/output.
 #[cfg(feature = "gpu")]
 mod lens_blur;
+// GPU-LENSFUN-PARITY-1: resample pass over a caller-bound, CPU-precomputed
+// `lumina_core::LensfunMap` (warp coordinates + vignetting gains) for the strict
+// Lensfun corrector. No WGSL re-implementation of the Lensfun models.
+#[cfg(feature = "gpu")]
+mod lensfun;
+// GPU encoding/readback helpers extracted from this file (file-size ratchet §8).
+#[cfg(feature = "gpu")]
+mod gpu_util;
 #[cfg(feature = "gpu")]
 pub mod tiling;
+#[cfg(feature = "gpu")]
+use gpu_util::{
+    encode_fullscreen_pass, encode_geometry_pass, readback_gradient_max, readback_texture,
+};
 
 /// A rendered frame.
 ///
@@ -321,11 +339,12 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 ///   the recipe GPU-eligible.
 ///
 /// This predicate sees only the recipe. Render-context state the GPU stage
-/// cannot reproduce — mask layers, an active Lensfun corrector, an unbound
-/// external depth plane — is covered by [`unsupported_gpu_stages_with_context`],
-/// which the routing mirrors in `lumina-cli`/`lumina-mcp` consult before
-/// entering the GPU path. A decoder As-Shot white balance is now GPU-carryable
-/// (see below), so a valid one is no longer a reason.
+/// cannot express from the recipe alone — mask layers, a caller-bound Lensfun
+/// map ([`GpuContext::set_lensfun_map`]), an unbound external depth plane — is
+/// the caller's responsibility ([`unsupported_gpu_stages_with_context`]), which
+/// the routing mirrors in `lumina-cli`/`lumina-mcp` consult before entering the
+/// GPU path. A decoder As-Shot white balance is GPU-carryable (see below), so a
+/// valid one is no longer a reason.
 pub fn unsupported_gpu_stages(recipe: &EditRecipe) -> Vec<String> {
     unsupported_gpu_stages_with_context(recipe, false, None)
 }
@@ -740,6 +759,15 @@ pub struct GpuContext {
     /// irrelevant for the focus-rect heuristic.
     #[cfg(feature = "gpu")]
     depth_plane: Option<DepthPlaneGpu>,
+    /// Caller-bound Lensfun warp/gain map (GPU-LENSFUN-PARITY-1), built from a
+    /// strict corrector via [`lumina_core::LensfunMap::from_corrector`] and
+    /// bound with [`GpuContext::set_lensfun_map`]. `None` means the recipe's
+    /// manual lens model (if any) applies. A bound map replaces the manual
+    /// lens step in the GPU geometry chain and is a loud render input: a
+    /// dimension mismatch or a distortion corrector without an explicit crop
+    /// errors instead of rendering divergent pixels.
+    #[cfg(feature = "gpu")]
+    lensfun_map: Option<lensfun::LensfunMapGpu>,
     /// VRAM-resident interactive state pool (GPU-60FPS-1 / GUI-WGPU-PRESENT-1):
     /// output + mask textures and overlay uniforms for a small LRU set of
     /// source dimensions, kept resident across frames so slider drags and brush
@@ -1105,6 +1133,7 @@ impl GpuContext {
             geometry_pipeline: std::sync::Mutex::new(None),
             lens_blur_pipeline: std::sync::Mutex::new(None),
             depth_plane: None,
+            lensfun_map: None,
             vram: std::sync::Mutex::new(VramPool::new()),
             source_actions: None,
             #[cfg(feature = "gpu")]
@@ -1355,6 +1384,26 @@ impl GpuContext {
             texture,
             view,
         });
+        Ok(())
+    }
+
+    /// Bind (or clear with `None`) the caller-owned Lensfun warp/gain map
+    /// (GPU-LENSFUN-PARITY-1), built from a strict corrector via
+    /// [`lumina_core::LensfunMap::from_corrector`].
+    ///
+    /// Mirroring [`Self::set_depth_plane`], the map is validated loudly on bind
+    /// (dimensions, plane lengths, TCA pairing, finiteness): an invalid map
+    /// returns the oracle's own [`lumina_core::CoreError`] and changes **no**
+    /// state. The GPU textures are uploaded once here and reused by every render
+    /// until the map is re-bound or cleared. A bound dimension-preserving map
+    /// replaces the recipe's manual lens step; a dimension-changing chain or a
+    /// distortion corrector without an explicit crop is refused loudly at the
+    /// render entry (never divergent pixels).
+    pub fn set_lensfun_map(
+        &mut self,
+        map: Option<&lumina_core::LensfunMap>,
+    ) -> Result<(), GpuError> {
+        self.lensfun_map = lensfun::bind_map(self.resources.as_ref(), map)?;
         Ok(())
     }
 
@@ -1792,6 +1841,24 @@ impl GpuContext {
                     dst,
                     encoder,
                 ),
+                // GPU-LENSFUN-PARITY-1: resample with the caller-bound map. The
+                // plan only contains a Lensfun step when a map is bound (the
+                // planner receives it), so a missing binding is a loud error.
+                GeometryStep::Lensfun { .. } => {
+                    let map = self.lensfun_map.as_ref().ok_or_else(|| {
+                        GpuError::RenderFailed(
+                            "geometry chain planned a Lensfun step without a bound map".into(),
+                        )
+                    })?;
+                    crate::lensfun::encode_lensfun_pass(
+                        resources,
+                        &geo.lensfun,
+                        map,
+                        current,
+                        dst,
+                        encoder,
+                    )?;
+                }
             }
             current = dst;
         }
@@ -2293,7 +2360,17 @@ impl GpuContext {
         // changes the output dimensions cannot be presented here yet. That is
         // an honest, loud limitation — no divergent pixels are ever written and
         // the caller (GUI) falls back to the exact CPU present path.
-        let geometry_plan = geometry::GeometryPlan::from_recipe(recipe, frame.width, frame.height)?;
+        let geometry_plan = match self.lensfun_map.as_ref() {
+            Some(bound) => geometry::GeometryPlan::from_recipe_with(
+                recipe,
+                frame.width,
+                frame.height,
+                &geometry::GenerativePlanInput::default(),
+                false,
+                Some(&bound.map),
+            )?,
+            None => geometry::GeometryPlan::from_recipe(recipe, frame.width, frame.height)?,
+        };
         let vram_geometry = geometry_plan.as_ref().is_some_and(|plan| {
             plan.output_width == frame.width && plan.output_height == frame.height
         });
@@ -3035,11 +3112,14 @@ impl GpuContext {
     /// bound them via [`GpuContext::set_camera_white_balance`] /
     /// [`GpuContext::set_depth_plane`].
     ///
-    /// This method only sees the recipe. Mask layers and an active Lensfun
-    /// corrector cannot be expressed here, so callers carrying them must consult
+    /// This method only sees the recipe. Mask layers cannot be expressed here,
+    /// so callers carrying them must consult
     /// [`unsupported_gpu_stages_with_context`] (plus their own context checks)
     /// *before* calling this method; the CLI/MCP routing mirrors do exactly
-    /// that (R2-MCP-01). The bound As-Shot context is validated here
+    /// that (R2-MCP-01). A caller-bound Lensfun map is carried into the geometry
+    /// chain when bound via [`GpuContext::set_lensfun_map`] (a bound map makes
+    /// the internal CPU fallback refuse loudly, since the free `render_cpu`
+    /// reference has no corrector). The bound As-Shot context is validated here
     /// ([`GpuContext::set_camera_white_balance`]) with the oracle's own error.
     ///
     /// When no adapter is bound (or the `gpu` feature is disabled downstream) it
@@ -3081,7 +3161,19 @@ impl GpuContext {
         recipe: &EditRecipe,
         generative: Option<&lumina_core::GenerativeCanvasInput<'_>>,
     ) -> Result<Frame, GpuError> {
+        // GPU-LENSFUN-PARITY-1: the free `render_cpu` reference does not carry a
+        // caller-bound Lensfun map (the corrector is render-context state,
+        // F-098-N1), so a fallback would silently drop the correction. Refuse
+        // loudly instead — the caller owns the full CPU reference for a bound
+        // map (the GUI presents the exact CPU frame itself).
         let cpu_fallback = |frame: &ImageFrame| {
+            if self.lensfun_map.is_some() {
+                return Err(GpuError::RenderFailed(
+                    "a bound Lensfun map cannot use the internal CPU fallback; \
+                     the caller owns the full CPU reference"
+                        .into(),
+                ));
+            }
             render_cpu_with_generative(
                 frame,
                 recipe,
@@ -3220,6 +3312,7 @@ impl GpuContext {
             height,
             &plan_input,
             generative.is_some(),
+            self.lensfun_map.as_ref().map(|bound| &bound.map),
         )?;
         let (plan_out_width, plan_out_height) =
             geometry_plan.as_ref().map_or((width, height), |plan| {
@@ -3794,125 +3887,20 @@ fn render_cpu_with_generative(
     Ok(Frame::from_image_frame(output.frame))
 }
 
-/// Map a 4-byte `MAP_READ` staging buffer and reinterpret its `u32` payload as
-/// the sharpening gradient maximum (`f32::from_bits`). Used by
-/// [`GpuContext::encode_sharpening`] after its `atomicMax` reduction.
-#[cfg(feature = "gpu")]
-fn readback_gradient_max(
-    resources: &GpuResources,
-    staging: &wgpu::Buffer,
-) -> Result<f32, GpuError> {
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |res| {
-        let _ = tx.send(res);
-    });
-    resources
-        .device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
-    rx.recv()
-        .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
-        .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
-    let mapped = slice
-        .get_mapped_range()
-        .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
-    let bits = u32::from_le_bytes([mapped[0], mapped[1], mapped[2], mapped[3]]);
-    drop(mapped);
-    staging.unmap();
-    Ok(f32::from_bits(bits))
-}
-
-/// Read an arbitrary RGBA8 texture back into a CPU [`Frame`].
-///
-/// Used by the dimension-changing geometry path (`render_with_gpu`), whose
-/// final texture carries the oracle's output dimensions rather than the pooled
-/// source-sized readback buffer.
-#[cfg(feature = "gpu")]
-fn readback_texture(
-    resources: &GpuResources,
-    texture: &wgpu::Texture,
-    width: u32,
-    height: u32,
-) -> Result<Frame, GpuError> {
-    let bytes_per_row = shaders::aligned_bytes_per_row(width);
-    let staging = resources.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lumina-gpu-geometry-readback"),
-        size: (bytes_per_row * height.max(1)) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = resources
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("lumina-gpu-geometry-readback-enc"),
-        });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &staging,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    resources.queue.submit(Some(encoder.finish()));
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |res| {
-        let _ = tx.send(res);
-    });
-    resources
-        .device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|e| GpuError::RenderFailed(format!("device poll: {e}")))?;
-    rx.recv()
-        .map_err(|e| GpuError::RenderFailed(format!("map channel: {e}")))?
-        .map_err(|e| GpuError::RenderFailed(format!("buffer map: {e}")))?;
-    let mapped = slice
-        .get_mapped_range()
-        .map_err(|e| GpuError::RenderFailed(format!("mapped view: {e}")))?;
-    let row_bytes = (width * 4) as usize;
-    let mut pixels = Vec::with_capacity(row_bytes * height as usize);
-    for y in 0..height as usize {
-        let start = y * bytes_per_row as usize;
-        pixels.extend_from_slice(&mapped[start..start + row_bytes]);
-    }
-    drop(mapped);
-    staging.unmap();
-    Ok(Frame {
-        width,
-        height,
-        pixels,
-    })
-}
-
 // ---------------------------------------------------------------------------
 // GPU backend init (only compiled under the `gpu` feature).
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "gpu")]
-struct GpuResources {
+pub(crate) struct GpuResources {
     #[allow(dead_code)]
     instance: std::mem::ManuallyDrop<wgpu::Instance>,
     #[allow(dead_code)]
     adapter: std::mem::ManuallyDrop<wgpu::Adapter>,
     #[allow(dead_code)]
-    device: std::mem::ManuallyDrop<wgpu::Device>,
+    pub(crate) device: std::mem::ManuallyDrop<wgpu::Device>,
     #[allow(dead_code)]
-    queue: std::mem::ManuallyDrop<wgpu::Queue>,
+    pub(crate) queue: std::mem::ManuallyDrop<wgpu::Queue>,
     /// Mirrors device loss into a flag the render methods poll, so a revoked
     /// adapter/device (driver update, GPU reset, monitor unplug) degrades to the
     /// CPU path instead of erroring or panicking (R2-GPU-06).
@@ -4104,58 +4092,6 @@ fn post_stages_needed(recipe: &EditRecipe) -> bool {
         .as_ref()
         .is_some_and(stages::RedEyeParams::needs_stage);
     presence || stages::ColorParams::needs_stage(recipe) || noise || sharpen || red_eye || effects
-}
-
-/// Encode one fullscreen-triangle draw into `dst` with `pipeline`/`bind_group`.
-#[cfg(feature = "gpu")]
-fn encode_fullscreen_pass(
-    encoder: &mut wgpu::CommandEncoder,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
-    dst: &wgpu::TextureView,
-) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("lumina-gpu-post-pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: dst,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
-    pass.draw(0..3, 0..1);
-}
-
-/// Encode one geometry sub-stage pass: allocate a transient uniform buffer for
-/// `params`, bind the (uniform + input texture) pair against `input_view` and
-/// draw into `dst`.
-#[cfg(feature = "gpu")]
-fn encode_geometry_pass<T: bytemuck::Pod>(
-    resources: &GpuResources,
-    layout: &wgpu::BindGroupLayout,
-    pipeline: &wgpu::RenderPipeline,
-    params: &T,
-    input_view: &wgpu::TextureView,
-    dst: &wgpu::TextureView,
-    encoder: &mut wgpu::CommandEncoder,
-) {
-    let buffer = geometry::create_geometry_uniform_buffer(
-        &resources.device,
-        std::mem::size_of::<T>() as u64,
-        "lumina-gpu-geometry-params",
-    );
-    geometry::write_geometry_params(&resources.queue, &buffer, params);
-    let bind = geometry::create_geometry_bind_group(&resources.device, layout, &buffer, input_view);
-    encode_fullscreen_pass(encoder, pipeline, &bind, dst);
 }
 
 /// Result of the batched source-action stage: the scratch textures that hold the
