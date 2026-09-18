@@ -121,6 +121,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
 | 1.0 | GPU-RENDER-MASK-19 | alle G | Masken-Pixelpass |
+| 1.0 | GUI-JANKLOG-19 | alle G | Ruckel-Attribution-Log |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
@@ -157,6 +158,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: hoch] UX-LOOK-TONECURVE-18 (Release: 1.0)** Tone Curve als echte Kurvengrafik (Look-Analyse 2026-09-17, UXG-16): Punkte setzen/ziehen pro Kanal (Kanalwahl besteht), statt P0/P1-Slider-Reihen. Abnahme: GUI-headless (Punkt setzen/ziehen/löschen persistiert), Golden mit Kurvengrafik, kein stiller Fallback.
 - [ ] **[PRIO: hoch] UX-LOOK-CROP-18 (Release: 1.0)** Crop-Overlay mit Eck-Handles, Drittel-Gitter, Abdunklung (Look-Analyse 2026-09-17, UXG-01): interaktives Aufziehen/Verschieben, Commit-Semantik per SOLL-Entscheid (steht aus — zuerst Doku). Abnahme: GUI-headless + Golden, Rezept-Semantik unverändert außer dokumentiertem Commit.
 - [ ] **[PRIO: hoch] UX-LOOK-HISTORY-18 (Release: 1.0)** History menschenlesbar + Presets als Baum (Look-Analyse 2026-09-17, UXG-07/12): History-Einträge mit Reglername + alt→neu + Uhrzeit (Schema-Entscheid zuerst), Presets als Gruppen-Baum ohne absoluten Pfad. Abnahme: GUI-headless (Einträge lesbar + klickbar), Golden, kein Schema-Bruch ohne Migration.
+- [ ] **[PRIO: hoch] GUI-JANKLOG-19 (Release: 1.0)** Ruckel-Ursachen aus dem Log ablesbar machen (User-Vorgabe 2026-09-18): Standard-Frames bleiben still (kein Per-Frame-Spam); nur langsame Aktionen/Render loggen (konfigurierbare Schwelle) mit Auslöser-Kette (Aktion → Rezept-Änderung → Renderpfad/Route → Teil-Dauern), damit aus dem Log klar ist, was den Ruckler verursacht hat. Zuerst SOLL-Entscheid in `feature/platform/cli-gui-wasm.md` (Schwelle, Log-Level, Trigger-Format, Debug vs. Release), dann Implementierung — keine Implementierung vor deiner Order. Abnahme: simulierter Slow-Render erzeugt genau eine attribuierte Zeile; Normalbetrieb bleibt still (Test assertet Stille); kein stiller Fallback.
 
 ### PRIO: mittel
 
