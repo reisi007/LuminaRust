@@ -244,6 +244,16 @@ BESTANDEN verifiziert).
   reproduzierbare Befehle aus cli-gui-wasm.md + Log-Ausschnitt; unabhängiger Verifizierungs-
   Agent bestätigt F-100-Checkliste + Tests (BESTANDEN). Letzter Schritt vor
   Abschluss von Phase 8.
+  **Bereit für Runde 2 (Release-Build, Stand 2026-09-18):** Vorher landen müssen
+  2 Tasks: GUI-GPU-AUDIT-17 (Automatisierung verifizieren + committen — liefert
+  Audit-Test + Timing-Baseline) und GPU-LENSFUN-PARITY-1 (landen + verifizieren +
+  committen, sonst steht die dokumentierte Lensfun-Ausnahme im Runde-2-Log).
+  GPU-RENDER-DENOISE/PREVIEW/EXPORT/MASK-19 sind bewusst dokumentiert-only
+  (keine Implementierung vor Runde 2 — User-Entscheid 2026-09-18); Runde 2
+  protokolliert deren CPU-Routen als bekannte Gaps, nicht als neue Befunde.
+  GUI-PARITY-GOLDENS-18 empfohlen, nicht Pflicht (nur CI-ignorierte Goldens).
+  R2-GUIMOD-04b/04c brauchen 04a-Zahlen aus Runde 2 (danach). UX-LOOK-18 sind
+  unabhängig (Look beeinflusst Routing-/Perf-Messung nicht).
 
 ## Abnahmekriterien
 
