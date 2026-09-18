@@ -117,6 +117,10 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | UX-LOOK-TONECURVE-18 | alle G | Kurvengrafik |
 | 1.0 | UX-LOOK-CROP-18 | alle G | Crop-Handles+Gitter |
 | 1.0 | UX-LOOK-HISTORY-18 | alle G | History lesbar+Presets-Baum |
+| 1.0 | GPU-RENDER-DENOISE-19 | G-14 | Denoise-WGSL-Pass |
+| 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
+| 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
+| 1.0 | GPU-RENDER-MASK-19 | alle G | Masken-Pixelpass |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
