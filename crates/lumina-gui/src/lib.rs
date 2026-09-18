@@ -21041,6 +21041,10 @@ mod tests {
     mod instrdbg_rework;
     // GUI-INSTRDBG-17c-Rest: the People-view "Use as mask" click test.
     mod instrdbg_face;
+    // GUI-GPU-AUDIT-17 (Release 1.0): headless routing audit over every
+    // `GuiAction` (Metal-gated, `--ignored`).
+    mod gpu_audit;
+    mod gpu_audit_actions;
     use lumina_core::ImageFileFormat;
     use lumina_sidecar::{
         BokehShape, BrushMark, BrushMarkSign, CoordinateSystem, Crop, DecodeFingerprint,

@@ -110,7 +110,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | GPU-LENSFUN-PARITY-1 | G-06 | Lensfun-GPU-Pass (dokumentierte Ausnahme bis dahin) |
-| 1.0 | GUI-GPU-AUDIT-17 | alle G | GPU-Audit ohne Fallback |
 | 1.0 | GUI-PARITY-GOLDENS-18 | alle G | Parity-Goldens-Rebless |
 | 1.0 | UX-LOOK-LAYOUT-18 | alle G | Develop-Layout links |
 | 1.0 | UX-LOOK-TOOLBAR-18 | alle G | Icon-Werkzeugleiste |
@@ -157,7 +156,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] GUI-GPU-AUDIT-17 (Release: 1.0)** GPU-Audit der GUI (User-Vorgabe 2026-09-17, F-103-N6): automatisiert + manuell belegen, dass alle GUI-Operationen ohne CPU-Fallback laufen und messbar schnell sind. Automatisiert: headless GUI mit echtem GPU-Kontext (lokales Metal, CI-Gap) fährt alle Aktionen und assertet je Aktion `gpu_routing_fallback_badge() == None` + misst Dauer (Budget-Tabelle, report-only bis Kalibrierung). Manuell: Debug-Log (`action= duration_ms= gpu_route=`) der Runde-2-Testfahrt ohne `cpu-fallback` (außer dokumentierte Ausnahmen). Abnahme: Audit-Test grün lokal, keine undokumentierte CPU-Route, Timing-Tabelle im Feature-Doc.
 - [ ] **[PRIO: hoch] UX-LOOK-LAYOUT-18 (Release: 1.0)** Develop-Makrolayout an LR angleichen (Look-Analyse 2026-09-17, UXG-02): linke Rail mit Navigator + Presets-Baum + Snapshots + History + Copy/Paste; Footer-Admin-Aktionen entzerren, „Previous | Reset"-Äquivalent rechts verankern. Zuerst SOLL-Entscheid in `lightroom-ux-parity.md` (Seiten-Layout offen!), dann Implementierung. Abnahme: GUI-headless + kittest-Goldens, kein Rezept-/Sidecar-Verhalten geändert.
 - [ ] **[PRIO: hoch] UX-LOOK-TOOLBAR-18 (Release: 1.0)** Icon-Werkzeugleiste (Look-Analyse 2026-09-17, UXG-04): Crop/Heal/Red-Eye/Masken + View-Toggles als Icons am LR-Ort (unter Histogramm/über Bild), Library-View-Tabs ikonisieren. Zielbild beachten (modern, aber vertraut). Abnahme: GUI-headless (jeder Button malt + schaltet), kittest-Goldens.
 - [ ] **[PRIO: hoch] UX-LOOK-TONECURVE-18 (Release: 1.0)** Tone Curve als echte Kurvengrafik (Look-Analyse 2026-09-17, UXG-16): Punkte setzen/ziehen pro Kanal (Kanalwahl besteht), statt P0/P1-Slider-Reihen. Abnahme: GUI-headless (Punkt setzen/ziehen/löschen persistiert), Golden mit Kurvengrafik, kein stiller Fallback.
@@ -172,7 +170,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] GPU-LENSFUN-PARITY-1 (→ G-06, Release: 1.0)** GPU-Pass für den (korrekt, strikt gematchten) Lensfun-Corrector. Befund GUI-ROUTING-N6 (2026-09-17): Ein aktiver Lensfun-Corrector hat keinen WGSL-Pass; GUI/CLI routen laut auf CPU (Badge `lens_correction (Lensfun corrector)`) — bis zur Umsetzung als dokumentierte Ausnahme in `feature/architecture/pipeline.md` § GPU-Pfad und `feature/platform/cli-gui-wasm.md` festgeschrieben. Scope: Lensfun liefert beliebige Distortion-/TCA-/Vignette-Modelle als per-Pixel-Koordinaten-/Gewinnfunktion; daher vorberechnete Warp-/Gain-Map (CPU-Aufbau pro Quelle/Dimensionen, GPU-Resample-Pass analog `depth_plane`) statt WGSL-Nachbau der Modelle. Abnahme: Oracle-vs-GPU-Paritätstest (`lumina-gpu/tests/parity.rs`, maxAbsDiff/PSNR nach F-043), GUI-headless ohne Badge für das Rezept, CPU-Referenz bleibt vollständig. Hinweis: Die **falsche** Profilzuordnung (lose Suche) ist mit GUI-ROUTING-N6 bereits behoben; hier geht es nur um die Pixel-Parität eines korrekten Correctors. **Stand 2026-09-18:** Kern (LensfunMap + WGSL-Resample-Pass + Oracle-Parität maxAbsDiff 0/PSNR ∞ + Testanker F1–F4) unabhängig verifiziert BESTANDEN und committet; Rest offen: GUI-Wiring (Corrector → Map-Bindung + Badge-Entfernung + Audit-Ausnahmetabellen-Update — braucht Umsetzungs-Order), F6-Stale-Line in `cli-gui-wasm.md` (mit Wiring), F7 CLI/MCP-Verdrahtung (Folge), F5 TCA-Skip mit manuellem Lens (niedrig, Folge).
+- [ ] **[PRIO: mittel] GPU-LENSFUN-PARITY-1 (→ G-06, Release: 1.0)** GPU-Pass für den (korrekt, strikt gematchten) Lensfun-Corrector. Befund GUI-ROUTING-N6 (2026-09-17): Ein aktiver Lensfun-Corrector hat keinen WGSL-Pass; GUI/CLI routen laut auf CPU (Badge `lens_correction (Lensfun corrector)`) — bis zur Umsetzung als dokumentierte Ausnahme in `feature/architecture/pipeline.md` § GPU-Pfad und `feature/platform/cli-gui-wasm.md` festgeschrieben. Scope: Lensfun liefert beliebige Distortion-/TCA-/Vignette-Modelle als per-Pixel-Koordinaten-/Gewinnfunktion; daher vorberechnete Warp-/Gain-Map (CPU-Aufbau pro Quelle/Dimensionen, GPU-Resample-Pass analog `depth_plane`) statt WGSL-Nachbau der Modelle. Abnahme: Oracle-vs-GPU-Paritätstest (`lumina-gpu/tests/parity.rs`, maxAbsDiff/PSNR nach F-043), GUI-headless ohne Badge für das Rezept, CPU-Referenz bleibt vollständig. Hinweis: Die **falsche** Profilzuordnung (lose Suche) ist mit GUI-ROUTING-N6 bereits behoben; hier geht es nur um die Pixel-Parität eines korrekten Correctors. **Stand 2026-09-18:** Kern (LensfunMap + WGSL-Resample-Pass + Oracle-Parität maxAbsDiff 0/PSNR ∞ + Testanker F1–F4) unabhängig verifiziert BESTANDEN und committet; Rest offen: GUI-Wiring (Corrector → Map-Bindung + Badge-Entfernung + Audit-Ausnahmetabellen-Update — **beauftragt 2026-09-18**), F6-Stale-Line in `cli-gui-wasm.md` (mit Wiring), F7 CLI/MCP-Verdrahtung (Folge), F5 TCA-Skip mit manuellem Lens (niedrig, Folge).
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
@@ -256,10 +254,10 @@ BESTANDEN verifiziert).
   reproduzierbare Befehle aus cli-gui-wasm.md + Log-Ausschnitt; unabhängiger Verifizierungs-
   Agent bestätigt F-100-Checkliste + Tests (BESTANDEN). Letzter Schritt vor
   Abschluss von Phase 8.
-  **Bereit für Runde 2 (Release-Build, Stand 2026-09-18):** Vorher landen müssen
-  2 Tasks: GUI-GPU-AUDIT-17 (Automatisierung verifizieren + committen — liefert
-  Audit-Test + Timing-Baseline) und GPU-LENSFUN-PARITY-1 (landen + verifizieren +
-  committen, sonst steht die dokumentierte Lensfun-Ausnahme im Runde-2-Log).
+  **Bereit für Runde 2 (Release-Build, Stand 2026-09-18):** Geladet: GUI-GPU-AUDIT-17
+  (verifiziert + committet — Audit-Test + Timing-Baseline), GPU-LENSFUN-Kern
+  (verifiziert + committet). Vor Runde 2 läuft noch das beauftragte Lensfun-
+  GUI-Wiring (sonst steht die Lensfun-Ausnahme im Runde-2-Log).
   GPU-RENDER-DENOISE/PREVIEW/EXPORT/MASK-19 sind bewusst dokumentiert-only
   (keine Implementierung vor Runde 2 — User-Entscheid 2026-09-18); Runde 2
   protokolliert deren CPU-Routen als bekannte Gaps, nicht als neue Befunde.

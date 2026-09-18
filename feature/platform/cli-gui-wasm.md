@@ -654,10 +654,166 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   `LF_SEARCH_LOOSE`); ohne echten DB-Eintrag greift der manuelle Pfad
   („nie ein geratenes Profil"). Damit ist der Badge für die Fixtures weg und
   eine reale Fehlkorrektur behoben. Ein **korrekt gematchter** Lensfun-Corrector
-  hat weiterhin keinen WGSL-Pass und bleibt die eine bewusst dokumentierte,
-  laute CPU-Route (Badge nennt den präzisen Grund); die GPU-Umsetzung ist als
-  `GPU-LENSFUN-PARITY-1` in `Agents.todo.md` getrackt. Details/Testanker:
-  `feature/architecture/pipeline.md` § Implementierungsstatus GPU-Pfad.
+  läuft seit **GPU-LENSFUN-PARITY-1 (2026-09-18)** auf der GPU: Der CPU-Aufbau
+  erzeugt eine `LensfunMap` (Warp-/Gain-Map), die der `lumina-gpu`-Resample-Pass
+  abtastet (`GpuContext::set_lensfun_map`), mit Oracle-Parität (`maxAbsDiff ==
+  0`). Ein GPU-Badge für den Corrector entfällt damit; verweigert/CPU-geroutet
+  bleibt nur der Distortion-Fall ohne expliziten Crop (datenabhängiger
+  Default-Crop, `feature/architecture/pipeline.md` § Implementierungsstatus
+  GPU-Pfad). Die GUI-Verdrahtung (Corrector → Map → Present-Gate) und der
+  headless Badge-Abwesenheitstest gehören zum selben Task.
+- **GUI-GPU-AUDIT-17 (Release 1.0, User-Vorgabe 2026-09-17, F-103-N6):**
+  Automatisierter headless Routing-Audit über **alle** 101 `GuiAction`s
+  (Quelle der Aktionsliste: `ALL_GUI_ACTIONS`). Der Audit lädt eine
+  deterministische synthetische Quelle in eine `LuminaApp` mit **echtem**
+  GPU-Kontext (Standalone-Metal-Adapter über `attach_wgpu_render_state`),
+  fährt je Aktion den realen Handler, führt danach den echten
+  Draft-Hot-Path (`render_draft_tick`: füllt `vram_fresh`/
+  `vram_render_refusal`) und den Present-Gate (`update_texture`) aus und
+  prüft je Aktion `gpu_routing_fallback_badge()`.
+  - **Testanker:** `crates/lumina-gui/src/tests/gpu_audit.rs` (Audit +
+    adapter-unabhängige Vollständigkeitsprüfung) und
+    `crates/lumina-gui/src/tests/gpu_audit_actions.rs` (erschöpfender
+    `GuiAction`-Dispatch ohne `_`-Arm — eine neue Aktion kompiliert nur mit
+    Audit-Arm).
+  - **Kommandos:** `cargo test -p lumina-gui` (Vollständigkeitstest
+    `gpu_audit_exception_table_is_complete_without_gpu`, läuft ohne GPU) und
+    `cargo test -p lumina-gui --lib gpu_audit -- --ignored` (Metal-Audit;
+    ohne Adapter SKIP statt Rot, wie `kittest_*`; CI-Gap kein Metal in CI).
+  - **Ergebnis (lokal, Metal, 2026-09-18):** 101 Aktionen gefahren, 10
+    dokumentierte CPU-Ausnahmen, keine undokumentierte CPU-Route; der
+    adapter-unabhängige Test pinnt die Ausnahmetabelle gegen die
+    dokumentierten Grundklassen. Der Present-Pfad selbst bleibt über
+    `kittest_parity` abgedeckt.
+  - **Dokumentierte CPU-Ausnahmen (explizite Liste, alle laut sichtbar per
+    Badge):**
+
+    | Aktion(en) | Badge-Grund | Normative Quelle |
+    | --- | --- | --- |
+    | `set_lens_profile`, `analyze_upright`, `set_upright_enabled` | `geometry (default content crop)` | CROP-MAXRECT-1 / GPU-MAXRECT-WELLE (`architecture/pipeline.md` § GPU-Pfad): Lens-/Perspektiv-Korrektur ohne explizites `geometry.crop` aktiviert den datenabhängigen MaxRect-Crop. |
+    | `set_crop_aspect`, `rotate_step` | `geometry (dimension-changing output…)` | GUI-LENSFUN-GATE-3 F1 (`architecture/pipeline.md` § GPU-Pfad): die readback-freie VRAM-Present-Textur ist quellgroß; ein dimensionsänderndes Rezept wird laut verweigert und exakt auf der CPU präsentiert (Export/Readback bleibt GPU-fähig). |
+    | `set_expand_canvas`, `generate_generative_canvas`, `set_expand_beyond_image`, `set_auto_fill_transparent` | `generative_edit (…)` | GEN-ONNX-1 Welle 2b: der readback-freie VRAM-Present ist artifact-blind; Preview/Export laufen per Design über den artifact-aware CPU-Pfad (kein VRAM-Injektionspunkt ohne Readback). |
+    | `set_denoise_enabled` | `denoise_ai (not GPU-wired)` | LRPAR-G14-DENOISE-IMPL-20: additive KI-Denoise-Stufe (Release 2.0) hat noch keinen WGSL-Pass; aktive Stufe routet laut auf CPU. |
+    | (kein `GuiAction`; separater Testfall `gpu_audit_lensfun_corrector_is_a_documented_cpu_exception`) | `lens_correction (Lensfun corrector)` | GUI-LENSFUN-GATE-1/-2, GPU-LENSFUN-PARITY-1: ein strikt gematchter Lensfun-Corrector hat keinen WGSL-Pass (Badge nennt den präzisen Grund). |
+
+  - **Timing-Tabelle (report-only, unkalibriert; kein hartes Gate):** eine
+    repräsentative lokale Metal-Messung (Debug, 64×48-Quelle,
+    Handler-Wanduhrzeit in Mikrosekunden; die absolute Zahl schwankt mit
+    Maschine/Last und wird bewusst nicht gegated). Gesamt:
+    **235317 µs** über 101 Aktionen (Summe der Handler-Zeiten, inkl. der
+    CPU-Vollrenders/Sidecar-Writes der betroffenen Handler).
+
+    | Aktion | Handler (µs) | Route |
+    | --- | ---: | --- |
+    | `toggle_before_after` | 10 | present |
+    | `toggle_split_view` | 2 | present |
+    | `toggle_crop_mode` | 6 | present |
+    | `toggle_clipping` | 1 | present |
+    | `toggle_softproof` | 1 | present |
+    | `toggle_original_histogram` | 4 | present |
+    | `toggle_lights_out` | 1 | present |
+    | `toggle_panels_hidden` | 0 | present |
+    | `toggle_all_panels_hidden` | 1 | present |
+    | `toggle_fullscreen` | 3 | present |
+    | `toggle_filter_bar` | 0 | present |
+    | `toggle_black_white` | 12155 | present |
+    | `toggle_stack_group` | 8312 | present |
+    | `create_snapshot` | 7009 | present |
+    | `duplicate_copy` | 14316 | present |
+    | `copy_settings` | 1 | present |
+    | `paste_settings` | 7027 | present |
+    | `set_rating` | 7101 | present |
+    | `set_flag` | 7083 | present |
+    | `set_color_label` | 6942 | present |
+    | `set_mask_tool` | 5 | present |
+    | `set_spot_tool` | 1 | present |
+    | `set_treatment` | 101 | present |
+    | `set_module` | 0 | present |
+    | `set_library_view` | 1 | present |
+    | `set_zoom_mode` | 18 | present |
+    | `regenerate_stale` | 1 | present |
+    | `match_total_exposure` | 7115 | present |
+    | `auto_tone` | 6957 | present |
+    | `save_recipe` | 7024 | present |
+    | `reset` | 86 | present |
+    | `render` | 86 | present |
+    | `export` | 5216 | present |
+    | `start_merge` | 5 | present |
+    | `toggle_compare_mode` | 1 | present |
+    | `clear_crop` | 1 | present |
+    | `set_crop_aspect` | 1 | geometry (dimension-changing output) |
+    | `rotate_step` | 1 | geometry (dimension-changing output) |
+    | `set_geometry_mirror` | 1 | present |
+    | `analyze_upright` | 12755 | geometry (default content crop) |
+    | `set_upright_enabled` | 12279 | geometry (default content crop) |
+    | `clear_upright` | 3 | present |
+    | `create_mask` | 172 | present |
+    | `select_mask` | 175 | present |
+    | `set_mask_visible` | 7293 | present |
+    | `set_show_mask_overlay` | 1 | present |
+    | `set_overlay_color` | 0 | present |
+    | `create_ai_mask` | 7352 | present |
+    | `create_luminance_range_mask` | 6993 | present |
+    | `create_color_range_mask` | 6958 | present |
+    | `combine_masks` | 6920 | present |
+    | `duplicate_mask` | 6973 | present |
+    | `set_overlay_mode` | 2 | present |
+    | `set_pin_visibility` | 1 | present |
+    | `set_solo_mode` | 5 | present |
+    | `set_mask_inverted` | 190 | present |
+    | `offer_mask_recalculation` | 200 | present |
+    | `add_keyword` | 6938 | present |
+    | `remove_keyword` | 14062 | present |
+    | `commit_metadata_draft` | 111 | present |
+    | `clear_metadata_draft` | 104 | present |
+    | `copy_metadata_draft` | 111 | present |
+    | `paste_metadata_draft` | 107 | present |
+    | `clear_metadata_history` | 101 | present |
+    | `apply_meta_preset` | 30 | present |
+    | `sync_metadata` | 72 | present |
+    | `set_spot_mode` | 0 | present |
+    | `clear_spot_visualize` | 1 | present |
+    | `detect_spot_candidates` | 66 | present |
+    | `apply_detected_spots` | 9760 | present |
+    | `regenerate_spot_variant` | 2 | present |
+    | `clear_spot_heals` | 6857 | present |
+    | `detect_red_eye_candidates` | 111 | present |
+    | `apply_detected_red_eyes` | 104 | present |
+    | `remove_red_eye_region` | 5 | present |
+    | `clear_red_eye` | 5 | present |
+    | `set_lens_profile` | 2 | geometry (default content crop) |
+    | `clear_lens_profile` | 4 | present |
+    | `set_lens_blur_bokeh` | 4 | present |
+    | `add_curve_point` | 12 | present |
+    | `remove_curve_point` | 11 | present |
+    | `apply_preset` | 160 | present |
+    | `save_preset_file` | 4400 | present |
+    | `set_spot_distraction` | 3 | present |
+    | `set_red_eye_pick_mode` | 3 | present |
+    | `reload_preset_entries` | 104 | present |
+    | `arm_wb_eyedropper` | 1 | present |
+    | `add_point_color` | 2 | present |
+    | `remove_point_color` | 10 | present |
+    | `set_expand_canvas` | 202 | generative_edit |
+    | `generate_generative_canvas` | 12401 | generative_edit |
+    | `set_expand_beyond_image` | 204 | generative_edit |
+    | `set_auto_fill_transparent` | 181 | generative_edit |
+    | `restore_section_previous` | 7098 | present |
+    | `reset_section` | 7084 | present |
+    | `set_lens_blur_enabled` | 1 | present |
+    | `sync_settings_to_selection` | 6 | present |
+    | `match_exposures_of_selection` | 2 | present |
+    | `apply_previous_to_selection` | 1 | present |
+    | `set_denoise_enabled` | 4 | denoise_ai (not GPU-wired) |
+    | `create_face_mask` | 2 | present |
+
+  - **Offen (nicht Teil dieses Implementierungsauftrags):** der **manuelle
+    Runde-2-Beleg** der Testfahrt mit Debug-Log (`RUST_LOG=trace`, Zeilen
+    `action=<name> duration_ms=<n> gpu_route=<present|cpu-fallback|n/a>`) steht
+    aus; der Audit ersetzt ihn nicht (DoD §6 verlangt Log-Ausschnitt). Die
+    Automatik belegt die Route über den Present-Gate-State, die manuelle Fahrt
+    muss denselben Zustand über die Debug-Instrumentierung (GUI-INSTRDBG-17)
+    bestätigen.
 - **Ist-Stand 2026-09-04:** Auto-Select (erstes Bild alle Formate, Selektion nie
   leer), `--module`/`--fullscreen`-Flags umgesetzt + verifiziert BESTANDEN
   (281p lib, 7p bins, kittest 11/11, Vision Golden-BESTANDEN); Folgearbeit:
