@@ -879,6 +879,193 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   sind geometrisch identisch (kein Springen, GUI-DRAFT-JUMP-1); Auto-Tone
   schreibt 6 Regler + Spiegel mit selektivem Stale-Clear (AUTO-TONE-2).
 
+### Ruckel-Attribution (`GUI-JANKLOG-19`, ENTWURF — wartet auf User-Freigabe)
+
+> **Status: ENTWURF, kein Bau.** Diese Untersektion ist der SOLL-Entscheid zu
+> `GUI-JANKLOG-19` (Release 1.0). Sie beschreibt Ziel, Format und Andockstellen,
+> enthält aber bewusst **keine** Implementierung. Die Umsetzung erfolgt erst
+> nach ausdrücklicher User-Freigabe — dann als eigener Slice **`jank_log.rs`**
+> (GUI-REFACTOR-W1-20, S1.5, neue Datei strikt ≤ 500 Zeilen, kein neuer
+> Baseline-Eintrag). Bis dahin bleibt der unten dokumentierte Ist-Stand
+> unverändert.
+
+**Ziel.** Standardbetrieb bleibt im Log still (kein Per-Frame-Spam); nur
+nachweislich langsame Aktionen/Render erzeugen **genau eine** attribuierte,
+greppbare Zeile, aus der die Kette Aktion → Rezept-Änderung →
+Renderpfad/Route → Teil-Dauern ablesbar ist. Kein stiller Fallback: eine
+unlesbare Schwelle/Umgebungsvariable wird laut gemeldet, nie stillschweigend
+deaktiviert. Reine Diagnose — keine Rezept-/Sidecar-/Pixel-Auswirkung.
+
+**Bestand (Abdeckungsbefund 2026-09-18, kein Doppelbau).**
+
+- `GuiActionTimer`/`instrument_gui_action!` (`gui_action.rs`) loggt in
+  Debug-Builds **unbedingt jede** Aktion (`action=… duration_ms=… gpu_route=…`),
+  ohne Schwelle; in Release ist alles wegkompiliert.
+- `mark_recipe_dirty(key, value)` kennt den Dirty-Key, gibt ihn aber an kein
+  Log weiter; `mark_dirty()` kennt nur den Invalidierungszustand.
+- `render_draft_tick` misst `gpu_ms`/`cpu_draft_ms`/`analyse_ms` in
+  `DragTickTimings`, loggt sie aber auf einer separaten `trace!`-Zeile ohne
+  Bezug zur auslösenden Aktion.
+- `LUMINA_PERF frame=…` loggt in beiden Profilen, aber nur bei
+  `LUMINA_PERF_LOG=1`, und ist Per-Frame-/Scroll-Diagnose, keine
+  Aktions-Attribution.
+- Route/Badge liegen als `gpu_route_label()` bzw. `routing_fallback_reason()`
+  vor, sind aber nicht mit der Aktionsdauer verknüpft.
+
+**1. Langsam-Schwelle.**
+
+| Parameter | Default-Vorschlag | Konfiguration | Begründung |
+| --- | --- | --- | --- |
+| Langsam-Schwelle | **16,7 ms** | `LUMINA_JANK_MS` (ganzzahlige Millisekunden) | entspricht genau einem 60-Hz-Frame-Budget und der bestehenden `slow_frame`-Definition (`LUMINA_PERF` zieht dieselbe 16,7-ms-Grenze) |
+
+- **Belegte Kalibrierung:** Die committete Handler-Messung der GPU-AUDIT-17-
+  Timing-Tabelle (Debug, 64×48-Quelle) hat als größten Einzelwert `duplicate_copy`
+  mit 14,3 ms; alle 101 Aktionen liegen ≤ 16,7 ms. Der dokumentierte
+  Normal-/Auditbetrieb bleibt damit unter dem Default **still**, während ein
+  echter Slow-Render (simulierte Verzögerung) sicher auslöst.
+- **Wo konfigurierbar:** einmalig beim Start gelesen (kein Per-Frame-Parsen),
+  reine Laufzeit-Diagnose, **nicht** im Sidecar/Rezept persistiert. Ein
+  `LUMINA_JANK_MS`-Wert `0` deaktiviert die Zeile ausdrücklich (mit einmaligem
+  erkennbarem Hinweis), ein unparsbarer Wert erzeugt `warn!` + Default 16,7 ms —
+  kein stiller Fallback.
+- **Bewusst offen:** ob Aktionen und Render-Ticks dieselbe Schwelle teilen oder
+  je `kind` eine eigene bekommen (Frage U1).
+
+**2. Log-Level Debug vs. Release (Runde 2 fährt Release).**
+
+Ausgangslage: GUI-INSTRDBG ist `#[cfg(debug_assertions)]` — in Release sind
+Timer, Log und Format-Strings vollständig wegkompiliert. Der manuelle
+Runde-2-Beleg läuft jedoch im Release-Build. Entscheidungsvorlage:
+
+- **Option A — Debug-only (Status quo):** Zero-Overhead in Release, aber Runde 2
+  sieht nichts; Diagnose nur im Debug-Build. Trade-off: erfüllt das
+  Zero-Overhead-Prinzip, verfehlt den Runde-2-Diagnosebedarf.
+- **Option B — Empfehlung:** in **beiden** Profilen instrumentiert, Emission
+  hinter Laufzeit-Opt-in `LUMINA_JANK_LOG=1` (Default aus in Release, an in
+  Debug). Ist es aus, prüft der Trigger nur ein gecachtes
+  `AtomicBool`/`OnceLock` — kein `Instant::now()` auf Idle-Frames, keine
+  Allokation → praktisch zero overhead im Normalbetrieb. Ist es an, wird die
+  Zeile als `warn!` emittiert (sichtbar bei Default-`RUST_LOG=info`,
+  unmissverständlich), damit Runde 2 ohne Log-Level-Tuning funktioniert.
+  Trade-off: Code und Format-Strings bleiben im Release-Binary (etwas größere
+  Binärdatei), Messpunkt bleibt minimal. Tests nutzen denselben thread-lokalen
+  Capture-Seam wie INSTRDBG statt des Env-Vars.
+- **Option C — immer im Code, nur `debug!`, `RUST_LOG` filtert:** gleiches
+  Laufzeitverhalten wie B ohne separaten Env-Schalter, aber Runde 2 müsste
+  `RUST_LOG=debug` setzen — dann überschwemmen alle übrigen `debug!`-Zeilen die
+  greppbare Jank-Zeile. Trade-off: kein zusätzlicher Schalter, dafür schlechtere
+  Greppbarkeit in Runde 2.
+
+**Empfehlung: Option B** — Zero-Overhead im Normalbetrieb (Default aus) und
+zugleich Release-Diagnose per ausdrücklichem Opt-in. Der genaue Level
+(`warn!` vs. `info!` vs. `debug!`) bleibt Freigabefrage U2.
+
+**3. Trigger-Format (greppbar).**
+
+Genau **eine** Zeile pro langsamem Vorgang, mit stabilem Präfix `LUMINA_JANK`:
+
+```text
+LUMINA_JANK kind=<action|render> action=<name|-> recipe_key=<key|-> route=<present|cpu-fallback|n/a> badge_reason="<reason|->" total_ms=<n> gpu_ms=<n> cpu_draft_ms=<n> analyse_ms=<n>
+```
+
+Feld-Regeln (Reihenfolge fix, Werte whitespace-frei außer dem gequoteten
+`badge_reason`, keine freien Texte):
+
+- `kind` — `action` (GuiAction-Scope) oder `render` (Draft-/Full-Render-Tick
+  außerhalb eines Aktions-Scopes).
+- `action` — `GuiAction::name()` des jüngsten instrumentierten Nutzer-Aufrufs
+  (`-`, wenn keiner, z. B. beim Debounce-Render).
+- `recipe_key` — Dirty-Key aus `mark_recipe_dirty`/`set_adjustment`/
+  `set_presence` (z. B. `exposure`, `presence.clarity`); `-` bei reiner
+  View-/Session-Änderung.
+- `route` — `gpu_route_label()` (`present|cpu-fallback|n/a`), unverändert
+  übernommen.
+- `badge_reason` — `routing_fallback_reason()`, in Anführungszeichen (der Grund
+  enthält Leerzeichen), `-` wenn keine CPU-Route.
+- `total_ms` — Gesamtdauer der äußeren Aktion bzw. des Render-Ticks.
+- `gpu_ms`, `cpu_draft_ms`, `analyse_ms` — Teil-Dauern aus `DragTickTimings`
+  (`-`, wo nicht zutreffend).
+- Emission **genau einmal** am Ende des äußersten Aktions-Scopes (RAII-Drop
+  analog `GuiActionTimer`); verschachtelte Messpunkte (Aktion → Render-Tick)
+  erzeugen **keine** zweite Zeile, sondern füllen dieselbe Zeile. Damit ist die
+  Abnahme „genau eine attribuierte Zeile“ strukturell erfüllt.
+- Kein Datum/Zeitstempel im Format duplizieren; der bestehende Logger stellt
+  `[WARN] <target>:` voran.
+
+Damit sind `grep 'LUMINA_JANK'`, `grep 'LUMINA_JANK.*kind=render'` und die
+Feld-Greps (`action=`, `recipe_key=`, `route=`) stabil. Einzeiler ist die
+Empfehlung; ein Zwei-Zeilen-Fallback mit `seq=<n>` bleibt Freigabefrage U4.
+
+**4. Andockstellen (kein Bau in diesem Schritt).**
+
+- `crates/lumina-gui/src/jank_log.rs` (**neu, S1.5**): einmalige
+  Schwellen-/Env-Auswertung, reine Format-Funktion (testbar), Emission,
+  thread-lokaler Capture-Seam für Tests — einzige Quelle des Formats.
+- `dirty.rs` (W1 S1.3): liefert den jüngsten Dirty-Key an den Jank-Record
+  (verhaltensneutrale Beobachtung; Invalidierungsinvariante und das
+  `set_adjustment`-Duplikat bleiben unangetastet).
+- `render_tick.rs` (W1 S1.1) / `present.rs` (W1 S1.4a): `gpu_ms`,
+  `cpu_draft_ms`, `analyse_ms` aus `DragTickTimings` bzw. Present-Ergebnis und
+  Badge-Grund fließen in denselben Record; `gpu_routing.rs` (S1.4b) liefert die
+  Route.
+- `gui_action.rs`: der bestehende `GuiActionTimer` bleibt Debug-Format; der
+  Jank-Record hängt sich an denselben äußersten Scope (kein zweiter Timer).
+- `logger.rs`: `RUST_LOG`-/`LUMINA_JANK_LOG`-Auswertung, Default-Level `info`.
+- `LUMINA_PERF`-Frame-Pfad (`lib.rs`): liefert weiter `slow_frame` und bleibt
+  unverändert; JANKLOG ist Aktions-Attribution, keine zweite Per-Frame-Quelle.
+
+**5. Test-/Abnahmeanker (Stille-Test, DoD).**
+
+- Headless-Test (neue Testdatei strikt ≤ 500, `cfg(debug_assertions)` plus
+  Capture-Seam): Normalbetrieb (Idle-Frames und Aktionen unter der Schwelle)
+  erzeugt **null** `LUMINA_JANK`-Zeilen; ein simulierter Slow-Render
+  (künstliche Überschreitung) erzeugt **genau eine** Zeile mit vollständiger
+  Kette.
+- Fehlerfall-Anchor: unparsbarer `LUMINA_JANK_MS` → `warn!` + Default, nie still
+  deaktiviert (Regressionstest gegen den stillen Fallback).
+- `cargo test -p lumina-gui` grün ohne GPU; keine Pixel-Änderung (kein
+  Draw-Code), optional kittest-Byte-Identität als Nachweis.
+
+**6. Abgrenzung / Nicht-Ziel.**
+
+- Keine Sidecar-/Rezept-Felder, keine Persistenz, keine Migration
+  (Diagnose only, Sidecar bleibt alleinige Quelle für Bearbeitungen).
+- Kein Per-Frame-Log im Normalbetrieb; `LUMINA_PERF` bleibt separat.
+- Kein Ersatz für den manuellen Runde-2-Log-Beleg (DoD §6), sondern dessen
+  Release-taugliche Grundlage.
+- Keine Änderung an Renderpfad, Pixeln oder GPU-Routing.
+
+**7. Offene Freigabefragen an den User.**
+
+- **U1 Schwelle:** Default 16,7 ms (Vorschlag) oder wahrnehmungsnäher 33/50 ms?
+  Eigene Schwelle je `kind` (action vs. render)?
+- **U2 Release-Sichtbarkeit:** Option B (Empfehlung) oder A/C? Wenn B: Level
+  `warn!` (Vorschlag), `info!` oder `debug!`? Env-Namen `LUMINA_JANK_LOG` /
+  `LUMINA_JANK_MS` in Ordnung?
+- **U3 Formatdetails:** Einzeiler wie spezifiziert? `badge_reason` gequotet
+  (Vorschlag) oder whitespace-frei sluggen? Zusätzliche Felder gewünscht
+  (`frame=`, `seq=`, `source=`)?
+- **U4 Ein Zeile vs. Sequenz:** Einzeiler (Vorschlag) oder zwei korrelierte
+  Zeilen?
+- **U5 Debug-Default:** JANKLOG in Debug standardmäßig an (wie INSTRDBG) oder
+  ebenfalls Opt-in?
+- **U6 Deaktivierung:** Semantik von `LUMINA_JANK_MS=0` (Vorschlag: aus, mit
+  einmaligem erkennbarem Log) und Verhältnis zu `LUMINA_PERF_LOG`.
+- **U7 Geltung:** nur GUI oder auch CLI-Render (globale Diagnose)?
+
+**Freigabe 2026-09-18 (User-Entscheide, verbindlich für S1.5):**
+- **U1 Schwelle: 8,3 ms (120-Hz-Budget).** Kein 144-Hz-Display: MacBook Pro =
+  ProMotion adaptiv bis 120 Hz (Apple-Specs) → Frame-Budget 8,33 ms. Eine
+  Schwelle je `kind` bleibt möglich, Default einheitlich 8,3 ms.
+- **U2 Release: nur Debug.** Release-Builds bleiben still (Zero-Overhead-Prinzip);
+  kein Release-Opt-in. Runde-2-Diagnose läuft in Debug-Builds.
+- **U3/U4 Format: Einzeiler** wie spezifiziert (`badge_reason` gequotet, keine
+  Zusatzfelder vorerst).
+- **U5 Debug: Build-Opt-in (User-Idee).** JANKLOG ist in Debug-Builds nicht
+  standardmäßig an, sondern per Cargo-Feature zuschaltbar (kein Env-Opt-in,
+  kein Immer-an). Feature-Name bei S1.5-Umsetzung festlegen.
+- U6/U7 bleiben offen (Default-Vorschläge des Entwurfs gelten bis zur Freigabe).
+
 ### Regler und Standardinteraktionen
 
 - Jeder Bearbeitungsregler ist ein horizontaler Slider mit der Beschriftung
