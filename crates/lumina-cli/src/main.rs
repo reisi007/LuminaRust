@@ -113,6 +113,9 @@ mod merge;
 // § „Rezept-Matrix"). Orchestration only — it renders through the shared
 // `render_standard` entry point and contains no second image processing.
 mod matrix;
+// GPU-LENSFUN-PARITY-1 (F7): CLI-side strict-corrector map bind (ratchet §8).
+#[cfg(feature = "gpu")]
+mod lensfun_gpu;
 
 /// Minimal stderr logger installed once so the backend-selection `info!` is
 /// actually visible. It only installs when no other logger has been registered
@@ -192,8 +195,8 @@ fn init_render_backend() -> Option<GpuContext> {
 // `GpuContext` is process-scoped and never needs orderly drop on workers.
 #[cfg(feature = "gpu")]
 thread_local! {
-    static GPU_CTX: std::cell::OnceCell<std::mem::ManuallyDrop<Option<GpuContext>>> =
-        const { std::cell::OnceCell::new() };
+    static GPU_CTX: std::cell::RefCell<std::mem::ManuallyDrop<Option<GpuContext>>> =
+        const { std::cell::RefCell::new(std::mem::ManuallyDrop::new(None)) };
 }
 
 /// Which backend the standard render entry actually used, with the loud CPU
@@ -253,23 +256,34 @@ impl RenderRoute {
 /// e.g. an **invalid** decoder As-Shot WB context, R2-MCP-01, and
 /// touched-but-reset sliders at their neutral value, R2-GPU-05). A valid As-Shot
 /// context is carried into the GPU entry via
-/// [`GpuContext::set_camera_white_balance`]. Any unsupported stage routes the
-/// whole render explicitly to the CPU pipeline with a once-per-reason-set log
-/// line, so GPU-enabled builds always produce the same pixels as CPU builds. The
-/// GPU is an accelerator, never a semantic change (Agents.md: no silent
-/// fallbacks).
+/// [`GpuContext::set_camera_white_balance`], and a strict Lensfun corrector's
+/// map via [`lensfun_gpu::bind`]. Any unsupported stage routes the whole render
+/// explicitly to the CPU pipeline with a once-per-reason-set log line, so
+/// GPU-enabled builds always produce the same pixels as CPU builds. The GPU is
+/// an accelerator, never a semantic change (Agents.md: no silent fallbacks).
 #[cfg(feature = "gpu")]
 fn render_best_effort(
-    ctx: Option<&GpuContext>,
+    ctx: Option<&mut GpuContext>,
     frame: &ImageFrame,
     recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
     generative: GenerativeCanvasInput<'_>,
 ) -> Result<(RenderOutput, RenderRoute), CliError> {
-    let reasons = gpu_routing_reasons(recipe, render_ctx);
+    let mut reasons = gpu_routing_reasons(recipe, render_ctx);
 
     match ctx {
         Some(ctx) if ctx.is_available() && reasons.is_empty() => {
+            // GPU-LENSFUN-PARITY-1 (F7): build/bind the strict corrector's map
+            // for this source/dimensions before the GPU entry. An unbound map or
+            // a distortion corrector without an explicit crop keeps the exact CPU
+            // reference and surfaces the reason — never a silent corrector loss.
+            if let Some(reason) = lensfun_gpu::bind(ctx, render_ctx, frame.width, frame.height) {
+                reasons.push(reason.to_string());
+                lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
+                let output = render_frame_with_generative(frame, render_ctx, generative)
+                    .map_err(|error| CliError::Message(error.to_string()))?;
+                return Ok((output, RenderRoute::Cpu { reasons }));
+            }
             // CAMERA-WB-WELLE (R2-MCP-01): carry the decoder As-Shot context into
             // the GPU entry like the Lensfun corrector / depth plane. The gains
             // are validated there with the oracle's own error but never
@@ -314,12 +328,12 @@ fn render_best_effort(
 /// [`render_best_effort`]. Pure decision logic so tests can pin the routing
 /// contract without a GPU adapter.
 ///
-/// Context-level features the GPU path cannot reproduce at all:
-/// - an **invalid** decoder As-Shot white balance (R2-MCP-01, via the shared
-///   gate; valid gains are carried into the GPU entry by
-///   [`render_best_effort`] and are pixel-neutral);
-/// - source-action artifacts, mask layers and the Lensfun corrector, none of
-///   which exist on the GPU path.
+/// Context-level features the GPU path cannot reproduce here: an **invalid**
+/// decoder As-Shot white balance (R2-MCP-01; valid gains are carried into the
+/// GPU entry and are pixel-neutral) and source-action artifacts / mask layers.
+/// The Lensfun corrector is **not** a static reason: [`lensfun_gpu::bind`]
+/// builds/binds its map and reports only an unbound map or a distortion
+/// corrector without an explicit crop as a loud CPU route.
 #[cfg(feature = "gpu")]
 fn gpu_routing_reasons(recipe: &EditRecipe, render_ctx: &RenderContext<'_>) -> Vec<String> {
     let mut reasons = unsupported_gpu_stages_with_context(
@@ -360,26 +374,7 @@ fn gpu_routing_reasons(recipe: &EditRecipe, render_ctx: &RenderContext<'_>) -> V
     if has_mask_layers {
         reasons.push("masks (active copy has layers)".into());
     }
-    if lensfun_corrector_active(render_ctx) {
-        reasons.push("lens_correction (Lensfun corrector)".into());
-    }
     reasons
-}
-
-/// Whether the render context carries a non-identity Lensfun corrector (which
-/// changes pixels on the CPU path and therefore forces CPU rendering).
-#[cfg(all(feature = "gpu", feature = "lensfun"))]
-fn lensfun_corrector_active(render_ctx: &RenderContext<'_>) -> bool {
-    render_ctx
-        .lensfun
-        .map(|corrector| !corrector.0.is_identity())
-        .unwrap_or(false)
-}
-
-/// Non-Lensfun build: no corrector can exist, so this never blocks the GPU.
-#[cfg(all(feature = "gpu", not(feature = "lensfun")))]
-fn lensfun_corrector_active(_render_ctx: &RenderContext<'_>) -> bool {
-    false
 }
 
 /// Non-GPU build: only the CPU pipeline exists, so this is a thin alias to
@@ -440,9 +435,14 @@ pub(crate) fn render_standard_routed_with_generative(
     #[cfg(feature = "gpu")]
     {
         GPU_CTX.with(|cell| {
-            let holder = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
-            let gpu: &Option<GpuContext> = holder;
-            render_best_effort(gpu.as_ref(), frame, recipe, render_ctx, generative)
+            let mut gpu = cell.borrow_mut();
+            if gpu.is_none() {
+                **gpu = init_render_backend();
+            }
+            match gpu.as_mut() {
+                Some(ctx) => render_best_effort(Some(ctx), frame, recipe, render_ctx, generative),
+                None => render_best_effort(None, frame, recipe, render_ctx, generative),
+            }
         })
     }
     #[cfg(not(feature = "gpu"))]

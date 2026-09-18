@@ -17,6 +17,7 @@ mod import_previous;
 mod lens_blur;
 #[cfg(feature = "lensfun")]
 mod lensfun;
+mod lensfun_gpu;
 mod mask;
 mod mask_render;
 mod mask_zdata;

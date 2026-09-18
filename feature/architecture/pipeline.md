@@ -1676,6 +1676,15 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Der adapter-unabhängige Vollständigkeitstest läuft in `cargo test -p lumina-gui`;
   der Metal-Lauf ist `cargo test -p lumina-gui --lib gpu_audit -- --ignored`
   (lokales Timing report-only, kein Gate).
+- **F7 CLI-Wiring (2026-09-18, verifiziert BESTANDEN):** Der CLI-GPU-Renderpfad
+  bindet die `LensfunMap` analog (`crates/lumina-cli/src/lensfun_gpu.rs`;
+  `main.rs` netto ±0); CPU-Routen nur bei Build-/Bind-Fehler und Distortion
+  ohne expliziten Crop (laut). **Offen:** MCP baut nie einen Corrector
+  (`lumina-mcp/src/util.rs`, `lensfun: None`) — kein stiller Verlust, aber
+  keine Lensfun-Korrektur auf dem MCP-Pfad (Folge, kein Task). Niedrig bekannt:
+  CLI-Backend-Retry bei hartem `GpuContext`-Init-Fehler (L1, keine
+  Korrektheitsfolge).
+
 
 ### G-01 Develop-Basis: Treatment, Profil, Reset-Automatik, Panel-Previous
 (LRPAR-G01-BASIC, Release 1.0)
