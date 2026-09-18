@@ -35,6 +35,11 @@ mod people_panel;
 mod filmstrip;
 mod i18n;
 mod merge_gui;
+// GPU-LENSFUN-PARITY-1 (GUI-Wiring): build the CPU `LensfunMap` from the strict
+// auto-corrector and bind it on the `GpuContext`, so a corrector recipe presents
+// through the readback-free VRAM path instead of the documented CPU exception.
+#[cfg(all(feature = "gpu", feature = "lensfun"))]
+mod lensfun_gpu;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
 // LRPAR-G08-PREVIOUS / GUI-FILMSTRIP-SYNC-1: the filmstrip selection actions
@@ -2201,17 +2206,6 @@ pub struct LuminaApp {
     /// successful VRAM render.
     #[cfg(feature = "gpu")]
     vram_render_refusal: Option<String>,
-    /// GUI-LENSFUN-GATE-2: whether the Lensfun corrector that produced the
-    /// **currently displayed** CPU preview changed pixels. Captured in
-    /// [`Self::render_from`] at the exact dimensions of that render (see
-    /// [`Self::lensfun_corrector_active`]) and used by the present gate instead
-    /// of the live single-slot cache: the navigator/export/full-analysis
-    /// renders rebuild that one slot at *other* dimensions, so reading it here
-    /// could serve a corrector verdict for a frame that is not on screen. The
-    /// gate memo is keyed by `render_key` (which already encodes the displayed
-    /// dimensions), so the routing verdict cannot flap between frames.
-    #[cfg(feature = "gpu")]
-    displayed_lensfun_active: bool,
     /// PARITY-PATHS-2: diagnostic override for the adapter-availability probe
     /// ([`Self::gpu_adapter_available`]). `Some(false)` lets the parity matrix
     /// exercise its adapterless SKIP branch on a machine that does have a
@@ -2284,20 +2278,18 @@ const NAVIGATOR_OVERVIEW_MAX_DIM: u32 = 256;
 /// before it auto-dismisses.
 const TOAST_TIMEOUT_SECONDS: f64 = 4.0;
 
-/// GUI-LENSFUN-GATE-1: the memoized GPU-stage verdict is keyed by render
-/// identity, the As-Shot WB context and whether a non-identity Lensfun
-/// corrector is active. The corrector state is caller-owned like the WB
-/// context (the recipe-only `lumina-gpu` gate cannot express it), so it must
-/// be part of the key — otherwise a verdict computed while no corrector was
-/// active would be served after the corrector cache was populated.
+/// CAMERA-WB-WELLE / GPU-LENSFUN-PARITY-1: the memoized GPU-stage verdict is
+/// keyed by render identity and the As-Shot WB context. The WB context is
+/// caller-owned like the (former) Lensfun corrector flag, so it must be part of
+/// the key — otherwise a verdict computed with one context would be served for
+/// another. The Lensfun corrector is no longer part of the key: its map bind is
+/// not a recipe-gate reason anymore (see [`LuminaApp::gpu_unsupported_reasons`]).
 ///
 /// GUI-LENSFUN-GATE-2: the value is the precise reason list (not just a bool),
 /// so the visible routing badge can name *why* the CPU route was taken while
-/// the per-frame hot path still hits this memo. The corrector flag is the
-/// **displayed-render** state ([`LuminaApp::displayed_lensfun_active`]), not
-/// the live single-slot cache.
+/// the per-frame hot path still hits this memo.
 #[cfg(feature = "gpu")]
-type GpuStageGate = ((RenderKey, Option<[f32; 4]>, bool), Vec<String>);
+type GpuStageGate = ((RenderKey, Option<[f32; 4]>), Vec<String>);
 
 /// GUI-WGPU-PRESENT-1: offscreen present target + its egui registration.
 ///
@@ -2698,13 +2690,24 @@ struct CachedLensCorrector {
         u32,
         u32,
     ),
-    /// GUI-LENSFUN-GATE-1: whether this corrector changes pixels
-    /// (`!Corrector::is_identity()`, probing distortion/vignetting/TCA).
-    /// Computed once at build time so the per-frame GPU present gate never
-    /// pays the FFI probe; mirrors the CLI's `lensfun_corrector_active`.
-    /// GPU-only: the non-GPU build has no gate that could consume it.
+    /// GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: whether this corrector
+    /// changes pixels (`!Corrector::is_identity()`, probing
+    /// distortion/vignetting/TCA). Computed once at build time so neither the
+    /// present gate nor the per-frame map bind pays the FFI probe; mirrors the
+    /// CLI's `lensfun_corrector_active`. An inactive (identity) corrector is a
+    /// no-op on the CPU oracle and binds no map, so the manual model stays in
+    /// effect on both paths. GPU-only: the non-GPU build has no bind path that
+    /// could consume it.
     #[cfg(feature = "gpu")]
     active: bool,
+    /// GPU-LENSFUN-PARITY-1: CPU-precomputed warp/gain map for this corrector at
+    /// the dimensions it was last built for (`LensfunMap::from_corrector`).
+    /// Built lazily by [`lensfun_gpu::bind`] on the GPU present path and reused
+    /// across frames/tool moves (the per-pixel FFI build is expensive); `None`
+    /// until first use. Fine to keep on the CPU: the map is a pure derived
+    /// artifact, the recipe/sidecar stay authoritative.
+    #[cfg(feature = "gpu")]
+    gpu_map: Option<lumina_core::LensfunMap>,
 }
 
 type DecodeResult = Result<DecodedFrame, (String, String)>;
@@ -2998,9 +3001,6 @@ impl LuminaApp {
             #[cfg(feature = "gpu")]
             // GUI-LENSFUN-GATE-3 (F1): no VRAM render was attempted yet.
             vram_render_refusal: None,
-            #[cfg(feature = "gpu")]
-            // GUI-LENSFUN-GATE-2: no displayed render yet, so no active corrector.
-            displayed_lensfun_active: false,
             #[cfg(feature = "gpu")]
             // PARITY-PATHS-2: report the real adapter state until a test forces it.
             gpu_adapter_override: None,
@@ -9633,9 +9633,6 @@ impl LuminaApp {
             // GUI-LENSFUN-GATE-3 (F1): no present refusal from the previous
             // source may leak into the new one.
             self.vram_render_refusal = None;
-            // GUI-LENSFUN-GATE-2: the previous image's displayed-corrector
-            // verdict must not leak into the new source's present gate.
-            self.displayed_lensfun_active = false;
         }
         self.status = Str::Loaded.format_arg(&self.source_name);
         info!(
@@ -10432,10 +10429,10 @@ impl LuminaApp {
             corrector.has_vignetting(),
             corrector.has_tca()
         );
-        // GUI-LENSFUN-GATE-1: snapshot the pixel-relevance once. A non-identity
-        // corrector forces the exact CPU present route because the recipe-only
-        // GPU gate cannot express the DB-derived correction (mirrors the CLI
-        // `lensfun_corrector_active` reason).
+        // GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: snapshot the
+        // pixel-relevance once. A non-identity corrector is bound on the GPU as
+        // a precomputed `LensfunMap` (`lensfun_gpu::bind`); only an identity
+        // one is a no-op that leaves the manual model in effect on both paths.
         #[cfg(feature = "gpu")]
         let active = !corrector.is_identity();
         self.lensfun_cache = Some(CachedLensCorrector {
@@ -10444,6 +10441,8 @@ impl LuminaApp {
             key,
             #[cfg(feature = "gpu")]
             active,
+            #[cfg(feature = "gpu")]
+            gpu_map: None,
         });
     }
 
@@ -10455,6 +10454,26 @@ impl LuminaApp {
         self.lensfun_cache
             .as_ref()
             .map(|cached| lumina_core::LensfunCorrectorRef(&cached.corrector))
+    }
+
+    /// GPU-LENSFUN-PARITY-1 (GUI-Wiring): refresh the auto-corrector for exactly
+    /// `width × height` and bind its `LensfunMap` on the GPU context. Returns
+    /// `None` when the VRAM present may proceed (no non-identity corrector, or
+    /// its map is bound) and `Some(reason)` when an active corrector's map could
+    /// not be bound — the caller must then keep the exact CPU present route and
+    /// surface the reason (never a silent manual-model render).
+    #[cfg(all(feature = "gpu", feature = "lensfun"))]
+    fn bind_lensfun_map(&mut self, width: u32, height: u32) -> Option<&'static str> {
+        self.ensure_lensfun_cache(width, height);
+        let gpu = self.gpu.as_mut()?;
+        lensfun_gpu::bind(gpu, self.lensfun_cache.as_mut(), width, height)
+    }
+
+    /// Non-Lensfun build: no corrector can exist, so the VRAM route is never
+    /// blocked by one.
+    #[cfg(all(feature = "gpu", not(feature = "lensfun")))]
+    fn bind_lensfun_map(&mut self, _width: u32, _height: u32) -> Option<&'static str> {
+        None
     }
 
     /// User-visible lens-blur depth status (G-05): `off`, `heuristic active`
@@ -11491,19 +11510,33 @@ impl LuminaApp {
         let generative_active = self.generative_stage_active();
         #[cfg(feature = "gpu")]
         {
-            if let Some(gpu) = self.gpu.as_ref() {
-                if gpu.is_available() {
-                    if generative_active {
-                        // The readback-free VRAM present path is artifact-blind
-                        // and can never render a generative recipe (documented
-                        // `lumina-gpu` limitation, no VRAM injection point
-                        // without a readback). Skip the doomed `render_to_vram`
-                        // attempt — no per-tick `warn!` spam — and record the
-                        // known refusal for the badge; the CPU artifact-aware
-                        // render below is the authoritative preview.
+            if self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
+                if generative_active {
+                    // The readback-free VRAM present path is artifact-blind
+                    // and can never render a generative recipe (documented
+                    // `lumina-gpu` limitation, no VRAM injection point
+                    // without a readback). Skip the doomed `render_to_vram`
+                    // attempt — no per-tick `warn!` spam — and record the
+                    // known refusal for the badge; the CPU artifact-aware
+                    // render below is the authoritative preview.
+                    self.vram_fresh = false;
+                    self.vram_render_refusal =
+                        Some(Self::GENERATIVE_VRAM_REFUSAL_REASON.to_owned());
+                } else if let Some((width, height)) = self
+                    .draft_original
+                    .as_ref()
+                    .or(self.original.as_ref())
+                    .map(|source| (source.width, source.height))
+                {
+                    // GPU-LENSFUN-PARITY-1: bind the corrector's precomputed
+                    // warp/gain map before the VRAM render. An active corrector
+                    // whose map cannot be built/bound is kept on the exact CPU
+                    // present route (loud) — the recipe-only VRAM path would
+                    // otherwise apply the manual model and diverge silently.
+                    if let Some(reason) = self.bind_lensfun_map(width, height) {
+                        warn!("gpu present kept on CPU: {reason}");
                         self.vram_fresh = false;
-                        self.vram_render_refusal =
-                            Some(Self::GENERATIVE_VRAM_REFUSAL_REASON.to_owned());
+                        self.vram_render_refusal = Some(reason.to_owned());
                     } else {
                         // R2-GUIMOD-03: borrow instead of clone. The fallback
                         // branch (`draft_original` absent on the first tick
@@ -11511,28 +11544,36 @@ impl LuminaApp {
                         // full-resolution original (~180 MB worst case) into
                         // a temporary that was dropped immediately after the
                         // call — `render_to_vram` only needs `&ImageFrame`.
-                        let source = self.draft_original.as_ref().or(self.original.as_ref());
-                        if let Some(src) = source {
-                            match gpu.render_to_vram(src, &self.recipe) {
-                                Ok(()) => {
-                                    // GUI-WGPU-PRESENT-1: the VRAM output now
-                                    // matches the current recipe/source — the
-                                    // present path may use it this frame.
-                                    self.vram_fresh = true;
-                                    // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
-                                    // render clears any earlier present refusal.
-                                    self.vram_render_refusal = None;
-                                }
-                                Err(err) => {
-                                    warn!("gpu render_to_vram failed: {err}");
-                                    self.vram_fresh = false;
-                                    // GUI-LENSFUN-GATE-3 (F1): classify the present
-                                    // refusal so it can surface as a badge even when
-                                    // the recipe gate is empty (dimension-changing
-                                    // geometry is refused *after* the gate).
-                                    self.vram_render_refusal = Self::classify_vram_refusal(&err);
-                                }
+                        let rendered =
+                            self.draft_original
+                                .as_ref()
+                                .or(self.original.as_ref())
+                                .map(|src| {
+                                    self.gpu
+                                        .as_ref()
+                                        .expect("availability checked above")
+                                        .render_to_vram(src, &self.recipe)
+                                });
+                        match rendered {
+                            Some(Ok(())) => {
+                                // GUI-WGPU-PRESENT-1: the VRAM output now
+                                // matches the current recipe/source — the
+                                // present path may use it this frame.
+                                self.vram_fresh = true;
+                                // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
+                                // render clears any earlier present refusal.
+                                self.vram_render_refusal = None;
                             }
+                            Some(Err(err)) => {
+                                warn!("gpu render_to_vram failed: {err}");
+                                self.vram_fresh = false;
+                                // GUI-LENSFUN-GATE-3 (F1): classify the present
+                                // refusal so it can surface as a badge even when
+                                // the recipe gate is empty (dimension-changing
+                                // geometry is refused *after* the gate).
+                                self.vram_render_refusal = Self::classify_vram_refusal(&err);
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -11962,14 +12003,6 @@ impl LuminaApp {
         let lensfun = self.lensfun_render_ref();
         #[cfg(not(feature = "lensfun"))]
         let lensfun = None;
-        // GUI-LENSFUN-GATE-2: snapshot the corrector state that produced THIS
-        // displayed preview, at exactly the render's own dimensions. The zoomed
-        // full-frame analysis pass below rebuilds the single-slot cache at the
-        // full dimensions; navigator/export renders do the same at theirs. The
-        // present gate must therefore bind to this snapshot, not to the live
-        // slot (see [`Self::displayed_lensfun_active`]).
-        #[cfg(feature = "gpu")]
-        let displayed_lensfun_active = self.lensfun_corrector_active();
         let masks_context = if with_masks {
             let planes = self.load_mask_planes();
             match &self.document {
@@ -12018,14 +12051,6 @@ impl LuminaApp {
         // GUI-spezifische Bildlogik außerhalb der Pipeline).
         let mask_warnings = output.mask_warnings;
         let mut preview = output.frame;
-        // GUI-LENSFUN-GATE-2: record the corrector state that produced this
-        // frame once the render borrowed `lensfun` (and hence the cache slot)
-        // is released. The analysis/navigator/export paths may overwrite the
-        // slot afterwards without affecting this displayed-render verdict.
-        #[cfg(feature = "gpu")]
-        {
-            self.displayed_lensfun_active = displayed_lensfun_active;
-        }
         // GUI-HISTOGRAM-FULL-1: identity of the un-cropped full-frame base for
         // the histogram analysis render below. Computed here while
         // `source_hash`/`decode_version`/`copy_id` are still owned — the
@@ -12507,12 +12532,14 @@ impl LuminaApp {
     /// - Before/After displays the original — never in VRAM;
     /// - zoomed ROI previews crop on the CPU — geometry must not jump;
     /// - recipes with GPU-unsupported stages would render tone-only in VRAM
-    ///   (the documented GPU-STAGE-1 Restrisiko) — CPU pixels are exact;
-    ///   GUI-LENSFUN-GATE-1: this includes the caller-owned Lensfun corrector
-    ///   state (see [`Self::gpu_unsupported_reasons`]) — a non-identity
-    ///   corrector is applied by the CPU reference even without a manual
-    ///   `lens_correction`, so the VRAM route must refuse it; the caller is
-    ///   responsible for passing the same corrector snapshot the render used;
+    ///   (the documented GPU-STAGE-1 Restrisiko) — CPU pixels are exact
+    ///   ([`Self::gpu_unsupported_reasons`]);
+    /// - a non-identity Lensfun corrector is applied by the CPU reference even
+    ///   without a manual `lens_correction`; since GPU-LENSFUN-PARITY-1 the
+    ///   present path binds its `LensfunMap` on the VRAM context
+    ///   (`lensfun_gpu::bind`), so only an unbindable map or a `lumina-gpu` map
+    ///   guard refusal (dimension mismatch, distortion without an explicit crop)
+    ///   keeps the exact CPU route — captured in `vram_render_refusal`;
     /// - stale VRAM (`vram_fresh == false`) after any edit **or** after any
     ///   completed full-quality CPU render (R2-GUIMOD-01);
     /// - R2-GUIMOD-01 belt-and-braces: for a non-draft preview the VRAM
@@ -12591,13 +12618,13 @@ impl LuminaApp {
 
     /// PARITY-PATHS-2 test hook: bind a caller-owned Lensfun corrector as if
     /// the EXIF auto-profile cache ([`Self::ensure_lensfun_cache`]) had resolved
-    /// it, so the parity matrix can exercise the active-corrector CPU route
+    /// it, so the parity matrix can exercise the active-corrector GPU route
     /// headlessly without a real EXIF/DB match. The corrector must be built for
     /// the frame geometry the next render uses (the GUI builds its own
     /// corrector at exactly the base-frame dimensions). Diagnostic only: like
     /// the real cache this keeps the DB handle alive for the modifier and marks
-    /// the corrector `active` when it is non-identity, which is what keeps the
-    /// VRAM present route refused.
+    /// the corrector `active` when it is non-identity, so the present path binds
+    /// a `LensfunMap` for it (`lensfun_gpu::bind`).
     #[cfg(all(feature = "gpu", feature = "lensfun"))]
     #[doc(hidden)]
     pub fn bind_test_lensfun_corrector(
@@ -12611,6 +12638,7 @@ impl LuminaApp {
             _db: db,
             key: (None, None, None, 0, 0, 0, 0),
             active,
+            gpu_map: None,
         });
     }
 
@@ -12621,14 +12649,31 @@ impl LuminaApp {
     /// recipe and the sidecar are untouched. `Ok(None)` when no usable adapter
     /// is bound (the caller then prints the SKIP verdict — never a substituted
     /// CPU frame passed off as a GPU result).
+    ///
+    /// GPU-LENSFUN-PARITY-1: binds the corrector's `LensfunMap` for the source
+    /// dimensions first; an active corrector whose map cannot be bound is a loud
+    /// error (never a readback of the uncorrected manual-model frame).
     #[cfg(feature = "gpu")]
-    pub fn render_gpu_readback_frame(&self) -> Result<Option<ImageFrame>, GuiError> {
+    pub fn render_gpu_readback_frame(&mut self) -> Result<Option<ImageFrame>, GuiError> {
+        let Some((width, height)) = self
+            .draft_original
+            .as_ref()
+            .or(self.original.as_ref())
+            .map(|source| (source.width, source.height))
+        else {
+            return Ok(None);
+        };
+        if !self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
+            return Ok(None);
+        }
+        if let Some(reason) = self.bind_lensfun_map(width, height) {
+            return Err(GuiError::Io(format!(
+                "gpu parity readback kept on the CPU reference: {reason}"
+            )));
+        }
         let Some(gpu) = self.gpu.as_ref() else {
             return Ok(None);
         };
-        if !gpu.is_available() {
-            return Ok(None);
-        }
         let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
             return Ok(None);
         };
@@ -12656,20 +12701,34 @@ impl LuminaApp {
     /// next frame's present path draws the GPU pixels exactly like the
     /// pointer-drag hot path (`render_draft_tick`). Returns `true` when a usable
     /// adapter rendered the VRAM result; `false` (with `vram_fresh` left
-    /// `false`) when no adapter is bound — never a silent CPU substitution.
+    /// `false`) when no adapter is bound or an active Lensfun corrector's map
+    /// could not be bound — never a silent CPU substitution.
     #[cfg(feature = "gpu")]
     pub fn prime_gpu_present(&mut self) -> bool {
+        if !self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
+            return false;
+        }
+        let Some((width, height)) = self
+            .draft_original
+            .as_ref()
+            .or(self.original.as_ref())
+            .map(|source| (source.width, source.height))
+        else {
+            return false;
+        };
+        if let Some(reason) = self.bind_lensfun_map(width, height) {
+            warn!("gpu parity prime kept on the CPU reference: {reason}");
+            self.vram_fresh = false;
+            return false;
+        }
         let rendered = {
-            let Some(gpu) = self.gpu.as_ref() else {
-                return false;
-            };
-            if !gpu.is_available() {
-                return false;
-            }
             let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
                 return false;
             };
-            gpu.render_to_vram(source, &self.recipe)
+            self.gpu
+                .as_ref()
+                .expect("availability checked above")
+                .render_to_vram(source, &self.recipe)
         };
         match rendered {
             Ok(()) => {
@@ -12707,19 +12766,13 @@ impl LuminaApp {
     /// replaces the render key — so the per-frame `Vec<String>` rebuild with
     /// its `format!` allocations collapses to one call per render.
     ///
-    /// GUI-LENSFUN-GATE-1: the memo key additionally carries the caller-owned
-    /// As-Shot WB context and the active Lensfun corrector state (see
-    /// [`Self::gpu_unsupported_reasons`]) — a verdict computed while no
-    /// corrector was bound must never be served after the corrector cache was
-    /// populated.
-    ///
-    /// GUI-LENSFUN-GATE-2: the corrector flag is the **displayed-render**
-    /// snapshot ([`Self::displayed_lensfun_active`]), not the live single-slot
-    /// `lensfun_cache`. The navigator/export/full-analysis renders overwrite
-    /// that slot at other dimensions; keying on the live slot could flip this
-    /// verdict (and the routing badge) between frames for the same displayed
-    /// pixels. `render_key` already encodes the displayed dimensions, so the
-    /// displayed-render verdict is stable per rendered frame.
+    /// CAMERA-WB-WELLE: the memo key additionally carries the caller-owned
+    /// As-Shot WB context — a verdict computed with one context must never be
+    /// served for another. GPU-LENSFUN-PARITY-1 removed the former Lensfun
+    /// corrector key component: the corrector is no longer a recipe-gate reason
+    /// (its map is bound on the GPU present path; an unbindable map and the
+    /// `lumina-gpu` map guards surface through [`Self::vram_render_refusal`]
+    /// instead).
     ///
     /// While no render key exists (dirty preview) the memo is deliberately
     /// bypassed *and* not populated: the recipe may drift between edits
@@ -12732,18 +12785,15 @@ impl LuminaApp {
                 .as_ref()
                 .is_some_and(|(_, reasons)| !reasons.is_empty())
         } else {
-            !self
-                .gpu_unsupported_reasons(self.displayed_lensfun_active)
-                .is_empty()
+            !self.gpu_unsupported_reasons().is_empty()
         }
     }
 
     /// GUI-LENSFUN-GATE-2: the precise reason list behind
     /// [`Self::recipe_has_unsupported_gpu_stages`], memoized identically. The
     /// visible routing badge consumes this so the user sees *why* the CPU route
-    /// was taken (`lens_correction (Lensfun corrector)`,
-    /// `geometry (default content crop)`, an invalid As-Shot context, …)
-    /// instead of only the generic headline — never a silent fallback.
+    /// was taken (`geometry (default content crop)`, an invalid As-Shot context,
+    /// …) instead of only the generic headline — never a silent fallback.
     #[cfg(feature = "gpu")]
     fn gpu_unsupported_stage_reasons(&mut self) -> Vec<String> {
         if self.refresh_gpu_stage_gate() {
@@ -12752,27 +12802,24 @@ impl LuminaApp {
                 .map(|(_, reasons)| reasons.clone())
                 .unwrap_or_default()
         } else {
-            self.gpu_unsupported_reasons(self.displayed_lensfun_active)
+            self.gpu_unsupported_reasons()
         }
     }
 
-    /// Populate the memoized gate verdict for the current render key, As-Shot
-    /// WB context and displayed-corrector state when it is stale. Returns
-    /// whether a valid keyed entry now exists — `false` (with the memo cleared)
-    /// while no render key exists, so a drifting recipe can never be served a
-    /// `None`-keyed verdict (see the doc above).
+    /// Populate the memoized gate verdict for the current render key and
+    /// As-Shot WB context when it is stale. Returns whether a valid keyed entry
+    /// now exists — `false` (with the memo cleared) while no render key exists,
+    /// so a drifting recipe can never be served a `None`-keyed verdict (see the
+    /// doc above).
     #[cfg(feature = "gpu")]
     fn refresh_gpu_stage_gate(&mut self) -> bool {
         let wb = self.camera_white_balance;
-        let lensfun_active = self.displayed_lensfun_active;
-        let fresh =
-            self.gpu_stage_gate
-                .as_ref()
-                .is_some_and(|((key, cached_wb, cached_lensfun), _)| {
-                    Some(key) == self.render_key.as_ref()
-                        && *cached_wb == wb
-                        && *cached_lensfun == lensfun_active
-                });
+        let fresh = self
+            .gpu_stage_gate
+            .as_ref()
+            .is_some_and(|((key, cached_wb), _)| {
+                Some(key) == self.render_key.as_ref() && *cached_wb == wb
+            });
         if fresh {
             return true;
         }
@@ -12780,52 +12827,29 @@ impl LuminaApp {
             self.gpu_stage_gate = None;
             return false;
         };
-        let reasons = self.gpu_unsupported_reasons(lensfun_active);
-        self.gpu_stage_gate = Some(((key, wb, lensfun_active), reasons));
+        let reasons = self.gpu_unsupported_reasons();
+        self.gpu_stage_gate = Some(((key, wb), reasons));
         true
     }
 
     /// GUI-LENSFUN-GATE-1: the GPU routing reason list for the current
     /// recipe/context, mirroring the CLI `gpu_routing_reasons`. Split out so
-    /// the list — including the caller-owned Lensfun corrector state — is
-    /// directly testable without a bound GPU adapter.
+    /// the list is directly testable without a bound GPU adapter.
     ///
-    /// A non-identity Lensfun corrector (EXIF auto-match / TCA) is applied by
-    /// the CPU reference even when the recipe carries no manual
-    /// `lens_correction` (F-098-N1), but the recipe-only `lumina-gpu` gate
-    /// cannot express it. Treating it as an unsupported stage keeps the VRAM
-    /// route refused and the exact CPU present path active — no silent
-    /// divergence between the drag draft (manual model on GPU) and the CPU
-    /// reference. Caller responsibility exactly like the As-Shot WB context:
-    /// this method sees the corrector snapshot the render actually used.
+    /// GPU-LENSFUN-PARITY-1: a non-identity Lensfun corrector is **no longer** a
+    /// reason here. The present path binds its `LensfunMap` on the GPU
+    /// (`lensfun_gpu::bind`); only an unbindable map keeps the exact CPU route,
+    /// and that surfaces through [`Self::vram_render_refusal`] (bind failure) or
+    /// the `lumina-gpu` map guard (`lensfun_map.dimensions` /
+    /// `lensfun_map.default_content_crop`), classified in
+    /// [`Self::classify_vram_refusal`].
     #[cfg(feature = "gpu")]
-    fn gpu_unsupported_reasons(&self, lensfun_active: bool) -> Vec<String> {
-        let mut reasons = lumina_gpu::unsupported_gpu_stages_with_context(
+    fn gpu_unsupported_reasons(&self) -> Vec<String> {
+        lumina_gpu::unsupported_gpu_stages_with_context(
             &self.recipe,
             false,
             self.camera_white_balance.as_ref(),
-        );
-        if lensfun_active {
-            reasons.push("lens_correction (Lensfun corrector)".into());
-        }
-        reasons
-    }
-
-    /// GUI-LENSFUN-GATE-1: whether the cached Lensfun auto-corrector changes
-    /// pixels, mirroring the CLI's `lensfun_corrector_active`. `false` without
-    /// the `lensfun` feature (no corrector can exist) and before the first
-    /// render populated the per-source cache.
-    #[cfg(all(feature = "gpu", feature = "lensfun"))]
-    fn lensfun_corrector_active(&self) -> bool {
-        self.lensfun_cache
-            .as_ref()
-            .is_some_and(|cached| cached.active)
-    }
-
-    /// Non-Lensfun build: no corrector can exist, so this never blocks the GPU.
-    #[cfg(all(feature = "gpu", not(feature = "lensfun")))]
-    fn lensfun_corrector_active(&self) -> bool {
-        false
+        )
     }
 
     /// R2-GUIMOD-06: classify *why* the GPU present path was not taken this
@@ -12924,15 +12948,24 @@ impl LuminaApp {
         if message.contains("generative_artifact") {
             return Some(Self::GENERATIVE_VRAM_REFUSAL_REASON.into());
         }
+        // GPU-LENSFUN-PARITY-1: the `lumina-gpu` map guard refuses a bound map
+        // whose dimensions do not match the frame, or a distortion corrector
+        // without an explicit crop (the CPU oracle would apply its content-based
+        // default crop, whose rectangle is not plannable). Both are loud core
+        // guards; classify them so the CPU route is never badge-less.
+        #[cfg(feature = "lensfun")]
+        if let Some(reason) = lensfun_gpu::classify_refusal(error) {
+            return Some(reason);
+        }
         None
     }
 
     /// The visible badge text for a CPU routing decision: the generic
     /// [`Str::CpuFallbackUnsupportedStages`] headline plus the precise,
-    /// semicolon-separated reasons (`lens_correction (Lensfun corrector)`,
-    /// `geometry (default content crop)`, …). `None` when there is no capability
-    /// reason — never a badge without a cause. Pure formatting so the precise
-    /// text is testable without a bound GPU adapter.
+    /// semicolon-separated reasons (`geometry (default content crop)`,
+    /// `lens_correction (Lensfun corrector; …)`, …). `None` when there is no
+    /// capability reason — never a badge without a cause. Pure formatting so the
+    /// precise text is testable without a bound GPU adapter.
     #[cfg(feature = "gpu")]
     fn format_routing_fallback_reason(reasons: &[String]) -> Option<String> {
         if reasons.is_empty() {
@@ -13404,19 +13437,13 @@ impl LuminaApp {
         self.preview_histogram = None;
         self.render_key = None;
         self.render_mask_layers.clear();
-        // GUI-LENSFUN-GATE-2: the neighbor pipeline renders with `lensfun: None`
-        // (see `preview_ctrl::render_neighbor`), so the adopted stand-in carries
-        // no Lensfun correction. Reset the displayed-corrector snapshot so the
-        // present gate does not attribute the previous render's corrector to
-        // this frame.
+        // GUI-LENSFUN-GATE-4: a present refusal captured for the *previous*
+        // frame/recipe is not known to apply to this adopted stand-in — the
+        // next `update_texture` would otherwise surface a transient, stale
+        // CPU-routing badge. The neighbor pipeline never runs `render_to_vram`,
+        // so no fresh refusal can be produced here either.
         #[cfg(feature = "gpu")]
         {
-            self.displayed_lensfun_active = false;
-            // GUI-LENSFUN-GATE-4: a present refusal captured for the *previous*
-            // frame/recipe is not known to apply to this adopted stand-in — the
-            // next `update_texture` would otherwise surface a transient, stale
-            // CPU-routing badge. The neighbor pipeline never runs `render_to_vram`,
-            // so no fresh refusal can be produced here either.
             self.vram_render_refusal = None;
         }
     }
@@ -30581,7 +30608,7 @@ mod tests {
         }
     }
 
-    // ---- GUI-LENSFUN-GATE-1: an active Lensfun corrector forces the CPU route ----
+    // ---- GPU-LENSFUN-PARITY-1: a corrector recipe presents on the GPU route ----
 
     /// Minimal version_1 Lensfun fixture database (same shape as the
     /// `lumina-core` row tests): one camera + one lens with distortion and
@@ -30632,16 +30659,16 @@ mod tests {
         (corrector, db)
     }
 
-    /// Pins the Befund-1 fix of the GPU geometry wave: an active Lensfun
-    /// corrector changes CPU pixels (EXIF auto-match / TCA), so the GPU
-    /// recipe-only gate must classify it as unsupported and the present gate
-    /// must refuse the VRAM route — the memo key carries the corrector state,
-    /// so a verdict computed while no corrector was bound can never be served
-    /// after the corrector cache was populated. This is the GUI counterpart of
-    /// the CLI `lensfun_corrector_active` → reason mirror.
+    /// GPU-LENSFUN-PARITY-1: a non-identity Lensfun corrector is **no longer** a
+    /// recipe-gate reason. The present path binds its `LensfunMap` on the GPU
+    /// (`lensfun_gpu::bind`), and the honest CPU routes (unbindable map, the
+    /// `lumina-gpu` map guards) surface through `vram_render_refusal` instead.
+    /// This pins the gate half; the GPU bind/render half is covered headless by
+    /// `gpu_audit_lensfun_corrector_presents_gpu_without_badge` and the guard
+    /// classification by [`Self::lensfun_map_refusal_is_classified_for_the_badge`].
     #[test]
     #[cfg(all(feature = "gpu", feature = "lensfun"))]
-    fn active_lensfun_corrector_forces_gpu_fallback_without_stale_memo_hit() {
+    fn active_lensfun_corrector_is_not_a_recipe_gate_reason() {
         let directory = tempfile::tempdir().unwrap();
         let mut app = new_app();
         app.load_bytes(png(), "lensfun-gate.png").unwrap();
@@ -30649,35 +30676,18 @@ mod tests {
         assert!(app.render_key.is_some());
 
         // No corrector yet: the default recipe is fully GPU-eligible and the
-        // verdict is memoized under `lensfun_active == false`.
+        // verdict is memoized against the render key.
         assert!(
             !app.recipe_has_unsupported_gpu_stages(),
             "without a corrector the default recipe must stay GPU-eligible"
         );
         assert!(
             app.gpu_stage_gate.is_some(),
-            "the no-corrector verdict must be memoized against the render key"
+            "the verdict must be memoized against the render key"
         );
 
-        // The caller-owned corrector state is an explicit routing reason.
-        let reasons = app.gpu_unsupported_reasons(true);
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r == "lens_correction (Lensfun corrector)"),
-            "GUI-LENSFUN-GATE-1: an active corrector must be a routing reason, got {reasons:?}"
-        );
-        assert!(
-            !app.gpu_unsupported_reasons(false)
-                .iter()
-                .any(|r| r.contains("Lensfun")),
-            "without a corrector no Lensfun reason may be added"
-        );
-
-        // Bind a genuinely non-identity corrector and render: the CPU render
-        // applies it, so `render_from` snapshots the displayed-corrector state
-        // and the memo key misses (state changed) — `gpu_present_if_ready`
-        // refuses the VRAM route and the exact CPU pixels stay on screen.
+        // A genuinely non-identity corrector changes CPU pixels, but must not
+        // add a recipe-gate reason: the present path binds its map on the GPU.
         let (corrector, db) = synthetic_lensfun_corrector(directory.path());
         assert!(
             !corrector.is_identity(),
@@ -30696,96 +30706,72 @@ mod tests {
                 2.8f32.to_bits(),
             ),
             active: true,
+            gpu_map: None,
         });
-        app.render().unwrap();
         assert!(
-            app.displayed_lensfun_active,
-            "the displayed render must snapshot the active corrector"
+            app.gpu_unsupported_reasons().is_empty(),
+            "GPU-LENSFUN-PARITY-1: an active corrector must not block the recipe gate, got {:?}",
+            app.gpu_unsupported_reasons()
         );
-        assert!(
-            app.recipe_has_unsupported_gpu_stages(),
-            "GUI-LENSFUN-GATE-1: an active Lensfun corrector must block the VRAM route \
-             (no stale `false` memo hit)"
-        );
-
-        // Clearing the corrector and re-rendering restores eligibility (the
-        // displayed-render snapshot flips back with the new render key).
-        app.lensfun_cache = None;
         app.render().unwrap();
-        assert!(!app.displayed_lensfun_active);
         assert!(
             !app.recipe_has_unsupported_gpu_stages(),
-            "GUI-LENSFUN-GATE-1: clearing the corrector must restore GPU eligibility"
+            "GPU-LENSFUN-PARITY-1: a corrector recipe must stay GPU-eligible \
+             (no stale recipe-gate reason)"
+        );
+
+        // Clearing the corrector keeps the recipe eligible and the memo honest.
+        app.lensfun_cache = None;
+        app.render().unwrap();
+        assert!(
+            !app.recipe_has_unsupported_gpu_stages(),
+            "clearing the corrector must keep the GPU eligibility"
         );
     }
 
-    /// GUI-LENSFUN-GATE-2: the present gate must describe the **displayed**
-    /// render, not the live single-slot `lensfun_cache`. A later navigator/
-    /// export/analysis render at other dimensions rebuilds that one slot;
-    /// without the displayed-render snapshot the gate would flip to "eligible"
-    /// and could present an uncorrected VRAM frame over the corrected CPU
-    /// preview — or flap the routing badge between frames.
+    /// GPU-LENSFUN-PARITY-1: the two `lumina-gpu` map guards are classified into
+    /// a precise badge reason — the core guard refuses, the GUI names it. Pure
+    /// classification (no adapter), so it runs in the normal suite; it pins the
+    /// "no silent CPU route" contract for a distortion corrector without an
+    /// explicit crop and for a dimension-mismatched bound map.
     #[test]
     #[cfg(all(feature = "gpu", feature = "lensfun"))]
-    fn displayed_lensfun_verdict_survives_single_slot_cache_clobber() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut app = new_app();
-        app.load_bytes(png(), "lensfun-clobber.png").unwrap();
-        app.render().unwrap();
-        assert!(!app.displayed_lensfun_active);
-
-        let (corrector, db) = synthetic_lensfun_corrector(directory.path());
-        app.lensfun_cache = Some(CachedLensCorrector {
-            corrector,
-            _db: db,
-            key: (
-                Some("Lumina Test Corp".into()),
-                Some("Lumina Test Body".into()),
-                None,
-                640,
-                480,
-                50.0f32.to_bits(),
-                2.8f32.to_bits(),
-            ),
-            active: true,
+    fn lensfun_map_refusal_is_classified_for_the_badge() {
+        let default_crop = lumina_gpu::GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
+            name: "lensfun_map.default_content_crop".into(),
+            value: 0.0,
+            minimum: 0.0,
+            maximum: 1.0,
         });
-        app.render().unwrap();
-        assert!(app.displayed_lensfun_active);
-        assert!(app.recipe_has_unsupported_gpu_stages());
-        let reasons = app.gpu_unsupported_stage_reasons();
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r == "lens_correction (Lensfun corrector)"),
-            "the precise reason must survive the memo, got {reasons:?}"
-        );
+        let reason = LuminaApp::classify_vram_refusal(&default_crop)
+            .expect("the default-content-crop guard must be classified");
+        assert!(reason.contains("Lensfun corrector"), "got {reason:?}");
+        assert!(reason.contains("default crop"), "got {reason:?}");
 
-        // Simulate the navigator/export single-slot overwrite (an other-dims
-        // render that finds no corrector clears the slot). The displayed
-        // preview is still the corrected CPU frame: the verdict must not flip.
-        app.lensfun_cache = None;
-        assert!(
-            app.recipe_has_unsupported_gpu_stages(),
-            "GUI-LENSFUN-GATE-2: a cache clobber must not re-enable the VRAM route \
-             for a displayed corrected frame (no flapping)"
-        );
-        // Repeat queries stay stable — the memo is keyed by the displayed render
-        // key, not by the live slot.
-        assert!(app.recipe_has_unsupported_gpu_stages());
-        assert!(app.recipe_has_unsupported_gpu_stages());
+        let mismatch = lumina_gpu::GpuError::Core(lumina_core::CoreError::InvalidAdjustment {
+            name: "lensfun_map.dimensions".into(),
+            value: 1.0,
+            minimum: 1.0,
+            maximum: 1.0,
+        });
+        let reason = LuminaApp::classify_vram_refusal(&mismatch)
+            .expect("the map-dimension guard must be classified");
+        assert!(reason.contains("map dimensions"), "got {reason:?}");
 
-        // Re-rendering without the corrector honestly restores eligibility.
-        app.render().unwrap();
-        assert!(!app.displayed_lensfun_active);
-        assert!(!app.recipe_has_unsupported_gpu_stages());
-        assert!(app.gpu_unsupported_stage_reasons().is_empty());
+        // Unrelated failures stay unclassified (their existing loud handling).
+        let other = lumina_gpu::GpuError::RenderFailed("device lost".into());
+        assert!(
+            LuminaApp::classify_vram_refusal(&other).is_none(),
+            "an unrelated VRAM failure must not be labelled as a Lensfun route"
+        );
     }
 
     /// GUI-LENSFUN-GATE-2: the visible routing badge names the precise reason,
     /// not just the generic headline — `geometry (default content crop)` and an
-    /// invalid As-Shot context are VRAM-gate refusals, the Lensfun corrector is
-    /// added by [`LuminaApp::gpu_unsupported_reasons`]. Pure text check, so it
-    /// runs without a bound adapter.
+    /// invalid As-Shot context are VRAM-gate refusals. The Lensfun map guards
+    /// are covered separately by
+    /// [`Self::lensfun_map_refusal_is_classified_for_the_badge`]. Pure text
+    /// check, so it runs without a bound adapter.
     #[test]
     #[cfg(feature = "gpu")]
     fn routing_fallback_badge_names_the_precise_reason() {
@@ -31018,37 +31004,26 @@ mod tests {
         assert!(painted, "the routing badge must be painted");
     }
 
-    /// GUI-LENSFUN-GATE-3 (F3): a source switch resets the displayed-corrector
-    /// snapshot, so the previous image's Lensfun verdict can never leak into
-    /// the new source's present gate (previously only code-reviewed).
+    /// GPU-LENSFUN-PARITY-1: the memoized GPU-stage verdict is keyed by render
+    /// identity + As-Shot WB only (the former Lensfun-corrector key component is
+    /// gone). A source switch must still clear the memo so a verdict computed
+    /// for the previous image can never be served for the new one.
     #[test]
     #[cfg(feature = "gpu")]
-    fn source_switch_resets_displayed_lensfun_snapshot() {
+    fn source_switch_resets_gpu_stage_gate_memo() {
         let mut app = new_app();
-        app.load_bytes(png(), "lensfun-first.png").unwrap();
-        app.displayed_lensfun_active = true;
-        app.load_bytes(png(), "lensfun-second.png").unwrap();
+        app.load_bytes(png(), "memo-first.png").unwrap();
+        app.render().unwrap();
+        // Populate the memo (a load alone does not query it).
+        let _ = app.recipe_has_unsupported_gpu_stages();
         assert!(
-            !app.displayed_lensfun_active,
-            "a source switch must drop the previous displayed-corrector verdict"
+            app.gpu_stage_gate.is_some(),
+            "the explicit verdict query must populate the memo"
         );
-    }
-
-    /// GUI-LENSFUN-GATE-3 (F3): adopting a cached neighbor frame resets the
-    /// displayed-corrector snapshot — the neighbor pipeline renders with
-    /// `lensfun: None`, so the stand-in carries no correction (previously only
-    /// code-reviewed).
-    #[test]
-    #[cfg(feature = "gpu")]
-    fn neighbor_adopt_resets_displayed_lensfun_snapshot() {
-        let mut app = new_app();
-        app.load_bytes(png(), "lensfun-adopt.png").unwrap();
-        app.displayed_lensfun_active = true;
-        let frame = ImageFrame::new(2, 2, vec![0u8; 2 * 2 * 4]).expect("2x2 frame");
-        app.adopt_neighbor_preview_frame(frame);
+        app.load_bytes(png(), "memo-second.png").unwrap();
         assert!(
-            !app.displayed_lensfun_active,
-            "an adopted neighbor frame carries no Lensfun correction"
+            app.gpu_stage_gate.is_none(),
+            "a source switch must drop the previous GPU-stage verdict"
         );
     }
 

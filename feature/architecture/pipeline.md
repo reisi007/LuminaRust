@@ -1641,7 +1641,13 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   (`lensfun_corrector_map_matches_cpu_oracle`, `lumina-gpu/tests/parity.rs`;
   Test-Feature `lumina-gpu/lensfun`, Default aus — Default-Builds linken kein
   liblensfun; CI kompiliert den GPU-Pfad nur, der lokale Metal-Lauf ist der
-  Beleg). Die CPU bleibt vollständige Referenz. **Verbleibende, bewusst
+  Beleg). Die CPU bleibt vollständige Referenz. **GUI-Wiring abgeschlossen
+  (2026-09-18):** Der Present-Pfad baut die Map pro Quelle/Dimensionen
+  (`LensfunMap::from_corrector`, gecacht am `CachedLensCorrector`) und bindet
+  sie vor jedem `render_to_vram` (`crates/lumina-gui/src/lensfun_gpu.rs`);
+  Headless-Beleg ohne Badge:
+  `gpu_audit_lensfun_corrector_presents_gpu_without_badge`, plus
+  `kittest_parity`-Zelle mit CPU↔GPU `maxAbsDiff=0`. **Verbleibende, bewusst
   dokumentierte CPU-Routen:** (a) eine Map, deren Dimensionen nicht zum Frame passen, und (b)
   ein Distortion-Corrector **ohne** expliziten `geometry.crop` (der CPU-Orakel
   erzeugt dann den inhaltsbasierten Default-Crop, dessen Rechteck vom
@@ -1656,8 +1662,18 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Metal-Kontext und prüft `gpu_routing_fallback_badge() == None` außer den hier
   und in `feature/platform/cli-gui-wasm.md` § GUI-GPU-AUDIT-17 gelisteten
   dokumentierten CPU-Ausnahmen (default content crop, dimension-changing
-  output, generative_edit, denoise_ai not GPU-wired, Lensfun-Corrector). Der
-  adapter-unabhängige Vollständigkeitstest läuft in `cargo test -p lumina-gui`;
+  output, generative_edit, denoise_ai not GPU-wired). Der frühere
+  Lensfun-Corrector-Eintrag ist mit dem GUI-Wiring entfallen: seit
+  **GPU-LENSFUN-PARITY-1 GUI-Wiring (2026-09-18)** bindet der Present-Pfad die
+  `LensfunMap` des strikt gematchten Correctors vor `render_to_vram`
+  (`crates/lumina-gui/src/lensfun_gpu.rs`); CPU-geroutet bleiben nur die
+  Core-Guards `lensfun_map.default_content_crop` (Distortion ohne expliziten
+  Crop) und `lensfun_map.dimensions` (Map passt nicht zum Frame), als Badge über
+  `classify_vram_refusal` benannt. Headless-Belege:
+  `gpu_audit_lensfun_corrector_presents_gpu_without_badge` (Metal; kein Badge,
+  Negativ-Distortion-Fall laut) und die gedrehte `kittest_parity`-Zelle
+  `lensfun_corrector_cell_presents_gpu_without_badge` (CPU↔GPU `maxAbsDiff=0`).
+  Der adapter-unabhängige Vollständigkeitstest läuft in `cargo test -p lumina-gui`;
   der Metal-Lauf ist `cargo test -p lumina-gui --lib gpu_audit -- --ignored`
   (lokales Timing report-only, kein Gate).
 

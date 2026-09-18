@@ -660,8 +660,19 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   0`). Ein GPU-Badge für den Corrector entfällt damit; verweigert/CPU-geroutet
   bleibt nur der Distortion-Fall ohne expliziten Crop (datenabhängiger
   Default-Crop, `feature/architecture/pipeline.md` § Implementierungsstatus
-  GPU-Pfad). Die GUI-Verdrahtung (Corrector → Map → Present-Gate) und der
-  headless Badge-Abwesenheitstest gehören zum selben Task.
+  GPU-Pfad). **GUI-Wiring abgeschlossen (2026-09-18):** Der Present-Pfad baut die
+  Map pro Quelle/Dimensionen (`LensfunMap::from_corrector`, gecacht am
+  `CachedLensCorrector`) und bindet sie vor jedem `render_to_vram`
+  (`crates/lumina-gui/src/lensfun_gpu.rs`, Debug-Diagnostik `kept on CPU:`);
+  Headless-Belege: `gpu_audit_lensfun_corrector_presents_gpu_without_badge`
+  (Metal, kein Badge; Negativ-Distortion-Fall bleibt laut CPU) und die
+  gedrehte `kittest_parity`-Zelle
+  `lensfun_corrector_cell_presents_gpu_without_badge` (CPU↔GPU `maxAbsDiff=0`).
+  Die Zelle legt zwei Goldens ab (`parity_paths_lensfun_corrector_{cpu,gpu}`);
+  weil der VRAM-Present nur die geteilte Preview-Textur speist und die UI nicht
+  ändert, ist der GPU-Snapshot **byte-identisch** zum CPU-Snapshot — der
+  eigentliche GPU-Pfad ist über `assert_path_parity` (`maxAbsDiff=0`) und die
+  `gpu_present_frame_size`-Present-Prüfung gepinnt, nicht über den Snapshot.
 - **GUI-GPU-AUDIT-17 (Release 1.0, User-Vorgabe 2026-09-17, F-103-N6):**
   Automatisierter headless Routing-Audit über **alle** 101 `GuiAction`s
   (Quelle der Aktionsliste: `ALL_GUI_ACTIONS`). Der Audit lädt eine
@@ -680,11 +691,12 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     `gpu_audit_exception_table_is_complete_without_gpu`, läuft ohne GPU) und
     `cargo test -p lumina-gui --lib gpu_audit -- --ignored` (Metal-Audit;
     ohne Adapter SKIP statt Rot, wie `kittest_*`; CI-Gap kein Metal in CI).
-  - **Ergebnis (lokal, Metal, 2026-09-18):** 101 Aktionen gefahren, 10
-    dokumentierte CPU-Ausnahmen, keine undokumentierte CPU-Route; der
-    adapter-unabhängige Test pinnt die Ausnahmetabelle gegen die
-    dokumentierten Grundklassen. Der Present-Pfad selbst bleibt über
-    `kittest_parity` abgedeckt.
+  - **Ergebnis (lokal, Metal, 2026-09-18; Stand nach GPU-LENSFUN-PARITY-1):** 101
+    Aktionen gefahren, 10 dokumentierte CPU-Ausnahmen (die vier
+    `GuiAction`-Klassen unten, `default content crop` zählt drei Aktionen),
+    keine undokumentierte CPU-Route; der adapter-unabhängige Test pinnt die
+    Ausnahmetabelle gegen die dokumentierten Grundklassen. Der Present-Pfad
+    selbst bleibt über `kittest_parity` abgedeckt.
   - **Dokumentierte CPU-Ausnahmen (explizite Liste, alle laut sichtbar per
     Badge):**
 
@@ -694,7 +706,19 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     | `set_crop_aspect`, `rotate_step` | `geometry (dimension-changing output…)` | GUI-LENSFUN-GATE-3 F1 (`architecture/pipeline.md` § GPU-Pfad): die readback-freie VRAM-Present-Textur ist quellgroß; ein dimensionsänderndes Rezept wird laut verweigert und exakt auf der CPU präsentiert (Export/Readback bleibt GPU-fähig). |
     | `set_expand_canvas`, `generate_generative_canvas`, `set_expand_beyond_image`, `set_auto_fill_transparent` | `generative_edit (…)` | GEN-ONNX-1 Welle 2b: der readback-freie VRAM-Present ist artifact-blind; Preview/Export laufen per Design über den artifact-aware CPU-Pfad (kein VRAM-Injektionspunkt ohne Readback). |
     | `set_denoise_enabled` | `denoise_ai (not GPU-wired)` | LRPAR-G14-DENOISE-IMPL-20: additive KI-Denoise-Stufe (Release 2.0) hat noch keinen WGSL-Pass; aktive Stufe routet laut auf CPU. |
-    | (kein `GuiAction`; separater Testfall `gpu_audit_lensfun_corrector_is_a_documented_cpu_exception`) | `lens_correction (Lensfun corrector)` | GUI-LENSFUN-GATE-1/-2, GPU-LENSFUN-PARITY-1: ein strikt gematchter Lensfun-Corrector hat keinen WGSL-Pass (Badge nennt den präzisen Grund). |
+
+    **Kein Lensfun-Corrector-Eintrag mehr (GPU-LENSFUN-PARITY-1 GUI-Wiring,
+    2026-09-18):** Ein strikt gematchter Correcter ist eine gebundene
+    `LensfunMap` und läuft auf GPU (`crates/lumina-gui/src/lensfun_gpu.rs`);
+    einzige verbleibende Corrector-CPU-Route ist der Distortion-Fall ohne
+    expliziten Crop (`lensfun_map.default_content_crop`) sowie eine nicht
+    bindbare/dimensionsfremde Map (`lensfun_map.dimensions`), beide über
+    `classify_vram_refusal` als Badge benannt. Headless-Beleg:
+    `gpu_audit_lensfun_corrector_presents_gpu_without_badge` (Assertion
+    `vram_fresh` + Badge-Abwesenheit; Negativ-Distortion-Fall bleibt laut),
+    plus die gedrehte `kittest_parity`-Zelle. Der Audit-Zähler der
+    `GuiAction`-Ausnahmen bleibt **10** (der Corrector war nie eine
+    `GuiAction`).
 
   - **Timing-Tabelle (report-only, unkalibriert; kein hartes Gate):** eine
     repräsentative lokale Metal-Messung (Debug, 64×48-Quelle,

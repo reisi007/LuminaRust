@@ -109,7 +109,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | GPU-LENSFUN-PARITY-1 | G-06 | Lensfun-GPU-Pass (dokumentierte Ausnahme bis dahin) |
 | 1.0 | GUI-PARITY-GOLDENS-18 | alle G | Parity-Goldens-Rebless |
 | 1.0 | UX-LOOK-LAYOUT-18 | alle G | Develop-Layout links |
 | 1.0 | UX-LOOK-TOOLBAR-18 | alle G | Icon-Werkzeugleiste |
@@ -170,7 +169,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] GPU-LENSFUN-PARITY-1 (→ G-06, Release: 1.0)** GPU-Pass für den (korrekt, strikt gematchten) Lensfun-Corrector. Befund GUI-ROUTING-N6 (2026-09-17): Ein aktiver Lensfun-Corrector hat keinen WGSL-Pass; GUI/CLI routen laut auf CPU (Badge `lens_correction (Lensfun corrector)`) — bis zur Umsetzung als dokumentierte Ausnahme in `feature/architecture/pipeline.md` § GPU-Pfad und `feature/platform/cli-gui-wasm.md` festgeschrieben. Scope: Lensfun liefert beliebige Distortion-/TCA-/Vignette-Modelle als per-Pixel-Koordinaten-/Gewinnfunktion; daher vorberechnete Warp-/Gain-Map (CPU-Aufbau pro Quelle/Dimensionen, GPU-Resample-Pass analog `depth_plane`) statt WGSL-Nachbau der Modelle. Abnahme: Oracle-vs-GPU-Paritätstest (`lumina-gpu/tests/parity.rs`, maxAbsDiff/PSNR nach F-043), GUI-headless ohne Badge für das Rezept, CPU-Referenz bleibt vollständig. Hinweis: Die **falsche** Profilzuordnung (lose Suche) ist mit GUI-ROUTING-N6 bereits behoben; hier geht es nur um die Pixel-Parität eines korrekten Correctors. **Stand 2026-09-18:** Kern (LensfunMap + WGSL-Resample-Pass + Oracle-Parität maxAbsDiff 0/PSNR ∞ + Testanker F1–F4) unabhängig verifiziert BESTANDEN und committet; Rest offen: GUI-Wiring (Corrector → Map-Bindung + Badge-Entfernung + Audit-Ausnahmetabellen-Update — **beauftragt 2026-09-18**), F6-Stale-Line in `cli-gui-wasm.md` (mit Wiring), F7 CLI/MCP-Verdrahtung (Folge), F5 TCA-Skip mit manuellem Lens (niedrig, Folge).
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
@@ -255,9 +253,9 @@ BESTANDEN verifiziert).
   Agent bestätigt F-100-Checkliste + Tests (BESTANDEN). Letzter Schritt vor
   Abschluss von Phase 8.
   **Bereit für Runde 2 (Release-Build, Stand 2026-09-18):** Geladet: GUI-GPU-AUDIT-17
-  (verifiziert + committet — Audit-Test + Timing-Baseline), GPU-LENSFUN-Kern
-  (verifiziert + committet). Vor Runde 2 läuft noch das beauftragte Lensfun-
-  GUI-Wiring (sonst steht die Lensfun-Ausnahme im Runde-2-Log).
+  (verifiziert + committet — Audit-Test + Timing-Baseline), GPU-LENSFUN-Kern +
+  -Wiring (gemeinsam verifiziert BESTANDEN; Commit nach SEC-Abgrenzung der
+  Baseline — die Lensfun-Ausnahme steht nicht mehr im Runde-2-Log).
   GPU-RENDER-DENOISE/PREVIEW/EXPORT/MASK-19 sind bewusst dokumentiert-only
   (keine Implementierung vor Runde 2 — User-Entscheid 2026-09-18); Runde 2
   protokolliert deren CPU-Routen als bekannte Gaps, nicht als neue Befunde.

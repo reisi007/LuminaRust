@@ -49,15 +49,15 @@ use super::gpu_audit_actions::{drive_action, AUDIT_SRC_H, AUDIT_SRC_W};
 const GPU_AUDIT_SKIP: &str = "GPU adapter unavailable - skipped GUI GPU audit";
 
 // Documented CPU-route reason classes (mirrors the live inventory
-// `cpu_routing_inventory_is_complete` in `crates/lumina-gpu/tests/parity.rs`
-// plus the GUI-only Lensfun corrector reason). Kept as string constants so the
-// exception table and the adapter-independent completeness test share one
-// source of truth.
+// `cpu_routing_inventory_is_complete` in `crates/lumina-gpu/tests/parity.rs`).
+// Kept as string constants so the exception table and the adapter-independent
+// completeness test share one source of truth. GPU-LENSFUN-PARITY-1 removed the
+// former GUI-only Lensfun exception: a strictly matched corrector is bound as a
+// `LensfunMap` and presents through VRAM.
 const REASON_DEFAULT_CONTENT_CROP: &str = "geometry (default content crop)";
 const REASON_DIMENSION_CHANGING: &str = "geometry (dimension-changing output";
 const REASON_DENOISE: &str = "denoise_ai (not GPU-wired)";
 const REASON_GENERATIVE: &str = "generative_edit";
-const REASON_LENSFUN: &str = "Lensfun corrector";
 
 /// Every documented CPU-route reason the exception table may use.
 const DOCUMENTED_CPU_REASONS: &[&str] = &[
@@ -65,7 +65,6 @@ const DOCUMENTED_CPU_REASONS: &[&str] = &[
     REASON_DIMENSION_CHANGING,
     REASON_DENOISE,
     REASON_GENERATIVE,
-    REASON_LENSFUN,
 ];
 
 /// The documented CPU-route exception for `action`, or `None` when the action
@@ -92,9 +91,10 @@ const DOCUMENTED_CPU_REASONS: &[&str] = &[
 ///   artifact-blind (GEN-ONNX-1 Welle 2b, documented in
 ///   `feature/platform/cli-gui-wasm.md`).
 ///
-/// The caller-owned **Lensfun corrector** (`Lensfun corrector`) is the one
-/// documented exception with no `GuiAction` of its own; it is exercised by
-/// `gpu_audit_lensfun_corrector_is_a_documented_cpu_exception`.
+/// The caller-owned **Lensfun corrector** is no longer an exception
+/// (GPU-LENSFUN-PARITY-1): it is exercised by
+/// `gpu_audit_lensfun_corrector_presents_gpu_without_badge`, which asserts the
+/// GPU present route and the absence of a badge.
 fn documented_cpu_exception(action: GuiAction) -> Option<&'static str> {
     match action {
         GuiAction::SetLensProfile | GuiAction::AnalyzeUpright | GuiAction::SetUprightEnabled => {
@@ -320,15 +320,21 @@ fn gpu_action_routing_audit_metal() {
     );
 }
 
-/// The one documented CPU exception without a `GuiAction`: a strictly matched
-/// Lensfun corrector has no WGSL pass, so the GUI gate routes the present to
-/// the exact CPU reference and the badge names the reason
-/// (GUI-LENSFUN-GATE-1/-2, GPU-LENSFUN-PARITY-1). Ignored with the audit; the
-/// same fixture database shape as the `kittest_parity` Lensfun cell.
+/// GPU-LENSFUN-PARITY-1: a strictly matched Lensfun corrector is bound as a
+/// `LensfunMap` and presents through the VRAM path — the badge is absent. This
+/// is the headless beleg for the former GUI-GPU-AUDIT-17 CPU exception turning
+/// into a GPU route. Ignored with the audit; same fixture database shape as the
+/// `kittest_parity` Lensfun cell.
+///
+/// Negative argumentation in the same test: a **distortion** corrector without
+/// an explicit crop would need the CPU content-based default crop, which the
+/// `lumina-gpu` map guard refuses. That route must stay loud (badge present,
+/// `vram_fresh == false`), so the removal of the blanket corrector exception
+/// cannot silently present a divergent frame.
 #[cfg(feature = "lensfun")]
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --lib gpu_audit -- --ignored"]
-fn gpu_audit_lensfun_corrector_is_a_documented_cpu_exception() {
+fn gpu_audit_lensfun_corrector_presents_gpu_without_badge() {
     const FIXTURE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <lensdatabase>
     <camera>
@@ -346,6 +352,15 @@ fn gpu_audit_lensfun_corrector_is_a_documented_cpu_exception() {
             <vignetting model="pa" focal="50" aperture="2.8" distance="10" k1="-0.08" k2="-0.03" k3="-0.01"/>
         </calibration>
     </lens>
+    <lens>
+        <maker>Lumina Test Corp</maker>
+        <model>Lumina Distortion 50mm f/2.8</model>
+        <mount>LuminaTestMount</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="50" a="0.08" b="-0.10" c="0.02"/>
+        </calibration>
+    </lens>
 </lensdatabase>
 "#;
 
@@ -353,7 +368,7 @@ fn gpu_audit_lensfun_corrector_is_a_documented_cpu_exception() {
     let mut app = LuminaApp::new(ctx.clone());
     attach_wgpu_render_state(&mut app, None);
     if !app.gpu_adapter_available() {
-        eprintln!("{GPU_AUDIT_SKIP} (no usable adapter; Lensfun exception not asserted)");
+        eprintln!("{GPU_AUDIT_SKIP} (no usable adapter; Lensfun GPU route not asserted)");
         return;
     }
 
@@ -366,32 +381,83 @@ fn gpu_audit_lensfun_corrector_is_a_documented_cpu_exception() {
 
     let fixture = directory.path().join("lensfun-fixture.xml");
     std::fs::write(&fixture, FIXTURE_XML).expect("write fixture db");
+
+    // Positive: vignetting-only corrector (no distortion, hence no default
+    // content crop). The map is bound and the present route is the VRAM path —
+    // no badge.
     let db = lumina_lensfun::LensfunDb::load_file(&fixture).expect("fixture db loads");
     let corrector = lumina_lensfun::Corrector::for_camera(
         &db,
         "Lumina Test Corp",
         "Lumina Test Body",
-        None,
+        Some("Lumina Vignetting 50mm f/2.8"),
         AUDIT_SRC_W,
         AUDIT_SRC_H,
         50.0,
         2.8,
         10.0,
     )
-    .expect("fixture profile yields a corrector");
+    .expect("fixture vignetting profile yields a corrector");
     assert!(
-        !corrector.is_identity(),
-        "fixture must be a real correction"
+        !corrector.is_identity() && !corrector.has_distortion(),
+        "fixture must be a real vignetting-only correction"
+    );
+    assert!(
+        !lumina_core::LensfunMap::from_corrector(&corrector, AUDIT_SRC_W, AUDIT_SRC_H)
+            .expect("fixture map builds")
+            .has_distortion,
+        "the positive fixture must not trigger the default-content-crop guard"
     );
     app.bind_test_lensfun_corrector(corrector, db);
-
     app.render_draft_tick([AUDIT_SRC_W, AUDIT_SRC_H]);
     app.update_texture(&ctx);
+    assert!(
+        app.vram_fresh,
+        "GPU-LENSFUN-PARITY-1: the bound map must render on the VRAM path"
+    );
+    assert!(
+        app.vram_render_refusal.is_none(),
+        "a bound map must not record a present refusal, got {:?}",
+        app.vram_render_refusal
+    );
+    assert!(
+        app.gpu_routing_fallback_badge().is_none(),
+        "GPU-LENSFUN-PARITY-1: a corrector recipe must present without a badge, got {:?}",
+        app.gpu_routing_fallback_badge()
+    );
+
+    // Negative: a distortion corrector without an explicit crop hits the CPU
+    // content-based default crop. The `lumina-gpu` map guard refuses it, so the
+    // route stays loudly on the CPU with a badge naming the reason.
+    let db = lumina_lensfun::LensfunDb::load_file(&fixture).expect("fixture db reloads");
+    let distortion = lumina_lensfun::Corrector::for_camera(
+        &db,
+        "Lumina Test Corp",
+        "Lumina Test Body",
+        Some("Lumina Distortion 50mm f/2.8"),
+        AUDIT_SRC_W,
+        AUDIT_SRC_H,
+        50.0,
+        2.8,
+        10.0,
+    )
+    .expect("fixture distortion profile yields a corrector");
+    assert!(
+        distortion.has_distortion(),
+        "negative fixture must carry a distortion model"
+    );
+    app.bind_test_lensfun_corrector(distortion, db);
+    app.render_draft_tick([AUDIT_SRC_W, AUDIT_SRC_H]);
+    app.update_texture(&ctx);
+    assert!(
+        !app.vram_fresh,
+        "a distortion corrector without an explicit crop must not present from VRAM"
+    );
     let badge = app
         .gpu_routing_fallback_badge()
-        .expect("the active Lensfun corrector must force the CPU route");
+        .expect("the default-content-crop guard must surface a badge");
     assert!(
-        badge.contains(REASON_LENSFUN),
+        badge.contains("Lensfun corrector"),
         "the badge must name the precise Lensfun reason, got {badge:?}"
     );
 }
