@@ -4038,7 +4038,7 @@ impl LuminaApp {
     /// to the CPU, `n/a` when no context exists (or the `gpu` feature is off).
     /// Diagnostic only; never consulted for routing.
     #[cfg(debug_assertions)]
-    fn gpu_route_label(&self) -> &'static str {
+    pub(crate) fn gpu_route_label(&self) -> &'static str {
         #[cfg(feature = "gpu")]
         {
             if self.gpu.is_some() {
@@ -4056,7 +4056,7 @@ impl LuminaApp {
     /// [`GuiActionTimer`] RAII guard). Debug builds only; release expands the
     /// `instrument_gui_action!` call site to nothing.
     #[cfg(debug_assertions)]
-    fn begin_gui_action(&self, action: GuiAction) -> GuiActionTimer {
+    pub(crate) fn begin_gui_action(&self, action: GuiAction) -> GuiActionTimer {
         GuiActionTimer::new(action, self.gpu_route_label())
     }
 
