@@ -1,4 +1,4 @@
-37690 crates/lumina-gui/src/lib.rs  # 2026-09-18: GPU-LENSFUN-PARITY-1 GUI-Wiring (37715 -> 37690, map-Bind nach lensfun_gpu.rs; die vorige 38046-Baseline war stale)
+36235 crates/lumina-gui/src/lib.rs  # 2026-09-18: GUI-REFACTOR-W1-20 S1.1/S1.3/S1.4a/S1.4b/S1.2a/S1.2b (37690 -> 36235, Extraktion nach render_tick/dirty/present/gpu_routing/render_source/render_entry/render_pipeline)
 11529 crates/lumina-cli/src/main.rs  # 17709 -> 11529 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 5072 crates/lumina-sidecar/src/lib.rs  # 10715 -> 5072 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 3257 crates/lumina-core/src/lib.rs  # 7336 -> 3257 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
