@@ -1,8 +1,8 @@
-38046 crates/lumina-gui/src/lib.rs
-17709 crates/lumina-cli/src/main.rs
-10715 crates/lumina-sidecar/src/lib.rs
-7336 crates/lumina-core/src/lib.rs  # 7587 -> 7336 am 2026-09-18: lensfun_row-Tests nach lens_row_tests.rs extrahiert (Lensfun-Map)
-5250 crates/lumina-gpu/src/lib.rs  # 5310 -> 5250 am 2026-09-18: GPU-LENSFUN-PARITY-1 (Map-Verdrahtung, Doku) + gpu_util-Extraktion
+37690 crates/lumina-gui/src/lib.rs  # 2026-09-18: GPU-LENSFUN-PARITY-1 GUI-Wiring (37715 -> 37690, map-Bind nach lensfun_gpu.rs; die vorige 38046-Baseline war stale)
+11529 crates/lumina-cli/src/main.rs  # 17709 -> 11529 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
+5072 crates/lumina-sidecar/src/lib.rs  # 10715 -> 5072 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
+3257 crates/lumina-core/src/lib.rs  # 7336 -> 3257 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
+4766 crates/lumina-gpu/src/lib.rs  # 5310 -> 4766 am 2026-09-18: GPU-LENSFUN-PARITY-1 + stale Baseline korrigiert + Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 3825 crates/lumina-gpu/tests/parity.rs  # 3840 -> 3825 am 2026-09-18: Helper nach parity_support extrahiert, Lensfun-Paritaets-/VRAM-Test (GPU-LENSFUN-PARITY-1)
 3505 crates/lumina-core/src/render.rs
 3333 crates/lumina-sidecar/src/zdata.rs
@@ -44,7 +44,6 @@
 806 crates/lumina-gui/src/merge_gui.rs
 799 crates/lumina-cli/tests/merge_e2e.rs
 794 crates/lumina-core/src/spot_heal.rs
-788 crates/lumina-gui/tests/kittest_parity.rs
 785 crates/lumina-onnx/tests/ort_backend.rs
 779 crates/lumina-merge/src/merge.rs
 770 crates/lumina-sidecar/src/meta_preset.rs

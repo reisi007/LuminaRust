@@ -124,7 +124,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | GUI-REFACTOR-W1-20 | alle G | Jank-Pfade |
 | 1.0 | GUI-REFACTOR-W2-20 | alle G | lib.rs-Entlastung |
 | 1.0 | GUI-REFACTOR-W3-20 | alle G | Test/Audit-Extraktion |
-| 1.0 | XXL-REFACTOR-SEC-20 | alle G | CLI/Sidecar/Core/GPU |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
@@ -165,7 +164,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: hoch] GUI-REFACTOR-W1-20 (Release: 1.0)** Wave 1 (Jank-Pfade, M–L): S1.1 `render_tick.rs` (Draft/Tick/Timings), S1.3 `dirty.rs` (Dirty-Key + Invalidierungsinvariante, `set_adjustment`-Duplikat NICHT anfassen), S1.4a `present.rs` + S1.4b `gpu_routing.rs`, S1.2a `render_source.rs`, S1.2b `render_from` → `render_pipeline.rs` (verschieben per Entscheid), S1.5 `jank_log.rs` NEU (erst nach JANKLOG-SOLL-Entscheid). Je Slice: verhaltensidentisch, Tests + kittest-Byte-Identität, Baseline senken, Exhaustivität ohne `_`-Arm erhalten, unabhängige Verifizierung.
 - [ ] **[PRIO: hoch] GUI-REFACTOR-W2-20 (Release: 1.0)** Wave 2 (lib.rs-Entlastung, L): S2.1 Preview-Draws, S2.2 Develop-Sektionen je Modul, S2.3 Library, S2.4–S2.7 Develop-Frame/Filmstrip/Navigator/App-Frame, S2.8 Ops-Module (Backlog). Je Slice wie W1-Abnahme.
 - [ ] **[PRIO: hoch] GUI-REFACTOR-W3-20 (Release: 1.0)** Wave 3 (Test/Audit, M–L): S3.1 `f100_action_button`-Guard als Block nach `src/tests/f100_audit.rs` (Guard bleibt im selben exhaustiven Match, kein `_`-Arm), S3.2 `mod tests`-Split thematisch (Testdateien strikt ≤500). Abnahme wie W1.
-- [ ] **[PRIO: hoch] XXL-REFACTOR-SEC-20 (Release: 1.0)** Sekundär-Backlog (L–XL, eigene Crates → parallelisierbar): CLI-`main.rs` (Tests-Split 6181 zuerst), Sidecar-`lib.rs` (Tests-Split 5644; Serde-Teile nur byte-identisch + Roundtrip-Tests), Core-`lib.rs` (Tests-Split; erst nach Dedup-Audit), GPU-`lib.rs` + Baseline 5250→5246 senken. Je Crate ein Agent, Abnahme wie W1.
 
 ### PRIO: mittel
 
