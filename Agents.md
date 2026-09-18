@@ -342,8 +342,9 @@ erst fertig, wenn:
   500 Zeilen darf nicht wachsen (CI: `scripts/check_file_sizes.sh` gegen
   `scripts/file_size_baseline.txt`). Verkleinern und Extrahieren jederzeit;
   danach den Baseline-Eintrag senken (bzw. entfernen, sobald die Datei wieder
-  bei ≤ 500 Zeilen steht). Neue Dateien über 500 Zeilen nur mit bewusstem
-  Baseline-Eintrag. Kein willkürliches Splitten ohne Kohäsion — Extraktion
+  bei ≤ 500 Zeilen steht). Neue Dateien bleiben strikt bei ≤ 500 Zeilen
+  (User-Entscheid 2026-09-18: keine neuen Baseline-Einträge — größere Ziele
+  werden feiner gesplittet; bestehende Einträge bleiben bestehen). Kein willkürliches Splitten ohne Kohäsion — Extraktion
   folgt Modulgrenzen. **Anti-Gaming (Pflicht):** Kommt neue Logik hinzu, gehört
   sie in neue oder passende kleine Dateien (Umdesign-Pflicht) — nicht in die
   übergroße Bestandsdatei. Kleinstverdrahtung an bestehenden Aufrufstellen
