@@ -1749,6 +1749,16 @@ pub struct LuminaApp {
     /// header banner (background decode/listing failure). Reset by
     /// [`LuminaApp::show_error_banner`], set by [`LuminaApp::show_error`].
     error_dialog: bool,
+    /// Crash-Fix Runde 2 (F5): message of the last draft-render failure that
+    /// was surfaced. A repeated identical failure in a following draft tick is
+    /// downgraded to one `warn!` instead of re-emitting `error!` and re-arming
+    /// the dialog every frame (45 MP drag ticks made that a log/abort storm).
+    /// Cleared once a draft render succeeds ([`LuminaApp::clear_draft_error_dedup`]).
+    draft_error_dedup: Option<String>,
+    /// Crash-Fix Runde 2 (F5): whether the one-time repeat `warn!` for the
+    /// current [`Self::draft_error_dedup`] message was already emitted. Keeps a
+    /// persistent failure from spamming `warn!` once per frame, too.
+    draft_error_repeat_warned: bool,
     render_key: Option<RenderKey>,
     tone_analysis: Option<lumina_core::ToneAnalysis>,
     /// 256-bin luminance histogram of the full-frame render (GUI-HISTOGRAM-FULL-1,
@@ -2863,6 +2873,8 @@ impl LuminaApp {
             status: Str::ReadyForImage.t().into(),
             error: None,
             error_dialog: false,
+            draft_error_dedup: None,
+            draft_error_repeat_warned: false,
             render_key: None,
             tone_analysis: None,
             preview_histogram: None,
@@ -9126,74 +9138,6 @@ impl LuminaApp {
         // GUI-SLIDER-SAVE-1: presence sliders commit like flat adjustments.
         self.pending_slider_commit = Some((format!("presence.{field}"), value));
         self.mark_dirty();
-    }
-
-    /// Set one tone-curve region delta (`shadows`, `darks`, `lights`,
-    /// `highlights`) and record the save commit (GUI-SLIDER-SAVE-1). Unknown
-    /// region names are ignored loudly (`warn!`) — all call sites pass
-    /// literals, and the headless save tests pin every valid name.
-    /// Master-channel shorthand over [`Self::set_tone_curve_channel_region`]
-    /// (test- and compat-owned; the panel binds the channel variant).
-    #[cfg(test)]
-    fn set_tone_curve_region(&mut self, region: &str, value: f64) {
-        self.set_tone_curve_channel_region("master", region, value);
-    }
-
-    /// Set one parametric tone-curve region (`shadows`/`darks`/`lights`/
-    /// `highlights`) of one channel (`master`/`red`/`green`/`blue`,
-    /// G-02) and record the save commit (GUI-SLIDER-SAVE-1). The four
-    /// region values persist as that channel's 4-point curve (same mapping
-    /// as the master path); setting a region replaces a free point list
-    /// (Last-Write-Wins je Kanal). Unknown names are ignored loudly — all
-    /// call sites pass literals, and the headless save tests pin every
-    /// valid name.
-    fn set_tone_curve_channel_region(&mut self, channel: &str, region: &str, value: f64) {
-        if !matches!(channel, "master" | "red" | "green" | "blue") {
-            warn!("set_tone_curve_channel_region: unknown channel {channel}");
-            return;
-        }
-        let (mut s, mut d, mut l, mut h) = tone_curve_channel_regions(&self.recipe, channel);
-        match region {
-            "shadows" => s = value,
-            "darks" => d = value,
-            "lights" => l = value,
-            "highlights" => h = value,
-            _ => {
-                warn!("set_tone_curve_channel_region: unknown region {region}");
-                return;
-            }
-        }
-        let mut curves = self.recipe.curves.clone().unwrap_or(Curves {
-            version: 1,
-            master: vec![
-                CurvePoint {
-                    input: 0.0,
-                    output: 0.0,
-                },
-                CurvePoint {
-                    input: 1.0,
-                    output: 1.0,
-                },
-            ],
-            channels: CurveChannels::default(),
-        });
-        curves.version = 1;
-        let points = build_tone_curve_points(s, d, l, h);
-        match channel {
-            "master" => curves.master = points,
-            "red" => curves.channels.red = Some(points),
-            "green" => curves.channels.green = Some(points),
-            "blue" => curves.channels.blue = Some(points),
-            _ => unreachable!(),
-        }
-        self.recipe.curves = Some(curves);
-        self.mark_recipe_dirty(&format!("curves.{channel}.{region}"), value);
-        // REVIEW-GUI-CURVE-1: a clamped output absorbs part of a delta, so the
-        // affected slider visibly snaps back. Surface that MVP limit explicitly
-        // instead of leaving the user with a silently moving slider.
-        if tone_curve_roundtrip_is_lossy(s, d, l, h) {
-            self.status = "Tone curve: extreme region values are clamped to the 0..=1 output range (MVP limit) — negative Shadows beyond the base point are not representable.".into();
-        }
     }
 
     /// Validate curve points like the core (`2..=32` points, finite values in

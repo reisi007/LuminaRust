@@ -1858,6 +1858,29 @@ Drag-and-drop. Preview, Exposure
 gespeichert. ONNX,
 Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 
+#### F-103-N6 Runde 2 Befunde (2026-09-19, Release-Build, noch offen)
+
+- **R2-CRASH-1 (kritisch, BEHOBEN 2026-09-19, verifiziert BESTANDEN):**
+  SIGABRT — Panic im Logger auf dem Fehler-Anzeigepfad (`show_error` →
+  `error!` → `eprint`-Panic → Panic-Hook-`eprintln`-Panic → Abort). Fix:
+  `StderrLogger`/`Panic-Hook` panicken nie mehr (writeln + catch_unwind +
+  Poison-Recovery + Zähler), Draft-Tick-Fehler dedupliziert (1×`error!` +
+  1×Repeat-`warn!`). Auslöser: `set_tone_curve_channel_region` schrieb ohne
+  Validierung Kurven mit Endpunkt ≠ (0,0) (positives `shadows`) → jeder Render
+  schlug fehl → Per-Frame-Fehlerpfad; schreibt jetzt validiert + laut.
+- **R2-JANK-1 (hoch, in Analyse/Fix):** Draft-Preview macht die Sidebar
+  rucklig — synchroner ungedrosselter CPU-Draft-Render (~16 ms) im UI-Frame
+  (H1) + GPU/CPU-Doppelarbeit (H2) + redundanter Textur-Upload (H3);
+  Histogramm nachrangig (~5 %). Fix-Vorschläge F1–F4 dokumentiert
+  (Performance-Analyse Runde 2).
+- **R2-MODSWITCH-1 (mittel, in Analyse/Fix):** Library↔Develop-Wechsel langsam
+  — synchrone Thumbnail-Disk-Probes + Preview-Decodes auf dem UI-Thread
+  (`ensure_thumbnail`-Pfad); Fix-Vorschläge F7/F8 dokumentiert.
+- **R2-CLAMP-1 (offen, Follow-up):** Untracked `gui.log` (23.08.) zeigt eine
+  ANDERE Render-Pfad-Panic (`f32::clamp`: min > max/NaN beim debounced Full
+  Render) — vom Crash-Fix nicht adressiert, endet jetzt mit Dump statt Abort.
+  Eigene Untersuchung ausstehend.
+
 ## Optionale zentrale Indizierung
 
 Die DB darf nur Pfade, Quellhashes, Metadaten, Sidecarstatus, Jobstatus,

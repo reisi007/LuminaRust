@@ -405,3 +405,89 @@ fn display_sampler_matches_core_render() {
     // A non-identity curve must actually differ from the ramp (non-vacuous).
     assert_ne!(rendered.pixels[64 * 4], 64, "curve must change midtones");
 }
+
+/// Crash-Fix Runde 2 (F6): a positive `shadows` delta would put the first
+/// point at `(0, >0)`, violating the mandatory `(0,0)` endpoint. The region
+/// must be refused loudly with the recipe unchanged — never written as an
+/// invalid curve that every subsequent render (GPU and CPU) rejects.
+#[test]
+fn positive_shadows_region_is_refused_without_mutating_the_recipe() {
+    let (_directory, mut app) = persistent_app();
+    assert!(app.recipe().curves.is_none());
+
+    app.set_tone_curve_channel_region("master", "shadows", 0.5);
+    assert!(
+        app.status.contains("not saved"),
+        "the refusal must be loud: {}",
+        app.status
+    );
+    assert!(
+        app.recipe().curves.is_none(),
+        "a refused region must not write a curve"
+    );
+    assert!(
+        app.pending_slider_commit.is_none(),
+        "a refused region must not arm a save"
+    );
+    // The same refusal applies per channel (class completeness) — the delta
+    // sits on the same shared endpoint.
+    app.set_tone_curve_channel_region("blue", "shadows", 0.25);
+    assert!(
+        app.recipe().curves.is_none(),
+        "channel path must refuse too"
+    );
+
+    // A valid region on the same channel still commits…
+    app.set_tone_curve_channel_region("master", "darks", 0.5);
+    let valid = app
+        .recipe()
+        .curves
+        .clone()
+        .expect("a valid region commits")
+        .master;
+    assert_eq!(valid.len(), 4);
+    // …and a later invalid edit leaves it untouched (no invalid state).
+    app.set_tone_curve_channel_region("master", "shadows", 0.5);
+    assert_eq!(
+        app.recipe().curves.as_ref().expect("curve kept").master,
+        valid,
+        "a refused region must not overwrite the existing curve"
+    );
+}
+
+/// Crash-Fix Runde 2 (F6): the counterpart endpoint. A negative `highlights`
+/// delta puts the last point at `(1, <1)`, which must be refused as well.
+#[test]
+fn negative_highlights_region_is_refused_loudly() {
+    let (_directory, mut app) = persistent_app();
+    app.set_tone_curve_channel_region("red", "highlights", -0.3);
+    assert!(
+        app.status.contains("not saved"),
+        "the refusal must be loud: {}",
+        app.status
+    );
+    assert!(
+        app.recipe().curves.is_none(),
+        "a refused highlights region must not write a curve"
+    );
+}
+
+/// Crash-Fix Runde 2 (F6): a negative `shadows` delta clamps onto the valid
+/// `(0,0)` endpoint, so it stays accepted (documented lossy MVP limit) —
+/// the fix refuses only the genuinely invalid direction.
+#[test]
+fn negative_shadows_region_stays_accepted_and_documented() {
+    let (_directory, mut app) = persistent_app();
+    app.set_tone_curve_channel_region("master", "shadows", -0.4);
+    let curves = app
+        .recipe()
+        .curves
+        .clone()
+        .expect("negative shadows clamps onto the valid endpoint");
+    assert_eq!(curves.master[0].output, 0.0, "first point stays (0,0)");
+    assert!(
+        app.status.contains("clamped"),
+        "the lossy clamp must stay visible: {}",
+        app.status
+    );
+}
