@@ -113,6 +113,8 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
 | 1.0 | GPU-RENDER-MASK-19 | alle G | Masken-Pixelpass |
+| 1.0 | LRPAR-G15-STACK-15 | G-15 | Bilderstapel |
+| 1.0 | LRPAR-G09-SORT-09 | G-09 | Sortierung + Custom-Sort |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
@@ -145,6 +147,8 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
+- [ ] **[PRIO: mittel] LRPAR-G15-STACK-15 (→ G-15, Release: 1.0)** Bilderstapel im Library-Grid: mehrere Bilder zu einem zuklappbaren Stapel gruppieren, Stapel als eines verschieben (Selektion/Sync/Batch wirken auf den Stapel), Persistenz Sidecar-first (Mitgliedschaft per stabiler ID/relativem Pfad, keine absoluten Pfade). **Schema-Entscheide (User 2026-09-19):** immer nur gleicher Ordner; Zuklappstatus persistent (Sidecar, last-writer-wins). Abnahme: Grid + Filmstrip zeigen Stapel korrekt (zugeklappt/aufgeklappt), Verschieben/Sync wirken als Einheit, Reload stellt Stapel wieder her, headless GUI-Tests.
+- [ ] **[PRIO: mittel] LRPAR-G09-SORT-09 (→ G-09, Release: 1.0)** Library-Sortierung: Sortieroptionen (Name, Aufnahmedatum, Custom) + persistente Custom-Sortierung (manuelle Reihenfolge, stabile IDs statt Arrayposition). **Schema-Entscheide (User 2026-09-19):** Modi = Name / Aufnahmedatum (EXIF) / Custom; Custom-Order liegt in einer Ordner-Datei (portabel, atomar); Drag-&-Drop-Umsortierung wechselt automatisch auf Custom. Abnahme: Sortierwahl wirkt in Grid + Filmstrip, Custom-Order überlebt Reload, headless GUI-Tests.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 
