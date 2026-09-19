@@ -56,6 +56,12 @@ fn apply_startup_config(app: &mut lumina_gui::LuminaApp, config: &StartupConfig)
     if let Some(dir) = &config.workdir {
         app.set_directory(dir.clone());
     }
+    // R3-WARMUP-1: front-load the cold-start work (folder index, first-screen
+    // thumbnails, first-image decode + committed full render) on the existing
+    // background paths once the app is idle. Arming here — not in
+    // `LuminaApp::new` — keeps headless/kittest harnesses that build the app
+    // directly free of warmup state, while the real app start always gets it.
+    app.schedule_startup_warmup();
 }
 
 /// Usage line printed to stderr when `--module` is unusable.

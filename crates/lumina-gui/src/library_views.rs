@@ -7,8 +7,59 @@
 //! indices; all three are `pub(crate)` because the grid module calls them.
 
 use super::*;
+use log::trace;
 
 impl LuminaApp {
+    /// Move the Library selection by `delta` entries over the filtered
+    /// raster (G-09 keyboard navigation). The active image (`self.path`)
+    /// anchors the move; selection and anchor follow without opening the
+    /// image. Empty listings are a loud no-op (status, no panic). Returns
+    /// the newly selected display-string path, if any.
+    ///
+    /// Moved here from `lib.rs` (file-size ratchet): cohesive with the Library
+    /// views this module already owns.
+    pub fn move_library_selection(&mut self, delta: isize) -> Option<String> {
+        let order = self.filtered_library_order();
+        if order.is_empty() {
+            self.status = Str::NoImagesSelected.t().into();
+            return None;
+        }
+        let paths: Vec<String> = order
+            .iter()
+            .map(|&index| self.entries[index].path.display().to_string())
+            .collect();
+        let current = paths
+            .iter()
+            .position(|path| *path == self.path)
+            .unwrap_or(0);
+        let next = library_move_index(current, delta, paths.len());
+        let target = paths[next].clone();
+        self.select_filmstrip_path(target.clone(), false, false);
+        trace!("GUI interaction: move_library_selection {delta} -> {target}");
+        Some(target)
+    }
+
+    /// Open the active Library selection in Loupe (G-09): loads the image
+    /// and shows the single-image view. Without a selection this is a loud
+    /// no-op (status, never a silent fallback). Moved here from `lib.rs`
+    /// (file-size ratchet), see [`Self::move_library_selection`].
+    pub fn open_library_selection(&mut self) {
+        let Some(target) = self
+            .filmstrip_selection
+            .iter()
+            .next()
+            .cloned()
+            .or_else(|| Some(self.path.clone()))
+            .filter(|path| !path.is_empty())
+        else {
+            self.status = Str::NoImagesSelected.t().into();
+            return;
+        };
+        trace!("GUI interaction: library open {target}");
+        self.handle_filmstrip_click(target, false, false);
+        self.set_library_view(LibraryView::Loupe);
+    }
+
     /// G-09 (LRPAR-G09-LIB) Loupe: the active selection shown large
     /// (Lightroom `E`). Single image, same badges/hover as the grid cells,
     /// no second render path — the filmstrip thumbnail texture is reused.

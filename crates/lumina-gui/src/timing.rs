@@ -205,11 +205,22 @@ impl LuminaApp {
     /// R3-LOG-1: records the switch instant and logs the event with the module
     /// name; [`Self::note_first_paint_after_switch`] closes the event → first
     /// paint delta.
+    ///
+    /// R3-OPEN-1: a switch *to* Develop with exactly one filmstrip selection
+    /// (≠ the loaded image) opens that image through the shared
+    /// [`Self::open_file`] path — see
+    /// [`Self::open_develop_selection_on_switch`]. This is the single funnel
+    /// for every Develop entry point (module bar, `D`, grid double-click,
+    /// startup wiring).
     pub fn set_module(&mut self, module: Module) {
         instrument_gui_action!(self, GuiAction::SetModule);
+        let changed = self.active_module != module;
         self.timing.module_switch = Some((module, Instant::now()));
         emit(|| module_switch_event_line(module));
         self.active_module = module;
+        if changed {
+            self.open_develop_selection_on_switch(module);
+        }
     }
 
     /// Current top-level module (read-only accessor for the `main()` startup

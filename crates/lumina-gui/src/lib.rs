@@ -118,6 +118,10 @@ mod render_schedule;
 mod thumb_cache;
 mod thumb_worker;
 mod timing;
+// R3-OPEN-1 / R3-WARMUP-1 (Release 1.0): Develop-switch selection open and the
+// one-shot cold-start warmup (new logic in new files, file-size ratchet).
+mod develop_open;
+mod warmup;
 // UX-LOOK-TOOLBAR-18: the icon tool strip + iconified Library view tabs (own
 // module, file-size ratchet).
 mod icon_toolbar;
@@ -1782,6 +1786,13 @@ pub struct LuminaApp {
     /// R2-MODSWITCH-1 F7: module the render scheduler last ran for. The first
     /// run after a change defers a due full render past the switch frame.
     last_scheduled_module: Option<Module>,
+    /// R3-OPEN-1: display path of the background decode currently in flight
+    /// (`None` when idle). Set by `begin_load_path`, cleared by the decode
+    /// drain; lets the Develop-switch open reuse an already-started decode
+    /// instead of starting a duplicate one.
+    pending_load_path: Option<String>,
+    /// R3-WARMUP-1: one-shot cold-start warmup state (scheduling only).
+    warmup: warmup::WarmupState,
     /// R3-LOG-1: cross-frame timing anchors (module switch event, in-flight
     /// decode). Measurement only — never read for logic.
     timing: timing::TimingState,
@@ -2822,6 +2833,8 @@ impl LuminaApp {
             active_module: Module::Develop,
             // R2-MODSWITCH-1 F7: no scheduler run yet.
             last_scheduled_module: None,
+            pending_load_path: None,
+            warmup: warmup::WarmupState::default(),
             timing: timing::TimingState::default(),
             export_path: String::new(),
             export_format: ImageFileFormat::Png,
@@ -4737,52 +4750,6 @@ impl LuminaApp {
                 library_entry_matches(entry, &query)
             })
             .collect()
-    }
-
-    /// Move the Library selection by `delta` entries over the filtered
-    /// raster (G-09 keyboard navigation). The active image (`self.path`)
-    /// anchors the move; selection and anchor follow without opening the
-    /// image. Empty listings are a loud no-op (status, no panic). Returns
-    /// the newly selected display-string path, if any.
-    pub fn move_library_selection(&mut self, delta: isize) -> Option<String> {
-        let order = self.filtered_library_order();
-        if order.is_empty() {
-            self.status = Str::NoImagesSelected.t().into();
-            return None;
-        }
-        let paths: Vec<String> = order
-            .iter()
-            .map(|&index| self.entries[index].path.display().to_string())
-            .collect();
-        let current = paths
-            .iter()
-            .position(|path| *path == self.path)
-            .unwrap_or(0);
-        let next = library_move_index(current, delta, paths.len());
-        let target = paths[next].clone();
-        self.select_filmstrip_path(target.clone(), false, false);
-        trace!("GUI interaction: move_library_selection {delta} -> {target}");
-        Some(target)
-    }
-
-    /// Open the active Library selection in Loupe (G-09): loads the image
-    /// and shows the single-image view. Without a selection this is a loud
-    /// no-op (status, never a silent fallback).
-    pub fn open_library_selection(&mut self) {
-        let Some(target) = self
-            .filmstrip_selection
-            .iter()
-            .next()
-            .cloned()
-            .or_else(|| Some(self.path.clone()))
-            .filter(|path| !path.is_empty())
-        else {
-            self.status = Str::NoImagesSelected.t().into();
-            return;
-        };
-        trace!("GUI interaction: library open {target}");
-        self.handle_filmstrip_click(target, false, false);
-        self.set_library_view(LibraryView::Loupe);
     }
 
     /// Toggle the split Before/After marker (`Shift+Y`, Welle 3, LR-09
@@ -10947,6 +10914,9 @@ impl LuminaApp {
             return;
         }
         self.note_decode_start(&path);
+        // R3-OPEN-1: remember which path this decode targets so the
+        // Develop-switch open can reuse it instead of starting a duplicate.
+        self.pending_load_path = Some(path.clone());
         self.status = format!(
             "Decoding {}",
             Path::new(&path)
@@ -11021,6 +10991,8 @@ impl LuminaApp {
     /// Apply a completed background decode: set the source, then restore the
     /// sidecar recipe for that path (mirroring the old synchronous `load_path`).
     fn finish_decode(&mut self, result: DecodeResult) {
+        // R3-OPEN-1: the in-flight decode is settled either way.
+        self.pending_load_path = None;
         match result {
             Ok(frame) => {
                 self.note_decode_finish(frame.frame.width, frame.frame.height);
@@ -11171,6 +11143,9 @@ impl LuminaApp {
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.decode_rx = None;
+                // R3-OPEN-1: a dropped decode sender must not leave the
+                // in-flight anchor behind (it would suppress a later open).
+                self.pending_load_path = None;
             }
         }
     }
@@ -12876,6 +12851,11 @@ impl eframe::App for LuminaApp {
         // PERF-GUI-3/4 + R2-JANK-1 F1/F4 + R2-MODSWITCH-1 F7: the per-frame
         // render scheduling (draft tick, debounce, module-switch deferral) lives
         // in `render_schedule` (file-size ratchet).
+        // R3-WARMUP-1: the one-shot cold-start warmup runs on the existing
+        // background paths while the UI is idle (armed by the native entry
+        // point). It runs before the scheduler so a render it arms is committed
+        // by the existing debounce path in the same frame.
+        self.maybe_run_startup_warmup(&ctx);
         self.schedule_render(&ctx);
 
         // Dropped files (path or bytes) load a new source (native only).
@@ -13131,6 +13111,8 @@ mod tests {
     mod spot_heal;
     mod spot_visualize;
     mod startup;
+    // R3-WARMUP-1: the one-shot cold-start warmup tests.
+    mod startup_warmup;
     mod toast;
     // UX-LOOK-TONECURVE-18: interactive tone-curve graph tests.
     mod tone_curve_graph;

@@ -203,7 +203,16 @@ impl LuminaApp {
                             ui.horizontal(|ui| {
                                 for &entry_idx in &raw_indices[row_start..row_end] {
                                     let entry = self.entries[entry_idx].clone();
-                                    let selected = self.path == entry.path.display().to_string();
+                                    // R3-GRIDSEL-1: the grid highlight follows
+                                    // the shared filmstrip selection (like
+                                    // Loupe/Compare/Survey), never the loaded
+                                    // `self.path`. A selected-but-not-yet-loaded
+                                    // cell is highlighted; the loaded cell is not
+                                    // unless it is also selected. This makes the
+                                    // "All views stay in sync" contract below true.
+                                    let selected = self
+                                        .filmstrip_selection
+                                        .contains(&entry.path.display().to_string());
                                     let tex = self.thumbnails.get(&entry.thumb_key).cloned();
                                     let placeholder_label =
                                         self.thumbnail_placeholder_label(&entry);

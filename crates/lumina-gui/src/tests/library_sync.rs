@@ -2,6 +2,72 @@
 
 use super::*;
 
+/// R3-GRIDSEL-1: the Library grid highlight follows the shared filmstrip
+/// selection, never the loaded `self.path`. Reproduces the report exactly:
+/// landscape loaded, portrait selected — the selected (not the loaded) cell
+/// must carry the selection stroke.
+#[test]
+fn grid_highlight_follows_filmstrip_selection_not_loaded_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = new_app();
+    // Same-directory fabricated entries: the RAW-only grid order holds both.
+    app.directory = dir.path().display().to_string();
+    app.entries = vec![
+        raw_entry(dir.path(), "a.cr3"),
+        raw_entry(dir.path(), "b.cr3"),
+    ];
+    let order = app.filmstrip_order();
+    assert_eq!(order.len(), 2, "both RAW entries are in the grid");
+    // Loaded = a, selected = b (the bug report: grid showed the loaded cell).
+    app.path = order[0].clone();
+    app.filmstrip_selection = BTreeSet::from([order[1].clone()]);
+
+    let mut selection_color: Option<egui::Color32> = None;
+
+    let (shapes, _ctx) = headless_frame(&mut app, |app, ui| {
+        selection_color = Some(ui.visuals().selection.bg_fill);
+        let ctx = ui.ctx().clone();
+        app.draw_library_grid(&ctx, ui);
+    });
+    let selection_color = selection_color.expect("the grid paints with ui visuals");
+    let highlights: Vec<egui::Rect> = shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect)
+                if rect.stroke.width == 2.0 && rect.stroke.color == selection_color =>
+            {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        highlights.len(),
+        1,
+        "exactly the selected cell is highlighted"
+    );
+    let b_center = text_shapes_for(&shapes, "b.cr3")
+        .into_iter()
+        .next()
+        .expect("selected cell paints its filename")
+        .0
+        .center();
+    let a_center = text_shapes_for(&shapes, "a.cr3")
+        .into_iter()
+        .next()
+        .expect("loaded cell paints its filename")
+        .0
+        .center();
+    assert!(
+        highlights[0].contains(b_center),
+        "the selected-but-unloaded cell must be highlighted"
+    );
+    assert!(
+        !highlights[0].contains(a_center),
+        "the loaded-but-unselected cell must NOT be highlighted"
+    );
+}
+
 /// GUI-TOAST-OVERLAP-1: a `Ready` neighbor probe raises NO per-cell badge
 /// (the transient overlay toast owns that signal) — the thumbnail cell
 /// stays uncovered. Loading/Stale/Failed keep their small corner chips.

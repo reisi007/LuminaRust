@@ -239,3 +239,212 @@ fn one_neighbor_failure_emits_exactly_one_app_level_warn() {
         "the visible failure state must persist for the badge"
     );
 }
+
+/// R3-OPEN-1: pump the background decode until the in-flight request settles
+/// (success or loud failure). `drain_auto_load` stops early when an image is
+/// already loaded, so it cannot observe a later switch's decode.
+fn drain_pending_decode(app: &mut LuminaApp) {
+    for _ in 0..2000 {
+        app.poll_decode();
+        if app.decode_rx.is_none() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// R3-OPEN-1 (Lightroom behaviour): a Develop switch with exactly one
+/// selection (≠ loaded) opens that image through the shared `open_file` path;
+/// zero or multiple selections leave the loaded image untouched.
+#[test]
+fn develop_switch_opens_single_selection_and_ignores_zero_or_many() {
+    let directory = tempfile::tempdir().unwrap();
+    // Fabricated RAW entries: the filmstrip selection is RAW-only, and the
+    // decode itself is irrelevant here — the test pins the *open* (the decode
+    // target), not a successful RAW decode.
+    let mut app = new_app();
+    app.directory = directory.path().display().to_string();
+    app.entries = vec![
+        raw_entry(directory.path(), "a.cr3"),
+        raw_entry(directory.path(), "b.cr3"),
+    ];
+    let order = app.filmstrip_order();
+    assert_eq!(order.len(), 2);
+    app.path = order[0].clone();
+    app.filmstrip_selection = BTreeSet::from([order[0].clone()]);
+
+    // Exactly one selection ≠ loaded → the Develop switch opens it.
+    app.set_module(Module::Library);
+    app.select_filmstrip_path(order[1].clone(), false, false);
+    assert_eq!(app.filmstrip_selection(), vec![order[1].clone()]);
+    app.set_module(Module::Develop);
+    assert!(
+        app.decode_rx.is_some(),
+        "the Develop switch must start the background decode"
+    );
+    assert_eq!(
+        app.pending_load_path.as_deref(),
+        Some(order[1].as_str()),
+        "the decode must target the single selection"
+    );
+    // Settle the (expected to fail) fake-RAW decode before the next case.
+    drain_pending_decode(&mut app);
+    assert_eq!(app.path, order[0], "a failed decode keeps the loaded image");
+
+    // 0 selected → the loaded image stays, no decode.
+    app.filmstrip_selection.clear();
+    app.set_module(Module::Library);
+    app.set_module(Module::Develop);
+    assert!(
+        app.decode_rx.is_none(),
+        "no selection must not start a decode"
+    );
+    assert_eq!(app.path, order[0], "the loaded image stays");
+
+    // >1 selected → the loaded image stays, no decode.
+    app.select_filmstrip_path(order[0].clone(), false, false);
+    app.select_filmstrip_path(order[1].clone(), true, false);
+    assert_eq!(app.filmstrip_selection().len(), 2);
+    app.set_module(Module::Library);
+    app.set_module(Module::Develop);
+    assert!(
+        app.decode_rx.is_none(),
+        "a multi-selection must not open one image"
+    );
+    assert_eq!(app.path, order[0], "the loaded image stays");
+}
+
+/// R3-OPEN-1: a selection that points at a vanished file is a loud error
+/// (the existing `open_file` failure path) and must not adopt the path.
+#[test]
+fn develop_switch_open_of_missing_file_is_loud() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = directory.path().join("a.png");
+    save_png(&a);
+    let a_path = a.display().to_string();
+    let missing = directory.path().join("missing.png").display().to_string();
+    let mut app = new_app();
+    app.set_directory(directory.path().display().to_string());
+    drain_auto_load(&mut app);
+    assert_eq!(app.path, a_path);
+
+    // A vanished path cannot be selected through the order-based helper, so
+    // seed the selection directly (the real stale-selection state).
+    app.filmstrip_selection = BTreeSet::from([missing.clone()]);
+    app.set_module(Module::Library);
+    app.set_module(Module::Develop);
+    drain_pending_decode(&mut app);
+    assert!(
+        app.original.is_some(),
+        "the previously loaded image stays on screen"
+    );
+    assert_eq!(app.path, a_path, "a failed open must not adopt the path");
+    let message = app.error().unwrap_or("").to_string();
+    assert!(
+        message.contains("missing.png"),
+        "the failure must name the vanished file loudly, got: {message:?}"
+    );
+}
+
+/// R3-OPEN-1: a repeat Develop switch (already active) must not re-open —
+/// only an actual module transition reacts.
+#[test]
+fn repeated_develop_switch_does_not_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = new_app();
+    app.directory = directory.path().display().to_string();
+    app.entries = vec![
+        raw_entry(directory.path(), "a.cr3"),
+        raw_entry(directory.path(), "b.cr3"),
+    ];
+    let order = app.filmstrip_order();
+    app.path = order[0].clone();
+    app.filmstrip_selection = BTreeSet::from([order[0].clone()]);
+    app.set_module(Module::Library);
+    app.select_filmstrip_path(order[1].clone(), false, false);
+    app.set_module(Module::Develop);
+    drain_pending_decode(&mut app);
+
+    // Already in Develop with the same lone (different) selection: the
+    // transition gate must keep the switch from re-opening.
+    app.set_module(Module::Develop);
+    assert!(
+        app.decode_rx.is_none(),
+        "a repeat Develop switch must not restart the decode"
+    );
+    assert_eq!(app.path, order[0]);
+}
+
+/// R3-OPEN-1 guard (a): when the lone selection IS the loaded image, the
+/// Develop switch must not reload it (no decode, no path change).
+#[test]
+fn develop_switch_does_not_reload_when_selection_is_loaded() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = new_app();
+    app.directory = directory.path().display().to_string();
+    app.entries = vec![
+        raw_entry(directory.path(), "a.cr3"),
+        raw_entry(directory.path(), "b.cr3"),
+    ];
+    let order = app.filmstrip_order();
+    // Loaded image and lone selection are the same path.
+    app.path = order[0].clone();
+    app.filmstrip_selection = BTreeSet::from([order[0].clone()]);
+    app.set_module(Module::Library);
+    let _ = crate::timing::take_timing_log();
+
+    app.set_module(Module::Develop);
+    assert!(
+        app.decode_rx.is_none(),
+        "the already-loaded image must not be reloaded"
+    );
+    assert!(
+        app.pending_load_path.is_none(),
+        "no decode may be started for the loaded path"
+    );
+    assert_eq!(app.path, order[0], "the loaded path is unchanged");
+    let log = crate::timing::take_timing_log();
+    assert!(
+        !log.iter().any(|line| line.contains("decode start")),
+        "no decode may start: {log:?}"
+    );
+}
+
+/// R3-OPEN-1 guard (b): the real grid double-click opens *before* switching, so
+/// the Develop switch must reuse that in-flight decode instead of starting a
+/// duplicate. Proved through the production entry point and the decode-start
+/// timing lines (exactly one), not just the `pending_load_path` flag.
+#[test]
+fn grid_double_click_reuses_inflight_decode_without_duplicate() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = new_app();
+    app.directory = directory.path().display().to_string();
+    app.entries = vec![
+        raw_entry(directory.path(), "a.cr3"),
+        raw_entry(directory.path(), "b.cr3"),
+    ];
+    let order = app.filmstrip_order();
+    app.path = order[0].clone();
+    app.filmstrip_selection = BTreeSet::from([order[0].clone()]);
+    app.set_module(Module::Library);
+    let _ = crate::timing::take_timing_log();
+
+    // Production double-click path: select + open, then switch to Develop.
+    app.open_grid_entry_in_develop(order[1].clone());
+    let log = crate::timing::take_timing_log();
+    let decode_starts = log
+        .iter()
+        .filter(|line| line.contains("decode start"))
+        .count();
+    assert_eq!(
+        decode_starts, 1,
+        "exactly one decode must start (the in-flight one is reused): {log:?}"
+    );
+    assert_eq!(
+        app.pending_load_path.as_deref(),
+        Some(order[1].as_str()),
+        "the reused decode still targets the double-clicked path"
+    );
+    assert!(app.decode_rx.is_some(), "the decode stays in flight");
+    assert_eq!(app.active_module, Module::Develop);
+}

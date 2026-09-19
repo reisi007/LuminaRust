@@ -1917,17 +1917,30 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
 
 #### F-103-N6 Runde 3 Befunde (2026-09-19, Release-Build `236a7e7`, 602k-Zeilen-Trace, Analyse per Subagent)
 
-- **R3-SWITCH-1 (teilweise vermessen 2026-09-19, zweiter Run):** Gezielter Run
-  Develop→Library→Bildwahl→Develop→Close (78k Zeilen, 0 Errors, 0 Panics,
-  sauberer Exit): In KEINEM der 3 Wechsel-Frames läuft Lumina-Arbeit
-  (danach jeweils nur wgpu/egui-Noise; einzige sichtbare Arbeit: Full-Res-
-  Textur-Upload 6032×4024 beim zurück nach Develop). Thumbnail-Roundtrip
-  zählbar (2 Jobs, Enqueue→Ready ~100 Log-Zeilen). Schwere Arbeit liegt in
-  der Auswahlkette (Background-Decode + 2 Thumb-Decodes + Base-MISS-Rebuild).
-  Echte Dauern weiter unbelegbar (keine Timestamps; eframe-Instant nur grob:
-  Library-Phase ~9 s inkl. Ordnerwahl+Decode). Verdacht verengt: nicht der
-  Wechsel-Frame, sondern Auswahlkette + Full-Res-Upload (→ R3-RENDER-SIZE-1).
-  F7-Deferral feuerte wieder 0× (kein pending Render beim Wechsel).
+- **R3-SWITCH-1 (teilweise vermessen 2026-09-19, dritter Run, instrumentiert):**
+  Erster Library-Wechsel: First-Paint 2886.8 ms (kalt); alle späteren Wechsel:
+  First-Paint 0.2–24.5 ms (Develop 24.5/0.5/0.4 ms, Library 0.2 ms). Thumbs je
+  4.2 ms, PreviewIndex-Build 0.1 ms (2 Einträge), Decode 283.1 ms (6032×4024),
+  Full-Render 85.2 ms ohne / 2117.8 ms mit Denoise-Fallback. F7-Deferral
+  feuerte 0×. Verdacht verengt: nicht der Wechsel-Frame, sondern Auswahlkette
+  + Full-Res-Upload (→ R3-RENDER-SIZE-1).
+- **R3-GRIDSEL-1 (BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Grid-Highlight folgt der Selektion
+  nicht — `library_grid.rs:206` malte aus `self.path` (geladenes Bild), nicht
+  aus `filmstrip_selection`. Grid zeigt Landscape (geladen), Filmstrip darunter
+  korrekt Portrait (selektiert). Fix: `selected` aus `filmstrip_selection` prüfen.
+- **R3-OPEN-1 (ENTSCHIEDEN 2026-09-19, User: Lightroom-mäßig):** Bei genau
+  einer Selektion öffnet der Develop-Wechsel das Bild (LR-Verhalten);
+  Doppelklick bleibt. Kaltstart-Warmup (R3-WARMUP-1) läuft im Hintergrund.
+- **R3-WARMUP-1 (ENTSCHIEDEN 2026-09-19, User):** Kaltstart-Arbeit (Ordner-
+  Index, Thumbnails, Decode + Full-Render des ersten Bildes) läuft direkt
+  nach App-Start im Hintergrund (Worker/Idle), damit der erste Library-
+  Wechsel kein 2.9-s-Loch mehr hat. Sichtbarer Fortschritt statt Stillstand,
+  kein stiller Zustand.
+- **R3-DENOISE-2 (offen, 2026-09-19):** Gelbes Badge „Render routed to CPU …
+  [denoise_ai (not GPU-wired)]" ist per Design laut (Gewichte weiter pending),
+  hat aber KEINE Log-Zeile: Badge stammt aus dem Rezept-Gate
+  (`gpu_unsupported_stage_reasons`), nur Present-Refusals loggen. Lücke für
+  R3-LOG-1: Gate-Routing braucht 1× `warn!` beim Auftreten.
 - **R3-DRAFT-1 (offen, gemessen):** 87 Drag-Ticks, alle zu langsam: ~55–60 ms/
   Frame ohne Crop (cpu-Median 26.27 ms + gpu-Median 25.70 ms), ~70–90 ms mit
   aktivem Crop (cpu-Median 35.53 ms, +35 %). F1-Drossel feuerte 0× (Events
