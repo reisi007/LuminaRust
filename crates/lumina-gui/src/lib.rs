@@ -100,6 +100,9 @@ mod develop_frame;
 mod develop_left_rail;
 mod develop_ops;
 mod filmstrip_frame;
+// UX-LOOK-TOOLBAR-18: the icon tool strip + iconified Library view tabs (own
+// module, file-size ratchet).
+mod icon_toolbar;
 mod navigator;
 // GUI-REFACTOR-W2-20 S2.8: the preset/history, settings-clipboard, folder and
 // snapshot ops.
@@ -12689,17 +12692,8 @@ impl eframe::App for LuminaApp {
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Q)) && !ctx.egui_wants_keyboard_input() {
-            let next = if self.spot_tool == SpotTool::None {
-                SpotTool::Heal
-            } else {
-                SpotTool::None
-            };
-            self.set_spot_tool(next);
-            self.status = if next == SpotTool::Heal {
-                "Spot heal armed (Q)".into()
-            } else {
-                "Spot heal disarmed".into()
-            };
+            // UX-LOOK-TOOLBAR-18: shared with the icon toolbar (same status).
+            self.toggle_spot_heal_tool();
         }
         self.handle_escape_shortcut(&ctx);
 
@@ -13332,9 +13326,12 @@ mod tests {
     // `GuiAction` (Metal-gated, `--ignored`).
     mod gpu_audit;
     mod gpu_audit_actions;
-    // GUI-REFACTOR-W3-20: thematic split of the former monolithic root test
-    // module. Shared helpers stay here; each file pulls them in via
+    // GUI-REFACTOR-W3-20 / UX-LOOK-TOOLBAR-18: thematic split of the former
+    // monolithic root test module. The shared draw/click helpers live in
+    // `support.rs` (see the ratchet comment there); each file pulls them in via
     // `use super::*` and keeps its test bodies otherwise unchanged.
+    mod support;
+    use support::*;
     mod badges;
     mod basic_commit;
     mod brush_gradient;
@@ -13384,6 +13381,8 @@ mod tests {
     mod spot_visualize;
     mod startup;
     mod toast;
+    // UX-LOOK-TOOLBAR-18: icon tool strip + Library view-tab paint/click tests.
+    mod toolbar_icons;
     mod w3_release;
     mod zoom;
     mod zoom_steps;
@@ -13448,207 +13447,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
-    /// GUI-VISION-1: drive one headless egui frame (`Context::run_ui`, no GPU
-    /// needed) and return the painted shapes. Layout-overflow regressions
-    /// (buttons clipped at the panel edge) fail here in
-    /// `cargo test -p lumina-gui --lib` instead of only in kittest goldens.
-    /// Mirrors the established `run_ui` headless pattern used by the
-    /// preview-interaction tests below.
-    fn headless_shapes(
-        app: &mut LuminaApp,
-        draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
-    ) -> Vec<egui::epaint::ClippedShape> {
-        headless_shapes_sized(app, 720.0, draw)
-    }
-
-    /// `headless_shapes` with an explicit canvas height: panels whose controls
-    /// extend past the 720px fold are fully painted on a taller virtual screen
-    /// (the production panel scrolls; the test asserts the whole content).
-    fn headless_shapes_sized(
-        app: &mut LuminaApp,
-        height: f32,
-        mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
-    ) -> Vec<egui::epaint::ClippedShape> {
-        let ctx = egui::Context::default();
-        let raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::pos2(0.0, 0.0),
-                egui::vec2(1200.0, height),
-            )),
-            ..Default::default()
-        };
-        let mut output = ctx.run_ui(raw, |ui| draw(app, ui));
-        // No GPU renderer consumes the per-frame texture deltas in these
-        // headless tests; dropping them would trip epaint's
-        // "unapplied deltas" debug assertion.
-        output.textures_delta.clear();
-        output.shapes
-    }
-    /// `(text rect, clip rect)` of every painted text shape whose full string
-    /// equals `needle` (button labels). A widget cut off at a panel edge is
-    /// painted with a clip rect smaller than its text rect. Exact match (not
-    /// substring) so unrelated labels can never trip the assertion.
-    fn text_shapes_for(
-        shapes: &[egui::epaint::ClippedShape],
-        needle: &str,
-    ) -> Vec<(egui::Rect, egui::Rect)> {
-        let mut out = Vec::new();
-        for clipped in shapes {
-            if let egui::Shape::Text(text) = &clipped.shape {
-                if text.galley.text() == needle {
-                    out.push((
-                        egui::Rect::from_min_size(text.pos, text.galley.size()),
-                        clipped.clip_rect,
-                    ));
-                }
-            }
-        }
-        out
-    }
-    /// Every painted occurrence of the button label `needle` must lie fully
-    /// inside its clip rect (1px tolerance for rounding).
-    fn assert_fully_visible(shapes: &[egui::epaint::ClippedShape], needle: &str) {
-        let hits = text_shapes_for(shapes, needle);
-        assert!(
-            !hits.is_empty(),
-            "{needle:?} must be painted; painted texts: {:?}",
-            painted_texts(shapes)
-        );
-        for (rect, clip) in &hits {
-            assert!(
-                clip.expand(1.0).contains_rect(*rect),
-                "{needle:?} text {rect:?} must be fully inside its clip {clip:?}"
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // F-100 Klickbarkeit (GUI-CLICK-ALL-17) audit + button tests.
-    // -----------------------------------------------------------------------
-
-    /// F-100 Klickbarkeit: exhaustive mapping of every keyboard-toggle enum
-    /// variant to the `Str` label of its clickable button. No `_` arm — a new
-    /// `ViewToggle`/`PanelToggle` variant fails compilation here, so a new
-    /// keyboard toggle cannot land without its button and audit entry.
-    fn view_toggle_button_label(toggle: ViewToggle) -> Str {
-        match toggle {
-            ViewToggle::BlackWhite => Str::TreatmentBlackWhite,
-            ViewToggle::Clipping => Str::ViewToolbarClipping,
-            ViewToggle::LightsOut => Str::ViewToolbarLightsOut,
-        }
-    }
-
-    /// Exhaustive mapping of every `PanelToggle` variant to its button label
-    /// (see [`view_toggle_button_label`]).
-    fn panel_toggle_button_label(toggle: PanelToggle) -> Str {
-        match toggle {
-            PanelToggle::CropMode => Str::ViewToolbarCrop,
-            PanelToggle::PanelsHidden => Str::ViewToolbarPanels,
-        }
-    }
-
-    /// Draw only the preview area (the view-toolbar host) in a headless pass.
-    fn draw_preview_area_only(app: &mut LuminaApp, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        app.draw_preview_area(&ctx, ui);
-    }
-
-    /// Paint the preview area once (no GPU) and return the painted shapes.
-    fn preview_area_shapes(app: &mut LuminaApp) -> Vec<egui::epaint::ClippedShape> {
-        headless_shapes(app, draw_preview_area_only)
-    }
-
-    /// Tall variant for the state badges painted *after* the preview image
-    /// (below the 720px fold in the normal harness).
-    fn preview_area_badge_shapes(app: &mut LuminaApp) -> Vec<egui::epaint::ClippedShape> {
-        headless_shapes_sized(app, 2000.0, draw_preview_area_only)
-    }
-
-    /// Paint `draw` headless, locate the button painted with `label`, click it
-    /// (press + release on the text centre) and return the settled frame's
-    /// shapes. A single persistent `egui::Context` across frames is what makes
-    /// the click register (same pattern as `masking_new_button_fully_inside_panel`).
-    fn headless_click_label(
-        app: &mut LuminaApp,
-        label: &str,
-        draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
-    ) -> Vec<egui::epaint::ClippedShape> {
-        headless_click_labels(app, &[label], draw)
-    }
-
-    /// Like [`headless_click_label`], but clicks several labels in order inside
-    /// one persistent `egui::Context`: the first click can open a collapsing
-    /// section (History/Rating/Dust Removal), the next clicks its buttons. The
-    /// returned shapes are the last settled frame.
-    fn headless_click_labels(
-        app: &mut LuminaApp,
-        labels: &[&str],
-        draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
-    ) -> Vec<egui::epaint::ClippedShape> {
-        headless_click_labels_sized(app, 720.0, labels, draw)
-    }
-
-    /// [`headless_click_labels`] with an explicit canvas height: panels whose
-    /// sub-sections extend past the 720px fold (the Metadata panel) are fully
-    /// clickable on a taller virtual screen.
-    fn headless_click_labels_sized(
-        app: &mut LuminaApp,
-        height: f32,
-        labels: &[&str],
-        mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
-    ) -> Vec<egui::epaint::ClippedShape> {
-        let ctx = egui::Context::default();
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, height));
-        let mut time = 0.0_f64;
-        let mut run = |app: &mut LuminaApp, events: Vec<egui::Event>| {
-            time += 1.0 / 60.0;
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(time),
-                    events,
-                    ..Default::default()
-                },
-                |ui| draw(app, ui),
-            );
-            output.textures_delta.clear();
-            output.shapes
-        };
-        let mut shapes = run(app, vec![]);
-        for label in labels {
-            assert_fully_visible(&shapes, label);
-            let pos = text_shapes_for(&shapes, label)
-                .into_iter()
-                .next()
-                .expect("button label painted")
-                .0
-                .center();
-            let click = |pressed: bool| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            };
-            run(app, vec![egui::Event::PointerMoved(pos), click(true)]);
-            run(app, vec![egui::Event::PointerMoved(pos), click(false)]);
-            // 30 frames settle the collapse/expand animation (~0.5 s).
-            shapes = Vec::new();
-            for _ in 0..30 {
-                shapes = run(app, vec![]);
-            }
-        }
-        shapes
-    }
-
-    /// Whether any painted text shape's galley contains `needle` (robust to
-    /// label wrapping, unlike the exact `text_shapes_for`).
-    fn text_contains(shapes: &[egui::epaint::ClippedShape], needle: &str) -> bool {
-        shapes.iter().any(|clipped| match &clipped.shape {
-            egui::Shape::Text(text) => text.galley.text().contains(needle),
-            _ => false,
-        })
-    }
-
     // -----------------------------------------------------------------------
     // F-100 Klickbarkeit (GUI-CLICK-ALL-17): per-button click/toggle tests.
     // Paint-only is not enough (DoD §3/§5): every new button must flip its
@@ -13661,25 +13459,6 @@ mod tests {
         app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
             .unwrap();
         app
-    }
-
-    /// Click `label` twice in the preview toolbar; assert the state flips to
-    /// `on`, then back off, with the expected status text each time.
-    fn assert_preview_button_toggles(
-        app: &mut LuminaApp,
-        label: &str,
-        on: impl Fn(&LuminaApp) -> bool,
-        on_status: &str,
-        off_status: &str,
-    ) {
-        let shapes = headless_click_label(app, label, draw_preview_area_only);
-        assert!(on(app), "{label:?} click must arm the state");
-        assert_eq!(app.status, on_status, "{label:?} on status");
-        assert_fully_visible(&shapes, label);
-        let shapes = headless_click_label(app, label, draw_preview_area_only);
-        assert!(!on(app), "{label:?} second click must disarm the state");
-        assert_eq!(app.status, off_status, "{label:?} off status");
-        assert_fully_visible(&shapes, label);
     }
 
     /// A real file on disk so the persisting History buttons (duplicate,
@@ -14080,17 +13859,6 @@ mod tests {
             cull_badge: cull_gui::CullBadge::None,
             face_persons: Vec::new(),
         }
-    }
-
-    /// Full text of every painted text shape (button/slider readouts).
-    fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
-        shapes
-            .iter()
-            .filter_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
-                _ => None,
-            })
-            .collect()
     }
 
     /// Read one manual optics field from a lens block (DoD-§3

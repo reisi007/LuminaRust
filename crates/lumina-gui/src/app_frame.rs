@@ -15,6 +15,26 @@ use super::*;
 use log::trace;
 
 impl LuminaApp {
+    /// Toggle the Spot-Heal tool exactly like the `Q` shortcut: one status flip
+    /// per activation, shared by the toolbar button and the keyboard so both
+    /// can never diverge. Pure UI state ([`Self::set_spot_tool`]); the
+    /// recipe/sidecar is never touched. (The Dust-Removal panel button arms
+    /// the same tool state via `set_spot_tool` directly, without the status
+    /// line — only toolbar and `Q` share the status flip.)
+    pub(crate) fn toggle_spot_heal_tool(&mut self) {
+        let next = if self.spot_tool == SpotTool::None {
+            SpotTool::Heal
+        } else {
+            SpotTool::None
+        };
+        self.set_spot_tool(next);
+        self.status = if next == SpotTool::Heal {
+            "Spot heal armed (Q)".into()
+        } else {
+            "Spot heal disarmed".into()
+        };
+    }
+
     /// Central working area: a zoom toolbar (Lightroom-like Fit / 1:1 / 200% /
     /// Fit Width + a live zoom readout and a collapsed-navigator reopen button),
     /// then the rendered preview and the render-state label. Shared by the
@@ -128,63 +148,57 @@ impl LuminaApp {
         });
     }
 
-    /// F-100 Klickbarkeit (GUI-CLICK-ALL-17, User-Vorgabe 2026-09-17): the
-    /// preview view toolbar. Every display-only view/tool toggle that used to
-    /// be reachable only by keyboard (`PanelToggle` crop/panels, `ViewToggle`
-    /// clipping/lights-out, split, fullscreen) gets a clickable button here.
-    /// Each button routes through the same `toggle_*` path as its shortcut, so
-    /// button and keyboard can never diverge (one `info!`/status per flip) and
-    /// the audit test can pin the coverage.
+    /// UX-LOOK-TOOLBAR-18 (UXG-04): the preview tool strip at the LR place
+    /// (under the histogram / over the image), now icon-based. It carries the
+    /// interactive develop tools (Crop / Heal / Red-Eye / Masking) *and* the
+    /// display-only view toggles that used to be keyboard-only (`PanelToggle`
+    /// crop/panels, `ViewToggle` clipping/lights-out, split, fullscreen).
+    ///
+    /// Every button routes through the same `toggle_*`/`set_*` path as its
+    /// keyboard shortcut — one status/`info!` per flip, no recipe or sidecar
+    /// semantics, so button and keyboard can never diverge. Icons are painted
+    /// by [`crate::icon_toolbar`]; the tooltips carry the existing working
+    /// labels and shortcuts (Namen-Vorbehalt: no new final wording).
     fn draw_view_toolbar(&mut self, ui: &mut egui::Ui) {
-        let shortcut = |key: &str| Str::ShortcutHint.format_arg(key);
+        use crate::icon_toolbar::{icon_button, ToolbarIcon};
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_label(self.crop_mode, Str::ViewToolbarCrop.t())
-                .on_hover_text(shortcut("R"))
-                .clicked()
-            {
+            // Interactive develop tools (LR order).
+            if icon_button(ui, ToolbarIcon::Crop, self.crop_mode).clicked() {
                 self.toggle_crop_mode();
             }
-            if ui
-                .selectable_label(self.clipping_overlay, Str::ViewToolbarClipping.t())
-                .on_hover_text(shortcut("J"))
-                .clicked()
-            {
+            let heal_active = self.spot_tool != SpotTool::None;
+            if icon_button(ui, ToolbarIcon::Heal, heal_active).clicked() {
+                self.toggle_spot_heal_tool();
+            }
+            if icon_button(ui, ToolbarIcon::RedEye, self.red_eye_pick_mode).clicked() {
+                self.set_red_eye_pick_mode(!self.red_eye_pick_mode);
+            }
+            let mask_active = self.mask_tool != MaskTool::None;
+            if icon_button(ui, ToolbarIcon::Masking, mask_active).clicked() {
+                self.set_mask_tool(if mask_active {
+                    MaskTool::None
+                } else {
+                    MaskTool::Brush
+                });
+            }
+            ui.separator();
+            // Display-only view toggles.
+            if icon_button(ui, ToolbarIcon::Clipping, self.clipping_overlay).clicked() {
                 self.toggle_clipping_overlay();
             }
-            if ui
-                .selectable_label(self.before_after_split, Str::ViewToolbarSplit.t())
-                .on_hover_text(shortcut("Shift+Y"))
-                .clicked()
-            {
+            if icon_button(ui, ToolbarIcon::Split, self.before_after_split).clicked() {
                 self.toggle_split_view();
             }
-            if ui
-                .selectable_label(self.lights_out, Str::ViewToolbarLightsOut.t())
-                .on_hover_text(shortcut("L"))
-                .clicked()
-            {
+            if icon_button(ui, ToolbarIcon::LightsOut, self.lights_out).clicked() {
                 self.toggle_lights_out();
             }
-            if ui
-                .selectable_label(self.panels_hidden, Str::ViewToolbarPanels.t())
-                .on_hover_text(shortcut("Tab"))
-                .clicked()
-            {
+            if icon_button(ui, ToolbarIcon::Panels, self.panels_hidden).clicked() {
                 self.toggle_panels_hidden();
             }
-            if ui
-                .selectable_label(self.all_panels_hidden, Str::ViewToolbarAllPanels.t())
-                .on_hover_text(shortcut("Shift+Tab"))
-                .clicked()
-            {
+            if icon_button(ui, ToolbarIcon::AllPanels, self.all_panels_hidden).clicked() {
                 self.toggle_all_panels_hidden();
             }
-            if ui
-                .selectable_label(self.fullscreen, Str::ViewToolbarFullscreen.t())
-                .on_hover_text(shortcut("F"))
-                .clicked()
-            {
+            if icon_button(ui, ToolbarIcon::Fullscreen, self.fullscreen).clicked() {
                 self.toggle_fullscreen();
             }
         });

@@ -1,6 +1,8 @@
 //! F-100 per-button click/toggle audits tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
 use super::*;
+// UX-LOOK-TOOLBAR-18: the preview tool strip and Library view tabs are icons.
+use crate::icon_toolbar::ToolbarIcon;
 
 #[test]
 fn f100_panel_and_view_toggle_labels_are_exhaustive_and_distinct() {
@@ -48,26 +50,23 @@ fn f100_panel_and_view_toggle_labels_are_exhaustive_and_distinct() {
 /// already-buttoned B&W treatment, whose button lives in the Basic section).
 #[test]
 fn f100_view_toolbar_paints_every_display_toggle_button() {
-    let mut app = new_app();
-    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
-        .unwrap();
-    let shapes = preview_area_shapes(&mut app);
-    for label in [
-        Str::ViewToolbarCrop,
-        Str::ViewToolbarClipping,
-        Str::ViewToolbarLightsOut,
-        Str::ViewToolbarPanels,
-        Str::ViewToolbarAllPanels,
-        Str::ViewToolbarFullscreen,
-        Str::ViewToolbarSplit,
+    let mut app = toolbar_app();
+    let (shapes, ctx) = preview_area_frame(&mut app);
+    // Display-only view toggles *and* the interactive develop tools are icons
+    // in the LR tool strip (UX-LOOK-TOOLBAR-18).
+    for icon in [
+        ToolbarIcon::Crop,
+        ToolbarIcon::Heal,
+        ToolbarIcon::RedEye,
+        ToolbarIcon::Masking,
+        ToolbarIcon::Clipping,
+        ToolbarIcon::LightsOut,
+        ToolbarIcon::Panels,
+        ToolbarIcon::AllPanels,
+        ToolbarIcon::Fullscreen,
+        ToolbarIcon::Split,
     ] {
-        assert_fully_visible(&shapes, label.t());
-    }
-    for toggle in [PanelToggle::CropMode, PanelToggle::PanelsHidden] {
-        assert_fully_visible(&shapes, panel_toggle_button_label(toggle).t());
-    }
-    for toggle in [ViewToggle::Clipping, ViewToggle::LightsOut] {
-        assert_fully_visible(&shapes, view_toggle_button_label(toggle).t());
+        assert_icon_painted(&shapes, &ctx, icon);
     }
     // `V` B&W: button lives in the Basic section, not the preview toolbar.
     app.set_section_open(SECTION_BASIC, true);
@@ -79,13 +78,12 @@ fn f100_view_toolbar_paints_every_display_toggle_button() {
 /// The new preview-toolbar button must toggle the mode and paint the badge.
 #[test]
 fn f100_crop_button_toggles_crop_mode_and_badge() {
-    let mut app = new_app();
-    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
-        .unwrap();
-    let shapes = headless_click_label(&mut app, Str::ViewToolbarCrop.t(), draw_preview_area_only);
+    let mut app = toolbar_app();
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::Crop], draw_preview_area_only);
     assert!(app.crop_mode, "crop button must toggle crop mode on");
     assert_eq!(app.status, Str::CropModeOn.t());
-    assert_fully_visible(&shapes, Str::ViewToolbarCrop.t());
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::Crop);
     // The state badge is painted after the preview image; use the tall
     // harness so it is inside the visible canvas (below the 720px fold in
     // the normal layout, exactly like the production status row).
@@ -95,10 +93,11 @@ fn f100_crop_button_toggles_crop_mode_and_badge() {
         "the crop-mode badge must be visible after the button click"
     );
     // Second click turns it off again (same path as `R`).
-    let shapes = headless_click_label(&mut app, Str::ViewToolbarCrop.t(), draw_preview_area_only);
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::Crop], draw_preview_area_only);
     assert!(!app.crop_mode, "crop button must toggle crop mode off");
     assert_eq!(app.status, Str::CropModeOff.t());
-    assert_fully_visible(&shapes, Str::ViewToolbarCrop.t());
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::Crop);
     let badge = preview_area_badge_shapes(&mut app);
     assert!(
         !text_contains(&badge, Str::CropModeOn.t()),
@@ -111,23 +110,15 @@ fn f100_crop_button_toggles_crop_mode_and_badge() {
 /// same state as `L`.
 #[test]
 fn f100_lights_out_button_toggles_and_stays_reachable() {
-    let mut app = new_app();
-    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
-        .unwrap();
-    let shapes = headless_click_label(
-        &mut app,
-        Str::ViewToolbarLightsOut.t(),
-        draw_preview_area_only,
-    );
+    let mut app = toolbar_app();
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::LightsOut], draw_preview_area_only);
     assert!(app.lights_out, "lights-out button must arm lights-out");
-    assert_fully_visible(&shapes, Str::ViewToolbarLightsOut.t());
-    let shapes = headless_click_label(
-        &mut app,
-        Str::ViewToolbarLightsOut.t(),
-        draw_preview_area_only,
-    );
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::LightsOut);
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::LightsOut], draw_preview_area_only);
     assert!(!app.lights_out, "lights-out button must disarm again");
-    assert_fully_visible(&shapes, Str::ViewToolbarLightsOut.t());
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::LightsOut);
 }
 
 /// The remaining keyboard-only actions get buttons: `\` filter drawer,
@@ -135,16 +126,14 @@ fn f100_lights_out_button_toggles_and_stays_reachable() {
 /// copy/history chords.
 #[test]
 fn f100_keyboard_only_actions_have_buttons() {
-    let mut app = new_app();
-    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
-        .unwrap();
-    let preview = preview_area_shapes(&mut app);
-    for label in [
-        Str::ViewToolbarSplit,
-        Str::ViewToolbarFullscreen,
-        Str::ViewToolbarAllPanels,
+    let mut app = toolbar_app();
+    let (preview, ctx) = preview_area_frame(&mut app);
+    for icon in [
+        ToolbarIcon::Split,
+        ToolbarIcon::Fullscreen,
+        ToolbarIcon::AllPanels,
     ] {
-        assert_fully_visible(&preview, label.t());
+        assert_icon_painted(&preview, &ctx, icon);
     }
     // `\` filter drawer: button in the Library grid toolbar.
     let library = headless_shapes(&mut app, |app, ui| {
@@ -170,9 +159,9 @@ fn f100_keyboard_only_actions_have_buttons() {
 #[test]
 fn f100_clipping_button_toggles_overlay() {
     let mut app = toolbar_app();
-    assert_preview_button_toggles(
+    assert_preview_icon_toggles(
         &mut app,
-        Str::ViewToolbarClipping.t(),
+        ToolbarIcon::Clipping,
         |app| app.clipping_overlay,
         Str::ClippingOn.t(),
         Str::ClippingOff.t(),
@@ -182,23 +171,25 @@ fn f100_clipping_button_toggles_overlay() {
 #[test]
 fn f100_split_button_toggles_and_holds_before() {
     let mut app = toolbar_app();
-    let shapes = headless_click_label(&mut app, Str::ViewToolbarSplit.t(), draw_preview_area_only);
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::Split], draw_preview_area_only);
     assert!(app.before_after_split, "split button must arm the marker");
     assert!(app.before_after, "split keeps the Before image held");
     assert_eq!(app.status, Str::SplitViewOn.t());
-    assert_fully_visible(&shapes, Str::ViewToolbarSplit.t());
-    let shapes = headless_click_label(&mut app, Str::ViewToolbarSplit.t(), draw_preview_area_only);
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::Split);
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::Split], draw_preview_area_only);
     assert!(!app.before_after_split, "split button must disarm again");
     assert_eq!(app.status, Str::SplitViewOff.t());
-    assert_fully_visible(&shapes, Str::ViewToolbarSplit.t());
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::Split);
 }
 
 #[test]
 fn f100_panels_button_toggles_side_panels() {
     let mut app = toolbar_app();
-    assert_preview_button_toggles(
+    assert_preview_icon_toggles(
         &mut app,
-        Str::ViewToolbarPanels.t(),
+        ToolbarIcon::Panels,
         |app| app.panels_hidden,
         Str::PanelsHiddenOn.t(),
         Str::PanelsHiddenOff.t(),
@@ -208,9 +199,9 @@ fn f100_panels_button_toggles_side_panels() {
 #[test]
 fn f100_all_panels_button_toggles_all_panels() {
     let mut app = toolbar_app();
-    assert_preview_button_toggles(
+    assert_preview_icon_toggles(
         &mut app,
-        Str::ViewToolbarAllPanels.t(),
+        ToolbarIcon::AllPanels,
         |app| app.all_panels_hidden(),
         Str::AllPanelsHiddenOn.t(),
         Str::AllPanelsHiddenOff.t(),
@@ -220,23 +211,17 @@ fn f100_all_panels_button_toggles_all_panels() {
 #[test]
 fn f100_fullscreen_button_toggles_and_settles_fit() {
     let mut app = toolbar_app();
-    let shapes = headless_click_label(
-        &mut app,
-        Str::ViewToolbarFullscreen.t(),
-        draw_preview_area_only,
-    );
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::Fullscreen], draw_preview_area_only);
     assert!(app.fullscreen, "fullscreen button must arm fullscreen");
     assert_eq!(app.zoom_mode, ZoomMode::Fit);
     assert_eq!(app.status, Str::FullscreenOn.t());
-    assert_fully_visible(&shapes, Str::ViewToolbarFullscreen.t());
-    let shapes = headless_click_label(
-        &mut app,
-        Str::ViewToolbarFullscreen.t(),
-        draw_preview_area_only,
-    );
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::Fullscreen);
+    let (shapes, ctx) =
+        headless_click_icons_frame(&mut app, &[ToolbarIcon::Fullscreen], draw_preview_area_only);
     assert!(!app.fullscreen, "fullscreen button must disarm again");
     assert_eq!(app.status, Str::FullscreenOff.t());
-    assert_fully_visible(&shapes, Str::ViewToolbarFullscreen.t());
+    assert_icon_painted(&shapes, &ctx, ToolbarIcon::Fullscreen);
 }
 
 #[test]

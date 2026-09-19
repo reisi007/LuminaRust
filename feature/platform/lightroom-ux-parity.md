@@ -168,3 +168,54 @@ wurden:
 DoD §6 Vision-Review der geänderten Layouts + kittest-Goldens (neu/geändert)
 + Headless-Asserts für Tool-Zustände; manueller Abgleich gegen die
 `.goal`-Screenshots; unabhängige Verifizierung (BESTANDEN) vor Commit.
+
+## Vision-Befunde UX-LOOK-LAYOUT-18 (Vision-Loop 2026-09-19, Build-Agent-sichtig)
+
+Nachgelagerter DoD-§6.2-Loop über 5 Alt/Neu-Golden-Paare (Commit d34ba0a),
+vom Build-Agenten am Bild gegengeprüft:
+
+- **LAYOUT-V1 (mittel, Fix-Pflicht nach TOOLBAR-18):** Footer-Überlappung in
+  schmalen Zuständen — „Regenerate Stale / Missing" und „Render / Apply"
+  überlagern sich zu unlesbarem „…Missing der / Apply"
+  (`develop_section_history`, `develop_section_presets`, `navigator_closed`;
+  in `develop_basic`/`develop_overlay_crop` korrekt 3-zeilig). Die
+  `horizontal_wrapped`-Footer-Zeilen wrappen nicht sauber. Fix als eigener
+  Slice nach UX-LOOK-TOOLBAR-18 (kein neuer Todo-Task, Follow-up dieser
+  Sektion).
+- **LAYOUT-V2 (niedrig, dokumentiertes Verhalten, kein Fix):** Bei
+  geschlossener linker Rail sind Presets/Snapshot/History nicht sichtbar.
+  Das entspricht Lightroom (Panel-Toggle blendet aus, derselbe Toggle blendet
+  ein — ein Klick auf „Navigator"/„Panels (Tab)"); kein Funktionsverlust.
+  Kein Fallback im rechten Panel (bewusst per LAYOUT-SOLL entfernt).
+- **LAYOUT-V3 (niedrig, Kosmetik, Folge-PR):** Toolbar-Ende („Panels (Tab)")
+  wird bei schmaler Canvas-Fläche knapp gekappt.
+
+## Umsetzungsstand UX-LOOK-TOOLBAR-18 (2026-09-19)
+
+SOLL-Entscheid oben umgesetzt (Implementierung + headless/kittest-Goldens,
+Commit ausstehend bis unabhängiger Verifizierung):
+
+- **Preview-Werkzeugleiste ist ikonisch** (`src/icon_toolbar.rs`,
+  `LuminaApp::draw_view_toolbar` in `src/app_frame.rs`): Crop / Heal / Red-Eye /
+  Masken als Werkzeuge (LR-Reihenfolge, gleicher Pfad wie `R`/`Q`/Detail-Picker/
+  `K`·`M`), danach Clipping / Split / Lights-Out / Panels / All-Panels /
+  Fullscreen als View-Toggles (gleicher Pfad wie `J`/`Shift+Y`/`L`/`Tab`/
+  `Shift+Tab`/`F`). Aktive Tools sind per Akzent-Highlight hervorgehoben,
+  Tooltips tragen die bestehenden Arbeitslabels + Shortcuts
+  (Namen-Vorbehalt: keine neuen finalen Wortlaute, `i18n.rs` unverändert).
+- **Library-View-Tabs ikonisiert** (`src/library_grid.rs`): Grid / Loupe /
+  Compare / Survey / People als Icons mit denselben `Str`-Tooltips; Klick
+  routet unverändert über `set_library_view`.
+- **Icons sind primitive-gezeichnet** (Linien/Kreise/Rects, keine Emoji-Glyphe):
+  deterministisch in headless und kittest. Kein Rezept-, Sidecar- oder
+  Persistenzverhalten geändert (reine Auslösung bestehender Aktionen).
+- **Kein neuer Shortcut**; `Q` nutzt jetzt denselben `toggle_spot_heal_tool`
+  wie der Toolbar-Button (Status „Spot heal armed/disarmed (Q)").
+- **Risiko (bekannt, nicht Fix dieser Task):** die Tooltips liegen auf
+  `Response::on_hover_text`; im headless/kittest-Pfad werden sie nicht
+  gerendert, gepinnt wird über den Widget-Id-Treffer (`assert_icon_painted`).
+- **Goldens:** `kittest_snapshots` mit `UPDATE_SNAPSHOTS=true` neu erzeugt
+  (46/56 Views enthalten die Leiste), Diff-Sichtung bestätigt die erwarteten
+  Deltas (Toolbar-Zeile unter dem Zoom-Toolbar, View-Tab-Zeile, dadurch leicht
+  verschobener Canvas/Empty-State, identische Farb-/Zustands-Signale).
+  `kittest_parity` (separates Target, GPU-abhängig) bewusst nicht verändert.

@@ -1,6 +1,8 @@
 //! F-100 exhaustive GuiAction → button guard and audit tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
 use super::*;
+// UX-LOOK-TOOLBAR-18: icon buttons are audited by their stable widget id.
+use crate::icon_toolbar::ToolbarIcon;
 
 // -----------------------------------------------------------------------
 // F-100 Shortcut → Button audit (GUI-CLICK-ALL-17): no shortcut without a
@@ -43,26 +45,56 @@ pub(super) enum F100Surface {
     People,
 }
 
-/// Exhaustive `GuiAction` → (`surface`, `button label`). No `_` arm.
-fn f100_action_button(action: GuiAction) -> (F100Surface, String) {
+/// UX-LOOK-TOOLBAR-18: a clickable button is either a painted text label or a
+/// vector-painted icon located by its stable widget id. `From` keeps the many
+/// existing text entries readable as `.into()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ButtonRef {
+    Text(String),
+    Icon(ToolbarIcon),
+}
+
+impl From<String> for ButtonRef {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for ButtonRef {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+/// Exhaustive `GuiAction` → (`surface`, `button`). No `_` arm.
+fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
     match action {
         GuiAction::ToggleBeforeAfter => (F100Surface::ModuleBar, Str::BeforeAfter.t().into()),
-        GuiAction::ToggleSplitView => (F100Surface::Preview, Str::ViewToolbarSplit.t().into()),
-        GuiAction::ToggleCropMode => (F100Surface::Preview, Str::ViewToolbarCrop.t().into()),
-        GuiAction::ToggleClipping => (F100Surface::Preview, Str::ViewToolbarClipping.t().into()),
+        // UX-LOOK-TOOLBAR-18: the preview tool strip is icon-based; the audit
+        // locates these by widget id instead of a painted text label.
+        GuiAction::ToggleSplitView => (F100Surface::Preview, ButtonRef::Icon(ToolbarIcon::Split)),
+        GuiAction::ToggleCropMode => (F100Surface::Preview, ButtonRef::Icon(ToolbarIcon::Crop)),
+        GuiAction::ToggleClipping => (F100Surface::Preview, ButtonRef::Icon(ToolbarIcon::Clipping)),
         GuiAction::ToggleSoftproof => (F100Surface::Histogram, Str::SoftproofToggle.t().into()),
         GuiAction::ToggleOriginalHistogram => (
             F100Surface::Histogram,
             Str::HistogramShowOriginal.t().into(),
         ),
-        GuiAction::ToggleLightsOut => (F100Surface::Preview, Str::ViewToolbarLightsOut.t().into()),
-        GuiAction::TogglePanelsHidden => (F100Surface::Preview, Str::ViewToolbarPanels.t().into()),
-        GuiAction::ToggleAllPanelsHidden => {
-            (F100Surface::Preview, Str::ViewToolbarAllPanels.t().into())
+        GuiAction::ToggleLightsOut => (
+            F100Surface::Preview,
+            ButtonRef::Icon(ToolbarIcon::LightsOut),
+        ),
+        GuiAction::TogglePanelsHidden => {
+            (F100Surface::Preview, ButtonRef::Icon(ToolbarIcon::Panels))
         }
-        GuiAction::ToggleFullscreen => {
-            (F100Surface::Preview, Str::ViewToolbarFullscreen.t().into())
-        }
+        GuiAction::ToggleAllPanelsHidden => (
+            F100Surface::Preview,
+            ButtonRef::Icon(ToolbarIcon::AllPanels),
+        ),
+        GuiAction::ToggleFullscreen => (
+            F100Surface::Preview,
+            ButtonRef::Icon(ToolbarIcon::Fullscreen),
+        ),
         GuiAction::ToggleFilterBar => (F100Surface::LibraryGrid, Str::FilterBar.t().into()),
         GuiAction::ToggleBlackWhite => (F100Surface::Basic, Str::TreatmentBlackWhite.t().into()),
         GuiAction::ToggleStackGroup => (F100Surface::History, Str::StackGroup.t().into()),
@@ -72,12 +104,21 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, String) {
         GuiAction::PasteSettings => (F100Surface::History, Str::PasteSettings.t().into()),
         GuiAction::SetRating => (F100Surface::Rating, "1".into()),
         GuiAction::SetFlag => (F100Surface::Rating, flag_label(Flag::Pick).into()),
-        GuiAction::SetColorLabel => (F100Surface::Rating, format!("1 {}", color_label_name(1))),
+        GuiAction::SetColorLabel => (
+            F100Surface::Rating,
+            format!("1 {}", color_label_name(1)).into(),
+        ),
         GuiAction::SetMaskTool => (F100Surface::Masking, Str::MaskToolBrush.t().into()),
         GuiAction::SetSpotTool => (F100Surface::Spot, "Heal (Q)".into()),
         GuiAction::SetTreatment => (F100Surface::Basic, Str::TreatmentColor.t().into()),
-        GuiAction::SetModule => (F100Surface::ModuleBar, Str::DevelopShortcut.format_arg("D")),
-        GuiAction::SetLibraryView => (F100Surface::LibraryGrid, Str::LibraryGridOn.t().into()),
+        GuiAction::SetModule => (
+            F100Surface::ModuleBar,
+            Str::DevelopShortcut.format_arg("D").into(),
+        ),
+        GuiAction::SetLibraryView => (
+            F100Surface::LibraryGrid,
+            ButtonRef::Icon(ToolbarIcon::ViewGrid),
+        ),
         GuiAction::SetZoomMode => (F100Surface::Preview, Str::ZoomFit.t().into()),
         GuiAction::RegenerateStale => (F100Surface::Develop, Str::RegenerateStale.t().into()),
         GuiAction::MatchExposure => (F100Surface::Develop, Str::MatchExposure.t().into()),
@@ -89,9 +130,10 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, String) {
         GuiAction::StartMerge => (F100Surface::Merge, Str::MergeHdr.t().into()),
         // GUI-INSTRDBG-17b: Library compare, Geometry, Masking-layer and
         // Metadata section actions.
-        GuiAction::ToggleCompareMode => {
-            (F100Surface::LibraryGrid, Str::CompareModeCompare.t().into())
-        }
+        GuiAction::ToggleCompareMode => (
+            F100Surface::LibraryGrid,
+            ButtonRef::Icon(ToolbarIcon::ViewCompare),
+        ),
         GuiAction::ClearCrop => (F100Surface::Geometry, Str::ClearCrop.t().into()),
         GuiAction::SetCropAspect => (F100Surface::Geometry, Str::Aspect.t().into()),
         GuiAction::RotateStep => (F100Surface::Geometry, Str::RotateLeft.t().into()),
@@ -199,36 +241,38 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, String) {
     }
 }
 
-/// Paint one F-100 button surface headless. `Develop` is painted before
-/// `Basic`/`Masking` open their sections, so the footer surface cannot
-/// gain extra section "Reset" texts.
-pub(super) fn f100_surface_shapes(
+/// Paint one F-100 button surface headless, returning the shapes and the
+/// persistent context, so the audit can verify icon buttons via
+/// `Context::read_response` (UX-LOOK-TOOLBAR-18). `Develop` is painted before
+/// `Basic`/`Masking` open their sections, so the footer surface cannot gain
+/// extra section "Reset" texts.
+pub(super) fn f100_surface_frame(
     app: &mut LuminaApp,
     surface: F100Surface,
-) -> Vec<egui::epaint::ClippedShape> {
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
     match surface {
-        F100Surface::Preview => preview_area_shapes(app),
-        F100Surface::Histogram => headless_shapes(app, |app, ui| app.draw_histogram_section(ui)),
-        F100Surface::Rating => headless_click_labels(app, &[Str::Rating.t()], |app, ui| {
+        F100Surface::Preview => preview_area_frame(app),
+        F100Surface::Histogram => headless_frame(app, |app, ui| app.draw_histogram_section(ui)),
+        F100Surface::Rating => headless_click_labels_frame(app, &[Str::Rating.t()], |app, ui| {
             app.draw_rating_section(ui)
         }),
-        F100Surface::LibraryGrid => headless_shapes(app, |app, ui| {
+        F100Surface::LibraryGrid => headless_frame(app, |app, ui| {
             let ctx = ui.ctx().clone();
             app.draw_library_grid(&ctx, ui);
         }),
-        F100Surface::History => headless_click_labels(app, &[Str::History.t()], |app, ui| {
+        F100Surface::History => headless_click_labels_frame(app, &[Str::History.t()], |app, ui| {
             app.draw_history_section(ui)
         }),
-        F100Surface::ModuleBar => headless_shapes(app, |app, ui| app.draw_module_bar(ui)),
+        F100Surface::ModuleBar => headless_frame(app, |app, ui| app.draw_module_bar(ui)),
         F100Surface::Develop => {
-            headless_shapes_sized(app, 4096.0, |app, ui| app.draw_develop_panel(ui))
+            headless_frame_sized(app, 4096.0, |app, ui| app.draw_develop_panel(ui))
         }
         F100Surface::Export => {
-            headless_shapes_sized(app, 2000.0, |app, ui| app.draw_export_panel(ui))
+            headless_frame_sized(app, 2000.0, |app, ui| app.draw_export_panel(ui))
         }
         F100Surface::Basic => {
             app.set_section_open(SECTION_BASIC, true);
-            headless_shapes_sized(app, 4096.0, |app, ui| app.draw_basic(ui))
+            headless_frame_sized(app, 4096.0, |app, ui| app.draw_basic(ui))
         }
         F100Surface::Masking => {
             // Prepare the buttons that need a selected mask (the eye and
@@ -237,23 +281,25 @@ pub(super) fn f100_surface_shapes(
                 let _ = app.select_mask(&id);
             }
             app.set_section_open(SECTION_MASKING, true);
-            headless_shapes_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
+            headless_frame_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
         }
         F100Surface::Spot => {
-            headless_click_labels_sized(app, 6000.0, &["Dust Removal (Q)"], |app, ui| {
+            headless_click_labels_sized_frame(app, 6000.0, &["Dust Removal (Q)"], |app, ui| {
                 app.draw_spot_heal(ui)
             })
         }
-        F100Surface::Merge => headless_click_labels(app, &[Str::MergeSection.t()], |app, ui| {
-            app.draw_merge_section(ui)
-        }),
+        F100Surface::Merge => {
+            headless_click_labels_frame(app, &[Str::MergeSection.t()], |app, ui| {
+                app.draw_merge_section(ui)
+            })
+        }
         F100Surface::Geometry => {
             // Prepare the conditional buttons: an active crop (Clear Crop)
             // and a persisted upright analysis (Clear Upright).
             let _ = app.set_crop_aspect("1:1");
             let _ = app.analyze_upright_now();
             app.set_section_open(SECTION_GEOMETRY, true);
-            headless_shapes_sized(app, 4096.0, |app, ui| app.draw_geometry(ui))
+            headless_frame_sized(app, 4096.0, |app, ui| app.draw_geometry(ui))
         }
         F100Surface::Metadata => {
             // The panel's sub-sections start collapsed; open the ones that
@@ -267,7 +313,7 @@ pub(super) fn f100_surface_shapes(
                 Str::MetadataPresetSection.t(),
                 Str::MetadataSyncSection.t(),
             ];
-            headless_click_labels_sized(app, 4096.0, &labels, |app, ui| {
+            headless_click_labels_sized_frame(app, 4096.0, &labels, |app, ui| {
                 app.draw_library_metadata_panel(ui)
             })
         }
@@ -277,13 +323,13 @@ pub(super) fn f100_surface_shapes(
             // tall panel keeps every control in one pass.
             let _ = app.add_red_eye_region(0.5, 0.5);
             app.set_section_open(SECTION_DETAIL, true);
-            headless_shapes_sized(app, 8000.0, |app, ui| app.draw_detail(ui))
+            headless_frame_sized(app, 8000.0, |app, ui| app.draw_detail(ui))
         }
         F100Surface::Optics => {
             // The bokeh radios live in the collapsed "Lens Blur" subgroup,
             // so click it open before asserting the shape of the panel.
             app.set_section_open(SECTION_OPTICS, true);
-            headless_click_labels_sized(app, 8000.0, &[Str::LensBlur.t()], |app, ui| {
+            headless_click_labels_sized_frame(app, 8000.0, &[Str::LensBlur.t()], |app, ui| {
                 app.draw_optics(ui)
             })
         }
@@ -292,14 +338,14 @@ pub(super) fn f100_surface_shapes(
             // button (endpoints are mandatory and never removable).
             app.set_section_open(SECTION_TONE_CURVE, true);
             app.add_curve_point("master", 0.5, 0.5);
-            headless_shapes_sized(app, 8000.0, |app, ui| app.draw_tone_curve(ui))
+            headless_frame_sized(app, 8000.0, |app, ui| app.draw_tone_curve(ui))
         }
         F100Surface::Presets => {
             // A path keeps the Refresh button painted while no real user
             // presets directory is scanned during the audit frame; the
             // Apply/Save buttons always paint.
             app.presets_dir = Some(std::path::PathBuf::from("instrdbg-presets"));
-            headless_click_labels(app, &[Str::PresetsSection.t()], |app, ui| {
+            headless_click_labels_frame(app, &[Str::PresetsSection.t()], |app, ui| {
                 app.draw_presets_section(ui)
             })
         }
@@ -308,13 +354,13 @@ pub(super) fn f100_surface_shapes(
             // the trailing "Add color" button always paints.
             app.set_section_open(SECTION_COLOR, true);
             app.add_point_color();
-            headless_shapes_sized(app, 8000.0, |app, ui| app.draw_color(ui))
+            headless_frame_sized(app, 8000.0, |app, ui| app.draw_color(ui))
         }
         F100Surface::Generative => {
             // An active expand role with a canvas paints the "Apply Frame"
             // button; `generative_stage_active` then paints "Generate".
             let _ = app.set_expand_beyond_image(true);
-            headless_click_labels_sized(app, 2000.0, &["Generative Expand"], |app, ui| {
+            headless_click_labels_sized_frame(app, 2000.0, &["Generative Expand"], |app, ui| {
                 app.draw_generative_expand(ui)
             })
         }
@@ -323,7 +369,7 @@ pub(super) fn f100_surface_shapes(
             // the startup auto-selection so the plain (counter-free) Sync
             // label is audited, mirroring `f100_action_button`.
             app.filmstrip_selection.clear();
-            headless_shapes(app, |app, ui| {
+            headless_frame(app, |app, ui| {
                 let ctx = ui.ctx().clone();
                 app.draw_filmstrip(&ctx, ui);
             })
@@ -338,11 +384,28 @@ pub(super) fn f100_surface_shapes(
             crate::face_gui::tests::seed_face(app);
             app.set_library_view(LibraryView::People);
             app.people_selected_cluster = "cluster-a".into();
-            headless_shapes_sized(app, 4096.0, |app, ui| {
+            headless_frame_sized(app, 4096.0, |app, ui| {
                 let ctx = ui.ctx().clone();
                 app.draw_library_grid(&ctx, ui);
             })
         }
+    }
+}
+
+/// Assert one audited button is reachable: text labels via the painted-shape
+/// check, icons via their registered widget id (UX-LOOK-TOOLBAR-18).
+pub(super) fn f100_assert_button(
+    shapes: &[egui::epaint::ClippedShape],
+    ctx: &egui::Context,
+    button: &ButtonRef,
+    what: &str,
+) {
+    match button {
+        ButtonRef::Text(label) => {
+            assert!(!label.is_empty(), "{what} must map to a non-empty label");
+            assert_fully_visible(shapes, label);
+        }
+        ButtonRef::Icon(icon) => assert_icon_painted(shapes, ctx, *icon),
     }
 }
 
@@ -375,19 +438,21 @@ fn f100_shortcut_audit_every_action_has_a_button() {
         F100Surface::People,
     ];
     for surface in order {
-        let shapes = f100_surface_shapes(&mut app, surface);
+        let (shapes, ctx) = f100_surface_frame(&mut app, surface);
         for action in ALL_GUI_ACTIONS {
-            let (action_surface, label) = f100_action_button(*action);
-            assert!(!label.is_empty(), "{action:?} must map to a button label");
+            let (action_surface, button) = f100_action_button(*action);
             if action_surface == surface {
-                assert_fully_visible(&shapes, &label);
+                f100_assert_button(&shapes, &ctx, &button, &format!("{action:?}"));
             }
         }
     }
     // Every instrumented action is in the audit table (paired with the
     // exhaustive match above: a new shortcut cannot compile unmapped).
     for action in ALL_GUI_ACTIONS {
-        let (_, label) = f100_action_button(*action);
-        assert!(!label.is_empty(), "{action:?} has no button");
+        let (_, button) = f100_action_button(*action);
+        assert!(
+            !matches!(&button, ButtonRef::Text(label) if label.is_empty()),
+            "{action:?} has no button"
+        );
     }
 }

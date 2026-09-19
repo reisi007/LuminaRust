@@ -110,7 +110,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | GUI-PARITY-GOLDENS-18 | alle G | Parity-Goldens-Rebless |
-| 1.0 | UX-LOOK-TOOLBAR-18 | alle G | Icon-Werkzeugleiste |
 | 1.0 | UX-LOOK-TONECURVE-18 | alle G | Kurvengrafik |
 | 1.0 | UX-LOOK-CROP-18 | alle G | Crop-Handles+Gitter |
 | 1.0 | UX-LOOK-HISTORY-18 | alle G | History lesbar+Presets-Baum |
@@ -148,7 +147,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] UX-LOOK-TOOLBAR-18 (Release: 1.0)** Icon-Werkzeugleiste (Look-Analyse 2026-09-17, UXG-04): Crop/Heal/Red-Eye/Masken + View-Toggles als Icons am LR-Ort (unter Histogramm/über Bild), Library-View-Tabs ikonisieren. Zielbild beachten (modern, aber vertraut). Abnahme: GUI-headless (jeder Button malt + schaltet), kittest-Goldens.
 - [ ] **[PRIO: hoch] UX-LOOK-TONECURVE-18 (Release: 1.0)** Tone Curve als echte Kurvengrafik (Look-Analyse 2026-09-17, UXG-16): Punkte setzen/ziehen pro Kanal (Kanalwahl besteht), statt P0/P1-Slider-Reihen. Abnahme: GUI-headless (Punkt setzen/ziehen/löschen persistiert), Golden mit Kurvengrafik, kein stiller Fallback.
 - [ ] **[PRIO: hoch] UX-LOOK-CROP-18 (Release: 1.0)** Crop-Overlay mit Eck-Handles, Drittel-Gitter, Abdunklung (Look-Analyse 2026-09-17, UXG-01): interaktives Aufziehen/Verschieben, Commit-Semantik per SOLL-Entscheid (steht aus — zuerst Doku). Abnahme: GUI-headless + Golden, Rezept-Semantik unverändert außer dokumentiertem Commit.
 - [ ] **[PRIO: hoch] UX-LOOK-HISTORY-18 (Release: 1.0)** History menschenlesbar + Presets als Baum (Look-Analyse 2026-09-17, UXG-07/12): History-Einträge mit Reglername + alt→neu + Uhrzeit (Schema-Entscheid zuerst), Presets als Gruppen-Baum ohne absoluten Pfad. Abnahme: GUI-headless (Einträge lesbar + klickbar), Golden, kein Schema-Bruch ohne Migration.

@@ -1,4 +1,4 @@
-14175 crates/lumina-gui/src/lib.rs  # 2026-09-19: GUI-REFACTOR-W3-20 S3.1/S3.2 (29952 -> 14176, f100_action_button-Guard nach src/tests/f100_audit.rs, mod tests thematisch nach src/tests/*.rs gesplittet; Shared-Test-Helper bleiben im Root); -1 durch UX-LOOK-LAYOUT-18 (linke Rail nach develop_left_rail.rs)
+13943 crates/lumina-gui/src/lib.rs  # 2026-09-19: UX-LOOK-TOOLBAR-18 (14175 -> 13943, Headless-Draw/Click-Helper nach src/tests/support.rs extrahiert); zuvor GUI-REFACTOR-W3-20 S3.1/S3.2 (29952 -> 14176, f100_action_button-Guard nach src/tests/f100_audit.rs, mod tests thematisch nach src/tests/*.rs gesplittet); UX-LOOK-LAYOUT-18 (linke Rail nach develop_left_rail.rs)
 11529 crates/lumina-cli/src/main.rs  # 17709 -> 11529 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 5072 crates/lumina-sidecar/src/lib.rs  # 10715 -> 5072 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 3257 crates/lumina-core/src/lib.rs  # 7336 -> 3257 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)

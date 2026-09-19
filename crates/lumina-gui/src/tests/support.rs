@@ -1,0 +1,356 @@
+//! Shared headless test helpers (UX-LOOK-TOOLBAR-18 extraction).
+//!
+//! `lib.rs` is over the 500-line ratchet, so the shared draw/click helpers
+//! live here instead of growing the crate root. Each test module pulls them in
+//! through `crate::tests`'s `use support::*;` plus its own `use super::*;`.
+
+use super::*;
+
+/// `(text rect, clip rect)` of every painted text shape whose full string
+/// equals `needle` (button labels). A widget cut off at a panel edge is painted
+/// with a clip rect smaller than its text rect. Exact match (not substring) so
+/// unrelated labels can never trip the assertion.
+pub(super) fn text_shapes_for(
+    shapes: &[egui::epaint::ClippedShape],
+    needle: &str,
+) -> Vec<(egui::Rect, egui::Rect)> {
+    let mut out = Vec::new();
+    for clipped in shapes {
+        if let egui::Shape::Text(text) = &clipped.shape {
+            if text.galley.text() == needle {
+                out.push((
+                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    clipped.clip_rect,
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Full text of every painted text shape (button/slider readouts).
+pub(super) fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+    shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every painted occurrence of the button label `needle` must lie fully inside
+/// its clip rect (1px tolerance for rounding).
+pub(super) fn assert_fully_visible(shapes: &[egui::epaint::ClippedShape], needle: &str) {
+    let hits = text_shapes_for(shapes, needle);
+    assert!(
+        !hits.is_empty(),
+        "{needle:?} must be painted; painted texts: {:?}",
+        painted_texts(shapes)
+    );
+    for (rect, clip) in &hits {
+        assert!(
+            clip.expand(1.0).contains_rect(*rect),
+            "{needle:?} text {rect:?} must be fully inside its clip {clip:?}"
+        );
+    }
+}
+
+/// Whether any painted text shape's galley contains `needle` (robust to label
+/// wrapping, unlike the exact `text_shapes_for`).
+pub(super) fn text_contains(shapes: &[egui::epaint::ClippedShape], needle: &str) -> bool {
+    shapes.iter().any(|clipped| match &clipped.shape {
+        egui::Shape::Text(text) => text.galley.text().contains(needle),
+        _ => false,
+    })
+}
+
+/// GUI-VISION-1: drive one headless egui frame (`Context::run_ui`, no GPU
+/// needed) and return the painted shapes. Layout-overflow regressions (buttons
+/// clipped at the panel edge) fail here in `cargo test -p lumina-gui --lib`
+/// instead of only in kittest goldens.
+pub(super) fn headless_shapes(
+    app: &mut LuminaApp,
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> Vec<egui::epaint::ClippedShape> {
+    headless_shapes_sized(app, 720.0, draw)
+}
+
+/// `headless_shapes` with an explicit canvas height: panels whose controls
+/// extend past the 720px fold are fully painted on a taller virtual screen
+/// (the production panel scrolls; the test asserts the whole content).
+pub(super) fn headless_shapes_sized(
+    app: &mut LuminaApp,
+    height: f32,
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> Vec<egui::epaint::ClippedShape> {
+    headless_frame_sized(app, height, draw).0
+}
+
+/// UX-LOOK-TOOLBAR-18: like [`headless_shapes_sized`], but also returns the
+/// `egui::Context`, so icon buttons (which paint no text label) can be located
+/// via `Context::read_response(<ToolbarIcon as id>)`.
+pub(super) fn headless_frame_sized(
+    app: &mut LuminaApp,
+    height: f32,
+    mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(1200.0, height),
+        )),
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(raw, |ui| draw(app, ui));
+    // No GPU renderer consumes the per-frame texture deltas in these headless
+    // tests; dropping them would trip epaint's "unapplied deltas" assertion.
+    output.textures_delta.clear();
+    (output.shapes, ctx)
+}
+
+/// [`headless_frame_sized`] on the default 720px canvas.
+pub(super) fn headless_frame(
+    app: &mut LuminaApp,
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
+    headless_frame_sized(app, 720.0, draw)
+}
+
+/// UX-LOOK-TOOLBAR-18: the icon button must be registered (so a real click
+/// lands on it), lie fully inside the virtual screen and paint at least one
+/// primitive inside its rect. Icon buttons have no text label, so this is the
+/// paint/visibility guard that replaces `assert_fully_visible`.
+pub(super) fn assert_icon_painted(
+    shapes: &[egui::epaint::ClippedShape],
+    ctx: &egui::Context,
+    icon: crate::icon_toolbar::ToolbarIcon,
+) {
+    let response = ctx
+        .read_response(icon.id())
+        .unwrap_or_else(|| panic!("icon {icon:?} must be registered/painted in its surface"));
+    let rect = response.rect;
+    assert!(
+        rect.is_positive() && rect.is_finite(),
+        "icon {icon:?} rect must be valid: {rect:?}"
+    );
+    let screen = ctx.viewport_rect();
+    assert!(
+        screen.expand(0.5).contains_rect(rect),
+        "icon {icon:?} {rect:?} must lie inside the screen {screen:?}"
+    );
+    let painted = shapes
+        .iter()
+        .any(|clipped| clipped.shape.visual_bounding_rect().intersects(rect));
+    assert!(
+        painted,
+        "icon {icon:?} must paint at least one shape inside {rect:?}"
+    );
+}
+
+/// Draw only the preview area (the view-toolbar host) in a headless pass.
+pub(super) fn draw_preview_area_only(app: &mut LuminaApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    app.draw_preview_area(&ctx, ui);
+}
+
+/// Paint the preview area once (no GPU) and return the painted shapes plus the
+/// context, so the icon buttons can be located by widget id.
+pub(super) fn preview_area_frame(
+    app: &mut LuminaApp,
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
+    headless_frame(app, draw_preview_area_only)
+}
+
+/// Tall variant for the state badges painted *after* the preview image (below
+/// the 720px fold in the normal harness).
+pub(super) fn preview_area_badge_shapes(app: &mut LuminaApp) -> Vec<egui::epaint::ClippedShape> {
+    headless_shapes_sized(app, 2000.0, draw_preview_area_only)
+}
+
+/// Paint `draw` headless, locate the button painted with `label`, click it
+/// (press + release on the text centre) and return the settled frame's shapes.
+/// A single persistent `egui::Context` across frames is what makes the click
+/// register.
+pub(super) fn headless_click_label(
+    app: &mut LuminaApp,
+    label: &str,
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> Vec<egui::epaint::ClippedShape> {
+    headless_click_labels(app, &[label], draw)
+}
+
+/// Like [`headless_click_label`], but clicks several labels in order inside one
+/// persistent `egui::Context`: the first click can open a collapsing section
+/// (History/Rating/Dust Removal), the next clicks its buttons. The returned
+/// shapes are the last settled frame.
+pub(super) fn headless_click_labels(
+    app: &mut LuminaApp,
+    labels: &[&str],
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> Vec<egui::epaint::ClippedShape> {
+    headless_click_labels_sized(app, 720.0, labels, draw)
+}
+
+/// [`headless_click_labels`] returning the persistent context too.
+pub(super) fn headless_click_labels_frame(
+    app: &mut LuminaApp,
+    labels: &[&str],
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
+    headless_click_labels_sized_frame(app, 720.0, labels, draw)
+}
+
+/// [`headless_click_labels`] with an explicit canvas height: panels whose
+/// sub-sections extend past the 720px fold (the Metadata panel) are fully
+/// clickable on a taller virtual screen.
+pub(super) fn headless_click_labels_sized(
+    app: &mut LuminaApp,
+    height: f32,
+    labels: &[&str],
+    draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> Vec<egui::epaint::ClippedShape> {
+    headless_click_labels_sized_frame(app, height, labels, draw).0
+}
+
+/// [`headless_click_labels_sized`] returning the persistent context too, so
+/// icon buttons can be checked after text-driven clicks (F-100 audit).
+pub(super) fn headless_click_labels_sized_frame(
+    app: &mut LuminaApp,
+    height: f32,
+    labels: &[&str],
+    mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, height));
+    let mut time = 0.0_f64;
+    let mut run = |app: &mut LuminaApp, events: Vec<egui::Event>| {
+        time += 1.0 / 60.0;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| draw(app, ui),
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    let mut shapes = run(app, vec![]);
+    for label in labels {
+        assert_fully_visible(&shapes, label);
+        let pos = text_shapes_for(&shapes, label)
+            .into_iter()
+            .next()
+            .expect("button label painted")
+            .0
+            .center();
+        let click = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run(app, vec![egui::Event::PointerMoved(pos), click(true)]);
+        run(app, vec![egui::Event::PointerMoved(pos), click(false)]);
+        // 30 frames settle the collapse/expand animation (~0.5 s).
+        shapes = Vec::new();
+        for _ in 0..30 {
+            shapes = run(app, vec![]);
+        }
+    }
+    (shapes, ctx)
+}
+
+/// UX-LOOK-TOOLBAR-18: click several icon buttons in order inside one
+/// persistent `egui::Context` (icon buttons paint no text label, so the click
+/// position comes from `Context::read_response`). Returns the last settled
+/// frame plus the context.
+pub(super) fn headless_click_icons_frame(
+    app: &mut LuminaApp,
+    icons: &[crate::icon_toolbar::ToolbarIcon],
+    mut draw: impl FnMut(&mut LuminaApp, &mut egui::Ui),
+) -> (Vec<egui::epaint::ClippedShape>, egui::Context) {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 720.0));
+    let mut time = 0.0_f64;
+    let mut run = |app: &mut LuminaApp, events: Vec<egui::Event>| {
+        time += 1.0 / 60.0;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| draw(app, ui),
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    let mut shapes = run(app, vec![]);
+    for icon in icons {
+        let pos = ctx
+            .read_response(icon.id())
+            .unwrap_or_else(|| panic!("icon {icon:?} must be painted before clicking"))
+            .rect
+            .center();
+        let click = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run(app, vec![egui::Event::PointerMoved(pos), click(true)]);
+        run(app, vec![egui::Event::PointerMoved(pos), click(false)]);
+        shapes = Vec::new();
+        for _ in 0..4 {
+            shapes = run(app, vec![]);
+        }
+    }
+    (shapes, ctx)
+}
+
+/// F-100 Klickbarkeit: exhaustive mapping of every keyboard-toggle enum variant
+/// to the `Str` label of its clickable button. No `_` arm — a new
+/// `ViewToggle`/`PanelToggle` variant fails compilation here, so a new keyboard
+/// toggle cannot land without its button and audit entry.
+pub(super) fn view_toggle_button_label(toggle: ViewToggle) -> Str {
+    match toggle {
+        ViewToggle::BlackWhite => Str::TreatmentBlackWhite,
+        ViewToggle::Clipping => Str::ViewToolbarClipping,
+        ViewToggle::LightsOut => Str::ViewToolbarLightsOut,
+    }
+}
+
+/// Exhaustive mapping of every `PanelToggle` variant to its button label
+/// (see [`view_toggle_button_label`]).
+pub(super) fn panel_toggle_button_label(toggle: PanelToggle) -> Str {
+    match toggle {
+        PanelToggle::CropMode => Str::ViewToolbarCrop,
+        PanelToggle::PanelsHidden => Str::ViewToolbarPanels,
+    }
+}
+
+/// UX-LOOK-TOOLBAR-18: click `icon` twice in the preview toolbar; assert the
+/// state flips to `on`, then back off, with the expected status text, and that
+/// the icon stays painted (registered + visible) after each flip.
+pub(super) fn assert_preview_icon_toggles(
+    app: &mut LuminaApp,
+    icon: crate::icon_toolbar::ToolbarIcon,
+    on: impl Fn(&LuminaApp) -> bool,
+    on_status: &str,
+    off_status: &str,
+) {
+    let (shapes, ctx) = headless_click_icons_frame(app, &[icon], draw_preview_area_only);
+    assert!(on(app), "{icon:?} click must arm the state");
+    assert_eq!(app.status, on_status, "{icon:?} on status");
+    assert_icon_painted(&shapes, &ctx, icon);
+    let (shapes, ctx) = headless_click_icons_frame(app, &[icon], draw_preview_area_only);
+    assert!(!on(app), "{icon:?} second click must disarm the state");
+    assert_eq!(app.status, off_status, "{icon:?} off status");
+    assert_icon_painted(&shapes, &ctx, icon);
+}

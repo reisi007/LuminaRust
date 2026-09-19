@@ -62,19 +62,25 @@ impl LuminaApp {
             }
         });
         // G-09 + FACE-20-S5: explicit Library-view selector (Grid / Loupe /
-        // Compare / Survey / People). The keyboard shortcuts stay the primary
-        // path; People deliberately has no new global shortcut (FACE-20 §3).
+        // Compare / Survey / People), UX-LOOK-TOOLBAR-18 iconified at the LR
+        // place with the existing labels/shortcuts as tooltips. The keyboard
+        // shortcuts stay the primary path; People deliberately has no new
+        // global shortcut (FACE-20 §3).
         ui.horizontal_wrapped(|ui| {
-            for (view, label) in [
-                (LibraryView::Grid, Str::LibraryGridOn.t()),
-                (LibraryView::Loupe, Str::LoupeOn.t()),
-                (LibraryView::Compare, Str::CompareModeCompare.t()),
-                (LibraryView::Survey, Str::SurveyOn.t()),
-                (LibraryView::People, Str::FacePeople.t()),
+            for view in [
+                LibraryView::Grid,
+                LibraryView::Loupe,
+                LibraryView::Compare,
+                LibraryView::Survey,
+                LibraryView::People,
             ] {
-                if ui
-                    .selectable_label(self.library_view == view, label)
-                    .clicked()
+                let active = self.library_view == view;
+                if crate::icon_toolbar::icon_button(
+                    ui,
+                    crate::icon_toolbar::library_view_icon(view),
+                    active,
+                )
+                .clicked()
                 {
                     self.set_library_view(view);
                 }

@@ -1,7 +1,10 @@
 //! F-100 enum shortcut → button maps tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
-use super::f100_audit::{f100_surface_shapes, F100Surface};
+use super::f100_audit::{f100_assert_button, f100_surface_frame, ButtonRef, F100Surface};
 use super::*;
+// UX-LOOK-TOOLBAR-18: the preview tool strip and the Library view tabs are
+// icon-based; their buttons are located by widget id.
+use crate::icon_toolbar::{library_view_icon, ToolbarIcon};
 
 // Exhaustive per-enum shortcut → button maps (no `_` arm). Together with
 // the `GuiAction` audit above these cover every F-100 shortcut: `G`/`D`/`E`
@@ -23,36 +26,58 @@ fn f100_panel_toggle_surface(toggle: PanelToggle) -> F100Surface {
     }
 }
 
-fn f100_module_button_label(module: Module) -> (F100Surface, String) {
+/// UX-LOOK-TOOLBAR-18: the clickable button for one view toggle (text in the
+/// Basic section for B&W; icons in the preview tool strip for the rest).
+fn f100_view_toggle_button(toggle: ViewToggle) -> ButtonRef {
+    match toggle {
+        ViewToggle::BlackWhite => ButtonRef::Text(view_toggle_button_label(toggle).t().into()),
+        ViewToggle::Clipping => ButtonRef::Icon(ToolbarIcon::Clipping),
+        ViewToggle::LightsOut => ButtonRef::Icon(ToolbarIcon::LightsOut),
+    }
+}
+
+fn f100_panel_toggle_button(toggle: PanelToggle) -> ButtonRef {
+    match toggle {
+        PanelToggle::CropMode => ButtonRef::Icon(ToolbarIcon::Crop),
+        PanelToggle::PanelsHidden => ButtonRef::Icon(ToolbarIcon::Panels),
+    }
+}
+
+fn f100_module_button_label(module: Module) -> (F100Surface, ButtonRef) {
     match module {
-        Module::Library => (F100Surface::ModuleBar, Str::LibraryShortcut.format_arg("G")),
-        Module::Develop => (F100Surface::ModuleBar, Str::DevelopShortcut.format_arg("D")),
+        Module::Library => (
+            F100Surface::ModuleBar,
+            Str::LibraryShortcut.format_arg("G").into(),
+        ),
+        Module::Develop => (
+            F100Surface::ModuleBar,
+            Str::DevelopShortcut.format_arg("D").into(),
+        ),
         Module::Export => (F100Surface::ModuleBar, Str::Export.t().into()),
     }
 }
 
-fn f100_library_view_button_label(view: LibraryView) -> (F100Surface, String) {
-    let label = match view {
-        LibraryView::Grid => Str::LibraryGridOn.t(),
-        LibraryView::Loupe => Str::LoupeOn.t(),
-        LibraryView::Compare => Str::CompareModeCompare.t(),
-        LibraryView::Survey => Str::SurveyOn.t(),
-        LibraryView::People => Str::FacePeople.t(),
-    };
-    (F100Surface::LibraryGrid, label.into())
+fn f100_library_view_button(view: LibraryView) -> (F100Surface, ButtonRef) {
+    (
+        F100Surface::LibraryGrid,
+        ButtonRef::Icon(library_view_icon(view)),
+    )
 }
 
-fn f100_compare_mode_button_label(mode: CompareMode) -> (F100Surface, String) {
+fn f100_compare_mode_button(mode: CompareMode) -> (F100Surface, ButtonRef) {
     // The clickable alias lives in the Library view selector (`C` compares,
     // `N` surveys the grid), never as a second, diverging button.
-    let label = match mode {
-        CompareMode::Compare => Str::CompareModeCompare.t(),
-        CompareMode::Survey => Str::SurveyOn.t(),
+    let view = match mode {
+        CompareMode::Compare => LibraryView::Compare,
+        CompareMode::Survey => LibraryView::Survey,
     };
-    (F100Surface::LibraryGrid, label.into())
+    (
+        F100Surface::LibraryGrid,
+        ButtonRef::Icon(library_view_icon(view)),
+    )
 }
 
-fn f100_mask_tool_button_label(tool: MaskTool) -> (F100Surface, String) {
+fn f100_mask_tool_button_label(tool: MaskTool) -> (F100Surface, ButtonRef) {
     let label = match tool {
         MaskTool::None => Str::MaskToolNone.t(),
         MaskTool::Brush => Str::MaskToolBrush.t(),
@@ -62,14 +87,14 @@ fn f100_mask_tool_button_label(tool: MaskTool) -> (F100Surface, String) {
     (F100Surface::Masking, label.into())
 }
 
-fn f100_flag_button_label(flag: Flag) -> (F100Surface, String) {
+fn f100_flag_button_label(flag: Flag) -> (F100Surface, ButtonRef) {
     (F100Surface::Rating, flag_label(flag).into())
 }
 
 #[test]
 fn f100_shortcut_enum_variants_have_buttons() {
     let (_directory, mut app) = persistent_app();
-    let mut entries: Vec<(F100Surface, String)> = Vec::new();
+    let mut entries: Vec<(F100Surface, ButtonRef)> = Vec::new();
     for toggle in [
         ViewToggle::BlackWhite,
         ViewToggle::Clipping,
@@ -77,13 +102,13 @@ fn f100_shortcut_enum_variants_have_buttons() {
     ] {
         entries.push((
             f100_view_toggle_surface(toggle),
-            view_toggle_button_label(toggle).t().into(),
+            f100_view_toggle_button(toggle),
         ));
     }
     for toggle in [PanelToggle::CropMode, PanelToggle::PanelsHidden] {
         entries.push((
             f100_panel_toggle_surface(toggle),
-            panel_toggle_button_label(toggle).t().into(),
+            f100_panel_toggle_button(toggle),
         ));
     }
     for module in [Module::Library, Module::Develop, Module::Export] {
@@ -96,10 +121,10 @@ fn f100_shortcut_enum_variants_have_buttons() {
         LibraryView::Survey,
         LibraryView::People,
     ] {
-        entries.push(f100_library_view_button_label(view));
+        entries.push(f100_library_view_button(view));
     }
     for mode in [CompareMode::Compare, CompareMode::Survey] {
-        entries.push(f100_compare_mode_button_label(mode));
+        entries.push(f100_compare_mode_button(mode));
     }
     for tool in [
         MaskTool::None,
@@ -120,10 +145,10 @@ fn f100_shortcut_enum_variants_have_buttons() {
         F100Surface::Basic,
         F100Surface::Masking,
     ] {
-        let shapes = f100_surface_shapes(&mut app, surface);
-        for (entry_surface, label) in &entries {
+        let (shapes, ctx) = f100_surface_frame(&mut app, surface);
+        for (entry_surface, button) in &entries {
             if *entry_surface == surface {
-                assert_fully_visible(&shapes, label);
+                f100_assert_button(&shapes, &ctx, button, "shortcut-map entry");
             }
         }
     }
