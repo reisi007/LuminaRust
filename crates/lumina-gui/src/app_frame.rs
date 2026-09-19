@@ -65,7 +65,15 @@ impl LuminaApp {
         // an in-flight draft render is "Draft", a missing `render_key` is
         // "Stale"/pending (never a silent fallback).
         if self.preview_is_draft {
-            ui.colored_label(RENDER_STATE_DRAFT_COLOR, Str::Draft.t());
+            // R2-JANK-1 F4: a draft whose analysis pass was throttled keeps the
+            // previous tone/histogram but names the lag visibly instead of
+            // flickering between draft and full analysis.
+            let label = if self.draft_throttle.analysis_pending() {
+                crate::draft_throttle::DRAFT_ANALYSIS_PENDING_LABEL
+            } else {
+                Str::Draft.t()
+            };
+            ui.colored_label(RENDER_STATE_DRAFT_COLOR, label);
         }
         if self.render_key.is_none() {
             ui.colored_label(RENDER_STATE_STALE_COLOR, Str::RenderStateStale.t());

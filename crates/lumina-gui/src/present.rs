@@ -14,6 +14,7 @@
 //! calls them; the GPU-only helpers keep their original private visibility.
 
 use super::*;
+use log::warn;
 
 impl LuminaApp {
     /// The texture upload is driven by the preview-area path.
@@ -33,7 +34,7 @@ impl LuminaApp {
         // no `ColorImage` upload. Every fallback condition below drops to the
         // historical CPU upload, which remains fully functional.
         #[cfg(feature = "gpu")]
-        {
+        let gpu_present_active = {
             self.gpu_present_frame = None;
             // R2-GUIMOD-06: record whether the GPU present path was taken or the
             // preview was routed to the CPU. `gpu_present_if_ready` returns the
@@ -44,12 +45,35 @@ impl LuminaApp {
                 Some((id, size)) => {
                     self.gpu_present_frame = Some((id, size));
                     self.gpu_route_fallback = None;
+                    true
                 }
                 None => {
                     self.gpu_route_fallback = self.routing_fallback_reason();
+                    false
                 }
             }
-        }
+        };
+        #[cfg(not(feature = "gpu"))]
+        let gpu_present_active = false;
+        self.update_cpu_texture(ctx, gpu_present_active);
+    }
+
+    /// R2-JANK-1 F3: CPU preview-texture upload.
+    ///
+    /// `gpu_present_active` is the present decision of this frame
+    /// ([`Self::gpu_present_if_ready`] succeeded). When it is set, the painted
+    /// preview is the registered VRAM user texture, so re-uploading the CPU
+    /// `ColorImage` every draft tick is redundant — and during a slider drag
+    /// that memcpy + texture upload ran once per tick even though the CPU
+    /// pixels were never painted. The upload is therefore skipped while the
+    /// GPU present path is active **except** while no CPU handle exists yet:
+    /// the handle is created once so the Navigator overview
+    /// (`navigator_viewport` clones `self.texture`) and the CPU fallback keep a
+    /// valid texture. The identity is left stale while skipping, so the first
+    /// frame after the GPU path ends re-uploads the current pixels once.
+    /// Before/After always takes the CPU path (`gpu_present_if_ready` refuses
+    /// it), so the swap stays exact.
+    pub(crate) fn update_cpu_texture(&mut self, ctx: &egui::Context, gpu_present_active: bool) {
         // Before/After shows the original (never the recipe) so the toggle can
         // never mutate the recipe — it only swaps which frame is displayed.
         let frame = if self.before_after {
@@ -60,7 +84,10 @@ impl LuminaApp {
         if let Some(frame) = frame {
             let size = [frame.width as usize, frame.height as usize];
             let identity = (self.preview_generation, self.before_after, size);
-            if self.texture_identity != Some(identity) {
+            let keep_for_navigator = self.texture.is_none();
+            if self.texture_identity != Some(identity)
+                && (!gpu_present_active || keep_for_navigator)
+            {
                 // Build the full-frame image while `frame` still borrows
                 // `self`; the handle mutation below needs `&mut self.texture`.
                 let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
@@ -74,6 +101,50 @@ impl LuminaApp {
                     ));
                 }
                 self.texture_identity = Some(identity);
+            }
+        }
+    }
+
+    /// GUI-WGPU-PRESENT-1 / GPU-STAGE-1: push the pipeline-evaluated combined
+    /// mask planes into the VRAM present composite. Extracted verbatim from
+    /// `render_pipeline.rs` (ratchet: the pipeline hub stays <= 500 lines);
+    /// failures are loud but never break the CPU preview path.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn upload_evaluated_mask_to_vram(&mut self) {
+        self.vram_mask_is_evaluated = false;
+        if self.render_mask_layers.is_empty() {
+            return;
+        }
+        let planes: Vec<lumina_core::MaskPlane> = self
+            .render_mask_layers
+            .iter()
+            .map(|layer| layer.plane.clone())
+            .collect();
+        match lumina_gpu::combine_mask_planes(&planes) {
+            Ok(Some(combined))
+                if combined.width == self.preview.as_ref().map(|p| p.width).unwrap_or(0)
+                    && combined.height == self.preview.as_ref().map(|p| p.height).unwrap_or(0) =>
+            {
+                if let Some(gpu) = self.gpu.as_ref() {
+                    if gpu.is_available()
+                        && gpu.ensure_vram(combined.width, combined.height).is_ok()
+                    {
+                        match gpu.upload_mask_plane(
+                            combined.width,
+                            combined.height,
+                            &combined.values,
+                        ) {
+                            Ok(()) => self.vram_mask_is_evaluated = true,
+                            Err(err) => {
+                                warn!("gpu evaluated-mask upload failed: {err}");
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warn!("gpu evaluated-mask combination failed: {err}");
             }
         }
     }

@@ -16,6 +16,26 @@
 use super::*;
 use log::{error, trace, warn};
 
+/// Idle-debounce window (seconds) before the pending full-quality render is
+/// committed after the last edit (PERF-GUI-3/4). Moved here from the crate root
+/// with [`full_render_debounce_remaining`] (cohesive with the tick hot path).
+const FULL_RENDER_DEBOUNCE_SECONDS: f64 = 0.150;
+
+/// REVIEW-GUI-DEBOUNCE-1: pure decision helper for the debounced full render.
+///
+/// Returns `Some(remaining_seconds)` while the wait window is still open (the
+/// caller must schedule a repaint for exactly that long), and `None` when the
+/// debounce has elapsed or no drag time was recorded (`last_edit_time == 0.0`
+/// → immediate render). Kept pure so the stranding fix is unit-testable
+/// without an event loop.
+pub(crate) fn full_render_debounce_remaining(last_edit_time: f64, now: f64) -> Option<f64> {
+    if last_edit_time <= 0.0 {
+        return None;
+    }
+    let remaining = FULL_RENDER_DEBOUNCE_SECONDS - (now - last_edit_time);
+    (remaining > 0.0).then_some(remaining)
+}
+
 /// R2-GUIMOD-04a: per-tick timings of one coalesced pointer-drag render tick
 /// (measurement only — never read for logic, feeds F-103-N6).
 ///
@@ -98,6 +118,43 @@ impl LuminaApp {
             self.draft_original = Some(source);
         }
         result
+    }
+
+    /// R2-JANK-1 F1: frame-budget-gated entry point for the coalesced drag tick.
+    /// `now` is the egui frame time (seconds), injected so the throttle is
+    /// headless-drivable (DoD §2).
+    ///
+    /// At most one draft render per `DRAFT_RENDER_BUDGET_SECONDS`: inside the
+    /// budget the tick returns without touching the draft, and the caller's
+    /// scheduled repaint retries once the budget elapses. No silent state — the
+    /// pending edit keeps the render key invalid, so the existing "Stale" badge
+    /// stays visible until the next draft render lands. The tick also arms the
+    /// F4 analysis cadence (`DraftThrottle::prepare_analysis`); a skipped
+    /// analysis pass is marked visibly via `DRAFT_ANALYSIS_PENDING_LABEL`.
+    ///
+    /// F2 (moving the draft render off the UI thread) is deliberately **not**
+    /// implemented here: `render_draft`/`render_from` mutate the whole app
+    /// state in place (stage caches, GPU bindings, analysis slots) and borrow
+    /// the draft source from `self`, so a worker split requires a shared
+    /// pipeline context plus a result-application state machine — an
+    /// architecture change, not a small fix. The frame-budget throttle removes
+    /// the repeated same-budget renders without it (R2-JANK-1 F2 finding).
+    pub(crate) fn render_draft_tick_at(&mut self, viewport: [u32; 2], now: f64) {
+        self.draft_throttle.observe(now);
+        if !self.draft_throttle.render_due() {
+            trace!("GUI render: draft tick throttled (frame budget)");
+            // The edit dropped the live analysis; restore the retained one
+            // (visible pending marker) so the panel never blanks mid-drag.
+            if let Some((analysis, histogram)) = self.draft_throttle.retained() {
+                self.tone_analysis = Some(analysis);
+                self.preview_histogram = Some(histogram);
+                self.draft_throttle.note_analysis_pending();
+            }
+            return;
+        }
+        self.draft_throttle.note_render();
+        self.draft_throttle.prepare_analysis();
+        self.render_draft_tick(viewport);
     }
 
     /// One coalesced pointer-drag tick (PERF-GUI-3/4 hot path): VRAM tone

@@ -1888,11 +1888,17 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   1×Repeat-`warn!`). Auslöser: `set_tone_curve_channel_region` schrieb ohne
   Validierung Kurven mit Endpunkt ≠ (0,0) (positives `shadows`) → jeder Render
   schlug fehl → Per-Frame-Fehlerpfad; schreibt jetzt validiert + laut.
-- **R2-JANK-1 (hoch, in Analyse/Fix):** Draft-Preview macht die Sidebar
-  rucklig — synchroner ungedrosselter CPU-Draft-Render (~16 ms) im UI-Frame
-  (H1) + GPU/CPU-Doppelarbeit (H2) + redundanter Textur-Upload (H3);
-  Histogramm nachrangig (~5 %). Fix-Vorschläge F1–F4 dokumentiert
-  (Performance-Analyse Runde 2).
+- **R2-JANK-1 (hoch, BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Draft-Preview machte die
+  Sidebar rucklig — synchroner ungedrosselter CPU-Draft-Render (~16 ms, mit
+  Denoise ~120 ms) im UI-Frame (H1) + GPU/CPU-Doppelarbeit (H2) + redundanter
+  Textur-Upload (H3). Fixes: F1 Frame-Budget-Drossel (max 1 Draft/16 ms,
+  Stale-Badge sichtbar), F3 CPU-Upload-Skip bei aktivem GPU-Present
+  (Navigator-Handle erhalten), F4 Analyse-Kadenz (150 ms, Retained-Snapshot +
+  „pending"-Label, Full-Render bei Loslassen). F2 Worker-Offload begründet
+  zurückgestellt (Architekturwechsel, Aufwand groß — eigener Task, kein
+  1.0-Blocker). Bewusste Trade-offs: Navigator kann unter GPU-Present-Drag
+  transient stale sein (Haupt-Preview korrekt); Pending-Label als Konstante
+  statt `Str` (Ratchet-Ceiling + Namen-Vorbehalt).
 - **R2-MODSWITCH-1 (mittel, in Analyse/Fix):** Library↔Develop-Wechsel langsam
   — synchrone Thumbnail-Disk-Probes + Preview-Decodes auf dem UI-Thread
   (`ensure_thumbnail`-Pfad); Fix-Vorschläge F7/F8 dokumentiert.

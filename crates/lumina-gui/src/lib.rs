@@ -56,6 +56,9 @@ mod sidecar_rebase;
 // GUI-REFACTOR-W1-20 S1.1: the interactive draft render and the coalesced
 // pointer-drag tick (Jank hot path) plus `DragTickTimings`.
 mod render_tick;
+// R2-JANK-1 F1/F4: frame-budget throttle for the draft render and cadence
+// throttle for the draft analysis pass (pure, time-injected state).
+mod draft_throttle;
 // GUI-REFACTOR-W1-20 S1.3: recipe invalidation (`mark_dirty`/`mark_recipe_dirty`)
 // and the single-adjustment default/reset path.
 mod dirty;
@@ -143,6 +146,7 @@ pub use gui_action::{
 // so the app-root field and headless tests keep the stable `lumina_gui` path).
 pub use render_tick::DragTickTimings;
 
+use draft_throttle::DraftThrottle;
 use eframe::egui;
 use lumina_core::cache::disk::DiskFolderCache;
 use lumina_core::cache::PreviewKind;
@@ -2002,6 +2006,10 @@ pub struct LuminaApp {
     /// Source downscaled to draft resolution, cached on load so draft renders
     /// never re-allocate during a slider drag (PERF-GUI-3 "zero alloc").
     draft_original: Option<ImageFrame>,
+    /// R2-JANK-1 F1/F4: frame-budget throttle for the interactive draft render
+    /// (F1) and cadence throttle for the draft analysis pass (F4). Time-state
+    /// only; the visible pending marker is derived from it.
+    draft_throttle: DraftThrottle,
     /// PERF-GUI-1: RAM cache of prepared base stages (`prepare_source_base`
     /// output: post decode/source-actions/ROI-crop, pre-adjustment), keyed by
     /// `CacheStage::Base` digests. Recipe-blind keys mean every slider change
@@ -2986,6 +2994,7 @@ impl LuminaApp {
             filmstrip_anchor: None,
             preview_is_draft: false,
             draft_original: None,
+            draft_throttle: DraftThrottle::default(),
             base_stage_cache: StageFrameCache::new(BASE_STAGE_CACHE_MAX_BYTES),
             source_hash_memo: None,
             last_stage_work: None,
@@ -12213,24 +12222,10 @@ fn tone_curve_roundtrip_is_lossy(shadows: f64, darks: f64, lights: f64, highligh
         || (rh - highlights).abs() > EPSILON
 }
 
-/// Idle-debounce window (seconds) before the pending full-quality render is
-/// committed after the last edit (PERF-GUI-3/4).
-const FULL_RENDER_DEBOUNCE_SECONDS: f64 = 0.150;
-
-/// REVIEW-GUI-DEBOUNCE-1: pure decision helper for the debounced full render.
-///
-/// Returns `Some(remaining_seconds)` while the wait window is still open (the
-/// caller must schedule a repaint for exactly that long), and `None` when the
-/// debounce has elapsed or no drag time was recorded (`last_edit_time == 0.0`
-/// → immediate render). Kept pure so the stranding fix is unit-testable
-/// without an event loop.
-fn full_render_debounce_remaining(last_edit_time: f64, now: f64) -> Option<f64> {
-    if last_edit_time <= 0.0 {
-        return None;
-    }
-    let remaining = FULL_RENDER_DEBOUNCE_SECONDS - (now - last_edit_time);
-    (remaining > 0.0).then_some(remaining)
-}
+// REVIEW-GUI-DEBOUNCE-1 / R2-JANK-1: the debounce decision helper moved to
+// `render_tick.rs` (cohesive with the draft-tick hot path); re-exported here so
+// the app root and the headless tests keep calling it unqualified.
+pub(crate) use render_tick::full_render_debounce_remaining;
 
 /// Mutable reference to one HSL mixer channel, creating the `Option` slot on
 /// first use so the GUI never has to special-case `None`.
@@ -13027,7 +13022,11 @@ impl eframe::App for LuminaApp {
             trace!("GUI render: draft render during pointer drag");
             let screen = ctx.input(|i| i.viewport_rect());
             let viewport = [screen.width() as u32, screen.height() as u32];
-            self.render_draft_tick(viewport);
+            // R2-JANK-1 F1: frame-budget-gated (at most one CPU draft per
+            // 16 ms); a throttled tick leaves `render_key` invalid so the
+            // "Stale" badge keeps the lag visible, and the unconditional
+            // repaint below retries once the budget elapses.
+            self.render_draft_tick_at(viewport, now);
             self.last_edit_time = now;
             ctx.request_repaint();
         } else if !pointer_down && self.pending_full_render {

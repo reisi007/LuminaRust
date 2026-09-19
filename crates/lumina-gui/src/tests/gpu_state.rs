@@ -288,3 +288,51 @@ fn decoded_as_shot_context_is_bound_on_the_gpu_context() {
         assert_eq!(ctx.camera_white_balance(), Some([1.7, 1.0, 1.3, 1.0]));
     }
 }
+
+// ---- R2-JANK-1 F3: no redundant CPU upload while GPU present is active ----
+
+/// F3: while the GPU present path is active the per-tick CPU upload is skipped,
+/// but the CPU handle (Navigator overview + fallback) is kept; the first frame
+/// without a handle still creates it, and the first CPU frame afterwards
+/// re-uploads once.
+#[test]
+fn gpu_present_skips_cpu_upload_but_keeps_the_navigator_texture() {
+    let mut app = new_app();
+    let ctx = egui::Context::default();
+    app.load_bytes(png(), "skip-upload.png").unwrap();
+    app.render().unwrap();
+
+    // First GPU-presented frame: no CPU handle yet → created once so the
+    // Navigator (`navigator_viewport` clones `self.texture`) stays valid.
+    app.update_cpu_texture(&ctx, true);
+    let handle_id = app
+        .texture
+        .as_ref()
+        .expect("navigator/fallback texture is created once")
+        .id();
+    let identity = app.texture_identity;
+    assert!(identity.is_some());
+
+    // New content while GPU present: upload skipped, identity left stale.
+    app.set_adjustment("exposure", 0.5);
+    app.render().unwrap();
+    app.update_cpu_texture(&ctx, true);
+    assert_eq!(
+        app.texture.as_ref().unwrap().id(),
+        handle_id,
+        "the navigator/fallback texture survives the skipped upload"
+    );
+    assert_eq!(
+        app.texture_identity, identity,
+        "the upload was skipped, so the identity is left stale for the next CPU frame"
+    );
+
+    // GPU path ends: the current pixels are uploaded once, handle reused.
+    app.update_cpu_texture(&ctx, false);
+    assert_ne!(app.texture_identity, identity, "CPU fallback re-uploads");
+    assert_eq!(
+        app.texture.as_ref().unwrap().id(),
+        handle_id,
+        "the CPU handle is updated in place, never re-created"
+    );
+}

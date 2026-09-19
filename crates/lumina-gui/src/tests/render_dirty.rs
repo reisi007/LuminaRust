@@ -292,3 +292,161 @@ fn load_mask_planes_reads_composite_tile_key_and_legacy_fallback() {
         "legacy bare-mask-id tiles must remain readable"
     );
 }
+
+// ---- R2-JANK-1 F1: draft tick frame budget ----
+
+/// F1: two draft ticks inside one 16 ms budget execute at most one CPU draft
+/// render; once the budget elapsed the next tick renders again.
+#[test]
+fn draft_tick_throttles_to_the_frame_budget() {
+    let mut app = new_app();
+    app.load_bytes(png(), "throttle.png").unwrap();
+    app.set_adjustment("exposure", 0.25);
+    assert!(app.render_key.is_none(), "edit arms the draft path");
+
+    app.render_draft_tick_at([800, 600], 1.000);
+    let after_first = app.preview_generation();
+    assert!(after_first > 0, "the first tick must render");
+
+    app.render_draft_tick_at([800, 600], 1.005);
+    assert_eq!(
+        app.preview_generation(),
+        after_first,
+        "a second tick inside the 16 ms budget must not re-render"
+    );
+    assert_eq!(
+        app.draft_throttle.last_render_time(),
+        1.000,
+        "the render anchor is unchanged by a throttled tick"
+    );
+
+    app.render_draft_tick_at([800, 600], 1.020);
+    assert!(
+        app.preview_generation() > after_first,
+        "past the budget the draft renders again"
+    );
+}
+
+/// F1: a throttled tick keeps the pending render key invalid, so the visible
+/// "Stale" state never silently disappears while the draft lags the recipe.
+#[test]
+fn throttled_draft_keeps_the_stale_render_key() {
+    let mut app = new_app();
+    app.load_bytes(png(), "stale.png").unwrap();
+    app.set_adjustment("exposure", 0.1);
+    app.render_draft_tick_at([800, 600], 2.000);
+    assert!(app.render_key.is_some(), "the first tick renders");
+
+    app.set_adjustment("exposure", 0.2);
+    assert!(app.render_key.is_none(), "the new edit invalidates the key");
+    app.render_draft_tick_at([800, 600], 2.005); // inside the budget
+    assert!(
+        app.render_key.is_none(),
+        "a throttled draft must leave the key invalid → 'Stale' stays visible"
+    );
+}
+
+// ---- R2-JANK-1 F4: draft analysis cadence ----
+
+/// F4: inside the analysis period a rendered draft keeps the previous analysis
+/// and marks it pending; the released full render clears the marker.
+#[test]
+fn draft_analysis_cadence_marks_pending_until_the_full_render() {
+    let mut app = new_app();
+    app.load_bytes(png(), "analysis.png").unwrap();
+    app.set_adjustment("exposure", 0.1);
+    app.render_draft_tick_at([800, 600], 1.000);
+    assert!(
+        !app.draft_throttle.analysis_pending(),
+        "the first draft analysis runs"
+    );
+    let histogram = app.preview_histogram.clone();
+
+    app.set_adjustment("exposure", 0.2);
+    app.render_draft_tick_at([800, 600], 1.050); // render due, analysis not
+    assert!(
+        app.draft_throttle.analysis_pending(),
+        "a throttled analysis must be visibly pending"
+    );
+    assert_eq!(
+        app.preview_histogram, histogram,
+        "the previous analysis stays displayed (never an empty histogram)"
+    );
+
+    app.render_full([800, 600], None).unwrap();
+    assert!(
+        !app.draft_throttle.analysis_pending(),
+        "the released full render runs the analysis and clears the marker"
+    );
+}
+
+/// F4: the pending analysis is a visible preview-state label — never a silent
+/// stale histogram.
+#[test]
+fn pending_analysis_is_painted_as_a_preview_label() {
+    let mut app = new_app();
+    app.load_bytes(png(), "label.png").unwrap();
+    app.render().unwrap();
+    app.preview_is_draft = true;
+
+    app.draft_throttle.note_analysis_pending();
+    let shapes = preview_area_badge_shapes(&mut app);
+    assert!(
+        text_contains(&shapes, crate::draft_throttle::DRAFT_ANALYSIS_PENDING_LABEL),
+        "the pending-analysis marker must be painted in the preview area"
+    );
+
+    app.draft_throttle.note_analysis();
+    let shapes = preview_area_badge_shapes(&mut app);
+    assert!(
+        text_contains(&shapes, "Draft"),
+        "without a pending analysis the ordinary Draft badge shows"
+    );
+    assert!(
+        !text_contains(&shapes, crate::draft_throttle::DRAFT_ANALYSIS_PENDING_LABEL),
+        "the pending marker disappears once the analysis is current"
+    );
+}
+
+/// F4: the analysis runs at its cadence, not once per draft tick. Three draft
+/// renders inside the period all update the pixels while keeping the previous
+/// analysis (pending); the first render past the period recomputes it and
+/// clears the marker.
+#[test]
+fn draft_analysis_runs_at_the_cadence_not_per_tick() {
+    let mut app = new_app();
+    app.load_bytes(png(), "cadence.png").unwrap();
+    app.set_adjustment("exposure", 0.1);
+    app.render_draft_tick_at([800, 600], 1.000);
+    assert!(
+        !app.draft_throttle.analysis_pending(),
+        "the first draft analysis always runs"
+    );
+
+    for (i, (t, value)) in [(1.050, 0.2), (1.100, 0.3), (1.140, 0.4)]
+        .into_iter()
+        .enumerate()
+    {
+        app.set_adjustment("exposure", value);
+        app.render_draft_tick_at([800, 600], t);
+        assert!(
+            app.render_key.is_some(),
+            "draft render {i} inside the budget must land"
+        );
+        assert!(
+            app.draft_throttle.analysis_pending(),
+            "tick {i} inside the analysis period skips the analysis and marks it pending"
+        );
+    }
+
+    // Past the analysis period the cadence elapses: recompute. (200 ms, not
+    // the exact 150 ms boundary — the literal `1.150 - 1.000` is not exactly
+    // `DRAFT_ANALYSIS_PERIOD_SECONDS` in f64; the pure unit test above pins the
+    // boundary itself.)
+    app.set_adjustment("exposure", 0.9);
+    app.render_draft_tick_at([800, 600], 1.200);
+    assert!(
+        !app.draft_throttle.analysis_pending(),
+        "past the cadence the analysis runs again and the marker clears"
+    );
+}

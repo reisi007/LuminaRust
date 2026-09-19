@@ -298,92 +298,111 @@ impl LuminaApp {
         // The draft/full distinction is untouched: a draft analysis render
         // uses the draft source, so `preview_is_draft` keeps describing the
         // histogram (REVIEW-GUI-N5).
-        // R2-GUIMOD-04a: timed for the per-tick drag instrumentation
-        // (measurement only — the result is used exactly as before).
-        let ana_t0 = std::time::Instant::now();
-        let (analysis, histogram) = match (
-            effective_roi.is_some() && !crop_failed,
-            full_analysis_digest,
-        ) {
-            (true, Some(full_digest)) => {
-                // Resolve the full-frame base first (mutable cache borrow only —
-                // no recipe borrow yet, so this never aliases the render below).
-                // The digest matches a settled Fit render byte-for-byte, hence a
-                // warm cache hit whenever the full frame was rendered before and
-                // only the cheaper downstream stages re-execute here.
-                let mut analysis_work = StageWork::default();
-                let full_base = match self.base_stage_cache.get(&full_digest) {
-                    Some(hit) => {
-                        analysis_work.base_cache_hit = true;
-                        trace!(
-                            "GUI render: full-frame analysis base cache HIT ({}x{})",
-                            source.width,
-                            source.height
-                        );
-                        hit
-                    }
-                    None => {
-                        let prepared = prepare_source_base(source, &[], &mut analysis_work)?;
-                        self.base_stage_cache
-                            .insert(full_digest.clone(), prepared.clone());
-                        analysis_work.base_cache_hit = false;
-                        trace!(
-                            "GUI render: full-frame analysis base cache MISS — rebuilt ({}x{})",
-                            source.width,
-                            source.height
-                        );
-                        prepared
-                    }
-                };
-                // G-06: Lensfun auto-corrector for the analysed full frame
-                // (same cached lookup as the preview render above). Runs
-                // BEFORE the shared `full_masks` borrow below.
-                #[cfg(feature = "lensfun")]
-                self.ensure_lensfun_cache(full_base.width, full_base.height);
-                #[cfg(feature = "lensfun")]
-                let full_lensfun = self.lensfun_render_ref();
-                #[cfg(not(feature = "lensfun"))]
-                let full_lensfun = None;
-                let full_masks = if with_masks {
-                    let planes = self.load_mask_planes();
-                    match &self.document {
-                        Some(document) => document
-                            .virtual_copies
-                            .iter()
-                            .find(|c| c.id == self.virtual_copy_id)
-                            .map(|_| MaskContext {
-                                copies: &document.virtual_copies,
-                                active_copy_id: &self.virtual_copy_id,
-                                planes,
-                                policy: MaskPolicy::Warn,
-                            }),
-                        None => None,
-                    }
-                } else {
-                    None
-                };
-                let full_denoise_input = self.denoise_render_input(denoise_artifact.as_ref());
-                let full_output = render_frame_from_base_with_generative_and_denoise(
-                    full_base,
-                    &RenderContext {
-                        recipe: &self.recipe,
-                        camera_white_balance: self.camera_white_balance,
-                        source_actions: &[],
-                        masks: full_masks,
-                        lensfun: full_lensfun,
-                        depth: None,
-                    },
-                    &mut analysis_work,
-                    generative.input(),
-                    &full_denoise_input,
-                )?;
-                analyze_tone_with_histogram(&full_output.frame)
+        // R2-JANK-1 F4: one-shot skip armed by `render_draft_tick_at` while the
+        // previous analysis is still younger than the draft analysis cadence.
+        // Always read (and clear) it, so a later full render can never inherit a
+        // stale skip. A skipped draft keeps the previous analysis displayed and
+        // marks it visibly pending — never an empty/silent histogram.
+        let skip_draft_analysis = self.draft_throttle.take_skip_analysis() && self.preview_is_draft;
+        if skip_draft_analysis {
+            trace!("GUI render: draft analysis throttled (F4) — retained analysis marked pending");
+            // Restore the retained analysis (`mark_dirty` cleared the live slot)
+            // so the panel keeps a real measurement, visibly marked pending.
+            if let Some((analysis, histogram)) = self.draft_throttle.retained() {
+                self.tone_analysis = Some(analysis);
+                self.preview_histogram = Some(histogram);
             }
-            _ => analyze_tone_with_histogram(&preview),
-        };
-        self.last_analysis_ms = ana_t0.elapsed().as_secs_f64() * 1000.0;
-        self.tone_analysis = Some(analysis);
-        self.preview_histogram = Some(histogram);
+            self.draft_throttle.note_analysis_pending();
+        } else {
+            // R2-GUIMOD-04a: timed for the per-tick drag instrumentation
+            // (measurement only — the result is used exactly as before).
+            let ana_t0 = std::time::Instant::now();
+            let (analysis, histogram) = match (
+                effective_roi.is_some() && !crop_failed,
+                full_analysis_digest,
+            ) {
+                (true, Some(full_digest)) => {
+                    // Resolve the full-frame base first (mutable cache borrow only —
+                    // no recipe borrow yet, so this never aliases the render below).
+                    // The digest matches a settled Fit render byte-for-byte, hence a
+                    // warm cache hit whenever the full frame was rendered before and
+                    // only the cheaper downstream stages re-execute here.
+                    let mut analysis_work = StageWork::default();
+                    let full_base = match self.base_stage_cache.get(&full_digest) {
+                        Some(hit) => {
+                            analysis_work.base_cache_hit = true;
+                            trace!(
+                                "GUI render: full-frame analysis base cache HIT ({}x{})",
+                                source.width,
+                                source.height
+                            );
+                            hit
+                        }
+                        None => {
+                            let prepared = prepare_source_base(source, &[], &mut analysis_work)?;
+                            self.base_stage_cache
+                                .insert(full_digest.clone(), prepared.clone());
+                            analysis_work.base_cache_hit = false;
+                            trace!(
+                                "GUI render: full-frame analysis base cache MISS — rebuilt ({}x{})",
+                                source.width,
+                                source.height
+                            );
+                            prepared
+                        }
+                    };
+                    // G-06: Lensfun auto-corrector for the analysed full frame
+                    // (same cached lookup as the preview render above). Runs
+                    // BEFORE the shared `full_masks` borrow below.
+                    #[cfg(feature = "lensfun")]
+                    self.ensure_lensfun_cache(full_base.width, full_base.height);
+                    #[cfg(feature = "lensfun")]
+                    let full_lensfun = self.lensfun_render_ref();
+                    #[cfg(not(feature = "lensfun"))]
+                    let full_lensfun = None;
+                    let full_masks = if with_masks {
+                        let planes = self.load_mask_planes();
+                        match &self.document {
+                            Some(document) => document
+                                .virtual_copies
+                                .iter()
+                                .find(|c| c.id == self.virtual_copy_id)
+                                .map(|_| MaskContext {
+                                    copies: &document.virtual_copies,
+                                    active_copy_id: &self.virtual_copy_id,
+                                    planes,
+                                    policy: MaskPolicy::Warn,
+                                }),
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let full_denoise_input = self.denoise_render_input(denoise_artifact.as_ref());
+                    let full_output = render_frame_from_base_with_generative_and_denoise(
+                        full_base,
+                        &RenderContext {
+                            recipe: &self.recipe,
+                            camera_white_balance: self.camera_white_balance,
+                            source_actions: &[],
+                            masks: full_masks,
+                            lensfun: full_lensfun,
+                            depth: None,
+                        },
+                        &mut analysis_work,
+                        generative.input(),
+                        &full_denoise_input,
+                    )?;
+                    analyze_tone_with_histogram(&full_output.frame)
+                }
+                _ => analyze_tone_with_histogram(&preview),
+            };
+            self.last_analysis_ms = ana_t0.elapsed().as_secs_f64() * 1000.0;
+            self.draft_throttle.retain_analysis(analysis, &histogram);
+            self.tone_analysis = Some(analysis);
+            self.preview_histogram = Some(histogram);
+            self.draft_throttle.note_analysis();
+        }
         // G04-FOLLOWUP-1 Visualize-Spots: the recipe threshold tints
         // candidate pixels red as a pure display post-process on the preview
         // frame. Render, export and CLI stay untinted (their paths never pass
@@ -434,49 +453,10 @@ impl LuminaApp {
         self.preview_render_src = Some((source.width, source.height));
         self.render_mask_layers = output.mask_layers;
         // GUI-WGPU-PRESENT-1 / GPU-STAGE-1: make the *pipeline-evaluated* mask
-        // coverage visible in the GPU present composite by pushing the combined
-        // effective planes into the VRAM mask texture. Failures are loud but
-        // never break the CPU preview path.
+        // coverage visible in the GPU present composite (method extracted to
+        // `present.rs`; failures stay loud there).
         #[cfg(feature = "gpu")]
-        {
-            self.vram_mask_is_evaluated = false;
-            if !self.render_mask_layers.is_empty() {
-                let planes: Vec<lumina_core::MaskPlane> = self
-                    .render_mask_layers
-                    .iter()
-                    .map(|layer| layer.plane.clone())
-                    .collect();
-                match lumina_gpu::combine_mask_planes(&planes) {
-                    Ok(Some(combined))
-                        if combined.width
-                            == self.preview.as_ref().map(|p| p.width).unwrap_or(0)
-                            && combined.height
-                                == self.preview.as_ref().map(|p| p.height).unwrap_or(0) =>
-                    {
-                        if let Some(gpu) = self.gpu.as_ref() {
-                            if gpu.is_available()
-                                && gpu.ensure_vram(combined.width, combined.height).is_ok()
-                            {
-                                match gpu.upload_mask_plane(
-                                    combined.width,
-                                    combined.height,
-                                    &combined.values,
-                                ) {
-                                    Ok(()) => self.vram_mask_is_evaluated = true,
-                                    Err(err) => {
-                                        warn!("gpu evaluated-mask upload failed: {err}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        warn!("gpu evaluated-mask combination failed: {err}");
-                    }
-                }
-            }
-        }
+        self.upload_evaluated_mask_to_vram();
         self.error = None;
         self.last_stage_work = Some(work);
         self.status = if !mask_warnings.is_empty() {
