@@ -30,6 +30,18 @@ impl LuminaApp {
             self.status = Str::NoImageLoaded.t().into();
             return Ok(());
         };
+        // GUI-JANKLOG-19: a full render outside an action scope (the 150 ms
+        // debounce commit) is an outermost `kind=render` scope; inside an
+        // action it nests and fills that action's record.
+        #[cfg(all(feature = "janklog", debug_assertions))]
+        let _jank = {
+            let (route, badge) = self.jank_route_and_badge();
+            let key = self
+                .pending_slider_commit
+                .as_ref()
+                .map(|(key, _)| key.as_str());
+            jank_log::JankScope::enter(jank_log::JankKind::Render, None, route, badge, key)
+        };
         // Derive the ROI from the zoom factor and pan offset when no explicit
         // crop was given (PERF-GUI-5, REVIEW-GUI-PANROI-1); the full render
         // always honours masks.
@@ -71,6 +83,10 @@ impl LuminaApp {
         };
         let result = self.render_from(&original, true, roi, generative);
         self.original = Some(original);
+        // GUI-JANKLOG-19: the full render's analysis pass flows into the same
+        // jank record as the enclosing action/render scope.
+        #[cfg(all(feature = "janklog", debug_assertions))]
+        jank_log::note_analyse_ms(self.last_analysis_ms);
         result
     }
 }

@@ -465,6 +465,14 @@ macro_rules! instrument_gui_action {
     ($app:expr, $action:expr) => {
         #[cfg(debug_assertions)]
         let _gui_action_timer = $app.begin_gui_action($action);
+        // GUI-JANKLOG-19: attach the jank record to the same outermost action
+        // scope (no second timer). The record is emitted on drop only when the
+        // scope is slow; nested render/dirty measurements fill this record.
+        #[cfg(all(feature = "janklog", debug_assertions))]
+        let _jank_scope = {
+            let (route, badge) = $app.jank_route_and_badge();
+            $crate::jank_log::JankScope::enter_action($action, route, badge)
+        };
     };
 }
 

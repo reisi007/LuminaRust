@@ -112,6 +112,18 @@ impl LuminaApp {
     /// the renders, flags and error paths are identical to the inlined
     /// sequence this method replaces.
     pub(crate) fn render_draft_tick(&mut self, viewport: [u32; 2]) {
+        // GUI-JANKLOG-19: a render tick outside an action scope is its own
+        // outermost jank scope (`kind=render`); inside an action it nests and
+        // fills that action's record instead of emitting a second line.
+        #[cfg(all(feature = "janklog", debug_assertions))]
+        let _jank = {
+            let (route, badge) = self.jank_route_and_badge();
+            let key = self
+                .pending_slider_commit
+                .as_ref()
+                .map(|(key, _)| key.as_str());
+            jank_log::JankScope::enter(jank_log::JankKind::Render, None, route, badge, key)
+        };
         let gpu_t0 = std::time::Instant::now();
         // GEN-ONNX-1 Welle 2b (F6): evaluated before the GPU borrow so the
         // proactive skip below can write the present-refusal fields.
@@ -204,5 +216,9 @@ impl LuminaApp {
         trace!(
             "GUI drag tick: cpu_draft_ms={cpu_draft_ms:.2} gpu_ms={gpu_ms:.2} analyse_ms={analyse_ms:.2}"
         );
+        // GUI-JANKLOG-19: link the partial durations with the action/scope in
+        // the same record (no separate trace-only attribution).
+        #[cfg(all(feature = "janklog", debug_assertions))]
+        jank_log::note_render_timings(gpu_ms, cpu_draft_ms, analyse_ms);
     }
 }

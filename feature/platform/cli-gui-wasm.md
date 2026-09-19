@@ -879,15 +879,24 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   sind geometrisch identisch (kein Springen, GUI-DRAFT-JUMP-1); Auto-Tone
   schreibt 6 Regler + Spiegel mit selektivem Stale-Clear (AUTO-TONE-2).
 
-### Ruckel-Attribution (`GUI-JANKLOG-19`, ENTWURF — wartet auf User-Freigabe)
+### Ruckel-Attribution (`GUI-JANKLOG-19`, IMPLEMENTIERT 2026-09-19)
 
-> **Status: ENTWURF, kein Bau.** Diese Untersektion ist der SOLL-Entscheid zu
-> `GUI-JANKLOG-19` (Release 1.0). Sie beschreibt Ziel, Format und Andockstellen,
-> enthält aber bewusst **keine** Implementierung. Die Umsetzung erfolgt erst
-> nach ausdrücklicher User-Freigabe — dann als eigener Slice **`jank_log.rs`**
-> (GUI-REFACTOR-W1-20, S1.5, neue Datei strikt ≤ 500 Zeilen, kein neuer
-> Baseline-Eintrag). Bis dahin bleibt der unten dokumentierte Ist-Stand
-> unverändert.
+> **Status: IMPLEMENTIERT (verifiziert BESTANDEN 2026-09-19).** Diese
+> Untersektion war der SOLL-Entscheid zu `GUI-JANKLOG-19` (Release 1.0) und
+> ist seit 2026-09-19 umgesetzt: Slice **`jank_log.rs`**
+> (`crates/lumina-gui/src/jank_log.rs`, ≤ 500 Zeilen, kein Baseline-Eintrag),
+> Build-Opt-in per Cargo-Feature **`janklog`** (nicht default), nur
+> Debug-Builds (`debug_assertions`), Release still per Konstruktion.
+> Schwelle Default **8,3 ms** (120-Hz-Budget), Override `LUMINA_JANK_MS`
+> (`0` = aus mit einmaligem `info!`, unparsbar = `warn!` + Default).
+> Andockstellen: `dirty.rs` (Dirty-Key), `render_tick.rs`/`render_entry.rs`
+> (Teil-Dauern), `present.rs` (Route/Badge), `gui_action.rs` (Makro-Scope),
+> `lib.rs` (nur `mod`-Zeile). Tests: `jank_log::tests::*` — Slow-Render und
+> Slow-Action erzeugen genau eine attribuierte Zeile, Normalbetrieb bleibt
+> still (Stille-Test), U6-Lautheit per Regressionstest gepinnt (Re-Verifizierung BESTANDEN
+> 2026-09-19). Einzige bekannte Grenze: Route/Badge wird beim Scope-Eintritt gelesen (Stand des zuletzt gemalten Frames — Verifizierungsbefund 3,
+> niedrig, dokumentiert). U6/U7-Reste (Verhältnis zu `LUMINA_PERF_LOG`)
+> bleiben Default bis Freigabe.
 
 **Ziel.** Standardbetrieb bleibt im Log still (kein Per-Frame-Spam); nur
 nachweislich langsame Aktionen/Render erzeugen **genau eine** attribuierte,

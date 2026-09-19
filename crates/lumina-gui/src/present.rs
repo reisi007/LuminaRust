@@ -220,3 +220,22 @@ impl LuminaApp {
         }
     }
 }
+
+/// GUI-JANKLOG-19 (`janklog`, debug only): the present route and the visible
+/// badge reason of the last painted frame, sourced from the values this module
+/// produces (`update_texture` sets `gpu_route_fallback`). Borrowed so the jank
+/// record clones only when a slow scope is actually emitted. Diagnostic only —
+/// never consulted for routing.
+#[cfg(all(feature = "janklog", debug_assertions))]
+impl LuminaApp {
+    pub(crate) fn jank_route_and_badge(&self) -> (&'static str, Option<&str>) {
+        #[cfg(feature = "gpu")]
+        {
+            (self.gpu_route_label(), self.gpu_route_fallback.as_deref())
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            (GPU_ROUTE_NA, None)
+        }
+    }
+}

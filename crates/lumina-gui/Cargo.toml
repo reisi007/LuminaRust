@@ -58,6 +58,12 @@ lensfun = ["lumina-core/lensfun", "lumina-lensfun/native"]
 # desktops; `--no-default-features` drops the wgpu stack and its native
 # dependencies.
 gpu = ["lumina-gpu", "dep:bytemuck"]
+# GUI-JANKLOG-19: Ruckel-Attribution (slow GUI actions/render ticks emit one
+# greppable `LUMINA_JANK` line). Build-Opt-in und **nicht** im Default (U5):
+# ohne das Feature wird das Modul nicht kompiliert (zero overhead); Release-
+# Builds bleiben zusätzlich per `debug_assertions`-Gate still (U2). Die
+# Schwelle regelt `LUMINA_JANK_MS` (Default 8,3 ms, `0` = aus; U1/U6).
+janklog = []
 
 [dependencies.bytemuck]
 version = "1"

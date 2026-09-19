@@ -22,6 +22,11 @@ impl LuminaApp {
     /// through here (or `set_adjustment`/`set_presence`); pure view state
     /// (zoom/pan) uses bare `mark_dirty` and is therefore never saved.
     pub(crate) fn mark_recipe_dirty(&mut self, key: &str, value: f64) {
+        // GUI-JANKLOG-19: hand the Dirty-Key to the active jank record
+        // (behaviour-neutral observation; the invalidation invariant and the
+        // `set_adjustment` duplicate below are untouched).
+        #[cfg(all(feature = "janklog", debug_assertions))]
+        jank_log::note_recipe_key(key);
         self.pending_slider_commit = Some((key.to_string(), value));
         self.mark_dirty();
     }

@@ -53,6 +53,8 @@ mod render_tick;
 mod dirty;
 // GUI-REFACTOR-W1-20 S1.4a: preview texture upload, the readback-free VRAM
 // present path and the present target/source identity.
+#[cfg(all(feature = "janklog", debug_assertions))]
+mod jank_log;
 mod present;
 // GUI-REFACTOR-W1-20 S1.4b (GPU only): present routing, VRAM/stage gate,
 // Lensfun map bind, refusal classification and the parity diagnostic hooks.
@@ -103,16 +105,14 @@ mod ops_clipboard;
 mod ops_folder;
 mod ops_presets;
 mod ops_snapshots;
-// PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk
-// LRU).
+// PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk LRU).
 mod preview_ctrl;
 mod slider;
 mod theme;
 mod viewport;
 
-// LRPAR-MATRIX-RECIPE (Slice 2): the headless GUI matrix runner. Test-only: it
-// drives `LuminaApp` on an egui context against the committed goldens and needs
-// no window/GPU renderer.
+// LRPAR-MATRIX-RECIPE (Slice 2): the headless GUI matrix runner. Test-only: it drives
+// `LuminaApp` on an egui context against the committed goldens and needs no window/GPU renderer.
 #[cfg(test)]
 mod matrix;
 
