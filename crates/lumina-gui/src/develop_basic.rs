@@ -79,19 +79,33 @@ impl LuminaApp {
     /// the last saved state / reset to documented defaults). Shared by all
     /// eight Develop sections so the behaviour is identical per panel;
     /// failures stay visible via `show_error`, never silent.
+    ///
+    /// UX-LOOK-LAYOUT-18: the pair is anchored at the right edge of the
+    /// section body (Lightroom Classic), so the adjustment controls below keep
+    /// the left edge. `right_to_left` places Reset at the far right and
+    /// Previous to its left — the visual order stays `Previous | Reset`.
     pub(crate) fn draw_section_prev_reset(&mut self, ui: &mut egui::Ui, section: usize) {
-        ui.horizontal(|ui| {
-            if ui.button(Str::Previous.t()).clicked() {
-                if let Err(error) = self.restore_section_previous(section) {
-                    self.show_error(error);
+        // `allocate_ui_with_layout` (not `with_layout`) bounds the row's
+        // `max_rect` to one control row: a bare `with_layout` child inherits the
+        // full remaining panel height and pushes the entire section body below
+        // the fold.
+        let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(
+            row_size,
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if ui.button(Str::Reset.t()).clicked() {
+                    if let Err(error) = self.reset_section(section) {
+                        self.show_error(error);
+                    }
                 }
-            }
-            if ui.button(Str::Reset.t()).clicked() {
-                if let Err(error) = self.reset_section(section) {
-                    self.show_error(error);
+                if ui.button(Str::Previous.t()).clicked() {
+                    if let Err(error) = self.restore_section_previous(section) {
+                        self.show_error(error);
+                    }
                 }
-            }
-        });
+            },
+        );
     }
 
     pub(crate) fn draw_basic(&mut self, ui: &mut egui::Ui) {

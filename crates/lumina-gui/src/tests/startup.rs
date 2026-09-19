@@ -33,13 +33,17 @@ fn develop_section_order_is_lightroom_conform() {
 /// Kittest table sync (F-103-N9, GPU-gated): `tests/kittest_snapshots.rs`
 /// clicks Develop sections by label (`collapse_except`), so a label rename
 /// or reorder here orphans those clicks. This headless test pins the same
-/// table without a GPU harness. Panel rects (position/size) genuinely need
-/// a laid-out harness and stay covered by the kittest interaction tests
+/// table without a GPU harness. UX-LOOK-LAYOUT-18: the left-rail panels
+/// (Navigator/Presets/Snapshot/History) precede the eight right-panel F-100
+/// sections. Panel rects (position/size) genuinely need a laid-out harness
+/// and stay covered by the kittest interaction tests
 /// (`filmstrip_is_single_row_horizontal`, …).
 #[test]
 fn develop_section_labels_match_kittest_table() {
     let kittest_table = [
+        "Navigator",
         "Presets",
+        "Snapshot",
         "History",
         "Basic",
         "Tone Curve",
@@ -50,7 +54,12 @@ fn develop_section_labels_match_kittest_table() {
         "Geometry",
         "Masking",
     ];
-    let mut labels = vec![Str::PresetsSection.t(), Str::History.t()];
+    let mut labels = vec![
+        Str::Navigator.t(),
+        Str::PresetsSection.t(),
+        Str::SnapshotButton.t(),
+        Str::History.t(),
+    ];
     labels.extend(LuminaApp::DEVELOP_SECTIONS.iter().map(|(s, _)| s.t()));
     assert_eq!(labels, kittest_table);
     let detail = labels.iter().position(|l| *l == "Detail").unwrap();

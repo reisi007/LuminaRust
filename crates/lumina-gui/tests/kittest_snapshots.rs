@@ -40,14 +40,12 @@ use std::path::{Path, PathBuf};
 ///
 /// Kept in sync with `LuminaApp::DEVELOP_SECTIONS` (single source of truth in
 /// `crates/lumina-gui/src/develop_frame.rs`, labels via `Str::*` in
-/// `crates/lumina-gui/src/i18n.rs`): `Presets` + `History` (top, collapsible)
-/// followed by the eight F-100 sections `Basic` … `Masking`.
+/// `crates/lumina-gui/src/i18n.rs`): the eight F-100 sections `Basic` … `Masking`
+/// after UX-LOOK-LAYOUT-18 moved Presets/History to the left rail (`develop_left_rail.rs`).
 /// F-103-N10 (user decision 2026-08-25): Detail BEFORE Effects (Lightroom
 /// Classic panel order). The committed goldens were rebaselined to the
 /// Detail-before-Effects layout (GUI-KIT-01-REFRESH).
 const DEVELOP_SECTIONS: &[&str] = &[
-    "Presets",
-    "History",
     "Basic",
     "Tone Curve",
     "Color",
@@ -457,7 +455,7 @@ fn open_collapsing_and_scroll_to(
         .query_all_by_label(header_label)
         .next()
         .map(|node| {
-            node.click();
+            node.click_accesskit(); // UX-LOOK-LAYOUT-18: opens the rail panels too.
             true
         })
         .unwrap_or(false);
@@ -465,7 +463,9 @@ fn open_collapsing_and_scroll_to(
         clicked,
         "Develop header {header_label:?} not found in headed harness"
     );
-    harness.run();
+    for _ in 0..5 {
+        harness.run();
+    }
     let found = harness
         .query_all_by_label(target_label)
         .next()

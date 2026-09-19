@@ -110,7 +110,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | GUI-PARITY-GOLDENS-18 | alle G | Parity-Goldens-Rebless |
-| 1.0 | UX-LOOK-LAYOUT-18 | alle G | Develop-Layout links |
 | 1.0 | UX-LOOK-TOOLBAR-18 | alle G | Icon-Werkzeugleiste |
 | 1.0 | UX-LOOK-TONECURVE-18 | alle G | Kurvengrafik |
 | 1.0 | UX-LOOK-CROP-18 | alle G | Crop-Handles+Gitter |
@@ -149,7 +148,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] UX-LOOK-LAYOUT-18 (Release: 1.0)** Develop-Makrolayout an LR angleichen (Look-Analyse 2026-09-17, UXG-02): linke Rail mit Navigator + Presets-Baum + Snapshots + History + Copy/Paste; Footer-Admin-Aktionen entzerren, „Previous | Reset"-Äquivalent rechts verankern. Zuerst SOLL-Entscheid in `lightroom-ux-parity.md` (Seiten-Layout offen!), dann Implementierung. Abnahme: GUI-headless + kittest-Goldens, kein Rezept-/Sidecar-Verhalten geändert.
 - [ ] **[PRIO: hoch] UX-LOOK-TOOLBAR-18 (Release: 1.0)** Icon-Werkzeugleiste (Look-Analyse 2026-09-17, UXG-04): Crop/Heal/Red-Eye/Masken + View-Toggles als Icons am LR-Ort (unter Histogramm/über Bild), Library-View-Tabs ikonisieren. Zielbild beachten (modern, aber vertraut). Abnahme: GUI-headless (jeder Button malt + schaltet), kittest-Goldens.
 - [ ] **[PRIO: hoch] UX-LOOK-TONECURVE-18 (Release: 1.0)** Tone Curve als echte Kurvengrafik (Look-Analyse 2026-09-17, UXG-16): Punkte setzen/ziehen pro Kanal (Kanalwahl besteht), statt P0/P1-Slider-Reihen. Abnahme: GUI-headless (Punkt setzen/ziehen/löschen persistiert), Golden mit Kurvengrafik, kein stiller Fallback.
 - [ ] **[PRIO: hoch] UX-LOOK-CROP-18 (Release: 1.0)** Crop-Overlay mit Eck-Handles, Drittel-Gitter, Abdunklung (Look-Analyse 2026-09-17, UXG-01): interaktives Aufziehen/Verschieben, Commit-Semantik per SOLL-Entscheid (steht aus — zuerst Doku). Abnahme: GUI-headless + Golden, Rezept-Semantik unverändert außer dokumentiertem Commit.

@@ -4,11 +4,12 @@
 //! [`LuminaApp::draw_develop_panel`] is the bottom-up panel shell with the
 //! pinned global-action footer; [`LuminaApp::DEVELOP_SECTIONS`] is the
 //! normative F-100 section order and [`LuminaApp::develop_scroll_content`] the
-//! top-down scroll content (histogram, presets, history, rating, the eight
-//! sections, generative/heal and the load controls). No behaviour changes:
-//! the layout direction, section order and footer stay byte-identical.
-//! `draw_develop_panel` is `pub(crate)` (the app root and headless tests call
-//! it); the private scroll helper stays in this module.
+//! top-down scroll content (histogram, rating, the eight sections,
+//! generative/heal and the load controls). UX-LOOK-LAYOUT-18 moved the
+//! Presets/Snapshots/History panels to the left rail
+//! (`develop_left_rail.rs`); the right-panel section order and the footer
+//! actions are unchanged. `draw_develop_panel` is `pub(crate)` (the app root
+//! and headless tests call it); the private scroll helper stays in this module.
 
 use super::*;
 
@@ -39,49 +40,60 @@ impl LuminaApp {
     ];
 
     /// The full Develop control stack: the eight F-100 sections in fixed order,
-    /// then the preset manager and the global render/save actions.  Every
+    /// then the footer admin actions. Presets/History/Snapshots live in the
+    /// left rail (UX-LOOK-LAYOUT-18), not in this panel. Every
     /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
     ///
     /// GUI-VISION-1: the outer layout is bottom-up so the global actions form
     /// a pinned footer at the panel bottom edge — never half-cut below a
     /// scroll fold (kittest `develop_basic`/`histogram_graphic` goldens).
-    /// Code order is bottom-first (padding, Save, Reset/Render, Match,
-    /// separator, then the scrolling sections); the scroll content itself is
-    /// explicitly top-down again because `ScrollArea` inherits the parent
-    /// layout (`Ui::new_child` falls back to `*self.layout()`).
+    /// Footer rows, edge-first: commit row (Save Recipe / Sidecar, Render /
+    /// Apply), then maintenance row (Reset, Match Total Exposure,
+    /// Regenerate Stale / Missing), then the Reset-Sliders checkbox on top.
+    /// Code order is bottom-first (the first row added lands lowest); the
+    /// scroll content itself is explicitly top-down again because `ScrollArea`
+    /// inherits the parent layout (`Ui::new_child` falls back to
+    /// `*self.layout()`).
     pub(crate) fn draw_develop_panel(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(2.0);
-            if ui.button(Str::SaveRecipe.t()).clicked() {
-                self.save_recipe_action();
-            }
-            ui.horizontal(|ui| {
-                if ui.button(Str::Reset.t()).clicked() {
-                    self.reset();
+            // UX-LOOK-LAYOUT-18: the admin actions are spread into readable
+            // rows instead of a cramped one-per-line stack. The commit row
+            // (Save / Render) sits closest to the panel edge; the global
+            // maintenance row (Reset / Match / Regenerate) is grouped above it.
+            // Bottom-up insertion: the first row added lands lowest.
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(Str::SaveRecipe.t()).clicked() {
+                    self.save_recipe_action();
                 }
                 if ui.button(Str::RenderApply.t()).clicked() {
                     self.render_action();
                 }
             });
-            if ui.button(Str::MatchExposure.t()).clicked() {
-                if let Err(error) = self.match_total_exposure(0.5) {
-                    self.show_error(error);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(Str::Reset.t()).clicked() {
+                    self.reset();
                 }
-            }
-            // GUI-GEN-GRANULAR-10 (F-100): the collective default — regenerate
-            // every stale/missing AI/analysis value (masks, auto-tone,
-            // matching) and skip the fresh ones. Explicit only, never implicit.
-            if ui.button(Str::RegenerateStale.t()).clicked() {
-                match self.regenerate_stale() {
-                    Ok(done) if done.is_empty() => {
-                        self.status = Str::NothingStale.t().to_string();
+                if ui.button(Str::MatchExposure.t()).clicked() {
+                    if let Err(error) = self.match_total_exposure(0.5) {
+                        self.show_error(error);
                     }
-                    Ok(done) => {
-                        self.status = Str::RegeneratedStale.format_arg(&done.join(", "));
-                    }
-                    Err(error) => self.show_error(error),
                 }
-            }
+                // GUI-GEN-GRANULAR-10 (F-100): the collective default — regenerate
+                // every stale/missing AI/analysis value (masks, auto-tone,
+                // matching) and skip the fresh ones. Explicit only, never implicit.
+                if ui.button(Str::RegenerateStale.t()).clicked() {
+                    match self.regenerate_stale() {
+                        Ok(done) if done.is_empty() => {
+                            self.status = Str::NothingStale.t().to_string();
+                        }
+                        Ok(done) => {
+                            self.status = Str::RegeneratedStale.format_arg(&done.join(", "));
+                        }
+                        Err(error) => self.show_error(error),
+                    }
+                }
+            });
             // LRPAR-G01-BASIC: "Reset Sliders Automatically" — folder-inherited
             // edit behaviour (see `set_reset_sliders_automatically`).
             let mut reset_auto = self.reset_sliders_automatically;
@@ -112,9 +124,12 @@ impl LuminaApp {
         // `draw_crop_thumb` duplicated the main preview a third time (left
         // rail overview + bottom filmstrip + right panel) and showed the
         // possibly ROI-cropped preview texture as if it were the full frame
-        // when zoomed. The Develop panel starts with Presets/History.
-        self.draw_presets_section(ui);
-        self.draw_history_section(ui);
+        // when zoomed.
+        //
+        // UX-LOOK-LAYOUT-18: Presets/Snapshots/History moved to the left rail
+        // (`draw_develop_left_rail`); the right panel now follows Lightroom
+        // Classic with the histogram, the rating row and the eight adjustment
+        // sections.
         self.draw_rating_section(ui);
         ui.separator();
         // The eight adjustment sections are grayed and non-interactive until an

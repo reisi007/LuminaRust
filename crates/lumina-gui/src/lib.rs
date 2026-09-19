@@ -96,6 +96,8 @@ mod library_views;
 // frame stays at the crate root: > 500 lines, see its doc comment).
 mod app_frame;
 mod develop_frame;
+// UX-LOOK-LAYOUT-18: the Develop left rail (own module, file-size ratchet).
+mod develop_left_rail;
 mod develop_ops;
 mod filmstrip_frame;
 mod navigator;
@@ -13203,19 +13205,15 @@ impl eframe::App for LuminaApp {
                 .show(ui, |ui| self.draw_folder_tree(ui));
         }
 
-        // Left: Lightroom-like thumbnail navigator rail (Develop / Export). The
-        // Library module keeps its text file-browser on the left instead, so the
-        // two never collide on the same side. It reuses the filmstrip
-        // ThumbnailManager (no duplicate generation) and highlights the active
-        // image.
+        // Left: Develop left rail (Navigator + Presets + Snapshots + History)
+        // or the thumbnail navigator rail (Export). The Library module keeps
+        // its text file-browser on the left instead. Both reuse the filmstrip
+        // ThumbnailManager (no duplicate generation); see `draw_left_rail_panel`.
         if self.navigator_open
             && !matches!(self.active_module, Module::Library)
             && !self.side_chrome_hidden()
         {
-            egui::Panel::left("navigator")
-                .resizable(true)
-                .default_size(150.0)
-                .show(ui, |ui| self.draw_navigator(&ctx, ui));
+            self.draw_left_rail_panel(&ctx, ui);
         }
 
         // Right: Develop controls (eight sections), the Library Metadata
@@ -13358,6 +13356,7 @@ mod tests {
     mod gpu_state;
     mod histogram;
     mod iptc;
+    mod layout;
     mod lens_blur;
     mod library_scan;
     mod library_sync;
