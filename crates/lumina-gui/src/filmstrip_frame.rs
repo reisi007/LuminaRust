@@ -11,6 +11,7 @@
 //! because the app root, navigator and headless tests call them.
 
 use super::*;
+use crate::thumb_worker::ThumbnailJob;
 use log::{debug, trace};
 
 impl LuminaApp {
@@ -242,14 +243,22 @@ impl LuminaApp {
 
     /// Ensure a thumbnail exists for `entry`.
     ///
-    /// Returns `true` when this call did potentially expensive work: enqueued a
-    /// background worker job or synchronously loaded/inserted a cached preview
-    /// from the disk cache. Callers feed this into the `LUMINA_PERF_LOG`
-    /// frame counters (GUI-SCROLL-200-1). `false` means the call was cheap
-    /// (texture already present, job in flight, retry budget exhausted).
+    /// Returns `true` when a background worker job was enqueued. Callers feed
+    /// this into the `LUMINA_PERF_LOG` frame counters (GUI-SCROLL-200-1).
+    /// `false` means the call was cheap (texture already present, job in
+    /// flight, retry budget exhausted).
+    ///
+    /// R2-MODSWITCH-1 F7: this is a **metadata-only** scheduling step now. The
+    /// UI thread probes the folder's memoized preview index
+    /// (`PreviewIndexCache::probe` — memory-only once the folder index is
+    /// warm; the first probe per folder builds it with one directory scan)
+    /// and enqueues the job; all disk reads and the decode run in the
+    /// worker pool (`thumb_worker`). The former synchronous cache-hit path
+    /// (`DiskFolderCache::for_image` + `load_preview` + `ImageFrame::decode`)
+    /// was the per-cell module-switch block and is gone.
     pub(crate) fn ensure_thumbnail(
         &mut self,
-        ctx: &egui::Context,
+        _ctx: &egui::Context,
         entry: &FileBrowserEntry,
     ) -> bool {
         // Key is the canonicalized absolute path, never the bare filename
@@ -261,43 +270,20 @@ impl LuminaApp {
         if !self.thumbnails.needs_job(&key) {
             return false;
         }
-        if let Ok(cache) = DiskFolderCache::for_image(entry.path.as_path()) {
-            // Use the headless-testable cache probe; on a hit, load and display
-            // the stored preview.  A miss enqueues a background thumbnail job
-            // (no silent fallback to a wrong/sized-up image).
-            if filmstrip::filmstrip_preview_cached(&cache, &entry.name, "vc-original") {
-                if let Ok(Some(bytes)) =
-                    cache.load_preview(&entry.name, "vc-original", PreviewKind::Standard)
-                {
-                    match ImageFrame::decode(&bytes) {
-                        Ok(frame) => {
-                            let tex = self.make_thumbnail_texture(ctx, &frame, &key);
-                            // insert marks the key probed *after* success only
-                            // (REVIEW-GUI-THUMB-2).
-                            self.thumbnails.insert(&key, tex);
-                            return true;
-                        }
-                        Err(error) => {
-                            // A cached-but-corrupt preview is a visible error,
-                            // not a silent miss.
-                            self.thumbnails
-                                .mark_failed(&key, format!("cached preview unreadable: {error}"));
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        // Cache miss: enqueue a background thumbnail job on the dedicated thread
-        // pool rather than the bounded `IdleQueue`. The channel is unbounded, so
-        // it never drops jobs under load. The key is marked in-flight (NOT
-        // probed) so a worker failure can retry in a bounded way and surface a
-        // visible error instead of a permanent gray cell (REVIEW-GUI-THUMB-2).
+        let folder = entry.path.parent().unwrap_or_else(|| Path::new("."));
+        let probe = self.thumbnail_cache.probe(folder, &entry.name);
+        // Enqueue a background thumbnail job on the dedicated thread pool rather
+        // than the bounded `IdleQueue`. The channel is unbounded, so it never
+        // drops jobs under load. The key is marked in-flight (NOT probed) so a
+        // worker failure can retry in a bounded way and surface a visible error
+        // instead of a permanent gray cell (REVIEW-GUI-THUMB-2).
         self.thumbnails.begin_job(&key);
         match self.thumbnail_tx.send(ThumbnailJob {
             source: entry.path.clone(),
             name: entry.name.clone(),
             key,
+            cache: probe.cache,
+            cached: probe.cached,
         }) {
             Ok(()) => {
                 debug!("enqueued thumbnail job for {}", entry.name);

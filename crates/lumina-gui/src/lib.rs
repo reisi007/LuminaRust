@@ -111,6 +111,12 @@ mod develop_frame;
 mod develop_left_rail;
 mod develop_ops;
 mod filmstrip_frame;
+// R2-MODSWITCH-1 F7: metadata-only folder preview index, the cache-aware
+// thumbnail worker pool and the module-switch-aware render scheduler (split
+// out of `lib.rs`, file-size ratchet).
+mod render_schedule;
+mod thumb_cache;
+mod thumb_worker;
 // UX-LOOK-TOOLBAR-18: the icon tool strip + iconified Library view tabs (own
 // module, file-size ratchet).
 mod icon_toolbar;
@@ -149,7 +155,6 @@ pub use render_tick::DragTickTimings;
 use draft_throttle::DraftThrottle;
 use eframe::egui;
 use lumina_core::cache::disk::DiskFolderCache;
-use lumina_core::cache::PreviewKind;
 use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{
@@ -164,8 +169,6 @@ use lumina_core::{
     MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
     RED_EYE_DETECT_ID_PREFIX,
 };
-// PERF-FILMSTRIP (thumbnail worker).
-use lumina_core::render_frame;
 use lumina_core::{
     export_image_with_generative, masks::rasterize_prompt, range_masks, ExportOptions,
 };
@@ -223,8 +226,12 @@ use log::debug;
 use log::{error, info, trace, warn};
 use theme::apply_lightroom_dark;
 
-use filmstrip::{downscale_rgba, ThumbnailManager, THUMBNAIL_MAX_DIM};
+// PERF-FILMSTRIP (thumbnail worker + navigator/preview paths).
+use filmstrip::{downscale_rgba, ThumbnailManager};
 use i18n::Str;
+use lumina_core::render_frame;
+// R2-MODSWITCH-1 F7: the cache-aware thumbnail job/result types (worker pool).
+use thumb_worker::{ThumbnailJob, ThumbnailResult};
 
 /// GEN-ONNX-1 Welle 2b: one resolved generative canvas plus the exact identity
 /// digest of the run it belongs to. The digest is the
@@ -1560,94 +1567,6 @@ impl IdleQueue {
     }
 }
 
-/// A request to generate a filmstrip thumbnail for one source on the dedicated
-/// background thread pool.
-///
-/// The channel carrying these is **unbounded** (`std::sync::mpsc::channel`), so
-/// the pool never drops a job under load — the original bottleneck was the
-/// bounded `IdleQueue` (capacity 32) that silently dropped thumbnails and
-/// logged "thumbnail queue full; will retry ... on a later frame" while the UI
-/// froze generating them synchronously on the main thread (M5 Pro: unusable
-/// switching). Thumbnails are now decoded/downscaled/rendered on worker threads
-/// and the resulting pixels are uploaded to a texture on the main thread.
-struct ThumbnailJob {
-    source: PathBuf,
-    name: String,
-    /// Stable thumbnail key (canonicalized absolute path) the result is filed
-    /// under — never the bare filename (REVIEW-GUI-THUMB-1).
-    key: String,
-}
-
-/// The outcome of a [`ThumbnailJob`]. A worker failure is always delivered as
-/// [`ThumbnailOutcome::Failed`] so the main thread can show a visible error and
-/// schedule a bounded retry instead of leaving a gray placeholder for the rest
-/// of the session (REVIEW-GUI-THUMB-2, no silent fallback).
-enum ThumbnailOutcome {
-    Ready(ImageFrame),
-    Failed(String),
-}
-
-/// The rendered (downscaled + default-recipe-rendered) preview pixels produced
-/// by a [`ThumbnailJob`]. The worker computes the frame, caches the PNG to disk
-/// and sends the pixels; the texture itself is created on the main thread (it
-/// needs the `egui::Context`) from these pixels.
-struct ThumbnailResult {
-    key: String,
-    name: String,
-    outcome: ThumbnailOutcome,
-}
-
-/// Decode + downscale + default-recipe-render a source on a background worker
-/// thread (PERF-FILMSTRIP). Returns the rendered frame so the main thread can
-/// build the `egui` texture (it needs the `Context`). Errors are returned
-/// visibly to the worker caller, never swallowed into `None`.
-fn decode_thumbnail_frame(source: &Path, name: &str) -> Result<ImageFrame, String> {
-    let bytes = std::fs::read(source).map_err(|error| format!("{}: {error}", source.display()))?;
-    let frame = if is_raw_name(name) {
-        lumina_raw::decode_bytes(&bytes, name)
-            .map_err(|error| error.to_string())?
-            .frame
-    } else {
-        ImageFrame::decode(&bytes).map_err(|error| error.to_string())?
-    };
-    let (small, w, h) = downscale_rgba(&frame.pixels, frame.width, frame.height, THUMBNAIL_MAX_DIM);
-    let small_frame = ImageFrame::new(w, h, small).map_err(|error| error.to_string())?;
-    let context = RenderContext {
-        recipe: &EditRecipe::default(),
-        camera_white_balance: None,
-        source_actions: &[],
-        masks: None,
-        lensfun: None,
-        depth: None,
-    };
-    // Default-recipe render for display; a render failure falls back to the
-    // plain downscaled frame (documented display-only preview path).
-    let preview = render_frame(&small_frame, &context)
-        .map(|o| o.frame)
-        .unwrap_or(small_frame);
-    let png = preview
-        .encode(ImageFileFormat::Png)
-        .map_err(|error| error.to_string())?;
-    if let Ok(cache) = DiskFolderCache::for_image(source) {
-        let _ = cache.store_preview(name, "vc-original", PreviewKind::Standard, &png);
-    }
-    Ok(preview)
-}
-
-/// Worker entry point: never drops a job silently; failures travel back to the
-/// main thread as [`ThumbnailOutcome::Failed`] (REVIEW-GUI-THUMB-2).
-fn worker_thumbnail(job: ThumbnailJob) -> ThumbnailResult {
-    let outcome = match decode_thumbnail_frame(&job.source, &job.name) {
-        Ok(frame) => ThumbnailOutcome::Ready(frame),
-        Err(message) => ThumbnailOutcome::Failed(message),
-    };
-    ThumbnailResult {
-        key: job.key,
-        name: job.name,
-        outcome,
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum GuiError {
     #[error("{0}")]
@@ -1854,8 +1773,14 @@ pub struct LuminaApp {
     /// main thread.
     thumbnail_tx: mpsc::Sender<ThumbnailJob>,
     thumbnail_rx: mpsc::Receiver<ThumbnailResult>,
+    /// R2-MODSWITCH-1 F7: metadata-only per-folder preview index the thumbnail
+    /// scheduler probes (memoized settings + `read_dir`, no per-cell disk read).
+    thumbnail_cache: thumb_cache::PreviewIndexCache,
     /// Active top-level module (Library / Develop / Export).
     active_module: Module,
+    /// R2-MODSWITCH-1 F7: module the render scheduler last ran for. The first
+    /// run after a change defers a due full render past the switch frame.
+    last_scheduled_module: Option<Module>,
     /// Export module UI state (F-103-N5). The target path is chosen via a
     /// native save dialog; the format/quality drive the shared export path.
     export_path: String,
@@ -2820,42 +2745,9 @@ impl LuminaApp {
     }
 
     pub fn new(_ctx: egui::Context) -> Self {
-        // PERF-FILMSTRIP: spin up the dedicated thumbnail thread pool. The pool
-        // size is the available parallelism clamped to [2, 8] (M5 Pro reports 12
-        // logical cores, so this lands at 8 workers; for small machines it never
-        // drops below 2). Workers share one (mutex-guarded) job receiver and
-        // send results back over an unbounded channel the main thread drains
-        // every frame via `poll_thumbnails`.
-        let (thumbnail_tx, thumbnail_rx) = {
-            let (job_tx, job_rx) = mpsc::channel::<ThumbnailJob>();
-            let (result_tx, result_rx) = mpsc::channel::<ThumbnailResult>();
-            let job_rx = Arc::new(Mutex::new(job_rx));
-            let pool_size = thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .clamp(2, 8);
-            for i in 0..pool_size {
-                let rx = Arc::clone(&job_rx);
-                let tx = result_tx.clone();
-                thread::spawn(move || {
-                    loop {
-                        let job = match rx.lock().expect("thumbnail job receiver poisoned").recv() {
-                            Ok(job) => job,
-                            Err(_) => break, // all senders gone → shut down
-                        };
-                        trace!("thumbnail worker {}: decoding {}", i, job.name);
-                        // Always reports back: failures arrive as
-                        // ThumbnailOutcome::Failed so the main thread can show
-                        // them and retry in a bounded way (REVIEW-GUI-THUMB-2).
-                        let result = worker_thumbnail(job);
-                        trace!("thumbnail worker {}: finished {}", i, result.name);
-                        let _ = tx.send(result);
-                    }
-                });
-            }
-            info!("thumbnail thread pool started with {} workers", pool_size);
-            (job_tx, result_rx)
-        };
+        // PERF-FILMSTRIP: spin up the dedicated thumbnail thread pool
+        // (R2-MODSWITCH-1 F7: moved to `thumb_worker::spawn_thumbnail_pool`).
+        let (thumbnail_tx, thumbnail_rx) = thumb_worker::spawn_thumbnail_pool();
         Self {
             original: None,
             preview: None,
@@ -2936,7 +2828,11 @@ impl LuminaApp {
             idle_queue: IdleQueue::new(32),
             thumbnail_tx,
             thumbnail_rx,
+            // R2-MODSWITCH-1 F7: empty per-folder preview index (built lazily).
+            thumbnail_cache: thumb_cache::PreviewIndexCache::default(),
             active_module: Module::Develop,
+            // R2-MODSWITCH-1 F7: no scheduler run yet.
+            last_scheduled_module: None,
             export_path: String::new(),
             export_format: ImageFileFormat::Png,
             export_quality: 90,
@@ -3372,6 +3268,9 @@ impl LuminaApp {
         // REVIEW-GUI-THUMB-1: drop cached thumbnails of a previous folder so
         // they neither resurface nor accumulate unboundedly across a session.
         self.thumbnails
+            .ensure_directory(&directory.to_string_lossy());
+        // R2-MODSWITCH-1 F7: same for the metadata-only preview index.
+        self.thumbnail_cache
             .ensure_directory(&directory.to_string_lossy());
         // PREVIEW-CACHE-FEATURE: a *directory change* invalidates the neighbor
         // cache state (RAM LRU, in-flight, failures) — stale entries of another
@@ -4288,15 +4187,23 @@ impl LuminaApp {
         } else {
             Str::ResetSlidersOff.t().into()
         };
-        if let Err(error) = self.persist_reset_sliders_flag() {
-            self.show_error(error);
+        match self.persist_reset_sliders_flag() {
+            Ok(folder) => {
+                // R2-MODSWITCH-1 F7: the folder settings changed — drop the
+                // memoized preview index for that folder so the new effective
+                // options take effect (visible invalidation, never a silent
+                // stale gate).
+                self.thumbnail_cache.invalidate_folder(&folder);
+            }
+            Err(error) => self.show_error(error),
         }
     }
 
     /// Write the current flag into the current folder's settings file,
     /// preserving the other inherited flags (read-modify-write over the
-    /// effective settings).
-    fn persist_reset_sliders_flag(&self) -> Result<(), GuiError> {
+    /// effective settings). Returns the folder written to, so the caller can
+    /// invalidate its memoized preview index visibly.
+    fn persist_reset_sliders_flag(&self) -> Result<PathBuf, GuiError> {
         let folder = if self.path.trim().is_empty() {
             PathBuf::from(self.directory.trim())
         } else {
@@ -4314,7 +4221,7 @@ impl LuminaApp {
         cache
             .save_settings(&settings)
             .map_err(|error| GuiError::Io(format!("cannot save folder settings: {error}")))?;
-        Ok(())
+        Ok(folder)
     }
 
     /// Refresh the flag from the given folder's inherited settings (called
@@ -12952,30 +12859,7 @@ impl eframe::App for LuminaApp {
         // *regardless of pointer state* — thumbnails stream in while the user
         // scrolls/clicks the filmstrip, so switching directories no longer blocks
         // on a synchronous decode+render on the UI thread.
-        {
-            // GUI-SCROLL-200-1: reset the per-frame diagnostic counters before
-            // any thumbnail work of this frame runs.
-            self.frame_thumb_enqueued = 0;
-            self.frame_thumbs_ready = 0;
-            while let Ok(result) = self.thumbnail_rx.try_recv() {
-                match result.outcome {
-                    ThumbnailOutcome::Ready(frame) => {
-                        let tex = self.make_thumbnail_texture(&ctx, &frame, &result.key);
-                        self.thumbnails.insert(&result.key, tex);
-                        trace!("thumbnail ready: {}", result.name);
-                    }
-                    ThumbnailOutcome::Failed(message) => {
-                        // Visible failure state + bounded retry instead of a gray
-                        // placeholder for the rest of the session
-                        // (REVIEW-GUI-THUMB-2, no silent fallback).
-                        warn!("thumbnail failed for {}: {message}", result.name);
-                        self.thumbnails.mark_failed(&result.key, message);
-                    }
-                }
-                self.frame_thumbs_ready += 1;
-                ctx.request_repaint();
-            }
-        }
+        self.poll_thumbnails(&ctx);
 
         // PREVIEW-CACHE-FEATURE: per-frame LUMINA_PERF_LOG counters reset before any
         // neighbor work of this frame (a schedule inside `poll_decode` counts).
@@ -13004,63 +12888,10 @@ impl eframe::App for LuminaApp {
         // the on-screen zoom (even on the frame a mode button/shortcut fires).
         self.sync_zoom();
 
-        // PERF-GUI-3/4: draft render while a pointer drag is in progress
-        // (coalesced: latest params overwrite, intermediate frames are dropped,
-        // a repaint is requested); a debounced full-quality render fires on
-        // mouse-up / idle (150 ms) so the final frame is computed once.
-        // GUI-60FPS-1: slider/mask hot path prefers the VRAM-resident GPU tone
-        // stage (`render_to_vram`, no `map_async` CPU readback). The CPU fallback
-        // remains fully functional when no adapter is bound or the `gpu` feature
-        // is off.
-        let pointer_down = ctx.input(|i| i.pointer.any_down());
-        let now = ctx.input(|i| i.time);
-        if pointer_down
-            && self.pending_full_render
-            && self.original.is_some()
-            && self.render_key.is_none()
-        {
-            trace!("GUI render: draft render during pointer drag");
-            let screen = ctx.input(|i| i.viewport_rect());
-            let viewport = [screen.width() as u32, screen.height() as u32];
-            // R2-JANK-1 F1: frame-budget-gated (at most one CPU draft per
-            // 16 ms); a throttled tick leaves `render_key` invalid so the
-            // "Stale" badge keeps the lag visible, and the unconditional
-            // repaint below retries once the budget elapses.
-            self.render_draft_tick_at(viewport, now);
-            self.last_edit_time = now;
-            ctx.request_repaint();
-        } else if !pointer_down && self.pending_full_render {
-            // 150 ms debounce after the last edit before committing the full
-            // render. `last_edit_time == 0` (no drag recorded) routes to an
-            // immediate full render so non-drag edits are never stranded.
-            //
-            // REVIEW-GUI-DEBOUNCE-1: while still inside the wait window
-            // (<150 ms) neither a render happens nor did anything schedule a
-            // repaint — egui would sleep indefinitely and the draft preview
-            // stayed until the next unrelated input. The waiting branch now
-            // requests a timed repaint exactly when the debounce elapses.
-            match full_render_debounce_remaining(self.last_edit_time, now) {
-                Some(remaining_seconds) => {
-                    trace!(
-                        "GUI render: debounce wait, repaint in {:.1} ms",
-                        remaining_seconds * 1000.0
-                    );
-                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-                        remaining_seconds,
-                    ));
-                }
-                None => {
-                    trace!("GUI render: debounced full render after interaction");
-                    let screen = ctx.input(|i| i.viewport_rect());
-                    let viewport = [screen.width() as u32, screen.height() as u32];
-                    // GUI-SLIDER-SAVE-1: the settled render commits pending
-                    // slider edits to the sidecar (CAS, loud conflicts) with
-                    // an INFO log; pure view edits (zoom/pan) only re-render.
-                    self.commit_pending_slider_save(viewport);
-                    self.last_edit_time = 0.0;
-                }
-            }
-        }
+        // PERF-GUI-3/4 + R2-JANK-1 F1/F4 + R2-MODSWITCH-1 F7: the per-frame
+        // render scheduling (draft tick, debounce, module-switch deferral) lives
+        // in `render_schedule` (file-size ratchet).
+        self.schedule_render(&ctx);
 
         // Dropped files (path or bytes) load a new source (native only).
         // egui 0.36: dropped files are trait objects (`DroppedFileHandle`)
@@ -13289,8 +13120,11 @@ mod tests {
     mod library_scan;
     mod library_sync;
     mod library_views;
+    // R2-MODSWITCH-1 F7: module-switch latency (off-thread thumbnail cache,
+    // metadata-only probe, deferred full render).
     mod masking_g03;
     mod masking_g11;
+    mod modswitch;
     mod navigator;
     mod optics;
     mod panels;

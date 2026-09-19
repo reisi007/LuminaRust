@@ -12,6 +12,9 @@
 //! (`feature/platform/cli-gui-wasm.md` § WASM-ENTFERNT).
 
 use eframe::egui;
+// R2-MODSWITCH-1 F7: `filmstrip_preview_cached` is the test-only reference
+// probe now (production goes through `thumb_cache::PreviewIndexCache`).
+#[cfg(test)]
 use lumina_core::cache::PreviewKind;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -159,10 +162,15 @@ pub fn downscale_rgba(pixels: &[u8], width: u32, height: u32, max_dim: u32) -> (
     (out, new_width, new_height)
 }
 
-/// Headless-testable cache probe: is a standard preview already on disk?
+/// Test-only reference cache probe: is a standard preview already on disk?
 ///
 /// A `None` result (I/O or settings gate) is treated as "not cached" so the
 /// caller falls back to generating a thumbnail rather than assuming a stale hit.
+/// Production no longer probes the cache on the UI thread
+/// (R2-MODSWITCH-1 F7: `crate::thumb_cache::PreviewIndexCache` does the
+/// metadata-only probe; the worker owns load/decode); this helper pins the
+/// core cache layout for the tests.
+#[cfg(test)]
 pub fn filmstrip_preview_cached(
     cache: &lumina_core::cache::disk::DiskFolderCache,
     source: &str,

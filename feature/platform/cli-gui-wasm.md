@@ -1899,9 +1899,13 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   1.0-Blocker). Bewusste Trade-offs: Navigator kann unter GPU-Present-Drag
   transient stale sein (Haupt-Preview korrekt); Pending-Label als Konstante
   statt `Str` (Ratchet-Ceiling + Namen-Vorbehalt).
-- **R2-MODSWITCH-1 (mittel, in Analyse/Fix):** Library↔Develop-Wechsel langsam
-  — synchrone Thumbnail-Disk-Probes + Preview-Decodes auf dem UI-Thread
-  (`ensure_thumbnail`-Pfad); Fix-Vorschläge F7/F8 dokumentiert.
+- **R2-MODSWITCH-1 (mittel, BEHOBEN 2026-09-19, verifiziert BESTANDEN):**
+  Library↔Develop-Wechsel langsam — synchrone Thumbnail-Disk-Probes +
+  Preview-Decodes auf dem UI-Thread. Fix F7: metadata-only
+  `PreviewIndexCache` (1 Build/Ordner, memoisiert, sichtbare Invalidierung) +
+  Decode im Worker-Pool (`thumb_worker`) + Full-Render-Deferral um 1 Frame bei
+  Modulwechsel (Stale sichtbar, Debounce/Drossel unverändert). F8
+  (`list_directory`-Async-Scan) bleibt Folge-Task.
 - **R2-CLAMP-1 (erledigt ohne Fix, 2026-09-19):** Untracked `gui.log` (23.08.) zeigte eine
   Render-Pfad-Panic (`f32::clamp`: min > max/NaN beim debounced Full
   Render, FitWidth-Rundung). Recherche-Beleg: Panic stammt aus einem Build 7
