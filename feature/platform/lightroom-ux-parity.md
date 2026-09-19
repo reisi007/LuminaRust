@@ -86,6 +86,40 @@ G-09-Scope-Anhebung (Catalog/Import/Loupe-Render), F-100-Reihenfolge
 (Calibration, Color-Split, Optics vor Effects), History-Schema (Labels),
 Pin-Semantik (Auswahl/Delete/`/`), Panel-Dynamik-Zielbild, Softproof-Anchor.
 
+## SOLL-Entscheide UX-LOOK-18 (User-Entscheide 2026-09-19, verbindlich)
+
+Alle fünf interaktiv abgefragt und mit der empfohlenen Option entschieden.
+**Namen-Vorbehalt (User-Regel 2026-09-19):** Sämtliche sichtbaren Namen —
+Panel-/Gruppen-/Preset-Baum-Labels, History-Eintragstexte, Toolbar-Tooltips —
+werden noch NICHT final entschieden. Bis Pre-MVP gelten technische
+Arbeitslabels (deutsch/englisch wie Bestand, `Str::`-Pflicht aus UXG-17
+bleibt); die finale Benennung erfolgt in einem eigenen Naming-Durchgang
+zusammen mit NAMING-F1. Implementierungen dürfen deshalb keine
+Namen als „final" dokumentieren oder per Golden zementieren, was noch
+offen ist — Goldens pinnen Layout/Geometrie, keine Wortlaute über das
+Bestehende hinaus.
+
+- **UX-LOOK-LAYOUT-18 (UXG-02): LR-Classic links.** Linke Rail: Navigator +
+  Presets-Baum + Snapshots + History + Copy/Paste; Footer-Admin-Aktionen
+  entzerrt, „Previous | Reset"-Äquivalent rechts verankert. Rezept-/Sidecar-
+  Verhalten unverändert (reines Layout).
+- **UX-LOOK-TOOLBAR-18 (UXG-04): Icons + Tooltips.** Crop/Heal/Red-Eye/Masken
+  + View-Toggles als Icons am LR-Ort (unter Histogramm/über Bild), aktive
+  Tools hervorgehoben, Tooltip mit Shortcut; Library-View-Tabs ikonisiert.
+- **UX-LOOK-TONECURVE-18 (UXG-16): Spline pro Kanal.** Echte Kurvengrafik,
+  Punkte setzen/ziehen/löschen pro Kanal (R/G/B/RGB-Master), weiche
+  Spline-Interpolation durch die Punkte (LR-Verhalten); persistiert wie
+  bisherige Kurvenparameter (kein Schema-Bruch, Migration wo nötig).
+- **UX-LOOK-CROP-18 (UXG-01): Enter/Esc.** Eck-Handles + Drittel-Gitter +
+  Abdunklung; Ziehen ändert live die Vorschau, Enter bestätigt (Rezept wird
+  erst bei Commit geschrieben), Esc verwirft. Rezept-Semantik außer dem
+  dokumentierten Commit unverändert.
+- **UX-LOOK-HISTORY-18 (UXG-07/12): Strukturiert im Sidecar.** History-Einträge
+  mit Reglername + alt→neu + Uhrzeit als strukturierte Felder im Sidecar
+  (Migration nach Pre-MVP-Regel: Breaking bis MVP erlaubt, Loader lehnt
+  Inkompatibles laut ab); Presets als Gruppen-Baum ohne absolute Pfade.
+  Anzeigetexte sind Arbeitslabels (Namen-Vorbehalt oben).
+
 ## UX-SLICE-2 — Polish-Follow-ups (2026-09-13)
 
 Fortsetzung von UX-SLICE-1; die Punkte F1–F6 stammen aus dessen
