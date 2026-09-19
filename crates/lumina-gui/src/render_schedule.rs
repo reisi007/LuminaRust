@@ -77,6 +77,8 @@ impl LuminaApp {
                         // pending edit stays armed and visible as "Stale"; the
                         // un-deferred next frame commits it.
                         trace!("GUI render: full render deferred past the module-switch frame");
+                        #[cfg(test)]
+                        MODULE_SWITCH_DEFERRALS.with(|count| count.set(count.get() + 1));
                         ctx.request_repaint();
                     } else {
                         trace!("GUI render: debounced full render after interaction");
@@ -92,4 +94,17 @@ impl LuminaApp {
             }
         }
     }
+}
+
+// R3-LOG-1 test seam: count the F7 deferral firings so a headless test can
+// prove the scheduler path fired (the production line stays `trace!`).
+#[cfg(test)]
+thread_local! {
+    static MODULE_SWITCH_DEFERRALS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// R3-LOG-1: drains the F7 module-switch deferral counter.
+#[cfg(test)]
+pub(crate) fn take_module_switch_deferrals() -> u32 {
+    MODULE_SWITCH_DEFERRALS.with(|count| count.replace(0))
 }

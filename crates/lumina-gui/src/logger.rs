@@ -10,12 +10,59 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{LevelFilter, Log, Metadata, Record};
 
 const RING_CAPACITY: usize = 512;
 
 static RING: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+
+/// R3-LOG-1: wall-clock timestamp prefix for every log line (all levels), so a
+/// manual `RUST_LOG=trace` run can order and delta the `trace!` events (switch
+/// deferral, F1 throttle, `GUI timing:` lines) without a separate clock. Pure
+/// `std` (no `chrono`): UTC `YYYY-MM-DDTHH:MM:SS.mmmZ`, computed from
+/// `SystemTime::now()`.
+fn timestamp_prefix() -> String {
+    format_timestamp(SystemTime::now())
+}
+
+/// Pure formatter for [`timestamp_prefix`] (unit-tested with an injected time).
+/// A pre-epoch clock (`duration_since` error) clamps to the Unix epoch rather
+/// than panicking — a logging prefix must never take the app down.
+fn format_timestamp(now: SystemTime) -> String {
+    let millis = now
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let secs = millis / 1000;
+    let sub_millis = millis % 1000;
+    let (year, month, day) = civil_from_days((secs / 86_400) as i64);
+    let seconds_of_day = secs % 86_400;
+    let (hour, minute, second) = (
+        seconds_of_day / 3600,
+        (seconds_of_day % 3600) / 60,
+        seconds_of_day % 60,
+    );
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{sub_millis:03}Z")
+}
+
+/// Civil date from a count of days since 1970-01-01 (Howard Hinnant's
+/// `civil_from_days` algorithm). UTC, no leap seconds — the standard proleptic
+/// Gregorian calendar.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m as u32, d as u32)
+}
 
 // Crash-Fix Runde 2: best-effort counters for degraded logging. Logging is a
 // diagnostic side channel — it must never take the app down. These make the
@@ -79,7 +126,8 @@ impl Log for StderrLogger {
             return;
         }
         let line = format!(
-            "[{}] {}: {}",
+            "[{}] [{}] {}: {}",
+            timestamp_prefix(),
             record.level(),
             record.target(),
             record.args()
@@ -167,6 +215,63 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R3-LOG-1: the timestamp prefix is a pure UTC formatter — pinned with
+    /// injected times (epoch, a known civil instant, sub-second millis).
+    #[test]
+    fn timestamp_prefix_is_iso8601_utc() {
+        assert_eq!(format_timestamp(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
+        assert_eq!(
+            format_timestamp(UNIX_EPOCH + std::time::Duration::from_millis(1)),
+            "1970-01-01T00:00:00.001Z"
+        );
+        // 1700000000 s = 2023-11-14T22:13:20Z (known Unix instant).
+        assert_eq!(
+            format_timestamp(UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)),
+            "2023-11-14T22:13:20.000Z"
+        );
+        assert_eq!(
+            format_timestamp(UNIX_EPOCH + std::time::Duration::from_millis(1_700_000_000_123)),
+            "2023-11-14T22:13:20.123Z"
+        );
+    }
+
+    /// R3-LOG-1: every logged line (all levels) carries the timestamp prefix,
+    /// so durationless `trace!` events stay orderable in a manual run. The
+    /// regex pins the exact shape.
+    #[test]
+    fn log_line_carries_a_timestamp_prefix() {
+        let logger = StderrLogger {
+            level: LevelFilter::Trace,
+        };
+        let record = Record::builder()
+            .args(format_args!("timestamp-prefix-test-line"))
+            .level(log::Level::Trace)
+            .target("logger::tests")
+            .build();
+        logger.log(&record);
+        let line = recent_lines()
+            .into_iter()
+            .find(|line| line.contains("timestamp-prefix-test-line"))
+            .expect("the line must be buffered");
+        // `[YYYY-MM-DDTHH:MM:SS.mmmZ] [LEVEL] target: message`.
+        let re_ok = {
+            let bytes = line.as_bytes();
+            bytes.len() > 25
+                && bytes[0] == b'['
+                && bytes[25] == b']'
+                && line[1..25].chars().enumerate().all(|(i, c)| match i {
+                    4 | 7 => c == '-',
+                    10 => c == 'T',
+                    13 | 16 => c == ':',
+                    19 => c == '.',
+                    23 => c == 'Z',
+                    _ => c.is_ascii_digit(),
+                })
+        };
+        assert!(re_ok, "timestamp prefix missing/malformed in {line:?}");
+        assert!(line.contains("[TRACE] logger::tests: timestamp-prefix-test-line"));
+    }
 
     /// Crash-Fix Runde 2: a failing writer surfaces the io error as a value —
     /// it must NOT panic (the pre-fix `eprintln!` panicked here and took the

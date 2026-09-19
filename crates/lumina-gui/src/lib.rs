@@ -117,6 +117,7 @@ mod filmstrip_frame;
 mod render_schedule;
 mod thumb_cache;
 mod thumb_worker;
+mod timing;
 // UX-LOOK-TOOLBAR-18: the icon tool strip + iconified Library view tabs (own
 // module, file-size ratchet).
 mod icon_toolbar;
@@ -1781,6 +1782,9 @@ pub struct LuminaApp {
     /// R2-MODSWITCH-1 F7: module the render scheduler last ran for. The first
     /// run after a change defers a due full render past the switch frame.
     last_scheduled_module: Option<Module>,
+    /// R3-LOG-1: cross-frame timing anchors (module switch event, in-flight
+    /// decode). Measurement only — never read for logic.
+    timing: timing::TimingState,
     /// Export module UI state (F-103-N5). The target path is chosen via a
     /// native save dialog; the format/quality drive the shared export path.
     export_path: String,
@@ -2721,21 +2725,6 @@ type DecodeResult = Result<DecodedFrame, (String, String)>;
 type DevelopSectionDraw = fn(&mut LuminaApp, &mut egui::Ui);
 
 impl LuminaApp {
-    /// Set the active top-level module (Library / Develop / Export). Used by the
-    /// headless snapshot tests (F-103-N9) to render a specific module; this is a
-    /// pure state assignment with no recipe/sidecar side effects.
-    pub fn set_module(&mut self, module: Module) {
-        instrument_gui_action!(self, GuiAction::SetModule);
-        trace!("GUI interaction: set_module {:?}", module);
-        self.active_module = module;
-    }
-
-    /// Current top-level module (read-only accessor for the `main()` startup
-    /// wiring and headless tests; mirrors [`Self::set_module`]).
-    pub fn module(&self) -> Module {
-        self.active_module
-    }
-
     /// KITTEST-COVERAGE-STATES-1: set the Export panel's output format. Pure
     /// display/panel state (the combo's own handler performs the same
     /// assignment); never a recipe or sidecar write.
@@ -2833,6 +2822,7 @@ impl LuminaApp {
             active_module: Module::Develop,
             // R2-MODSWITCH-1 F7: no scheduler run yet.
             last_scheduled_module: None,
+            timing: timing::TimingState::default(),
             export_path: String::new(),
             export_format: ImageFileFormat::Png,
             export_quality: 90,
@@ -4675,7 +4665,7 @@ impl LuminaApp {
                 } else {
                     self.compare_mode = Some(CompareMode::Survey);
                     self.before_after = false;
-                    self.active_module = Module::Library;
+                    self.set_module(Module::Library);
                     self.library_view = LibraryView::Survey;
                     self.status = Str::SurveyOn.t().into();
                 }
@@ -4700,7 +4690,7 @@ impl LuminaApp {
         self.library_view = view;
         match view {
             LibraryView::Grid | LibraryView::Loupe | LibraryView::Survey => {
-                self.active_module = Module::Library;
+                self.set_module(Module::Library);
                 self.before_after = false;
                 self.compare_mode = match view {
                     LibraryView::Survey => Some(CompareMode::Survey),
@@ -4713,13 +4703,13 @@ impl LuminaApp {
                 };
             }
             LibraryView::Compare => {
-                self.active_module = Module::Library;
+                self.set_module(Module::Library);
                 self.compare_mode = Some(CompareMode::Compare);
                 self.before_after = true;
                 self.status = Str::CompareOnPattern.format_arg(Str::CompareModeCompare.t());
             }
             LibraryView::People => {
-                self.active_module = Module::Library;
+                self.set_module(Module::Library);
                 self.before_after = false;
                 self.compare_mode = None;
                 self.status = Str::FacePeople.t().into();
@@ -10956,7 +10946,7 @@ impl LuminaApp {
         if path.trim().is_empty() {
             return;
         }
-        info!("decoding (background) {}", path);
+        self.note_decode_start(&path);
         self.status = format!(
             "Decoding {}",
             Path::new(&path)
@@ -11033,6 +11023,7 @@ impl LuminaApp {
     fn finish_decode(&mut self, result: DecodeResult) {
         match result {
             Ok(frame) => {
+                self.note_decode_finish(frame.frame.width, frame.frame.height);
                 // GUI-SIDECAR-READ-1: edits made while this decode was in
                 // flight target the still-loaded image — flush them to its
                 // path now, before the new path is adopted below (a flush
@@ -11146,6 +11137,7 @@ impl LuminaApp {
                 }
             }
             Err((path, message)) => {
+                self.note_decode_failed();
                 // REVIEW-GUI-PATHDESYNC-1: a failed decode must NOT adopt the
                 // new path — original/document/recipe still belong to the
                 // previously loaded image, so writes would otherwise produce a
@@ -11207,6 +11199,7 @@ impl LuminaApp {
         let mut failure_count = 0;
         for (probe, message) in ctrl.drain_failures() {
             warn!("neighbor preview failed for {probe}: {message}");
+            timing::note_neighbor_failure_warn();
             failure_count += 1;
         }
         // A2: a ready frame or a (visible) failure changes per-cell badges — the
@@ -12839,16 +12832,8 @@ impl eframe::App for LuminaApp {
                         && (i.modifiers.ctrl || i.modifiers.command)
                         && i.modifiers.shift
                 }) {
-                    match import_export_for_key(key, true, true) {
-                        Some(ImportExportAction::Import) => {
-                            self.active_module = Module::Library;
-                            self.status = Str::GotoLibraryImport.t().into();
-                        }
-                        Some(ImportExportAction::Export) => {
-                            self.active_module = Module::Export;
-                            self.status = Str::GotoExport.t().into();
-                        }
-                        None => {}
+                    if let Some(action) = import_export_for_key(key, true, true) {
+                        self.apply_import_export_action(action);
                     }
                 }
             }
@@ -13034,6 +13019,7 @@ impl eframe::App for LuminaApp {
         // LRPAR-G15-IPTC-S8: dynamic-preset prompt dialog (floating window,
         // Cancel discards without touching any sidecar).
         self.draw_meta_preset_dialog(&ctx);
+        self.note_first_paint_after_switch();
         if let Some(t0) = perf_t0 {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             // GUI-SCROLL-200-1: `slow_frame` flags every frame over the 16.7 ms
@@ -13148,6 +13134,8 @@ mod tests {
     mod toast;
     // UX-LOOK-TONECURVE-18: interactive tone-curve graph tests.
     mod tone_curve_graph;
+    // R3-LOG-1: wall-clock switch/decode/render instrumentation tests.
+    mod timing_instrumentation;
     // UX-LOOK-TOOLBAR-18: icon tool strip + Library view-tab paint/click tests.
     mod toolbar_icons;
     mod w3_release;

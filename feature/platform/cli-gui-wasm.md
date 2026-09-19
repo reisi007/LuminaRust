@@ -1952,12 +1952,13 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   geloggt = ein Ereignis auf zwei Ebenen) im selben Run — Fallback- und
   Fail-Pfad sind je nach Bild/Pfad inkonsistent. Doppel-`warn!` zusammenführen
   (1 Zeile/Ereignis).
-- **R3-LOG-1 (offen, Instrumentierung fehlt):** F3-Upload-Skip und
-  PreviewIndex-Build haben KEINE Log-Stelle (unbelegbar); Decode-/Full-Render-/
-  Thumb-Build-Dauern fehlen; Badge-Häufigkeit nicht loggbar; Refusal-Warnung
-  nennt keine Stage. Nachrüsten: Delta-Traces für `set_module`,
-  Deferral-Feuer, Thumb-Build (ms + Einträge), Decode (ms), Full-Render (ms),
-  Upload-Skip (Bytes), Refusal-Wechsel (Stage-Name).
+- **R3-LOG-1 (BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Delta-Traces für
+  Switch-Event + First-Paint, Decode (ms + Auflösung), PreviewIndex-Build,
+  Thumbnail-Roundtrip, Full-Render (ms + Dims), Upload/Skip (Bytes),
+  F7-/F1-Feuer-Zähler, Refusal-Wechsel (Stage, 1× `warn!` + `trace!`/Tick),
+  Denoise-Einzeiler. Alle 7 Switch-Entry-Points über `set_module`. **Alle
+  Trace-Meldungen tragen einen zentralen ISO-8601-UTC-Stempel**
+  (`logger.rs`, std-only).
 - **R3-CONFLICT-1 (ungeprüft):** 6 Sidecar-Saves, 0 Rebases/Konflikte —
   Single-Instance-Run; die Rebase-Logik ist per Log unbestätigt (nur per Test).
 

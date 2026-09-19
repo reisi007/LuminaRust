@@ -284,6 +284,7 @@ impl LuminaApp {
             key,
             cache: probe.cache,
             cached: probe.cached,
+            enqueued_at: std::time::Instant::now(),
         }) {
             Ok(()) => {
                 debug!("enqueued thumbnail job for {}", entry.name);

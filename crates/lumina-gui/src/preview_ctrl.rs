@@ -486,7 +486,7 @@ impl PreviewController {
                     self.pending_failed.remove(&probe);
                 }
                 PreviewOutcome::Failed(message) => {
-                    log::warn!("neighbor preview failed for {}: {message}", result.name);
+                    // R3-DENOISE-1: the one visible warn! lives in the app drain.
                     self.in_flight.remove(&probe);
                     let attempts = self.attempts.get(&probe).copied().unwrap_or(0) + 1;
                     self.attempts.insert(probe.clone(), attempts);

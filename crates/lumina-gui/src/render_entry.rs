@@ -81,8 +81,17 @@ impl LuminaApp {
                 return Err(error);
             }
         };
+        // R3-LOG-1: wall time of the committed full render plus the output
+        // dimensions — the heavy work behind a module switch / settled edit.
+        let render_stopwatch = timing::Stopwatch::now();
         let result = self.render_from(&original, true, roi, generative);
+        let render_ms = render_stopwatch.elapsed_ms();
         self.original = Some(original);
+        if result.is_ok() {
+            if let Some(preview) = self.preview.as_ref() {
+                timing::emit(|| timing::full_render_line(render_ms, preview.width, preview.height));
+            }
+        }
         // GUI-JANKLOG-19: the full render's analysis pass flows into the same
         // jank record as the enclosing action/render scope.
         #[cfg(all(feature = "janklog", debug_assertions))]

@@ -31,6 +31,8 @@ use lumina_core::cache::{preview_cache_key, PreviewKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::timing;
+
 /// Preview directory below a folder's `.lumina` cache root (mirrors core).
 const PREVIEWS_DIR: &str = "previews";
 
@@ -157,11 +159,17 @@ impl PreviewIndexCache {
 
     fn index_for(&mut self, folder: &Path) -> &PreviewIndex {
         if !self.folders.contains_key(folder) {
+            // R3-LOG-1: the one-per-folder build is the module-switch cost the
+            // R3-SWITCH-1 run could not attribute — log folder, entry count and
+            // wall time.
+            let stopwatch = timing::Stopwatch::now();
+            let index = PreviewIndex::build(folder);
+            let entries = index.stems.len();
+            timing::emit(|| timing::preview_index_line(folder, entries, stopwatch.elapsed_ms()));
             #[cfg(test)]
             {
                 self.builds += 1;
             }
-            let index = PreviewIndex::build(folder);
             self.folders.insert(folder.to_path_buf(), index);
         }
         self.folders.get(folder).expect("index inserted above")
@@ -279,6 +287,29 @@ mod tests {
             index.folders.len(),
             0,
             "a directory switch drops the indices"
+        );
+    }
+
+    /// R3-LOG-1: the one-per-folder build logs folder, entry count and wall time.
+    #[test]
+    fn preview_index_build_is_logged_with_folder_and_entries() {
+        let dir = folder();
+        let cache = DiskFolderCache::in_folder(dir.path()).unwrap();
+        cache
+            .store_preview("photo.arw", THUMB_VIRTUAL_COPY, PreviewKind::Standard, b"x")
+            .unwrap();
+        let _ = crate::timing::take_timing_log();
+        let mut index = PreviewIndexCache::default();
+        index.probe(dir.path(), "photo.arw");
+        let log = crate::timing::take_timing_log();
+        assert_eq!(log.len(), 1, "exactly one build line: {log:?}");
+        let line = &log[0];
+        assert!(line.contains("preview index built"), "{line}");
+        assert!(line.contains("entries=1"), "{line}");
+        assert!(line.contains("build_ms="), "{line}");
+        assert!(
+            line.contains(&dir.path().display().to_string()),
+            "the folder must be named: {line}"
         );
     }
 }

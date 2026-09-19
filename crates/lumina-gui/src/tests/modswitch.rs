@@ -183,3 +183,59 @@ fn module_switch_defers_full_render_out_of_the_switch_frame() {
     assert!(app.render_key.is_some(), "the full render must complete");
     assert!(app.error().is_none(), "render must not fail");
 }
+
+/// R3-DENOISE-1: one neighbor failure is one event — the controller emits no
+/// warning, the app-level drain emits exactly one. The former two-level
+/// double-`warn!` (controller + app) for the same failure is gone.
+#[test]
+fn one_neighbor_failure_emits_exactly_one_app_level_warn() {
+    use crate::preview_ctrl::{PreviewController, PreviewJob};
+    use lumina_core::preview_cache::PreviewKind;
+
+    let mut app = new_app();
+    let ctx = egui::Context::default();
+    let mut ctrl = PreviewController::spawn(1).0;
+    // A real worker round trip that must fail (source does not exist).
+    ctrl.enqueue(PreviewJob {
+        probe_id: "missing-neighbor".into(),
+        source: std::path::PathBuf::from("/nonexistent/r3-denoise-1.png"),
+        name: "r3-denoise-1.png".into(),
+        virtual_copy: "vc-original".into(),
+        target: (8, 8),
+        kind: PreviewKind::Screen,
+        priority: 0,
+    });
+    app.preview_ctrl = Some(ctrl);
+    let _ = crate::timing::take_neighbor_failure_warns();
+
+    // Pump the worker result into `pending_failed`, then let the app drain it.
+    let mut drained = false;
+    for _ in 0..2000 {
+        if let Some(ctrl) = app.preview_ctrl.as_mut() {
+            ctrl.poll();
+        }
+        app.poll_neighbor_previews(&ctx);
+        if app
+            .preview_ctrl
+            .as_ref()
+            .is_some_and(|ctrl| ctrl.failure("missing-neighbor").is_some())
+        {
+            drained = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(drained, "the worker failure must surface");
+    assert_eq!(
+        crate::timing::take_neighbor_failure_warns(),
+        1,
+        "one failed neighbor job = exactly one app-level warn"
+    );
+    assert!(
+        app.preview_ctrl
+            .as_ref()
+            .and_then(|ctrl| ctrl.failure("missing-neighbor"))
+            .is_some(),
+        "the visible failure state must persist for the badge"
+    );
+}

@@ -279,6 +279,56 @@ fn generative_vram_refusal_surfaces_as_badge_end_to_end() {
     );
 }
 
+/// R3-ROUTING-1 (NIEDRIG-1): the real `render_draft_tick` path drives the
+/// classified `render_to_vram` refusal through two identical ticks — exactly
+/// one `warn!` (the first state change), the repeat only `trace!`d. Skips
+/// loudly-commented without a usable adapter.
+#[test]
+#[cfg(feature = "gpu")]
+fn repeated_vram_refusal_warns_once_through_the_real_draft_tick() {
+    use crate::timing::take_vram_refusal_warns;
+
+    let (png, _frame) = synthetic_8x8_png();
+    let mut app = new_app();
+    app.load_bytes(png.clone(), "gpu-refusal-throttle.png")
+        .unwrap();
+    let _dir = app_source_path(&mut app, &png, "gpu-refusal-throttle.png");
+    let Some(gpu) = lumina_gpu::GpuContext::new().ok() else {
+        eprintln!("no GPU adapter; skipping VRAM refusal throttle test");
+        return;
+    };
+    if !gpu.is_available() {
+        eprintln!("GPU unavailable; skipping VRAM refusal throttle test");
+        return;
+    }
+    app.gpu = Some(gpu);
+    // A free crop changes the output dimensions: the recipe gate stays empty
+    // (an explicit crop is set), but `render_to_vram` refuses it post-gate.
+    app.set_crop_free(0.1, 0.1, 0.5, 0.5).unwrap();
+    let _ = take_vram_refusal_warns();
+
+    app.render_draft_tick([800, 600]);
+    assert_eq!(
+        take_vram_refusal_warns(),
+        1,
+        "the first classified refusal must warn exactly once"
+    );
+    assert!(
+        app.vram_render_refusal
+            .as_deref()
+            .is_some_and(|reason| reason.contains("geometry")),
+        "the geometry refusal must be captured: {:?}",
+        app.vram_render_refusal
+    );
+
+    app.render_draft_tick([800, 600]);
+    assert_eq!(
+        take_vram_refusal_warns(),
+        0,
+        "a repeated identical refusal must not warn again (trace only)"
+    );
+}
+
 /// GUI-LENSFUN-GATE-3 (F1): the captured present refusal only fills an
 /// *empty* gate — a recipe-gate reason already explains the CPU route, and
 /// the dimension-changing refusal is a post-gate condition that never

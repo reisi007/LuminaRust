@@ -14,6 +14,7 @@
 //! calls them; the GPU-only helpers keep their original private visibility.
 
 use super::*;
+#[cfg(feature = "gpu")]
 use log::warn;
 
 impl LuminaApp {
@@ -88,6 +89,12 @@ impl LuminaApp {
             if self.texture_identity != Some(identity)
                 && (!gpu_present_active || keep_for_navigator)
             {
+                let target = if keep_for_navigator {
+                    "navigator-handle"
+                } else {
+                    "preview"
+                };
+                let bytes = frame.pixels.len();
                 // Build the full-frame image while `frame` still borrows
                 // `self`; the handle mutation below needs `&mut self.texture`.
                 let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
@@ -101,6 +108,13 @@ impl LuminaApp {
                     ));
                 }
                 self.texture_identity = Some(identity);
+                // R3-LOG-1: name the upload target and the uploaded byte count.
+                timing::emit(|| timing::texture_upload_line(target, bytes));
+            } else if self.texture_identity != Some(identity) && gpu_present_active {
+                // R3-LOG-1 / R2-JANK-1 F3: the GPU present path is active and a
+                // CPU handle already exists — the upload is skipped; name the
+                // saved bytes instead (measurement only, pixels unchanged).
+                timing::emit(|| timing::texture_upload_skip_line("preview", frame.pixels.len()));
             }
         }
     }

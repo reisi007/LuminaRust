@@ -41,6 +41,9 @@ pub(crate) struct ThumbnailJob {
     /// R2-MODSWITCH-1 F7: the scheduler saw a cached standard preview; load and
     /// decode it instead of re-decoding the source.
     pub(crate) cached: bool,
+    /// R3-LOG-1: enqueue instant, so the main-thread drain can report the
+    /// enqueue→ready wall time (queue + decode + texture-free delivery).
+    pub(crate) enqueued_at: std::time::Instant,
 }
 
 /// The outcome of a [`ThumbnailJob`]. A worker failure is always delivered as
@@ -58,6 +61,8 @@ pub(crate) struct ThumbnailResult {
     pub(crate) key: String,
     pub(crate) name: String,
     pub(crate) outcome: ThumbnailOutcome,
+    /// R3-LOG-1: forwarded from the job so the drain reports enqueue→ready ms.
+    pub(crate) enqueued_at: std::time::Instant,
 }
 
 /// Cache-aware decode + downscale + default-recipe render, on the worker thread.
@@ -131,6 +136,7 @@ fn worker_thumbnail(job: ThumbnailJob) -> ThumbnailResult {
         key: job.key,
         name: job.name,
         outcome,
+        enqueued_at: job.enqueued_at,
     }
 }
 
@@ -179,9 +185,12 @@ impl LuminaApp {
         while let Ok(result) = self.thumbnail_rx.try_recv() {
             match result.outcome {
                 ThumbnailOutcome::Ready(frame) => {
+                    let enqueue_to_ready_ms =
+                        timing::Stopwatch::at(result.enqueued_at).elapsed_ms();
                     let tex = self.make_thumbnail_texture(ctx, &frame, &result.key);
                     self.thumbnails.insert(&result.key, tex);
-                    trace!("thumbnail ready: {}", result.name);
+                    // R3-LOG-1: report the enqueue→ready wall time per key.
+                    timing::emit(|| timing::thumbnail_ready_line(&result.key, enqueue_to_ready_ms));
                 }
                 ThumbnailOutcome::Failed(message) => {
                     // Visible failure state + bounded retry instead of a gray

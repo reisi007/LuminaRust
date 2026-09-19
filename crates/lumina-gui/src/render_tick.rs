@@ -143,6 +143,8 @@ impl LuminaApp {
         self.draft_throttle.observe(now);
         if !self.draft_throttle.render_due() {
             trace!("GUI render: draft tick throttled (frame budget)");
+            #[cfg(test)]
+            DRAFT_TICK_THROTTLES.with(|count| count.set(count.get() + 1));
             // The edit dropped the live analysis; restore the retained one
             // (visible pending marker) so the panel never blanks mid-drag.
             if let Some((analysis, histogram)) = self.draft_throttle.retained() {
@@ -194,9 +196,7 @@ impl LuminaApp {
                     // attempt — no per-tick `warn!` spam — and record the
                     // known refusal for the badge; the CPU artifact-aware
                     // render below is the authoritative preview.
-                    self.vram_fresh = false;
-                    self.vram_render_refusal =
-                        Some(Self::GENERATIVE_VRAM_REFUSAL_REASON.to_owned());
+                    self.note_vram_refusal(Self::GENERATIVE_VRAM_REFUSAL_REASON);
                 } else if let Some((width, height)) = self
                     .draft_original
                     .as_ref()
@@ -209,9 +209,7 @@ impl LuminaApp {
                     // present route (loud) — the recipe-only VRAM path would
                     // otherwise apply the manual model and diverge silently.
                     if let Some(reason) = self.bind_lensfun_map(width, height) {
-                        warn!("gpu present kept on CPU: {reason}");
-                        self.vram_fresh = false;
-                        self.vram_render_refusal = Some(reason.to_owned());
+                        self.note_vram_refusal(reason);
                     } else {
                         // R2-GUIMOD-03: borrow instead of clone. The fallback
                         // branch (`draft_original` absent on the first tick
@@ -240,13 +238,21 @@ impl LuminaApp {
                                 self.vram_render_refusal = None;
                             }
                             Some(Err(err)) => {
-                                warn!("gpu render_to_vram failed: {err}");
-                                self.vram_fresh = false;
-                                // GUI-LENSFUN-GATE-3 (F1): classify the present
-                                // refusal so it can surface as a badge even when
-                                // the recipe gate is empty (dimension-changing
-                                // geometry is refused *after* the gate).
-                                self.vram_render_refusal = Self::classify_vram_refusal(&err);
+                                // R3-ROUTING-1: a classified post-gate refusal
+                                // (dimension-changing geometry, generative,
+                                // Lensfun map) warns once per state change and
+                                // traces per tick; an unclassified failure stays
+                                // loud every tick.
+                                match Self::classify_vram_refusal(&err) {
+                                    Some(reason) => {
+                                        self.note_vram_refusal(&reason);
+                                    }
+                                    None => {
+                                        warn!("gpu render_to_vram failed: {err}");
+                                        self.vram_fresh = false;
+                                        self.vram_render_refusal = None;
+                                    }
+                                }
                             }
                             None => {}
                         }
@@ -338,6 +344,19 @@ pub(crate) fn take_draft_error_log() -> Vec<String> {
 #[cfg(test)]
 pub(crate) fn take_draft_error_repeat_warns() -> u32 {
     DRAFT_ERROR_REPEAT_WARNS.with(|warns| warns.replace(0))
+}
+
+// R3-LOG-1 test seam: count F1 frame-budget throttles so a headless test can
+// prove the throttle path fired (the production line stays `trace!`).
+#[cfg(test)]
+thread_local! {
+    static DRAFT_TICK_THROTTLES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// R3-LOG-1: drains the F1 draft-tick throttle counter.
+#[cfg(test)]
+pub(crate) fn take_draft_tick_throttles() -> u32 {
+    DRAFT_TICK_THROTTLES.with(|count| count.replace(0))
 }
 
 #[cfg(test)]

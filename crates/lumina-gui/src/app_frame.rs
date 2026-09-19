@@ -15,6 +15,24 @@ use super::*;
 use log::trace;
 
 impl LuminaApp {
+    /// R3-LOG-1 (MITTEL-1): `Cmd/Ctrl+Shift+I` jumps to Library (import lives
+    /// there), `Cmd/Ctrl+Shift+E` jumps to Export. Both go through
+    /// [`Self::set_module`], so the switch event/first-paint timing is recorded
+    /// (the direct `active_module` assignment used to be invisible to the trace
+    /// log). Behaviour unchanged: same module targets, same status lines.
+    pub(crate) fn apply_import_export_action(&mut self, action: ImportExportAction) {
+        match action {
+            ImportExportAction::Import => {
+                self.set_module(Module::Library);
+                self.status = Str::GotoLibraryImport.t().into();
+            }
+            ImportExportAction::Export => {
+                self.set_module(Module::Export);
+                self.status = Str::GotoExport.t().into();
+            }
+        }
+    }
+
     /// Toggle the Spot-Heal tool exactly like the `Q` shortcut: one status flip
     /// per activation, shared by the toolbar button and the keyboard so both
     /// can never diverge. Pure UI state ([`Self::set_spot_tool`]); the

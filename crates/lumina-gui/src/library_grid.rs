@@ -12,6 +12,16 @@ use super::*;
 use log::trace;
 
 impl LuminaApp {
+    /// R3-LOG-1 (MITTEL-1): a Library-grid double-click opens the entry in
+    /// Develop — the module switch goes through [`Self::set_module`] so the
+    /// switch event/first-paint timing is recorded (the direct `active_module`
+    /// assignment used to be invisible to the trace log). Behaviour unchanged:
+    /// same selection/open path, same target module.
+    pub(crate) fn open_grid_entry_in_develop(&mut self, path: String) {
+        self.handle_filmstrip_click(path, false, false);
+        self.set_module(Module::Develop);
+    }
+
     /// UX-SLICE-2 (F3): the single Library empty state, shared by Grid, Loupe,
     /// Compare and Survey. Deterministic painted icon, honest body text and
     /// the F2 "Open Folder" CTA (native folder picker via [`Self::open_folder`]).
@@ -243,12 +253,9 @@ impl LuminaApp {
                                             "GUI interaction: library grid open {}",
                                             entry.path.display()
                                         );
-                                        self.handle_filmstrip_click(
+                                        self.open_grid_entry_in_develop(
                                             entry.path.display().to_string(),
-                                            false,
-                                            false,
                                         );
-                                        self.active_module = Module::Develop;
                                     }
                                     // LR-01 + Welle 2: rating/flag/color-label
                                     // badge of the default copy, painted over
