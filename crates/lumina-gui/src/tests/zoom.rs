@@ -184,6 +184,104 @@ fn pan_drag_schedules_draft_and_final_roi_render() {
     );
 }
 
+/// R2-CLAMP-1 regression (`bbb0cba`): the preview-centre clamp must be
+/// order-independent. Fit-width rounding can make the fitted draw width a
+/// sub-pixel larger than the pane (`draw.x = pane.width() + ε`), which
+/// inverts the `[lo, hi]` clamp bounds; without the `swap` guard
+/// `f32::clamp` panics on `min > max`. This drives the real `draw_preview`
+/// path headlessly with exactly such a draw width and an oversized pan, then
+/// asserts the centre lands inside the corrected (swapped) hull and is pinned
+/// to the pane centre. The other `zoom.rs` tests only cover `sync_zoom` /
+/// `roi_from_zoom` and never exercise the inverted branch.
+#[test]
+fn preview_center_clamp_swaps_inverted_bounds_without_panic() {
+    let ctx = egui::Context::default();
+    let mut app = LuminaApp::new(ctx.clone());
+    // 4:1 source in a ~4:3 pane → the base fit is width-limited, so at
+    // zoom ≈ 1 the draw width equals the pane width and only the x bounds
+    // can invert (the y draw stays below the pane height).
+    app.load_bytes(
+        ImageFrame::new(400, 100, [128_u8, 128, 128, 255].repeat(400 * 100))
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap(),
+        "clamp.png",
+    )
+    .unwrap();
+    app.render().unwrap();
+    app.texture = Some(ctx.load_texture(
+        "preview",
+        egui::ColorImage::filled([400, 100], egui::Color32::BLACK),
+        egui::TextureOptions::LINEAR,
+    ));
+
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let mut pass = |app: &mut LuminaApp, time: f64| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+    };
+
+    // Warm-up: `draw_preview` caches the pane geometry / base fit that the
+    // next frame derives its draw size from.
+    pass(&mut app, 1.0);
+    let pane_w = app.preview_pane_w;
+    let base_fit = app.preview_base_fit_scale;
+    assert!(
+        pane_w > 0.0 && base_fit > 0.0,
+        "warm-up must cache the pane geometry (pane_w={pane_w}, base_fit={base_fit})"
+    );
+
+    // Simulate the fit-width rounding: draw width = pane width + ε (ε = 0.25
+    // sub-pixel) while the y draw stays inside the pane. The deliberately
+    // oversized pan would normally clamp to the pane edges; with inverted
+    // bounds the corrected hull collapses to a ±ε/2 band around the centre.
+    let eps = 0.25_f32;
+    app.zoom_mode = ZoomMode::Custom;
+    app.preview_zoom = (pane_w + eps) / (400.0 * base_fit);
+    app.preview_pan = egui::vec2(pane_w * 10.0, app.preview_pane_h * 10.0);
+
+    // Must not panic: `f32::clamp` asserts `min <= max`, so the pre-guard
+    // code (`lo > hi` handed straight to `clamp`) aborts here.
+    pass(&mut app, 1.1);
+
+    let rect = app.preview_screen_rect().expect("preview painted");
+    let live_pane = app.preview_pane_rect().expect("pane recorded");
+    assert!(
+        rect.width() > live_pane.width(),
+        "guard scenario needs draw.x > pane.width(): {} vs {}",
+        rect.width(),
+        live_pane.width()
+    );
+    // Corrected (swapped) hull for the centre on the x axis.
+    let hull_lo = live_pane.right() - rect.width() / 2.0;
+    let hull_hi = live_pane.left() + rect.width() / 2.0;
+    assert!(hull_lo <= hull_hi, "hull must be well-formed after swap");
+    let cx = rect.center().x;
+    assert!(
+        cx >= hull_lo - 1e-3 && cx <= hull_hi + 1e-3,
+        "centre x {cx} must lie inside the swapped hull [{hull_lo}, {hull_hi}]"
+    );
+    assert!(
+        (cx - live_pane.center().x).abs() <= 0.5,
+        "inverted bounds must pin the centre to the pane centre: {cx} vs {}",
+        live_pane.center().x
+    );
+    assert!(
+        app.preview_pan.x.abs() <= 0.5,
+        "oversized pan must clamp into the ±ε/2 band, got {}",
+        app.preview_pan.x
+    );
+}
+
 /// GUI-SCROLL-200-1 (single view): scroll-wheel zoom over the preview must
 /// stay fluid — it only *arms* the debounced re-render pipeline
 /// (`mark_dirty`); no synchronous full decode/full render may run inside

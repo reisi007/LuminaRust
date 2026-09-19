@@ -1876,10 +1876,14 @@ Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 - **R2-MODSWITCH-1 (mittel, in Analyse/Fix):** Library↔Develop-Wechsel langsam
   — synchrone Thumbnail-Disk-Probes + Preview-Decodes auf dem UI-Thread
   (`ensure_thumbnail`-Pfad); Fix-Vorschläge F7/F8 dokumentiert.
-- **R2-CLAMP-1 (offen, Follow-up):** Untracked `gui.log` (23.08.) zeigt eine
-  ANDERE Render-Pfad-Panic (`f32::clamp`: min > max/NaN beim debounced Full
-  Render) — vom Crash-Fix nicht adressiert, endet jetzt mit Dump statt Abort.
-  Eigene Untersuchung ausstehend.
+- **R2-CLAMP-1 (erledigt ohne Fix, 2026-09-19):** Untracked `gui.log` (23.08.) zeigte eine
+  Render-Pfad-Panic (`f32::clamp`: min > max/NaN beim debounced Full
+  Render, FitWidth-Rundung). Recherche-Beleg: Panic stammt aus einem Build 7
+  Minuten VOR dem Fix-Commit `bbb0cba` (2026-08-23, „order-independent
+  bounds", Guard per `swap`); Guard im aktuellen Code vorhanden
+  (`preview_draws.rs:259-278`), kein zweiter variabler-Clamp-Kandidat im
+  Render-/Present-Pfad. Regressionstest `preview_center_clamp_swaps_inverted_bounds_without_panic`
+  (verifiziert BESTANDEN 2026-09-19, Mutations-Beweis: ohne Swap panickt er wie Alt-Log).
 
 ## Optionale zentrale Indizierung
 
