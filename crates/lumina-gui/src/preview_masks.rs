@@ -5,11 +5,14 @@
 //! (brush sampling/upload, gradient/radial start-end) and
 //! [`LuminaApp::gpu_upload_brush_tile`] keeps the VRAM brush plane in sync on
 //! the GPU path. The overlay painters ([`LuminaApp::draw_mask_overlay`],
-//! [`LuminaApp::draw_edit_pins`], [`LuminaApp::draw_lens_blur_overlay`],
-//! [`LuminaApp::draw_crop_overlay`]) render the CPU matte, the G-11 pins and
-//! the lens-blur/crop rectangles on the full-frame preview rect. Pure display
-//! and session state — no recipe/sidecar changes. The `#[cfg(feature = "gpu")]`
-//! blocks move atomically.
+//! [`LuminaApp::draw_edit_pins`], [`LuminaApp::draw_lens_blur_overlay`])
+//! render the CPU matte, the G-11 pins and the lens-blur rectangle on the
+//! full-frame preview rect. Pure display and session state — no recipe/sidecar
+//! changes. The `#[cfg(feature = "gpu")]` blocks move atomically.
+//!
+//! UX-LOOK-CROP-18 moved the interactive crop overlay to
+//! `develop_geometry::crop_overlay` ([`LuminaApp::draw_crop_overlay`]); the
+//! mask/pin/lens-blur painters stay here.
 //!
 //! The helpers called from `preview_draws::draw_preview` are `pub(crate)`;
 //! `gpu_upload_brush_tile` stays private (only this module's drag calls it).
@@ -339,29 +342,6 @@ impl LuminaApp {
             rect,
             1.0_f32,
             egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
-            egui::StrokeKind::Middle,
-        );
-    }
-
-    /// Crop-rectangle overlay (G-06): paints the active recipe crop as a
-    /// white stroke over the full-frame preview rect. Pure display (never
-    /// recipe/sidecar); the mapping is covered headless via
-    /// [`Self::crop_overlay_rect`]. Visible when the tool-overlay mode
-    /// shows overlays OR the crop-mode badge (`R`) is armed (cropping
-    /// intent) — reiner Session-Display-State.
-    pub(crate) fn draw_crop_overlay(&self, ui: &mut egui::Ui, full_rect: egui::Rect) {
-        if !self.overlay_visible() && !self.crop_mode {
-            return;
-        }
-        let crop = self.recipe.geometry.as_ref().and_then(|g| g.crop.as_ref());
-        let (src_w, src_h) = self.image_dims().unwrap_or((0, 0));
-        let Some(rect) = Self::crop_overlay_rect(full_rect, crop, src_w, src_h) else {
-            return;
-        };
-        ui.painter().rect_stroke(
-            rect,
-            1.0_f32,
-            egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
             egui::StrokeKind::Middle,
         );
     }

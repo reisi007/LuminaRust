@@ -215,15 +215,16 @@ impl LuminaApp {
                 egui::Sense::drag()
             } else if pick || red_eye_pick {
                 egui::Sense::click()
-            } else if pan_eligible {
+            } else if pan_eligible && !self.crop_mode {
                 egui::Sense::drag()
             } else {
                 egui::Sense::click()
             };
             let response = ui.allocate_rect(rect, sense);
 
-            // Pan while zoomed (only when no mask tool and not picking).
-            if !armed && !pick && !red_eye_pick && pan_eligible {
+            // Pan while zoomed (only when no mask tool and not picking, and
+            // never while the interactive crop tool owns the pointer).
+            if !armed && !pick && !red_eye_pick && pan_eligible && !self.crop_mode {
                 let delta = response.drag_delta();
                 if delta != egui::Vec2::ZERO {
                     if response.drag_started() {

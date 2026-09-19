@@ -12680,7 +12680,7 @@ impl eframe::App for LuminaApp {
         // Keyboard: `Y` toggles Before/After (which never mutates the recipe);
         // `Shift+Y` toggles the split Before/After marker (Welle 3, same
         // recipe-free guarantee). `Esc` cancels an armed white-balance
-        // eyedropper.
+        // eyedropper; the interactive crop tool handles its own Enter/Esc.
         let shift_held = ctx.input(|i| i.modifiers.shift);
         if ctx.input(|i| i.key_pressed(egui::Key::Y)) {
             if shift_held {
@@ -12693,7 +12693,7 @@ impl eframe::App for LuminaApp {
             // UX-LOOK-TOOLBAR-18: shared with the icon toolbar (same status).
             self.toggle_spot_heal_tool();
         }
-        self.handle_escape_shortcut(&ctx);
+        self.handle_crop_shortcuts(&ctx);
 
         // Module-switch shortcuts (`G` Library grid, `D` Develop, `E`
         // Library loupe). They are ignored while a widget wants keyboard

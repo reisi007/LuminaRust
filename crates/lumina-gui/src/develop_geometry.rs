@@ -6,6 +6,11 @@
 //! `pub(crate)` because `DEVELOP_SECTIONS` references it; `aspect_name` stays
 //! private to this module.
 
+// UX-LOOK-CROP-18 (UXG-01): the interactive on-canvas crop overlay lives in
+// its own file (file-size ratchet) while staying in this Geometry module
+// boundary.
+pub(crate) mod crop_overlay;
+
 use super::*;
 
 impl LuminaApp {

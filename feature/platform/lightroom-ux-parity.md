@@ -244,3 +244,29 @@ Commit nach unabhängiger Verifizierung BESTANDEN):
   unter `allow(dead_code)`).
 - **Golden:** `develop_section_tone_curve.png` rebaselined (Diff nur rechtes
   Panel, Canvas links byte-identisch).
+
+## Umsetzungsstand UX-LOOK-CROP-18 (2026-09-19)
+
+SOLL-Entscheid oben umgesetzt (Implementierung + headless/kittest-Goldens,
+unabhängig verifiziert BESTANDEN):
+
+- **Interaktives Crop-Overlay** (`src/develop_geometry/crop_overlay.rs`):
+  4 Eck-Handles (Resize mit gegenüberliegendem Anker, Mindestgröße 0.02),
+  Move innen, Bild-Clamp, Drittel-Gitter, Abdunklung außerhalb.
+- **Draft-Trennung:** Gezogener Rahmen ist session-only (`egui`-Temp-Memory).
+  „Live-Vorschau" (SOLL) = Overlay (Rahmen/Gitter/Abdunklung) aktualisiert
+  live; die gerenderten Bildpixel werden erst bei Commit neu gerendert, da
+  das Rezept erst bei Commit geschrieben wird. Kein Pixel-Live-Reframing
+  (bewusst keine Architekturänderung).
+- **Enter/Esc:** Enter committet über `set_crop_free` (genau ein
+  History-Step + debounced Write); Esc verwirft (Rezept bitgleich, kein
+  Sidecar); R-aus mit Draft verwirft laut (`warn!`).
+- **Aspect→Free:** Ein interaktiver Commit schreibt dokumentiert ein
+  `Crop::Free` (Schema kennt keine größen-erhaltenden Aspect-Commits) —
+  gepinnt per Test, kein stiller Verlust. Keine neuen Rezeptfelder, kein
+  Schema-Bruch.
+- **Tests:** 10 neue headless Tests (Draft-Trennung, alle Ecken, Move/Clamp,
+  Enter→Persistenz+Reload, Esc, Paint, Aspect→Free, R-off, Fall-through) +
+  kittest-Golden `develop_overlay_crop_interactive.png` (Handles+Gitter+
+  Abdunklung, Pixel-Guard).
+- **Namen-Vorbehalt:** `i18n.rs` unverändert, keine neuen Wortlaute.

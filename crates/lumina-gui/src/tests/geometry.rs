@@ -291,3 +291,8 @@ fn g06_lensfun_auto_status_names_exif_state() {
         assert!(status.contains("RF200-800"), "got `{status}`");
     }
 }
+
+// UX-LOOK-CROP-18 (UXG-01): interactive crop overlay (Enter/Esc, handles,
+// thirds grid, darkening) — gestures/paint/persistence in its own files.
+mod crop_overlay;
+mod crop_overlay_support;
