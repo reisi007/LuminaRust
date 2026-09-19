@@ -31,6 +31,11 @@ use lumina_gui::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+// UX-LOOK-HISTORY-18: shared harness helpers moved here so this file stays
+// within its committed size baseline (see the support module docs).
+mod kittest_snapshots_support;
+use kittest_snapshots_support::*;
+
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
 /// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
 /// (repeated inline on each `#[ignore]` attribute below, since the attribute
@@ -55,23 +60,6 @@ const DEVELOP_SECTIONS: &[&str] = &[
     "Geometry",
     "Masking",
 ];
-
-/// Create a headless harness running the Lumina app at a fixed window size.
-fn build_harness() -> Harness<'static, LuminaApp> {
-    Harness::builder()
-        .with_size([1024.0_f32, 720.0_f32])
-        .wgpu()
-        .build_eframe(|cc| LuminaApp::new(cc.egui_ctx.clone()))
-}
-
-/// Load the bundled sample image so the preview / Develop / Export modules have
-/// something to render.
-fn load_sample(harness: &mut Harness<'_, LuminaApp>) {
-    harness
-        .state_mut()
-        .load_bytes(LuminaApp::sample_image_png(), "sample.png")
-        .expect("sample image loads");
-}
 
 /// Expand exactly the Develop sections listed in `keep`.
 ///
@@ -216,21 +204,6 @@ fn expand_and_scroll_to(harness: &mut Harness<'_, LuminaApp>, section: usize, ta
     // scrolled layout before snapshotting.
     harness.run();
     harness.run();
-}
-
-/// Assert that `label` is laid out inside the 1024x720 window (not below
-/// the ScrollArea fold): existence in the accesskit tree alone does not
-/// prove pixel-visibility.
-fn assert_label_on_screen(harness: &mut Harness<'_, LuminaApp>, label: &str) {
-    let rect = harness
-        .query_all_by_label(label)
-        .next()
-        .unwrap_or_else(|| panic!("label {label:?} not found in headed harness"))
-        .rect();
-    assert!(
-        rect.min.y >= 0.0 && rect.max.y <= 720.0 && rect.max.x <= 1024.0,
-        "label {label:?} must be pixel-visible in the 1024x720 viewport, got {rect:?}"
-    );
 }
 
 #[test]
@@ -432,57 +405,6 @@ fn develop_section_geometry() {
     harness.snapshot("develop_section_geometry");
 }
 
-/// Open exactly one of the Presets / History / Rating Develop headers.
-///
-/// Those three are plain `ui.collapsing` headers *outside* the eight
-/// `section_open` F-100 sections, so `expand_and_scroll_to` cannot open
-/// them: all eight sections are closed via `set_section_open` and the
-/// target header is clicked open instead (default closed on a fresh
-/// harness). `target_label` is then scrolled into view with the same
-/// 2-frame settle as `expand_and_scroll_to` before snapshotting.
-fn open_collapsing_and_scroll_to(
-    harness: &mut Harness<'_, LuminaApp>,
-    header_label: &str,
-    target_label: &str,
-) {
-    for i in 0..SECTION_COUNT {
-        harness.state_mut().set_section_open(i, false);
-    }
-    // Layout frame so the accesskit tree contains the (closed) headers.
-    harness.run();
-    let clicked = harness
-        .query_all_by_label(header_label)
-        .next()
-        .map(|node| {
-            node.click_accesskit(); // UX-LOOK-LAYOUT-18: opens the rail panels too.
-            true
-        })
-        .unwrap_or(false);
-    assert!(
-        clicked,
-        "Develop header {header_label:?} not found in headed harness"
-    );
-    for _ in 0..5 {
-        harness.run();
-    }
-    let found = harness
-        .query_all_by_label(target_label)
-        .next()
-        .map(|node| {
-            node.scroll_to_me();
-            true
-        })
-        .unwrap_or(false);
-    assert!(
-        found,
-        "scroll target {target_label:?} not found in headed harness (header {header_label})"
-    );
-    // One frame dispatches the ScrollIntoView event, the second settles the
-    // scrolled layout before snapshotting.
-    harness.run();
-    harness.run();
-}
-
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn develop_section_presets() {
@@ -510,24 +432,41 @@ fn develop_section_history() {
     // "No sidecar loaded" without one — so seed an in-memory document plus
     // one history step first. `create_mask` (pure session state, Masking
     // precedent above) ensures the document; `create_preset`/`apply_preset`
-    // records `history-1` with `recorded_at: None` (deterministic label, no
-    // timestamp pixels) and only re-renders — no sidecar write, no disk.
+    // records `history-1`. UX-LOOK-HISTORY-18: the row now renders the
+    // structured change plus a timestamp, so the session-only clock override
+    // pins it deterministically (the label text is read back from the same
+    // formatter the panel uses — layout is pinned, not a literal word choice).
+    harness
+        .state_mut()
+        .set_history_timestamp_override(Some("2026-09-19T12:00:00Z".into()));
     harness
         .state_mut()
         .create_mask("Snapshot Seed")
         .expect("seed mask entry");
+    harness.state_mut().set_adjustment("exposure", 0.4);
+    harness.state_mut().set_adjustment("contrast", -0.2);
     let preset = harness
         .state_mut()
         .create_preset("Snapshot Seed")
         .expect("seed preset");
+    // Move the session recipe away from the preset so applying it is a real,
+    // readable change (name + old→new) in the history row.
+    harness.state_mut().set_adjustment("exposure", -1.0);
+    harness.state_mut().set_adjustment("contrast", 0.5);
     harness
         .state_mut()
         .apply_preset(&preset)
         .expect("seed history entry");
-    // Only History open: the recorded entry row.
-    open_collapsing_and_scroll_to(&mut harness, "History", "1. history-1");
+    let label = harness
+        .state_mut()
+        .history_labels()
+        .into_iter()
+        .next()
+        .expect("one readable history entry");
+    // Only History open: the readable entry row.
+    open_collapsing_and_scroll_to(&mut harness, "History", &label);
     // Non-vacuous guard: the entry row must actually be on-screen.
-    assert_label_on_screen(&mut harness, "1. history-1");
+    assert_label_on_screen(&mut harness, &label);
     harness.snapshot("develop_section_history");
 }
 

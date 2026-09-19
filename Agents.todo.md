@@ -110,7 +110,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | GUI-PARITY-GOLDENS-18 | alle G | Parity-Goldens-Rebless |
-| 1.0 | UX-LOOK-HISTORY-18 | alle G | History lesbar+Presets-Baum |
 | 1.0 | GPU-RENDER-DENOISE-19 | G-14 | Denoise-WGSL-Pass |
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
@@ -145,7 +144,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] UX-LOOK-HISTORY-18 (Release: 1.0)** History menschenlesbar + Presets als Baum (Look-Analyse 2026-09-17, UXG-07/12): History-Einträge mit Reglername + alt→neu + Uhrzeit (Schema-Entscheid zuerst), Presets als Gruppen-Baum ohne absoluten Pfad. Abnahme: GUI-headless (Einträge lesbar + klickbar), Golden, kein Schema-Bruch ohne Migration.
 ### PRIO: mittel
 
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.

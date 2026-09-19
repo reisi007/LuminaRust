@@ -6,6 +6,36 @@
 
 use super::*;
 
+// GUI-REFACTOR-W3-20 helpers moved out of the ratcheted crate root:
+// `new_app`, `open_and_decode` and the 2×1 PNG fixture are shared by the
+// thematic test modules through `crate::tests`'s `use support::*;`.
+pub(super) fn new_app() -> LuminaApp {
+    LuminaApp::new(egui::Context::default())
+}
+
+/// Open a file and synchronously drain the background decode (PERF-GUI-7)
+/// channel. The headless test harness has no `update()` event loop, so the
+/// async `decode_rx` must be pumped here before asserting on the result.
+pub(super) fn open_and_decode(app: &mut LuminaApp, path: impl Into<String>) {
+    app.open_file(path);
+    // Pump the background decode channel; yield so the worker thread is
+    // scheduled. Bounded so a genuine failure can't hang the suite.
+    for _ in 0..2000 {
+        app.poll_decode();
+        if app.original.is_some() || app.error().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+pub(super) fn png() -> Vec<u8> {
+    ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
+        .unwrap()
+        .encode(ImageFileFormat::Png)
+        .unwrap()
+}
+
 /// `(text rect, clip rect)` of every painted text shape whose full string
 /// equals `needle` (button labels). A widget cut off at a panel edge is painted
 /// with a clip rect smaller than its text rect. Exact match (not substring) so

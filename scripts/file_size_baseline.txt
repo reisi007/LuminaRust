@@ -1,4 +1,4 @@
-13943 crates/lumina-gui/src/lib.rs  # 2026-09-19: UX-LOOK-TOOLBAR-18 (14175 -> 13943, Headless-Draw/Click-Helper nach src/tests/support.rs extrahiert); zuvor GUI-REFACTOR-W3-20 S3.1/S3.2 (29952 -> 14176, f100_action_button-Guard nach src/tests/f100_audit.rs, mod tests thematisch nach src/tests/*.rs gesplittet); UX-LOOK-LAYOUT-18 (linke Rail nach develop_left_rail.rs)
+13908 crates/lumina-gui/src/lib.rs  # 2026-09-19: UX-LOOK-HISTORY-18 (13943 -> 13908, `apply_adjustment_to_selection` nach selection_actions.rs, History-Label/Change-Logik nach history_changes.rs, Test-Helper nach tests/support.rs); zuvor UX-LOOK-TOOLBAR-18 (14175 -> 13943, Headless-Draw/Click-Helper nach src/tests/support.rs extrahiert); zuvor GUI-REFACTOR-W3-20 S3.1/S3.2 (29952 -> 14176, f100_action_button-Guard nach src/tests/f100_audit.rs, mod tests thematisch nach src/tests/*.rs gesplittet); UX-LOOK-LAYOUT-18 (linke Rail nach develop_left_rail.rs)
 11529 crates/lumina-cli/src/main.rs  # 17709 -> 11529 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 5072 crates/lumina-sidecar/src/lib.rs  # 10715 -> 5072 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
 3257 crates/lumina-core/src/lib.rs  # 7336 -> 3257 am 2026-09-18: Tests-Split nach src/tests/ (XXL-REFACTOR-SEC-20)
@@ -7,7 +7,7 @@
 3505 crates/lumina-core/src/render.rs
 3333 crates/lumina-sidecar/src/zdata.rs
 3264 crates/lumina-gpu/src/stages.rs
-3040 crates/lumina-gui/tests/kittest_snapshots.rs
+2978 crates/lumina-gui/tests/kittest_snapshots.rs  # 2026-09-19: UX-LOOK-HISTORY-18 (3040 -> 2978, build_harness/load_sample/assert_label_on_screen/open_collapsing_and_scroll_to nach tests/kittest_snapshots_support/)
 1919 crates/lumina-core/src/mask_loader.rs
 1789 crates/lumina-lensfun/src/lib.rs
 1665 crates/lumina-core/src/generative.rs
@@ -51,7 +51,7 @@
 733 crates/lumina-gui/src/cull_gui.rs
 730 crates/lumina-gpu/tests/golden.rs
 729 crates/lumina-core/src/tone_props.rs
-713 crates/lumina-gui/src/presets.rs
+683 crates/lumina-gui/src/presets.rs  # 2026-09-19: UX-LOOK-HISTORY-18 (713 -> 683, rekursiver Scan nach preset_tree.rs ausgelagert)
 704 crates/lumina-mcp/src/util.rs
 694 crates/lumina-core/src/preview_cache.rs
 677 crates/lumina-mcp/tests/f101f1.rs

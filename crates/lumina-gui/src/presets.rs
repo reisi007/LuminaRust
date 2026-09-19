@@ -17,7 +17,6 @@
 //! directory.
 
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use lumina_sidecar::{EditRecipe, Preset};
@@ -259,44 +258,15 @@ pub fn load_preset_file(path: &Path) -> Result<Preset, PresetFileError> {
     Ok(envelope.preset)
 }
 
-/// Lists the presets directory sorted by file name. A missing directory means
-/// "no presets saved yet" (first run), not an error; an unreadable directory
-/// surfaces as a single failed entry. Invalid files appear as failed entries —
-/// they are never skipped silently.
+/// Lists the presets directory recursively, sorted by full (relative) path.
+///
+/// UX-LOOK-HISTORY-18: the walk now descends into sub-folders so the GUI can
+/// render the presets as a group tree keyed by the relative folder (never an
+/// absolute path). A missing directory means "no presets saved yet" (first
+/// run), not an error; an unreadable directory surfaces as a failed entry.
+/// Invalid files appear as failed entries — they are never skipped silently.
 pub fn scan_presets_dir(dir: &Path) -> Vec<PresetEntry> {
-    let read = match fs::read_dir(dir) {
-        Ok(read) => read,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Vec::new(),
-        Err(error) => {
-            return vec![PresetEntry::Failed {
-                path: dir.to_path_buf(),
-                error: format!("presets directory unreadable: {error}"),
-            }]
-        }
-    };
-    let mut files: Vec<PathBuf> = read
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|name| name.ends_with(PRESET_FILE_SUFFIX))
-        })
-        .collect();
-    files.sort();
-    files
-        .into_iter()
-        .map(|path| match load_preset_file(&path) {
-            Ok(preset) => PresetEntry::Available {
-                path,
-                preset: Box::new(preset),
-            },
-            Err(error) => PresetEntry::Failed {
-                path,
-                error: error.to_string(),
-            },
-        })
-        .collect()
+    crate::preset_tree::scan_presets_recursive(dir)
 }
 
 /// Content validation shared by save and load: non-empty name, only known MVP

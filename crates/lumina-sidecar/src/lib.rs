@@ -44,6 +44,14 @@ pub use merge_recipe::{
     MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
 };
 
+// UX-LOOK-HISTORY-18: structured edit-history steps (parameter/from/to) carried
+// additively as typed extras; loud validation (see module docs).
+mod history;
+pub use history::{
+    validate_history_entry, HistoryChange, HistoryEntry, HISTORY_CHANGES_KEY, MAX_HISTORY_CHANGES,
+    MAX_HISTORY_CHANGE_PARAMETER_CHARS, MAX_HISTORY_CHANGE_VALUE_CHARS,
+};
+
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
 // (detections, embedding/vector references, clusters, person labels plus
 // identity/status; no models, no clustering evaluation, no CLI/GUI).
@@ -2024,15 +2032,6 @@ fn default_target_luminance() -> f64 {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HistoryEntry {
-    pub id: String,
-    pub recipe: EditRecipe,
-    pub recorded_at: Option<String>,
-    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extras: Extras,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preset {
     pub id: String,
     pub name: String,
@@ -3932,6 +3931,7 @@ impl SidecarDocument {
             }
             for entry in &copy.history {
                 validate_name("history entry id", &entry.id)?;
+                validate_history_entry(entry)?;
             }
         }
         for copy in &self.deleted_virtual_copies {

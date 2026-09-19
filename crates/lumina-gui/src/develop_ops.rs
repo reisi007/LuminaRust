@@ -79,23 +79,12 @@ impl LuminaApp {
             return;
         }
         let entries = self.preset_entries.clone();
-        for entry in &entries {
-            match entry {
-                presets::PresetEntry::Available { preset, .. } => {
-                    if ui.selectable_label(false, &preset.name).clicked() {
-                        trace!("GUI interaction: apply file preset {}", preset.name);
-                        match self.apply_preset(preset) {
-                            Ok(()) => self.status = Str::PresetApplied.format_arg(&preset.name),
-                            Err(error) => self.show_error(error),
-                        }
-                    }
-                }
-                presets::PresetEntry::Failed { path, error } => {
-                    let name = path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.display().to_string());
-                    ui.colored_label(egui::Color32::LIGHT_RED, format!("{name}: {error}"));
+        if let Some(index) = preset_tree::draw_preset_tree(ui, &directory, &entries) {
+            if let presets::PresetEntry::Available { preset, .. } = &entries[index] {
+                trace!("GUI interaction: apply file preset {}", preset.name);
+                match self.apply_preset(preset) {
+                    Ok(()) => self.status = Str::PresetApplied.format_arg(&preset.name),
+                    Err(error) => self.show_error(error),
                 }
             }
         }
@@ -212,10 +201,7 @@ impl LuminaApp {
             }
             let mut restore_target: Option<String> = None;
             for (index, entry) in copy.history.iter().enumerate().rev() {
-                let mut label = format!("{}. {}", index + 1, entry.id);
-                if let Some(recorded_at) = &entry.recorded_at {
-                    label.push_str(&format!(" ({})", recorded_at));
-                }
+                let label = history_changes::format_history_label(entry, index + 1);
                 let selected = self.history_selected.as_deref() == Some(entry.id.as_str());
                 if ui.selectable_label(selected, label).clicked() {
                     restore_target = Some(entry.id.clone());

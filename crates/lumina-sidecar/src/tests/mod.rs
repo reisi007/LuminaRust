@@ -11,6 +11,7 @@ mod document_io;
 mod generative_bundle;
 mod generative_g04;
 mod generative_spot;
+mod history_change;
 mod iptc_a;
 mod iptc_b;
 mod locks;

@@ -89,10 +89,11 @@ impl LuminaApp {
         extras.insert("snapshot".into(), Value::Bool(true));
         extras.insert("snapshot_name".into(), Value::String(name.clone()));
         let frozen = self.recipe.clone();
+        let timestamp = self.history_timestamp();
         self.active_copy_mut()?.history.push(HistoryEntry {
             id: new_id.clone(),
             recipe: frozen,
-            recorded_at: None,
+            recorded_at: Some(timestamp),
             extras,
         });
         self.save_sidecar();

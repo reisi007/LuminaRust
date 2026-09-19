@@ -270,3 +270,32 @@ unabhängig verifiziert BESTANDEN):
   kittest-Golden `develop_overlay_crop_interactive.png` (Handles+Gitter+
   Abdunklung, Pixel-Guard).
 - **Namen-Vorbehalt:** `i18n.rs` unverändert, keine neuen Wortlaute.
+
+## Umsetzungsstand UX-LOOK-HISTORY-18 (2026-09-19)
+
+SOLL-Entscheid oben umgesetzt (Implementierung + Tests + Golden,
+unabhängig verifiziert BESTANDEN):
+
+- **Strukturierte History-Einträge (additiv, kein Schema-Bruch):** neuer
+  typisierter `HistoryChange { parameter, from, to }` (`deny_unknown_fields`)
+  pro Eintrag unter Extras-Schlüssel `"changes"` (`lumina-sidecar/src/history.rs`,
+  `HistoryEntry` verlustfrei dorthin gezogen). Kein `schema_version`-Bump,
+  keine Migration nötig.
+- **Laute Ablehnung:** falscher Typ/fehlende/unbekannte Felder/leeres
+  `parameter`/Steuerzeichen/Überlänge/Anzahl → `SidecarError::Invalid`;
+  fehlendes `changes` = Legacy (leere Liste, nichts erfunden). Keine stille
+  Normalisierung.
+- **Lesbar + klickbar:** Label `Name from → to — Zeit` (Arbeitslabel,
+  Namen-Vorbehalt), Klick-Restore mit Wirkung; Zeit via `recorded_at`
+  (session-only Override für deterministische Goldens, nicht persistiert).
+- **Presets-Baum:** Gruppierung nach relativem Unterordner (nie absolut),
+  verschachtelte Header, kaputte Dateien als Fehlerknoten, Tiefenlimit 16;
+  Klick = bestehender `apply_preset`-Pfad.
+- **Tests:** 6 Sidecar (Roundtrip, Legacy, Ablehnung, `set_changes`,
+  Revalidierung) + 4 GUI (Label+Restore, Legacy, Baum+Klick, Batch-Persistenz);
+  Golden `develop_section_history.png` rebaselined.
+- **Bekannte Grenzen (niedrig, Folgearbeit):** Überlängen-/Anzahl-Limits und
+  Baum-Tiefenlimit ohne Negativtest; `deleted_virtual_copies` validieren
+  `history` nicht (keine Wirkung, Doku vs. Verhalten); `recipe_changes`
+  kappt theoretisch Unerreichbares still; Ablehnungs-Asserts teils nur
+  `.is_err()`.

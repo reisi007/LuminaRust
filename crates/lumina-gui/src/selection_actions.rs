@@ -248,6 +248,49 @@ impl LuminaApp {
         report
     }
 
+    /// GUI selection batch adjustment (exposure/contrast/highlights/shadows):
+    /// sets `key = value` on the default copy of every selected sidecar and
+    /// persists each atomically. UX-LOOK-HISTORY-18: the appended history step
+    /// carries the structured control change (name + old→new) and a timestamp.
+    pub fn apply_adjustment_to_selection(
+        paths: &[std::path::PathBuf],
+        key: &str,
+        value: f64,
+    ) -> Result<usize, GuiError> {
+        if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") {
+            return Err(GuiError::Io(Str::UnknownAdjustment.format_arg(key)));
+        }
+        let mut changed = 0;
+        for path in paths {
+            let sidecar_path = lumina_sidecar::sidecar_path_for(path);
+            let mut document = lumina_sidecar::load_sidecar(&sidecar_path)?;
+            let Some(copy) = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.is_default)
+            else {
+                continue;
+            };
+            let before = copy.recipe.clone();
+            copy.recipe.adjustments.insert(key.into(), value);
+            let mut entry = HistoryEntry {
+                id: format!("selection-{changed}"),
+                recipe: copy.recipe.clone(),
+                recorded_at: Some(history_changes::now_rfc3339()),
+                extras: BTreeMap::new(),
+            };
+            if let Err(error) =
+                entry.set_changes(history_changes::recipe_changes(&before, &copy.recipe))
+            {
+                error!("selection history changes rejected: {error}");
+            }
+            copy.history.push(entry);
+            lumina_sidecar::save_sidecar(&sidecar_path, &document)?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
+
     /// Write the Previous `reference` recipe into the currently loaded image:
     /// same disk write as [`Self::apply_recipe_to_path`] (CAS sidecar +
     /// history step), then adopt the persisted state in memory (recipe +
@@ -264,6 +307,7 @@ impl LuminaApp {
             .map_err(|error| error.to_string())?;
         self.recipe = recipe.clone();
         let id = self.virtual_copy_id.clone();
+        let timestamp = self.history_timestamp();
         let document = self
             .document
             .as_mut()
@@ -273,13 +317,18 @@ impl LuminaApp {
             .iter_mut()
             .find(|copy| copy.id == id)
             .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        let before = copy.recipe.clone();
         copy.recipe = recipe.clone();
-        copy.history.push(HistoryEntry {
+        let mut entry = HistoryEntry {
             id: history_id.into(),
             recipe: recipe.clone(),
-            recorded_at: None,
+            recorded_at: Some(timestamp),
             extras: history_extras,
-        });
+        };
+        if let Err(error) = entry.set_changes(history_changes::recipe_changes(&before, recipe)) {
+            error!("previous history changes rejected: {error}");
+        }
+        copy.history.push(entry);
         self.mark_dirty();
         self.save_sidecar();
         self.render().map_err(|error| error.to_string())?;
@@ -343,13 +392,18 @@ impl LuminaApp {
         };
         let copy = default_copy_mut(&mut document)
             .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        let before = copy.recipe.clone();
         copy.recipe = recipe.clone();
-        copy.history.push(HistoryEntry {
+        let mut entry = HistoryEntry {
             id: history_id.into(),
             recipe: recipe.clone(),
-            recorded_at: None,
+            recorded_at: Some(self.history_timestamp()),
             extras: history_extras,
-        });
+        };
+        if let Err(error) = entry.set_changes(history_changes::recipe_changes(&before, recipe)) {
+            error!("sync history changes rejected: {error}");
+        }
+        copy.history.push(entry);
         lumina_sidecar::save_sidecar_if_unchanged(
             &sidecar_path,
             &document,
@@ -393,6 +447,7 @@ impl LuminaApp {
         };
         let copy = default_copy_mut(&mut document)
             .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
+        let before = copy.recipe.clone();
         let old = copy
             .recipe
             .adjustments
@@ -404,12 +459,18 @@ impl LuminaApp {
         copy.recipe.auto_features.match_total_exposure = true;
         copy.recipe.auto_features.target_luminance = median;
         copy.recipe.auto_features.matched_exposure = Some(delta);
-        copy.history.push(HistoryEntry {
+        let mut entry = HistoryEntry {
             id: history_id.into(),
             recipe: copy.recipe.clone(),
-            recorded_at: None,
+            recorded_at: Some(self.history_timestamp()),
             extras: BTreeMap::new(),
-        });
+        };
+        if let Err(error) =
+            entry.set_changes(history_changes::recipe_changes(&before, &copy.recipe))
+        {
+            error!("match history changes rejected: {error}");
+        }
+        copy.history.push(entry);
         lumina_sidecar::save_sidecar_if_unchanged(
             &sidecar_path,
             &document,

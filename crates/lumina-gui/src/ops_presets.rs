@@ -78,6 +78,8 @@ impl LuminaApp {
             };
             self.recipe.adjustments.insert(key.clone(), value);
         }
+        let changes = history_changes::recipe_changes(&previous, &self.recipe);
+        let timestamp = self.history_timestamp();
         if let Some(document) = &mut self.document {
             if let Some(copy) = document
                 .virtual_copies
@@ -85,12 +87,16 @@ impl LuminaApp {
                 .find(|copy| copy.id == self.virtual_copy_id)
             {
                 let id = format!("history-{}", copy.history.len() + 1);
-                copy.history.push(HistoryEntry {
+                let mut entry = HistoryEntry {
                     id,
                     recipe: previous,
-                    recorded_at: None,
+                    recorded_at: Some(timestamp),
                     extras: BTreeMap::new(),
-                });
+                };
+                if let Err(error) = entry.set_changes(changes) {
+                    log::error!("preset history changes rejected: {error}");
+                }
+                copy.history.push(entry);
             }
         }
         self.render()

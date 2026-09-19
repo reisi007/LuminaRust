@@ -42,6 +42,11 @@ mod merge_gui;
 mod lensfun_gpu;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
+// UX-LOOK-HISTORY-18: the presets group tree (relative-folder grouping, own
+// module for the file-size ratchet) and the readable history label /
+// structured change diff.
+mod history_changes;
+mod preset_tree;
 // LRPAR-G08-PREVIOUS / GUI-FILMSTRIP-SYNC-1: the filmstrip selection actions
 // (Lightroom "Sync Settings", "Match Total Exposures", "Previous Image").
 mod selection_actions;
@@ -1853,6 +1858,10 @@ pub struct LuminaApp {
     /// [`Self::apply_previous_to_selection`]. Session-only, never persisted
     /// (like `settings_clipboard` above).
     previous_reference: Option<PreviousReference>,
+    /// UX-LOOK-HISTORY-18: session-only clock override for deterministic
+    /// history timestamps in headless/kittest tests. Never persisted; `None`
+    /// uses the real UTC clock.
+    history_timestamp_override: Option<String>,
     /// Welle 2 display-only view flags (`J` clipping overlay, `L` lights-out,
     /// `Tab` panel hide, `R` crop mode). None of them mutates the recipe; the
     /// B&W `V` treatment is recipe-backed instead (see `toggle_black_white`).
@@ -2911,6 +2920,7 @@ impl LuminaApp {
             before_after: false,
             settings_clipboard: None,
             previous_reference: None,
+            history_timestamp_override: None,
             clipping_overlay: false,
             lights_out: false,
             panels_hidden: false,
@@ -8750,38 +8760,6 @@ impl LuminaApp {
             .ok_or_else(|| GuiError::Io(Str::NoMaskSelected.t().to_string()))
     }
 
-    pub fn apply_adjustment_to_selection(
-        paths: &[std::path::PathBuf],
-        key: &str,
-        value: f64,
-    ) -> Result<usize, GuiError> {
-        if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") {
-            return Err(GuiError::Io(Str::UnknownAdjustment.format_arg(key)));
-        }
-        let mut changed = 0;
-        for path in paths {
-            let sidecar_path = lumina_sidecar::sidecar_path_for(path);
-            let mut document = lumina_sidecar::load_sidecar(&sidecar_path)?;
-            let Some(copy) = document
-                .virtual_copies
-                .iter_mut()
-                .find(|copy| copy.is_default)
-            else {
-                continue;
-            };
-            copy.recipe.adjustments.insert(key.into(), value);
-            copy.history.push(HistoryEntry {
-                id: format!("selection-{changed}"),
-                recipe: copy.recipe.clone(),
-                recorded_at: None,
-                extras: BTreeMap::new(),
-            });
-            lumina_sidecar::save_sidecar(&sidecar_path, &document)?;
-            changed += 1;
-        }
-        Ok(changed)
-    }
-
     /// GUI-FILMSTRIP-SYNC-1: pure filmstrip click semantics (Lightroom-like),
     /// headless-testable without an [`egui::Context`].
     ///
@@ -11729,6 +11707,7 @@ impl LuminaApp {
             self.document = Some(document);
             return;
         };
+        let previous_recipe = copy.recipe.clone();
         copy.recipe = self.recipe.clone();
         // G-06 (LRPAR-G06-GEO): an armed geometry edit becomes exactly one
         // visible history step. The entry stores the saved (final) recipe,
@@ -11746,12 +11725,21 @@ impl LuminaApp {
             let mut extras = BTreeMap::new();
             extras.insert("step".into(), Value::String("geometry".into()));
             extras.insert("action".into(), Value::String(step));
-            copy.history.push(HistoryEntry {
+            // UX-LOOK-HISTORY-18: persist the readable step (control + old→new
+            // + time) so the history panel shows more than a machine id.
+            let mut entry = HistoryEntry {
                 id: format!("geometry-{counter}"),
                 recipe: copy.recipe.clone(),
-                recorded_at: None,
+                recorded_at: Some(self.history_timestamp()),
                 extras,
-            });
+            };
+            if let Err(error) = entry.set_changes(history_changes::recipe_changes(
+                &previous_recipe,
+                &self.recipe,
+            )) {
+                error!("geometry history changes rejected: {error}");
+            }
+            copy.history.push(entry);
         }
         match lumina_sidecar::save_sidecar_if_unchanged(
             &sidecar_path,
@@ -13350,6 +13338,8 @@ mod tests {
     mod gpu_routing;
     mod gpu_state;
     mod histogram;
+    // UX-LOOK-HISTORY-18: readable/clickable history entries + presets tree.
+    mod history_presets_look;
     mod iptc;
     mod layout;
     mod lens_blur;
@@ -13393,31 +13383,6 @@ mod tests {
         MaskDefinition, MaskOperation, MaskPrompt, MaskStatus, ModelIdentity, NormalizedRect,
         Point2, Preprocessing, PromptTransform, Resolution, SourceFingerprint, SourceStatus,
     };
-    fn new_app() -> LuminaApp {
-        LuminaApp::new(egui::Context::default())
-    }
-
-    /// Open a file and synchronously drain the background decode (PERF-GUI-7)
-    /// channel. The headless test harness has no `update()` event loop, so the
-    /// async `decode_rx` must be pumped here before asserting on the result.
-    fn open_and_decode(app: &mut LuminaApp, path: impl Into<String>) {
-        app.open_file(path);
-        // Pump the background decode channel; yield so the worker thread is
-        // scheduled. Bounded so a genuine failure can't hang the suite.
-        for _ in 0..2000 {
-            app.poll_decode();
-            if app.original.is_some() || app.error().is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-    }
-    fn png() -> Vec<u8> {
-        ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
-            .unwrap()
-            .encode(ImageFileFormat::Png)
-            .unwrap()
-    }
     /// GUI-STARTUP-FOLLOWUP-1 (B4): JPEG fixture through the real encoder so
     /// the startup test below decodes genuine JPEG bytes (not a renamed PNG).
     fn jpeg() -> Vec<u8> {
