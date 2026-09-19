@@ -1904,11 +1904,10 @@ pub struct LuminaApp {
     combine_name_input: String,
     duplicate_name_input: String,
     /// G-02 (LRPAR-G02-COLOR) tone-curve panel session state. Display-only
-    /// (never recipe/sidecar): selected curve channel (`0` master, `1..=3`
-    /// red/green/blue) plus the add-point input buffers.
+    /// (never recipe/sidecar): the selected curve channel (`0` master,
+    /// `1..=3` red/green/blue). UX-LOOK-TONECURVE-18 edits the curve through
+    /// the interactive graph, so no add-point input buffers are kept.
     tone_curve_channel: usize,
-    tone_curve_new_input: f32,
-    tone_curve_new_output: f32,
     /// Welle 3 (LR-13/LR-20/LR-09/LR-12/LR-17 light) display/session state.
     /// All of these are display-only or `extras`/history-backed, so no
     /// sidecar schema change was needed:
@@ -2942,8 +2941,6 @@ impl LuminaApp {
             combine_name_input: String::new(),
             duplicate_name_input: String::new(),
             tone_curve_channel: 0,
-            tone_curve_new_input: 0.5,
-            tone_curve_new_output: 0.5,
             filter_bar_visible: false,
             library_filter: String::new(),
             compare_mode: None,
@@ -9248,11 +9245,12 @@ impl LuminaApp {
         None
     }
 
-    /// Set one free point-curve control point (`input`/`output`) of one
-    /// channel (G-02) and record the save commit. Replaces that channel's
-    /// parametric 4-point list (Last-Write-Wins je Kanal). Violations of the
-    /// point rules are refused loudly (status + no save), never clipped
-    /// silently.
+    /// Set one free point-curve control point (`input`/`output`) of one channel
+    /// (G-02) and record the save commit. The interactive graph
+    /// (UX-LOOK-TONECURVE-18) is the production editor; this per-field path is
+    /// test-owned (`#[cfg(test)]`, loud-refusal coverage). Violations are
+    /// refused loudly (status + no save), never clipped silently.
+    #[cfg(test)]
     fn set_curve_point(&mut self, channel: &str, index: usize, field: &str, value: f64) {
         if !matches!(field, "input" | "output") {
             warn!("set_curve_point: unknown field {field}");
@@ -13381,6 +13379,8 @@ mod tests {
     mod spot_visualize;
     mod startup;
     mod toast;
+    // UX-LOOK-TONECURVE-18: interactive tone-curve graph tests.
+    mod tone_curve_graph;
     // UX-LOOK-TOOLBAR-18: icon tool strip + Library view-tab paint/click tests.
     mod toolbar_icons;
     mod w3_release;

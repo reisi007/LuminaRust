@@ -219,3 +219,28 @@ Commit ausstehend bis unabhängiger Verifizierung):
   Deltas (Toolbar-Zeile unter dem Zoom-Toolbar, View-Tab-Zeile, dadurch leicht
   verschobener Canvas/Empty-State, identische Farb-/Zustands-Signale).
   `kittest_parity` (separates Target, GPU-abhängig) bewusst nicht verändert.
+
+## Umsetzungsstand UX-LOOK-TONECURVE-18 (2026-09-19)
+
+SOLL-Entscheid oben umgesetzt (Implementierung + headless/kittest-Goldens,
+Commit nach unabhängiger Verifizierung BESTANDEN):
+
+- **Echte Kurvengrafik pro Kanal** (`src/develop_tone/tone_curve_graph.rs`,
+  P0/P1-Slider-Editor in `src/develop_tone.rs` ersetzt): Klick auf die Kurve
+  setzt einen Punkt (Kurvennähe 8 pt, sonst No-op), Drag zieht (Input-Clamp
+  zwischen Nachbarn, Output 0..=1), Doppelklick löscht Innenpunkte; Endpunkte
+  `(0,0)`/`(1,1)` weder zieh- noch löschbar (laute Verweigerung, Status +
+  `warn!`, kein Save). Kanalwahl Master/R/G/B unverändert.
+- **Spline = PCHIP-Spiegel von `lumina_core::monotone_curve`**
+  (Anzeige-Sampler nur für Grafik/Hit-Testing; Rendering bleibt Core bzw.
+  GPU-`apply_curves_stage`, unberührt — keine neue CPU-Route).
+- **Persistenz unverändert** über bestehenden `curves`-Rezeptblock (kein
+  Schema-Bruch, keine Migration); Reload-Roundtrip getestet.
+- **Tests:** 7 headless Tests (`src/tests/tone_curve_graph.rs`:
+  Gesten-Instrumentierung, Zustand + Sidecar-Reload, pro-Kanal-Unabhängigkeit,
+  Clamp/laute Verweigerung, Paint, 256-Rampen-Parität gegen `render_frame`).
+- **Namen-Vorbehalt:** keine neuen sichtbaren Strings, `i18n.rs` unverändert
+  (ungenutzte `Str::ToneCurveAddPoint/RemovePoint/PointInput/PointOutput`
+  unter `allow(dead_code)`).
+- **Golden:** `develop_section_tone_curve.png` rebaselined (Diff nur rechtes
+  Panel, Canvas links byte-identisch).

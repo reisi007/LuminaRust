@@ -207,32 +207,11 @@ fn f100_optics_bokeh_button_logs_one_line() {
     assert_single_action_line(&lines, GuiAction::SetLensBlurBokeh);
 }
 
-#[test]
-fn f100_tone_curve_add_point_button_logs_one_line() {
-    let (_directory, mut app) = persistent_app();
-    app.set_section_open(SECTION_TONE_CURVE, true);
-    let lines = click_action_lines(
-        &mut app,
-        8000.0,
-        &[Str::ToneCurveAddPoint.t()],
-        |app, ui| app.draw_tone_curve(ui),
-    );
-    assert_single_action_line(&lines, GuiAction::AddCurvePoint);
-}
-
-#[test]
-fn f100_tone_curve_remove_point_button_logs_one_line() {
-    let (_directory, mut app) = persistent_app();
-    app.add_curve_point("master", 0.5, 0.5);
-    app.set_section_open(SECTION_TONE_CURVE, true);
-    let lines = click_action_lines(
-        &mut app,
-        8000.0,
-        &[Str::ToneCurveRemovePoint.t()],
-        |app, ui| app.draw_tone_curve(ui),
-    );
-    assert_single_action_line(&lines, GuiAction::RemoveCurvePoint);
-}
+// UX-LOOK-TONECURVE-18: the former Tone-Curve add/remove *buttons* were
+// replaced by graph gestures (click adds, double-click removes). Their
+// click→instrumentation coverage now lives in
+// `tests/tone_curve_graph.rs` (`graph_gesture_add_logs_curve_action` /
+// `graph_gesture_remove_logs_curve_action`).
 
 #[test]
 fn f100_presets_apply_button_logs_one_line() {

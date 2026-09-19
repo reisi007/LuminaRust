@@ -282,14 +282,13 @@ fn develop_section_tone_curve() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
     load_sample(&mut harness);
-    // Only Tone Curve open: the parametric regions + point-curve editor.
-    // B1: scroll target is the first point row (not the "Point curve"
-    // group label) so the P0/P1 editor rows are pixel-visible in the
-    // golden; the group label alone left them below the fold.
-    expand_and_scroll_to(&mut harness, SECTION_TONE_CURVE, "P0 (0.00)");
-    // Non-vacuous guard: the scrolled-to widgets must actually be on-screen,
+    // Only Tone Curve open: the parametric regions + the interactive
+    // point-curve graph. UX-LOOK-TONECURVE-18 replaced the P0/P1 slider rows
+    // with the graph, so the scroll target is the graph's group label.
+    expand_and_scroll_to(&mut harness, SECTION_TONE_CURVE, "Point curve");
+    // Non-vacuous guard: the scrolled-to widget must actually be on-screen,
     // otherwise the golden below could pass on clipped (invisible) pixels.
-    assert_label_on_screen(&mut harness, "P0 (0.00)");
+    assert_label_on_screen(&mut harness, "Point curve");
     harness.snapshot("develop_section_tone_curve");
 }
 

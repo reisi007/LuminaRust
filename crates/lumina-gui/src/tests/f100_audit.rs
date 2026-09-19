@@ -2,6 +2,7 @@
 
 use super::*;
 // UX-LOOK-TOOLBAR-18: icon buttons are audited by their stable widget id.
+use crate::develop_tone::tone_curve_graph::tone_curve_graph_id;
 use crate::icon_toolbar::ToolbarIcon;
 
 // -----------------------------------------------------------------------
@@ -48,10 +49,15 @@ pub(super) enum F100Surface {
 /// UX-LOOK-TOOLBAR-18: a clickable button is either a painted text label or a
 /// vector-painted icon located by its stable widget id. `From` keeps the many
 /// existing text entries readable as `.into()`.
+///
+/// UX-LOOK-TONECURVE-18: `Widget` covers graph-hosted gestures that have no
+/// text label (the tone-curve graph adds on click, removes on double-click);
+/// it is audited by the widget id it registers via `Ui::interact`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ButtonRef {
     Text(String),
     Icon(ToolbarIcon),
+    Widget(egui::Id),
 }
 
 impl From<String> for ButtonRef {
@@ -192,10 +198,16 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
         GuiAction::SetLensProfile => (F100Surface::Optics, Str::LensProfile.t().into()),
         GuiAction::ClearLensProfile => (F100Surface::Optics, Str::LensProfile.t().into()),
         GuiAction::SetLensBlurBokeh => (F100Surface::Optics, Str::LensBlurBokehRound.t().into()),
-        GuiAction::AddCurvePoint => (F100Surface::ToneCurve, Str::ToneCurveAddPoint.t().into()),
-        GuiAction::RemoveCurvePoint => {
-            (F100Surface::ToneCurve, Str::ToneCurveRemovePoint.t().into())
-        }
+        // UX-LOOK-TONECURVE-18: both gestures live on the interactive graph
+        // (click adds, double-click removes), which is audited by widget id.
+        GuiAction::AddCurvePoint => (
+            F100Surface::ToneCurve,
+            ButtonRef::Widget(tone_curve_graph_id("master")),
+        ),
+        GuiAction::RemoveCurvePoint => (
+            F100Surface::ToneCurve,
+            ButtonRef::Widget(tone_curve_graph_id("master")),
+        ),
         GuiAction::ApplyPreset => (F100Surface::Presets, Str::ApplyPreset.t().into()),
         GuiAction::SavePresetFile => (F100Surface::Presets, Str::SavePresetFile.t().into()),
         // GUI-INSTRDBG-17c: WB eyedropper, Point Color, Spot distraction,
@@ -406,6 +418,28 @@ pub(super) fn f100_assert_button(
             assert_fully_visible(shapes, label);
         }
         ButtonRef::Icon(icon) => assert_icon_painted(shapes, ctx, *icon),
+        ButtonRef::Widget(id) => {
+            let response = ctx
+                .read_response(*id)
+                .unwrap_or_else(|| panic!("{what} widget must be registered/painted"));
+            let rect = response.rect;
+            assert!(
+                rect.is_positive() && rect.is_finite(),
+                "{what} widget rect must be valid: {rect:?}"
+            );
+            let screen = ctx.viewport_rect();
+            assert!(
+                screen.expand(0.5).contains_rect(rect),
+                "{what} widget {rect:?} must lie inside the screen {screen:?}"
+            );
+            let painted = shapes
+                .iter()
+                .any(|clipped| clipped.shape.visual_bounding_rect().intersects(rect));
+            assert!(
+                painted,
+                "{what} widget must paint at least one shape inside {rect:?}"
+            );
+        }
     }
 }
 
