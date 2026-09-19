@@ -132,6 +132,64 @@ fn develop_section_previous_reset_are_right_anchored() {
     );
 }
 
+/// LAYOUT-V1 (Follow-up UX-LOOK-LAYOUT-18): the pinned Develop footer
+/// (commit row + maintenance row + Reset-Sliders checkbox) must stay readable
+/// in narrow panels. Every footer button paints fully inside its clip and no
+/// two button rects overlap — the maintenance row wraps into clean extra
+/// lines instead of spilling into the commit row (the vision finding
+/// "…Missing der / Apply" in `develop_section_history`/`_presets`/
+/// `navigator_closed`). Pinned at both the default 320px panel and a tighter
+/// 220px panel; the layout must be width-driven, not style-dependent.
+#[test]
+fn develop_footer_buttons_never_overlap_in_narrow_panels() {
+    for width in [320.0_f32, 220.0] {
+        let mut app = new_app();
+        app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+            .unwrap();
+        app.set_module(Module::Develop);
+        let shapes = headless_shapes(&mut app, |app, ctx| {
+            egui::Panel::right("controls")
+                .resizable(false)
+                .exact_size(width)
+                .show(ctx, |ui| app.draw_develop_panel(ui));
+        });
+        // Same five footer buttons in `draw_develop_panel`'s top-down order.
+        let labels = [
+            Str::Reset.t(),
+            Str::MatchExposure.t(),
+            Str::RegenerateStale.t(),
+            Str::SaveRecipe.t(),
+            Str::RenderApply.t(),
+        ];
+        let mut rects = Vec::new();
+        for label in labels {
+            assert_fully_visible(&shapes, label);
+            let rect = text_shapes_for(&shapes, label)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("{label:?} must be painted"))
+                .0;
+            assert!(
+                rect.is_positive() && rect.is_finite(),
+                "{label:?} must paint a valid rect, got {rect:?}"
+            );
+            rects.push((label, rect));
+        }
+        for i in 0..rects.len() {
+            for j in (i + 1)..rects.len() {
+                let (left_label, left) = rects[i];
+                let (right_label, right) = rects[j];
+                let overlap = left.intersect(right);
+                assert!(
+                    overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                    "footer buttons {left_label:?} {left:?} and {right_label:?} \
+                     {right:?} overlap at a {width}px panel ({overlap:?})"
+                );
+            }
+        }
+    }
+}
+
 /// UX-LOOK-LAYOUT-18: the right-anchored Previous/Reset buttons are real
 /// buttons — a headless click changes the recipe (uncommitted edit → Previous
 /// restores the load baseline; Reset sets documented defaults).

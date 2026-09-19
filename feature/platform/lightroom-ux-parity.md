@@ -174,14 +174,14 @@ DoD §6 Vision-Review der geänderten Layouts + kittest-Goldens (neu/geändert)
 Nachgelagerter DoD-§6.2-Loop über 5 Alt/Neu-Golden-Paare (Commit d34ba0a),
 vom Build-Agenten am Bild gegengeprüft:
 
-- **LAYOUT-V1 (mittel, Fix-Pflicht nach TOOLBAR-18):** Footer-Überlappung in
+- **LAYOUT-V1 (mittel, BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Footer-Überlappung in
   schmalen Zuständen — „Regenerate Stale / Missing" und „Render / Apply"
-  überlagern sich zu unlesbarem „…Missing der / Apply"
-  (`develop_section_history`, `develop_section_presets`, `navigator_closed`;
-  in `develop_basic`/`develop_overlay_crop` korrekt 3-zeilig). Die
-  `horizontal_wrapped`-Footer-Zeilen wrappen nicht sauber. Fix als eigener
-  Slice nach UX-LOOK-TOOLBAR-18 (kein neuer Todo-Task, Follow-up dieser
-  Sektion).
+  überlagerten sich zu unlesbarem „…Missing der / Apply".
+  Ursache: `Layout::bottom_up` + `horizontal_wrapped` brach nach unten um.
+  Fix: echter `egui::Panel::bottom`-Footer (top-down, gleiche Buttons/
+  Reihenfolge/Handler), gepinnt per `develop_footer_buttons_never_overlap_in_narrow_panels`
+  (320/220 px, Disjunktheit; Bug ohne Fix reproduziert). 28 Develop-Goldens
+  rebaselined (Diffs nur im rechten Panel).
 - **LAYOUT-V2 (niedrig, dokumentiertes Verhalten, kein Fix):** Bei
   geschlossener linker Rail sind Presets/Snapshot/History nicht sichtbar.
   Das entspricht Lightroom (Panel-Toggle blendet aus, derselbe Toggle blendet

@@ -285,11 +285,12 @@ fn library_people_view_paints_from_the_selector() {
     }
 }
 
-/// GUI-VISION-1 refactor guard: the outer Develop panel is bottom-up
-/// (pinned footer) but the scroll content must stay top-down in F-100
-/// order — headers paint top-to-bottom Basic → … → Masking.
+/// GUI-VISION-1 refactor guard: the Develop panel pins its footer in a bottom
+/// `Panel` (LAYOUT-V1; previously a bottom-up shell) but the scroll content
+/// must stay top-down in F-100 order — headers paint top-to-bottom
+/// Basic → … → Masking.
 #[test]
-fn develop_sections_stay_top_down_despite_bottom_up_footer() {
+fn develop_sections_stay_top_down_with_pinned_footer() {
     let mut app = new_app();
     app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
         .unwrap();

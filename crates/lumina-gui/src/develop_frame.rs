@@ -1,8 +1,8 @@
 //! GUI-REFACTOR-W2-20 S2.4: the Develop frame (section order table, panel
 //! shell and scroll content), extracted verbatim from `lib.rs`.
 //!
-//! [`LuminaApp::draw_develop_panel`] is the bottom-up panel shell with the
-//! pinned global-action footer; [`LuminaApp::DEVELOP_SECTIONS`] is the
+//! [`LuminaApp::draw_develop_panel`] is the panel shell with the pinned
+//! global-action footer in a bottom `Panel` (LAYOUT-V1); [`LuminaApp::DEVELOP_SECTIONS`] is the
 //! normative F-100 section order and [`LuminaApp::develop_scroll_content`] the
 //! top-down scroll content (histogram, rating, the eight sections,
 //! generative/heal and the load controls). UX-LOOK-LAYOUT-18 moved the
@@ -44,72 +44,91 @@ impl LuminaApp {
     /// left rail (UX-LOOK-LAYOUT-18), not in this panel. Every
     /// adjustment uses [`lr_slider`] so the F-100 reset/scroll/scale rules apply.
     ///
-    /// GUI-VISION-1: the outer layout is bottom-up so the global actions form
-    /// a pinned footer at the panel bottom edge — never half-cut below a
-    /// scroll fold (kittest `develop_basic`/`histogram_graphic` goldens).
-    /// Footer rows, edge-first: commit row (Save Recipe / Sidecar, Render /
-    /// Apply), then maintenance row (Reset, Match Total Exposure,
-    /// Regenerate Stale / Missing), then the Reset-Sliders checkbox on top.
-    /// Code order is bottom-first (the first row added lands lowest); the
-    /// scroll content itself is explicitly top-down again because `ScrollArea`
-    /// inherits the parent layout (`Ui::new_child` falls back to
-    /// `*self.layout()`).
+    /// GUI-VISION-1: the global actions form a pinned footer at the panel
+    /// bottom edge — never half-cut below a scroll fold (kittest
+    /// `develop_basic`/`histogram_graphic` goldens). Top-down footer order:
+    /// the Reset-Sliders checkbox, then maintenance row (Reset, Match Total
+    /// Exposure, Regenerate Stale / Missing), then the commit row (Save
+    /// Recipe / Sidecar, Render / Apply) closest to the panel edge.
+    ///
+    /// LAYOUT-V1 (Follow-up UX-LOOK-LAYOUT-18): the footer is a real bottom
+    /// `Panel`, not a `with_layout(bottom_up)` shell with `horizontal_wrapped`
+    /// rows. In a bottom-up parent egui wraps a row *downward* (toward the
+    /// panel edge) while the shell advances by its first line only, so the
+    /// maintenance row's wrapped line spilled into the commit row and produced
+    /// the unreadable "…Missing der / Apply" overlap in narrow panels
+    /// (`develop_section_history`, `develop_section_presets`,
+    /// `navigator_closed`). A bottom panel lays its content out top-down like
+    /// the wrapped rows themselves, so they wrap onto their own lines at any
+    /// width — same buttons, same order, same actions. The `default_size` only
+    /// seeds the panel's first frame with enough height for the wrapped rows;
+    /// the panel then settles to the actual content height. The scroll content
+    /// stays explicitly top-down again because `ScrollArea` inherits the
+    /// parent layout (`Ui::new_child` falls back to `*self.layout()`).
     pub(crate) fn draw_develop_panel(&mut self, ui: &mut egui::Ui) {
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.add_space(2.0);
-            // UX-LOOK-LAYOUT-18: the admin actions are spread into readable
-            // rows instead of a cramped one-per-line stack. The commit row
-            // (Save / Render) sits closest to the panel edge; the global
-            // maintenance row (Reset / Match / Regenerate) is grouped above it.
-            // Bottom-up insertion: the first row added lands lowest.
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(Str::SaveRecipe.t()).clicked() {
-                    self.save_recipe_action();
+        egui::Panel::bottom("develop_footer")
+            // Seed height for the wrapped rows; the panel self-sizes to the
+            // real content height after its first frame.
+            .default_size(140.0)
+            // Keep the historic footer look: no own frame/margins and no
+            // reserved separator room (the explicit `ui.separator()` below is
+            // the single visible divider).
+            .frame(egui::Frame::NONE)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.separator();
+                // LRPAR-G01-BASIC: "Reset Sliders Automatically" — folder-inherited
+                // edit behaviour (see `set_reset_sliders_automatically`).
+                let mut reset_auto = self.reset_sliders_automatically;
+                ui.checkbox(&mut reset_auto, Str::ResetSlidersAutomatically.t());
+                if reset_auto != self.reset_sliders_automatically {
+                    self.set_reset_sliders_automatically(reset_auto);
                 }
-                if ui.button(Str::RenderApply.t()).clicked() {
-                    self.render_action();
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(Str::Reset.t()).clicked() {
-                    self.reset();
-                }
-                if ui.button(Str::MatchExposure.t()).clicked() {
-                    if let Err(error) = self.match_total_exposure(0.5) {
-                        self.show_error(error);
+                // UX-LOOK-LAYOUT-18: the admin actions are spread into readable
+                // rows instead of a cramped one-per-line stack. The maintenance
+                // row (Reset / Match / Regenerate) is grouped above the commit
+                // row (Save / Render), which sits closest to the panel edge.
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(Str::Reset.t()).clicked() {
+                        self.reset();
                     }
-                }
-                // GUI-GEN-GRANULAR-10 (F-100): the collective default — regenerate
-                // every stale/missing AI/analysis value (masks, auto-tone,
-                // matching) and skip the fresh ones. Explicit only, never implicit.
-                if ui.button(Str::RegenerateStale.t()).clicked() {
-                    match self.regenerate_stale() {
-                        Ok(done) if done.is_empty() => {
-                            self.status = Str::NothingStale.t().to_string();
+                    if ui.button(Str::MatchExposure.t()).clicked() {
+                        if let Err(error) = self.match_total_exposure(0.5) {
+                            self.show_error(error);
                         }
-                        Ok(done) => {
-                            self.status = Str::RegeneratedStale.format_arg(&done.join(", "));
-                        }
-                        Err(error) => self.show_error(error),
                     }
-                }
-            });
-            // LRPAR-G01-BASIC: "Reset Sliders Automatically" — folder-inherited
-            // edit behaviour (see `set_reset_sliders_automatically`).
-            let mut reset_auto = self.reset_sliders_automatically;
-            ui.checkbox(&mut reset_auto, Str::ResetSlidersAutomatically.t());
-            if reset_auto != self.reset_sliders_automatically {
-                self.set_reset_sliders_automatically(reset_auto);
-            }
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        self.develop_scroll_content(ui);
-                    });
+                    // GUI-GEN-GRANULAR-10 (F-100): the collective default — regenerate
+                    // every stale/missing AI/analysis value (masks, auto-tone,
+                    // matching) and skip the fresh ones. Explicit only, never implicit.
+                    if ui.button(Str::RegenerateStale.t()).clicked() {
+                        match self.regenerate_stale() {
+                            Ok(done) if done.is_empty() => {
+                                self.status = Str::NothingStale.t().to_string();
+                            }
+                            Ok(done) => {
+                                self.status = Str::RegeneratedStale.format_arg(&done.join(", "));
+                            }
+                            Err(error) => self.show_error(error),
+                        }
+                    }
                 });
-        });
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(Str::SaveRecipe.t()).clicked() {
+                        self.save_recipe_action();
+                    }
+                    if ui.button(Str::RenderApply.t()).clicked() {
+                        self.render_action();
+                    }
+                });
+                ui.add_space(2.0);
+            });
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    self.develop_scroll_content(ui);
+                });
+            });
     }
 
     /// Scrolling part of the Develop panel (sections + load controls); the
