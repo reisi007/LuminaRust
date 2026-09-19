@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 /// Collapsing-header labels of the Develop panel, in draw order.
 ///
 /// Kept in sync with `LuminaApp::DEVELOP_SECTIONS` (single source of truth in
-/// `crates/lumina-gui/src/lib.rs`, labels via `Str::*` in
+/// `crates/lumina-gui/src/develop_frame.rs`, labels via `Str::*` in
 /// `crates/lumina-gui/src/i18n.rs`): `Presets` + `History` (top, collapsible)
 /// followed by the eight F-100 sections `Basic` … `Masking`.
 /// F-103-N10 (user decision 2026-08-25): Detail BEFORE Effects (Lightroom

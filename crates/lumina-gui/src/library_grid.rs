@@ -1,0 +1,325 @@
+//! GUI-REFACTOR-W2-20 S2.3: the Library grid view and empty state,
+//! extracted verbatim from `lib.rs`.
+//!
+//! [`LuminaApp::draw_library_grid`] paints the filtered/sorted thumbnail grid
+//! (thumbnail scheduling, selection, badges, sidecar/copy index) and delegates
+//! to the loupe/compare/survey views; [`LuminaApp::draw_library_empty_state`]
+//! is the empty-library placeholder. No behaviour changes: scheduling,
+//! filter order and `trace!`s are byte-identical. The grid is `pub(crate)`
+//! because the app root and headless tests call it.
+
+use super::*;
+use log::trace;
+
+impl LuminaApp {
+    /// UX-SLICE-2 (F3): the single Library empty state, shared by Grid, Loupe,
+    /// Compare and Survey. Deterministic painted icon, honest body text and
+    /// the F2 "Open Folder" CTA (native folder picker via [`Self::open_folder`]).
+    fn draw_library_empty_state(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(48.0);
+            paint_library_empty_icon(ui);
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(Str::LibraryEmptyTitle.t()).heading());
+            ui.label(Str::ReadyForImage.t());
+            ui.add_space(8.0);
+            if ui.button(Str::OpenFolder.t()).clicked() {
+                self.open_folder();
+            }
+        });
+    }
+
+    /// Lightroom-like Library grid view (center): RAW files of the current
+    /// directory rendered through the shared ThumbnailManager pipeline (no
+    /// duplicate generation). Double-click opens a file and switches to
+    /// Develop (Loupe). The thumbnail cell size is user-adjustable via a
+    /// toolbar slider (Lightroom "Grid" thumbnails).
+    pub(crate) fn draw_library_grid(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        // Toolbar: a thumbnail-size slider (Lightroom-like). Small/simple stub
+        // for now — it drives the cell size of the grid below.
+        ui.horizontal(|ui| {
+            ui.label(Str::LibraryThumbSize.t());
+            let mut size = self.library_thumb_size;
+            if ui
+                .add(
+                    egui::Slider::new(&mut size, 72.0..=240.0)
+                        .show_value(true)
+                        .fixed_decimals(0),
+                )
+                .changed()
+            {
+                self.library_thumb_size = size.round();
+            }
+            // F-100 Klickbarkeit (GUI-CLICK-ALL-17): the `\` filter drawer had
+            // no clickable access; this button toggles the same path.
+            ui.separator();
+            if ui
+                .selectable_label(self.filter_bar_visible, Str::FilterBar.t())
+                .on_hover_text(Str::ShortcutHint.format_arg("\\"))
+                .clicked()
+            {
+                self.toggle_filter_bar();
+            }
+        });
+        // G-09 + FACE-20-S5: explicit Library-view selector (Grid / Loupe /
+        // Compare / Survey / People). The keyboard shortcuts stay the primary
+        // path; People deliberately has no new global shortcut (FACE-20 §3).
+        ui.horizontal_wrapped(|ui| {
+            for (view, label) in [
+                (LibraryView::Grid, Str::LibraryGridOn.t()),
+                (LibraryView::Loupe, Str::LoupeOn.t()),
+                (LibraryView::Compare, Str::CompareModeCompare.t()),
+                (LibraryView::Survey, Str::SurveyOn.t()),
+                (LibraryView::People, Str::FacePeople.t()),
+            ] {
+                if ui
+                    .selectable_label(self.library_view == view, label)
+                    .clicked()
+                {
+                    self.set_library_view(view);
+                }
+            }
+        });
+        ui.separator();
+        // Welle 3 (LR-13 light): `\` Library drawer — text filter over the
+        // scanned entry metadata plus Quick Develop sliders. Hidden by
+        // default, so the default grid layout (and its kittest goldens) are
+        // pixel-identical without it.
+        if self.filter_bar_visible {
+            ui.horizontal(|ui| {
+                ui.label(Str::FilterBar.t());
+                let mut query = self.library_filter.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut query)
+                            .hint_text(Str::FilterPlaceholder.t()),
+                    )
+                    .changed()
+                {
+                    self.set_library_filter(query);
+                }
+            });
+            ui.collapsing(Str::QuickDevelop.t(), |ui| {
+                for (key, label, range) in [
+                    ("exposure", Str::Exposure, -10.0..=10.0),
+                    ("contrast", Str::Contrast, -1.0..=1.0),
+                    ("highlights", Str::Highlights, -1.0..=1.0),
+                    ("shadows", Str::Shadows, -1.0..=1.0),
+                ] {
+                    let mut value = self.recipe.adjustments.get(key).copied().unwrap_or(0.0);
+                    if ui
+                        .add(egui::Slider::new(&mut value, range).text(label.t()))
+                        .changed()
+                    {
+                        if let Err(error) = self.apply_quick_develop(key, value) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            });
+            self.draw_library_metadata(ui);
+            ui.separator();
+        }
+        // GUI-SCROLL-200-1: index-based view over the RAW entries. Only the
+        // visible rows are laid out (show_rows) and only the buffered window's
+        // thumbnails are ensured per frame — never an O(n) loop over all
+        // entries. GUI-FILMSTRIP-DUP-1: one shared index source.
+        // G-09 (LRPAR-G09-LIB): grid, loupe, compare and survey share this
+        // filtered order ([`Self::filtered_library_order`]: RAW-only display
+        // order narrowed by the active collection view and the `\` query),
+        // so painting and keyboard navigation always see the same list.
+        let raw_indices: Vec<usize> = self.filtered_library_order();
+        // LRPAR-G12-FACE-20 (S5): the People view is not tied to the RAW-only
+        // grid order (a face analysis of any loaded source is shown), so it
+        // branches before the shared empty state below.
+        if self.library_view == LibraryView::People {
+            self.draw_library_people(ctx, ui);
+            return;
+        }
+        // UX-SLICE-2 (F3): one shared empty state for every Library view —
+        // Grid, Loupe, Compare and Survey. The check runs before the view
+        // branch so the non-grid views can no longer render a second,
+        // divergent empty text (`Heading + ReadyForImage` vs. icon + CTA).
+        if raw_indices.is_empty() {
+            self.draw_library_empty_state(ui);
+            return;
+        }
+        // G-09: non-grid views branch here; the grid body below (and its
+        // kittest goldens) stays pixel-identical for `LibraryView::Grid`.
+        match self.library_view {
+            LibraryView::Loupe => {
+                self.library_cols = 1;
+                self.draw_library_loupe(ctx, ui, &raw_indices);
+                return;
+            }
+            LibraryView::Compare => {
+                self.library_cols = 1;
+                self.draw_library_compare(ctx, ui, &raw_indices);
+                return;
+            }
+            LibraryView::Survey => {
+                self.draw_library_survey(ctx, ui, &raw_indices);
+                return;
+            }
+            // Handled above (independent of the RAW-only grid order).
+            LibraryView::People => return,
+            LibraryView::Grid => {}
+        }
+        let thumb = self.library_thumb_size;
+        const CELL_INNER_PAD: f32 = 8.0;
+        let cell_inner = (thumb - CELL_INNER_PAD).max(32.0);
+        let cols = ((ui.available_width() / thumb).floor() as usize).max(1);
+        self.library_cols = cols;
+        let count = raw_indices.len();
+        let total_rows = count.div_ceil(cols);
+        // The closure returns the laid-out row window so scheduling below runs
+        // with the exact visible range.
+        let visible_rows = {
+            egui::ScrollArea::vertical()
+                .show_rows(
+                    ui,
+                    cell_inner,
+                    total_rows,
+                    |ui, rows: std::ops::Range<usize>| {
+                        for row in rows.clone() {
+                            let row_start = row * cols;
+                            let row_end = (row_start + cols).min(count);
+                            ui.horizontal(|ui| {
+                                for &entry_idx in &raw_indices[row_start..row_end] {
+                                    let entry = self.entries[entry_idx].clone();
+                                    let selected = self.path == entry.path.display().to_string();
+                                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                                    let placeholder_label =
+                                        self.thumbnail_placeholder_label(&entry);
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        egui::vec2(cell_inner, cell_inner),
+                                        egui::Sense::click(),
+                                    );
+                                    if selected {
+                                        ui.painter().rect_stroke(
+                                            rect.expand(2.0),
+                                            3.0,
+                                            egui::Stroke::new(
+                                                2.0_f32,
+                                                ui.visuals().selection.bg_fill,
+                                            ),
+                                            egui::StrokeKind::Outside,
+                                        );
+                                    }
+                                    if let Some(texture) = tex {
+                                        ui.put(
+                                            rect,
+                                            egui::Image::from_texture(&texture)
+                                                .max_size(rect.size()),
+                                        );
+                                    } else {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            2.0,
+                                            egui::Color32::from_gray(40),
+                                        );
+                                        ui.put(rect, egui::Label::new(placeholder_label));
+                                    }
+                                    // GUI-FILMSTRIP-DUP-1: single click selects
+                                    // (shared filmstrip selection, no open);
+                                    // double-click opens in Develop. All
+                                    // views stay in sync through the same
+                                    // selection bookkeeping.
+                                    if resp.clicked() {
+                                        self.select_filmstrip_path(
+                                            entry.path.display().to_string(),
+                                            false,
+                                            false,
+                                        );
+                                    }
+                                    if resp.double_clicked() {
+                                        trace!(
+                                            "GUI interaction: library grid open {}",
+                                            entry.path.display()
+                                        );
+                                        self.handle_filmstrip_click(
+                                            entry.path.display().to_string(),
+                                            false,
+                                            false,
+                                        );
+                                        self.active_module = Module::Develop;
+                                    }
+                                    // LR-01 + Welle 2: rating/flag/color-label
+                                    // badge of the default copy, painted over
+                                    // the cell's bottom edge (display-only;
+                                    // edits go through the rating section or
+                                    // the 1-5/6-9/P/X/U keys). Unrated +
+                                    // unflagged + unlabeled cells stay clean.
+                                    // UX-SLICE-1: shared with the filmstrip.
+                                    paint_entry_badge(ui, rect, &entry);
+                                    // LRPAR-G09-CULL-25: assisted-culling badge
+                                    // (top-right; visually distinct from the
+                                    // manual rating badge at the bottom edge).
+                                    cull_gui::paint_cull_badge(
+                                        ui,
+                                        rect,
+                                        cull_gui::entry_cull_badge(&entry),
+                                    );
+                                    // F-100 Library: relative-subfolder badge of
+                                    // the recursive aggregation, painted over
+                                    // the cell's top edge (display-only, like
+                                    // the rating badge). Empty for top-level
+                                    // files, so flat listings (tree click) and
+                                    // the existing goldens stay pixel-identical.
+                                    if !entry.folder.is_empty() {
+                                        let badge_pos = rect.left_top() + egui::vec2(4.0, 2.0);
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                badge_pos - egui::vec2(2.0, 0.0),
+                                                egui::vec2(118.0, 16.0),
+                                            ),
+                                            2.0,
+                                            LIBRARY_BADGE_BG,
+                                        );
+                                        ui.painter().text(
+                                            badge_pos,
+                                            egui::Align2::LEFT_TOP,
+                                            folder_badge_display(&entry.folder),
+                                            egui::FontId::monospace(11.0),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
+                                    // Sidecar/copy status on hover (kept from the former
+                                    // text file-browser). The full (untruncated)
+                                    // subfolder badge is part of the tooltip so
+                                    // the ellipsized display text loses nothing.
+                                    let hover_folder = if entry.folder.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n{}", entry.folder)
+                                    };
+                                    resp.on_hover_text(format!(
+                                        "{}{}\n[{}] {}:{} {}:{} {}:{} {}:{} {}:{}",
+                                        entry.name,
+                                        hover_folder,
+                                        entry.status_label(),
+                                        Str::Copies.t(),
+                                        entry.virtual_copies,
+                                        Str::Masking.t(),
+                                        entry.missing_models,
+                                        Str::Rating.t(),
+                                        stars_for_rating(entry.rating),
+                                        Str::FlagLabel.t(),
+                                        flag_label(entry.flag),
+                                        Str::ColorLabel.t(),
+                                        color_label_name(entry.color_label),
+                                    ));
+                                }
+                            });
+                        }
+                        rows
+                    },
+                )
+                .inner
+        };
+        // GUI-SCROLL-200-1: schedule thumbnail work only for the visible
+        // window (+ buffer), then a bounded nearest-first off-screen prefetch.
+        let window = visible_rows.start * cols..(visible_rows.end * cols).min(count);
+        self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
+    }
+}
