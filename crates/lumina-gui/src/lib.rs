@@ -4687,12 +4687,11 @@ impl LuminaApp {
     pub fn toggle_crop_mode(&mut self) {
         instrument_gui_action!(self, GuiAction::ToggleCropMode);
         self.crop_mode = !self.crop_mode;
+        // UX-LOOK-CROP-18b: arming/leaving crop mode changes the preview
+        // texture (full frame vs. committed crop) — invalidate.
+        self.mark_dirty();
         info!("GUI interaction: toggle_crop_mode -> {}", self.crop_mode);
-        self.status = if self.crop_mode {
-            Str::CropModeOn.t().into()
-        } else {
-            Str::CropModeOff.t().into()
-        };
+        self.set_crop_mode_status();
     }
 
     /// Toggle the Library filter drawer (`\`, Welle 3, LR-13 light).

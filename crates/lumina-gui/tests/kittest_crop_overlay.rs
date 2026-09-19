@@ -164,6 +164,40 @@ fn develop_overlay_crop_interactive() {
     harness.snapshot("develop_overlay_crop_interactive");
 }
 
+/// Armed crop mode with a committed straighten angle: the crop bar exposes the
+/// rotation control (knob at the committed angle) beside the Auto-Level button;
+/// the preview itself stays the neutral full frame (the crop-tool authoring
+/// surface). Pins the rotation affordance inside the crop tool
+/// (UX-LOOK-CROP-18b), not any wording (Namen-Vorbehalt).
+#[test]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored"]
+fn develop_overlay_crop_rotation() {
+    let (tmp, photo) = photo_png_fixture();
+    let mut harness = build_harness();
+    harness.state_mut().set_module(Module::Develop);
+    open_file_and_restore_fixture(&mut harness, &photo);
+    assert_preview_loaded(&mut harness);
+    assert_no_tmp_leak(&mut harness, tmp.path());
+    // Commit a straighten angle through the public path, then arm crop mode:
+    // the bar reads the committed angle, the preview stays the full frame.
+    harness.state_mut().set_straighten(8.0);
+    harness.state_mut().toggle_crop_mode();
+    harness.run();
+    assert_eq!(
+        harness
+            .state()
+            .recipe()
+            .geometry
+            .as_ref()
+            .map(|geometry| geometry.rotation_degrees),
+        Some(8.0),
+        "the golden's rotation must be committed in the recipe"
+    );
+    harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
+    harness.run_steps(2);
+    harness.snapshot("develop_overlay_crop_rotation");
+}
+
 /// Drive one real pointer drag from `from` to `to`, one event per frame.
 fn drag_handle(
     harness: &mut Harness<'_, LuminaApp>,

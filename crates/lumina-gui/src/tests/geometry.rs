@@ -296,3 +296,7 @@ fn g06_lensfun_auto_status_names_exif_state() {
 // thirds grid, darkening) — gestures/paint/persistence in its own files.
 mod crop_overlay;
 mod crop_overlay_support;
+// UX-LOOK-CROP-18b (UXG-01 Runde 2): full-frame re-edit + straighten/Auto-Level
+// in the crop tool.
+mod crop_session;
+mod crop_session_support;

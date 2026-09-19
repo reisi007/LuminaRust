@@ -271,6 +271,28 @@ unabhängig verifiziert BESTANDEN):
   Abdunklung, Pixel-Guard).
 - **Namen-Vorbehalt:** `i18n.rs` unverändert, keine neuen Wortlaute.
 
+## SOLL-Entscheid + Umsetzungsstand UX-LOOK-CROP-18b (2026-09-19, Runde-2-Befund)
+
+User-Befund: Nach Commit kein Vergrößern möglich (Referenz schrumpfte mit);
+Rotation/Auto-Level fehlt im Tool. Entscheide (Build-Agent, Runde-2-Fix):
+
+- **Vollbild-Referenz:** Crop-Session arbeitet immer auf Vollbild-Koordinaten
+  (Display-Rezept ohne Geometry-Stage NUR im Crop-Modus, Normalpfad ohne
+  Mehrkosten); Draft-Init aus Commit; Vergrößern bis Vollbild; Commit ersetzt.
+- **Rotation im Tool per Regler** (kein On-Canvas-Drag): Straighten-Slider im
+  Crop-Balken (Session-Draft, Commit via `rotation_degrees`, ein gemeinsamer
+  History-Step mit Crop). Rotation NICHT live im Modus (Core-Ordnung
+  crop→rotate verbietet live-rotierte Fläche mit Quell-Rechteck) — dokumentierte
+  Grenze, Wirkung nach Verlassen des Tools sichtbar.
+- **Auto-Level-Button:** nutzt `upright`-Analyse unverändert, Konfidenz-Gate
+  0.10; low → laut (`warn!` + Status), kein Save; high → Analyse mit
+  Fingerprint als DEAKTIVIERTE Stage persistiert (Evidenz, kein Doppel-Apply,
+  bestehende Stage nie überschrieben).
+- Verlustfrei: nur Rezept, Esc bitgleich. Namen-Vorbehalt gilt (Bestands-`Str`).
+
+Umsetzung verifiziert BESTANDEN 2026-09-19 (13 Tests inkl. echter Balken-Bedienung,
+Guard-Test, Goldens; Verifizierung + Re-Verifizierung).
+
 ## Umsetzungsstand UX-LOOK-HISTORY-18 (2026-09-19)
 
 SOLL-Entscheid oben umgesetzt (Implementierung + Tests + Golden,

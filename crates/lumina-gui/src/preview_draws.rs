@@ -415,7 +415,7 @@ impl LuminaApp {
                 self.draw_mask_overlay(ui, full_rect);
                 self.draw_edit_pins(ui, full_rect);
                 self.draw_lens_blur_overlay(ui, full_rect);
-                self.draw_crop_overlay(ui, full_rect);
+                self.draw_crop_overlay(ui, pane, full_rect);
             }
             ui.set_clip_rect(previous_clip);
         } else {

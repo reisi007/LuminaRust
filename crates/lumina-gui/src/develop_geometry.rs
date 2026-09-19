@@ -10,6 +10,14 @@
 // its own file (file-size ratchet) while staying in this Geometry module
 // boundary.
 pub(crate) mod crop_overlay;
+// UX-LOOK-CROP-18b (UXG-01 Runde 2): the crop-mode display recipe override
+// (full-frame authoring) and the crop bar's straighten draft + Auto-Level live
+// in their own files (file-size ratchet), same module boundary.
+mod crop_display;
+// UX-LOOK-CROP-18b: pure overlay geometry math extracted from `crop_overlay.rs`
+// (file-size ratchet).
+mod crop_geometry;
+pub(crate) mod crop_rotation;
 
 use super::*;
 

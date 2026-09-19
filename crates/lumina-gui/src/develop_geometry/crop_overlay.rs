@@ -26,47 +26,16 @@
 use super::*;
 use log::{info, warn};
 
-/// Normalized (`0..=1`) free-crop rectangle of the session draft.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct CropDraft {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-/// Minimum normalized extent a corner drag may leave (never a degenerate rect).
-const CROP_MIN_EXTENT: f32 = 0.02;
-/// Screen (points) side length of one painted corner handle.
-const CROP_HANDLE_SIZE: f32 = 8.0;
-/// Screen (points) radius within which a press grabs a corner handle.
-const CROP_HANDLE_HIT: f32 = 14.0;
-
-/// One of the four draggable crop corners.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CropCorner {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}
-
-/// What an in-flight crop drag does.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum CropDragKind {
-    Move,
-    Corner(CropCorner),
-}
-
-/// In-flight crop gesture, kept in `egui` temp memory across frames.
-#[derive(Debug, Clone, Copy)]
-struct CropDrag {
-    kind: CropDragKind,
-    /// Effective normalized rectangle when the gesture started.
-    start: CropDraft,
-    /// Normalized pointer position when the gesture started.
-    origin: (f32, f32),
-}
+// UX-LOOK-CROP-18b: the crop bar's session rotation draft, the fingerprinted
+// Auto-Level stash and the bar layout/gesture helpers (own file, same module).
+use super::crop_geometry::{
+    draft_screen_rect, moved_rect, nearest_corner, outside_regions, pointer_fraction, resized_rect,
+    CropDraft, CropDrag, CropDragKind, CROP_HANDLE_HIT, CROP_HANDLE_SIZE,
+};
+use super::crop_rotation::{
+    crop_auto_level_stash, crop_bar_rect, crop_rotation_draft, set_crop_auto_level_stash,
+    set_crop_rotation_draft,
+};
 
 fn draft_id() -> egui::Id {
     egui::Id::new("lumina.crop_overlay.draft")
@@ -103,121 +72,6 @@ fn set_crop_draft(ctx: &egui::Context, draft: Option<CropDraft>) -> bool {
     })
 }
 
-/// Normalized screen fraction of `pos` inside `full_rect`, clamped to `0..=1`.
-fn pointer_fraction(full_rect: egui::Rect, pos: egui::Pos2) -> (f32, f32) {
-    (
-        ((pos.x - full_rect.min.x) / full_rect.width().max(1e-6)).clamp(0.0, 1.0),
-        ((pos.y - full_rect.min.y) / full_rect.height().max(1e-6)).clamp(0.0, 1.0),
-    )
-}
-
-/// Nearest corner of `crop` within `max_dist` screen points of `pos`.
-fn nearest_corner(crop: egui::Rect, pos: egui::Pos2, max_dist: f32) -> Option<CropCorner> {
-    [
-        (CropCorner::TopLeft, crop.left_top()),
-        (CropCorner::TopRight, crop.right_top()),
-        (CropCorner::BottomLeft, crop.left_bottom()),
-        (CropCorner::BottomRight, crop.right_bottom()),
-    ]
-    .into_iter()
-    .map(|(corner, point)| (corner, point.distance(pos)))
-    .filter(|(_, distance)| *distance <= max_dist)
-    .min_by(|a, b| a.1.total_cmp(&b.1))
-    .map(|(corner, _)| corner)
-}
-
-/// Move `start` by a normalized delta, clamped so the rectangle stays inside
-/// the frame.
-fn moved_rect(start: CropDraft, dx: f32, dy: f32) -> CropDraft {
-    CropDraft {
-        x: (start.x + dx).clamp(0.0, (1.0 - start.width).max(0.0)),
-        y: (start.y + dy).clamp(0.0, (1.0 - start.height).max(0.0)),
-        ..start
-    }
-}
-
-/// Resize `start` by dragging `corner` to the normalized point `to`; keeps the
-/// opposite corner anchored and enforces [`CROP_MIN_EXTENT`].
-fn resized_rect(start: CropDraft, corner: CropCorner, to: (f32, f32)) -> CropDraft {
-    let fx = to.0.clamp(0.0, 1.0);
-    let fy = to.1.clamp(0.0, 1.0);
-    let mut x0 = start.x;
-    let mut y0 = start.y;
-    let mut x1 = start.x + start.width;
-    let mut y1 = start.y + start.height;
-    match corner {
-        CropCorner::TopLeft => {
-            x0 = fx;
-            y0 = fy;
-        }
-        CropCorner::TopRight => {
-            x1 = fx;
-            y0 = fy;
-        }
-        CropCorner::BottomLeft => {
-            x0 = fx;
-            y1 = fy;
-        }
-        CropCorner::BottomRight => {
-            x1 = fx;
-            y1 = fy;
-        }
-    }
-    // Keep the dragged edge on the far side of the anchored one (a crossing
-    // drag stops at the minimum extent instead of inverting the rect).
-    match corner {
-        CropCorner::TopLeft | CropCorner::BottomLeft => x0 = x0.min(x1 - CROP_MIN_EXTENT),
-        CropCorner::TopRight | CropCorner::BottomRight => x1 = x1.max(x0 + CROP_MIN_EXTENT),
-    }
-    match corner {
-        CropCorner::TopLeft | CropCorner::TopRight => y0 = y0.min(y1 - CROP_MIN_EXTENT),
-        CropCorner::BottomLeft | CropCorner::BottomRight => y1 = y1.max(y0 + CROP_MIN_EXTENT),
-    }
-    // Final clamp into the frame (the anchored side may sit near an edge, so
-    // the minimum extent wins over the boundary).
-    x0 = x0.clamp(0.0, 1.0 - CROP_MIN_EXTENT);
-    y0 = y0.clamp(0.0, 1.0 - CROP_MIN_EXTENT);
-    x1 = x1.clamp(x0 + CROP_MIN_EXTENT, 1.0);
-    y1 = y1.clamp(y0 + CROP_MIN_EXTENT, 1.0);
-    CropDraft {
-        x: x0,
-        y: y0,
-        width: x1 - x0,
-        height: y1 - y0,
-    }
-}
-
-/// Map the normalized draft onto the full-frame preview canvas.
-fn draft_screen_rect(full_rect: egui::Rect, draft: CropDraft) -> egui::Rect {
-    egui::Rect::from_min_size(
-        egui::pos2(
-            full_rect.min.x + draft.x * full_rect.width(),
-            full_rect.min.y + draft.y * full_rect.height(),
-        ),
-        egui::vec2(
-            draft.width * full_rect.width(),
-            draft.height * full_rect.height(),
-        ),
-    )
-}
-
-/// The four rectangles covering `full` outside `crop` (the darkening bands).
-fn outside_regions(full: egui::Rect, crop: egui::Rect) -> [egui::Rect; 4] {
-    let c = crop.intersect(full);
-    [
-        egui::Rect::from_min_max(full.min, egui::pos2(full.max.x, c.min.y)),
-        egui::Rect::from_min_max(egui::pos2(full.min.x, c.max.y), full.max),
-        egui::Rect::from_min_max(
-            egui::pos2(full.min.x, c.min.y),
-            egui::pos2(c.min.x, c.max.y),
-        ),
-        egui::Rect::from_min_max(
-            egui::pos2(c.max.x, c.min.y),
-            egui::pos2(full.max.x, c.max.y),
-        ),
-    ]
-}
-
 impl LuminaApp {
     /// Effective normalized crop rectangle for the overlay: the active session
     /// draft when a gesture/edit is in flight, otherwise the recipe crop (free
@@ -248,9 +102,15 @@ impl LuminaApp {
 
     /// Crop-rectangle overlay: the recipe crop paints as a white stroke, and
     /// while crop mode is armed the interactive chrome (darkening, thirds
-    /// grid, corner handles, drag gesture) is added. Pure display/session
-    /// state — the recipe is only touched on `Enter`.
-    pub(crate) fn draw_crop_overlay(&self, ui: &mut egui::Ui, full_rect: egui::Rect) {
+    /// grid, corner handles, drag gesture) and the crop bar (straighten +
+    /// Auto-Level, UX-LOOK-CROP-18b) are added. Pure display/session state —
+    /// the recipe is only touched on `Enter`.
+    pub(crate) fn draw_crop_overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane: egui::Rect,
+        full_rect: egui::Rect,
+    ) {
         if !self.overlay_visible() && !self.crop_mode {
             return;
         }
@@ -272,6 +132,17 @@ impl LuminaApp {
         }
         // Armed crop mode (UX-LOOK-CROP-18): the effective rectangle is the
         // session draft, otherwise the recipe crop, otherwise the full frame.
+        // UX-LOOK-CROP-18b: `full_rect` is the *full-frame* canvas because the
+        // crop-mode preview renders the full frame (see `crop_display.rs`), so
+        // a committed crop stays re-editable (shrink AND grow to full frame).
+        //
+        // The toggle invalidates the preview (full frame vs. committed crop),
+        // and the resulting render resets the status line to "Preview current";
+        // keep the crop-mode hint visible without clobbering real feedback
+        // (errors, Auto-Level status), which are never `PreviewCurrent`.
+        if self.status == Str::PreviewCurrent.t() {
+            self.status = Str::CropModeOn.t().into();
+        }
         let ctx = ui.ctx().clone();
         let draft = self.effective_crop_draft(&ctx);
         let rect = draft_screen_rect(full_rect, draft);
@@ -282,13 +153,17 @@ impl LuminaApp {
             egui::StrokeKind::Middle,
         );
         self.paint_crop_mode_chrome(ui, full_rect, rect);
+        let bar = crop_bar_rect(pane);
         if self.mask_tool != MaskTool::None {
             // A masking/retouch tool owns the pointer; the crop frame stays a
-            // pure display (no gesture, no silent reassignment).
+            // pure display (no gesture, no silent reassignment). The crop bar
+            // widgets still handle their own pointer.
+            self.draw_crop_bar(ui, bar, &ctx);
             return;
         }
         let response = ui.interact(full_rect, crop_overlay_id(), egui::Sense::drag());
-        self.crop_drag_interaction(ui, &ctx, full_rect, &rect, &response);
+        self.crop_drag_interaction(ui, &ctx, full_rect, &rect, &response, bar);
+        self.draw_crop_bar(ui, bar, &ctx);
     }
 
     /// Paint the armed crop-mode chrome: darkening outside the crop, the
@@ -348,7 +223,8 @@ impl LuminaApp {
 
     /// Gesture handling for the armed crop overlay: press a corner to resize,
     /// press inside to move. The draft lives in `egui` temp memory; the recipe
-    /// stays untouched until `Enter`.
+    /// stays untouched until `Enter`. `bar` is the crop-bar strip: a press that
+    /// starts there belongs to the bar controls, never to the crop gesture.
     fn crop_drag_interaction(
         &self,
         ui: &egui::Ui,
@@ -356,6 +232,7 @@ impl LuminaApp {
         full_rect: egui::Rect,
         rect: &egui::Rect,
         response: &egui::Response,
+        bar: egui::Rect,
     ) {
         let id = drag_id();
         if response.drag_started() {
@@ -365,6 +242,10 @@ impl LuminaApp {
                 .input(|input| input.pointer.press_origin())
                 .or_else(|| response.interact_pointer_pos());
             let Some(pos) = origin else { return };
+            if bar.contains(pos) {
+                // The press belongs to the crop-bar slider/button.
+                return;
+            }
             let kind = match nearest_corner(*rect, pos, CROP_HANDLE_HIT) {
                 Some(corner) => CropDragKind::Corner(corner),
                 None if rect.contains(pos) => CropDragKind::Move,
@@ -397,38 +278,65 @@ impl LuminaApp {
         }
     }
 
-    /// `Enter` commit (UX-LOOK-CROP-18): write the session draft through the
-    /// existing free-crop setter, which arms the debounced sidecar write and
-    /// one geometry history step. Returns whether a draft was committed.
+    /// `Enter` commit (UX-LOOK-CROP-18): write the session drafts through the
+    /// existing setters, which arm the debounced sidecar write and one geometry
+    /// history step (crop + rotation + a stashed Auto-Level analysis run before
+    /// the single save, so they coalesce into one step). Returns whether
+    /// anything was committed.
+    ///
+    /// UX-LOOK-CROP-18b adds the session rotation draft and the Auto-Level
+    /// analysis stash to the same commit; a rotation that already matches the
+    /// recipe is not re-written (keeps a crop-only commit labelled
+    /// `geometry.crop_free`).
     pub fn commit_crop_edit(&mut self, ctx: &egui::Context) -> bool {
-        let Some(draft) = crop_draft(ctx) else {
-            return false;
-        };
-        if let Err(error) = self.set_crop_free(
-            f64::from(draft.x),
-            f64::from(draft.y),
-            f64::from(draft.width),
-            f64::from(draft.height),
-        ) {
-            self.show_error(error);
+        let draft = crop_draft(ctx);
+        let rotation = crop_rotation_draft(ctx);
+        let auto = crop_auto_level_stash(ctx);
+        if draft.is_none() && rotation.is_none() && auto.is_none() {
             return false;
         }
+        if let Some(stash) = &auto {
+            self.persist_auto_level_analysis(stash);
+        }
+        if let Some(degrees) = rotation {
+            let current = self.committed_rotation_degrees();
+            if (f64::from(degrees) - current).abs() > 1e-4 {
+                self.set_straighten(f64::from(degrees));
+            }
+        }
+        if let Some(draft) = draft {
+            if let Err(error) = self.set_crop_free(
+                f64::from(draft.x),
+                f64::from(draft.y),
+                f64::from(draft.width),
+                f64::from(draft.height),
+            ) {
+                self.show_error(error);
+                return false;
+            }
+        }
         set_crop_draft(ctx, None);
+        set_crop_rotation_draft(ctx, None);
+        set_crop_auto_level_stash(ctx, None);
         info!(
-            "GUI interaction: commit_crop_edit -> x={:.4} y={:.4} w={:.4} h={:.4}",
-            draft.x, draft.y, draft.width, draft.height
+            "GUI interaction: commit_crop_edit -> crop={draft:?} rotation={rotation:?} \
+             auto_level={}",
+            auto.is_some()
         );
         true
     }
 
-    /// `Esc` cancel / crop-mode exit (UX-LOOK-CROP-18): drop the session draft,
-    /// leaving the recipe exactly as before the gesture. Returns whether a
-    /// draft was discarded.
+    /// `Esc` cancel / crop-mode exit (UX-LOOK-CROP-18): drop the session drafts
+    /// (crop rectangle, rotation, Auto-Level stash), leaving the recipe exactly
+    /// as before the gesture. Returns whether anything was discarded.
     pub fn cancel_crop_edit(&mut self, ctx: &egui::Context) -> bool {
-        if !set_crop_draft(ctx, None) {
+        let had = set_crop_draft(ctx, None)
+            | set_crop_rotation_draft(ctx, None)
+            | set_crop_auto_level_stash(ctx, None);
+        if !had {
             return false;
         }
-        info!("GUI interaction: cancel_crop_edit -> interactive crop draft discarded");
+        info!("GUI interaction: cancel_crop_edit -> interactive crop/rotation draft discarded");
         true
     }
 

@@ -1858,6 +1858,26 @@ Drag-and-drop. Preview, Exposure
 gespeichert. ONNX,
 Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 
+#### F-103-N6 Runde 2 Runbook (manueller Test, 2026-09-19)
+
+**Arbeitsteilung (User-Regel):** Der User fährt die GUI, der Build-Agent
+verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
+
+- **Build (mit Crash-Fix ≥ `460cefd`):** `cargo build --release -p lumina-gui`
+- **Start (durch den Build-Agenten, Log in Datei):**
+  `RUST_LOG=trace nohup ./target/release/lumina-gui > /tmp/lumina_r2_trace.log 2>&1 < /dev/null & disown`
+  Nur EINE Instanz gleichzeitig (keine zweite aus dem Terminal daneben).
+- **Checkliste:** RAW per Pfad + Drag & Drop; Preview + Exposure/Contrast
+  (Renderstand ändert sich); Sidecar-Write + Neustart-Restore; linke Rail;
+  Icon-Leiste (jeder Button); Kurvengrafik (Klick/Drag/Doppelklick pro Kanal);
+  Crop (Handles, Enter = Commit, Esc = Verwerfen); Library↔Develop-Wechsel;
+  Loupe/Compare/Survey; 04a-Zahlen für R2-GUIMOD (gefühlte Draft-Latenz,
+  Modulwechsel-Dauer).
+- **Melden pro Befund:** Was + Wann („jetzt beim X geruckelt/verschwunden"),
+  ggf. Screenshot; Crash-Dialog-Text bzw. Feststellung „still verschwunden".
+  Der Build-Agent zieht die Log-Stelle, analysiert und verankert Fixes mit
+  Tests — Befunde landen hier unten als R2-*-Einträge, nicht als Todo-Tasks.
+
 #### F-103-N6 Runde 2 Befunde (2026-09-19, Release-Build, noch offen)
 
 - **R2-CRASH-1 (kritisch, BEHOBEN 2026-09-19, verifiziert BESTANDEN):**

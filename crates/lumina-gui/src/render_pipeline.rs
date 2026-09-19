@@ -197,10 +197,20 @@ impl LuminaApp {
         // (`Lens → [auto-fill] → Perspective → [expand] → Crop`); the core owns
         // the compositing, the GUI never re-implements it.
         let denoise_input = self.denoise_render_input(denoise_artifact.as_ref());
+        // UX-LOOK-CROP-18b: while the crop tool is armed the preview shows the
+        // full frame (display-only recipe without the geometry stage); the real
+        // recipe is untouched and `Enter` commits. No clone on the normal path.
+        let display_recipe;
+        let render_recipe: &EditRecipe = if self.crop_mode {
+            display_recipe = self.crop_mode_display_recipe();
+            &display_recipe
+        } else {
+            &self.recipe
+        };
         let output = render_frame_from_base_with_generative_and_denoise(
             base_frame,
             &RenderContext {
-                recipe: &self.recipe,
+                recipe: render_recipe,
                 camera_white_balance: self.camera_white_balance,
                 source_actions: &[],
                 masks: masks_context,
@@ -268,7 +278,7 @@ impl LuminaApp {
             decode_version,
             "raster-mvp-1",
             copy_id,
-            &self.recipe,
+            render_recipe,
             mask_hashes,
             OutputSpec {
                 profile: "sRGB".into(),
