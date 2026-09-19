@@ -14,6 +14,7 @@
 //! and `is_raw_name` stay at the crate root because `merge_gui` shares them.
 
 use super::*;
+use crate::sidecar_rebase::save_rebased_unit;
 use log::{error, info};
 
 impl LuminaApp {
@@ -264,6 +265,11 @@ impl LuminaApp {
         for path in paths {
             let sidecar_path = lumina_sidecar::sidecar_path_for(path);
             let mut document = lumina_sidecar::load_sidecar(&sidecar_path)?;
+            // SIDECAR-REBASE-1: CAS instead of the former blind plain save — a
+            // concurrent change to this target rebases our adjustment onto the
+            // current file instead of being overwritten or dropped.
+            let base = document.clone();
+            let expected = lumina_sidecar::document_revision(&base)?;
             let Some(copy) = document
                 .virtual_copies
                 .iter_mut()
@@ -285,7 +291,7 @@ impl LuminaApp {
                 error!("selection history changes rejected: {error}");
             }
             copy.history.push(entry);
-            lumina_sidecar::save_sidecar(&sidecar_path, &document)?;
+            save_rebased_unit(&sidecar_path, &base, &document, Some(&expected))?;
             changed += 1;
         }
         Ok(changed)
@@ -390,6 +396,7 @@ impl LuminaApp {
         } else {
             None
         };
+        let base = document.clone();
         let copy = default_copy_mut(&mut document)
             .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
         let before = copy.recipe.clone();
@@ -404,8 +411,9 @@ impl LuminaApp {
             error!("sync history changes rejected: {error}");
         }
         copy.history.push(entry);
-        lumina_sidecar::save_sidecar_if_unchanged(
+        save_rebased_unit(
             &sidecar_path,
+            &base,
             &document,
             expected_revision.as_deref(),
         )
@@ -445,6 +453,7 @@ impl LuminaApp {
         } else {
             None
         };
+        let base = document.clone();
         let copy = default_copy_mut(&mut document)
             .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
         let before = copy.recipe.clone();
@@ -471,8 +480,9 @@ impl LuminaApp {
             error!("match history changes rejected: {error}");
         }
         copy.history.push(entry);
-        lumina_sidecar::save_sidecar_if_unchanged(
+        save_rebased_unit(
             &sidecar_path,
+            &base,
             &document,
             expected_revision.as_deref(),
         )

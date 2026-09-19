@@ -153,3 +153,48 @@ fn selection_batch_adjustment_writes_structured_history_entry() {
         "every persisted step carries a timestamp"
     );
 }
+
+/// SIDECAR-REBASE-1 (B2): the static selection-adjustment path rebases an
+/// overtaking foreign edit instead of silently overwriting it.
+#[test]
+fn selection_batch_adjustment_rebases_overtaking_sidecar() {
+    use crate::sidecar_rebase::set_conflict_hook;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (directory, mut app) = persistent_app();
+    let source = directory.path().join("photo.png");
+    app.save_sidecar();
+    let sidecar = lumina_sidecar::sidecar_path_for(&source);
+
+    let wrote = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&wrote);
+    let hook_path = sidecar.clone();
+    set_conflict_hook(Some(Box::new(move |_| {
+        if flag.replace(true) {
+            return;
+        }
+        let mut disk = lumina_sidecar::load_sidecar(&hook_path).unwrap();
+        disk.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("whites".into(), 0.7);
+        lumina_sidecar::save_sidecar(&hook_path, &disk).unwrap();
+    })));
+    let changed =
+        LuminaApp::apply_adjustment_to_selection(std::slice::from_ref(&source), "exposure", 0.6)
+            .expect("batch adjustment");
+    set_conflict_hook(None);
+
+    assert_eq!(changed, 1);
+    let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+    assert_eq!(
+        document.virtual_copies[0].recipe.adjustments["exposure"],
+        0.6
+    );
+    assert_eq!(
+        document.virtual_copies[0].recipe.adjustments.get("whites"),
+        Some(&0.7),
+        "the foreign edit must survive the rebased batch adjustment"
+    );
+}

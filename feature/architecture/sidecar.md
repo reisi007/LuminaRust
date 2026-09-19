@@ -387,7 +387,13 @@ Migration angeboten; nach Bestätigung wird ein Backup geschrieben und atomar
 
 Widerspricht ein optionaler Index dem Sidecar, gewinnt das Sidecar. Bei
 gleichzeitigen Sidecar-Schreibvorgängen wird ein Konflikt gemeldet; eine
-stille Last-Write-Wins-Policy ist nicht zulässig.
+stille Last-Write-Wins-Policy ist nicht zulässig. Die GUI rebased seit
+2026-09-19 zusätzlich (SIDECAR-REBASE-1, verifiziert BESTANDEN): aktuellen
+Stand laden → eigene Änderungen feldselektiv mergen (Objekte rekursiv,
+Arrays mit Identitäts-Schlüssel je Element, Rest atomar mit lokalem Sieg +
+`warn!`-Protokoll als `overwritten_fields`) → erneut speichern (max. 3
+Retries, danach laut). Sektions-Saves (Culling/Face) ersetzen nur die eigene
+Sektion. Echte Zweit-Instanz mit Dauerbeschreibung bleibt laut.
 
 ## Abnahme
 

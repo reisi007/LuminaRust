@@ -152,7 +152,7 @@ fn slider_changes_preview() {
 #[test]
 fn sidecar_persist_on_close_and_reload() {
     // (3) Änderungen spätestens beim Schließen im Sidecar persistiert und nach
-    // Reload byte-identisch wiederhergestellt — CAS, Konflikt sichtbar, atomar,
+    // Reload byte-identisch wiederhergestellt — CAS mit Rebase, atomar,
     // relative Pfade, Original unverändert.
     use lumina_sidecar::{
         document_revision, load_sidecar, save_sidecar as raw_save, sidecar_path_for,
@@ -256,7 +256,10 @@ fn sidecar_persist_on_close_and_reload() {
         "previous exposure must survive second save"
     );
 
-    // Externer Conflict-Fall: externe Modifikation hinter dem Rücken der GUI
+    // Externer Konflikt-Fall: externe Modifikation hinter dem Rücken der GUI.
+    // SIDECAR-REBASE-1: der überholende Save wird rebased — die externe
+    // `whites`-Änderung bleibt erhalten, der lokale `exposure`-Edit wird
+    // angewendet, kein stiller Verlust und kein Conflict-Dialog.
     let mut external = load_sidecar(&sidecar_path).unwrap();
     external.virtual_copies[0]
         .recipe
@@ -266,44 +269,43 @@ fn sidecar_persist_on_close_and_reload() {
     let rev_external = document_revision(&load_sidecar(&sidecar_path).unwrap()).unwrap();
     assert_ne!(rev2, rev_external);
 
-    // Lokaler Versuch mit veralteter Revision → Conflict sichtbar, kein stiller Fallback
+    // Lokaler Save mit veralteter Revision → rebased statt Conflict.
     app.set_adjustment("exposure", 2.0);
     app.render().unwrap();
     app.save_sidecar();
-    assert!(app.error().is_some(), "conflict must be visible");
-    assert_eq!(
-        app.status(),
-        Str::Error.t(),
-        "conflict status must be Error"
-    );
-    let err_msg = app.error().unwrap().to_string();
     assert!(
-        err_msg.to_lowercase().contains("conflict")
-            || err_msg.contains("changed concurrently")
-            || err_msg.contains("sidecar"),
-        "conflict error must mention conflict, got {err_msg:?}"
+        app.error().is_none(),
+        "an overtaking save must be rebased, not surfaced as a conflict: {:?}",
+        app.error()
     );
-    // On-disk ist externe Version unverändert (lokaler 2.0 nicht überschrieben)
+    assert_eq!(app.status(), Str::SidecarSaved.t());
+    let rev3 = document_revision(&load_sidecar(&sidecar_path).unwrap()).unwrap();
+    assert_ne!(
+        rev_external, rev3,
+        "the rebased save must advance the revision"
+    );
+    // On-disk: der lokale Edit UND die externe Änderung.
     let on_disk = load_sidecar(&sidecar_path).unwrap();
     assert_eq!(
         on_disk.virtual_copies[0].recipe.adjustments.get("exposure"),
-        Some(&1.2),
-        "conflicting save must not overwrite on-disk exposure"
+        Some(&2.0),
+        "the local edit must be applied by the rebase"
     );
     assert_eq!(
         on_disk.virtual_copies[0].recipe.adjustments.get("whites"),
-        Some(&0.9)
+        Some(&0.9),
+        "the foreign edit must survive the rebase"
     );
 
     // Simuliere Schließen via Drop nach erfolgreichem Save — Reload via neuem LuminaApp
     drop(app);
     let mut reopened = new_app();
     open_and_decode(&mut reopened, source.display().to_string());
-    // Nach Reload muss die zuletzt erfolgreich persistierte Recipe byte-identisch da sein
+    // Nach Reload muss der gemergte Stand da sein (lokaler 2.0 + externer whites).
     assert_eq!(
         reopened.recipe().adjustments.get("exposure"),
-        Some(&1.2),
-        "exposure after reload must be last persisted (1.2), not conflict attempt 2.0"
+        Some(&2.0),
+        "exposure after reload must be the rebased 2.0"
     );
     assert_eq!(reopened.recipe().adjustments.get("contrast"), Some(&0.4));
     assert_eq!(
@@ -311,17 +313,11 @@ fn sidecar_persist_on_close_and_reload() {
         Some(&0.9),
         "external whites must be visible after reload"
     );
-    // Ungültige Conflict-Änderung (2.0) darf nicht wieder auftauchen
-    assert_ne!(
-        reopened.recipe().adjustments.get("exposure"),
-        Some(&2.0),
-        "conflicted unsaved edit must not leak into reload"
-    );
     // Negativ-Test: ohne persistierten Sidecar wäre Reload leer — belege dass
     // der positive Pfad wirklich aus dem Sidecar kam (kein In-Memory-Carry).
     let sidecar_json = std::fs::read_to_string(&sidecar_path).unwrap();
     assert!(
-        sidecar_json.contains("\"exposure\"") && sidecar_json.contains("1.2"),
-        "sidecar JSON must contain persisted exposure"
+        sidecar_json.contains("\"exposure\"") && sidecar_json.contains("2.0"),
+        "sidecar JSON must contain the rebased exposure"
     );
 }

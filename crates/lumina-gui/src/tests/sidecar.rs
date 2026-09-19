@@ -353,3 +353,118 @@ fn local_mask_adjustments_roundtrip_through_sidecar() {
     assert_eq!(layer.extras["adjustment_exposure"].as_f64(), Some(1.25));
     assert_eq!(layer.extras["adjustment_contrast"].as_f64(), Some(-0.35));
 }
+
+/// SIDECAR-REBASE-1: a face-section write on a stale revision rebases onto the
+/// current file — the explicit section write wins while a foreign recipe change
+/// survives (analogous to the culling section-rebase test).
+#[test]
+fn sidecar_face_section_rebase_preserves_foreign_recipe_change() {
+    use crate::sidecar_rebase::RebaseSection;
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("photo.png");
+    save_png(&source);
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+    app.set_adjustment("exposure", 0.2);
+    app.save_sidecar();
+    let sidecar = lumina_sidecar::sidecar_path_for(&source);
+
+    // A second session persists a face analysis (revision bump); a foreign
+    // plain write then changes the recipe. `app` never saw either.
+    let mut seeded = new_app();
+    open_and_decode(&mut seeded, source.display().to_string());
+    crate::face_gui::tests::seed_face(&mut seeded);
+    let mut external = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+    assert!(
+        external.face.is_some(),
+        "precondition: face section on disk"
+    );
+    external.virtual_copies[0]
+        .recipe
+        .adjustments
+        .insert("contrast".into(), 0.4);
+    lumina_sidecar::save_sidecar(&sidecar, &external).unwrap();
+
+    // `app` clears the face section (it never had one) on a stale revision.
+    let local = app.document.clone().unwrap();
+    let path = app.path.clone();
+    app.save_section_with_rebase(&path, local, RebaseSection::Face)
+        .unwrap();
+
+    let merged = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+    assert!(merged.face.is_none(), "the explicit section write must win");
+    assert_eq!(
+        merged.virtual_copies[0].recipe.adjustments.get("contrast"),
+        Some(&0.4),
+        "the foreign recipe change must survive a face section rebase"
+    );
+}
+
+/// SIDECAR-REBASE-1 (B2): the match-exposures path rebases an overtaking target
+/// change; the foreign `whites` edit and the local exposure delta both persist.
+#[test]
+fn match_exposures_rebases_overtaking_target_and_keeps_foreign_edit() {
+    use crate::sidecar_rebase::set_conflict_hook;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn solid_gray(path: &Path, level: u8) {
+        let pixels = vec![level, level, level, 255, level, level, level, 255];
+        let png = ImageFrame::new(2, 1, pixels)
+            .unwrap()
+            .encode(ImageFileFormat::Png)
+            .unwrap();
+        std::fs::write(path, png).unwrap();
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let dark = directory.path().join("dark.png");
+    let bright = directory.path().join("bright.png");
+    solid_gray(&dark, 30);
+    solid_gray(&bright, 220);
+    // Materialize both sidecars first so the target CAS has an expected revision.
+    for path in [&dark, &bright] {
+        let mut setup = new_app();
+        open_and_decode(&mut setup, path.display().to_string());
+        setup.add_keyword("seed").unwrap();
+    }
+    let mut app = new_app();
+    open_and_decode(&mut app, dark.display().to_string());
+    app.filmstrip_selection.insert(dark.display().to_string());
+    app.filmstrip_selection.insert(bright.display().to_string());
+
+    // Sorted iteration hits `bright.png` first: overtake it once with a foreign
+    // `whites` adjustment, which the match delta must not clobber.
+    let bright_sidecar = lumina_sidecar::sidecar_path_for(&bright);
+    let wrote = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&wrote);
+    let hook_path = bright_sidecar.clone();
+    set_conflict_hook(Some(Box::new(move |_| {
+        if flag.replace(true) {
+            return;
+        }
+        let mut disk = lumina_sidecar::load_sidecar(&hook_path).unwrap();
+        disk.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("whites".into(), 0.7);
+        lumina_sidecar::save_sidecar(&hook_path, &disk).unwrap();
+    })));
+    let report = app.match_exposures_of_selection();
+    set_conflict_hook(None);
+
+    assert_eq!(report.applied_count(), 2);
+    assert_eq!(report.failed_count(), 0);
+    let bright_doc = lumina_sidecar::load_sidecar(&bright_sidecar).unwrap();
+    let default = bright_doc
+        .virtual_copies
+        .iter()
+        .find(|copy| copy.is_default)
+        .unwrap();
+    assert_eq!(default.recipe.adjustments.get("whites"), Some(&0.7));
+    assert!(
+        default.recipe.adjustments.contains_key("exposure"),
+        "the match delta must be applied"
+    );
+    assert!(bright_doc.keywords.contains(&"seed".to_string()));
+}

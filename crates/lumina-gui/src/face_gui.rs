@@ -57,8 +57,8 @@ use lumina_onnx::{
     FaceArtifactEvidence,
 };
 use lumina_sidecar::{
-    save_sidecar_if_unchanged, sidecar_path_for, validate_face_analysis, FaceAnalysis,
-    FaceArtifactStatus, FaceBoundingBox, MaskPrompt, MaskStatus, NormalizedRect, PromptTransform,
+    validate_face_analysis, FaceAnalysis, FaceArtifactStatus, FaceBoundingBox, MaskPrompt,
+    MaskStatus, NormalizedRect, PromptTransform,
 };
 use std::path::Path;
 
@@ -298,20 +298,20 @@ impl LuminaApp {
             .take()
             .ok_or_else(|| GuiError::Io(Str::FaceNoAnalysis.t().to_string()))?;
         document.face = Some(analysis);
-        let expected = self.sidecar_revision.clone();
-        let sidecar = sidecar_path_for(std::path::Path::new(&path));
-        match save_sidecar_if_unchanged(&sidecar, &document, expected.as_deref()) {
-            Ok(revision) => {
-                self.sidecar_revision = Some(revision);
-                self.document = Some(document);
+        // SIDECAR-REBASE-1: only the source-level `face` section is written, so
+        // a concurrent change is rebased by applying this section onto the
+        // current file (every other foreign field survives).
+        match self.save_section_with_rebase(
+            &path,
+            document,
+            crate::sidecar_rebase::RebaseSection::Face,
+        ) {
+            Ok(_revision) => {
                 self.refresh_entry(std::path::Path::new(&path));
                 info!("{action} persisted for `{path}` (face section only)");
                 Ok(())
             }
-            Err(error) => {
-                self.document = Some(document);
-                Err(GuiError::Sidecar(error))
-            }
+            Err(error) => Err(GuiError::Sidecar(error)),
         }
     }
 
@@ -385,8 +385,8 @@ pub(crate) mod tests {
         FaceEmbeddingVector, FaceModelSuite,
     };
     use lumina_sidecar::{
-        validate_face_analysis, DecodeFingerprint, Extras, FaceCluster, FaceLandmark,
-        FaceVectorRef, GeometryFingerprint, SourceFingerprint,
+        sidecar_path_for, validate_face_analysis, DecodeFingerprint, Extras, FaceCluster,
+        FaceLandmark, FaceVectorRef, GeometryFingerprint, SourceFingerprint,
     };
     use std::path::Path;
 

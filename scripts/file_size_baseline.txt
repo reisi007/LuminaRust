@@ -48,7 +48,7 @@
 779 crates/lumina-merge/src/merge.rs
 770 crates/lumina-sidecar/src/meta_preset.rs
 743 crates/lumina-gui-harness/src/main.rs
-733 crates/lumina-gui/src/cull_gui.rs
+730 crates/lumina-gui/src/cull_gui.rs  # 2026-09-19: SIDECAR-REBASE-1 (733 -> 730, Culling-Adopt/Clear laufen ueber den Rebase-Helfer)
 730 crates/lumina-gpu/tests/golden.rs
 729 crates/lumina-core/src/tone_props.rs
 683 crates/lumina-gui/src/presets.rs  # 2026-09-19: UX-LOOK-HISTORY-18 (713 -> 683, rekursiver Scan nach preset_tree.rs ausgelagert)

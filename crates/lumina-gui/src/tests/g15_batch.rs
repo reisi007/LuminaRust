@@ -207,3 +207,57 @@ fn g15_batch_empty_selection_falls_back_or_stays_loud() {
     assert_eq!(report.failed_count(), 0);
     assert_eq!(empty.status(), "No images selected");
 }
+
+/// SIDECAR-REBASE-1 (B1): the metadata batch (`save_rebased_unit`) rebases an
+/// overtaking sidecar change instead of silently overwriting it. The foreign
+/// recipe edit survives and the batch keyword lands.
+#[test]
+fn g15_batch_rebases_overtaking_sidecar_and_keeps_foreign_edit() {
+    use crate::sidecar_rebase::set_conflict_hook;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("photo.png");
+    save_png(&source);
+    let mut setup = new_app();
+    open_and_decode(&mut setup, source.display().to_string());
+    setup.add_keyword("seed").unwrap();
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+    app.filmstrip_selection.insert(source.display().to_string());
+    let sidecar = lumina_sidecar::sidecar_path_for(&source);
+
+    // Overtake once between the batch's load and its CAS: foreign contrast.
+    let wrote = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&wrote);
+    let hook_path = sidecar.clone();
+    set_conflict_hook(Some(Box::new(move |_| {
+        if flag.replace(true) {
+            return;
+        }
+        let mut disk = lumina_sidecar::load_sidecar(&hook_path).unwrap();
+        disk.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("contrast".into(), 0.4);
+        lumina_sidecar::save_sidecar(&hook_path, &disk).unwrap();
+    })));
+    let op = parse_metadata_batch_op("add_keyword", "batch").unwrap();
+    let report = app.apply_metadata_batch(&op);
+    set_conflict_hook(None);
+
+    assert_eq!(report.applied_count(), 1);
+    assert_eq!(report.failed_count(), 0);
+    let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+    assert!(document.keywords.contains(&"batch".to_string()));
+    assert!(document.keywords.contains(&"seed".to_string()));
+    assert_eq!(
+        document.virtual_copies[0]
+            .recipe
+            .adjustments
+            .get("contrast"),
+        Some(&0.4),
+        "the foreign recipe edit must survive the batch rebase"
+    );
+}

@@ -42,8 +42,8 @@ use lumina_cull::{
     CullingReadState,
 };
 use lumina_sidecar::{
-    now_rfc3339_utc, save_sidecar_if_unchanged, sidecar_path_for, CullProposal, CullingSection,
-    CullingStatus, Resolution, SourceStatus, CULLING_SCHEMA_VERSION,
+    now_rfc3339_utc, CullProposal, CullingSection, CullingStatus, Resolution, SourceStatus,
+    CULLING_SCHEMA_VERSION,
 };
 
 use crate::i18n::Str;
@@ -239,14 +239,15 @@ impl LuminaApp {
             self.document = Some(document);
             return Err(GuiError::Io(error.to_string()));
         }
-        // The write goes through the same compare-and-swap atomic writer as
-        // every other sidecar edit; only the `culling` section is added.
-        let expected = self.sidecar_revision.clone();
-        let sidecar_path = sidecar_path_for(std::path::Path::new(&path));
-        match save_sidecar_if_unchanged(&sidecar_path, &document, expected.as_deref()) {
-            Ok(revision) => {
-                self.sidecar_revision = Some(revision);
-                self.document = Some(document);
+        // SIDECAR-REBASE-1: same CAS writer, but only the `culling` section is
+        // written, so a concurrent change is rebased by applying this section
+        // onto the current file (every other foreign field survives).
+        match self.save_section_with_rebase(
+            &path,
+            document,
+            crate::sidecar_rebase::RebaseSection::Culling,
+        ) {
+            Ok(_revision) => {
                 self.refresh_entry(std::path::Path::new(&path));
                 self.status = Str::CullingAdoptedPattern.format_arg(&path);
                 info!(
@@ -256,10 +257,7 @@ impl LuminaApp {
                 );
                 Ok(CullAdoptReport { path, badge, score })
             }
-            Err(error) => {
-                self.document = Some(document);
-                Err(GuiError::Sidecar(error))
-            }
+            Err(error) => Err(GuiError::Sidecar(error)),
         }
     }
 
@@ -278,21 +276,20 @@ impl LuminaApp {
             return Ok(());
         }
         lumina_cull::clear_culling(&mut document);
-        let expected = self.sidecar_revision.clone();
-        let sidecar_path = sidecar_path_for(std::path::Path::new(&path));
-        match save_sidecar_if_unchanged(&sidecar_path, &document, expected.as_deref()) {
-            Ok(revision) => {
-                self.sidecar_revision = Some(revision);
-                self.document = Some(document);
+        // SIDECAR-REBASE-1: explicit clear of the `culling` section through the
+        // rebase helper (foreign changes to every other field survive).
+        match self.save_section_with_rebase(
+            &path,
+            document,
+            crate::sidecar_rebase::RebaseSection::Culling,
+        ) {
+            Ok(_revision) => {
                 self.refresh_entry(std::path::Path::new(&path));
                 self.status = Str::CullingClearedPattern.format_arg(&path);
                 info!("culling proposal cleared for `{path}` (no proposal)");
                 Ok(())
             }
-            Err(error) => {
-                self.document = Some(document);
-                Err(GuiError::Sidecar(error))
-            }
+            Err(error) => Err(GuiError::Sidecar(error)),
         }
     }
 
@@ -428,7 +425,7 @@ pub(crate) fn warn_unknown_cull_token(token: &str) {
 mod tests {
     use super::*;
     use lumina_core::{ImageFileFormat, ImageFrame};
-    use lumina_sidecar::load_sidecar;
+    use lumina_sidecar::{load_sidecar, sidecar_path_for};
     use std::path::Path;
 
     fn new_app() -> LuminaApp {

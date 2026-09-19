@@ -50,6 +50,9 @@ mod preset_tree;
 // LRPAR-G08-PREVIOUS / GUI-FILMSTRIP-SYNC-1: the filmstrip selection actions
 // (Lightroom "Sync Settings", "Match Total Exposures", "Previous Image").
 mod selection_actions;
+// SIDECAR-REBASE-1: rebase a losing CAS save onto the current file instead of
+// dropping it on a concurrent change (slider/crop/batch save paths).
+mod sidecar_rebase;
 // GUI-REFACTOR-W1-20 S1.1: the interactive draft render and the coalesced
 // pointer-drag tick (Jank hot path) plus `DragTickTimings`.
 mod render_tick;
@@ -167,8 +170,8 @@ use lumina_sidecar::{apply_batch_op, validate_smart_collection_def, SMART_COLLEC
 use lumina_sidecar::{
     default_meta_presets_dir, document_revision, is_metadata_field, load_meta_preset_file,
     load_sidecar, now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path,
-    save_sidecar_if_unchanged, scan_meta_presets_dir, sidecar_path_for,
-    validate_metadata_field_value, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
+    scan_meta_presets_dir, sidecar_path_for, validate_metadata_field_value,
+    MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
 };
 use lumina_sidecar::{
     load_zdata, zdata_path_for, AiSelect, AiSelectKind, ArtifactStatus, BatchOp, BrushMark,
@@ -5214,8 +5217,8 @@ impl LuminaApp {
     /// Apply one [`BatchOp`] to every image of the filmstrip selection
     /// (G-15 META-MVP, Slice 3 — Stapel-Vollfunktion). An empty selection
     /// falls back to the loaded image so the action is never a silent
-    /// no-op. Per file: `load_sidecar` → `apply_batch_op` → `validate` →
-    /// atomic `save_sidecar`. `SetRating`/`SetFlag` with an empty `copy_id`
+    /// no-op. Per file: `load_sidecar` → `apply_batch_op` → CAS+rebase save
+    /// (`validate` runs inside the write). `SetRating`/`SetFlag` with an empty `copy_id`
     /// (see [`parse_metadata_batch_op`]) resolve against the target's
     /// default copy. Failures are loud per image (`error!` + report entry)
     /// and never abort the rest — same pattern as
@@ -5271,9 +5274,8 @@ impl LuminaApp {
         report
     }
 
-    /// One atomic batch step for `path` (G-15 META-MVP, Slice 3). Returns
-    /// `Ok(changed)`. A missing sidecar is always a loud error — the batch
-    /// never invents source identities from bytes it did not decode.
+    /// One atomic batch step for `path` (G-15 META-MVP, Slice 3); returns
+    /// `Ok(changed)`. Missing sidecar/invented identity stays a loud error.
     fn apply_metadata_op_to_path(path: &Path, op: &BatchOp) -> Result<bool, String> {
         let sidecar_path = lumina_sidecar::sidecar_path_for(path);
         let mut document = lumina_sidecar::load_sidecar(&sidecar_path)
@@ -5301,11 +5303,13 @@ impl LuminaApp {
             }
             _ => op.clone(),
         };
+        let base = document.clone();
         let changed =
             apply_batch_op(&mut document, &resolved).map_err(|error| error.to_string())?;
         if changed {
-            document.validate().map_err(|error| error.to_string())?;
-            lumina_sidecar::save_sidecar(&sidecar_path, &document)
+            let expected =
+                lumina_sidecar::document_revision(&base).map_err(|error| error.to_string())?;
+            sidecar_rebase::save_rebased_unit(&sidecar_path, &base, &document, Some(&expected))
                 .map_err(|error| error.to_string())?;
         }
         Ok(changed)
@@ -5462,10 +5466,11 @@ impl LuminaApp {
     // Every mutation below travels the same sidecar path as the CLI (`meta
     // draft`, `meta preset apply`, `meta sync`): load → mutate a clone with
     // the S1 helpers (`apply_metadata_draft`, history handling) → validate →
-    // CAS + atomic `save_sidecar_if_unchanged`. Conflicts are loud errors,
-    // never silent last-write-wins. `keywords` in preset `fields` stays
-    // loudly rejected (S4 semantics); an empty draft value removes the field
-    // (S1 draft semantics). No second metadata logic lives in the GUI.
+    // CAS + atomic rebase (`save_rebased`): concurrent changes merge
+    // field-selectively; a persistent conflict is a loud error, never silent
+    // last-write-wins. `keywords` in preset `fields` stays loudly rejected
+    // (S4 semantics); an empty draft value removes the field (S1 semantics).
+    // No second metadata logic lives in the GUI.
 
     /// Origin marker for history entries written through this panel.
     const META_ORIGIN_GUI: &'static str = "gui";
@@ -6167,7 +6172,7 @@ impl LuminaApp {
         {
             return Ok(false);
         }
-        save_sidecar_if_unchanged(&sidecar, &candidate, Some(&expected))
+        sidecar_rebase::save_rebased_unit(&sidecar, &document, &candidate, Some(&expected))
             .map_err(|error| error.to_string())?;
         Ok(true)
     }
@@ -6234,7 +6239,7 @@ impl LuminaApp {
             .history
             .truncate(MAX_METADATA_HISTORY_ENTRIES);
         candidate.validate().map_err(|error| error.to_string())?;
-        save_sidecar_if_unchanged(&sidecar, &candidate, Some(&expected))
+        sidecar_rebase::save_rebased_unit(&sidecar, &document, &candidate, Some(&expected))
             .map_err(|error| error.to_string())?;
         Ok(true)
     }
@@ -11605,10 +11610,10 @@ impl LuminaApp {
     /// success; a failed write keeps the error visible instead of being
     /// overwritten by a success message.
     ///
-    /// REVIEW-GUI-N1: the write goes through the compare-and-swap API
-    /// [`lumina_sidecar::save_sidecar_if_unchanged`] with the revision read
-    /// from disk immediately before, so an externally modified sidecar is
-    /// reported as a conflict instead of being silently overwritten.
+    /// REVIEW-GUI-N1 + SIDECAR-REBASE-1: the write goes through the CAS API
+    /// with the revision this lineage was loaded from; an externally modified
+    /// sidecar is first rebased (local edits applied field-selectively) and
+    /// only a conflict that persists over the retries is reported loudly.
     /// Additionally, `document.source` of an already-loaded document is kept
     /// as loaded — recomputing it from the live bytes would silently launder a
     /// source/conflict state (the fresh identity is only set for documents
@@ -11624,13 +11629,13 @@ impl LuminaApp {
             return;
         };
         let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
-        // REVIEW-GUI-N1: compare-and-swap against the revision this document
-        // lineage was loaded from (`self.sidecar_revision`, captured at
-        // load time and refreshed after each successful save). An external
-        // modification since then therefore surfaces as a visible conflict
-        // instead of being silently overwritten. `None` expects the file to
-        // not exist yet (fresh document); if a file appeared in the meantime,
-        // the CAS refuses visibly rather than clobbering it.
+        // REVIEW-GUI-N1 + SIDECAR-REBASE-1: compare-and-swap against the
+        // revision this document lineage was loaded from (`self.sidecar_revision`,
+        // captured at load time and refreshed after each successful save). An
+        // overtaking save is rebased onto the current file (field-selectively);
+        // a conflict that persists over the bounded retries stays visible
+        // instead of being silently overwritten. `None` expects the file not to
+        // exist yet (fresh document): a concurrently appearing file is refused.
         let expected_revision = self.sidecar_revision.clone();
         let mut document = self
             .document
@@ -11641,6 +11646,9 @@ impl LuminaApp {
         // silently launder an externally changed source (conflict laundering).
         // A document newly created above already carries the current identity
         // via `SidecarDocument::new(self.source_identity(frame), ..)`.
+        // SIDECAR-REBASE-1: the pre-edit state is the three-way-merge ancestor
+        // for a `Conflict` rebase (local edits survive on the current file).
+        let base_document = document.clone();
         let Some(copy) = document
             .virtual_copies
             .iter_mut()
@@ -11684,27 +11692,20 @@ impl LuminaApp {
             }
             copy.history.push(entry);
         }
-        match lumina_sidecar::save_sidecar_if_unchanged(
+        match sidecar_rebase::save_rebased(
             &sidecar_path,
+            &base_document,
             &document,
             expected_revision.as_deref(),
+            sidecar_rebase::MAX_REBASE_ATTEMPTS,
         ) {
-            Ok(new_revision) => {
-                self.status = Str::SidecarSaved.t().into();
-                self.sidecar_revision = Some(new_revision);
-                self.document = Some(document);
-                // LRPAR-G01-BASIC: a successful save moves the Previous
-                // baseline to the saved state (panel-Previous = last saved).
-                self.capture_section_baselines();
-                // GUI-VIEW-2: targeted single-file refresh instead of a full
-                // `list_directory` rescan (full-file hash per entry). The
-                // success status stands as set above.
-                self.refresh_entry(&path);
-            }
+            // LRPAR-G01-BASIC / GUI-VIEW-2: the shared finish helper moves the
+            // Previous baseline and refreshes the single entry on success.
+            Ok(saved) => self.finish_sidecar_save(&path, saved),
             Err(save_error) => {
                 error!("sidecar save failed for {}: {save_error}", path.display());
                 self.show_error(save_error);
-                // Keep the document so the failed edit is not lost; the
+                // Keep the local document so the failed edit is not lost; the
                 // conflict stays visible until resolved.
                 self.document = Some(document);
             }

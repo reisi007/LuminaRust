@@ -175,7 +175,7 @@ fn set_mask_tool_refused_visibly_while_geometry_active() {
 // ---- REVIEW-GUI-SAVEMSG-1 / REVIEW-GUI-N1: save status + CAS ----
 
 #[test]
-fn failed_save_reports_error_and_never_claims_sidecar_saved() {
+fn overtaking_save_is_rebased_and_keeps_both_edits() {
     use lumina_sidecar::{load_sidecar, save_sidecar as raw_save, sidecar_path_for};
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("photo.png");
@@ -196,31 +196,28 @@ fn failed_save_reports_error_and_never_claims_sidecar_saved() {
         .insert("contrast".into(), 0.9);
     raw_save(&sidecar, &external).unwrap();
 
-    // Local unsaved edit + save → the CAS must refuse with a visible
-    // conflict instead of silently overwriting the external change.
+    // SIDECAR-REBASE-1: a local edit on a stale revision is rebased onto the
+    // current file — the save succeeds, the external contrast change survives
+    // and the local exposure edit is applied (no conflict dialog, no loss).
     app.set_adjustment("exposure", 2.0);
     app.save_sidecar();
-    assert_eq!(
-        app.status(),
-        Str::Error.t(),
-        "conflicting save must surface as an error status"
+    assert!(
+        app.error().is_none(),
+        "an overtaking save must be rebased: {:?}",
+        app.error()
     );
-    assert!(app.error().is_some(), "conflict must be visible");
-    assert_ne!(
-        app.status(),
-        Str::SidecarSaved.t(),
-        "REVIEW-GUI-SAVEMSG-1: a failed save must never report success"
-    );
+    assert_eq!(app.status(), Str::SidecarSaved.t());
 
-    // The on-disk document is untouched by the refused write.
     let after = load_sidecar(&sidecar).unwrap();
     assert_eq!(
         after.virtual_copies[0].recipe.adjustments.get("exposure"),
-        Some(&1.0)
+        Some(&2.0),
+        "the local edit must be applied"
     );
     assert_eq!(
         after.virtual_copies[0].recipe.adjustments.get("contrast"),
-        Some(&0.9)
+        Some(&0.9),
+        "the foreign edit must survive the rebase"
     );
 }
 
@@ -297,4 +294,64 @@ fn select_virtual_copy_resets_session_state_and_notes_discarded_edits() {
 
     // Unknown ids fail visibly instead of being swallowed.
     assert!(app.select_virtual_copy("nope").is_err());
+}
+
+/// SIDECAR-REBASE-1 (DoD §4/§6): a conflict that persists over every retry is
+/// reported as a loud `Error` and must never claim "Sidecar saved"; the local
+/// edit stays in memory (no silent loss) and the losing edit never lands on
+/// disk.
+#[test]
+fn persistent_conflict_reports_error_and_never_claims_sidecar_saved() {
+    use crate::sidecar_rebase::{set_conflict_hook, MAX_REBASE_ATTEMPTS};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("photo.png");
+    save_png(&source);
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+    app.set_adjustment("exposure", 1.0);
+    app.save_sidecar();
+    assert!(app.error().is_none());
+    let sidecar = lumina_sidecar::sidecar_path_for(&source);
+
+    // Every attempt is overtaken: the rebase budget is exhausted.
+    let attempts = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&attempts);
+    let hook_path = sidecar.clone();
+    set_conflict_hook(Some(Box::new(move |_| {
+        let next = counter.get() + 1;
+        counter.set(next);
+        let mut disk = lumina_sidecar::load_sidecar(&hook_path).unwrap();
+        disk.virtual_copies[0]
+            .recipe
+            .adjustments
+            .insert("contrast".into(), 0.1 * next as f64);
+        lumina_sidecar::save_sidecar(&hook_path, &disk).unwrap();
+    })));
+
+    app.set_adjustment("highlights", 0.5);
+    app.save_sidecar();
+    set_conflict_hook(None);
+
+    assert_eq!(
+        app.status(),
+        Str::Error.t(),
+        "a persistent conflict must surface as a loud error status"
+    );
+    assert!(app.error().is_some(), "the conflict must be visible");
+    assert_ne!(app.status(), Str::SidecarSaved.t());
+    assert_eq!(
+        attempts.get(),
+        MAX_REBASE_ATTEMPTS + 1,
+        "the save must give up after the bounded attempts"
+    );
+    // The local edit stays in memory, but the losing save never reached disk.
+    assert_eq!(app.recipe().adjustments.get("highlights"), Some(&0.5));
+    let on_disk = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+    assert!(!on_disk.virtual_copies[0]
+        .recipe
+        .adjustments
+        .contains_key("highlights"));
 }

@@ -414,3 +414,47 @@ fn filmstrip_selection_actions_are_visible() {
     assert_fully_visible(&output.shapes, Str::MatchSelection.t());
     assert_fully_visible(&output.shapes, Str::PreviousImage.t());
 }
+
+/// SIDECAR-REBASE-1 (B2): the filmstrip sync path rebases an overtaking target
+/// change instead of dropping the save; the foreign source-level field and the
+/// synced recipe both persist.
+#[test]
+fn sync_settings_rebases_overtaking_target_and_keeps_foreign_metadata() {
+    use crate::sidecar_rebase::set_conflict_hook;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("target.png");
+    save_png(&source);
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+    app.add_keyword("seed").unwrap();
+    app.set_adjustment("exposure", 1.5);
+    app.filmstrip_selection.insert(source.display().to_string());
+    let sidecar = lumina_sidecar::sidecar_path_for(&source);
+
+    let wrote = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&wrote);
+    let hook_path = sidecar.clone();
+    set_conflict_hook(Some(Box::new(move |_| {
+        if flag.replace(true) {
+            return;
+        }
+        let mut disk = lumina_sidecar::load_sidecar(&hook_path).unwrap();
+        disk.keywords.push("foreign".into());
+        lumina_sidecar::save_sidecar(&hook_path, &disk).unwrap();
+    })));
+    let report = app.sync_settings_to_selection();
+    set_conflict_hook(None);
+
+    assert_eq!(report.applied_count(), 1);
+    assert_eq!(report.failed_count(), 0);
+    let document = lumina_sidecar::load_sidecar(&sidecar).unwrap();
+    assert!(document.keywords.contains(&"foreign".to_string()));
+    assert!(document.keywords.contains(&"seed".to_string()));
+    assert_eq!(
+        document.virtual_copies[0].recipe.adjustments["exposure"],
+        1.5
+    );
+}
