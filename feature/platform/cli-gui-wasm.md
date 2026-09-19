@@ -1915,6 +1915,52 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Render-/Present-Pfad. Regressionstest `preview_center_clamp_swaps_inverted_bounds_without_panic`
   (verifiziert BESTANDEN 2026-09-19, Mutations-Beweis: ohne Swap panickt er wie Alt-Log).
 
+#### F-103-N6 Runde 3 Befunde (2026-09-19, Release-Build `236a7e7`, 602k-Zeilen-Trace, Analyse per Subagent)
+
+- **R3-SWITCH-1 (teilweise vermessen 2026-09-19, zweiter Run):** Gezielter Run
+  Develop→Library→Bildwahl→Develop→Close (78k Zeilen, 0 Errors, 0 Panics,
+  sauberer Exit): In KEINEM der 3 Wechsel-Frames läuft Lumina-Arbeit
+  (danach jeweils nur wgpu/egui-Noise; einzige sichtbare Arbeit: Full-Res-
+  Textur-Upload 6032×4024 beim zurück nach Develop). Thumbnail-Roundtrip
+  zählbar (2 Jobs, Enqueue→Ready ~100 Log-Zeilen). Schwere Arbeit liegt in
+  der Auswahlkette (Background-Decode + 2 Thumb-Decodes + Base-MISS-Rebuild).
+  Echte Dauern weiter unbelegbar (keine Timestamps; eframe-Instant nur grob:
+  Library-Phase ~9 s inkl. Ordnerwahl+Decode). Verdacht verengt: nicht der
+  Wechsel-Frame, sondern Auswahlkette + Full-Res-Upload (→ R3-RENDER-SIZE-1).
+  F7-Deferral feuerte wieder 0× (kein pending Render beim Wechsel).
+- **R3-DRAFT-1 (offen, gemessen):** 87 Drag-Ticks, alle zu langsam: ~55–60 ms/
+  Frame ohne Crop (cpu-Median 26.27 ms + gpu-Median 25.70 ms), ~70–90 ms mit
+  aktivem Crop (cpu-Median 35.53 ms, +35 %). F1-Drossel feuerte 0× (Events
+  langsamer als 16-ms-Budget — jeder Tick rendert voll), Monster-Top: 42.90 ms
+  CPU-Draft. F4-Kadenz wirkt (52× gedrosselt, Analyse-Median 0.95 ms — Analyse
+  ist nicht das Problem). Basis-Cache gesund (95× HIT / 3× MISS).
+- **R3-ROUTING-1 (offen, gemessen):** Mit aktivem Crop (dimension-changing)
+  fällt JEDER Kurven-Tick auf CPU zurück (38 Ticks ↔ 38× `render_to_vram
+  failed`-Warnung, gpu bis 47.37 ms vergeudet) + gelbes „Render routed to
+  CPU"-Badge. Das verletzt die GPU-Default-Regel (User-Entscheid: „routed to
+  CPU" = Fail mit Fix-Pflicht) — VRAM-Geometrie-Pfad oder Draft-ROI ohne Crop
+  fehlt. Sofortmaßnahme unabhängig davon: Pro-Tick-`warn!` bei bekanntem
+  persistentem Refusal drosseln (1× beim Wechsel + `trace!` pro Tick, Vorbild
+  Generative-Pfad) — 38 identische Warnungen pro Session sind Log-Spam.
+- **R3-RENDER-SIZE-1 (offen, User-Frage 2026-09-19):** Weder Draft noch Full
+  rendern auf Anzeigegröße — Draft feste 1280-px-Kante (`lib.rs:2899`),
+  Full volle Quell-Auflösung (24 MP ≈ 96 MB RGBA, `render_entry.rs:24-84`).
+  Anzeigegröße wäre sinnvoll (Vorschlag: Full/Draft auf Viewport-Auflösung +
+  Device-Pixel-Ratio begrenzen, Full-Res nur für Export/1:1-Loupe).
+- **R3-DENOISE-1 (bekannt, verstärkt):** `pending-integration`-Fallback (1×,
+  funktioniert, Portrait ok) vs. harter Neighbor-Fail (Landscape, doppelt
+  geloggt = ein Ereignis auf zwei Ebenen) im selben Run — Fallback- und
+  Fail-Pfad sind je nach Bild/Pfad inkonsistent. Doppel-`warn!` zusammenführen
+  (1 Zeile/Ereignis).
+- **R3-LOG-1 (offen, Instrumentierung fehlt):** F3-Upload-Skip und
+  PreviewIndex-Build haben KEINE Log-Stelle (unbelegbar); Decode-/Full-Render-/
+  Thumb-Build-Dauern fehlen; Badge-Häufigkeit nicht loggbar; Refusal-Warnung
+  nennt keine Stage. Nachrüsten: Delta-Traces für `set_module`,
+  Deferral-Feuer, Thumb-Build (ms + Einträge), Decode (ms), Full-Render (ms),
+  Upload-Skip (Bytes), Refusal-Wechsel (Stage-Name).
+- **R3-CONFLICT-1 (ungeprüft):** 6 Sidecar-Saves, 0 Rebases/Konflikte —
+  Single-Instance-Run; die Rebase-Logik ist per Log unbestätigt (nur per Test).
+
 ## Optionale zentrale Indizierung
 
 Die DB darf nur Pfade, Quellhashes, Metadaten, Sidecarstatus, Jobstatus,
