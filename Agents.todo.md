@@ -109,7 +109,6 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
-| 1.0 | GUI-PARITY-GOLDENS-18 | alle G | Parity-Goldens-Rebless |
 | 1.0 | GPU-RENDER-DENOISE-19 | G-14 | Denoise-WGSL-Pass |
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
@@ -218,7 +217,6 @@ Marker-Kommentaren im Code implementiert; die F-103-N6-Runde 1 hat eigene
 Befunde erzeugt (GUI-CLICK-ALL-17, GUI-ROUTING-N6, GUI-INSTRDBG-17 — alle
 BESTANDEN verifiziert).
 
-- [ ] **[PRIO: mittel] GUI-PARITY-GOLDENS-18 (Release: 1.0)** Veraltete `kittest_parity`-Goldens neu erzeugen (Befund 2026-09-17, User-Entscheid): `parity_paths_*` (`cpu_gpu_path_parity_matrix`, `lensfun_corrector_cell_presents_cpu_and_refuses_vram`) scheitern lokal an alten Snapshots (numerische Parität grün, nur Snapshots stale; CI-ignoriert). Goldens auf Metal-Maschine mit `UPDATE_SNAPSHOTS=true` neu erzeugen, Diff sichten (nur beabsichtigte UI-Änderungen seit 6b4105e), danach 4/4 grün. Abnahme: `cargo test -p lumina-gui --test kittest_parity -- --ignored` 4/4 grün.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04b (→ G-10, Release: 1.0)** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04c (→ G-10, Release: 1.0)** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).
 

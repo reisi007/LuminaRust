@@ -640,8 +640,10 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   pixelneutral (kein UI-Draw-Code geändert; Release-`strings`-Nachweis).
   Daher kein Rebaseline; eine Stabilisierung (Render-Synchronisation vor dem
   Snapshot) ist ein eigener Folge-Task. Die `kittest_parity`-Goldens
-  `parity_paths_*` bleiben separat als `GUI-PARITY-GOLDENS-18` verplant
-  (2/4 Parity-Testfunktionen rot bestätigt, nicht Teil dieses Reworks).
+  `parity_paths_*` wurden am 2026-09-19 als `GUI-PARITY-GOLDENS-18` rebaselined
+  (verifiziert BESTANDEN, 4/4 grün; Diffs ausschließlich UX-LOOK-Deltas seit
+  6b4105e — Toolbar, linke Rail, Footer, History-Labels; numerische Parität
+  unverändert: neutral/detail/lensfun maxAbsDiff 0, tinted 1/90.96 dB).
 - **Routing-Badge-Befund (GUI-ROUTING-N6, F-103-N6-Runde 1, 2026-09-17):**
   Der gelbe Badge im manuellen Test (`Render routed to CPU: …`) wurde
   reproduziert. Für die committeten RAW-Fixtures mit einem harmlosen
