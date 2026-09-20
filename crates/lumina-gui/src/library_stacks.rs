@@ -6,7 +6,8 @@
 //! (`lumina_sidecar::StackMembership`, `SidecarDocument::stack`); this module
 //! owns the GUI projection: which entries are hidden behind a collapsed cover,
 //! selecting a stack as a unit, the collapse/expand/create/unstack mutations
-//! (atomic CAS writes through `sidecar_rebase`) and the painted stack badge.
+//! (atomic CAS writes through `sidecar_rebase`) and the painted stack
+//! membership sign (`stack_visuals`).
 //!
 //! Loud by construction: every failure is per image (`error!` + `Result`), no
 //! silent fallback, no sidecar is invented for an unstacked/unedited image.
@@ -15,27 +16,13 @@ use super::*;
 use log::{error, info};
 use std::path::Path;
 
-/// R5-STACK-3: colour of the stack membership bracket painted around a stacked
-/// grid/filmstrip cell (distinct from the selection stroke). Display-only.
-const STACK_GROUP_FRAME: egui::Color32 = egui::Color32::from_rgb(0, 190, 235);
-
-/// The Library surface a stack badge is painted on. R5-STACK-2: the grid and
-/// the filmstrip are drawn in the **same** frame and both show the same image,
-/// so a badge id derived from `thumb_key` alone collided — egui keys widget
-/// interaction by id, so the second registration made one surface's badge
-/// unclickable. The surface is part of the id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StackBadgeSurface {
-    Grid,
-    Filmstrip,
-}
-
-/// Stable egui id of the painted stack badge for one cell, so the headless
-/// tests can locate and click it (F-100 clickability). Unique per surface
-/// (R5-STACK-2).
-pub(crate) fn stack_badge_id(surface: StackBadgeSurface, thumb_key: &str) -> egui::Id {
-    egui::Id::new(("lumina-stack-badge", surface as u8, thumb_key))
-}
+// R5-STACKVIS-21: the painted membership sign (amber bracket + offset cards)
+// and the clickable position badge, extracted into its own submodule (file-size
+// ratchet DoD §8). `StackBadgeSurface` is re-exported so the existing
+// grid/filmstrip call sites stay unchanged; the colors and `stack_badge_id` are
+// reached through `library_stacks::stack_visuals` (they are test/paint details).
+pub(crate) mod stack_visuals;
+pub(crate) use stack_visuals::StackBadgeSurface;
 
 impl LuminaApp {
     // ---- read helpers ----------------------------------------------------
@@ -422,68 +409,5 @@ impl LuminaApp {
             self.sidecar_revision = None;
             self.reload_document_for_batch_target(path);
         }
-    }
-
-    // ---- painting --------------------------------------------------------
-
-    /// Paints the stack badge over a grid/filmstrip cell. Returns `true` when
-    /// the badge was clicked, so the caller toggles the collapse instead of
-    /// running the plain cell click. No badge is painted for a non-stacked
-    /// entry (zero visual change for existing listings).
-    pub(crate) fn paint_stack_badge(
-        &self,
-        ui: &mut egui::Ui,
-        rect: egui::Rect,
-        entry: &FileBrowserEntry,
-        surface: StackBadgeSurface,
-    ) -> bool {
-        let Some(stack) = entry.stack.as_ref() else {
-            return false;
-        };
-        let collapsed = self.stack_collapsed_for_entry(entry);
-        let symbol = if collapsed { "⊞" } else { "⊟" };
-        let count = stack.members.len();
-        let index = stack
-            .members
-            .iter()
-            .position(|member| member == &entry.name)
-            .map(|position| position + 1)
-            .unwrap_or(1);
-        // R5-STACK-3 (User-Entscheid 2026-09-20): a visible membership bracket
-        // around every stacked cell plus the "index/count" position makes the
-        // grouping recognizable without selecting the stack. Collapsed keeps
-        // the clear stack symbol. Pure display — never recipe/sidecar.
-        ui.painter().rect_stroke(
-            rect.expand(1.0),
-            2.0,
-            egui::Stroke::new(1.5_f32, STACK_GROUP_FRAME),
-            egui::StrokeKind::Outside,
-        );
-        let label = format!("{symbol} {index}/{count}");
-        // Top-centre keeps clear of the folder badge (top-left), the
-        // assisted-culling badge (top-right) and the rating/flag/color label
-        // badge (bottom edge), so no two chips overlap.
-        let badge = egui::Rect::from_min_size(
-            egui::pos2(rect.center().x - 26.0, rect.top() + 2.0),
-            egui::vec2(52.0, 16.0),
-        );
-        let response = ui.interact(
-            badge,
-            stack_badge_id(surface, &entry.thumb_key),
-            egui::Sense::click(),
-        );
-        ui.painter().rect_filled(
-            badge,
-            2.0,
-            egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180),
-        );
-        ui.painter().text(
-            badge.left_center() + egui::vec2(4.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::monospace(11.0),
-            egui::Color32::WHITE,
-        );
-        response.clicked()
     }
 }

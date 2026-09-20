@@ -476,7 +476,7 @@ fn g15_stack_badge_click_toggles_collapse() {
     };
     let _ = run(&mut app, vec![]);
     let badge = ctx
-        .read_response(crate::library_stacks::stack_badge_id(
+        .read_response(crate::library_stacks::stack_visuals::stack_badge_id(
             crate::library_stacks::StackBadgeSurface::Grid,
             &thumb_key,
         ))

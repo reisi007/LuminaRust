@@ -36,6 +36,18 @@ fn visible_names(app: &LuminaApp) -> Vec<String> {
         .collect()
 }
 
+/// How many painted rect shapes carry `color` as their stroke (the headless
+/// membership-sign assertions below count brackets/cards/selection frames).
+fn stroke_rect_count(shapes: &[egui::epaint::ClippedShape], color: egui::Color32) -> usize {
+    shapes
+        .iter()
+        .filter(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) => rect.stroke.color == color,
+            _ => false,
+        })
+        .count()
+}
+
 /// R5-STACK-2: a **non-cover** member's badge toggles the same stack — that is
 /// the exact cell the user clicked in the run (the cover was elsewhere).
 #[test]
@@ -58,7 +70,7 @@ fn non_cover_badge_click_visibly_collapses_the_grid() {
         .to_string();
     let ctx = egui::Context::default();
     let mut time = 0.0_f64;
-    let badge_id = crate::library_stacks::stack_badge_id(
+    let badge_id = crate::library_stacks::stack_visuals::stack_badge_id(
         crate::library_stacks::StackBadgeSurface::Grid,
         &thumb_key,
     );
@@ -189,7 +201,7 @@ fn stack_membership_bracket_and_index_are_painted() {
         text_contains(&shapes, "⊟ 1/2") && text_contains(&shapes, "⊟ 2/2"),
         "both members must paint their stack position"
     );
-    let group_color = egui::Color32::from_rgb(0, 190, 235);
+    let group_color = crate::library_stacks::stack_visuals::STACK_MEMBERSHIP_FRAME;
     let frames = shapes
         .iter()
         .filter(|clipped| match &clipped.shape {
@@ -200,6 +212,115 @@ fn stack_membership_bracket_and_index_are_painted() {
     assert_eq!(
         frames, 2,
         "each stacked cell must paint exactly one membership bracket"
+    );
+}
+
+/// R5-STACKVIS-21 (User-Order 2026-09-20): the stack membership sign must not
+/// reuse the blue selection stroke. With the whole stack selected, each member
+/// paints BOTH marks in the same frame: the amber `STACK_MEMBERSHIP_FRAME`
+/// bracket plus the darker `STACK_MEMBERSHIP_CARD` offset cards (the stack
+/// optic), and the blue selection frame. The two colors differ, so membership
+/// can never read as selection.
+#[test]
+fn stack_sign_colour_and_form_differ_from_selection() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = stub_raw(directory.path(), "a.cr3");
+    let b = stub_raw(directory.path(), "b.cr3");
+    let mut app = new_app();
+    scan(&mut app, directory.path());
+    app.path = a.display().to_string();
+    put_selection(&mut app, &[&a, &b]);
+    app.create_stack_from_selection().unwrap();
+
+    // The whole stack is selected (blue frame on each member) while each member
+    // keeps its amber stack sign — the exact "both visible at once" case.
+    // Set the exact display strings (not `select_filmstrip_path`, which goes
+    // through `filmstrip_order` and the tempdir path spelling).
+    put_selection(&mut app, &[&a, &b]);
+    assert_eq!(
+        app.filmstrip_selection().len(),
+        2,
+        "both stacked members must be selected for this scene"
+    );
+
+    let ctx = egui::Context::default();
+    // Apply the real Lumina theme so `ui.visuals().selection.bg_fill` is the
+    // blue `ACCENT` the app paints, not egui's default selection color.
+    crate::theme::apply_lightroom_dark(&ctx);
+    let mut time = 0.0_f64;
+    let shapes = grid_run(&ctx, &mut app, &mut time, vec![]);
+
+    let frame = crate::library_stacks::stack_visuals::STACK_MEMBERSHIP_FRAME;
+    let card = crate::library_stacks::stack_visuals::STACK_MEMBERSHIP_CARD;
+    let selection = crate::theme::ACCENT;
+    assert_ne!(
+        frame, selection,
+        "the stack membership colour must differ from the selection colour"
+    );
+    assert_ne!(
+        card, selection,
+        "the stack card colour must differ from blue"
+    );
+
+    assert_eq!(
+        stroke_rect_count(&shapes, frame),
+        2,
+        "each stacked cell paints its amber membership bracket"
+    );
+    assert_eq!(
+        stroke_rect_count(&shapes, card),
+        4,
+        "each stacked cell paints two offset cards (the stack optic)"
+    );
+    assert_eq!(
+        stroke_rect_count(&shapes, selection),
+        2,
+        "both selected stacked cells keep the blue selection frame"
+    );
+}
+
+/// R5-STACKVIS-21 (Spez `feature/product/metadata.md` §6: the membership sign
+/// "macht die Gruppierung auch ohne Selektion erkennbar"): with **no** selection
+/// the stack still shows its amber bracket, the two offset cards and the
+/// `index/count` badge — and no blue selection frame is painted.
+#[test]
+fn stack_sign_is_visible_without_selection() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = stub_raw(directory.path(), "a.cr3");
+    let b = stub_raw(directory.path(), "b.cr3");
+    let mut app = new_app();
+    scan(&mut app, directory.path());
+    app.path = a.display().to_string();
+    put_selection(&mut app, &[&a, &b]);
+    app.create_stack_from_selection().unwrap();
+    // Explicitly clear the selection: recognizability must not depend on it.
+    app.filmstrip_selection.clear();
+
+    let ctx = egui::Context::default();
+    crate::theme::apply_lightroom_dark(&ctx);
+    let mut time = 0.0_f64;
+    let shapes = grid_run(&ctx, &mut app, &mut time, vec![]);
+
+    assert!(
+        text_contains(&shapes, "⊟ 1/2") && text_contains(&shapes, "⊟ 2/2"),
+        "both stacked members must paint their position without a selection"
+    );
+    let frame = crate::library_stacks::stack_visuals::STACK_MEMBERSHIP_FRAME;
+    let card = crate::library_stacks::stack_visuals::STACK_MEMBERSHIP_CARD;
+    assert_eq!(
+        stroke_rect_count(&shapes, frame),
+        2,
+        "amber brackets paint without a selection"
+    );
+    assert_eq!(
+        stroke_rect_count(&shapes, card),
+        4,
+        "offset cards paint without a selection"
+    );
+    assert_eq!(
+        stroke_rect_count(&shapes, crate::theme::ACCENT),
+        0,
+        "no selection means no blue selection frame on the stack"
     );
 }
 
@@ -243,7 +364,7 @@ fn filmstrip_badge_click_visibly_collapses() {
         output.shapes
     };
     run(&mut app, vec![]);
-    let badge_id = crate::library_stacks::stack_badge_id(
+    let badge_id = crate::library_stacks::stack_visuals::stack_badge_id(
         crate::library_stacks::StackBadgeSurface::Filmstrip,
         &thumb_key,
     );
@@ -289,7 +410,7 @@ fn badge_click_visibly_collapses_and_expands_the_grid() {
         .to_string();
     let ctx = egui::Context::default();
     let mut time = 0.0_f64;
-    let badge_id = crate::library_stacks::stack_badge_id(
+    let badge_id = crate::library_stacks::stack_visuals::stack_badge_id(
         crate::library_stacks::StackBadgeSurface::Grid,
         &thumb_key,
     );

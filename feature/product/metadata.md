@@ -149,11 +149,18 @@ Quelle.
   (`move_library_selection`) überspringt bei zugeklapptem Stapel die
   verdeckten Mitglieder. Dadurch wirken Sync/Batch/Previous automatisch auf
   den Stapel als Einheit.
-  **Zugehörigkeits-Klammer (R5-STACK-3, User-Entscheid 2026-09-20):** Jedes
-  Zellen-Badge eines gestapelten Bildes trägt zusätzlich eine sichtbare
-  Zugehörigkeits-Klammer (Rahmen um die Zelle) und die Position im Stapel als
+  **Zugehörigkeits-Zeichen (R5-STACK-3 + R5-STACKVIS-21, User-Entscheid
+  2026-09-20):** Jedes Zellen-Badge eines gestapelten Bildes trägt zusätzlich
+  ein eigenes Zugehörigkeits-Zeichen und die Position im Stapel als
   „&lt;Index&gt;/&lt;Anzahl&gt;“ (z. B. „1/2“); zugeklappt bleibt das klare
-  Stapel-Symbol „⊞ &lt;Index&gt;/&lt;Anzahl&gt;“ nur am Deckbild. Die Klammer ist
+  Stapel-Symbol „⊞ &lt;Index&gt;/&lt;Anzahl&gt;“ nur am Deckbild. Farbe und Form
+  sind normiert (`STACK_MEMBERSHIP_FRAME` = Bernstein `#E8A91C`,
+  `STACK_MEMBERSHIP_CARD` = dunkleres Bernstein `#8A5E0E`): eine goldene
+  Zugehörigkeits-Klammer um die Zelle **plus versetzte Karten** (zwei
+  versetzt-gezeichnete Kartenumrisse) hinter dem Positions-Badge. Das Zeichen
+  ist bewusst **kein** blauer Selektions-Rahmen — die Selektions-Umrandung
+  bleibt `ACCENT` (`#4A90D9`). Beide Zeichen dürfen gleichzeitig sichtbar sein
+  und müssen an Farbe und Form auseinanderzuhalten bleiben. Das Zeichen ist
   reine Anzeige (kein Rezept, kein Sidecar) und macht die Gruppierung auch ohne
   Selektion erkennbar.
 - **Sichtbare Funktionen (klickbare Buttons im Library-Metadaten-Panel):**
