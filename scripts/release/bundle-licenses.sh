@@ -26,6 +26,8 @@ licenses/lensfun/COPYING.CC-BY-SA-3.0
 licenses/lensfun/SOURCE-OFFER.md
 licenses/models/BiRefNet-LICENSE-MIT.txt
 licenses/models/SAM-2-LICENSE-Apache-2.0.txt
+licenses/models/YuNet-LICENSE-MIT.txt
+licenses/models/SFace-LICENSE-Apache-2.0.txt
 licenses/models/ONNXRuntime-LICENSE-MIT.txt
 licenses/models/MODEL-SOURCE-OFFER.md
 "

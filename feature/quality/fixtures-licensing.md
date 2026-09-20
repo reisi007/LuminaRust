@@ -104,9 +104,11 @@ PSNR-Toleranzen stehen normativ in
   Proto3-Encoder-Quelle (`crates/lumina-onnx/tests/ort_backend.rs` +
   `scripts/regenerate_onnx_fixture.rs`), kein Download, keine Modellgewichte,
   daher **keine Lizenzpflicht** (trivialer, formelhaft generierter Graph).
-- Kein echtes Segmentierungs- oder Gesichtsmodell: echte BiRefNet/SAM-2- **und**
-  YuNet/SFace-Gewichte bleiben weiterhin `pending-integration` (keine
-  spontanen Downloads, Agents.md).
+- Kein echtes Segmentierungs- oder Gesichtsmodell als Fixture: echte
+  BiRefNet/SAM-2-Gewichte bleiben `pending-integration`. Die Face-Manifeste
+  (YuNet/SFace) tragen seit FACE-20-S6 (2026-09-20) verifizierte
+  `sha256:<hex>`-Pins, aber die Gewichte werden weiterhin **nicht** committet
+  und **nicht** zur Testzeit geladen (keine spontanen Downloads, Agents.md).
 - Regenerierung: `scripts/regenerate_onnx_fixture.sh`; ein Drift zwischen
   Encoder und Fixture bzw. vom Pin ist ein harter Testfehler.
 
@@ -173,19 +175,36 @@ liegt beim Build-Agenten/Eigentümer.
 | --- | --- | --- | --- |
 | **BiRefNet** (Zheng et al., arXiv:2401.03407) | erstes automatisches Subjekt-Modell | **MIT** (GitHub `LICENSE` = MIT, Copyright (c) 2024 ZhengPeng; HF-Card `ZhengPeng7/BiRefNet` `license: mit` — verifiziert 2026-08-20, R6; Manifest korrigiert) | Gewichte *pending integration* (`model_hash = "pending-integration"`) |
 | **SAM 2.1** (`sam2.1_hiera_*`) | erstes interaktives Box/Pinsel-Modell (F-082) | **Apache-2.0** für Code **und** Gewichte (facebookresearch/sam2 `LICENSE`, HF-Model-Cards, Meta-Announcement „code and weights … permissive Apache 2.0" — verifiziert 2026-08-20, R6) | Adapter integriert (Commit `452d8a4`); Gewichte *pending integration* (`model_hash = "pending-integration"`) |
-| **YuNet** (`face_detection_yunet`, OpenCV Zoo) | geplante Gesichts-Detektion (LRPAR-G12-FACE-20 / FACE-20-S2) | **MIT** *deklariert* (OpenCV Zoo Modell-Verzeichnis `LICENSE`) — **Kandidat/Proposal**, Gewichts-Grant noch nicht verifiziert (FACE-20-S6) | Gewichte *pending integration* (`model_hash = "pending-integration"`), kein Download |
-| **SFace** (`face_recognition_sface`, MobileFaceNet, OpenCV Zoo) | geplantes Gesichts-Embedding (LRPAR-G12-FACE-20 / FACE-20-S2) | **Apache-2.0** *deklariert* (OpenCV Zoo Modell-Verzeichnis `LICENSE`) — **Kandidat/Proposal**, Gewichts-Grant noch nicht verifiziert (FACE-20-S6) | Gewichte *pending integration* (`model_hash = "pending-integration"`), kein Download |
+| **YuNet** (`face_detection_yunet_2023mar.onnx`, OpenCV Zoo) | Gesichts-Detektion (LRPAR-G12-FACE-20 / FACE-20-S6) | **MIT** © 2020 Shiqi Yu — Modellverzeichnis `LICENSE` + README „all files in this directory", verifiziert **2026-09-20** an der Quelle (`opencv/opencv_zoo` `main` @ `47534e27…`, Blob `4cdf89a4…`) | **Gewichts-Grant verifiziert**; Pin `sha256:8f2383e4…552fa4` (232 589 Byte), Manifest `model_hash`, keine Gewichte committet |
+| **SFace** (`face_recognition_sface_2021dec.onnx`, MobileFaceNet, OpenCV Zoo) | Gesichts-Embedding (LRPAR-G12-FACE-20 / FACE-20-S6) | **Apache-2.0** © 2021 Shenzhen Institute of AI and Robotics for Society — Modellverzeichnis `LICENSE` + README „all files in this directory", verifiziert **2026-09-20** an der Quelle (`opencv/opencv_zoo` Blob `d6456956…`) | **Gewichts-Grant verifiziert**; Pin `sha256:0ba9fbfa…c34e79` (38 696 353 Byte), Manifest `model_hash`, keine Gewichte committet |
 | **ONNX Runtime** (`ort` 2.0.0-rc.13) | Inferenz-Runtime | **MIT** (ORT `MIT OR Apache-2.0`, `ort-sys` `MIT OR Apache-2.0`) | **optional**, Feature `onnx-rt`, nicht im Default-Build |
 
-**Face-Modelle — offener S6-Task (FACE-20-S6):** YuNet und SFace sind
-**Kandidaten**; die Modell-Verzeichnis-`LICENSE` der OpenCV Zoo deckt den
-*Code*, ist aber **kein** Grant für die **Gewichte** (Directory-LICENSE ≠
-Gewichts-Grant). Vor jeder Hash-Pin-/Bundle-Integration sind Gewichtslizenz,
-Quelle (Repo/Release/Commit), Version und Hash **am tatsächlichen Gewicht** zu
-prüfen und hier (Lizenz + Hash) sowie in `THIRD-PARTY-NOTICES.md` zu ergänzen.
-Bis dahin behalten beide Manifeste `model_hash = "pending-integration"` und
-können nie `Verified` melden (FACE-20 §2.2, S6 in §6); es werden keine Gewichte
-committet oder heruntergeladen.
+**Face-Modelle — S6 abgeschlossen (FACE-20-S6, 2026-09-20):** YuNet und SFace
+sind an der tatsächlichen Gewichtsquelle verifiziert. Maßgeblich ist, dass die
+**Modellverzeichnis-`LICENSE`** nicht bloß den Demo-Code, sondern laut eigener
+`README` „alle Dateien in diesem Verzeichnis" lizenziert — damit ist sie der
+**Gewichts-Grant** für die danebenliegende `.onnx`-Datei (MIT für YuNet,
+Apache-2.0 für SFace). Die exakten Bytes wurden einmalig bezogen und per
+SHA-256 geprüft (Git-LFS-Objekt-ID = Inhalts-Hash); die Manifeste
+`face_detect_manifest`/`face_embed_manifest` tragen jetzt diesen Pin
+(`sha256:<hex>`) statt `pending-integration`. **Es werden weiterhin keine
+Gewichte committet oder zur Testzeit heruntergeladen**; Tests laufen gegen die
+deterministischen Stubs und das lokale, hash-gepinnte Behavior-Fixture
+(`lumina-crafted-reducemax.onnx`). **Bekannte, laute Grenze:** Die
+ausgelieferten Graphen (YuNet = 12 Per-Stride-Outputs; SFace = `data`→`fc1` mit
+eingebackener `(x−127.5)·1/128`-Normierung) passen **nicht** zum kanonischen
+Single-Output-Vertrag aus S2; ein echtes Artefakt wird daher hash-verifiziert,
+aber beim Laden laut abgelehnt (`InferenceFailed` listet die verfügbaren
+Tensoren) — kein stiller Fallback, kein stilles Umbiegen. Der dafür nötige
+Multi-Output-Adapter ist eine eigene Folgearbeit (siehe `Agents.todo.md`).
+Lizenztexte: `licenses/models/YuNet-LICENSE-MIT.txt`,
+`licenses/models/SFace-LICENSE-Apache-2.0.txt`.
+Gepinnte `input_spec_digest`-Werte (kanonischer I/O-Vertrag; in
+`crates/lumina-onnx/tests/face_pins.rs` verankert): YuNet
+`sha256:e992dce8b7c2c51bdd9872106550f57ebdaf0ee86c5774f2212b47a79182d5dc`
+(640×640, RGB, NCHW, ImageNet-Normierung), SFace
+`sha256:a5c289c6f0c6466b927a7c895db2fc35cc22c96846db950bdd13bc741012270f`
+(112×112, RGB, NCHW, ImageNet-Normierung).
 
 **SAM-2-Export-Pfad (AGPL-Falle):** Die SAM-2.1-Gewichte sind Apache-2.0,
 aber der übliche Lade-/Inferenzweg über das PyPI-Paket **`ultralytics`
@@ -287,7 +306,7 @@ zählt zur F-078-Abnahme.
 | LibRaw (nativ) | CI-Image OCI-Label `lumina.libraw_version` | `0.22.2` |
 | Benchmark-Fixtures | eingefrorener `FIXTURE_SEED = 0x5EED` + `SplitMix64` | Änderung ⇒ Re-Baseline |
 | ONNX-Behavior-Fixture | SHA-256-Pin in `tests/fixtures/README.md` + `tests/ort_backend.rs` | `2a2ede66…` (committetes Binär-Fixture) |
-| Modellgewichte | `ModelManifest.model_hash` als Identität | BiRefNet aktuell `pending-integration`; Face-Kandidaten YuNet/SFace ebenso (`FACE-20-S6` offen) |
+| Modellgewichte | `ModelManifest.model_hash` als Identität | BiRefNet/SAM 2 `pending-integration`; Face YuNet/SFace **gepinnt** (`sha256:<hex>`, FACE-20-S6 2026-09-20), keine Gewichte committet |
 
 Policy: `Cargo.lock` committet halten; native Abhängigkeiten über das immutable
 CI-Image pinnen; Modellgewichte bei Integration über Hash + Version + Lizenz +
@@ -317,7 +336,8 @@ Targets nicht erreichbar.
 
 - [x] Fixture-Inventar dokumentiert (synthetisch + RAW + Generierungsvertrag).
 - [x] Modell-Inventar mit Lizenzen dokumentiert (BiRefNet MIT, SAM 2.1
-  Apache-2.0, ORT MIT — jeweils an der tatsächlichen Quelle verifiziert, R6).
+  Apache-2.0, YuNet MIT, SFace Apache-2.0, ORT MIT — jeweils an der
+  tatsächlichen Quelle verifiziert, R6/FACE-20-S6).
 - [x] Vollständige Abhängigkeits-Lizenztabelle erstellt (`THIRD-PARTY-NOTICES.md`).
 - [x] Keine GPL/AGPL/SSPL gefunden; LibRaw als einzige Pflicht benannt.
 - [x] Versionierungs-Policy dokumentiert.

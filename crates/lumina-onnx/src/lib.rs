@@ -40,10 +40,11 @@
 //! The [`face`] module adds the native face-detection/embedding stages
 //! (deterministic, tests-only stubs by default; a real ORT path behind
 //! `onnx-rt`) and the model-free, deterministic clustering stage, plus the
-//! mapping onto the S1 sidecar `face` schema. Every planned weight descriptor
-//! stays `pending-integration` until hash-pinned weights land — there is no
-//! download and no silent fallback. See [`face`] for the licence findings and
-//! the full identity/invalidation contract.
+//! mapping onto the S1 sidecar `face` schema. Both shipped weight descriptors
+//! carry verified, pinned SHA-256 `model_hash` values (FACE-20-S6, licences
+//! MIT/Apache-2.0 verified at the OpenCV Zoo source) — there is no download and
+//! no silent fallback, and the known real-artifact I/O boundary is documented
+//! in [`face`].
 //!
 //! ## KI-denoise pipeline (LRPAR-G14-DENOISE-IMPL-20)
 //!
@@ -101,12 +102,12 @@ pub use face::{
     FaceArtifactEvidence, FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
     FaceEmbeddingVector, FaceInferenceOptions, FaceModelSuite, FaceOnnxEngine, StubFaceDetector,
     StubFaceEmbedder, FACE_DETECTION_SCORE_THRESHOLD_DEFAULT, FACE_DETECT_INFERENCE_HEIGHT,
-    FACE_DETECT_INFERENCE_WIDTH, FACE_DETECT_LICENSE, FACE_DETECT_MODEL_NAME,
-    FACE_DETECT_MODEL_VERSION, FACE_EMBEDDING_NORMALIZATION, FACE_EMBED_DIMENSION,
-    FACE_EMBED_INFERENCE_HEIGHT, FACE_EMBED_INFERENCE_WIDTH, FACE_EMBED_LICENSE,
-    FACE_EMBED_MODEL_NAME, FACE_EMBED_MODEL_VERSION, FACE_IDENTITY_DIGEST_KEY,
-    FACE_LANDMARK_NAMES_5PT, FACE_PREPROCESSING_NAME, FACE_PREPROCESSING_VERSION,
-    FACE_RESCALING_METHOD,
+    FACE_DETECT_INFERENCE_WIDTH, FACE_DETECT_LICENSE, FACE_DETECT_MODEL_HASH,
+    FACE_DETECT_MODEL_NAME, FACE_DETECT_MODEL_VERSION, FACE_EMBEDDING_NORMALIZATION,
+    FACE_EMBED_DIMENSION, FACE_EMBED_INFERENCE_HEIGHT, FACE_EMBED_INFERENCE_WIDTH,
+    FACE_EMBED_LICENSE, FACE_EMBED_MODEL_HASH, FACE_EMBED_MODEL_NAME, FACE_EMBED_MODEL_VERSION,
+    FACE_IDENTITY_DIGEST_KEY, FACE_LANDMARK_NAMES_5PT, FACE_PREPROCESSING_NAME,
+    FACE_PREPROCESSING_VERSION, FACE_RESCALING_METHOD,
 };
 pub use generative::{
     fixture_manifest, fixture_model_hash, manifest_hash_is_pinned, outpaint_canvas_from_sidecar,

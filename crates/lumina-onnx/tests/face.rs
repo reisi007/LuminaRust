@@ -10,11 +10,10 @@ use lumina_core::ImageFrame;
 use lumina_onnx::{
     cluster_embeddings, clusters_from_labels, detected_face_id, face_artifact_status,
     face_detect_manifest, face_embed_manifest, face_identity, face_identity_digest,
-    face_identity_with_digest, face_model_hash_is_pinned, verify_model_hash, DetectedFace,
-    FaceAnalysisOutput, FaceArtifactEvidence, FaceClusteringParams, FaceDetectionInference,
-    FaceEmbeddingInference, FaceEmbeddingRecord, FaceEmbeddingVector, FaceInferenceOptions,
-    FaceModelSuite, ModelHashStatus, ModelManifest, OnnxError, StubFaceDetector, StubFaceEmbedder,
-    FACE_IDENTITY_DIGEST_KEY, PENDING_INTEGRATION_HASH,
+    face_identity_with_digest, DetectedFace, FaceAnalysisOutput, FaceArtifactEvidence,
+    FaceClusteringParams, FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
+    FaceEmbeddingVector, FaceInferenceOptions, FaceModelSuite, ModelManifest, OnnxError,
+    StubFaceDetector, StubFaceEmbedder, FACE_IDENTITY_DIGEST_KEY,
 };
 use lumina_sidecar::{
     DecodeFingerprint, Extras, FaceArtifactStatus, FaceBoundingBox, FaceClusteringIdentity,
@@ -95,27 +94,6 @@ fn fingerprints() -> (SourceFingerprint, DecodeFingerprint, GeometryFingerprint)
 
 fn clustering() -> FaceClusteringIdentity {
     FaceClusteringParams::default().to_identity()
-}
-
-/// SOLL FACE-20 §2.2: shipped face descriptors stay `pending-integration`
-/// until hash-pinned weights land and can never report `Verified`.
-#[test]
-fn builtin_face_descriptors_are_pending_and_never_verified() {
-    for manifest in [face_detect_manifest(), face_embed_manifest()] {
-        assert_eq!(manifest.model_hash, PENDING_INTEGRATION_HASH);
-        assert!(!face_model_hash_is_pinned(&manifest));
-        assert_eq!(
-            verify_model_hash(&manifest.model_hash, "any-digest"),
-            ModelHashStatus::Pending
-        );
-        assert!(manifest.validate().is_ok());
-    }
-    let detect = face_detect_manifest();
-    assert!(detect.capabilities.face_detect);
-    assert!(!detect.capabilities.face_embed);
-    let embed = face_embed_manifest();
-    assert!(embed.capabilities.face_embed);
-    assert!(!embed.capabilities.face_detect);
 }
 
 /// The `face_detect`/`face_embed` capability flags are additive: manifests

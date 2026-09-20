@@ -70,6 +70,15 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   Copyleft-Pflicht zum Gesamtwerk hinzu, solange der Lizenzentscheid je
   Modell dies bestätigt.
 
+> **S6-Ergebnis (2026-09-20):** Beide Gewichts-Grants sind an der Quelle
+> verifiziert (YuNet MIT, SFace Apache-2.0), die Pins sind gesetzt und die
+> Lizenztexte gebündelt — siehe §3.3 und
+> `feature/quality/fixtures-licensing.md` §5. Die oben beschriebene
+> `pending-integration`-Regel gilt damit für Face **nicht mehr**; sie bleibt für
+> BiRefNet/SAM 2/Denoise/Inpaint in Kraft. Gewichte werden weiterhin nicht
+> committet (Nutzer-geliefert), und der reale ORT-Pfad ist bis zum
+> Multi-Output-Adapter eine laute, dokumentierte Grenze (§3.3).
+
 ### 2.3 Capability (native-only, kein stiller Fallback)
 
 - `lumina-onnx` bleibt **native-only** (CLI + Desktop, `onnx-rt`-Feature,
@@ -182,6 +191,45 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   melden `missing` bzw. `corrupt` — nie ein stiller `valid` und kein Crash.
   Pre-MVP ist das ein bewusster, dokumentierter Bruch; `schema_version` bleibt 2.
 
+### 3.3 Umsetzungsnotiz S6 — Lizenzen/Gewichte (2026-09-20)
+
+- **Lizenz an der Quelle verifiziert (F-078-Gate):** Beide Gewichte sind
+  freigegeben. Maßgeblich ist, dass die **Modellverzeichnis-`LICENSE`** laut
+  eigener `README` „alle Dateien in diesem Verzeichnis" lizenziert und damit die
+  danebenliegende `.onnx`-Datei mit umfasst (nicht bloß den Demo-Code):
+  - **YuNet** (`models/face_detection_yunet`, `face_detection_yunet_2023mar.onnx`):
+    **MIT**, © 2020 Shiqi Yu (`LICENSE`-Blob `4cdf89a4…`).
+  - **SFace** (`models/face_recognition_sface`, `face_recognition_sface_2021dec.onnx`):
+    **Apache-2.0**, © 2021 Shenzhen Institute of AI and Robotics for Society
+    (`LICENSE`-Blob `d6456956…`).
+  Quelle: `opencv/opencv_zoo`, `main` @ `47534e27c9851bb1128ccc0102f1145e27f23f98`
+  (verifiziert 2026-09-20). Die frühere Sorge „Directory-LICENSE ≠
+  Gewichts-Grant" ist damit **ausgeräumt**; die bekannten Fallen
+  (InsightFace-NC, EdgeFace-NC, `ultralytics`-AGPL) treffen nicht zu.
+- **Pins:** `face_detect_manifest`/`face_embed_manifest` tragen jetzt
+  `sha256:<hex>`-Pins der exakten Bytes (232 589 B bzw. 38 696 353 B; Git-LFS-
+  Objekt-ID = Inhalts-Hash, einmalig bezogen und nachgerechnet). Die
+  kanonischen `input_spec_digest`-Werte sind in den Tests gepinnt und in
+  `feature/quality/fixtures-licensing.md` §5 dokumentiert. Der Wechsel von
+  `pending-integration` auf den Pin invalidiert persistierte Analysen sichtbar
+  (`stale`) — der beabsichtigte, dokumentierte Effekt.
+- **Keine Gewichte committet/gebündelt:** Konsistent zur bestehenden
+  Architektur (BiRefNet/SAM 2/Denoise/Inpaint: Gewichte nutzer-geliefert via
+  `--detector`/`--embedder` bzw. Env-Variablen) und weil der echte ORT-Pfad
+  erst nach dem Adapter (siehe unten) nutzbar ist. Lizenztexte liegen in
+  `licenses/models/`; getestet wird netzwerkfrei gegen Stubs und das lokale,
+  hash-gepinnte Behavior-Fixture.
+- **Bekannte, laute Grenze (Folgearbeit):** Die ausgelieferten Graphen passen
+  **nicht** zum kanonischen Single-Output-Vertrag aus S2 —
+  **YuNet** liefert zwölf Per-Stride-Tensoren (`cls_*`/`obj_*`/`bbox_*`/`kps_*`)
+  und **SFace** konsumiert `data` (0..255, mit eingebackener
+  `(x−127.5)·1/128`-Normierung) und liefert `fc1` (128-d). Ein echtes Artefakt
+  wird daher hash-verifiziert, aber beim Laden **laut** abgelehnt
+  (`InferenceFailed` listet die verfügbaren Tensoren) — kein stiller Fallback
+  und kein stilles Umbiegen. Ein dedizierter Multi-Output-Adapter (YuNet-Dekode
+  inkl. NMS + korrekter SFace-I/O-Vertrag) ist eine eigene Folgearbeit
+  (`Agents.todo.md`).
+
 ## 4. Persistenz-Scope (Sidecar-first)
 
 - **Source of truth ist das Sidecar** (`<name>.lumina.json` + `<name>.lumina.zdata`,
@@ -252,9 +300,11 @@ Verifizierungs-Agenten; Reihenfolge seriell bei Schema-/API-Berührung:
 5. **FACE-20-S5 GUI:** Personen-Ansicht + Develop-Brücke (Maskenquelle),
    headless Tests (`cargo test -p lumina-gui`), Golden/PSNR nur wo visuell
    relevant, kein manueller Test als einzige Absicherung.
-6. **FACE-20-S6 Lizenzen/Fixtures:** Modell-Lizenzen + Pins in
-   `fixtures-licensing.md` nachtragen, `THIRD-PARTY-NOTICES.md` ergänzen,
-   hash-gepinnte Fixtures ohne Netzwerk.
+6. **FACE-20-S6 Lizenzen/Fixtures (umgesetzt 2026-09-20):** Modell-Lizenzen +
+   Pins in `fixtures-licensing.md` nachgetragen, `THIRD-PARTY-NOTICES.md`
+   ergänzt, Manifest-Pins gesetzt, Lizenztexte gebündelt; Tests netzwerkfrei
+   gegen Stubs und das lokale, hash-gepinnte Behavior-Fixture. Semantik und
+   bekannte laute I/O-Grenze: §3.3.
 7. **Face-Vektor-Persistenz (Folgearbeit, umgesetzt 2026-09-17):** Der
    `.lumina.zdata`-RecordKind `face_embedding` (`kind = 5`) existiert; CLI/GUI
    persistieren Detektionen/Landmarken/Cluster **und** die normierten
@@ -265,15 +315,18 @@ Verifizierungs-Agenten; Reihenfolge seriell bei Schema-/API-Berührung:
 
 **Stand 2026-09-17 (S1–S5 + Vektor-Record-Kind, Verifizierung BESTANDEN):**
 S1 Schema, S2 ONNX, S3 Clustering, S4 CLI (Exit-Codes inkl. Usage-2), S5 GUI
-(People-Ansicht + Face→Masken-Brücke als Box-Region, kein GPS). Offen: S6
-Gewichte/Lizenzen. Der Vektor-Record-Kind (§3.2) ist umgesetzt; der
+(People-Ansicht + Face→Masken-Brücke als Box-Region, kein GPS). **S6
+(Gewichte/Lizenzen) umgesetzt 2026-09-20, Verifizierung ausstehend (§3.3).** Der
+Vektor-Record-Kind (§3.2) ist umgesetzt; der
 Face-Evidence-Helper liegt jetzt genau einmal in `lumina-sidecar` und wird von
 CLI und GUI gemeinsam genutzt. **Abdeckungsgrenze (B1, dokumentiert):** Die
 CLI-Schreib-Orchestrierung (`face_analyze` ohne `onnx-rt` nicht kompiliert, mit
 `onnx-rt` nur mit echten Modellen ausführbar) ist code-review-verifiziert, nicht
 prozess-E2E; der Record-/Codec-/Checksum-/Evidence-Vertrag ist vollständig
 getestet. Ein stubbarer `FaceOnnxEngine`-Injektionspunkt wäre der Weg zu voller
-Prozess-Abdeckung.
+Prozess-Abdeckung. **Zusätzliche laute Grenze (S6):** der reale Detektor/
+Embedder passt noch nicht zum S2-I/O-Vertrag (YuNet 12 Outputs; SFace
+`data`/`fc1`) — Multi-Output-Adapter als Folgearbeit (§3.3).
 
 Jeder Slice braucht: SOLL-Satz im Feature-Dokument vor Code (falls Semantik
 unklar), Tests mit der Implementierung, Verifizierungsbericht mit

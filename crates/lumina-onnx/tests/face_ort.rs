@@ -202,6 +202,30 @@ fn face_detector_rejects_unknown_tensor_names_at_load() {
     }
 }
 
+/// The input-name branch of `load_session` is checked *before* the output
+/// branch. This is exactly where a real `SFace` graph fails today (`data` ≠
+/// the manifest's `input`), so the refusal must be loud and must list the
+/// available inputs — never a silent load with the wrong tensor.
+#[test]
+fn face_detector_rejects_unknown_input_tensor_names_at_load() {
+    let path = write_fixture("detect-input-names");
+    let result = OrtFaceDetector::new(
+        &path,
+        detect_manifest(FIXTURE_PIN.into(), "does-not-exist", OUTPUT_NAME),
+        FaceInferenceOptions::default(),
+    );
+    let _ = std::fs::remove_file(&path);
+    match result {
+        Err(OnnxError::InferenceFailed { reason, .. }) => {
+            assert!(reason.contains("`does-not-exist`"), "{reason}");
+            assert!(reason.contains("input"), "{reason}");
+            assert!(reason.contains("`x`"), "{reason}");
+        }
+        Err(other) => panic!("expected InferenceFailed, got {other:?}"),
+        Ok(_) => panic!("a manifest with a wrong input name must not load"),
+    }
+}
+
 /// The fixture is loadable and hash-verifies, but its rank-4 matte-shaped
 /// output violates the canonical detection contract — a loud `InferenceFailed`,
 /// never a silent reshape into detections.

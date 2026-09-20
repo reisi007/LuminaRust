@@ -40,8 +40,8 @@ ONNX inference is a native capability, the browser remains explicitly "offen"
   persisted `GenerativeEdit` flags, capability + hash gated), the real
   hash-pinned `fixture_manifest`/`verify_fixture_manifest`, and the documented
   real-weight attachment surface `GenerativeModelSource::artifact`.
-- `face.rs` + `face/` — LRPAR-G12-FACE-20 S2/S3: face detection/embedding
-  manifests (`face_detect`/`face_embed` capabilities, `pending-integration`),
+- `face.rs` + `face/` — LRPAR-G12-FACE-20 S2/S3/S6: face detection/embedding
+  manifests (`face_detect`/`face_embed` capabilities, verified `sha256:` pins),
   the shared inference identity + digest onto the S1 sidecar schema, the
   deterministic, tests-only stub backends, the model-free DBSCAN-over-cosine
   clustering with confirm/split/merge, and the real ORT face backends behind
@@ -154,19 +154,24 @@ The decision `feature/decisions/LRPAR-G12-FACE-20.md` splits face recognition
 into three independently versioned stages; `crates/lumina-onnx` implements the
 native detection/embedding stages (S2) and the model-free clustering stage (S3).
 
-- **Candidates (proposal, pending S6; not yet weight-verified):**
-  `face_detect_manifest()` = **YuNet** candidate (OpenCV Zoo
-  `face_detection_yunet`, declared **MIT**); `face_embed_manifest()` =
-  **SFace/MobileFaceNet** candidate (OpenCV Zoo `face_recognition_sface`,
-  declared **Apache-2.0**). Those licence values come from the OpenCV Zoo
-  model-directory `LICENSE`, which is **not** by itself a grant for the model
-  **weights**: the weight licence and the exact release must be verified
-  against the actual weight source before any hash pin lands (`FACE-20-S6`,
-  `feature/quality/fixtures-licensing.md` §5). The InsightFace/ArcFace
+- **Models + licences (verified, FACE-20-S6):** `face_detect_manifest()` =
+  **YuNet** (OpenCV Zoo `face_detection_yunet`, **MIT** © 2020 Shiqi Yu);
+  `face_embed_manifest()` = **SFace/MobileFaceNet** (OpenCV Zoo
+  `face_recognition_sface`, **Apache-2.0** © 2021 Shenzhen Institute of AI and
+  Robotics for Society). The model-directory `LICENSE` plus its README clause
+  "all files in this directory" is the **weight grant** (verified 2026-09-20 at
+  `opencv/opencv_zoo` `main` @ `47534e27…`). Both descriptors carry verified
+  `sha256:<hex>` pins of the exact artifacts
+  (`FACE_DETECT_MODEL_HASH` / `FACE_EMBED_MODEL_HASH`); the InsightFace/ArcFace
   non-commercial weight licence and the AGPL `ultralytics` tooling are
   explicitly avoided. **No weights are committed and nothing is downloaded**;
-  every descriptor carries `model_hash = "pending-integration"` and can never
-  report `Verified`.
+  license texts live in `licenses/models/`.
+- **Known I/O boundary (loud, never silent):** the shipped graphs (YuNet = 12
+  per-stride outputs; SFace = `data`→`fc1` with a baked-in `(x−127.5)·1/128`)
+  do not yet match the S2 canonical single-output contract. A real artifact
+  hash-verifies but is refused loudly at load (`InferenceFailed` listing the
+  available tensors) until the dedicated multi-output adapter lands — no silent
+  re-shaping and no stub substitution.
 - **Capabilities:** `ModelCapabilities.face_detect` / `face_embed`
   (additive, `#[serde(default)]`; manifests written before them keep parsing).
 - **Identity (`face_identity`, `face_identity_digest`):** source + decode +

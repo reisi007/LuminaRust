@@ -15,29 +15,19 @@
 //! ONNX Runtime path lives behind the non-default `onnx-rt` feature
 //! ([`ort`]).
 //!
-//! ## Model decision and licences (F-078, **candidate/proposal — pending S6**)
+//! ## Model decision and licences (F-078, verified — FACE-20-S6)
 //!
-//! Two **candidate** ONNX models from the OpenCV Zoo are declared here; the
-//! exact variant *and* the licence/weight grant are still to be verified at
-//! weight-integration time (benchmark + licence gate, FACE-20 §2.1/§2.2, S6 in
-//! §6, tracked as `FACE-20-S6` in `feature/quality/fixtures-licensing.md` §5):
-//!
-//! | Stage | Model | Declared licence (candidate) | Status |
-//! | --- | --- | --- | --- |
-//! | detection | `YuNet` (`face_detection_yunet`) | **MIT** (OpenCV Zoo model-dir `LICENSE`) | planned, `model_hash = "pending-integration"` |
-//! | embedding | `SFace` (`face_recognition_sface`, MobileFaceNet) | **Apache-2.0** (OpenCV Zoo model-dir `LICENSE`) | planned, `model_hash = "pending-integration"` |
-//!
-//! The model-directory `LICENSE` covers the OpenCV Zoo *code*; it is **not** by
-//! itself a grant for the model **weights**, so the weight licence and the
-//! exact release/commit must be verified against the actual weight source
-//! before any hash pin lands (S6). Both are expected to be OSI-permissive; the
-//! known trap is the non-commercial InsightFace/ArcFace weight licence and the
-//! AGPL `ultralytics` tooling — see `feature/quality/fixtures-licensing.md` §5.
-//! **No weights are committed and nothing is downloaded** (Agents.md); until
-//! hash-pinned weights land, every planned descriptor keeps the documented
-//! [`PENDING_INTEGRATION_HASH`] placeholder and can never report `Verified`
-//! (FACE-20 §2.2). Tests run exclusively against deterministic stubs or a
-//! locally committed behavior fixture.
+//! Two weight-verified OpenCV Zoo models are declared: **YuNet** (detection,
+//! MIT © 2020 Shiqi Yu) and **SFace/MobileFaceNet** (embedding, Apache-2.0).
+//! Licence, weight grant and exact SHA-256 were verified at the source
+//! (2026-09-20); the constants, provenance and the **known loud I/O boundary**
+//! (YuNet = 12 per-stride outputs; SFace = `data`→`fc1` with a baked-in
+//! `(x−127.5)·1/128`; neither yet matches the S2 canonical single-output
+//! contract) live in [`pins`]. A real artifact hash-verifies but is refused
+//! loudly at load (`InferenceFailed` listing the available tensors) until the
+//! dedicated multi-output adapter lands — no silent re-shaping, no stub
+//! substitution. Tests run against deterministic stubs and the local behavior
+//! fixture; **no weights are committed and nothing is downloaded** (Agents.md).
 //!
 //! ## No silent fallback
 //!
@@ -60,6 +50,7 @@ pub mod backend;
 pub mod cluster;
 #[cfg(feature = "onnx-rt")]
 pub mod ort;
+pub mod pins;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -108,20 +99,10 @@ pub const FACE_EMBED_INFERENCE_HEIGHT: u32 = 112;
 /// persisted [`FaceVectorRef::dimension`]; a change requires re-clustering.
 pub const FACE_EMBED_DIMENSION: u32 = 128;
 
-/// Planned detection model name (OpenCV Zoo `face_detection_yunet`, MIT).
-pub const FACE_DETECT_MODEL_NAME: &str = "YuNet";
-/// Planned detection model version (OpenCV Zoo release tag).
-pub const FACE_DETECT_MODEL_VERSION: &str = "2023mar";
-/// Declared detection licence **candidate** (OpenCV Zoo model-dir `LICENSE`);
-/// the weight grant is verified in FACE-20-S6, not here (F-078).
-pub const FACE_DETECT_LICENSE: &str = "MIT";
-/// Planned embedding model name (OpenCV Zoo `face_recognition_sface`).
-pub const FACE_EMBED_MODEL_NAME: &str = "SFace";
-/// Planned embedding model version (OpenCV Zoo release tag).
-pub const FACE_EMBED_MODEL_VERSION: &str = "2021dec";
-/// Declared embedding licence **candidate** (OpenCV Zoo model-dir `LICENSE`);
-/// the weight grant is verified in FACE-20-S6, not here (F-078).
-pub const FACE_EMBED_LICENSE: &str = "Apache-2.0";
+pub use pins::{
+    FACE_DETECT_LICENSE, FACE_DETECT_MODEL_HASH, FACE_DETECT_MODEL_NAME, FACE_DETECT_MODEL_VERSION,
+    FACE_EMBED_LICENSE, FACE_EMBED_MODEL_HASH, FACE_EMBED_MODEL_NAME, FACE_EMBED_MODEL_VERSION,
+};
 
 /// Canonical 5-point alignment landmark order (part of the identity contract).
 /// The detector emits landmarks in this order and the embedder aligns to the
@@ -151,26 +132,29 @@ pub const FACE_IDENTITY_DIGEST_KEY: &str = "face_identity_digest";
 
 /// Whether `manifest` carries a real (non-placeholder) `model_hash`.
 ///
-/// FACE-20 §2.2: until hash-pinned weights are committed every face manifest
-/// carries [`PENDING_INTEGRATION_HASH`] and must never be reported as verified.
+/// FACE-20 §2.2 / FACE-20-S6: the shipped face manifests now carry the verified
+/// upstream SHA-256 pins, so this reports `true` for both. A descriptor still
+/// carrying [`PENDING_INTEGRATION_HASH`] must never be reported as verified.
 #[must_use]
 pub fn face_model_hash_is_pinned(manifest: &ModelManifest) -> bool {
     manifest.model_hash != PENDING_INTEGRATION_HASH
 }
 
-/// Build the planned detection descriptor (YuNet, MIT candidate,
-/// `pending-integration`).
+/// Build the detection descriptor (YuNet, MIT, pinned `model_hash`).
 ///
-/// Declares only `face_detect`. The tensor names are the planned contract and
-/// are confirmed at weight-integration time; while the hash stays
-/// `pending-integration` the descriptor is a declaration, not a verified
-/// identity.
+/// Declares only `face_detect`. The tensor names are the **canonical pipeline
+/// contract** (single fused `detections` output, see
+/// [`crate::face::backend::decode_face_detections`]); the shipped YuNet graph
+/// emits twelve per-stride tensors instead, so a real YuNet artifact is
+/// hash-verified but refused loudly at load until a multi-output decoder lands
+/// (documented boundary, `feature/quality/fixtures-licensing.md` §5) — never a
+/// silent substitution.
 #[must_use]
 pub fn face_detect_manifest() -> ModelManifest {
     ModelManifest {
         model_name: FACE_DETECT_MODEL_NAME.into(),
         model_version: FACE_DETECT_MODEL_VERSION.into(),
-        model_hash: PENDING_INTEGRATION_HASH.into(),
+        model_hash: FACE_DETECT_MODEL_HASH.into(),
         license: FACE_DETECT_LICENSE.into(),
         input: ModelInputSpec {
             resolution: ModelResolution {
@@ -190,16 +174,21 @@ pub fn face_detect_manifest() -> ModelManifest {
     }
 }
 
-/// Build the planned embedding descriptor (SFace/MobileFaceNet, Apache-2.0
-/// candidate, `pending-integration`).
+/// Build the embedding descriptor (SFace/MobileFaceNet, Apache-2.0, pinned
+/// `model_hash`).
 ///
-/// Declares only `face_embed`.
+/// Declares only `face_embed`. Keeps the canonical pipeline I/O contract
+/// (`input` → single `output`, see
+/// [`crate::face::backend::decode_face_embedding`]); the shipped SFace graph
+/// uses `data` → `fc1` with a baked-in `(x − 127.5) · 1/128` transform, so a
+/// real SFace artifact is hash-verified but refused loudly at load until the
+/// adapter is reconciled (documented boundary) — never a silent substitution.
 #[must_use]
 pub fn face_embed_manifest() -> ModelManifest {
     ModelManifest {
         model_name: FACE_EMBED_MODEL_NAME.into(),
         model_version: FACE_EMBED_MODEL_VERSION.into(),
-        model_hash: PENDING_INTEGRATION_HASH.into(),
+        model_hash: FACE_EMBED_MODEL_HASH.into(),
         license: FACE_EMBED_LICENSE.into(),
         input: ModelInputSpec {
             resolution: ModelResolution {
@@ -248,8 +237,8 @@ impl FaceModelSuite {
         Ok(suite)
     }
 
-    /// The planned descriptor pair (YuNet MIT + SFace Apache-2.0, both
-    /// `pending-integration`).
+    /// The shipped descriptor pair (YuNet MIT + SFace Apache-2.0, both with a
+    /// verified, pinned `model_hash`).
     #[must_use]
     pub fn candidate() -> Self {
         Self {
@@ -904,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn planned_descriptors_declare_exactly_their_capability_and_stay_pending() {
+    fn shipped_descriptors_declare_exactly_their_capability_and_are_pinned() {
         let detect = face_detect_manifest();
         assert!(detect.capabilities.face_detect);
         assert!(!detect.capabilities.face_embed);
@@ -916,21 +905,30 @@ mod tests {
         assert!(!detect.capabilities.instance_segmentation);
         assert!(!detect.capabilities.inpaint_heal);
         assert!(!detect.capabilities.outpaint);
-        assert_eq!(detect.model_hash, PENDING_INTEGRATION_HASH);
-        assert!(!face_model_hash_is_pinned(&detect));
+        assert_eq!(detect.model_hash, FACE_DETECT_MODEL_HASH);
+        assert!(face_model_hash_is_pinned(&detect));
         assert_eq!(detect.license, FACE_DETECT_LICENSE);
 
         let embed = face_embed_manifest();
         assert!(embed.capabilities.face_embed);
         assert!(!embed.capabilities.face_detect);
-        assert_eq!(embed.model_hash, PENDING_INTEGRATION_HASH);
-        assert!(!face_model_hash_is_pinned(&embed));
+        assert_eq!(embed.model_hash, FACE_EMBED_MODEL_HASH);
+        assert!(face_model_hash_is_pinned(&embed));
         assert_eq!(embed.license, FACE_EMBED_LICENSE);
 
         // Both descriptors are internally consistent.
         assert!(detect.validate().is_ok());
         assert!(embed.validate().is_ok());
         assert!(FaceModelSuite::candidate().validate().is_ok());
+    }
+
+    /// FACE-20-S6: both shipped descriptors use the verified pins; the pin
+    /// well-formedness (`sha256:<64 lowercase hex>`) is asserted in
+    /// [`crate::face::pins`].
+    #[test]
+    fn shipped_descriptors_use_the_pinned_hashes() {
+        assert_eq!(face_detect_manifest().model_hash, FACE_DETECT_MODEL_HASH);
+        assert_eq!(face_embed_manifest().model_hash, FACE_EMBED_MODEL_HASH);
     }
 
     #[test]

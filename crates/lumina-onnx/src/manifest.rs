@@ -348,10 +348,9 @@ impl ModelManifest {
     ///   real weights land in F-048 — otherwise the stale-detection hole this
     ///   digest enables stays closed only on the producer side (follow-up,
     ///   outside this crate).
-    /// * All shipped descriptors still carry the
-    ///   [`crate::hash::PENDING_INTEGRATION_HASH`] placeholder, i.e. no
-    ///   hash-pinned valid identities exist yet that could be invalidated by
-    ///   the new extras entry.
+    /// * Face descriptors (YuNet/SFace, S6 2026-09-20) now carry hash-pinned
+    ///   valid identities; all other shipped descriptors still carry the
+    ///   [`crate::hash::PENDING_INTEGRATION_HASH`] placeholder.
     pub fn to_model_identity(&self) -> lumina_sidecar::ModelIdentity {
         let mut extras = BTreeMap::new();
         extras.insert(

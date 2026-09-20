@@ -28,6 +28,8 @@ licenses/
 └── models/                          ← ML models + inference runtime
     ├── BiRefNet-LICENSE-MIT.txt     © 2024 ZhengPeng (MIT)
     ├── SAM-2-LICENSE-Apache-2.0.txt Meta SAM 2.1 (Apache-2.0, code + weights; no NOTICE file exists)
+    ├── YuNet-LICENSE-MIT.txt        © 2020 Shiqi Yu (MIT, OpenCV Zoo face detection)
+    ├── SFace-LICENSE-Apache-2.0.txt Apache-2.0 (OpenCV Zoo face embedding, MobileFaceNet)
     ├── ONNXRuntime-LICENSE-MIT.txt  © Microsoft Corporation (MIT)
     └── MODEL-SOURCE-OFFER.md        provenance pins, export-path rules, R4 note
 ```

@@ -33,10 +33,13 @@
 //! No path substitutes a stub or a different model: a call that cannot run
 //! returns an error the caller must surface.
 //!
-//! Real weights remain `pending-integration` (Agents.md: no spontaneous
-//! downloads), so numeric correctness against a real YuNet/SFace artifact is
-//! validated when weights land; the load/verify/contract paths are exercised
-//! against the committed behavior fixture in `tests/face_ort.rs`.
+//! The two shipped face weights carry verified `sha256:` pins (FACE-20-S6), so
+//! an artifact is hash-checked against a real identity; because the shipped
+//! graphs do not yet match the canonical single-output I/O contract (see
+//! `face::pins`), a real artifact is refused loudly at load until the
+//! multi-output adapter lands. The load/verify/contract paths are exercised
+//! against the committed behavior fixture in `tests/face_ort.rs`; no download
+//! occurs at build or test time.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};

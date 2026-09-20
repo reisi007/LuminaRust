@@ -6,6 +6,10 @@
 "LibRaw Software License" was removed upstream with v0.18) and the bundled
 license-text inventory (`licenses/`, release script
 `scripts/release/bundle-licenses.sh`) added (F-078-R3/R4).
+**Updated:** 2026-09-20 — FACE-20-S6: YuNet (MIT) and SFace (Apache-2.0) weight
+licences/grants verified at the OpenCV Zoo source; face descriptors now carry
+verified `sha256:` pins and the two license texts are bundled
+(`licenses/models/`).
 **Scope of this document:** Complete, machine-checkable inventory of every
 third-party crate resolved by the workspace, plus the distribution terms of the
 native libraries and ML models that LuminaRust links against or distributes.
@@ -143,17 +147,31 @@ obligations that MUST be honored in any distributed build:
      via the MIT-licensed Microsoft ORT export tooling or Apache-2.0
      redistributed community artifacts.
    - **YuNet / SFace** (face detection / embedding, LRPAR-G12-FACE-20 /
-     FACE-20-S2): candidate descriptors `face_detect_manifest`
-     (`face_detection_yunet`) and `face_embed_manifest`
-     (`face_recognition_sface`, MobileFaceNet) in `lumina-onnx` (`face.rs`),
-     both `model_hash = "pending-integration"`, **no weights committed and no
-     download**. Declared licences — **MIT** (YuNet) and **Apache-2.0**
-     (SFace) — come from the OpenCV Zoo model-directory `LICENSE`, which covers
-     the *code* and is **not** by itself a grant for the model **weights**
-     (directory-LICENSE ≠ weight grant). The weight licence plus the exact
-     release/commit must be verified against the actual weight source before
-     any hash pin or bundling (**FACE-20-S6**, open; see
-     `feature/quality/fixtures-licensing.md` §5 and §3.4).
+     FACE-20-S6, licence + weight grant **verified 2026-09-20**): descriptors
+     `face_detect_manifest` (`face_detection_yunet`, **MIT** © 2020 Shiqi Yu)
+     and `face_embed_manifest` (`face_recognition_sface`, MobileFaceNet,
+     **Apache-2.0** © 2021 Shenzhen Institute of AI and Robotics for Society)
+     in `lumina-onnx` (`face.rs`) now carry **verified, pinned** `model_hash`
+     values — YuNet
+     `sha256:8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`
+     (`face_detection_yunet_2023mar.onnx`, 232 589 bytes) and SFace
+     `sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79`
+     (`face_recognition_sface_2021dec.onnx`, 38 696 353 bytes). The
+     per-model-directory `LICENSE` plus the README "all files in this
+     directory" clause is the **weight grant** the earlier
+     `pending-integration` candidate state was waiting for (it is not merely a
+     code licence). Upstream: `opencv/opencv_zoo` `main` @ `47534e27…`
+     (LICENSE blobs `4cdf89a4…` / `d6456956…`). **No weight binaries are
+     committed and no download occurs at test time** (Agents.md); consumers
+     supply artifacts via `--detector`/`--embedder`
+     (`LUMINA_FACE_DETECT_MODEL_PATH` / `LUMINA_FACE_EMBED_MODEL_PATH`).
+     **Known I/O boundary (loud, no silent fallback):** the shipped graphs
+     (YuNet = 12 per-stride outputs; SFace = `data`→`fc1` with a baked-in
+     `(x−127.5)·1/128`) do not match the S2 canonical single-output contract,
+     so a real artifact hash-verifies but is refused loudly at load (available
+     tensors are listed) until a dedicated adapter slice lands. License texts:
+     `licenses/models/YuNet-LICENSE-MIT.txt`,
+     `licenses/models/SFace-LICENSE-Apache-2.0.txt`.
    - **ONNX Runtime** (`ort` 2.0.0-rc.13): **MIT OR Apache-2.0** (`ort`,
      `ort-sys`); optional `onnx-rt` feature, not in default builds. ORT
      prebuilt-binary redistribution terms to be re-checked before release
@@ -202,7 +220,7 @@ SHA256 manifest, aborts loudly on anything missing). Inventory:
 | `THIRD-PARTY-NOTICES.md` | this document (crate table + obligations) |
 | `licenses/libraw/` | upstream `COPYRIGHT` @ tag 0.22.2, LGPL-2.1 text, CDDL-1.0 text, written source offer for **LibRaw 0.22.2** (R3) |
 | `licenses/lensfun/` | LGPL-3.0 text (= upstream `lgpl-3.0.txt`), CC-BY-SA-3.0 legalcode (lens database), source offer for **Lensfun 0.3.4** + DB attribution |
-| `licenses/models/` | BiRefNet MIT, SAM 2.1 Apache-2.0, ONNX Runtime MIT; provenance/export-path notes (incl. R4 reminder) |
+| `licenses/models/` | BiRefNet MIT, SAM 2.1 Apache-2.0, YuNet MIT, SFace Apache-2.0, ONNX Runtime MIT; provenance/export-path notes (incl. R4 reminder) |
 | `CHECKSUMS.sha256` | SHA256 manifest over the bundled license payload |
 
 Short pre-release checklist (full version in `licenses/README.md`):

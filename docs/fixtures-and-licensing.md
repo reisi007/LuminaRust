@@ -92,6 +92,8 @@ See §6 (R1) for the recorded resolution.
 | --- | --- | --- | --- | --- |
 | **BiRefNet** (Zheng et al., arXiv:2401.03407) | first automatic subject model (`subject_segmentation`) | **Apache-2.0** | weights **pending integration** (`model_hash = "pending-integration"`) | `crates/lumina-onnx/src/manifest.rs::birefnet_manifest` sets `license: "Apache-2.0"`; README of `lumina-onnx` confirms |
 | **SAM 2** | first interactive box/brush model | **TBD** (verify at integration) | planned only | `feature/README.md` "Festgelegte Entscheidungen" |
+| **YuNet** (`opencv/opencv_zoo`, `face_detection_yunet`) | face detection (LRPAR-G12-FACE-20, FACE-20-S6) | **MIT** © 2020 Shiqi Yu — model-dir `LICENSE` + README "all files in this directory" (verified 2026-09-20) | weights **not committed**, `model_hash` pinned to `sha256:8f2383e4…552fa4` | `crates/lumina-onnx/src/face.rs`; `feature/quality/fixtures-licensing.md` §5 |
+| **SFace** (`opencv/opencv_zoo`, `face_recognition_sface`, MobileFaceNet) | face embedding (LRPAR-G12-FACE-20, FACE-20-S6) | **Apache-2.0** © 2021 Shenzhen Institute of AI and Robotics for Society — model-dir `LICENSE` + README "all files in this directory" (verified 2026-09-20) | weights **not committed**, `model_hash` pinned to `sha256:0ba9fbfa…c34e79` | `crates/lumina-onnx/src/face.rs`; `feature/quality/fixtures-licensing.md` §5 |
 | **ONNX Runtime** (via `ort` 2.0.0-rc.13) | inference runtime for the above | **MIT** (ORT crate `MIT OR Apache-2.0`; `ort-sys` `MIT OR Apache-2.0`; ONNX Runtime C lib MIT) | **optional**, gated behind `onnx-rt` feature; not in default build | `crates/lumina-onnx/Cargo.toml`; `cargo metadata --all-features` |
 
 Notes:
@@ -104,6 +106,13 @@ Notes:
 - BiRefNet's Apache-2.0 status is taken from the manifest/README, which cite the
   upstream repo; it should be re-confirmed against the actual weight source at
   integration.
+- **FACE-20-S6 (2026-09-20):** YuNet/SFace licences and **weight grants** were
+  verified at the OpenCV Zoo source (the per-model-directory `LICENSE` covers
+  "all files in this directory", i.e. the weights); their manifests now carry
+  verified `sha256:` pins. The normative record is
+  `feature/quality/fixtures-licensing.md` §5 and `THIRD-PARTY-NOTICES.md`
+  (item 6). Weights remain uncommitted (consumer-supplied); the real ORT I/O
+  adapter is a documented follow-up.
 
 ---
 
