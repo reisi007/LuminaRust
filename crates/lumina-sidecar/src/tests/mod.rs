@@ -16,6 +16,7 @@ mod iptc_a;
 mod iptc_b;
 mod locks;
 mod mask_graph;
+mod mask_groups;
 mod mask_prompts;
 mod meta_collections;
 mod paths;

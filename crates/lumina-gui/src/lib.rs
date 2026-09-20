@@ -37,6 +37,9 @@ mod i18n;
 // LRPAR-G09-SORT-09: the Library-module strings (Filter/Compare/Survey, Stack,
 // Sort) live here; `Str::t` delegates to them (file-size ratchet).
 mod i18n_library;
+// LRPAR-G03-MASKGROUP-03: the masking strings (G-03 + group panel) live here;
+// `Str::t` delegates to them (file-size ratchet).
+mod i18n_masking;
 mod merge_gui;
 // GPU-LENSFUN-PARITY-1 (GUI-Wiring): build the CPU `LensfunMap` from the strict
 // auto-corrector and bind it on the `GpuContext`, so a corrector recipe presents
@@ -103,6 +106,9 @@ mod develop_heal;
 mod develop_histogram;
 mod develop_masking;
 mod develop_masking_g03;
+// LRPAR-G03-MASKGROUP-03: Copy vs. Duplicate, mask groups + collapsible panel.
+mod develop_masking_group_panel;
+mod develop_masking_groups;
 mod develop_optics;
 mod develop_tone;
 // GUI-REFACTOR-W2-20 S2.3: the Library folder tree/metadata/grid/loupe views.
@@ -1574,6 +1580,15 @@ pub struct LuminaApp {
     combine_other_id: String,
     combine_name_input: String,
     duplicate_name_input: String,
+    /// LRPAR-G03-MASKGROUP-03 session state: the group marked selected in the
+    /// panel, the pending group name, the masks marked for late grouping and the
+    /// shared feather/density offsets applied to the selected group's members.
+    /// Display-only; groups themselves persist in the sidecar.
+    selected_group_id: Option<String>,
+    group_name_input: String,
+    group_member_selection: BTreeSet<String>,
+    group_feather_offset: f32,
+    group_density_offset: f32,
     /// G-02 (LRPAR-G02-COLOR) tone-curve panel session state. Display-only
     /// (never recipe/sidecar): the selected curve channel (`0` master,
     /// `1..=3` red/green/blue). UX-LOOK-TONECURVE-18 edits the curve through
@@ -2601,6 +2616,11 @@ impl LuminaApp {
             combine_other_id: String::new(),
             combine_name_input: String::new(),
             duplicate_name_input: String::new(),
+            selected_group_id: None,
+            group_name_input: String::new(),
+            group_member_selection: BTreeSet::new(),
+            group_feather_offset: 0.0,
+            group_density_offset: 0.0,
             tone_curve_channel: 0,
             filter_bar_visible: false,
             library_filter: String::new(),
@@ -5842,6 +5862,8 @@ impl LuminaApp {
             });
         }
         self.selected_mask_id = Some(mask_id.into());
+        // LRPAR-G03-MASKGROUP-03: selecting a single mask leaves group mode.
+        self.selected_group_id = None;
         self.render_key = None;
         self.status = Str::MaskSelected.format_arg(mask_id);
         Ok(())
@@ -6279,56 +6301,6 @@ impl LuminaApp {
         let id = self.push_mask_definition(definition)?;
         self.select_mask(&id)?;
         info!("GUI interaction: combine_masks {operation:?} -> {id}");
-        self.status = Str::MaskCreated.t().into();
-        Ok(id)
-    }
-
-    /// Duplicate a source mask under a new name (G-03). The copy gets a fresh
-    /// stable id and carries the definition (prompt/ai-select); the binary
-    /// payload stays deduplicated by content hash in `.zdata`. Derived nodes
-    /// are rebuilt with [`Self::combine_masks`] instead of aliased silently.
-    pub fn duplicate_mask(
-        &mut self,
-        mask_id: &str,
-        name: impl Into<String>,
-    ) -> Result<String, GuiError> {
-        instrument_gui_action!(self, GuiAction::DuplicateMask);
-        let name = name.into();
-        if name.trim().is_empty() {
-            return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
-        }
-        self.ensure_document_loaded()?;
-        let copy_id = self.virtual_copy_id.clone();
-        let template = {
-            let document = self.document.as_ref().expect("document was ensured");
-            let copy = document
-                .virtual_copies
-                .iter()
-                .find(|copy| copy.id == copy_id)
-                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
-            copy.mask_library
-                .iter()
-                .find(|mask| mask.id == mask_id)
-                .cloned()
-                .ok_or_else(|| GuiError::Io(Str::MaskNotFound.t().to_string()))?
-        };
-        if template.operation != MaskOperation::Source {
-            return Err(GuiError::Io(
-                "Only source masks duplicate; rebuild derived masks with Combine".into(),
-            ));
-        }
-        let id = format!(
-            "mask-{}",
-            blake3::hash(format!("duplicate\0{copy_id}\0{mask_id}\0{name}").as_bytes()).to_hex()
-        );
-        let mut duplicated = template;
-        duplicated.id = id;
-        duplicated.name = name;
-        duplicated.created_at = "pending".into();
-        duplicated.generator_version = env!("CARGO_PKG_VERSION").into();
-        let id = self.push_mask_definition(duplicated)?;
-        self.select_mask(&id)?;
-        info!("GUI interaction: duplicate_mask {mask_id} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
     }
@@ -12497,6 +12469,7 @@ mod tests {
     // metadata-only probe, deferred full render).
     mod masking_g03;
     mod masking_g11;
+    mod masking_groups;
     mod modswitch;
     mod navigator;
     mod navigator_r4;

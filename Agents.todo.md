@@ -149,7 +149,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] LRPAR-G03-MASKGROUP-03 (→ G-03, Release: 1.0)** Maskengruppen mit Copy-vs.-Duplicate-Semantik nach `feature/product/ai-masks.md` (Masken-DAG, Gruppen-Abschnitt, User-Entscheid 2026-09-20): Copy = tiefe unabhängige Kopie; Duplicate = Gruppe mit Pointer-Mitgliedern (Quell-Änderungen propagieren, kein stilles Entkoppeln); nachträgliches Gruppieren; Gruppen-Aktionen (Selektion/Aktivierung/Löschung/Parameter-Offsets als Einheit, aufklappbar); Quell-Löschung materialisiert laut; Sidecar-first. Abnahme: Core-Graph- + headless GUI-Tests (Propagation, Materialisierung, Reload), kein stiller Fallback.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 

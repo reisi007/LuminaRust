@@ -100,6 +100,20 @@ pub use stack::{
     MAX_STACK_MEMBERS, MAX_STACK_MEMBER_CHARS, STACK_SCHEMA_VERSION,
 };
 
+// LRPAR-G03-MASKGROUP-03: per-copy mask groups (Copy vs. Duplicate). Schema in
+// `mask_group`, pure document operations/validation in `mask_group_ops`.
+mod mask_group;
+mod mask_group_ops;
+pub use mask_group::{
+    group_id_for_mask, mask_groups_of, set_mask_groups, validate_group_id, validate_group_name,
+    MaskGroup, MASK_GROUPS_EXTRAS_KEY, MASK_GROUP_VERSION, MAX_MASK_GROUP_ID_CHARS,
+    MAX_MASK_GROUP_MEMBERS, MAX_MASK_GROUP_NAME_CHARS,
+};
+pub use mask_group_ops::{
+    apply_group_parameter_offsets, delete_mask_node, dissolve_group, group_masks,
+    move_group_member, set_group_collapsed, validate_mask_groups, MaskDeletionOutcome,
+};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -3923,67 +3937,8 @@ impl SidecarDocument {
                 }
             }
         }
-        self.validate_mask_graph(&copy_ids)
-    }
-
-    fn validate_mask_graph(&self, copy_ids: &BTreeSet<&String>) -> Result<(), SidecarError> {
-        let mut nodes = BTreeSet::new();
-        let mut edges = BTreeMap::<(String, String), Vec<(String, String)>>::new();
-        for copy in &self.virtual_copies {
-            for mask in &copy.mask_library {
-                let node = (copy.id.clone(), mask.id.clone());
-                nodes.insert(node.clone());
-                for reference in &mask.references {
-                    edges
-                        .entry(node.clone())
-                        .or_default()
-                        .push((reference.copy_id.clone(), reference.mask_id.clone()));
-                }
-            }
-        }
-        for (from, targets) in &edges {
-            for target in targets {
-                if !copy_ids.contains(&target.0) || !nodes.contains(target) {
-                    return invalid(format!(
-                        "mask `{}/{}' references unknown mask `{}/{}`",
-                        from.0, from.1, target.0, target.1
-                    ));
-                }
-                if from == target {
-                    return invalid(format!("mask `{}/{}' references itself", from.0, from.1));
-                }
-            }
-        }
-        fn visit(
-            node: &(String, String),
-            edges: &BTreeMap<(String, String), Vec<(String, String)>>,
-            visiting: &mut BTreeSet<(String, String)>,
-            visited: &mut BTreeSet<(String, String)>,
-        ) -> Result<(), SidecarError> {
-            if visiting.contains(node) {
-                return invalid(format!(
-                    "mask graph contains a cycle at `{}/{}`",
-                    node.0, node.1
-                ));
-            }
-            if !visited.insert(node.clone()) {
-                return Ok(());
-            }
-            visiting.insert(node.clone());
-            if let Some(targets) = edges.get(node) {
-                for target in targets {
-                    visit(target, edges, visiting, visited)?;
-                }
-            }
-            visiting.remove(node);
-            Ok(())
-        }
-        let mut visiting = BTreeSet::new();
-        let mut visited = BTreeSet::new();
-        for node in nodes {
-            visit(&node, &edges, &mut visiting, &mut visited)?;
-        }
-        Ok(())
+        mask_group_ops::validate_mask_graph(self, &copy_ids)?;
+        mask_group_ops::validate_mask_groups(self)
     }
 }
 

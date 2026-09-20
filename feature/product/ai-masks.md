@@ -122,6 +122,44 @@ Zyklen sind Fehler; es gibt keine stillen Resizes oder leeren Fallbacks.
   Maskenbibliothek der virtuellen Kopie, binäre Matten weiter dedupliziert über
   Content-Hash im `.zdata`-Container.
 
+#### Normative Implementierungsdetails (LRPAR-G03-MASKGROUP-03, 2026-09-20)
+
+- **Mitgliedschaftsbereich:** Eine Gruppe gehört genau einer virtuellen Kopie
+  und darf nur Knoten **derselben Kopie** referenzieren (`member.copy_id` ==
+  besitzende Kopie). Cross-Copy-Gruppenmitgliedschaft ist nicht Teil von v1.
+- **Eindeutigkeit:** Ein Maskenknoten gehört innerhalb einer Kopie höchstens
+  einer Gruppe an; eine doppelte Zuordnung wird laut abgelehnt (kein stilles
+  Umhängen). Gruppen-IDs sind innerhalb der Kopie eindeutig.
+- **Identität:** Die Gruppen-ID ist stabil und wird beim Anlegen deterministisch
+  aus `(copy_id, sortierte Mitglieds-Knoten)` abgeleitet
+  (`mask-group-<blake3>`), danach nie neu berechnet — Umbenennen und Umsortieren
+  ändern die ID nicht. Keine Arrayposition ist Identität.
+- **Anzeigename:** Nicht-leer, getrimmt, ohne Steuerzeichen. Der Zuklappzustand
+  `collapsed` wird persistiert (Default `false`); bei gleichzeitigen Schreibern
+  gilt last-writer-wins wie beim Stapel.
+- **Schema:** Additiv-optional als geflattete Top-Level-Liste `mask_groups` am
+  Virtual-Copy-Objekt (über die bestehende additive `extras`-Ablage, damit
+  keine `VirtualCopy`-Struct-Literale außerhalb des Umfangs brechen — gleiches
+  Muster wie der additive negative Prompt). Kein `schema_version`-Bump; ein
+  vorhandener, aber fehlgeformter `mask_groups`-Wert wird laut abgelehnt (kein
+  stilles Normalisieren).
+- **Copy vs. Duplicate:** `Copy` ist die tiefe, unabhängige Kopie (eigene
+  Definition/ID, eigener Payload; Quelländerungen propagieren nicht).
+  `Duplicate` legt eine Gruppe mit einem Pointer-Mitglied auf den Quellknoten
+  an; Änderungen am Quellknoten sind für alle Mitglieder sichtbar. Es gibt
+  keine stille Entkopplung.
+- **Gruppen-Aktionen:** gemeinsam selektieren; aktivieren/deaktivieren
+  (Sichtbarkeit aller Mitglieds-Layer); auflösen (Gruppencontainer entfernen,
+  Masken bleiben erhalten — kein stilles Löschen); Mitgliederreihenfolge
+  verschieben; gemeinsame Parameter-Offsets (Feather/Density) auf alle
+  Mitglieds-Layer als Einheit, deterministisch auf die gültigen Bereiche
+  geklemmt.
+- **Quell-Löschung:** Wird ein Maskenknoten gelöscht, der von Gruppenmitgliedern
+  referenziert wird, wird **pro gelöschtem Quellknoten genau eine** eingefrorene
+  tiefe Kopie erzeugt; alle betroffenen Mitgliedschaften und referenzierenden
+  Layer werden auf die eingefrorene Kopie umgehängt, mit lautem `info!`-Log und
+  History-Eintrag. Kein Mitglied wird still gelöscht oder entleert.
+
 ## Benutzergeführte Segmentierung
 
 Neben automatischer Subject-Segmentierung soll LuminaRust ein Objekt anhand

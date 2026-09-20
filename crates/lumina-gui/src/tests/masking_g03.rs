@@ -306,6 +306,9 @@ fn g03_panel_paints_all_controls_inside_panel() {
         Str::CombineAdd.t(),
         Str::CombineSubtract.t(),
         Str::DuplicateMask.t(),
+        Str::DuplicateGroup.t(),
+        Str::MaskGroupsLabel.t(),
+        Str::GroupSelected.t(),
         Str::MaskEye.t(),
     ] {
         assert_fully_visible(&shapes, needle);

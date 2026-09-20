@@ -226,8 +226,11 @@ impl LuminaApp {
                 }
             }
         });
-        // Button-first right-to-left (GUI-VISION-1): see the AI add row.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        // Copy (deep, independent) vs. Duplicate (group with a pointer member).
+        // The name input owns its own line (GUI-VISION-1) so the wrapped button
+        // row cannot push the panel past its budget.
+        ui.text_edit_singleline(&mut self.duplicate_name_input);
+        ui.horizontal_wrapped(|ui| {
             if ui.button(Str::DuplicateMask.t()).clicked() {
                 let selected = self.selected_mask_id.clone().unwrap_or_default();
                 if let Err(e) = self.duplicate_mask(&selected, self.duplicate_name_input.clone()) {
@@ -236,7 +239,18 @@ impl LuminaApp {
                     self.duplicate_name_input.clear();
                 }
             }
-            ui.text_edit_singleline(&mut self.duplicate_name_input);
+            if ui.button(Str::DuplicateGroup.t()).clicked() {
+                let selected = self.selected_mask_id.clone().unwrap_or_default();
+                if let Err(e) =
+                    self.group_duplicate_mask(&selected, self.duplicate_name_input.clone())
+                {
+                    self.show_error(e);
+                } else {
+                    self.duplicate_name_input.clear();
+                }
+            }
         });
+        // LRPAR-G03-MASKGROUP-03: the collapsible group panel.
+        self.draw_masking_groups(ui, document);
     }
 }

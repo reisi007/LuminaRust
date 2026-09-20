@@ -542,6 +542,24 @@ pub enum Str {
     DuplicateMask,
     OtherMask,
     MaskStatusLabel,
+    // LRPAR-G03-MASKGROUP-03: group panel (Copy vs. Duplicate, collapsible
+    // groups, member reorder, shared offsets, loud deletion).
+    MaskGroupsLabel,
+    GroupMembersLabel,
+    GroupSelected,
+    DuplicateGroup,
+    Ungroup,
+    GroupActive,
+    GroupFeatherOffset,
+    GroupDensityOffset,
+    GroupApplyOffsets,
+    GroupOffsetsApplied,
+    MaskGroupedPattern,
+    MaskGroupDissolved,
+    MaskDeletedPattern,
+    DeleteMaskButton,
+    MaskGroupNotFound,
+    SelectMasksToGroup,
 
     // G-16 power-shortcut rest (LRPAR-G16-POWER): Shift+double-click auto
     // white/black point, Alt+slider masking preview, S softproof preview.
@@ -767,6 +785,8 @@ pub enum Str {
 }
 // LRPAR-G09-SORT-09: the Library strings live in `i18n_library.rs`.
 use crate::i18n_library::library_text;
+// LRPAR-G03-MASKGROUP-03: the masking strings live in `i18n_masking.rs`.
+use crate::i18n_masking::masking_text;
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
     /// live; the future `de` locale would be a second match arm selected by a
@@ -1231,43 +1251,23 @@ impl Str {
             Str::OverlayModeLabel => "Tool overlay",
             Str::OverlayAlways => "Always",
             Str::OverlayAuto => "Auto",
-            Str::OverlayNever => "Never",
-            Str::OverlayModeSetPattern => "Tool overlay: {}",
-            Str::PinVisibilityLabel => "Edit pins",
             Str::PinVisibilitySetPattern => "Edit pins: {}",
-            Str::SoloMode => "Solo mode (one section open)",
-            Str::SoloModeOn => "Solo mode on (opening a section closes the others)",
-            Str::SoloModeOff => "Solo mode off",
-            Str::AllPanelsHiddenOn => "All panels hidden (Shift+Tab to show)",
-            Str::AllPanelsHiddenOff => "All panels shown",
-            Str::SpotOverlayHint => {
-                "Overlay/pins follow the global Tool overlay + Edit pins modes (Masking section)"
-            }
-            Str::ShowOverlay => "Show overlay",
-            Str::OverlayColor => "Overlay color",
-            Str::MaskEye => "Eye",
-            Str::AiSelectLabel => "AI select",
-            Str::AiSubject => "Subject",
-            Str::AiSky => "Sky",
-            Str::AiBackground => "Background",
-            Str::AiObjects => "Objects",
-            Str::AiPeople => "People",
-            Str::DetailLabel => "Detail (optional)",
-            Str::AddAiMask => "Add AI mask",
-            Str::LuminanceRange => "Luminance range",
-            Str::ColorRange => "Color range",
-            Str::AddRange => "Add range",
-            Str::CombineLabel => "Combine",
-            Str::CombineAdd => "Add",
-            Str::CombineSubtract => "Subtract",
-            Str::DuplicateMask => "Duplicate",
-            Str::OtherMask => "Other",
-            Str::MaskStatusLabel => "Status",
-            Str::SoftproofOn => "Softproof preview on (S, full gamut simulation follows in G-10)",
-            Str::SoftproofOff => "Softproof preview off",
-            Str::SoftproofToggle => "Softproof preview (S)",
-            Str::AutoEndpointAppliedPattern => "Auto {} applied (Shift+double-click)",
-            Str::MaskingPreviewPattern => "Masking preview: {} (Alt held)",
+            Str::OverlayNever | Str::OverlayModeSetPattern | Str::PinVisibilityLabel => masking_text(self),
+            Str::SpotOverlayHint | Str::ShowOverlay | Str::OverlayColor | Str::MaskEye => masking_text(self),
+            Str::AiSelectLabel | Str::AiSubject | Str::AiSky | Str::AiBackground => masking_text(self),
+            Str::AiObjects | Str::AiPeople | Str::DetailLabel | Str::AddAiMask => masking_text(self),
+            Str::LuminanceRange | Str::ColorRange | Str::AddRange | Str::CombineLabel => masking_text(self),
+            Str::CombineAdd | Str::CombineSubtract | Str::DuplicateMask => masking_text(self),
+            Str::OtherMask | Str::MaskStatusLabel | Str::SoftproofOn | Str::SoftproofOff => masking_text(self),
+            Str::SoftproofToggle | Str::AutoEndpointAppliedPattern => masking_text(self),
+            Str::MaskingPreviewPattern | Str::SoloMode | Str::SoloModeOn => masking_text(self),
+            Str::SoloModeOff | Str::AllPanelsHiddenOn | Str::AllPanelsHiddenOff => masking_text(self),
+            Str::MaskGroupsLabel | Str::GroupMembersLabel | Str::GroupSelected => masking_text(self),
+            Str::DuplicateGroup | Str::Ungroup | Str::GroupActive => masking_text(self),
+            Str::GroupFeatherOffset | Str::GroupDensityOffset | Str::GroupApplyOffsets => masking_text(self),
+            Str::GroupOffsetsApplied | Str::MaskGroupedPattern | Str::MaskGroupDissolved => masking_text(self),
+            Str::MaskDeletedPattern | Str::DeleteMaskButton => masking_text(self),
+            Str::MaskGroupNotFound | Str::SelectMasksToGroup => masking_text(self),
             Str::KeywordsSection => "Keywords",
             Str::KeywordInputHint => "New keyword…",
             Str::AddKeyword => "Add keyword",

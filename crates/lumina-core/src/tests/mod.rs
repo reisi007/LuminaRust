@@ -14,6 +14,7 @@ mod denoise_pipeline;
 mod geometry;
 mod hsl;
 mod image_io;
+mod mask_groups;
 mod presence;
 mod red_eye;
 mod sharpening_noise;
