@@ -2275,6 +2275,13 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   wie der untere Filmstrip zeigt. Lightroom hat dort nur Navigator +
   Presets/Snapshots/History. Fix: Rail entfernen, Navigator-Viewport behalten;
   einzige Selektionsfläche in Develop bleibt der untere Filmstrip.
+- **R4-LIB-1 (hoch, offen, User-Bug 2026-09-20):** Ordner-Navigation unvollständig:
+  (a) Bilder aus Unterordnern werden nicht mit angezeigt (rekursives Listing
+  fehlt im Grid); (b) kein Weg eine Ebene hoch ohne den Ordnernamen zu
+  editieren (Up-Button/Breadcrumb fehlt — User strandete im `.lumina`-Ordner);
+  (c) leere Ordner (keine Bilder inkl. Unterordner) werden angezeigt statt
+  ausgeblendet; `.lumina`-Metadatenordner muss aus Baum/Listing raus. Fix
+  zusammen mit R4-Welle (lumina-gui).
 - **Abdeckung Runde 4:** gefahren: Switches, Zoom, Navigator-Drag, Beenden.
   Offen aus Fahrplan: Stapel, Sortierung/Drag-&-Drop, Crop-Tick, Neustart-Restore.
 
