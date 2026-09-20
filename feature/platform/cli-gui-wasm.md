@@ -1269,8 +1269,13 @@ der aktiven Kopie über den normalen Save/Render-Pfad.
 - Das Bibliotheks-Raster zeigt Bilder des gewählten Ordners **einschließlich
   Unterordner** (rekursiv, symlink-/loop-sicher, Tiefe begrenzt analog
   `FOLDER_SCAN_DEPTH`); jede Zelle trägt den relativen Unterordner als
-  Pfad-Badge; der Ordnerbaum bleibt als flache Pro-Ordner-Navigation erhalten
-  (Klick = dieser Ordner flach listen bleibt möglich).
+  Pfad-Badge. **R4-LIB-1 (User-Entscheid 2026-09-20):** Jeder Navigationspfad
+  listet rekursiv (Ordnerbaum-Klick, `Open`, Start-Workdir) — die frühere
+  flache Baum-Klick-Listung ist abgeschafft; die Library-Toolbar bietet
+  einen **Up-Button + klickbaren Breadcrumb** (eine Ebene hoch ohne
+  Namens-Edit), der Ordnerbaum blendet **leere Ordner** (kein unterstütztes
+  Bild inkl. Unterordner) aus, und der `.lumina/`-Metadatenordner erscheint
+  nie als Baum-Knoten oder Listeneintrag.
 - **`.lumina/`-Ausschluss (F-100 Library, GUI-LIBRARY-LUMINA-DIR-1):** Der
   Library-Scan (flach wie rekursiv, alle Ebenen) steigt niemals in
   Verzeichnisse mit dem exakten Namen `.lumina` ab und listet keine Dateien
@@ -2058,7 +2063,7 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
     Grid-/Badge-/Filmstreifen-Reihenfolge (deep, mid, top) ist in beiden
     Zuständen identisch; nur Selektion/Status folgen dem neuen Ziel.
   Die übrigen Goldens blieben byte-identisch.
-- **R3-DENOISE-2 (BEHOBEN 2026-09-20):** Gelbes Badge „Render routed to CPU …
+- **R3-DENOISE-2 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** Gelbes Badge „Render routed to CPU …
   [denoise_ai (not GPU-wired)]" ist per Design laut (Gewichte weiter pending),
   hatte aber KEINE Log-Zeile: Badge stammt aus dem Rezept-Gate
   (`gpu_unsupported_stage_reasons`), nur Present-Refusals loggten. Fix: der
@@ -2080,7 +2085,7 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   langsamer als 16-ms-Budget — jeder Tick rendert voll), Monster-Top: 42.90 ms
   CPU-Draft. F4-Kadenz wirkt (52× gedrosselt, Analyse-Median 0.95 ms — Analyse
   ist nicht das Problem). Basis-Cache gesund (95× HIT / 3× MISS).
-- **R3-ROUTING-1 (BEHOBEN 2026-09-20):** Mit aktivem Crop (dimension-changing)
+- **R3-ROUTING-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** Mit aktivem Crop (dimension-changing)
   fiel JEDER Kurven-Tick auf CPU zurück (38 Ticks ↔ 38× `render_to_vram
   failed`-Warnung, gpu bis 47.37 ms vergeudet) + gelbes „Render routed to
   CPU"-Badge — ein Verstoß gegen die GPU-Default-Regel („routed to CPU" = Fail
@@ -2187,7 +2192,7 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Cap-Logik selbst ändert kein kittest-Golden** (die Golden-Fixtures liegen
   unter der 256-px-Floor); die vier geänderten Goldens stammen ausschließlich
   aus dem asynchronen Listing-Pfad (F8, s. R2-MODSWITCH-1 F8).
-- **R3-DENOISE-1 (BEHOBEN 2026-09-20):** Der `pending-integration`-Fallback
+- **R3-DENOISE-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** Der `pending-integration`-Fallback
   der aktiven Vorschau arbeitete sichtbar (Warn), während ein Nachbar-Preview
   (Landscape) hart fehlschlug — die Fallback-/Fail-Semantik hing am Pfad statt
   am Rezept. Root Cause: `worker_preview` renderte über `render_frame`, dessen
@@ -2247,41 +2252,76 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
 
 #### F-103-N6 Runde 4 Befunde (2026-09-20, manueller Akzeptanz-Run, Release `0fb2922`, 36-MB-Trace, ~80 s)
 
-- **R4-NAV-1 (hoch, offen):** Navigator-Box lässt sich nicht zum Pannen nutzen —
-  User-Befund mit Screenshots (Fit + Custom-Zoom). Log zeigt 36×
-  `navigator viewport drag` (State wird gepannt, Modus → Custom), aber Box/View
-  folgen sichtbar nicht (Box nicht greifbar / Renderbereich folgt nicht).
-  Verdacht Pan/Box-Mismatch (Rect-Math vs. `preview_pan` vs. ROI). Repro +
-  Headless-Test nötig (Pan → Box bewegt sich + ROI folgt).
-- **R4-RECT-1 (hoch, offen):** Weißes Rechteck überlagert die Preview bei Fit
-  (reicht über das Bild hinaus), ohne erkennbare Bedeutung. Ausgeschlossen per
-  Log: WB-/Red-Eye-Picker (0 Pick-Zeilen), Crop (0 Crop-Zeilen). Kandidaten:
-  Masken-/Expand-/Compare-Overlays oder veraltetes ROI-Rechteck. Identifizieren
-  (headless Repro Fit + gleiche Rezeptlage) + entfernen/laut machen.
-- **R4-WARN-1 (mittel, offen):** 35× `gpu present refused … geometry
-  (dimension-changing …)` in ~6 s (13:55:07–13, Zoom-Drag). Route ist
-  dokumentiert (committeter Crop im Sample-Sidecar, außerhalb Crop-Tool), aber
-  der Present-Pfad warnt pro Render — das Gate-Dedup (R3-DENOISE-2, 1× pro
-  Reason-Set) greift dort nicht. Present-Warn ebenfalls dedupieren.
-- **R4-SWITCH-2 (mittel, offen):** Erster Library-Paint 4286,1 ms (schlechter
-  als Runde-3-Kaltstart 2886,8 ms) bei NULL `lumina_gui`-Traces zwischen
-  Switch-Event und Paint → uninstrumentierter UI-Block (R3-LOG-1-Lücke).
-  Warmup („cold-start work scheduled") erst 13:54:39, also NACH dem Switch
-  (13:54:31) → Warmup-Arming/Idle-Timing prüfen (kam zu spät, um zu helfen).
-  Spätere Wechsel: Develop 20,3 ms (ok).
-- **R4-UX-1 (ENTSCHIEDEN 2026-09-20, User):** Doppelte Thumbnail-Leiste in der
-  Develop-Seitenleiste — unter dem Navigator liegt eine zweite Bildleiste
-  („Click a thumbnail to open it", `draw_navigator`-Rail), die dieselben Bilder
-  wie der untere Filmstrip zeigt. Lightroom hat dort nur Navigator +
-  Presets/Snapshots/History. Fix: Rail entfernen, Navigator-Viewport behalten;
-  einzige Selektionsfläche in Develop bleibt der untere Filmstrip.
-- **R4-LIB-1 (hoch, offen, User-Bug 2026-09-20):** Ordner-Navigation unvollständig:
-  (a) Bilder aus Unterordnern werden nicht mit angezeigt (rekursives Listing
-  fehlt im Grid); (b) kein Weg eine Ebene hoch ohne den Ordnernamen zu
-  editieren (Up-Button/Breadcrumb fehlt — User strandete im `.lumina`-Ordner);
-  (c) leere Ordner (keine Bilder inkl. Unterordner) werden angezeigt statt
-  ausgeblendet; `.lumina`-Metadatenordner muss aus Baum/Listing raus. Fix
-  zusammen mit R4-Welle (lumina-gui).
+- **R4-NAV-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** Navigator-Box ließ sich nicht zum Pannen
+  nutzen — Log zeigte 36× `navigator viewport drag` (State gepannt, Modus →
+  Custom), ohne dass Box/View sichtbar folgten. **Root Cause:** Der Drag-Pfad
+  war nicht an eine vergrößerte Ansicht gegattert. Bei Fit/`zoom <= 1` ist das
+  Viewport-Rechteck das ganze Bild; der Drag setzte dennoch `preview_pan` und
+  pinnte `Custom`, während `draw_preview` den Pan im selben Frame wieder auf
+  Null klemmte (nichts zu pannen) — genau das „Box folgt nicht"-Muster. Die
+  Pure-Math (Pan→Box→ROI) war konsistent (Coverage-Welle). **Fix:**
+  `navigator_drag_pans_preview` gattert den Drag auf `zoom > 1.0` **und**
+  Überlauf des Vollquell-Draws — dieselbe Regel wie der Preview-Hand-Tool-Pan
+  (`pan_gesture_pins_custom`). **Tests:** `tests/navigator_r4.rs` fährt den
+  **echten Draw-Pfad** (persistenter egui-Kontext, Pointer-Drag, test-only
+  Last-Nav-Rect-Seam `navigator::last_navigator_view_rect`):
+  `navigator_viewport_drag_moves_box_and_roi_at_zoom` (Box + ROI folgen),
+  `navigator_viewport_drag_is_inert_at_fit` (Regression; Mutationsbeweis: ohne
+  Gate wird der Pan nicht-null → rot), plus die Gate-Matrix
+  `navigator_drag_pan_gate_requires_magnified_overflow`.
+- **R4-RECT-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** Das weiße Rechteck über der Preview war
+  der **unarmierte Crop-Overlay-Rahmen** (`draw_crop_overlay`, `OverlayMode
+  Always`): Bei committetem `Crop::Free` malte er das normalisierte Rezept-Crop
+  auf den **Vollquell-Canvas** (`full_rect`), während die Preview-Pixel bereits
+  zugeschnitten sind — der Rahmen reichte damit über das Bild hinaus (Fit +
+  Custom-Zoom) und hatte keine Interaktion. **Fix:** Der unarmierte Crop-Rahmen
+  wird nicht mehr gemalt; nur das armierte Crop-Tool zeigt den Rahmen (dessen
+  Preview ist der geometriefreie Vollframe, dort stimmt die Abbildung).
+  **Test:** `crop_overlay_unarmed_paints_no_crop_frame` (committeter Crop, Crop
+  aus → 0 weiße Rahmen/0 Abdunklung).
+- **R4-WARN-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** 35× `gpu present refused … geometry
+  (dimension-changing …)` in ~6 s (Zoom-Drag). **Root Cause:** `mark_dirty`/
+  `set_adjustment` löschen `vram_render_refusal` bei jeder Bearbeitung; der
+  Present-Refusal-Memo verglich nur dagegen und warnte beim nächsten Tick
+  erneut, obwohl der Grund unverändert war. **Fix:** `note_vram_refusal`
+  dedupliziert über einen neuen, render-key-tibergreifenden Memo
+  (`TimingState::present_refusal_warned`, R4-WARN-1); ein erfolgreicher
+  VRAM-Present re-armiert ihn (`clear_present_refusal_warn`). **Test:**
+  `vram_refusal_warns_once_across_render_key_changes` (35 `mark_dirty` +
+  gleicher Grund → 0 Re-Warns; Re-Arm nach Erfolg; neuer Grund warnt).
+- **R4-SWITCH-2 (BEHOBEN, verifiziert BESTANDEN 2026-09-20, Instrumentierung + Warmup-Nachweis):**
+  Erster Library-Paint 4286,1 ms bei NULL `lumina_gui`-Traces zwischen Switch
+  und Paint. **Fix (a):** Der blockierende synchrone Ordner-Walk des
+  Folder-Tree-Knotens ist jetzt instrumentiert (`timing::folder_scan_line`,
+  `GUI timing: folder raw count … scan_ms=`) — die R3-LOG-1-Lücke ist
+  geschlossen; **Fix (b):** Warmup-Arming (`GUI timing: warmup armed`) und
+  jeder Deferral-Grund (`GUI timing: warmup deferred reason=…`, dedupliziert
+  pro Grund statt pro Frame) sind getraced, sodass ein spätes Warmup
+  erklärbar ist (Idle-/Listing-Gate). **Tests:**
+  `warmup_arming_and_deferral_are_traced`,
+  `folder_tree_raw_count_is_traced_once_and_cached`; die relative
+  Vorwärm-Messung (`warmup_frontloads_first_library_switch_work`, kein
+  ms-Budget auf CI) bleibt grün.
+- **R4-UX-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20, User-Entscheid):** Doppelte Thumbnail-Leiste
+  unter dem Navigator entfernt (`draw_navigator` malt nur noch Heading +
+  Viewport); der Navigator-Viewport bleibt, der untere Filmstrip ist die
+  einzige Selektionsfläche in allen Modulen. Der per-Zelle-Neighbor-Preview-
+  Status (A2) bleibt sichtbar — er wandert auf die Filmstreifen-Zelle (die
+  frühere Rail war der einzige Träger). **Test:**
+  `navigator_has_no_duplicate_thumbnail_rail`.
+- **R4-LIB-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20, User-Bug):** Ordner-Navigation vervollständigt:
+  (a) `set_directory` listet **rekursiv** (jeder Navigationspfad: Baum-Klick,
+  `Open`, Start-Workdir) — Unterordner-Bilder erscheinen im Grid mit
+  Relativ-Badge; (b) Up-Button + klickbarer Breadcrumb in der Library-Toolbar
+  (`library_breadcrumb`) — kein Namens-Edit nötig, die `.lumina`-Falle ist
+  auflösbar; (c) Unterordner ohne unterstütztes Bild inkl. Unterordner werden
+  im Baum ausgeblendet (`FolderTreeInfo::has_images`, depth-limitiert); (d) der
+  `.lumina/`-Cache-Ordner ist weder Baum-Knoten noch Listeneintrag (bereits im
+  Scan-Engine-Guard, zusätzlich im Baum). **Tests:**
+  `library_recursive_reload_keeps_subfolder_images`,
+  `library_up_button_navigates_to_parent`,
+  `folder_tree_hides_empty_folders_and_lumina_cache`; die Listing-/Scan-Suite
+  ist auf die rekursive Navigations-Semantik nachgezogen.
 - **Abdeckung Runde 4:** gefahren: Switches, Zoom, Navigator-Drag, Beenden.
   Offen aus Fahrplan: Stapel, Sortierung/Drag-&-Drop, Crop-Tick, Neustart-Restore.
 

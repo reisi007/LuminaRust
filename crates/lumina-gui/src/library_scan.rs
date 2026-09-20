@@ -222,7 +222,7 @@ fn scan_single_dir(root: &Path, dir: &Path, out: &mut Vec<FileBrowserEntry>) {
 
 /// Recursive driver behind [`collect_entries_recursive`]: depth-limited,
 /// symlink-/loop-safe via canonical `visited` paths. `remaining_depth == 0`
-/// scans nothing (same convention as `count_raw_files`).
+/// scans nothing (same convention as `library_tree::folder_tree_info`).
 fn scan_dir_recursive(
     root: &Path,
     dir: &Path,

@@ -158,6 +158,28 @@ impl LuminaApp {
                             // badge per cell — same `FileBrowserEntry` data and
                             // presentation as the Library grid (shared helper).
                             paint_entry_badge(ui, rect, &entry);
+                            // PREVIEW-CACHE-FEATURE (A2): the per-cell
+                            // neighbor-preview state („preparing / stale /
+                            // failed") stays visible on the filmstrip cell
+                            // after R4-UX-1 removed the duplicate navigator
+                            // rail that used to carry it — never only in logs.
+                            if let Some((text, color)) =
+                                self.neighbor_preview_badge(&entry.thumb_key)
+                            {
+                                let badge_h = 16.0;
+                                let badge_rect = egui::Rect::from_min_size(
+                                    rect.min + egui::vec2(2.0, 2.0),
+                                    egui::vec2(rect.width() - 4.0, badge_h),
+                                );
+                                ui.painter().rect_filled(badge_rect, 3.0, color);
+                                ui.painter().text(
+                                    badge_rect.min + egui::vec2(4.0, 1.0),
+                                    egui::Align2::LEFT_TOP,
+                                    text,
+                                    egui::FontId::proportional(10.0),
+                                    egui::Color32::WHITE,
+                                );
+                            }
                             // LRPAR-G15-STACK-15: clickable stack badge toggles
                             // the collapse; it wins over the plain cell click.
                             let stack_badge_clicked = self.paint_stack_badge(ui, rect, &entry);

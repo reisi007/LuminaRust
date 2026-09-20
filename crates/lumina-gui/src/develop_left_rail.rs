@@ -17,17 +17,20 @@
 //! `i18n.rs` is under the file-size ratchet (> 500 lines must not grow); the
 //! Snapshots header therefore reuses `Str::SnapshotButton` as a working label.
 //!
-//! The `Export` module keeps the plain navigator rail; only `Develop` gets the
-//! full left rail (see [`LuminaApp::draw_left_rail_panel`]).
+//! The `Export` module keeps the plain navigator panel; only `Develop` gets the
+//! full left rail (see [`LuminaApp::draw_left_rail_panel`]). R4-UX-1
+//! (2026-09-20) removed the duplicate thumbnail rail from the navigator in both
+//! modules — the bottom filmstrip stays the single selection surface.
 
 use super::*;
 
 impl LuminaApp {
     /// Left edge panel dispatcher: `Develop` gets the full Lightroom-Classic
     /// left rail (Navigator + Presets + Snapshots + History), every other
-    /// module keeps the thumbnail navigator rail. The caller
-    /// ([`eframe::App::ui`]) keeps the `navigator_open`/module/chrome gate, so
-    /// `Tab`/`Shift+Tab`/`L`/`F` and the Library module stay untouched.
+    /// module keeps the plain Navigator panel (R4-UX-1: no duplicate thumbnail
+    /// rail). The caller ([`eframe::App::ui`]) keeps the
+    /// `navigator_open`/module/chrome gate, so `Tab`/`Shift+Tab`/`L`/`F` and the
+    /// Library module stay untouched.
     pub(crate) fn draw_left_rail_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let develop = self.active_module == Module::Develop;
         // Distinct panel ids: `egui` remembers a resizable panel's size per id,

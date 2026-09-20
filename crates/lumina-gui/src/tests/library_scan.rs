@@ -17,14 +17,8 @@ fn library_list_directory_aggregates_subfolders_with_path_badges() {
 
     let mut app = new_app();
     app.set_directory(root.path().display().to_string());
-    // Tree-click navigation stays flat (pre-existing behavior).
-    assert_eq!(
-        app.entries().len(),
-        1,
-        "set_directory must keep listing a single folder flat"
-    );
-    // Recursive aggregation shows all three with correct badges.
-    app.list_directory();
+    // R4-LIB-1(a): every navigation path aggregates subfolders — the former
+    // flat `set_directory` listing hid the nested images.
     let mut badges: Vec<(String, String)> = app
         .entries()
         .iter()
@@ -68,10 +62,11 @@ fn library_list_directory_sorts_aggregated_entries_globally_by_name() {
     assert_eq!(names, vec!["a.arw", "m.arw", "z.arw"]);
 }
 
-/// GUI-LIBRARY-SUBFOLDERS-1: a tree click keeps navigating per folder —
-/// the clicked folder lists flat with empty badges.
+/// R4-LIB-1(a): a tree click aggregates subfolder images too — the clicked
+/// folder and its descendants list, with relative path badges. Navigating away
+/// (e.g. via Up/breadcrumb) shows only that subtree.
 #[test]
-fn folder_tree_click_lists_single_folder_flat() {
+fn folder_tree_click_aggregates_subfolders() {
     let root = tempfile::tempdir().unwrap();
     let sub = root.path().join("sub");
     let nested = sub.join("nested");
@@ -82,15 +77,19 @@ fn folder_tree_click_lists_single_folder_flat() {
 
     let mut app = new_app();
     app.set_directory(sub.display().to_string());
-    let names: Vec<&str> = app
+    let mut names: Vec<&str> = app
         .entries()
         .iter()
         .map(|entry| entry.name.as_str())
         .collect();
-    assert_eq!(names, vec!["mid.arw"]);
+    names.sort();
+    assert_eq!(names, vec!["deep.arw", "mid.arw"]);
+    let nested_badge = Path::new("nested").display().to_string();
     assert!(
-        app.entries().iter().all(|entry| entry.folder.is_empty()),
-        "flat listings carry no path badge"
+        app.entries()
+            .iter()
+            .any(|entry| entry.name == "deep.arw" && entry.folder == nested_badge),
+        "nested images carry their relative badge"
     );
     app.set_directory(nested.display().to_string());
     let names: Vec<&str> = app
@@ -100,12 +99,13 @@ fn folder_tree_click_lists_single_folder_flat() {
         .collect();
     assert_eq!(names, vec!["deep.arw"]);
     app.set_directory(root.path().display().to_string());
-    let names: Vec<&str> = app
+    let mut names: Vec<&str> = app
         .entries()
         .iter()
         .map(|entry| entry.name.as_str())
         .collect();
-    assert_eq!(names, vec!["top.arw"]);
+    names.sort();
+    assert_eq!(names, vec!["deep.arw", "mid.arw", "top.arw"]);
 }
 
 /// GUI-LIBRARY-SUBFOLDERS-1: the recursive scan terminates on a symlink
@@ -158,7 +158,7 @@ fn library_list_directory_respects_folder_scan_depth() {
         .collect();
     names.sort();
     // Depth 3 scans root, l1, l2 — l3/l4 stay out (mirrors
-    // `count_raw_files` with `FOLDER_SCAN_DEPTH`).
+    // `library_tree::folder_tree_info` with `FOLDER_SCAN_DEPTH`).
     assert_eq!(names, vec!["one.arw", "top.arw", "two.arw"]);
     assert_eq!(FOLDER_SCAN_DEPTH, 3);
 }
@@ -195,16 +195,9 @@ fn library_scan_excludes_lumina_cache_dirs_flat_and_recursive() {
     assert!(crate::library_scan::scan_entry(&root.path().join("top.arw")).is_some());
 
     let mut app = new_app();
-    // Flat: only the real top-level image lists.
+    // R4-LIB-1(a): navigation aggregates recursively; no cache file ever
+    // lists (flat or recursive, every level).
     app.set_directory(root.path().display().to_string());
-    let names: Vec<&str> = app
-        .entries()
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect();
-    assert_eq!(names, vec!["top.arw"]);
-    // Recursive: the subfolder image joins; no cache file ever does.
-    app.list_directory();
     let mut names: Vec<&str> = app
         .entries()
         .iter()
@@ -337,7 +330,7 @@ fn library_root_is_the_workdir() {
 }
 
 #[test]
-fn folder_scan_helpers_count_raw_files_with_depth_limit() {
+fn folder_tree_info_counts_raw_files_with_depth_limit() {
     let dir = tempfile::tempdir().unwrap();
     let sub = dir.path().join("sub");
     let deeper = sub.join("deeper");
@@ -347,11 +340,18 @@ fn folder_scan_helpers_count_raw_files_with_depth_limit() {
     std::fs::write(sub.join("c.nef"), b"x").unwrap();
     std::fs::write(deeper.join("d.orf"), b"x").unwrap();
 
-    assert_eq!(count_raw_files(dir.path(), 3), 3);
+    // R4-LIB-1: the folder node walk reports the RAW count and whether any
+    // supported image exists (the `b.jpg`).
+    let info = |depth| crate::library_tree::folder_tree_info_at_depth(dir.path(), depth);
+    assert_eq!(info(3).raw_count, 3);
     // The depth limit stops the scan below `sub`.
-    assert_eq!(count_raw_files(dir.path(), 2), 2);
-    assert_eq!(count_raw_files(dir.path(), 1), 1);
-    assert_eq!(count_raw_files(dir.path(), 0), 0);
+    assert_eq!(info(2).raw_count, 2);
+    assert_eq!(info(1).raw_count, 1);
+    assert_eq!(info(0).raw_count, 0);
+    assert!(
+        info(3).has_images,
+        "the jpg must mark the subtree as non-empty"
+    );
 
     let subs = subdirectories(dir.path());
     assert_eq!(subs.len(), 1);
@@ -385,18 +385,19 @@ fn folder_badge_display_fits_fixed_badge_box() {
     assert!(shown.ends_with("ted_deep"));
 }
 
-/// M2: `count_raw_files` terminates on a symlink cycle and counts the
+/// M2: the folder node walk terminates on a symlink cycle and counts the
 /// looped subtree once (same visited-set convention as the recursive
 /// listing scan).
 #[cfg(unix)]
 #[test]
-fn count_raw_files_terminates_on_symlink_loop() {
+fn folder_tree_info_terminates_on_symlink_loop() {
     let dir = tempfile::tempdir().unwrap();
     let sub = dir.path().join("sub");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(dir.path().join("a.ARW"), b"x").unwrap();
     std::fs::write(sub.join("b.ARW"), b"x").unwrap();
     std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
-    assert_eq!(count_raw_files(dir.path(), 3), 2);
-    assert_eq!(count_raw_files(dir.path(), 2), 2);
+    let info = |depth| crate::library_tree::folder_tree_info_at_depth(dir.path(), depth);
+    assert_eq!(info(3).raw_count, 2);
+    assert_eq!(info(2).raw_count, 2);
 }

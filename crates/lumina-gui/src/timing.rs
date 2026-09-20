@@ -78,6 +78,15 @@ pub(crate) struct TimingState {
     module_switch: Option<(Module, Instant)>,
     /// In-flight background decode: path + enqueue instant.
     decode: Option<(String, Instant)>,
+    /// R4-WARN-1: the last VRAM present-refusal reason that already produced a
+    /// `warn!`. Survives `mark_dirty`/`set_adjustment` (which clear the
+    /// per-frame `vram_render_refusal`), so a render-key change with an
+    /// unchanged reason does not re-warn; a successful present re-arms it.
+    /// Hosted next to the [`LuminaApp::note_vram_refusal`] throttle (same
+    /// cohesion), never read by a render/routing decision. GPU-only: the
+    /// writer lives in the `gpu`-gated `note_vram_refusal`.
+    #[cfg(feature = "gpu")]
+    present_refusal_warned: Option<String>,
 }
 
 // ---- Pure log-line builders (single source of truth for the format) ----
@@ -117,6 +126,30 @@ pub(crate) fn preview_index_line(folder: &Path, entries: usize, ms: f64) -> Stri
         folder.display(),
         format_ms(ms)
     )
+}
+
+/// R4-SWITCH-2: the depth-limited RAW count of one folder-tree node. This walk
+/// runs synchronously on the UI thread the first time a node is shown and was
+/// the uninstrumented block behind the first Library paint; the line makes it
+/// visible in the trace (`files` is the counted number, not the walk size).
+pub(crate) fn folder_scan_line(path: &Path, files: usize, ms: f64) -> String {
+    format!(
+        "GUI timing: folder raw count folder={} files={files} scan_ms={}",
+        path.display(),
+        format_ms(ms)
+    )
+}
+
+/// R4-SWITCH-2: the one-shot cold-start warmup was armed at native startup.
+pub(crate) fn warmup_armed_line() -> String {
+    "GUI timing: warmup armed".to_string()
+}
+
+/// R4-SWITCH-2: the armed warmup was deferred this frame; `reason` is the
+/// concrete gate (`pointer down`, `no listing yet`) so a late warmup is
+/// explainable from the trace instead of an uninstrumented gap.
+pub(crate) fn warmup_deferred_line(reason: &str) -> String {
+    format!("GUI timing: warmup deferred reason={reason}")
 }
 
 pub(crate) fn thumbnail_ready_line(key: &str, ms: f64) -> String {
@@ -304,18 +337,35 @@ impl LuminaApp {
     /// `trace!`d. This collapses the former per-tick `warn!` spam (38 identical
     /// lines/session) while the stage name (`geometry`, `generative_edit`, …)
     /// stays in every line.
+    ///
+    /// R4-WARN-1: the state-change check above re-armed on every edit, because
+    /// `mark_dirty`/`set_adjustment` clear `vram_render_refusal` (the recipe may
+    /// have changed). A persistent reason (e.g. a committed dimension-changing
+    /// crop outside the crop tool) then warned once per zoom-drag tick (35× in
+    /// ~6 s). A separate memo ([`TimingState::present_refusal_warned`]) survives
+    /// the render-key change and warns once per reason; a successful present
+    /// re-arms it via [`Self::clear_present_refusal_warn`].
     pub(crate) fn note_vram_refusal(&mut self, stage: &str) -> bool {
         self.vram_fresh = false;
         let changed = self.vram_render_refusal.as_deref() != Some(stage);
         self.vram_render_refusal = Some(stage.to_owned());
-        if changed {
+        let already_warned = self.timing.present_refusal_warned.as_deref() == Some(stage);
+        if changed && !already_warned {
             log::warn!("gpu present refused, keeping CPU route: {stage}");
+            self.timing.present_refusal_warned = Some(stage.to_owned());
             #[cfg(test)]
             VRAM_REFUSAL_WARNS.with(|warns| warns.set(warns.get() + 1));
         } else {
             trace!("GUI timing: vram present refusal unchanged stage={stage}");
         }
         changed
+    }
+
+    /// R4-WARN-1: re-arm the present-refusal warn after a successful VRAM
+    /// present (`vram_fresh = true`). A reason that reappears after the GPU
+    /// path worked again is a genuinely new occurrence and must be visible.
+    pub(crate) fn clear_present_refusal_warn(&mut self) {
+        self.timing.present_refusal_warned = None;
     }
 }
 

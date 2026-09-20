@@ -261,6 +261,9 @@ impl LuminaApp {
                                 // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
                                 // render clears any earlier present refusal.
                                 self.vram_render_refusal = None;
+                                // R4-WARN-1: a reason that reappears after the
+                                // GPU path worked again is a new occurrence.
+                                self.clear_present_refusal_warn();
                             }
                             Some(Err(err)) => {
                                 // R3-ROUTING-1: a classified post-gate refusal

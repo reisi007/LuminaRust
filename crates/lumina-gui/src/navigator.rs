@@ -5,13 +5,39 @@
 //! [`LuminaApp::navigator_zoomed_overview`] the thumbnail-grade zoomed
 //! overview (cached by content hash), [`LuminaApp::draw_navigator_viewport`]
 //! maps/paints the draggable viewport rectangle and [`LuminaApp::draw_navigator`]
-//! the collapsible rail. No behaviour changes: the ROI mapping, the `Custom`
-//! pan pin and the `trace!`s are byte-identical. The externally called helpers
-//! are `pub(crate)`.
+//! the collapsible navigator panel. R4-UX-1 (2026-09-20) removed the duplicate
+//! thumbnail rail from `draw_navigator`; R4-NAV-1 gated the drag-to-pan on a
+//! genuinely magnified view. The externally called helpers are `pub(crate)`.
 
 use super::*;
 use log::{trace, warn};
 use lumina_core::{render_frame_with_denoise, DenoiseStageInput, DenoiseStageStatus};
+
+// R4-NAV-1: test-only capture of the navigator viewport rectangle painted by
+// the last `draw_navigator_viewport` call on this thread. A pure test seam
+// (like `timing::TIMING_LOG`) so a headless test can drive the real draw path
+// and observe where the box actually lands — not only the pure helper. No
+// production state, no `LuminaApp` field (lib.rs is under the file-size
+// ratchet).
+#[cfg(test)]
+thread_local! {
+    static LAST_NAV_VIEW_RECT: std::cell::Cell<Option<egui::Rect>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: the navigator viewport rectangle painted by the last
+/// `draw_navigator_viewport` call on this thread (`None` before the first
+/// paint). Read-only; the value is overwritten each paint.
+#[cfg(test)]
+pub(crate) fn last_navigator_view_rect() -> Option<egui::Rect> {
+    LAST_NAV_VIEW_RECT.with(|cell| cell.get())
+}
+
+/// Reset the test-only navigator viewport capture.
+#[cfg(test)]
+pub(crate) fn clear_last_navigator_view_rect() {
+    LAST_NAV_VIEW_RECT.with(|cell| cell.set(None));
+}
 
 impl LuminaApp {
     /// Full-frame overview for the navigator (GUI-NAV-RECT-1): the viewport
@@ -167,8 +193,25 @@ impl LuminaApp {
             egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
             egui::StrokeKind::Middle,
         );
+        #[cfg(test)]
+        LAST_NAV_VIEW_RECT.with(|cell| cell.set(Some(view)));
         let drag = response.drag_delta();
-        if drag != egui::Vec2::ZERO {
+        // R4-NAV-1: only a genuinely magnified, overflowing view has a window
+        // to move. At Fit (or zoom <= 1) the viewport rectangle IS the whole
+        // frame, so a drag must neither move `preview_pan` nor pin `Custom` —
+        // otherwise the state silently changes while the box stays glued (the
+        // reported "box does not follow the drag"). Same gate as the preview
+        // hand-tool pan (`pan_gesture_pins_custom`).
+        if drag != egui::Vec2::ZERO
+            && Self::navigator_drag_pans_preview(
+                self.preview_zoom,
+                src_w as f32,
+                src_h as f32,
+                scale,
+                self.preview_pane_w,
+                self.preview_pane_h,
+            )
+        {
             let nav_scale = (nav_rect.width() / src_w as f32).max(1e-6);
             self.preview_pan =
                 Self::pan_for_navigator_drag(self.preview_pan, drag, nav_scale, scale);
@@ -181,10 +224,34 @@ impl LuminaApp {
         }
     }
 
-    /// Left thumbnail navigator rail (Lightroom-like). Reuses the filmstrip
-    /// [`Self::ensure_thumbnail`] / [`ThumbnailManager`] pipeline — no duplicate
-    /// thumbnail generation — shows a vertical scroll of directory entries,
-    /// highlights the active image and opens an entry on click.
+    /// R4-NAV-1: whether a navigator drag may pan the preview. Only a
+    /// genuinely magnified view (`zoom > 1`) whose full-source draw overflows
+    /// the pane has an off-screen window to move — exactly the preview
+    /// hand-tool gate ([`Self::pan_gesture_pins_custom`]). `scale` is the
+    /// on-screen preview scale (screen points per source pixel) and
+    /// `src_w * scale` / `src_h * scale` the full-source draw size at that
+    /// scale. Pure helper so the gate is headless-testable without a pane.
+    pub(crate) fn navigator_drag_pans_preview(
+        zoom: f32,
+        src_w: f32,
+        src_h: f32,
+        scale: f32,
+        pane_w: f32,
+        pane_h: f32,
+    ) -> bool {
+        Self::pan_gesture_pins_custom(zoom, src_w * scale, src_h * scale, pane_w, pane_h)
+    }
+
+    /// Left navigator panel (Lightroom-like): the overview with the draggable
+    /// viewport rectangle.
+    ///
+    /// R4-UX-1 (User-Entscheid 2026-09-20): the former thumbnail rail below the
+    /// viewport is removed. It duplicated the same directory images as the
+    /// bottom filmstrip ("Click a thumbnail to open it"), which F-100 already
+    /// designates as the single selection surface in all three modules; the
+    /// left panel now carries only the Navigator viewport (plus
+    /// Presets/Snapshots/History in Develop). No selection path is lost — the
+    /// filmstrip keeps click/⌘-click/⇧-click and its neighbor-preview badges.
     pub(crate) fn draw_navigator(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(Str::Navigator.t());
@@ -197,90 +264,5 @@ impl LuminaApp {
         });
         ui.separator();
         self.draw_navigator_viewport(ctx, ui);
-        ui.separator();
-        // RAW-only: mirror the filmstrip filter so the left navigator rail shows
-        // only RAW entries (jpg/png/webp are excluded from the Develop preview).
-        // GUI-FILMSTRIP-DUP-1: one shared index source — each image once.
-        // GUI-SCROLL-200-1: index view + `show_rows` — one fixed-height row per
-        // entry, only the visible window is laid out and scheduled.
-        let raw_indices: Vec<usize> = self.raw_entry_indices();
-        let count = raw_indices.len();
-        // UX-SLICE-2 (F3): honest empty hint — the same text as the filmstrip
-        // ("No images in this folder") instead of "Click a thumbnail to open it"
-        // when the rail carries no entries.
-        ui.label(if count == 0 {
-            Str::FilmstripEmpty.t()
-        } else {
-            Str::FilmstripHint.t()
-        });
-        const CELL_W: f32 = 120.0;
-        const CELL_H: f32 = 90.0;
-        let active_path = self.path.clone();
-        let visible_rows = egui::ScrollArea::vertical()
-            .show_rows(ui, CELL_H, count, |ui, rows: std::ops::Range<usize>| {
-                for i in rows.clone() {
-                    // Reuse the filmstrip thumbnail pipeline (no duplicate
-                    // generation): ensure_thumbnail populates the shared
-                    // ThumbnailManager entry.
-                    let entry = self.entries[raw_indices[i]].clone();
-                    self.ensure_thumbnail(ctx, &entry);
-                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
-                    let placeholder_label = self.thumbnail_placeholder_label(&entry);
-                    let active = active_path == entry.path.display().to_string();
-                    let (cell, resp) =
-                        ui.allocate_exact_size(egui::vec2(CELL_W, CELL_H), egui::Sense::click());
-                    if let Some(texture) = tex {
-                        ui.put(
-                            cell,
-                            egui::Image::from_texture(&texture).max_size(cell.size()),
-                        );
-                    } else {
-                        ui.painter()
-                            .rect_filled(cell, 2.0, egui::Color32::from_gray(40));
-                        ui.put(cell, egui::Label::new(placeholder_label));
-                    }
-                    if active {
-                        ui.painter().rect_stroke(
-                            cell,
-                            2.0_f32,
-                            egui::Stroke::new(2.0_f32, crate::theme::ACCENT),
-                            egui::StrokeKind::Middle,
-                        );
-                    }
-                    // PREVIEW-CACHE-FEATURE (A2): visible per-cell neighbor-preview
-                    // state („wird vorbereitet / Veraltet / Fehler"), never only in
-                    // logs. The thumb_key is the canonical path used as the probe id.
-                    if let Some((text, color)) = self.neighbor_preview_badge(&entry.thumb_key) {
-                        let corner_max = CELL_W.min(CELL_H) * 0.5;
-                        let badge_w = corner_max + text.len() as f32 * 5.5 + 8.0;
-                        let badge_h = corner_max + 8.0;
-                        let badge_rect = egui::Rect::from_min_size(
-                            egui::pos2(cell.min.x + 2.0, cell.min.y + 2.0),
-                            egui::vec2(badge_w, badge_h),
-                        );
-                        ui.painter().rect_filled(badge_rect, 3.0, color);
-                        ui.painter().text(
-                            badge_rect.min + egui::vec2(5.0, 5.0),
-                            egui::Align2::LEFT_TOP,
-                            text,
-                            egui::FontId::proportional(10.0),
-                            egui::Color32::WHITE,
-                        );
-                    }
-                    if resp.clicked() {
-                        // GUI-FILMSTRIP-DUP-1: the rail shares the filmstrip
-                        // selection — clicking here selects AND opens, exactly
-                        // like a filmstrip click, so all views stay in sync.
-                        trace!("GUI interaction: navigator open {}", entry.path.display());
-                        self.handle_filmstrip_click(entry.path.display().to_string(), false, false);
-                    }
-                }
-                rows
-            })
-            .inner;
-        // GUI-SCROLL-200-1: visible-first scheduling + bounded prefetch for the
-        // rail as well; show_rows covers the drawing side.
-        let window = visible_rows.start..visible_rows.end.min(count);
-        self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
     }
 }

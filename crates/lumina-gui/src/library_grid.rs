@@ -72,6 +72,31 @@ impl LuminaApp {
                 self.toggle_filter_bar();
             }
         });
+        // R4-LIB-1(b): one-click Up + breadcrumb, so leaving a folder —
+        // including a stray `.lumina/` — never requires editing the path text
+        // field. Clicking an earlier segment navigates to that ancestor.
+        ui.horizontal_wrapped(|ui| {
+            let crumbs = crate::library_tree::library_breadcrumb(&self.directory);
+            let mut jump: Option<String> = None;
+            if crumbs.len() > 1 {
+                let parent = crumbs[crumbs.len() - 2].1.clone();
+                if ui.button("⬆").on_hover_text(parent.clone()).clicked() {
+                    jump = Some(parent);
+                }
+            }
+            for (index, (label, target)) in crumbs.iter().enumerate() {
+                if index > 0 {
+                    ui.label("›");
+                }
+                let current = index + 1 == crumbs.len();
+                if ui.selectable_label(current, label).clicked() && !current {
+                    jump = Some(target.clone());
+                }
+            }
+            if let Some(target) = jump {
+                self.set_directory(target);
+            }
+        });
         // G-09 + FACE-20-S5: explicit Library-view selector (Grid / Loupe /
         // Compare / Survey / People), UX-LOOK-TOOLBAR-18 iconified at the LR
         // place with the existing labels/shortcuts as tooltips. The keyboard

@@ -208,6 +208,49 @@ fn vram_refusal_warns_once_per_state_change() {
     assert_eq!(take_vram_refusal_warns(), 1);
 }
 
+/// R4-WARN-1: the per-render-key present-refusal warn is deduped by reason set.
+/// `mark_dirty` clears the per-frame refusal on every edit, so the former
+/// per-stage dedup re-armed on each zoom-drag tick (35 identical warnings in
+/// ~6 s for a persistent dimension-changing crop). The memo survives the
+/// render-key change; only a genuinely different reason — or a reason that
+/// reappears after a successful present — warns again.
+#[cfg(feature = "gpu")]
+#[test]
+fn vram_refusal_warns_once_across_render_key_changes() {
+    let mut app = app();
+    let _ = take_vram_refusal_warns();
+    let geometry = "geometry (dimension-changing output)";
+    assert!(app.note_vram_refusal(geometry), "first occurrence is new");
+    assert_eq!(take_vram_refusal_warns(), 1, "one warn for the first state");
+
+    // 35 zoom-drag ticks: `mark_dirty` clears the per-frame refusal, the
+    // reason stays identical — no re-warn.
+    for _ in 0..35 {
+        app.mark_dirty();
+        app.note_vram_refusal(geometry);
+    }
+    assert_eq!(
+        take_vram_refusal_warns(),
+        0,
+        "a render-key change with the same reason must not re-warn"
+    );
+
+    // A successful present re-arms the same reason for a later recurrence
+    // (the real success branch clears both the per-frame refusal and the memo).
+    app.vram_render_refusal = None;
+    app.clear_present_refusal_warn();
+    app.note_vram_refusal(geometry);
+    assert_eq!(
+        take_vram_refusal_warns(),
+        1,
+        "a reason after a successful present is a new occurrence"
+    );
+
+    // A different reason set warns immediately.
+    app.note_vram_refusal("generative_edit (artifact-blind VRAM present stage)");
+    assert_eq!(take_vram_refusal_warns(), 1, "a new reason warns again");
+}
+
 /// F7 (R2-MODSWITCH-1) fires for real: an armed full render in the switch frame
 /// is deferred exactly once, then committed on the next frame. The counter is
 /// the test-visible anchor for the `trace!` scheduler line.

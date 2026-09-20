@@ -198,3 +198,50 @@ fn warmup_frontloads_first_library_switch_work() {
     cold.ensure_thumbnail_priority(&ctx, &indices, 0..indices.len());
     assert_eq!(cold.thumbnail_cache.builds(), 1);
 }
+
+/// R4-SWITCH-2: the warmup's arming and its deferral gates are traced, so a
+/// warmup that ran late (the R4 run showed it 37 s after start, after the
+/// first Library switch) is explainable from the trace instead of an
+/// uninstrumented gap. The deferral line fires once per reason, never per
+/// frame.
+#[test]
+fn warmup_arming_and_deferral_are_traced() {
+    use crate::timing::take_timing_log;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = new_app();
+    let ctx = egui::Context::default();
+    let _ = take_timing_log();
+
+    app.schedule_startup_warmup();
+    let log = take_timing_log();
+    assert!(
+        log.iter().any(|line| line.contains("warmup armed")),
+        "arming must be traced: {log:?}"
+    );
+    assert!(app.warmup_pending());
+
+    // No listing/source yet: deferred loudly, exactly once across frames.
+    assert!(!app.maybe_run_startup_warmup(&ctx));
+    assert!(!app.maybe_run_startup_warmup(&ctx));
+    let log = take_timing_log();
+    let deferred: Vec<&String> = log
+        .iter()
+        .filter(|line| line.contains("warmup deferred"))
+        .collect();
+    assert_eq!(
+        deferred.len(),
+        1,
+        "the deferral is traced once per reason: {log:?}"
+    );
+    assert!(deferred[0].contains("no listing yet"), "{:?}", deferred[0]);
+    assert!(
+        app.warmup_pending(),
+        "a deferral must not discharge the warmup"
+    );
+
+    // Once entries exist the still-armed warmup proceeds (and discharges).
+    app.entries = vec![raw_entry(directory.path(), "a.cr3")];
+    assert!(app.maybe_run_startup_warmup(&ctx));
+    assert!(!app.warmup_pending());
+}

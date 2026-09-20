@@ -34,7 +34,7 @@ read-only, 2026-09-12), `.goal/Goal.md` G-01…G-16,
 | UXG-12 | Presets = Datei-Browser statt Baum (kein Amount/Gruppen) | `lib.rs:16418` | ja (Amount-Semantik) | neu |
 | UXG-13 | Kürzel `O`/`Z`/`Shift+L`/`I` fehlen; `E`-Alias unsauber | `lib.rs:135` | nein (F-100 erweitern) | LRPAR-G16-POWER |
 | UXG-14 | Keine Canvas-Cursor; keine Stepper/Reset-Affordanz | Grep `CursorIcon` leer | nein | neu |
-| UXG-15 | Navigator-Rail: Größe/Drag-Affordanz schwach (Duplikat-These visuell nicht belegt, niedrig prior) | `lib.rs:17347` | ja (Layout) | neu |
+| UXG-15 | Navigator-Rail: **R4-UX-1 (2026-09-20, User)** entfernt die Duplikat-Thumbnail-Rail unter dem Navigator — Navigator-Viewport bleibt, der untere Filmstrip ist die einzige Selektionsfläche; R4-NAV-1 gattert den Viewport-Drag auf vergrößerte Ansichten | `navigator.rs` | entschieden | R4-UX-1 |
 | UXG-16 | Tone Curve ohne Kurvengrafik (P0/P1-Slider + Add-Point statt Punkte setzen/ziehen; Vision 2026-09-17: „bitterste Umlernstelle") | `lib.rs:15832`, `develop_section_tone_curve.png` | ja (Interaktion/Kanal) | neu |
 | UXG-17 | Hardcodierte UI-Literale statt `Str::` (F-100: englisch, 0 deutsche UI-Literale); Generative-Panels 2026-09-17 behoben (`ExpandDragFrameHint`/`ExpandCropToImage`), Spot-Panel (`draw_spot_heal`) offen | `i18n.rs`, `lib.rs:17185/17188` (behoben), `lib.rs:17680–17719` (offen) | nein | neu |
 | UXG-18 | Vision-Feinschliff 2026-09-17 (je einzeln entscheidbar): HSL ohne 8 Color-Mixer-Farbfelder; Compare/Survey-Tiles unausgerichtet; Toast überdeckt Toolbar-Kante; Preset-Dialog unzentriert/beschnitten; Meta-History als Rohdaten-Dump (ISO/Pipe); Histogramm ohne RGB-Kanäle/Clipping-Dreiecke/EXIF-Zeile; kein EXIF-Overlay über dem Bild; Slider-Blau ohne Akzent-Disziplin | Goldens + Vision-Urteil 2026-09-17 | teils | neu |
@@ -142,9 +142,11 @@ wurden:
   Dialog ist ein bewusster No-op (kein Status, kein Fehler). Für headless Tests
   ist der Picker injizierbar (Session-State, nie persistiert).
 - **F3 — ein Empty-State für alle Library-Ansichten:** Grid, Loupe, Compare und
-  Survey zeigen denselben zentrierten Empty-State (Icon + Titel + Body + CTA);
-  der Navigator-Rail zeigt bei 0 Einträgen den ehrlichen Hinweis
-  „No images in this folder“ statt „Click a thumbnail to open it“.
+  Survey zeigen denselben zentrierten Empty-State (Icon + Titel + Body + CTA).
+  Der untere Filmstreifen zeigt bei 0 Einträgen den ehrlichen Hinweis
+  „No images in this folder“ statt „Click a thumbnail to open it“. **R4-UX-1
+  (2026-09-20, User):** Die frühere Navigator-Rail (zweite Bildleiste links)
+  ist entfernt — der Filmstreifen ist die einzige Selektionsfläche.
 - **F4 — Badge-Painting pixel-belegt:** eigener Golden mit bewerteten,
   geflaggten und gelabelten Fixtures (Grid **und** Filmstreifen) plus
   Pixel-Assert auf `LIBRARY_BADGE_BG`; kein stiller Fallback.

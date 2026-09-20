@@ -19,9 +19,13 @@
 //! [`Crop::Free`] rectangle; the aspect-preset selector in the Geometry panel
 //! stays the way to request a locked aspect.
 //!
-//! The unarmed overlay (a recipe crop painted as a white stroke, `OverlayMode`
-//! `Always`) is preserved byte-for-byte — only the armed crop mode adds the
-//! interactive chrome.
+//! R4-RECT-1 (2026-09-20): the former unarmed white crop stroke is removed.
+//! Outside crop mode the preview pixels already carry the committed crop (the
+//! render applies it); painting its normalized rect onto the *full-source*
+//! canvas drew a white frame that reached past the cropped image with no
+//! interactive meaning — the reported rectangle over the preview at Fit. Only
+//! the armed crop tool paints a crop frame (its preview is the full frame, so
+//! the rect maps correctly).
 
 use super::*;
 use log::{info, warn};
@@ -111,23 +115,11 @@ impl LuminaApp {
         pane: egui::Rect,
         full_rect: egui::Rect,
     ) {
-        if !self.overlay_visible() && !self.crop_mode {
-            return;
-        }
+        // R4-RECT-1: only the armed crop tool paints a crop frame. An unarmed
+        // committed crop is already applied to the preview pixels; the former
+        // full-source white stroke reached past the cropped image and was not
+        // interactive (no picker/crop gesture), so it must not be painted.
         if !self.crop_mode {
-            // Historical behaviour (unarmed crop, `OverlayMode::Always`): only
-            // an actual recipe crop paints, as a white stroke.
-            let crop = self.recipe.geometry.as_ref().and_then(|g| g.crop.as_ref());
-            let (src_w, src_h) = self.image_dims().unwrap_or((0, 0));
-            let Some(rect) = Self::crop_overlay_rect(full_rect, crop, src_w, src_h) else {
-                return;
-            };
-            ui.painter().rect_stroke(
-                rect,
-                1.0_f32,
-                egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
-                egui::StrokeKind::Middle,
-            );
             return;
         }
         // Armed crop mode (UX-LOOK-CROP-18): the effective rectangle is the

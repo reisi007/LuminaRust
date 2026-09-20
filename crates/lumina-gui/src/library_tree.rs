@@ -11,6 +11,85 @@
 use super::*;
 use log::trace;
 
+/// R4-LIB-1: per-folder tree info. `raw_count` is the depth-limited RAW count
+/// shown in the node label; `has_images` is true when any **supported** image
+/// (RAW or raster — the Library grid's set) exists in the folder or its
+/// depth-limited descendants, so the tree hides folders that would list
+/// nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct FolderTreeInfo {
+    pub(crate) raw_count: usize,
+    pub(crate) has_images: bool,
+}
+
+/// Depth-limited walk behind [`FolderTreeInfo`]. `.lumina/` is never descended
+/// (R4-LIB-1d); symlink-/loop-safe via a canonical visited set (same
+/// convention as the recursive listing scan).
+fn folder_tree_info(path: &Path) -> FolderTreeInfo {
+    folder_tree_info_at_depth(path, FOLDER_SCAN_DEPTH)
+}
+
+/// [`folder_tree_info`] at an explicit depth (test seam for the depth-limit
+/// assertions; production always uses `FOLDER_SCAN_DEPTH`).
+pub(crate) fn folder_tree_info_at_depth(dir: &Path, remaining_depth: usize) -> FolderTreeInfo {
+    let mut visited = std::collections::HashSet::new();
+    folder_tree_info_inner(dir, remaining_depth, &mut visited)
+}
+
+fn folder_tree_info_inner(
+    dir: &Path,
+    remaining_depth: usize,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> FolderTreeInfo {
+    if remaining_depth == 0 {
+        return FolderTreeInfo::default();
+    }
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(canonical) {
+        return FolderTreeInfo::default();
+    }
+    let mut info = FolderTreeInfo::default();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return info;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // R4-LIB-1(d): the deletable cache directory is not content.
+            if path.file_name().and_then(|name| name.to_str()) == Some(".lumina") {
+                continue;
+            }
+            let sub = folder_tree_info_inner(&path, remaining_depth - 1, visited);
+            info.raw_count += sub.raw_count;
+            info.has_images |= sub.has_images;
+        } else if is_supported_image(&path) {
+            info.has_images = true;
+            if is_raw_name(&path.display().to_string()) {
+                info.raw_count += 1;
+            }
+        }
+    }
+    info
+}
+
+/// R4-LIB-1(b): clickable breadcrumb segments of `directory` as `(label,
+/// absolute target)`. The last segment is the current folder; earlier segments
+/// navigate up. Pure lexical path logic (no I/O), unit-testable headless.
+pub(crate) fn library_breadcrumb(directory: &str) -> Vec<(String, String)> {
+    let path = PathBuf::from(directory.trim());
+    let mut segments = Vec::new();
+    let mut accumulated = PathBuf::new();
+    for component in path.components() {
+        accumulated.push(component.as_os_str());
+        let label = match component {
+            std::path::Component::RootDir => "/".to_string(),
+            _ => component.as_os_str().to_string_lossy().into_owned(),
+        };
+        segments.push((label, accumulated.display().to_string()));
+    }
+    segments
+}
+
 impl LuminaApp {
     /// Lightroom-like Library folder tree (left panel): directory hierarchy
     /// rooted at `$HOME` (or two ancestors above the current directory when it
@@ -53,6 +132,23 @@ impl LuminaApp {
         }
     }
 
+    /// R4-LIB-1/R4-SWITCH-2: cached [`FolderTreeInfo`] for `path`. The first
+    /// access performs the synchronous depth-limited walk (traced via
+    /// `folder_scan_line`), later frames reuse the cache.
+    fn folder_info_cached(&mut self, path: &Path) -> FolderTreeInfo {
+        let key = path.display().to_string();
+        if let Some(info) = self.folder_raw_counts.get(&key) {
+            return *info;
+        }
+        let stopwatch = crate::timing::Stopwatch::now();
+        let info = folder_tree_info(path);
+        crate::timing::emit(|| {
+            crate::timing::folder_scan_line(path, info.raw_count, stopwatch.elapsed_ms())
+        });
+        self.folder_raw_counts.insert(key, info);
+        info
+    }
+
     /// One folder-tree node: disclosure arrow + label with RAW count, then the
     /// lazily cached children when expanded.
     fn draw_folder_node(
@@ -64,12 +160,11 @@ impl LuminaApp {
         select_target: &mut Option<String>,
     ) {
         let path_str = path.display().to_string();
-        // Depth-limited RAW count, computed once per folder and cached.
-        if !self.folder_raw_counts.contains_key(&path_str) {
-            let count = count_raw_files(path, FOLDER_SCAN_DEPTH);
-            self.folder_raw_counts.insert(path_str.clone(), count);
-        }
-        let raw_count = self.folder_raw_counts[&path_str];
+        // Depth-limited node info, computed once per folder and cached.
+        // R4-SWITCH-2: this synchronous walk was the uninstrumented UI block
+        // behind the first Library paint; time it so the trace names it.
+        let info = self.folder_info_cached(path);
+        let raw_count = info.raw_count;
         let open = self.open_folders.contains(&path_str);
         ui.horizontal(|ui| {
             ui.add_space((depth * 14) as f32);
@@ -102,13 +197,22 @@ impl LuminaApp {
             return;
         }
         // Lazy children cache: fill via read_dir on first expansion.
+        // R4-LIB-1(c/d): a child is kept only when its depth-limited subtree
+        // actually carries a supported image (empty folders would list nothing)
+        // and never when it is the deletable `.lumina/` cache directory.
         let children = match self.folder_children.get(&path_str) {
             Some(children) => children.clone(),
             None => {
-                let children: Vec<String> = subdirectories(path)
-                    .iter()
-                    .map(|child| child.display().to_string())
-                    .collect();
+                let mut children: Vec<String> = Vec::new();
+                for child in subdirectories(path) {
+                    // R4-LIB-1(d): the deletable cache directory is never a node.
+                    if child.file_name().and_then(|name| name.to_str()) == Some(".lumina") {
+                        continue;
+                    }
+                    if self.folder_info_cached(&child).has_images {
+                        children.push(child.display().to_string());
+                    }
+                }
                 self.folder_children
                     .insert(path_str.clone(), children.clone());
                 children

@@ -1754,9 +1754,9 @@ pub struct LuminaApp {
     /// Library module: lazy per-folder children cache, filled via `read_dir`
     /// the first time a folder node is expanded.
     folder_children: BTreeMap<String, Vec<String>>,
-    /// Library module: depth-limited RAW file count per folder node
-    /// (display only; computed once per folder).
-    folder_raw_counts: BTreeMap<String, usize>,
+    /// Library module: depth-limited RAW count + "has supported image"
+    /// per folder node for R4-LIB-1 pruning (computed once per folder).
+    folder_raw_counts: BTreeMap<String, library_tree::FolderTreeInfo>,
     /// UX-SLICE-2 (F2): injectable native folder-picker seam. `None`
     /// (production) opens the real `rfd` dialog; headless tests install a
     /// closure (no display server) so the empty-state CTA wiring can be
@@ -2842,10 +2842,10 @@ impl LuminaApp {
         self.begin_load_path(p);
     }
 
-    /// Flat per-folder navigation (folder tree clicks): lists exactly the
-    /// chosen folder, badges stay empty. This is the pre-existing behavior
-    /// and stays untouched by the recursive aggregation (F-100: a tree click
-    /// keeps flat-listing a single folder possible).
+    /// Navigate to `directory` (folder tree click, `Open`, startup workdir).
+    /// R4-LIB-1(a): the grid aggregates subfolder images (F-100), so every
+    /// navigation path uses the recursive listing (depth-limited; `.lumina/`
+    /// excluded) — the former flat tree-click listing hid subfolder images.
     pub fn set_directory(&mut self, directory: impl Into<String>) {
         self.directory = directory.into();
         info!("directory set: {}", self.directory);
@@ -2853,7 +2853,7 @@ impl LuminaApp {
         // sync on explicit navigation (same refresh as `open_file`).
         let folder = PathBuf::from(self.directory.trim());
         self.refresh_reset_sliders_flag(&folder);
-        self.list_directory_flat();
+        self.list_directory();
     }
 
     /// Current working directory (read-only accessor for the `main()` startup
@@ -11760,44 +11760,6 @@ const PREVIEW_ROI_MARGIN: f64 = 1.3;
 /// desktop cache budget is generous (512 MiB of prepared frames).
 const BASE_STAGE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
 
-/// Number of RAW files under `dir`, descending at most `remaining_depth`
-/// directory levels (depth 0 scans nothing). Pure read-only helper used by the
-/// Library folder tree. Symlink-/loop-safe via a canonical visited set (same
-/// convention as `scan_dir_recursive`); a symlink cycle terminates instead of
-/// recursing forever or double-counting the looped subtree.
-fn count_raw_files(dir: &Path, remaining_depth: usize) -> usize {
-    let mut visited = std::collections::HashSet::new();
-    count_raw_files_inner(dir, remaining_depth, &mut visited)
-}
-
-fn count_raw_files_inner(
-    dir: &Path,
-    remaining_depth: usize,
-    visited: &mut std::collections::HashSet<PathBuf>,
-) -> usize {
-    if remaining_depth == 0 {
-        return 0;
-    }
-    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    if !visited.insert(canonical) {
-        return 0;
-    }
-    let mut count = 0usize;
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                count += count_raw_files_inner(&path, remaining_depth - 1, visited);
-            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if is_raw_name(name) {
-                    count += 1;
-                }
-            }
-        }
-    }
-    count
-}
-
 /// Immediate subdirectories of `dir`, sorted; empty when unreadable so a
 /// permission error degrades to "no children" instead of a broken node.
 fn subdirectories(dir: &Path) -> Vec<PathBuf> {
@@ -12366,9 +12328,9 @@ impl eframe::App for LuminaApp {
         }
 
         // Left: Develop left rail (Navigator + Presets + Snapshots + History)
-        // or the thumbnail navigator rail (Export). The Library module keeps
-        // its text file-browser on the left instead. Both reuse the filmstrip
-        // ThumbnailManager (no duplicate generation); see `draw_left_rail_panel`.
+        // or the plain Navigator panel (Export). The Library module keeps its
+        // text file-browser on the left instead (R4-UX-1: no duplicate rail;
+        // the bottom filmstrip is the single selection surface everywhere).
         if self.navigator_open
             && !matches!(self.active_module, Module::Library)
             && !self.side_chrome_hidden()
@@ -12489,8 +12451,7 @@ mod tests {
     mod instrdbg_rework;
     // GUI-INSTRDBG-17c-Rest: the People-view "Use as mask" click test.
     mod instrdbg_face;
-    // GUI-GPU-AUDIT-17 (Release 1.0): headless routing audit over every
-    // `GuiAction` (Metal-gated, `--ignored`).
+    // GUI-GPU-AUDIT-17: headless audit over every `GuiAction` (Metal, --ignored).
     mod gpu_audit;
     mod gpu_audit_actions;
     // GUI-REFACTOR-W3-20 / UX-LOOK-TOOLBAR-18: thematic split of the former
@@ -12530,6 +12491,7 @@ mod tests {
     mod library_scan;
     mod library_sort;
     mod library_sync;
+    mod library_tree_r4;
     mod library_views;
     // R2-MODSWITCH-1 F7: module-switch latency (off-thread thumbnail cache,
     // metadata-only probe, deferred full render).
@@ -12537,6 +12499,7 @@ mod tests {
     mod masking_g11;
     mod modswitch;
     mod navigator;
+    mod navigator_r4;
     mod optics;
     mod panels;
     mod preview_placement;

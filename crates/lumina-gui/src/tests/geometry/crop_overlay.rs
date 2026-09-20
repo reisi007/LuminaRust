@@ -225,10 +225,12 @@ fn crop_mode_paints_handles_grid_and_darkening() {
     );
 }
 
-/// Without crop mode the overlay is the historical plain white stroke: no
-/// chrome is added, so the unarmed golden/semantics are preserved.
+/// R4-RECT-1: without crop mode a committed recipe crop paints NOTHING — the
+/// preview pixels already carry the crop, and the former full-source white
+/// stroke reached past the cropped image (the reported rectangle over the
+/// preview). No darkening, no white crop frame.
 #[test]
-fn crop_overlay_unarmed_paints_only_the_frame() {
+fn crop_overlay_unarmed_paints_no_crop_frame() {
     let mut harness = CropHarness::new();
     let (_directory, mut app) = crop_app(&harness.ctx);
     app.toggle_crop_mode(); // off again
@@ -250,7 +252,10 @@ fn crop_overlay_unarmed_paints_only_the_frame() {
         }
     }
     assert_eq!(bands, 0, "unarmed overlay must not darken");
-    assert!(strokes >= 1, "unarmed overlay still paints the crop frame");
+    assert_eq!(
+        strokes, 0,
+        "an unarmed committed crop must not paint a crop frame"
+    );
 }
 
 /// Every corner is a member of the resize class: the dragged corner follows

@@ -68,6 +68,10 @@ pub(crate) struct WarmupState {
     /// The warmup ran; never again.
     done: bool,
     report: WarmupReport,
+    /// R4-SWITCH-2: the last deferral reason already traced, so a late warmup
+    /// names its gate (`pointer down`, `no listing yet`) without per-frame
+    /// trace spam.
+    deferred: Option<&'static str>,
 }
 
 impl WarmupState {
@@ -91,6 +95,19 @@ impl LuminaApp {
     /// their goldens stay free of warmup progress).
     pub fn schedule_startup_warmup(&mut self) {
         self.warmup.arm();
+        // R4-SWITCH-2: an armed-but-late warmup must be explainable from the
+        // trace — the arming instant is the first anchor.
+        crate::timing::emit(crate::timing::warmup_armed_line);
+    }
+
+    /// R4-SWITCH-2: trace a warmup deferral once per reason change (never per
+    /// frame), so the trace shows *why* the cold-start work was still pending
+    /// after the first Library switch instead of an uninstrumented gap.
+    fn trace_warmup_deferral(&mut self, reason: &'static str) {
+        if self.warmup.deferred != Some(reason) {
+            self.warmup.deferred = Some(reason);
+            crate::timing::emit(|| crate::timing::warmup_deferred_line(reason));
+        }
     }
 
     /// R3-WARMUP-1: run the pending warmup once the app is idle and has
@@ -106,13 +123,16 @@ impl LuminaApp {
         }
         // Idle only: never compete with an active pointer interaction.
         if ctx.input(|i| i.pointer.any_down()) {
+            self.trace_warmup_deferral("pointer down");
             return false;
         }
         // Wait for the first listing / loaded source: a workdir may be opened
         // after startup, and an in-memory load has no folder to index.
         if self.entries.is_empty() && self.original.is_none() {
+            self.trace_warmup_deferral("no listing yet");
             return false;
         }
+        self.warmup.deferred = None;
         if let Some(first) = self.entries.first().cloned() {
             // 1. Folder preview index (metadata-only, memoized, R3-LOG-1 timed).
             let folder = first
