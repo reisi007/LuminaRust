@@ -395,17 +395,17 @@ fn g04_spot_panel_paints_g04_controls() {
                 egui::Panel::right("controls")
                     .resizable(true)
                     .default_size(320.0)
-                    .show(ui, |ui| app.draw_spot_heal(ui));
+                    .show(ui, |ui| app.draw_spot_tool_options(ui));
             },
         );
         output.textures_delta.clear();
         output.shapes
     };
     let shapes = run(vec![]);
-    let pos = text_shapes_for(&shapes, "Dust Removal (Q)")
+    let pos = text_shapes_for(&shapes, "Remove options")
         .into_iter()
         .next()
-        .expect("Dust Removal header must be painted")
+        .expect("Remove options header must be painted")
         .0
         .center();
     let click = |pressed: bool| egui::Event::PointerButton {

@@ -38,12 +38,9 @@ fn assert_single_action_line(lines: &[String], action: GuiAction) {
 #[test]
 fn f100_spot_distraction_checkbox_logs_one_line() {
     let (_directory, mut app) = persistent_app();
-    let lines = click_action_lines(
-        &mut app,
-        6000.0,
-        &["Dust Removal (Q)", "Dust"],
-        |app, ui| app.draw_spot_heal(ui),
-    );
+    let lines = click_action_lines(&mut app, 6000.0, &["Remove options", "Dust"], |app, ui| {
+        app.draw_spot_tool_options(ui)
+    });
     assert_single_action_line(&lines, GuiAction::SetSpotDistraction);
     assert!(app.spot_distraction().dust, "the checkbox must persist");
 }

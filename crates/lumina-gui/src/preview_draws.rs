@@ -222,16 +222,17 @@ impl LuminaApp {
             );
 
             let armed = self.mask_tool != MaskTool::None;
+            let spot_armed = self.spot_tool != SpotTool::None;
             let pick = self.wb_pick_mode;
             let red_eye_pick = self.red_eye_pick_mode;
 
-            // A mask tool arms the preview for a drag gesture; the WB eyedropper
-            // and the red-eye region picker keep a plain click; otherwise a
-            // zoomed image drags to pan (hand tool). Pan never conflicts with an
-            // armed mask tool or either picker.
+            // A mask tool arms the preview for a drag gesture; the armed spot
+            // tool, the WB eyedropper and the red-eye region picker keep a
+            // plain click; otherwise a zoomed image drags to pan (hand tool).
+            // Pan never conflicts with an armed tool or either picker.
             let sense = if armed {
                 egui::Sense::drag()
-            } else if pick || red_eye_pick {
+            } else if spot_armed || pick || red_eye_pick {
                 egui::Sense::click()
             } else if pan_eligible && !self.crop_mode {
                 egui::Sense::drag()
@@ -240,9 +241,9 @@ impl LuminaApp {
             };
             let response = ui.allocate_rect(rect, sense);
 
-            // Pan while zoomed (only when no mask tool and not picking, and
+            // Pan while zoomed (only when no tool and not picking, and
             // never while the interactive crop tool owns the pointer).
-            if !armed && !pick && !red_eye_pick && pan_eligible && !self.crop_mode {
+            if !armed && !spot_armed && !pick && !red_eye_pick && pan_eligible && !self.crop_mode {
                 let delta = response.drag_delta();
                 if delta != egui::Vec2::ZERO {
                     if response.drag_started() {
@@ -394,6 +395,10 @@ impl LuminaApp {
                 }
             }
             self.handle_mask_tool_drag(&response, rect);
+            // R5-DUST-23: the armed spot tool dabs on click and paints the
+            // live-size circle cursor (the sidebar panel never wired a pointer
+            // handler, so the tool did nothing on the image).
+            self.handle_spot_tool_interaction(ui, &response, rect, scale);
             // Mask overlay is painted over the full-frame rect (accounting for the
             // current ROI crop) so it lines up with the zoomed/panned view.
             {

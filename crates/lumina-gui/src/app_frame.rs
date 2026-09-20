@@ -75,6 +75,12 @@ impl LuminaApp {
         // F-100 Klickbarkeit (GUI-CLICK-ALL-17): the view toggles that used to
         // be keyboard-only get a clickable button row under the zoom toolbar.
         self.draw_view_toolbar(ui);
+        // R5-DUST-23: the Spot-Heal tool options live in a toolbar-near strip
+        // over the image while the tool is armed (toolbar icon / `Q`); there is
+        // no Dust-Removal sidebar section anymore.
+        if self.spot_tool != SpotTool::None {
+            self.draw_spot_tool_options(ui);
+        }
         self.update_texture(ctx);
         self.draw_preview(ui);
         // UX-SLICE-1 (UXG-07): the render hash moved to the app status line

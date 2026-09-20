@@ -161,7 +161,9 @@ impl LuminaApp {
                 draw_section(self, ui);
             }
             self.draw_generative_expand(ui);
-            self.draw_spot_heal(ui);
+            // R5-DUST-23: the Dust-Removal controls moved out of the sidebar
+            // into the preview tool strip (see `draw_preview_area`); the Develop
+            // panel has no Dust-Removal section anymore.
         });
         ui.separator();
         // GUI-VISION-1 (same bug class as the Export Choose row):

@@ -147,7 +147,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] R5-DUST-23 (User-Order 2026-09-20, nach Sort-Mini-Welle)** Dust Removal aus der Sidebar in die Toolbar über dem Bild (Arming dort, kein Panel-Abschnitt mehr), Pinselgröße sichtbar + einstellbar, Funktion reparieren (User: „funktioniert nicht"). Abnahme: headless Tests (Arming, Size, Dab→Heilung) + Golden + unabhängige Verifizierung.
+- [ ] **[PRIO: hoch] R5-DUST-23-FOLLOWUP (nächstes Mal, User-Order 2026-09-20)** Dust-Erweiterung: Anzeige nur bei Auswahl (Ausgewähltes wie Maske), Entfernungen bearbeitbar inkl. Neu-Generierung, Typ Generate/KI-generiert (Clone nie verwendet). Abnahme: SOLL zuerst + headless Tests + Golden + unabhängige Verifizierung.
 - [ ] **[PRIO: hoch] R5-BRUSH-24 (User-Order 2026-09-20, User-Urteil „großer Fail", nach Sort-Mini-Welle)** Pinsel-Masken auf Lightroom-Niveau: Größe/Weichheit/Fluss einstellbar (Slider + `[`/`]`-Shortcuts als Alias), Kreis-Cursor mit live Größe am Zeiger, mehrere Masken pro Bild anlegbar + einzeln wählbar (Pin-Liste klickbar), dazu vollständige Maskenverwaltung (Liste aller Masken mit Sichtbarkeits-Toggle, Umbenennen, Löschen, Reihenfolge, Duplizieren — alles klickbare Buttons).
 - [ ] **[PRIO: hoch] R5-MASKVIS-25 (User-Order 2026-09-20, präzisiert, nach Sort-Mini-Welle)** Masken-Overlay nur sichtbar, wenn die Masken-Ansicht geöffnet ist; togglebar: nur Pins für alle Masken vs. volles Overlay für die aktuell ausgewählte Maske. Dazu Bildbereich vergrößern (Seiten-Panels ausblendbar für maximale Preview). Abnahme: headless Tests (Sichtbarkeit nur bei offener Ansicht, Pin-vs-Full-Toggle, Panel-Hide) + Golden + unabhängige Verifizierung.
 

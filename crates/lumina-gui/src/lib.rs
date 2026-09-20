@@ -94,6 +94,9 @@ mod preview_draws;
 // GUI-REFACTOR-W2-20 S2.1: preview mask-tool interaction and the preview
 // overlays (mask matte, G-11 pins, lens-blur/crop rects).
 mod preview_masks;
+// R5-DUST-23: interactive Spot-Heal tool (dab + live-size cursor + `[`/`]`
+// size shortcuts).
+mod spot_tool;
 // GUI-REFACTOR-W2-20 S2.2: the Develop section renderers, one module per
 // F-100 section (plus the shared Basic-row helpers and the histogram).
 mod develop_basic;
@@ -6659,6 +6662,11 @@ impl LuminaApp {
     pub fn set_mask_tool(&mut self, tool: MaskTool) {
         instrument_gui_action!(self, GuiAction::SetMaskTool);
         self.mask_tool = tool;
+        // R5-DUST-23: arming a mask tool disarms the spot tool (the reverse is
+        // handled in `set_spot_tool`), so the preview never holds two tools.
+        if tool != MaskTool::None {
+            self.spot_tool = SpotTool::None;
+        }
         self.pending_brush_marks.clear();
         self.drag_start = None;
         self.drag_current = None;
@@ -11823,6 +11831,8 @@ impl eframe::App for LuminaApp {
             // UX-LOOK-TOOLBAR-18: shared with the icon toolbar (same status).
             self.toggle_spot_heal_tool();
         }
+        // R5-DUST-23: `[`/`]` resize the armed spot tool (alias, shared path).
+        self.handle_spot_size_shortcuts(&ctx);
         self.handle_crop_shortcuts(&ctx);
 
         // Module-switch shortcuts (`G` Library grid, `D` Develop, `E`
@@ -12460,6 +12470,8 @@ mod tests {
     mod sliders_domain;
     mod sliders_filmstrip;
     mod spot_heal;
+    // R5-DUST-23: Dust-Removal toolbar tool (arming, size, dab, cursor).
+    mod spot_tool;
     mod spot_visualize;
     mod startup;
     // R3-WARMUP-1: the one-shot cold-start warmup tests.

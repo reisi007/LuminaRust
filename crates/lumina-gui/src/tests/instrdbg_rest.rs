@@ -44,24 +44,18 @@ fn assert_single_action_line(lines: &[String], action: GuiAction) {
 #[test]
 fn f100_spot_quick_button_logs_one_line() {
     let (_directory, mut app) = persistent_app();
-    let lines = click_action_lines(
-        &mut app,
-        4096.0,
-        &["Dust Removal (Q)", "Quick"],
-        |app, ui| app.draw_spot_heal(ui),
-    );
+    let lines = click_action_lines(&mut app, 4096.0, &["Quick"], |app, ui| {
+        app.draw_spot_tool_options(ui)
+    });
     assert_single_action_line(&lines, GuiAction::SetSpotMode);
 }
 
 #[test]
 fn f100_spot_generative_button_logs_one_line() {
     let (_directory, mut app) = persistent_app();
-    let lines = click_action_lines(
-        &mut app,
-        4096.0,
-        &["Dust Removal (Q)", "Generative"],
-        |app, ui| app.draw_spot_heal(ui),
-    );
+    let lines = click_action_lines(&mut app, 4096.0, &["Generative"], |app, ui| {
+        app.draw_spot_tool_options(ui)
+    });
     assert_single_action_line(&lines, GuiAction::SetSpotMode);
 }
 
@@ -71,8 +65,8 @@ fn f100_spot_visualize_off_button_logs_one_line() {
     let lines = click_action_lines(
         &mut app,
         4096.0,
-        &["Dust Removal (Q)", "Visualize off"],
-        |app, ui| app.draw_spot_heal(ui),
+        &["Remove options", "Visualize off"],
+        |app, ui| app.draw_spot_tool_options(ui),
     );
     assert_single_action_line(&lines, GuiAction::ClearSpotVisualize);
 }
@@ -83,8 +77,8 @@ fn f100_spot_detect_button_logs_one_line() {
     let lines = click_action_lines(
         &mut app,
         4096.0,
-        &["Dust Removal (Q)", "Detect objects"],
-        |app, ui| app.draw_spot_heal(ui),
+        &["Remove options", "Detect objects"],
+        |app, ui| app.draw_spot_tool_options(ui),
     );
     assert_single_action_line(&lines, GuiAction::DetectSpotCandidates);
 }
@@ -95,8 +89,8 @@ fn f100_spot_apply_detected_button_logs_one_line() {
     let lines = click_action_lines(
         &mut app,
         4096.0,
-        &["Dust Removal (Q)", "Apply detected"],
-        |app, ui| app.draw_spot_heal(ui),
+        &["Remove options", "Apply detected"],
+        |app, ui| app.draw_spot_tool_options(ui),
     );
     assert_single_action_line(&lines, GuiAction::ApplyDetectedSpots);
 }
@@ -108,8 +102,8 @@ fn f100_spot_regenerate_variant_button_logs_one_line() {
     let lines = click_action_lines(
         &mut app,
         4096.0,
-        &["Dust Removal (Q)", "Regenerate variant"],
-        |app, ui| app.draw_spot_heal(ui),
+        &["Remove options", "Regenerate variant"],
+        |app, ui| app.draw_spot_tool_options(ui),
     );
     assert_single_action_line(&lines, GuiAction::RegenerateSpotVariant);
 }
@@ -120,8 +114,8 @@ fn f100_spot_clear_button_logs_one_line() {
     let lines = click_action_lines(
         &mut app,
         4096.0,
-        &["Dust Removal (Q)", "Clear spots"],
-        |app, ui| app.draw_spot_heal(ui),
+        &["Remove options", "Clear spots"],
+        |app, ui| app.draw_spot_tool_options(ui),
     );
     assert_single_action_line(&lines, GuiAction::ClearSpotHeals);
 }

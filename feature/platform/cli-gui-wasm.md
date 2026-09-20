@@ -1235,7 +1235,8 @@ kapern. Modulwechsel mutieren niemals Rezept oder Sidecar.
 | `0` | Bewertung zurücksetzen (unbewertet) | LR-01; nur mit geladener virtueller Kopie, sonst Zoom-Fit wie bisher |
 | `P` / `X` / `U` | Pick / Reject / Unflag der aktiven Kopie | LR-01 |
 | `K` / `M` / `Shift+M` | Maskenwerkzeug Pinsel / Verlauf / Radial scharfschalten | LR-10; `Esc` entschärft; bei aktiver Rezept-Geometrie laut verweigert |
-| `Q` | Spot-Heal-Werkzeug umschalten | bereits gebunden |
+| `Q` | Spot-Heal-Werkzeug umschalten (Alias für das Toolbar-Icon „Heal" über dem Bild) | R5-DUST-23: kein Sidebar-Abschnitt mehr; Tool-Optionen in der toolbar-nahen Leiste |
+| `[` / `]` | Spot-Größe des armierten Werkzeugs verkleinern / vergrößern | R5-DUST-23; nur bei armiertem Spot-Werkzeug, geklemmt auf `1..=512` Quellpixel, `info!`-sichtbar |
 | `Cmd/Ctrl+'` | Aktive virtuelle Kopie duplizieren und auswählen | LR-09; vorheriges `save_sidecar` sichert ungespeicherte Edits, damit das Duplikat den aktuellen Stand erbt |
 | `Cmd/Ctrl+Shift+C` / `Cmd/Ctrl+Shift+V` | Einstellungen kopieren / einfügen (aktive virtuelle Kopie) | LR-09 Welle 2; sitzungsweiter Clipboard (nicht persistiert), Einfügen über Save/Render-Pfad mit `preview_generation`-Bump |
 | `6`–`9` | Farb-Label 1–4 (Rot/Gelb/Grün/Blau) der aktiven Kopie | Welle 2; `extras["color_label"]`, kein Schema-Change; `0` = kein Label |
@@ -1599,7 +1600,8 @@ Maskierungs-Parität“):
 Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-04 (Details, Feldsemantik und
 Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
 
-- **Visualize-Slider:** Schwellwert-Slider im Spot-Panel
+- **Visualize-Slider:** Schwellwert-Slider in der toolbar-nahen Spot-Tool-Leiste
+  (Gruppe „Remove options“, R5-DUST-23)
   (`spot_visualize_threshold`, `0..=1`), rezept-persistiert (Reload stellt
   ihn wieder her); deterministische Kandidaten-Tönung, kein Modell. Das
   Overlay malt ausschließlich die GUI-Vorschau (`render_from`-Post-Prozess,
@@ -1610,7 +1612,7 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
   Visualize-Overlay — reiner Session-Display-State (nie Sidecar, Reload →
   `Always`), `info!`-Log. Die CLI kennt kein Overlay-Flag und rendert
   immer ohne Overlay.
-- **Detect-Objects:** Button im Spot-Panel + CLI `lumina spot
+- **Detect-Objects:** Button in der Spot-Tool-Leiste + CLI `lumina spot
   --detect-objects` (Heuristik Stufe 1, ohne Modell, ONNX nur hinter
   F-078-Gate, Status laut); `--detect-apply` übernimmt explizit. Ohne
   `--detect-threshold` gilt der Rezept-Schwellwert
@@ -1623,8 +1625,8 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
   gespeicherten Schalter (ungenannte bleiben, Abschalten per `k=false`;
   Entscheid: Merge, konsistent zum GUI-Einzeltoggle — siehe
   `feature/product/spot-removal.md` § „G-04 Remove-Parität“).
-- **Generativ-Varianten:** Prompt-/Seed-/Varianten-Steuerung im Spot-Panel +
-  CLI `lumina spot --regenerate-variant --spot-id <id> --variant <n>`;
+- **Generativ-Varianten:** Prompt-/Seed-/Varianten-Steuerung in der
+  Spot-Tool-Leiste + CLI `lumina spot --regenerate-variant --spot-id <id> --variant <n>`;
   deterministisch (`variant_seed`), persistiert, `info!`-Log.
 - **CLI:** `lumina spot --list` (Spots + Einstellungen je Kopie),
   `--add-heuristic`, `--clear`, `--set-visualize-threshold`,
@@ -2441,7 +2443,9 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Straighten-Dreh-Gegenprobe (kein Slider-Log), Loupe-Größe, Sort-Drag-Linie,
   Restart-Restore (nur 1 Session im Log).
 - **Neue UX-Tasks aus dem Run:** R5-DUST-23 (Dust-Tool in Toolbar, Größe,
-  Funktion), R5-BRUSH-24 („großer Fail": Größe/Weichheit/Fluss, Kreis-Cursor,
+  Funktion — **implementiert 2026-09-20**: Toolbar-Arming `Heal`/`Q` ohne
+  Sidebar-Abschnitt, Size-Slider + `[`/`]`, Dab→Heilung, Kreis-Cursor;
+  Verifizierung offen), R5-BRUSH-24 („großer Fail": Größe/Weichheit/Fluss, Kreis-Cursor,
   Mehrfach-Masken + komplette Maskenverwaltung), R5-MASKVIS-25 (Overlay-Toggle
   ohne Panel + Bildbereich vergrößern), R5-STACKVIS-21 (Stack-Zeichen ≠
   Selektions-Rahmen, kein Rechtsklick bleibt).

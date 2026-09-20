@@ -115,7 +115,7 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
             format!("1 {}", color_label_name(1)).into(),
         ),
         GuiAction::SetMaskTool => (F100Surface::Masking, Str::MaskToolBrush.t().into()),
-        GuiAction::SetSpotTool => (F100Surface::Spot, "Heal (Q)".into()),
+        GuiAction::SetSpotTool => (F100Surface::Preview, ButtonRef::Icon(ToolbarIcon::Heal)),
         GuiAction::SetTreatment => (F100Surface::Basic, Str::TreatmentColor.t().into()),
         GuiAction::SetModule => (
             F100Surface::ModuleBar,
@@ -304,8 +304,8 @@ pub(super) fn f100_surface_frame(
             headless_frame_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
         }
         F100Surface::Spot => {
-            headless_click_labels_sized_frame(app, 6000.0, &["Dust Removal (Q)"], |app, ui| {
-                app.draw_spot_heal(ui)
+            headless_click_labels_sized_frame(app, 8000.0, &["Remove options"], |app, ui| {
+                app.draw_spot_tool_options(ui)
             })
         }
         F100Surface::Merge => {
