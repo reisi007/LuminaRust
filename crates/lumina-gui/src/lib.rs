@@ -154,6 +154,8 @@ mod ops_presets;
 mod ops_snapshots;
 // PREVIEW-CACHE-FEATURE: the neighbor-preview controller (worker pool + RAM/disk LRU).
 mod preview_ctrl;
+// R3-ROUTING-1/R3-DENOISE-1: neighbor-preview job planning + background worker.
+mod preview_jobs;
 mod slider;
 mod theme;
 mod viewport;
@@ -254,6 +256,9 @@ use theme::apply_lightroom_dark;
 // PERF-FILMSTRIP (thumbnail worker + navigator/preview paths).
 use filmstrip::{downscale_rgba, ThumbnailManager};
 use i18n::Str;
+// R3-DENOISE-1 (B4): the crate root no longer renders directly; the bare
+// `render_frame` re-export is only consumed by the headless test modules.
+#[cfg(test)]
 use lumina_core::render_frame;
 // R2-MODSWITCH-1 F7: the cache-aware thumbnail job/result types (worker pool).
 use thumb_worker::{ThumbnailJob, ThumbnailResult};
@@ -10881,67 +10886,6 @@ impl LuminaApp {
         }
     }
 
-    /// Plan and enqueue the asymmetric +4/−2 neighbor-preview window around the
-    /// currently active image `active_path`. The worker pool is spawned lazily
-    /// on first navigation so headless tests stay thread-free. The authoritative
-    /// state of each neighbor (content hash, sidecar recipe) is resolved inside
-    /// the workers, never on the UI thread.
-    fn schedule_neighbor_previews(&mut self, active_path: &str) -> usize {
-        if self.entries.is_empty() {
-            return 0;
-        }
-        let canonical = Path::new(active_path)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(active_path))
-            .to_string_lossy()
-            .into_owned();
-        let Some(active) = self.entries.iter().position(|e| e.thumb_key == canonical) else {
-            return 0;
-        };
-        // Pre-build arrays before touching `preview_ctrl` so the borrows stay
-        // disjoint (no `self` field overlap in the borrow checker).
-        let probe_ids: Vec<String> = self.entries.iter().map(|e| e.thumb_key.clone()).collect();
-        let sources: Vec<PathBuf> = self.entries.iter().map(|e| e.path.clone()).collect();
-        let names: Vec<String> = self.entries.iter().map(|e| e.name.clone()).collect();
-        let preview_ctrl = self.preview_ctrl.get_or_insert_with(|| {
-            // Pool clamped to a small dedicated size (the SOLL mandates a fixed
-            // small pool; thumbnails keep their own pool). The disk tier is
-            // rooted per-job at the source's own `.lumina/previews` folder.
-            let pool_size = thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .clamp(2, 4);
-            let (ctrl, _queue) = preview_ctrl::PreviewController::spawn(pool_size);
-            ctrl
-        });
-        // A6: inherit the folder / display option — a 1:1 zoom plans neighbors
-        // at 1:1 resolution, otherwise the (default) Screen preview is used.
-        // The worker keeps the decoded frame at full resolution for `OneToOne`
-        // (no downscaling), so the target here only drives the Screen path.
-        let (kind, target) = if self.zoom_mode == ZoomMode::OneToOne {
-            (lumina_core::preview_cache::PreviewKind::OneToOne, (0, 0))
-        } else {
-            (
-                lumina_core::preview_cache::PreviewKind::Screen,
-                (self.draft_max_dim, self.draft_max_dim),
-            )
-        };
-        // A6: when the kind/resolution changes (e.g. zoom → 1:1) the previously
-        // prepared neighbors are stale for the new key and are lazily re-rendered.
-        preview_ctrl.plan_kind(kind);
-        let jobs =
-            preview_ctrl::plan_window_jobs(&probe_ids, &sources, &names, active, target, kind);
-        let mut enqueued = 0;
-        for job in jobs {
-            if preview_ctrl.enqueue(job) {
-                enqueued += 1;
-            }
-        }
-        self.frame_previews_enqueued += enqueued;
-        preview_ctrl.set_active(&canonical);
-        enqueued
-    }
-
     /// PREVIEW-CACHE-FEATURE (A1/A4): paint a cached neighbor preview for the
     /// path being navigated to, so the first frame of a change-of-active shows
     /// no decode/render wait. Serves first from the RAM LRU, then from the disk
@@ -12767,8 +12711,10 @@ mod tests {
     mod geometry;
     mod geometry_session;
     mod gpu_routing;
+    // R3-Runde-3: routing/denoise fixes (R3-ROUTING-1/-DENOISE-1/-DENOISE-2).
     mod gpu_state;
     mod histogram;
+    mod r3_fixes;
     // UX-LOOK-HISTORY-18: readable/clickable history entries + presets tree.
     mod history_presets_look;
     mod iptc;

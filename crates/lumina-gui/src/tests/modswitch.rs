@@ -204,6 +204,7 @@ fn one_neighbor_failure_emits_exactly_one_app_level_warn() {
         target: (8, 8),
         kind: PreviewKind::Screen,
         priority: 0,
+        denoise_policy: lumina_core::DenoisePolicy::Warn,
     });
     app.preview_ctrl = Some(ctrl);
     let _ = crate::timing::take_neighbor_failure_warns();

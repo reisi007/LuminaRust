@@ -268,6 +268,14 @@ fn gpu_action_routing_audit_metal() {
         // verdict* is identical (see `gpu_routing_fallback_badge`).
         app.path = source_path.display().to_string();
         app.presets_dir = Some(presets.clone());
+        // R3-ROUTING-1: drive every action from the documented neutral display
+        // state. `ToggleCropMode` (index 2) would otherwise leave the crop tool
+        // armed for all later iterations; an armed crop tool previews the
+        // geometry-free full frame by design, so the committed crop's
+        // dimension-changing CPU route (`SetCropAspect`/`RotateStep` exception)
+        // would no longer be exercised. Reset per iteration keeps the audit's
+        // per-action routing claim exact.
+        app.crop_mode = false;
 
         let start = Instant::now();
         drive_action(

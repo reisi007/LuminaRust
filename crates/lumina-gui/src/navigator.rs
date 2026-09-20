@@ -10,7 +10,8 @@
 //! are `pub(crate)`.
 
 use super::*;
-use log::trace;
+use log::{trace, warn};
+use lumina_core::{render_frame_with_denoise, DenoiseStageInput, DenoiseStageStatus};
 
 impl LuminaApp {
     /// Full-frame overview for the navigator (GUI-NAV-RECT-1): the viewport
@@ -33,7 +34,17 @@ impl LuminaApp {
     /// downscaled source — exactly like the draft path). Returns the cached
     /// frame when source + recipe are unchanged, re-renders otherwise. `None`
     /// without a loaded source.
-    fn navigator_zoomed_overview(&mut self) -> Option<ImageFrame> {
+    ///
+    /// R3-DENOISE-1 (B4): the render uses the **session denoise policy** like
+    /// the active preview / neighbor worker ([`Self::denoise_policy`]). The
+    /// former `render_frame` default (`Strict`) hard-failed for any active
+    /// `denoise_ai` while the session policy was `Warn`, and the `.ok()?`
+    /// swallowed it into a silent "not current" navigator — a silent path split.
+    /// The downscaled stand-in cannot blend the full-frame artifact, so the
+    /// stage is resolved as non-ready; `Warn` falls back visibly, `Strict`
+    /// aborts. A genuine failure is logged once per (source, recipe) key and
+    /// remembered so it cannot spam per frame.
+    pub(crate) fn navigator_zoomed_overview(&mut self) -> Option<ImageFrame> {
         let (width, height) = self
             .navigator_frame()
             .map(|frame| (frame.width, frame.height))?;
@@ -62,7 +73,23 @@ impl LuminaApp {
             lensfun: nav_lensfun,
             depth: None,
         };
-        let frame = render_frame(&small, &context).map(|o| o.frame).ok()?;
+        let denoise = DenoiseStageInput::non_ready(
+            DenoiseStageStatus::Unavailable,
+            "navigator overview stand-in: the full-frame denoise artifact is \
+             applied only to the active full-resolution render",
+        )
+        .with_policy(self.denoise_policy());
+        let frame = match render_frame_with_denoise(&small, &context, &denoise) {
+            Ok(output) => output.frame,
+            Err(error) => {
+                warn!("navigator overview render failed: {error}");
+                // Remember the failure under this key so a persistent error
+                // (e.g. an explicit `Strict` policy) logs once, not per frame.
+                self.navigator_overview = None;
+                self.navigator_overview_key = Some(key);
+                return None;
+            }
+        };
         self.navigator_overview = Some(frame.clone());
         self.navigator_overview_key = Some(key);
         Some(frame)

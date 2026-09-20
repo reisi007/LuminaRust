@@ -702,7 +702,12 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     (2026-09-20) ist die Oberfläche auf **102** Aktionen gewachsen:
     `set_library_sort` ist display-only (Sortier-/Anzeigezustand, kein
     Render-Key, keine Bildstufe) und daher keine CPU-Ausnahme — der
-    Metal-Lauf über 101 Render-Aktionen bleibt unberührt.
+    Metal-Lauf über 101 Render-Aktionen bleibt unberührt. **R3-ROUTING-1
+    (2026-09-20):** Der Audit fährt jede Aktion aus dem dokumentierten neutralen
+    Anzeigezustand (`crop_mode = false`); ein armiertes Crop-Tool zeigt per
+    Design den geometriefreien Vollbild-Display-Recipe (`crop_mode_display_recipe`)
+    und würde die per-Aktion-Aussage verwischen. Ergebnis unverändert: 102
+    Aktionen, 10 dokumentierte CPU-Ausnahmen.
   - **Dokumentierte CPU-Ausnahmen (explizite Liste, alle laut sichtbar per
     Badge):**
 
@@ -2006,35 +2011,102 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   nach App-Start im Hintergrund (Worker/Idle), damit der erste Library-
   Wechsel kein 2.9-s-Loch mehr hat. Sichtbarer Fortschritt statt Stillstand,
   kein stiller Zustand.
-- **R3-DENOISE-2 (offen, 2026-09-19):** Gelbes Badge „Render routed to CPU …
+- **R3-DENOISE-2 (BEHOBEN 2026-09-20):** Gelbes Badge „Render routed to CPU …
   [denoise_ai (not GPU-wired)]" ist per Design laut (Gewichte weiter pending),
-  hat aber KEINE Log-Zeile: Badge stammt aus dem Rezept-Gate
-  (`gpu_unsupported_stage_reasons`), nur Present-Refusals loggen. Lücke für
-  R3-LOG-1: Gate-Routing braucht 1× `warn!` beim Auftreten.
+  hatte aber KEINE Log-Zeile: Badge stammt aus dem Rezept-Gate
+  (`gpu_unsupported_stage_reasons`), nur Present-Refusals loggten. Fix: der
+  `warn!` (`gpu present refused by recipe gate, keeping CPU route: …`) lebt in
+  `refresh_gpu_stage_gate`, wenn ein neuer keyed Verdict mit nicht-leeren
+  Gründen entsteht, und vergleicht den neuen Grund-Satz mit dem **vorherigen**
+  Verdict im `gpu_stage_gate`-Memo — kein zusätzliches Zustandsfeld. Ein
+  Slider-Drag (neuer Render-Key pro Tick, gleicher Verdict) warnt damit genau
+  einmal; ein geänderter Grund-Satz warnt erneut, ein leerer Verdict re-armiert
+  den nächsten Auftritt. Test:
+  `gate_route_warns_once_per_reason_set` (Dedup über den Grund-Satz **bei
+  Render-Key-Wechsel**: eine Nicht-Stage-Änderung wie Exposure erzeugt einen
+  neuen Key bei gleichem Verdict → kein Re-Warn; ein geänderter Grund-Satz →
+  Warn; adapterunabhängig) und `gate_route_is_logged_once_through_update_texture`
+  (echter Badge-Pfad, Metal, 1× über drei Frames).
 - **R3-DRAFT-1 (offen, gemessen):** 87 Drag-Ticks, alle zu langsam: ~55–60 ms/
   Frame ohne Crop (cpu-Median 26.27 ms + gpu-Median 25.70 ms), ~70–90 ms mit
   aktivem Crop (cpu-Median 35.53 ms, +35 %). F1-Drossel feuerte 0× (Events
   langsamer als 16-ms-Budget — jeder Tick rendert voll), Monster-Top: 42.90 ms
   CPU-Draft. F4-Kadenz wirkt (52× gedrosselt, Analyse-Median 0.95 ms — Analyse
   ist nicht das Problem). Basis-Cache gesund (95× HIT / 3× MISS).
-- **R3-ROUTING-1 (offen, gemessen):** Mit aktivem Crop (dimension-changing)
-  fällt JEDER Kurven-Tick auf CPU zurück (38 Ticks ↔ 38× `render_to_vram
+- **R3-ROUTING-1 (BEHOBEN 2026-09-20):** Mit aktivem Crop (dimension-changing)
+  fiel JEDER Kurven-Tick auf CPU zurück (38 Ticks ↔ 38× `render_to_vram
   failed`-Warnung, gpu bis 47.37 ms vergeudet) + gelbes „Render routed to
-  CPU"-Badge. Das verletzt die GPU-Default-Regel (User-Entscheid: „routed to
-  CPU" = Fail mit Fix-Pflicht) — VRAM-Geometrie-Pfad oder Draft-ROI ohne Crop
-  fehlt. Sofortmaßnahme unabhängig davon: Pro-Tick-`warn!` bei bekanntem
-  persistentem Refusal drosseln (1× beim Wechsel + `trace!` pro Tick, Vorbild
-  Generative-Pfad) — 38 identische Warnungen pro Session sind Log-Spam.
+  CPU"-Badge — ein Verstoß gegen die GPU-Default-Regel („routed to CPU" = Fail
+  mit Fix-Pflicht). Root Cause: bei armiertem Crop-Tool rendert die CPU-Vorschau
+  den **geometriefreien Vollbild-Display-Recipe**
+  (`crop_mode_display_recipe`, UX-LOOK-CROP-18b), der GPU-Present-Pfad evaluierte
+  aber weiter den echten Recipe mit dem committeten Crop → dimension-changing →
+  Refusal pro Tick. Fix (kleinere, testbare Variante „Draft-ROI ohne Crop"):
+  `gpu_present_recipe()` liefert bei `crop_mode` genau den geometriefreien
+  Display-Recipe an alle drei `render_to_vram`-Aufrufer (Draft-Tick,
+  Prime-, Readback-Parität), sonst den echten Recipe ohne Clone. Die
+  Routing-Entscheidung ist per `trace!` sichtbar
+  (`GUI routing: gpu present recipe=crop-display (geometry removed)`), kein
+  stiller Fallback. Verbleibende, dokumentierte CPU-Route: ein committeter Crop
+  **außerhalb** des Crop-Tools (dimension-changing, Badge
+  `geometry (dimension-changing output)`) bleibt unverändert laut. Tests:
+  `crop_mode_gpu_present_recipe_drops_geometry` (Rezept-Wahl, adapterunabhängig)
+  und `crop_mode_draft_tick_presents_gpu_without_badge` (echter Draft-Tick,
+  Metal: `vram_fresh` + kein Badge + 0 Refusal-Warns; Mutationsbeweis: ohne Fix
+  fällt der Tick wieder auf CPU). Der GPU-Audit
+  (`gpu_action_routing_audit_metal`) setzt `crop_mode` je Aktion auf den
+  dokumentierten neutralen Zustand zurück (der Zustand leckte vorher aus der
+  `toggle_crop_mode`-Iteration), damit die 10 dokumentierten CPU-Ausnahmen
+  (inkl. `set_crop_aspect`/`rotate_step`) weiter exakt gepinnt sind.
+  **Rework 2026-09-20 (B1, Regression):** Das Gate bewertete weiter
+  `&self.recipe`, während `render_to_vram` den Present-Recipe sah. Kombination
+  *Crop-Tool armiert + Lens-/Perspective-Korrektur + committeter Crop*:
+  Gate(echt)=`[]` → Badge leer, der geometriefreie Display-Recipe aktiviert
+  `default_content_crop_active` → `render_to_vram` weist mit generischem
+  Unsupported-Text ab, den `classify_vram_refusal` nicht kennt → Pro-Tick
+  `warn!` + `vram_render_refusal=None` (stiller CPU-Route). Fix (beide
+  Quellen gleichgezogen): `gpu_unsupported_reasons()` bewertet jetzt
+  `gpu_present_recipe()` (wie `render_to_vram`), und `render_draft_tick` prüft
+  das Gate **vor** dem GPU-Versuch und überspringt ihn (`note_vram_refusal` mit
+  dem präzisen Gate-Grund) — 1× `warn!` + `trace!`/Tick, Badge gesetzt, keine
+  vergeudete GPU-Zeit. Headless/Metal-Test
+  `crop_mode_lens_default_content_crop_is_loud_not_silent` (Gate nennt
+  `geometry (default content crop)`; 3 Ticks → genau 1 Refusal-Warn + 1
+  Gate-Warn, Badge gesetzt; Mutationsbeweise: Gate-Mutation und
+  Skip-Mutation jeder rot).
 - **R3-RENDER-SIZE-1 (offen, User-Frage 2026-09-19):** Weder Draft noch Full
   rendern auf Anzeigegröße — Draft feste 1280-px-Kante (`lib.rs:2899`),
   Full volle Quell-Auflösung (24 MP ≈ 96 MB RGBA, `render_entry.rs:24-84`).
   Anzeigegröße wäre sinnvoll (Vorschlag: Full/Draft auf Viewport-Auflösung +
   Device-Pixel-Ratio begrenzen, Full-Res nur für Export/1:1-Loupe).
-- **R3-DENOISE-1 (bekannt, verstärkt):** `pending-integration`-Fallback (1×,
-  funktioniert, Portrait ok) vs. harter Neighbor-Fail (Landscape, doppelt
-  geloggt = ein Ereignis auf zwei Ebenen) im selben Run — Fallback- und
-  Fail-Pfad sind je nach Bild/Pfad inkonsistent. Doppel-`warn!` zusammenführen
-  (1 Zeile/Ereignis).
+- **R3-DENOISE-1 (BEHOBEN 2026-09-20):** Der `pending-integration`-Fallback
+  der aktiven Vorschau arbeitete sichtbar (Warn), während ein Nachbar-Preview
+  (Landscape) hart fehlschlug — die Fallback-/Fail-Semantik hing am Pfad statt
+  am Rezept. Root Cause: `worker_preview` renderte über `render_frame`, dessen
+  Default `DenoiseStageInput::inactive()` die Policy **Strict** trägt; jede
+  Nachbar-Datei mit aktivem, nicht-bereitem `denoise_ai` wurde damit zum
+  sichtbaren Fehler-Cell, während die aktive Vorschau (Policy `Warn`) fiel.
+  Fix: `PreviewJob` trägt die Session-Policy (`denoise_policy`, aus
+  `LuminaApp::denoise_policy()` beim Planen); der Worker rendert über
+  `render_frame_with_denoise` mit einer ehrlichen `Unavailable`-Stage
+  (downscaled Stand-in kann das vollauflösende `denoise_rgb`-Artefakt nicht
+  blenden) und derselben Policy — `Warn` fällt sichtbar zurück, `Strict`
+  bricht laut ab, exakt wie die aktive Vorschau. Der Doppel-`warn!` des
+  Nachbar-Fehlers war bereits mit R3-LOG-1 auf 1 Zeile/Ereignis zusammengeführt.
+  Test: `neighbor_denoise_stage_follows_the_app_policy` (Warn → Ok, Strict →
+  lauter Abbruch; Mutationsbeweis: erzwingt man Strict, schlägt der Warn-Zweig
+  fehl). Für den File-Size-Ratchet sind Fensterplanung + Worker-Render nach
+  `preview_jobs.rs` extrahiert (Test in `tests/r3_fixes.rs`).
+  **Rework 2026-09-20 (B4):** Derselbe Pfad-Split bestand im **Navigator**:
+  `navigator_zoomed_overview` renderte `render_frame` (Strict-Default) und
+  verschluckte den Fehler via `.ok()?` → bei aktiver `denoise_ai` (Session
+  `Warn`) verschwand der Navigator still. Fix: der Overview rendert über
+  `render_frame_with_denoise` mit der Session-Policy (gleiche ehrliche
+  `Unavailable`-Stand-in-Stage); ein echter Fehler wird `warn!`-laut geloggt
+  und unter dem `(Quelle, Rezept)`-Key gemerkt, damit er nicht pro Frame
+  spammt. Test: `navigator_overview_follows_the_session_denoise_policy`
+  (Warn → Frame, Strict → None + gemerkt; Mutationsbeweis: Revert auf
+  `render_frame(...).ok()?` rot).
 - **R3-LOG-1 (BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Delta-Traces für
   Switch-Event + First-Paint, Decode (ms + Auflösung), PreviewIndex-Build,
   Thumbnail-Roundtrip, Full-Render (ms + Dims), Upload/Skip (Bytes),

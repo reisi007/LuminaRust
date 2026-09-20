@@ -19,13 +19,9 @@
 //! boundary documented in `feature/platform/capability-matrix.md`).
 
 #[cfg(test)]
-use lumina_core::preview_cache::decode_webp;
-use lumina_core::preview_cache::{
-    encode_webp_lossless, prefetch_window, LruPreviewCache, PreviewDiskCache, PreviewKey,
-    PreviewKind,
-};
-use lumina_core::{render_frame, ImageFrame, RenderContext};
-use lumina_sidecar::EditRecipe;
+use lumina_core::preview_cache::{decode_webp, encode_webp_lossless};
+use lumina_core::preview_cache::{prefetch_window, LruPreviewCache, PreviewDiskCache, PreviewKind};
+use lumina_core::{DenoisePolicy, ImageFrame};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -41,7 +37,7 @@ pub const PREVIEW_MAX_ATTEMPTS: u32 = 3;
 /// The field set is deliberately lightweight so the main thread enqueues jobs
 /// without any file I/O: `probe_id` is a stable source identity (canonical path)
 /// used for dedup/in-flight tracking; the **worker** computes the authoritative
-/// [`PreviewKey`] + digest by reading the source, so a changed source/render is
+/// `PreviewKey` + digest by reading the source, so a changed source/render is
 /// reflected in a new digest (stale detection) without a main-thread read.
 pub struct PreviewJob {
     /// Stable source identity (canonical absolute path). Never a bare filename.
@@ -54,6 +50,11 @@ pub struct PreviewJob {
     pub kind: PreviewKind,
     /// Priority rank for the worker pool (0 = highest).
     pub priority: u8,
+    /// R3-DENOISE-1: the app's denoise fallback policy, propagated from the
+    /// active preview so the worker falls back (`Warn`) or aborts (`Strict`)
+    /// identically for an active `denoise_ai` stage — never one path silently
+    /// failing where the other falls back.
+    pub denoise_policy: DenoisePolicy,
 }
 
 /// Cheap staleness fingerprint of a source + its sidecar, captured by the
@@ -74,7 +75,8 @@ pub struct PreviewStamp {
 /// source — byte length). A missing/unreadable file yields the default stamp,
 /// which never equals a previously recorded live stamp, so the entry staleness
 /// check re-renders instead of serving a frame of a vanished source.
-fn file_stamp(path: &std::path::Path, with_len: bool) -> ((i64, u32), u64) {
+/// `pub(crate)`: the background worker (`preview_jobs`) captures the same stamp.
+pub(crate) fn file_stamp(path: &std::path::Path, with_len: bool) -> ((i64, u32), u64) {
     let Ok(meta) = std::fs::metadata(path) else {
         return ((-1, 0), 0);
     };
@@ -104,135 +106,6 @@ pub struct PreviewResult {
     /// Cheap source/sidecar fingerprint at prepare time (A3 staleness gate).
     pub stamp: PreviewStamp,
     pub outcome: PreviewOutcome,
-}
-
-/// Decode + render + downscale + WebP-encode a neighbor on the background
-/// worker. Returns the decoded frame so the UI thread can use it immediately,
-/// and stores the encoded WebP to the source's own `.lumina/previews` tier.
-fn worker_preview(job: PreviewJob) -> Result<PreviewResult, String> {
-    let bytes = std::fs::read(&job.source).map_err(|e| format!("{}: {e}", job.source.display()))?;
-    let decoded = if crate::is_raw_name(&job.name) {
-        lumina_raw::decode_bytes(&bytes, &job.name)
-            .map_err(|e| e.to_string())?
-            .frame
-    } else {
-        ImageFrame::decode(&bytes).map_err(|e| e.to_string())?
-    };
-
-    // Build the render input: 1:1 previews keep the full decoded frame (no
-    // downscaling), Screen previews are reduced to the target long edge.
-    let frame = if job.kind == PreviewKind::OneToOne {
-        decoded
-    } else {
-        downscale_to_target(&decoded, job.target)
-    };
-
-    // Render with the neighbor's own recipe (its sidecar, if any): the worker
-    // — not the UI thread — reads the sidecar, keeping the main thread free of
-    // per-neighbor file I/O on navigation.
-    //
-    // B7: a render failure must never be silently replaced by the un-rendered
-    // base frame — that would show a wrong (recipe-less) neighbor preview with
-    // no visible indication. Any error propagates up as a `Failed` outcome so
-    // the cell keeps a visible error state (no silent fallback, Agents.md).
-    let recipe = load_neighbor_recipe(&job.source, &job.virtual_copy);
-    let context = RenderContext {
-        recipe: &recipe,
-        camera_white_balance: None,
-        source_actions: &[],
-        masks: None,
-        lensfun: None,
-        depth: None,
-    };
-    let rendered = render_frame(&frame, &context)
-        .map(|o| o.frame)
-        .map_err(|e| format!("render {}: {e}", job.name))?;
-
-    // Build the authoritative key from the source content hash + recipe.
-    let content_hash = blake3::hash(&bytes).to_hex().to_string();
-    let key = PreviewKey {
-        source_content_hash: content_hash,
-        decode_context: "decode-v1".to_owned(),
-        pipeline_version: env!("CARGO_PKG_VERSION").to_owned(),
-        virtual_copy_id: job.virtual_copy.clone(),
-        render_key: render_key_of(&recipe, (rendered.width, rendered.height)),
-        kind: job.kind,
-        width: rendered.width,
-        height: rendered.height,
-        encode: Default::default(),
-    };
-    let digest = key.digest();
-
-    let webp = encode_webp_lossless(&rendered).map_err(|e| e.to_string())?;
-    // Disk tier is rooted at the *source's own* folder (`.lumina/previews`),
-    // like `DiskFolderCache` — a whole sidecar bundle moves together. The write
-    // happens on the worker, never the UI thread.
-    if let Some(folder) = job.source.parent() {
-        if let Ok(disk) = PreviewDiskCache::in_folder(folder) {
-            if let Err(e) = disk.store(&digest, &webp) {
-                // Disk write failure is only diagnosed, not fatal — the RAM LRU
-                // still serves the hit this session.
-                log::warn!("preview disk store failed for {}: {e}", job.name);
-            }
-        }
-    }
-
-    // A3: cheap source+sidecar fingerprint at prepare time — the UI-side
-    // staleness gate on later navigation (an mtime/len change → re-render).
-    let (src_mtime, src_len) = file_stamp(&job.source, true);
-    let (side_mtime, _) = file_stamp(&lumina_sidecar::sidecar_path_for(&job.source), false);
-    Ok(PreviewResult {
-        digest,
-        probe_id: job.probe_id.clone(),
-        name: job.name,
-        stamp: PreviewStamp {
-            source_mtime: src_mtime,
-            source_len: src_len,
-            sidecar_mtime: side_mtime,
-        },
-        outcome: PreviewOutcome::Ready(rendered),
-    })
-}
-
-/// Downscale `frame` so it fits the target long edge (returns unchanged when
-/// already within).
-fn downscale_to_target(frame: &ImageFrame, target: (u32, u32)) -> ImageFrame {
-    let long = frame.width.max(frame.height);
-    let max_edge = target.0.max(target.1);
-    if max_edge == 0 || long <= max_edge {
-        return frame.clone();
-    }
-    frame.downscale(max_edge)
-}
-
-/// Deterministic render digest for the neighbor recipe (content + target). Used
-/// as the render-key component of the [`PreviewKey`]; a recipe change therefore
-/// produces a new key → the cached entry is stale.
-fn render_key_of(recipe: &EditRecipe, target: (u32, u32)) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"preview-render");
-    hasher.update(&target.0.to_le_bytes());
-    hasher.update(&target.1.to_le_bytes());
-    if let Ok(bytes) = serde_json::to_vec(recipe) {
-        hasher.update(&bytes);
-    }
-    hasher.finalize().to_hex().to_string()
-}
-
-/// Load the recipe of a neighbor's virtual copy from its sidecar (worker side).
-/// A missing sidecar or virtual copy yields the default recipe — the neighbor
-/// preview then reflects the develop state exactly like a fresh source.
-fn load_neighbor_recipe(source: &std::path::Path, virtual_copy: &str) -> EditRecipe {
-    let sidecar = lumina_sidecar::sidecar_path_for(source);
-    match lumina_sidecar::load_sidecar(&sidecar) {
-        Ok(document) => document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == virtual_copy)
-            .map(|copy| copy.recipe.clone())
-            .unwrap_or_default(),
-        Err(_) => EditRecipe::default(),
-    }
 }
 
 /// Shared priority-ordered job queue backed by a condvar so workers block when
@@ -347,7 +220,7 @@ impl PreviewController {
                 let job = queue.pop();
                 log::trace!("preview worker {i}: preparing {}", job.name);
                 let probe = job.probe_id.clone();
-                let result = match worker_preview(job) {
+                let result = match crate::preview_jobs::worker_preview(job) {
                     Ok(result) => result,
                     Err(message) => PreviewResult {
                         digest: String::new(),
@@ -665,6 +538,7 @@ pub fn plan_window_jobs(
     active: usize,
     target: (u32, u32),
     kind: PreviewKind,
+    denoise_policy: DenoisePolicy,
 ) -> Vec<PreviewJob> {
     let window = prefetch_window(active, probe_ids.len());
     window
@@ -677,6 +551,7 @@ pub fn plan_window_jobs(
             target,
             kind,
             priority: slot.priority,
+            denoise_policy,
         })
         .collect()
 }
@@ -718,6 +593,7 @@ mod tests {
             3,
             (800, 600),
             PreviewKind::Screen,
+            DenoisePolicy::Warn,
         );
         let priorities: Vec<u8> = jobs.iter().map(|j| j.priority).collect();
         assert_eq!(priorities, vec![0, 1, 2, 3, 4, 5]);
@@ -735,6 +611,7 @@ mod tests {
             0,
             (800, 600),
             PreviewKind::Screen,
+            DenoisePolicy::Warn,
         );
         assert_eq!(jobs.len(), 4);
     }
@@ -834,6 +711,7 @@ mod tests {
             target: (64, 64),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         }));
         assert!(
             !ctrl.needs_job("probe-0"),
@@ -887,6 +765,7 @@ mod tests {
             target: (8, 8),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         });
 
         // Wait (bounded) for the worker result to land in the RAM LRU.
@@ -1048,6 +927,7 @@ mod tests {
             target: (8, 8),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while ctrl.lru().is_empty() && Instant::now() < deadline {
@@ -1100,6 +980,7 @@ mod tests {
             target: (8, 8),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while ctrl.lru().is_empty() && Instant::now() < deadline {
@@ -1137,6 +1018,7 @@ mod tests {
             target: (8, 8),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         });
         let deadline2 = Instant::now() + Duration::from_secs(10);
         while ctrl.probe_state("stale") != PreviewProbeState::Ready && Instant::now() < deadline2 {
@@ -1184,7 +1066,15 @@ mod tests {
             let probe = (0..40).map(|i| format!("probe-{i}")).collect::<Vec<_>>();
             let sources: Vec<PathBuf> = (0..40).map(|i| PathBuf::from(format!("p{i}"))).collect();
             let names: Vec<String> = (0..40).map(|i| format!("p{i}.png")).collect();
-            plan_window_jobs(&probe, &sources, &names, 0, (800, 600), PreviewKind::Screen)
+            plan_window_jobs(
+                &probe,
+                &sources,
+                &names,
+                0,
+                (800, 600),
+                PreviewKind::Screen,
+                DenoisePolicy::Warn,
+            )
         };
         assert_eq!(
             jobs.len(),
@@ -1210,6 +1100,7 @@ mod tests {
                 39,
                 (800, 600),
                 PreviewKind::Screen,
+                DenoisePolicy::Warn,
             )
         };
         assert_eq!(jobs_end.len(), 2);
@@ -1238,6 +1129,7 @@ mod tests {
                 10,
                 (800, 600),
                 PreviewKind::Screen,
+                DenoisePolicy::Warn,
             )
         };
         assert_eq!(jobs_mid.len(), 6);
@@ -1265,6 +1157,7 @@ mod tests {
                     active,
                     (64, 64),
                     PreviewKind::Screen,
+                    DenoisePolicy::Warn,
                 )
             };
             assert_eq!(jobs.len(), expected_len, "active={active} count={count}");
@@ -1338,6 +1231,7 @@ mod tests {
                 target: (64, 64),
                 kind: PreviewKind::Screen,
                 priority: prio,
+                denoise_policy: DenoisePolicy::Warn,
             });
         }
         let mut popped = Vec::new();
@@ -1361,6 +1255,7 @@ mod tests {
                 target: (32, 32),
                 kind: PreviewKind::Screen,
                 priority: (prio % 6) as u8,
+                denoise_policy: DenoisePolicy::Warn,
             });
         }
         let mut last = 0u8;
@@ -1441,6 +1336,7 @@ mod tests {
             target: (8, 8),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while ctrl.probe_state("kind") != PreviewProbeState::Ready && Instant::now() < deadline {
@@ -1478,6 +1374,7 @@ mod tests {
             target: (0, 0),
             kind: PreviewKind::OneToOne,
             priority: 0,
+            denoise_policy: DenoisePolicy::Warn,
         });
         let deadline2 = Instant::now() + Duration::from_secs(10);
         while ctrl.probe_state("kind") != PreviewProbeState::Ready && Instant::now() < deadline2 {

@@ -278,6 +278,24 @@ pub(crate) fn take_vram_refusal_warns() -> u32 {
     VRAM_REFUSAL_WARNS.with(|warns| warns.replace(0))
 }
 
+#[cfg(all(test, feature = "gpu"))]
+thread_local! {
+    static GPU_GATE_ROUTE_WARNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// R3-DENOISE-2: count one recipe-gate CPU-route `warn!` (the deduped line in
+/// `refresh_gpu_stage_gate`). Test-only, so the call site stays a single line.
+#[cfg(all(test, feature = "gpu"))]
+pub(crate) fn note_gpu_gate_route_warn() {
+    GPU_GATE_ROUTE_WARNS.with(|warns| warns.set(warns.get() + 1));
+}
+
+/// Drains the test-only recipe-gate CPU-route warn count.
+#[cfg(all(test, feature = "gpu"))]
+pub(crate) fn take_gpu_gate_route_warns() -> u32 {
+    GPU_GATE_ROUTE_WARNS.with(|warns| warns.replace(0))
+}
+
 #[cfg(feature = "gpu")]
 impl LuminaApp {
     /// R3-ROUTING-1: record a *known* VRAM present refusal. Returns `true`

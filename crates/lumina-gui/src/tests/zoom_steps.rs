@@ -59,6 +59,7 @@ fn neighbor_preview_badges_for_loading_stale_failed() {
             target: (64, 64),
             kind: PreviewKind::Screen,
             priority: 0,
+            denoise_policy: lumina_core::DenoisePolicy::Warn,
         }
     }
 

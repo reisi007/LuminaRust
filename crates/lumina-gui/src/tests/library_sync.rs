@@ -90,6 +90,7 @@ fn ready_probe_shows_no_cell_badge() {
         target: (64, 64),
         kind: PreviewKind::Screen,
         priority: 0,
+        denoise_policy: lumina_core::DenoisePolicy::Warn,
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     while ctrl.probe_state("neighbor-probe") != preview_ctrl::PreviewProbeState::Ready

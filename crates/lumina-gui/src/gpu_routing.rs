@@ -130,7 +130,7 @@ impl LuminaApp {
         let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
             return Ok(None);
         };
-        gpu.render_to_vram(source, &self.recipe)
+        gpu.render_to_vram(source, self.gpu_present_recipe().as_ref())
             .map_err(|error| GuiError::Io(format!("gpu parity readback: {error}")))?;
         let frame = gpu
             .readback_output_frame()
@@ -178,10 +178,11 @@ impl LuminaApp {
             let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
                 return false;
             };
+            let recipe = self.gpu_present_recipe();
             self.gpu
                 .as_ref()
                 .expect("availability checked above")
-                .render_to_vram(source, &self.recipe)
+                .render_to_vram(source, recipe.as_ref())
         };
         match rendered {
             Ok(()) => {
@@ -281,6 +282,24 @@ impl LuminaApp {
             return false;
         };
         let reasons = self.gpu_unsupported_reasons();
+        // R3-DENOISE-2: the recipe-gate CPU route needs a log line, not only the
+        // post-gate present refusals. The verdict memo holds the *previous*
+        // key's reason set, so comparing against it emits exactly one `warn!`
+        // per distinct reason set: a slider drag (new render key per tick, same
+        // gate verdict) warns once, a changed set warns again, and an empty
+        // verdict re-arms the next occurrence. Never a silent CPU route.
+        let unchanged = self
+            .gpu_stage_gate
+            .as_ref()
+            .is_some_and(|(_, previous)| previous == &reasons);
+        if !reasons.is_empty() && !unchanged {
+            warn!(
+                "gpu present refused by recipe gate, keeping CPU route: {}",
+                reasons.join("; ")
+            );
+            #[cfg(test)]
+            crate::timing::note_gpu_gate_route_warn();
+        }
         self.gpu_stage_gate = Some(((key, wb), reasons));
         true
     }
@@ -288,6 +307,13 @@ impl LuminaApp {
     /// GUI-LENSFUN-GATE-1: the GPU routing reason list for the current
     /// recipe/context, mirroring the CLI `gpu_routing_reasons`. Split out so
     /// the list is directly testable without a bound GPU adapter.
+    ///
+    /// R3-ROUTING-1 (B1): the gate must evaluate the **same recipe the VRAM
+    /// present path actually renders** ([`Self::gpu_present_recipe`]) — while
+    /// the crop tool is armed that is the geometry-free display recipe. Judging
+    /// the committed recipe instead left the crop-tool + lens/perspective +
+    /// committed-crop combination with an empty badge while `render_to_vram`
+    /// refused the display recipe's `default content crop` (silent CPU route).
     ///
     /// GPU-LENSFUN-PARITY-1: a non-identity Lensfun corrector is **no longer** a
     /// reason here. The present path binds its `LensfunMap` on the GPU
@@ -298,11 +324,35 @@ impl LuminaApp {
     /// [`Self::classify_vram_refusal`].
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_unsupported_reasons(&self) -> Vec<String> {
+        let recipe = self.gpu_present_recipe();
         lumina_gpu::unsupported_gpu_stages_with_context(
-            &self.recipe,
+            recipe.as_ref(),
             false,
             self.camera_white_balance.as_ref(),
         )
+    }
+
+    /// R3-ROUTING-1: the recipe the readback-free VRAM present path must
+    /// evaluate for the frame currently displayed.
+    ///
+    /// While the interactive crop tool is armed the preview shows the
+    /// geometry-free full frame ([`Self::crop_mode_display_recipe`]); the GPU
+    /// must evaluate **exactly** that recipe. With the committed crop still in
+    /// the recipe, `render_to_vram` refuses the dimension-changing output on
+    /// every tick and the display silently splits between the CPU render
+    /// (geometry-free) and a badge-less/refused GPU row (the R3-ROUTING-1
+    /// finding: 38 refusals, GPU time wasted). The normal path borrows the real
+    /// recipe without a clone; the routing decision is trace-visible (R3-LOG-1).
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_present_recipe(&self) -> std::borrow::Cow<'_, EditRecipe> {
+        if self.crop_mode {
+            crate::timing::emit(|| {
+                "GUI routing: gpu present recipe=crop-display (geometry removed)".to_string()
+            });
+            std::borrow::Cow::Owned(self.crop_mode_display_recipe())
+        } else {
+            std::borrow::Cow::Borrowed(&self.recipe)
+        }
     }
 
     /// R2-GUIMOD-06: classify *why* the GPU present path was not taken this
@@ -329,8 +379,7 @@ impl LuminaApp {
     /// pixels are unchanged — this is observability only.
     #[cfg(feature = "gpu")]
     pub(crate) fn routing_fallback_reason(&mut self) -> Option<String> {
-        let gpu = self.gpu.as_ref()?;
-        if !gpu.is_available() {
+        if !self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
             return None;
         }
         let reasons = self.gpu_unsupported_stage_reasons();

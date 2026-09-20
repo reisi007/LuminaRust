@@ -197,6 +197,19 @@ impl LuminaApp {
                     // known refusal for the badge; the CPU artifact-aware
                     // render below is the authoritative preview.
                     self.note_vram_refusal(Self::GENERATIVE_VRAM_REFUSAL_REASON);
+                } else if self.recipe_has_unsupported_gpu_stages() {
+                    // R3-ROUTING-1 (B1): the gate now evaluates the recipe the
+                    // VRAM present path actually renders (`gpu_present_recipe`).
+                    // A gate-unsupported present recipe (e.g. the crop tool's
+                    // geometry-free display recipe with a lens/perspective
+                    // correction and no explicit crop → `default content crop`)
+                    // would make `render_to_vram` refuse with the generic
+                    // unsupported-stage text, which the refusal classifier
+                    // cannot name — the GUI then warned per tick with no badge.
+                    // Record the precise gate reason and skip the doomed attempt:
+                    // 1× warn + `trace!`/tick, badge set, no wasted GPU time.
+                    let reason = self.gpu_unsupported_stage_reasons().join("; ");
+                    self.note_vram_refusal(&reason);
                 } else if let Some((width, height)) = self
                     .draft_original
                     .as_ref()
@@ -217,7 +230,13 @@ impl LuminaApp {
                         // full-resolution original (~180 MB worst case) into
                         // a temporary that was dropped immediately after the
                         // call — `render_to_vram` only needs `&ImageFrame`.
-                        let rendered =
+                        let rendered = {
+                            // R3-ROUTING-1: while the crop tool is armed the
+                            // preview is the geometry-free full frame; render
+                            // exactly that recipe on the GPU instead of letting
+                            // the committed crop's dimension change refuse every
+                            // tick.
+                            let recipe = self.gpu_present_recipe();
                             self.draft_original
                                 .as_ref()
                                 .or(self.original.as_ref())
@@ -225,8 +244,9 @@ impl LuminaApp {
                                     self.gpu
                                         .as_ref()
                                         .expect("availability checked above")
-                                        .render_to_vram(src, &self.recipe)
-                                });
+                                        .render_to_vram(src, recipe.as_ref())
+                                })
+                        };
                         match rendered {
                             Some(Ok(())) => {
                                 // GUI-WGPU-PRESENT-1: the VRAM output now
