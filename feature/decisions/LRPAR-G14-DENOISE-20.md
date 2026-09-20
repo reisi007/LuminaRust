@@ -151,6 +151,39 @@ Gültigkeit verlangt Übereinstimmung von Quell-Hash, Decode-/Geometrie-Kontext,
 > aktives `denoise_ai` wird als `denoise_ai (not GPU-wired)` auf die CPU
 > geroutet und bricht dort laut ab (§6, kein stiller Fallback).
 
+### 6.1 Sample-Sidecar-Zustand (R5-DENOISEFIX-22, 2026-09-20)
+
+**Befund:** Das Sample-Sidecar `sample-data/raw/aircraft-landscape.cr3.lumina.json`
+trug ein **aktives** `denoise_ai` (`enabled: true`) mit
+`model_hash = "pending-integration"` — sowohl im aktiven Rezept als auch im
+`history`-Snapshot. Nach §3.1/§6 ist das der sichtbare `unavailable`-Fall:
+Der Recipe-Gate routet `denoise_ai (not GPU-wired)` auf die CPU (GUI-Badge),
+der Full-Res-Pfad bricht unter der Default-`Strict`-Policy laut ab. Der
+manuelle Akzeptanz-Run F-103-N6 Runde 6 belegte das mit 5× ERROR
+`no denoise artifact resolved` + 5× Recipe-Gate-Warn.
+
+**Fix (fixture-/zustandsseitig, kein Code):** `enabled` wurde im **aktiven
+Rezept und im `history`-Snapshot** auf `false` gesetzt. Beide Stellen müssen
+übereinstimmen, weil ein History-Revert den Render byte-identisch
+reproduzieren soll (`history_recipe_snapshot_reproduces_the_original_render`).
+`enabled: false` ist per `DenoiseAi::is_identity()` reine Identität — kein
+Modell, kein Artefakt, kein Fehler; `lumina-gpu::unsupported_gpu_stages_with_context`
+listet die Stufe dann nicht mehr als CPU-Routen-Grund. Der G-1-WGSL-Pass
+bleibt unangetastet (kein Code-Strip), es gibt weiterhin keinen stillen
+Fallback.
+
+**Randbedingung (wichtig für Verifikation und Folgearbeit):** Die Datei ist
+**nicht committet**. `*.lumina.json` steht in `.gitignore` („User sidecars
+(per-image edit recipes) are never committed — local only"); `git ls-files`
+und `HEAD` kennen sie nicht. Das Sample-Sidecar ist damit ein **lokales,
+generiertes** Artefakt aus manuellen GUI-Läufen (hier: ein persistierter
+Denoise-Toggle). Die Richtigstellung wirkt für den lokalen manuellen Test,
+ist aber nicht über einen Commit dauerhaft; ein erneutes Einschalten von
+Denoise im Sample-Ordner stellt den Zustand wieder her. Ein dauerhafter
+Repo-Sample-Zustand wäre eine eigene Entscheidung (Sidecar bewusst als
+Fixture committen **oder** einen deterministischen Test-Sidecar außerhalb des
+Sample-Ordners führen) — kein stilles Umgehen des Ignore.
+
 ## 7. Abgrenzung Rote Augen (nicht hier gelöst)
 
 G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rote-Augen-Korrektur → LRPAR-G14-REDEYE-15 (Release 1.5)**, KI-Denoise → dieser Entscheid (Release 2.0). Rote Augen (Erkennung + Korrektur als eigene Rezept-Stufe) wird hier bewusst **nicht** spezifiziert; Querverweis genügt. Gemeinsame F-078-/Capability-Muster dürfen wiederverwendet werden, die Stufen bleiben getrennt.

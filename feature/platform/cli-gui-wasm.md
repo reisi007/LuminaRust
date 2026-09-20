@@ -2425,12 +2425,18 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   (`selected=2`); Grid-Cmd-Klick-Gegenprobe durch User offen.
 - **Stacks:** `unstacked` → neu `joined` (User-Test), Collapse/Expand aus
   Runde 5 bestätigt; 1/2-2/2-Badges im Screenshot live (R5-STACK-3 wirkt).
-- **Denoise (dringlich, s. R5-DENOISEFIX-22):** 5× ERROR `no denoise artifact
-  resolved` (Full-Res-Pfad via Generative Expand) + 5× Recipe-Gate-Warn
-  `gpu present refused … denoise_ai` — das committete Sample-Sidecar
-  (`denoise_ai.enabled: true`, `pending-integration`) erzwingt CPU-Route und
-  harte Errors. WARN-2-Dedup deckt den Recipe-Gate-Pfad pro Switch nicht ab
-  (Rest).
+- **Denoise (BEHOBEN via R5-DENOISEFIX-22, 2026-09-20):** 5× ERROR `no denoise
+  artifact resolved` (Full-Res-Pfad via Generative Expand) + 5× Recipe-Gate-Warn
+  `gpu present refused … denoise_ai` — das **lokale** Sample-Sidecar
+  (`denoise_ai.enabled: true`, `pending-integration`; `*.lumina.json` ist
+  gitignored, kein Commit) erzwang CPU-Route und harte Errors. Fix:
+  `enabled: false` im aktiven Rezept **und** im `history`-Snapshot —
+  `DenoiseAi::is_identity()` macht die Stufe dann pixel-neutral, der
+  GPU-Recipe-Gate (`unsupported_gpu_stages_with_context`) listet sie nicht
+  mehr, der Full-Res-Pfad bricht nicht mehr ab. Kein Code-Strip
+  (G-1-WGSL-Pass unangetastet), kein stiller Fallback. Entscheid-Nachtrag:
+  `feature/decisions/LRPAR-G14-DENOISE-20.md` §6.1. Der generelle
+  WARN-2-Dedup-Rest (Recipe-Gate-Pfad, s. R5-WARN-2) bleibt unverändert.
 - **Manuell offen:** NAV-1-Drag-Gegenprobe (0 Drag-Traces im Run),
   Straighten-Dreh-Gegenprobe (kein Slider-Log), Loupe-Größe, Sort-Drag-Linie,
   Restart-Restore (nur 1 Session im Log).
