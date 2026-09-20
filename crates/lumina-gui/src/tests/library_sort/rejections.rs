@@ -14,11 +14,10 @@ fn sort_file_with_higher_version_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     stub_raw(dir.path(), "a.cr3");
     stub_raw(dir.path(), "b.cr3");
-    std::fs::write(
-        sort_file(dir.path()),
+    write_sort_file(
+        dir.path(),
         br#"{"format":"lumina-folder-sort","version":2,"mode":"custom","order":["b.cr3","a.cr3"]}"#,
-    )
-    .unwrap();
+    );
     let mut app = new_app();
     scan(&mut app, dir.path());
     assert_eq!(app.library_sort(), LibrarySort::Name);
@@ -37,11 +36,10 @@ fn sort_file_with_unknown_format_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     stub_raw(dir.path(), "a.cr3");
     stub_raw(dir.path(), "b.cr3");
-    std::fs::write(
-        sort_file(dir.path()),
+    write_sort_file(
+        dir.path(),
         br#"{"format":"some-other-tool","version":1,"mode":"custom","order":["b.cr3","a.cr3"]}"#,
-    )
-    .unwrap();
+    );
     let mut app = new_app();
     scan(&mut app, dir.path());
     assert_eq!(app.library_sort(), LibrarySort::Name);
@@ -60,11 +58,10 @@ fn sort_file_with_unknown_mode_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     stub_raw(dir.path(), "a.cr3");
     stub_raw(dir.path(), "b.cr3");
-    std::fs::write(
-        sort_file(dir.path()),
+    write_sort_file(
+        dir.path(),
         br#"{"format":"lumina-folder-sort","version":1,"mode":"shuffle","order":[]}"#,
-    )
-    .unwrap();
+    );
     let mut app = new_app();
     scan(&mut app, dir.path());
     assert_eq!(app.library_sort(), LibrarySort::Name);

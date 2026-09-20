@@ -1614,7 +1614,7 @@ pub struct LuminaApp {
     library_view: LibraryView,
     /// LRPAR-G09-SORT-09: active Library sort mode (Name/CaptureDate/Custom).
     /// Display-only, but persisted per folder together with the custom order in
-    /// `lumina-sort.json` (see `library_sort`). Default `Name`.
+    /// `lumina-sort.json` in `.lumina/` (see `library_sort`). Default `Name`.
     library_sort: LibrarySort,
     /// LRPAR-G09-SORT-09: custom order as relative keys of the listed folder
     /// (stable names, never array positions). Empty when unused.

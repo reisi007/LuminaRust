@@ -5,7 +5,8 @@
 //! original. It reorders `LuminaApp::entries`, the single source shared by the
 //! grid, the filmstrip, the navigator and the Library keyboard navigation
 //! ([`Self::raw_entry_indices`]). The custom arrangement is persisted portably
-//! by [`crate::library_sort_file`] as `lumina-sort.json` next to the images.
+//! by [`crate::library_sort_file`] as `.lumina/lumina-sort.json` in the
+//! folder's deletable cache directory.
 //!
 //! Stacks (LRPAR-G15-STACK-15) sort as a unit: a collapsed stack shows its
 //! cover at the cover's sorted position, and the custom order keeps all members
@@ -27,7 +28,7 @@ pub enum LibrarySort {
     Name,
     /// EXIF capture date ascending (entries without a timestamp sort last).
     CaptureDate,
-    /// Manual order persisted in the folder's `lumina-sort.json`.
+    /// Manual order persisted in the folder's `.lumina/lumina-sort.json`.
     Custom,
 }
 
@@ -141,7 +142,7 @@ impl LuminaApp {
     }
 
     /// Selects a sort mode, persists mode + order to the folder's
-    /// `lumina-sort.json` and re-sorts the display order. Display-only:
+    /// `.lumina/lumina-sort.json` and re-sorts the display order. Display-only:
     /// recipe/sidecar are never touched. A failed write is returned loudly for
     /// the caller to surface (`show_error`).
     pub fn set_library_sort(&mut self, sort: LibrarySort) -> Result<(), String> {
@@ -277,7 +278,7 @@ impl LuminaApp {
         )
     }
 
-    /// Loads the folder's `lumina-sort.json` into the session state (mode +
+    /// Loads the folder's `.lumina/lumina-sort.json` into the session state (mode +
     /// order). Returns a loud error message when the file exists but is not
     /// usable; the caller surfaces it visibly and the defaults (`Name`, empty
     /// order) apply — never a silent ignore.

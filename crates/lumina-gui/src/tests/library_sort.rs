@@ -11,6 +11,9 @@ use super::*;
 // Rework B1/B2/B4: rejection-classes, sidecar-safety and drag-as-unit coverage
 // (split out so both files stay within the 500-line ratchet).
 mod rejections;
+// 2026-09-20: legacy `lumina-sort.json` (next to the images) → `.lumina/`
+// migration (split out so both files stay within the 500-line ratchet).
+mod migration;
 // R5-FIX-WELLE-20: sort-row visibility + drop indicator.
 mod r5_sort;
 
@@ -71,7 +74,13 @@ fn put_selection(app: &mut LuminaApp, paths: &[&Path]) {
 }
 
 fn sort_file(dir: &Path) -> PathBuf {
-    dir.join("lumina-sort.json")
+    dir.join(".lumina").join("lumina-sort.json")
+}
+
+/// Writes `bytes` to the active `.lumina/lumina-sort.json` (creating `.lumina/`).
+fn write_sort_file(dir: &Path, bytes: &[u8]) {
+    std::fs::create_dir_all(dir.join(".lumina")).unwrap();
+    std::fs::write(sort_file(dir), bytes).unwrap();
 }
 
 /// Default mode is `Name`; the RAW grid order is lexicographic.
@@ -87,6 +96,10 @@ fn sort_defaults_to_name() {
     assert_eq!(visible_names(&app), vec!["a.cr3", "b.cr3", "c.cr3"]);
     // No sort file is written by merely listing a folder.
     assert!(!sort_file(dir.path()).exists());
+    assert!(
+        !dir.path().join("lumina-sort.json").exists(),
+        "no sort relic may appear next to the images"
+    );
 }
 
 /// `CaptureDate` orders by the EXIF timestamp and puts unknown timestamps last.
@@ -194,7 +207,7 @@ fn corrupt_sort_file_falls_back_loudly_to_name() {
     let dir = tempfile::tempdir().unwrap();
     stub_raw(dir.path(), "a.cr3");
     stub_raw(dir.path(), "b.cr3");
-    std::fs::write(sort_file(dir.path()), b"{ not json").unwrap();
+    write_sort_file(dir.path(), b"{ not json");
     let mut app = new_app();
     scan(&mut app, dir.path());
     assert_eq!(app.library_sort(), LibrarySort::Name);
@@ -211,11 +224,10 @@ fn corrupt_sort_file_falls_back_loudly_to_name() {
 fn sort_file_with_absolute_path_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     stub_raw(dir.path(), "a.cr3");
-    std::fs::write(
-        sort_file(dir.path()),
+    write_sort_file(
+        dir.path(),
         br#"{"format":"lumina-folder-sort","version":1,"mode":"custom","order":["/etc/passwd"]}"#,
-    )
-    .unwrap();
+    );
     let mut app = new_app();
     scan(&mut app, dir.path());
     assert_eq!(app.library_sort(), LibrarySort::Name);
@@ -234,11 +246,10 @@ fn custom_order_appends_entries_missing_from_the_file() {
     stub_raw(dir.path(), "a.cr3");
     stub_raw(dir.path(), "b.cr3");
     stub_raw(dir.path(), "c.cr3");
-    std::fs::write(
-        sort_file(dir.path()),
+    write_sort_file(
+        dir.path(),
         br#"{"format":"lumina-folder-sort","version":1,"mode":"custom","order":["c.cr3"]}"#,
-    )
-    .unwrap();
+    );
     let mut app = new_app();
     scan(&mut app, dir.path());
     assert_eq!(app.library_sort(), LibrarySort::Custom);
