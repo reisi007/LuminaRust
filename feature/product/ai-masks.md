@@ -101,6 +101,27 @@ ist `min`, Invert ist `65535 - value`, und Subtract ist
 `(a * (65535 - b) + 32767) / 65535` berechnet. Fehlende Payloads, Ziele und
 Zyklen sind Fehler; es gibt keine stillen Resizes oder leeren Fallbacks.
 
+### Maskengruppen (Copy vs. Duplicate, User-Entscheid 2026-09-20 — Lightroom kennt das nicht)
+
+- **Copy** erzeugt eine tiefe, unabhängige Kopie (eigene Matte/Payload, eigene
+  Parameter). Änderungen an der Quelle wirken nicht auf die Kopie und umgekehrt.
+- **Duplicate** erzeugt eine **Gruppe**: einen benannten logischen Container mit
+  stabiler ID, dessen Mitglieder **Referenzen (Pointer)** auf den Quellknoten
+  sind. Änderungen am Quellknoten propagieren an alle Mitglieder; es gibt keine
+  stillen Entkopplungen (sichtbarer Gruppenstatus im Panel).
+- Einzelne Masken lassen sich nachträglich unter einer Gruppe zusammenfassen
+  (Mitglieder per stabiler Knoten-ID, keine Arrayposition).
+- **Gruppen-Aktionen** wirken auf die logische Einheit: gemeinsam
+  selektieren, aktivieren/deaktivieren, löschen, verschieben sowie gemeinsame
+  Parameter-Offsets (z. B. Dichte/Feather) für alle Mitglieder. Die Gruppe ist
+  im Panel aufklappbar (Mitglieder einzeln sichtbar, analog Stapeln).
+- **Löschen der Quelle:** Gruppenmitglieder materialisieren als eingefrorene
+  Kopien (laut, mit History-Eintrag) — konsistent zur Cross-Copy-Regel oben.
+  Kein Mitglied wird still gelöscht oder entleert.
+- **Persistenz:** Sidecar-first; Gruppe + Mitgliedschaften in der
+  Maskenbibliothek der virtuellen Kopie, binäre Matten weiter dedupliziert über
+  Content-Hash im `.zdata`-Container.
+
 ## Benutzergeführte Segmentierung
 
 Neben automatischer Subject-Segmentierung soll LuminaRust ein Objekt anhand
