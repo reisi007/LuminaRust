@@ -2269,9 +2269,12 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Warmup („cold-start work scheduled") erst 13:54:39, also NACH dem Switch
   (13:54:31) → Warmup-Arming/Idle-Timing prüfen (kam zu spät, um zu helfen).
   Spätere Wechsel: Develop 20,3 ms (ok).
-- **R4-UX-1 (offen, User-Klärung läuft):** Rechte Seitenleiste/Filmstrip-Anordnung
-  in Develop „macht keinen Sinn" (User-Wortlaut) — betroffenes Element per
-  Rückfrage eingrenzen.
+- **R4-UX-1 (ENTSCHIEDEN 2026-09-20, User):** Doppelte Thumbnail-Leiste in der
+  Develop-Seitenleiste — unter dem Navigator liegt eine zweite Bildleiste
+  („Click a thumbnail to open it", `draw_navigator`-Rail), die dieselben Bilder
+  wie der untere Filmstrip zeigt. Lightroom hat dort nur Navigator +
+  Presets/Snapshots/History. Fix: Rail entfernen, Navigator-Viewport behalten;
+  einzige Selektionsfläche in Develop bleibt der untere Filmstrip.
 - **Abdeckung Runde 4:** gefahren: Switches, Zoom, Navigator-Drag, Beenden.
   Offen aus Fahrplan: Stapel, Sortierung/Drag-&-Drop, Crop-Tick, Neustart-Restore.
 
