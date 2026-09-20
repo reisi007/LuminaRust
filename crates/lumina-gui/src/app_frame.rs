@@ -194,13 +194,17 @@ impl LuminaApp {
             }
             let heal_active = self.spot_tool != SpotTool::None;
             if icon_button(ui, ToolbarIcon::Heal, heal_active).clicked() {
+                // R5-TOOLFLOW-1: a tool switch commits the active tool first.
+                self.commit_outgoing_tool_for_switch(ui.ctx());
                 self.toggle_spot_heal_tool();
             }
             if icon_button(ui, ToolbarIcon::RedEye, self.red_eye_pick_mode).clicked() {
+                self.commit_outgoing_tool_for_switch(ui.ctx());
                 self.set_red_eye_pick_mode(!self.red_eye_pick_mode);
             }
             let mask_active = self.mask_tool != MaskTool::None;
             if icon_button(ui, ToolbarIcon::Masking, mask_active).clicked() {
+                self.commit_outgoing_tool_for_switch(ui.ctx());
                 self.set_mask_tool(if mask_active {
                     MaskTool::None
                 } else {

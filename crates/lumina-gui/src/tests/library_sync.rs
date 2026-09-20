@@ -293,3 +293,163 @@ fn duplicate_paths_appear_once_per_view() {
         .collect();
     assert_eq!(rail, order, "rail and filmstrip share one index source");
 }
+
+/// R5-SELECT-1: one headless Library-view frame in a persistent context, with
+/// an explicit modifier state (the production click reads `InputState.modifiers`).
+fn selection_view_pass(
+    ctx: &egui::Context,
+    app: &mut LuminaApp,
+    time: &mut f64,
+    events: Vec<egui::Event>,
+) {
+    *time += 1.0 / 60.0;
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(*time),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            let ctx = ui.ctx().clone();
+            app.draw_library_grid(&ctx, ui);
+        },
+    );
+    output.textures_delta.clear();
+}
+
+/// Click the grid/survey cell registered under `id` with `modifiers` held.
+fn click_cell(
+    ctx: &egui::Context,
+    app: &mut LuminaApp,
+    time: &mut f64,
+    id: egui::Id,
+    modifiers: egui::Modifiers,
+) {
+    let pos = ctx
+        .read_response(id)
+        .unwrap_or_else(|| panic!("cell {id:?} must be registered"))
+        .rect
+        .center();
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers,
+    };
+    // `InputState.modifiers` is fed by `ModifiersChanged`, not by the
+    // `PointerButton` payload (egui 0.36), so a held Cmd/Ctrl/Shift must be
+    // announced explicitly on each frame the click is processed.
+    let held = egui::Event::ModifiersChanged(modifiers);
+    selection_view_pass(
+        ctx,
+        app,
+        time,
+        vec![egui::Event::PointerMoved(pos), held.clone()],
+    );
+    selection_view_pass(
+        ctx,
+        app,
+        time,
+        vec![egui::Event::PointerMoved(pos), held.clone(), button(true)],
+    );
+    selection_view_pass(ctx, app, time, vec![held, button(false)]);
+    selection_view_pass(ctx, app, time, vec![]);
+}
+
+/// R5-SELECT-1: modifier clicks in the Library **grid** and **Survey** view
+/// must read Cmd/Ctrl-toggle + Shift-range exactly like the filmstrip
+/// (`filmstrip_frame.rs`). Both used to pass a hard-coded `false, false`, so
+/// multi-selection was impossible there although the filmstrip accepted it.
+#[test]
+fn grid_and_survey_clicks_read_modifier_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = new_app();
+    app.directory = dir.path().display().to_string();
+    app.entries = vec![
+        raw_entry(dir.path(), "a.cr3"),
+        raw_entry(dir.path(), "b.cr3"),
+        raw_entry(dir.path(), "c.cr3"),
+    ];
+    let order = app.filmstrip_order();
+    assert_eq!(order.len(), 3);
+    let id_of = |app: &LuminaApp, name: &str| -> egui::Id {
+        let key = app
+            .entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .expect("entry registered")
+            .thumb_key
+            .clone();
+        crate::library_sort::library_cell_id(&key)
+    };
+    let ctrl = egui::Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    for view in [LibraryView::Grid, LibraryView::Survey] {
+        app.set_library_view(view);
+        // Each sub-case gets a fresh context so the Survey layout (which shows
+        // only the selected cells once ≥2 are selected) is the full listing
+        // when the click position is resolved.
+        let run = |app: &mut LuminaApp,
+                   selection: BTreeSet<String>,
+                   anchor: Option<String>,
+                   id: egui::Id,
+                   modifiers: egui::Modifiers|
+         -> Vec<String> {
+            app.filmstrip_selection = selection;
+            app.filmstrip_anchor = anchor;
+            let ctx = egui::Context::default();
+            let mut time = 0.0_f64;
+            selection_view_pass(&ctx, app, &mut time, vec![]);
+            click_cell(&ctx, app, &mut time, id, modifiers);
+            app.filmstrip_selection()
+        };
+        let a_id = id_of(&app, "a.cr3");
+        let c_id = id_of(&app, "c.cr3");
+        let a = order[0].clone();
+        let c = order[2].clone();
+
+        // Plain click selects exactly one image.
+        assert_eq!(
+            run(
+                &mut app,
+                BTreeSet::new(),
+                None,
+                a_id,
+                egui::Modifiers::default()
+            ),
+            vec![a.clone()],
+            "{view:?}: plain click selects exactly the clicked image"
+        );
+
+        // Cmd/Ctrl-click toggles a second one in.
+        let toggled = run(
+            &mut app,
+            BTreeSet::from([a.clone()]),
+            Some(a.clone()),
+            c_id,
+            ctrl,
+        );
+        assert_eq!(toggled.len(), 2, "{view:?}: Cmd/Ctrl-click toggles in");
+        assert!(
+            toggled.contains(&a) && toggled.contains(&c),
+            "{view:?}: toggled set {toggled:?}"
+        );
+
+        // Shift-click fills the inclusive anchor→clicked range.
+        assert_eq!(
+            run(
+                &mut app,
+                BTreeSet::from([a.clone()]),
+                Some(a.clone()),
+                c_id,
+                egui::Modifiers::SHIFT,
+            ),
+            order,
+            "{view:?}: Shift-click selects the anchor→clicked range"
+        );
+    }
+}

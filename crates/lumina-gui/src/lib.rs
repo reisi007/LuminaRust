@@ -4167,6 +4167,15 @@ impl LuminaApp {
     pub fn toggle_crop_mode(&mut self) {
         instrument_gui_action!(self, GuiAction::ToggleCropMode);
         self.crop_mode = !self.crop_mode;
+        // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): arming the geometry tool
+        // disarms the source-coordinate tools (mask / WB / red-eye / spot)
+        // instead of leaving them armed-but-refused. The reverse direction
+        // (geometry -> mask/WB) commits the crop draft first, see
+        // `commit_outgoing_tool_for_switch`.
+        if self.crop_mode {
+            self.set_mask_tool(MaskTool::None);
+            self.cancel_armed_preview_tools();
+        }
         // UX-LOOK-CROP-18b: arming/leaving crop mode changes the preview
         // texture (full frame vs. committed crop) — invalidate.
         self.mark_dirty();
@@ -6639,64 +6648,16 @@ impl LuminaApp {
 
     // ---- F-103-N4: interactive mask tools (Brush / Linear / Radial) ----
 
-    /// Visible reason shown when a source-coordinate tool is refused because
-    /// active recipe geometry changes the mapping between the displayed
-    /// (post-geometry) preview and the source frame (REVIEW-GUI-MASKGEO-1).
-    const GEOMETRY_TOOL_BLOCKED: &str = "Mask and white-balance tools are unavailable while Crop, Rotation, Mirror or Perspective is active — drawn/picked source coordinates would land transformed-wrong. Reset the geometry to use them.";
-
-    /// True while recipe geometry changes the mapping between the displayed
-    /// (post-geometry) preview frame and the un-decoded source frame
-    /// (REVIEW-GUI-MASKGEO-1).
-    ///
-    /// The interactive tools map pointer positions to *source* coordinates
-    /// (`to_normalized` + ROI). With `Crop`/`rotation`/mirroring — and equally
-    /// with a non-neutral `Perspective`, which changes the output bounds — that
-    /// mapping is no longer identity, so brush/gradient/radial prompts and WB
-    /// picks would silently land at transformed-wrong positions. Until the
-    /// core applies geometry to mask planes (documented F-041 alignment limit)
-    /// the honest behaviour is to refuse these tools visibly instead of
-    /// writing wrong data.
-    fn geometry_blocks_source_mapping(&self) -> bool {
-        let geometry_active = self.recipe.geometry.as_ref().is_some_and(|g| {
-            g.crop.is_some()
-                || g.rotation_degrees.abs() > f32::EPSILON
-                || g.mirror_horizontal
-                || g.mirror_vertical
-        });
-        // LRPAR-G06-UPRIGHT-15: the effective perspective (manual or upright)
-        // determines whether the preview is geometrically transformed.
-        let perspective_active = self.recipe.effective_perspective().is_some_and(|p| {
-            p.vertical != 0.0
-                || p.horizontal != 0.0
-                || p.rotation != 0.0
-                || p.scale != 1.0
-                || p.aspect_ratio != 1.0
-                || p.shift_x != 0.0
-                || p.shift_y != 0.0
-        });
-        geometry_active || perspective_active
-    }
-
     /// Arm or disarm an interactive masking tool. Disarming returns the preview
     /// to its ordinary click/eyedropper behaviour and cancels any in-progress
     /// drag.
     ///
-    /// REVIEW-GUI-MASKGEO-1: arming is refused (visibly, tool stays `None`)
-    /// while recipe geometry is active — see
-    /// [`Self::geometry_blocks_source_mapping`]. No silent fallback into
-    /// transformed-wrong marks.
+    /// R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former hard refusal while
+    /// recipe geometry is active is replaced by the tool switch committing the
+    /// active geometry draft (see [`Self::commit_outgoing_tool_for_switch`]).
+    /// The callers route through that helper; this setter only arms.
     pub fn set_mask_tool(&mut self, tool: MaskTool) {
         instrument_gui_action!(self, GuiAction::SetMaskTool);
-        if tool != MaskTool::None && self.geometry_blocks_source_mapping() {
-            warn!("mask tool {tool:?} refused while recipe geometry is active");
-            self.mask_tool = MaskTool::None;
-            self.pending_brush_marks.clear();
-            self.drag_start = None;
-            self.drag_current = None;
-            self.drawing = false;
-            self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
-            return;
-        }
         self.mask_tool = tool;
         self.pending_brush_marks.clear();
         self.drag_start = None;
@@ -11977,6 +11938,8 @@ impl eframe::App for LuminaApp {
                 // tool is modifier-free (see the F-100 shortcut table).
                 if ctx.input(|i| i.key_pressed(key) && !i.modifiers.ctrl && !i.modifiers.command) {
                     if let Some(tool) = mask_tool_for_key(key, shift) {
+                        // R5-TOOLFLOW-1: commit the active tool before arming.
+                        self.commit_outgoing_tool_for_switch(&ctx);
                         self.set_mask_tool(tool);
                     }
                 }

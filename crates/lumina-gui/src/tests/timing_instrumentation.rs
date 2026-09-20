@@ -434,3 +434,51 @@ fn switch_to_paint_anchor_is_present_per_direction() {
         assert!(take_timing_log().is_empty());
     }
 }
+
+/// R5-WARN-2 (R4-WARN-1 pattern on the Denoise-Gate path): the per-tick core
+/// `denoise_ai … falling back` warn fires once per distinct `(status, reason)`.
+/// The GUI resolves the state every render; only the first occurrence lets the
+/// core warn (`quiet == false`), the repeats are suppressed (`quiet == true`),
+/// and `Ready`/`Inactive` re-arm it.
+#[test]
+fn denoise_fallback_warn_is_deduplicated_across_ticks() {
+    use crate::timing::take_denoise_refusal_warns;
+    use lumina_core::{DenoisePolicy, DenoiseStageStatus};
+    let _ = take_denoise_refusal_warns();
+    let mut app = new_app();
+    app.load_bytes(png(), "denoise-warn.png").unwrap();
+    app.recipe.denoise_ai = Some(crate::denoise_gui::default_denoise_ai());
+    app.set_denoise_policy(DenoisePolicy::Warn);
+
+    let first = app.resolve_denoise_state(None);
+    assert_eq!(first.status, DenoiseStageStatus::Unavailable);
+    assert!(
+        !first.refusal_warned,
+        "the first occurrence must let the core warn"
+    );
+    // Mirror the render loop: the resolved state is stored before the input is
+    // built.
+    app.denoise_gui = first;
+    assert!(!app.denoise_render_input(None).quiet);
+
+    for _ in 0..6 {
+        app.denoise_gui = app.resolve_denoise_state(None);
+        assert!(
+            app.denoise_gui.refusal_warned,
+            "a per-tick repeat must be suppressed"
+        );
+        assert!(app.denoise_render_input(None).quiet);
+    }
+    assert_eq!(
+        take_denoise_refusal_warns(),
+        1,
+        "the identical reason may warn only once"
+    );
+
+    // Re-arm (a `Ready`/`Inactive` stage would call this): the next recurrence
+    // is visible again.
+    app.clear_denoise_refusal_warn();
+    app.denoise_gui = app.resolve_denoise_state(None);
+    assert!(!app.denoise_gui.refusal_warned);
+    assert_eq!(take_denoise_refusal_warns(), 1);
+}

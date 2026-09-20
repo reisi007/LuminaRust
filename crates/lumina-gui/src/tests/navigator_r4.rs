@@ -220,6 +220,143 @@ fn navigator_viewport_drag_is_inert_at_fit() {
     assert_eq!(before, after, "the Fit viewport rectangle is static");
 }
 
+/// R5-FIX-WELLE-20 (R4-NAV-1 again): the navigator box drag must move the real
+/// view, not just the pure helper. This drives the **full frame path** — the
+/// left-rail navigator *and* `draw_preview` in the same persistent
+/// `egui::Context` — so the pan clamp that the R4 test never exercised runs.
+///
+/// Root causes pinned here (both made the box "not follow" while the R4 gate
+/// was green):
+/// 1. `draw_preview` clamped the pan against the on-screen size of the painted
+///    ROI-crop texture (only `PREVIEW_ROI_MARGIN`× the pane), capping every pan
+///    at ~15 % of a pane. The drag below maps to ≈ −257 px; the old clamp would
+///    stop at ≈ −89 px, so the `> 150` bound is the mutation catch.
+/// 2. The crop already encodes the pan, yet `draw_preview` offset the texture by
+///    the live pan again, so the drawn view moved 2× the cursor. The
+///    view-centre check fails under that double count.
+struct FullNavHarness {
+    ctx: egui::Context,
+    time: f64,
+    screen: egui::Rect,
+}
+
+impl FullNavHarness {
+    fn new() -> Self {
+        Self {
+            ctx: egui::Context::default(),
+            time: 0.0,
+            screen: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+        }
+    }
+
+    fn frame(&mut self, app: &mut LuminaApp, events: Vec<egui::Event>) {
+        self.time += 1.0 / 60.0;
+        let ctx = self.ctx.clone();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(self.screen),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::Panel::left("nav_full")
+                    .resizable(false)
+                    .default_size(200.0)
+                    .show(ui, |ui| {
+                        let ctx = ui.ctx().clone();
+                        app.draw_navigator(&ctx, ui);
+                    });
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.update_texture(&ctx);
+                    app.draw_preview(ui);
+                });
+            },
+        );
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
+fn navigator_drag_moves_view_past_the_roi_crop_margin() {
+    let mut harness = FullNavHarness::new();
+    let mut app = LuminaApp::new(harness.ctx.clone());
+    let (png, _frame) = synthetic_gradient_png();
+    app.load_bytes(png, "gradient.png").unwrap();
+    app.texture = Some(harness.ctx.load_texture(
+        "preview",
+        egui::ColorImage::filled([64, 40], egui::Color32::GRAY),
+        egui::TextureOptions::LINEAR,
+    ));
+    // Warm-up caches the pane geometry + base fit; then zoom and render the ROI
+    // crop that the navigator drag must survive.
+    harness.frame(&mut app, vec![]);
+    app.zoom_mode = ZoomMode::Custom;
+    app.preview_zoom = 8.0;
+    app.preview_pan = egui::Vec2::ZERO;
+    app.mark_dirty();
+    app.render_full([800, 600], None).unwrap();
+    harness.frame(&mut app, vec![]);
+    assert!(
+        app.preview_roi.is_some(),
+        "zoomed view must render an ROI crop for this test"
+    );
+
+    let before_box = last_navigator_view_rect().expect("navigator paints its viewport");
+    let start = before_box.center();
+    let drag = egui::vec2(40.0, -20.0);
+    let end = start + drag;
+    harness.frame(&mut app, vec![egui::Event::PointerMoved(start)]);
+    harness.frame(
+        &mut app,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    harness.frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+    harness.frame(&mut app, vec![pointer(end, false)]);
+    harness.frame(&mut app, vec![]);
+
+    // 1. The pan survived the downstream clamp: the old ROI-crop clamp capped
+    //    it at ~15 % of the pane (~89 px here); the drag maps to ≈ −257 px.
+    assert!(
+        app.preview_pan.x < -150.0 && app.preview_pan.y > 70.0,
+        "navigator drag must pan past the ROI-crop margin, got {:?}",
+        app.preview_pan
+    );
+    assert_eq!(app.zoom_mode, ZoomMode::Custom);
+
+    // 2. The painted box followed the cursor by the drag (navigator points).
+    let after_box = last_navigator_view_rect().expect("navigator repaints");
+    assert!(
+        (after_box.center().x - before_box.center().x - drag.x).abs() < 2.0
+            && (after_box.center().y - before_box.center().y - drag.y).abs() < 2.0,
+        "the box must follow the drag: {before_box:?} -> {after_box:?} (drag {drag:?})"
+    );
+
+    // Simulate the debounced full render the navigator's `mark_dirty` arms: the
+    // crop re-centres on the new pan, so the settled view is compared (the
+    // mouse-down frames necessarily place a stale crop).
+    app.render_full([800, 600], None).unwrap();
+    harness.frame(&mut app, vec![]);
+
+    // 3. The visible view and the box agree: the source under the pane centre is
+    //    exactly `w/2 - pan/scale` (no 2× placement). The old double count would
+    //    report `w/2 - 2·pan/scale` here.
+    let full = app.image_dims().unwrap();
+    let pane = app.preview_pane_rect().expect("preview pane recorded");
+    let rect = app.preview_screen_rect().expect("preview painted");
+    let roi = app
+        .preview_roi
+        .map(|r| LuminaApp::roi_in_full_pixels(r, full.0, full.1, app.preview_render_src));
+    let (view_x, view_y) = LuminaApp::to_normalized(pane.center(), rect, roi, full);
+    let expected_x = 0.5 - app.preview_pan.x / app.preview_effective_scale / full.0 as f32;
+    let expected_y = 0.5 - app.preview_pan.y / app.preview_effective_scale / full.1 as f32;
+    assert!(
+        (view_x - expected_x).abs() < 0.02 && (view_y - expected_y).abs() < 0.02,
+        "view centre ({view_x},{view_y}) must match the box window ({expected_x},{expected_y})"
+    );
+}
+
 /// R4-UX-1: the navigator no longer paints the duplicate thumbnail rail (its
 /// "Click a thumbnail to open it" / "No images in this folder" hint and the
 /// per-cell thumbnails). The bottom filmstrip stays the single selection

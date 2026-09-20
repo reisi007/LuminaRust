@@ -61,8 +61,14 @@ impl LuminaApp {
     }
 
     /// G-09 (LRPAR-G09-LIB) Loupe: the active selection shown large
-    /// (Lightroom `E`). Single image, same badges/hover as the grid cells,
-    /// no second render path — the filmstrip thumbnail texture is reused.
+    /// (Lightroom `E`).
+    ///
+    /// R5-LOUPE-1 (User-Bug, 2026-09-20): the loupe must paint the developed
+    /// render — the Draft or viewport-capped Full preview, exactly like the
+    /// Develop canvas under R3-RENDER-SIZE-1 — not the (≤ 221 px) filmstrip
+    /// thumbnail, which left the image tiny in the middle. The render texture
+    /// is uploaded lazily for the loaded entry; only an entry that is not the
+    /// loaded image falls back to its thumbnail so the pane is never empty.
     /// Display-only; edits stay on the rating keys and Quick Develop.
     pub(crate) fn draw_library_loupe(
         &mut self,
@@ -90,10 +96,22 @@ impl LuminaApp {
         let height = (ui.available_height() - 30.0).clamp(64.0, 600.0);
         let size = egui::vec2(ui.available_width().max(64.0), height);
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-        if let Some(texture) = self.thumbnails.get(&entry.thumb_key).cloned() {
+        // R5-LOUPE-1: prefer the tile's developed render; upload it on demand
+        // (the Library view never runs the preview-area upload path).
+        let loaded = self.entries[active].path.display().to_string() == self.path;
+        let render_texture = if loaded && self.preview.is_some() {
+            self.update_texture(ctx);
+            self.texture.clone()
+        } else {
+            None
+        };
+        let texture = render_texture.or_else(|| self.thumbnails.get(&entry.thumb_key).cloned());
+        if let Some(texture) = texture {
+            // Contain-fit to the whole pane so the loupe is actually large for
+            // small sources too (the thumbnail fallback keeps the same fit).
             ui.put(
                 rect,
-                egui::Image::from_texture(&texture).max_size(rect.size()),
+                egui::Image::from_texture(&texture).fit_to_exact_size(rect.size()),
             );
         } else {
             ui.painter()
@@ -216,8 +234,8 @@ impl LuminaApp {
                         let selected = self
                             .filmstrip_selection
                             .contains(&entry.path.display().to_string());
-                        let (rect, resp) =
-                            ui.allocate_exact_size(egui::vec2(thumb, thumb), egui::Sense::click());
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(thumb, thumb), egui::Sense::hover());
                         if selected {
                             ui.painter().rect_stroke(
                                 rect.expand(2.0),
@@ -242,11 +260,25 @@ impl LuminaApp {
                         ui.vertical(|ui| {
                             ui.label(entry.name.clone());
                         });
+                        // R5-SELECT-1: stable per-cell id, registered after the
+                        // image so the cell is the topmost interactive widget
+                        // (same pattern as the grid) — this makes the modifier
+                        // click path headless-testable.
+                        let resp = ui.interact(
+                            rect,
+                            crate::library_sort::library_cell_id(&entry.thumb_key),
+                            egui::Sense::click(),
+                        );
                         if resp.clicked() {
+                            // R5-SELECT-1: Survey reads the same Cmd/Ctrl-toggle
+                            // + Shift-range modifiers as the filmstrip/grid.
+                            let modifiers = ui.input(|state| state.modifiers);
+                            let toggle = modifiers.command || modifiers.ctrl;
+                            let range = modifiers.shift;
                             self.select_filmstrip_path(
                                 entry.path.display().to_string(),
-                                false,
-                                false,
+                                toggle,
+                                range,
                             );
                         }
                         if resp.double_clicked() {

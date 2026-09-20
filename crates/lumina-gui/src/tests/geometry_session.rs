@@ -2,28 +2,24 @@
 
 use super::*;
 
-// ---- REVIEW-GUI-MASKGEO-1: geometry blocks source-coordinate tools ----
+// ---- R5-FIX-WELLE-20 F3: red-eye freed under TOOLFLOW-1 ----
 
+/// R5-FIX-WELLE-20 (F3): with active recipe geometry the red-eye picker is now
+/// freed like the mask/WB tools (R5-TOOLFLOW-1). Arming is not refused and a
+/// preview click really marks a region — the stale `GEOMETRY_TOOL_BLOCKED`
+/// refusal is gone.
 #[test]
-fn geometry_blocks_source_mapping_flags_each_dimension() {
-    let mut app = new_app();
-    assert!(!app.geometry_blocks_source_mapping(), "default is neutral");
-    app.recipe.geometry = Some(Geometry {
-        version: 1,
-        crop: None,
-        rotation_degrees: 90.0,
-        mirror_horizontal: false,
-        mirror_vertical: false,
-    });
-    assert!(app.geometry_blocks_source_mapping(), "rotation blocks");
-    app.recipe.geometry = Some(Geometry {
-        version: 1,
-        crop: None,
-        rotation_degrees: 0.0,
-        mirror_horizontal: true,
-        mirror_vertical: false,
-    });
-    assert!(app.geometry_blocks_source_mapping(), "mirror blocks");
+fn red_eye_picker_is_freed_while_geometry_is_active() {
+    let ctx = egui::Context::default();
+    let mut app = LuminaApp::new(ctx.clone());
+    app.load_bytes(png(), "red-eye-geo.png").unwrap();
+    app.render().unwrap();
+    app.texture = Some(ctx.load_texture(
+        "preview",
+        egui::ColorImage::filled([2, 1], egui::Color32::BLACK),
+        egui::TextureOptions::LINEAR,
+    ));
+    // Active crop geometry (the former block condition).
     app.recipe.geometry = Some(Geometry {
         version: 1,
         crop: Some(Crop::Free {
@@ -36,32 +32,49 @@ fn geometry_blocks_source_mapping_flags_each_dimension() {
         mirror_horizontal: false,
         mirror_vertical: false,
     });
-    assert!(app.geometry_blocks_source_mapping(), "crop blocks");
-    app.recipe.geometry = None;
-    app.recipe.perspective = Some(Perspective {
-        version: 1,
-        vertical: 0.4,
-        horizontal: 0.0,
-        rotation: 0.0,
-        scale: 1.0,
-        aspect_ratio: 1.0,
-        shift_x: 0.0,
-        shift_y: 0.0,
-    });
-    assert!(app.geometry_blocks_source_mapping(), "perspective blocks");
-    app.recipe.perspective = Some(Perspective {
-        version: 1,
-        vertical: 0.0,
-        horizontal: 0.0,
-        rotation: 0.0,
-        scale: 1.0,
-        aspect_ratio: 1.0,
-        shift_x: 0.0,
-        shift_y: 0.0,
-    });
+    app.set_red_eye_pick_mode(true);
     assert!(
-        !app.geometry_blocks_source_mapping(),
-        "a neutral perspective is not blocking"
+        app.red_eye_pick_mode,
+        "geometry must not refuse the red-eye picker"
+    );
+
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let pos = screen.center();
+    let mut pass = |app: &mut LuminaApp, events: Vec<egui::Event>, time: f64| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.draw_preview(ui));
+            },
+        );
+        output.textures_delta.clear();
+    };
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    pass(&mut app, vec![egui::Event::PointerMoved(pos)], 0.5);
+    pass(
+        &mut app,
+        vec![egui::Event::PointerMoved(pos), button(true)],
+        0.6,
+    );
+    pass(&mut app, vec![button(false)], 0.7);
+
+    assert_eq!(
+        app.recipe()
+            .red_eye
+            .as_ref()
+            .map(|red_eye| red_eye.regions.len()),
+        Some(1),
+        "a preview click must mark a red-eye region under geometry"
     );
 }
 
@@ -140,8 +153,12 @@ fn geometry_rotation_renders_persists_and_reloads() {
     );
 }
 
+/// R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former geometry hard-lock on
+/// `set_mask_tool` is replaced — the tool arms even while geometry is active
+/// (the UI callers commit the active geometry draft first; the plain setter
+/// only arms). No dead-end banner.
 #[test]
-fn set_mask_tool_refused_visibly_while_geometry_active() {
+fn set_mask_tool_arms_while_geometry_active() {
     let mut app = new_app();
     app.load_bytes(png(), "geo.png").unwrap();
     app.recipe.geometry = Some(Geometry {
@@ -157,16 +174,11 @@ fn set_mask_tool_refused_visibly_while_geometry_active() {
         mirror_vertical: false,
     });
     app.set_mask_tool(MaskTool::Brush);
-    assert_eq!(app.mask_tool, MaskTool::None, "arming must be refused");
-    assert!(
-        app.status().contains("unavailable"),
-        "refusal must be visible, got {:?}",
-        app.status()
+    assert_eq!(
+        app.mask_tool,
+        MaskTool::Brush,
+        "the tool must arm (no hard refusal)"
     );
-    // Without geometry arming works again.
-    app.recipe.geometry = None;
-    app.set_mask_tool(MaskTool::Brush);
-    assert_eq!(app.mask_tool, MaskTool::Brush);
     // Disarming stays possible in every state.
     app.set_mask_tool(MaskTool::None);
     assert_eq!(app.mask_tool, MaskTool::None);

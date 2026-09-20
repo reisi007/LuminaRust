@@ -123,6 +123,28 @@ impl LuminaApp {
             }
         });
         ui.separator();
+        // R5-SORT-1 (User-Bug, 2026-09-20): the Library sort modes (Name /
+        // Capture Date / Custom) are always visible in the grid header. They
+        // used to live only inside the `\` drawer and were unfindable without
+        // knowing that shortcut; the drawer now holds only the text filter and
+        // Quick Develop.
+        ui.horizontal_wrapped(|ui| {
+            ui.label(Str::LibrarySortName.t().to_string() + ":");
+            for sort in [
+                LibrarySort::Name,
+                LibrarySort::CaptureDate,
+                LibrarySort::Custom,
+            ] {
+                if ui
+                    .selectable_label(self.library_sort == sort, sort_label(sort))
+                    .clicked()
+                {
+                    if let Err(message) = self.set_library_sort(sort) {
+                        self.show_error(message);
+                    }
+                }
+            }
+        });
         // Welle 3 (LR-13 light): `\` Library drawer — text filter over the
         // scanned entry metadata plus Quick Develop sliders. Hidden by
         // default, so the default grid layout (and its kittest goldens) are
@@ -139,26 +161,6 @@ impl LuminaApp {
                     .changed()
                 {
                     self.set_library_filter(query);
-                }
-            });
-            // LRPAR-G09-SORT-09: Library sort modes (Name / Capture Date /
-            // Custom). The buttons are the clickable primary path; the grid and
-            // the filmstrip share this display order, and a grid drag-drop
-            // switches to Custom automatically.
-            ui.horizontal_wrapped(|ui| {
-                for sort in [
-                    LibrarySort::Name,
-                    LibrarySort::CaptureDate,
-                    LibrarySort::Custom,
-                ] {
-                    if ui
-                        .selectable_label(self.library_sort == sort, sort_label(sort))
-                        .clicked()
-                    {
-                        if let Err(message) = self.set_library_sort(sort) {
-                            self.show_error(message);
-                        }
-                    }
                 }
             });
             ui.collapsing(Str::QuickDevelop.t(), |ui| {
@@ -314,22 +316,55 @@ impl LuminaApp {
                                             entry.path.display().to_string(),
                                         ));
                                     }
+                                    // R5-SORT-1: a custom drag shows an
+                                    // insertion line at the hovered target so
+                                    // the drop position is visible before the
+                                    // release. The dragged cell's own line is
+                                    // skipped (it still contains the pointer).
+                                    if let Some(dragged) = resp.dnd_hover_payload::<String>() {
+                                        if dragged.as_str() != entry.path.display().to_string() {
+                                            let x = rect.left() - 3.0;
+                                            ui.painter().line_segment(
+                                                [
+                                                    egui::pos2(x, rect.top()),
+                                                    egui::pos2(x, rect.bottom()),
+                                                ],
+                                                egui::Stroke::new(3.0_f32, crate::theme::ACCENT),
+                                            );
+                                        }
+                                    }
                                     // LRPAR-G15-STACK-15: the painted stack
                                     // badge is clickable (toggles the collapse
                                     // of this stack) and takes precedence over
                                     // the plain cell click.
-                                    let stack_badge_clicked =
-                                        self.paint_stack_badge(ui, rect, &entry);
+                                    let stack_badge_clicked = self.paint_stack_badge(
+                                        ui,
+                                        rect,
+                                        &entry,
+                                        crate::library_stacks::StackBadgeSurface::Grid,
+                                    );
                                     // GUI-FILMSTRIP-DUP-1: single click selects
                                     // (shared filmstrip selection, no open);
                                     // double-click opens in Develop. All
                                     // views stay in sync through the same
                                     // selection bookkeeping.
+                                    // R5-SELECT-1: the grid must read the same
+                                    // Cmd/Ctrl-toggle + Shift-range modifiers as
+                                    // the filmstrip (`filmstrip_frame.rs`),
+                                    // otherwise multi-selection is impossible
+                                    // in the grid while Compare/Survey accept it.
                                     if resp.clicked() && !stack_badge_clicked {
+                                        let modifiers = ui.input(|state| state.modifiers);
+                                        let toggle = modifiers.command || modifiers.ctrl;
+                                        let range = modifiers.shift;
+                                        trace!(
+                                            "GUI interaction: library grid click {}",
+                                            entry.path.display()
+                                        );
                                         self.select_filmstrip_path(
                                             entry.path.display().to_string(),
-                                            false,
-                                            false,
+                                            toggle,
+                                            range,
                                         );
                                     }
                                     if stack_badge_clicked {

@@ -28,7 +28,7 @@
 //! the rect maps correctly).
 
 use super::*;
-use log::{info, warn};
+use log::info;
 
 // UX-LOOK-CROP-18b: the crop bar's session rotation draft, the fingerprinted
 // Auto-Level stash and the bar layout/gesture helpers (own file, same module).
@@ -351,10 +351,16 @@ impl LuminaApp {
                     self.status = Str::Cancel.t().into();
                     return;
                 }
-            } else if self.cancel_crop_edit(ctx) {
-                // Crop mode left without Enter (`R` toggled off): the draft is
-                // discarded loudly, never carried silently into a later session.
-                warn!("crop overlay: crop mode left with an uncommitted draft — discarded");
+            } else if crop_draft(ctx).is_some()
+                || crop_rotation_draft(ctx).is_some()
+                || crop_auto_level_stash(ctx).is_some()
+            {
+                // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): crop mode left
+                // without `Enter` (`R` toggled off) now **commits** the draft
+                // (and logs it) instead of discarding it. `Esc` above still
+                // discards explicitly.
+                let committed = self.commit_crop_edit(ctx);
+                info!("GUI interaction: crop mode left — draft committed={committed}");
                 return;
             }
         }

@@ -15,6 +15,10 @@ use crate::develop_geometry::crop_rotation::{
 use crop_overlay_support::{crop_app, drag_corner, CropHarness};
 use crop_session_support::{click_auto_button, drag_straighten_slider};
 
+// R5-FIX-WELLE-20: nested test module so this 500-line-ratcheted file does not
+// grow (straighten commit + tool-flow switch).
+mod r5_tools;
+
 /// Deterministic `w`×`h` checker PNG (real decode, non-degenerate content).
 fn save_sized_png(path: &Path, width: u32, height: u32) {
     let mut pixels = vec![0u8; (width * height * 4) as usize];
@@ -366,9 +370,10 @@ fn crop_bar_paints_straighten_and_auto_level() {
     }
 }
 
-/// F1(a): the Straighten slider is really interactive — a pointer drag on the
-/// painted track changes the session rotation draft through the UI path (not
-/// the setter) and never writes the recipe.
+/// F1(a) / R5-STRAIGHTEN-1: the Straighten slider is really interactive — a
+/// pointer drag on the painted track reaches the recipe through the real
+/// `set_straighten` path (logged at `info!`, save armed by the setter) and the
+/// session rotation draft is kept in sync.
 #[test]
 fn crop_bar_slider_drag_sets_the_session_rotation_draft() {
     let mut app = new_app();
@@ -378,13 +383,17 @@ fn crop_bar_slider_drag_sets_the_session_rotation_draft() {
         draft > 10.0 && draft <= 180.0,
         "dragging right of centre must raise the angle, got {draft}"
     );
-    assert!(
-        app.recipe().geometry.is_none(),
-        "the drag must not write the recipe"
+    assert_eq!(
+        app.recipe()
+            .geometry
+            .as_ref()
+            .map(|geometry| geometry.rotation_degrees),
+        Some(draft),
+        "R5-STRAIGHTEN-1: the drag must write the rotation into the recipe"
     );
     assert!(
-        app.pending_slider_commit.is_none(),
-        "the drag must not arm a save"
+        app.pending_slider_commit.is_some(),
+        "the drag must arm the debounced save (the value must persist)"
     );
 }
 

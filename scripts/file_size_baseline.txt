@@ -26,7 +26,7 @@
 1201 crates/lumina-core/src/masks.rs
 1174 crates/lumina-mcp/tests/mcp.rs
 899 crates/lumina-gui/src/face_gui.rs  # 1095 -> 899 am 2026-09-17: People-Panel nach people_panel.rs extrahiert, create_face_mask instrumentiert (GUI-INSTRDBG-17c-Rest)
-1084 crates/lumina-core/src/denoise.rs
+1031 crates/lumina-core/src/denoise.rs  # R5-WARN-2: DenoiseStageInput nach src/denoise/stage_input.rs extrahiert (1084 -> 1031; quiet-Feld additiv)
 1059 crates/lumina-onnx/src/face/backend.rs
 1035 crates/lumina-sidecar/src/face.rs
 1007 crates/lumina-cli/src/matrix.rs

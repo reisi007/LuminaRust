@@ -15,10 +15,26 @@ use super::*;
 use log::{error, info};
 use std::path::Path;
 
+/// R5-STACK-3: colour of the stack membership bracket painted around a stacked
+/// grid/filmstrip cell (distinct from the selection stroke). Display-only.
+const STACK_GROUP_FRAME: egui::Color32 = egui::Color32::from_rgb(0, 190, 235);
+
+/// The Library surface a stack badge is painted on. R5-STACK-2: the grid and
+/// the filmstrip are drawn in the **same** frame and both show the same image,
+/// so a badge id derived from `thumb_key` alone collided — egui keys widget
+/// interaction by id, so the second registration made one surface's badge
+/// unclickable. The surface is part of the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StackBadgeSurface {
+    Grid,
+    Filmstrip,
+}
+
 /// Stable egui id of the painted stack badge for one cell, so the headless
-/// tests can locate and click it (F-100 clickability).
-pub(crate) fn stack_badge_id(thumb_key: &str) -> egui::Id {
-    egui::Id::new(("lumina-stack-badge", thumb_key))
+/// tests can locate and click it (F-100 clickability). Unique per surface
+/// (R5-STACK-2).
+pub(crate) fn stack_badge_id(surface: StackBadgeSurface, thumb_key: &str) -> egui::Id {
+    egui::Id::new(("lumina-stack-badge", surface as u8, thumb_key))
 }
 
 impl LuminaApp {
@@ -419,17 +435,31 @@ impl LuminaApp {
         ui: &mut egui::Ui,
         rect: egui::Rect,
         entry: &FileBrowserEntry,
+        surface: StackBadgeSurface,
     ) -> bool {
         let Some(stack) = entry.stack.as_ref() else {
             return false;
         };
         let collapsed = self.stack_collapsed_for_entry(entry);
         let symbol = if collapsed { "⊞" } else { "⊟" };
-        let label = if stack.is_cover(&entry.name) {
-            format!("{symbol} {}", stack.members.len())
-        } else {
-            symbol.to_string()
-        };
+        let count = stack.members.len();
+        let index = stack
+            .members
+            .iter()
+            .position(|member| member == &entry.name)
+            .map(|position| position + 1)
+            .unwrap_or(1);
+        // R5-STACK-3 (User-Entscheid 2026-09-20): a visible membership bracket
+        // around every stacked cell plus the "index/count" position makes the
+        // grouping recognizable without selecting the stack. Collapsed keeps
+        // the clear stack symbol. Pure display — never recipe/sidecar.
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            2.0,
+            egui::Stroke::new(1.5_f32, STACK_GROUP_FRAME),
+            egui::StrokeKind::Outside,
+        );
+        let label = format!("{symbol} {index}/{count}");
         // Top-centre keeps clear of the folder badge (top-left), the
         // assisted-culling badge (top-right) and the rating/flag/color label
         // badge (bottom edge), so no two chips overlap.
@@ -439,7 +469,7 @@ impl LuminaApp {
         );
         let response = ui.interact(
             badge,
-            stack_badge_id(&entry.thumb_key),
+            stack_badge_id(surface, &entry.thumb_key),
             egui::Sense::click(),
         );
         ui.painter().rect_filled(

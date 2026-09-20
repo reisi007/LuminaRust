@@ -8,6 +8,8 @@
 
 use super::*;
 
+mod r5_stacks; // R5-FIX-WELLE-20: per-stack badge visibility + membership bracket
+
 fn stub_identity(name: &str) -> SourceIdentity {
     SourceIdentity {
         relative_name: name.into(),
@@ -172,14 +174,14 @@ fn g15_stack_grid_and_filmstrip_collapse_display() {
         "hidden member must not paint in the collapsed grid"
     );
     assert!(
-        text_contains(&shapes, "⊞ 2"),
+        text_contains(&shapes, "⊞ 1/2"),
         "collapsed cover paints the stack badge"
     );
 
     let shapes = filmstrip_shapes(&mut app);
     assert!(text_contains(&shapes, "a.cr3"));
     assert!(!text_contains(&shapes, "b.cr3"));
-    assert!(text_contains(&shapes, "⊞ 2"));
+    assert!(text_contains(&shapes, "⊞ 1/2"));
 
     // Expand: both entries are listed and painted again.
     app.toggle_stack_collapse().unwrap();
@@ -190,7 +192,7 @@ fn g15_stack_grid_and_filmstrip_collapse_display() {
     );
     let shapes = grid_shapes(&mut app);
     assert!(text_contains(&shapes, "a.cr3") && text_contains(&shapes, "b.cr3"));
-    assert!(text_contains(&shapes, "⊟ 2"));
+    assert!(text_contains(&shapes, "⊟ 1/2"));
 }
 
 /// Selecting one member selects the whole stack, so Sync/Batch act on the
@@ -474,7 +476,10 @@ fn g15_stack_badge_click_toggles_collapse() {
     };
     let _ = run(&mut app, vec![]);
     let badge = ctx
-        .read_response(crate::library_stacks::stack_badge_id(&thumb_key))
+        .read_response(crate::library_stacks::stack_badge_id(
+            crate::library_stacks::StackBadgeSurface::Grid,
+            &thumb_key,
+        ))
         .expect("the cover badge must be registered")
         .rect;
     let pos = badge.center();

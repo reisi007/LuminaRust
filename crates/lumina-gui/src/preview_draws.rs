@@ -17,6 +17,10 @@
 use super::*;
 use log::trace;
 
+// R5-FIX-WELLE-20 / R4-NAV-1: pan-clamp + ROI placement geometry (new file so
+// neither this 500-line-ratcheted module nor `lib.rs` has to grow).
+mod preview_geometry;
+
 impl LuminaApp {
     pub(crate) fn draw_preview(&mut self, ui: &mut egui::Ui) {
         // Clone the texture handle so the borrow of `self` does not outlive the
@@ -105,7 +109,21 @@ impl LuminaApp {
             } else {
                 egui::Vec2::ZERO
             };
-            let mut center = pane.center() + eff_pan;
+            // R4-NAV-1: an ROI crop already encodes the pan in its window
+            // (`roi_from_zoom` centres it on `w/2 - pan/scale`), so it is
+            // placed by `live_pan - rendered_pan` — adding the live pan on top
+            // of the crop (the old code) moved the image 2× the cursor and
+            // made the navigator box disagree with the view. Without a crop
+            // `rendered_pan` is zero and this is the historical `+pan`.
+            let (full_u_w, full_u_h) = self.image_dims().unwrap_or((src_w as u32, src_h as u32));
+            let rendered_pan = Self::roi_rendered_pan(
+                self.preview_roi,
+                full_u_w,
+                full_u_h,
+                self.preview_render_src,
+                scale,
+            );
+            let mut center = pane.center() + eff_pan - rendered_pan;
             let mut rect = egui::Rect::from_center_size(center, draw);
 
             // Scroll-wheel behaviour (GUI-PREVIEW-NAV-1, Lightroom-like): the
@@ -162,7 +180,7 @@ impl LuminaApp {
                             // Recompute for the placement below.
                             scale = new_scale;
                             draw = new_draw;
-                            center = new_center;
+                            center = new_center - rendered_pan;
                             rect = egui::Rect::from_center_size(center, draw);
                             self.mark_dirty();
                         } else if Self::pan_gesture_pins_custom(
@@ -181,7 +199,7 @@ impl LuminaApp {
                             // pan — the gate above keeps the mode Fit.
                             self.zoom_mode = ZoomMode::Custom;
                             center += wheel;
-                            self.preview_pan = center - pane.center();
+                            self.preview_pan += wheel;
                             // Recompute for the placement below.
                             rect = egui::Rect::from_center_size(center, draw);
                             self.mark_dirty();
@@ -245,39 +263,26 @@ impl LuminaApp {
                 }
             }
 
-            // Clamp the centre so a zoomed image always covers the pane (no empty
-            // gutters) and a smaller-than-pane image stays centred (no panning).
-            //
-            // Order-independent guard: at fit the computed draw size can, by
-            // floating-point rounding, come out a few micro-pixels larger than
-            // the pane (`draw.x ≈ pane.width() + ε`), which would make
-            // `pane.left() + draw.x / 2.0` (the `clamp` *min*) larger than
-            // `pane.right() - draw.x / 2.0` (the `clamp` *max*) and panic
-            // `f32::clamp`. Swap the bounds when they invert instead of passing
-            // them through, and clamp against the corrected [lo, hi] so the
-            // centre is pinned to the pane centre (where `lo ≈ hi ≈ centre`).
-            if draw.x <= pane.width() {
-                center.x = pane.center().x;
-            } else {
-                let mut lo = pane.left() + draw.x / 2.0;
-                let mut hi = pane.right() - draw.x / 2.0;
-                if lo > hi {
-                    std::mem::swap(&mut lo, &mut hi);
-                }
-                center.x = center.x.clamp(lo, hi);
-            }
-            if draw.y <= pane.height() {
-                center.y = pane.center().y;
-            } else {
-                let mut lo = pane.top() + draw.y / 2.0;
-                let mut hi = pane.bottom() - draw.y / 2.0;
-                if lo > hi {
-                    std::mem::swap(&mut lo, &mut hi);
-                }
-                center.y = center.y.clamp(lo, hi);
-            }
+            // R5-FIX-WELLE-20 / R4-NAV-1: clamp the pan so the FULL source image
+            // always covers the pane (no empty gutters); a not-magnified or
+            // smaller-than-pane view stays centred. The old inline clamp used
+            // the painted texture's size, which at zoom is an ROI crop only
+            // `PREVIEW_ROI_MARGIN`× the pane — that capped every pan at ~15 % of
+            // a pane, so the navigator box barely moved. The crop itself always
+            // covers the pane (it is re-derived from the clamped pan), so the
+            // guard is purely about the image bounds.
+            let desired_pan = center - pane.center() + rendered_pan;
+            let clamped = Self::clamp_preview_pan(
+                desired_pan,
+                self.preview_zoom,
+                src_w,
+                src_h,
+                scale,
+                pane.width(),
+                pane.height(),
+            );
             self.preview_pan = if self.zoom_mode == ZoomMode::Custom {
-                center - pane.center()
+                clamped
             } else {
                 // GUI-ZOOM-CUSTOM-1 / GUI-NAV-RECT-1: pan is only meaningful
                 // in `Custom`. Absolute modes re-centre every frame
@@ -287,6 +292,7 @@ impl LuminaApp {
                 // centred with zero pan.
                 egui::Vec2::ZERO
             };
+            center = pane.center() + self.preview_pan - rendered_pan;
             let rect = egui::Rect::from_center_size(center, draw);
             self.preview_effective_scale = scale;
             // KITTEST-PARITY-PATHS-1: record the painted preview quad and the
@@ -335,14 +341,10 @@ impl LuminaApp {
             // WB eyedropper needs the source-coordinate mapping, which is part
             // of the desktop capability set.
             if pick && response.clicked() {
-                // REVIEW-GUI-MASKGEO-1: the picker may have been armed before
-                // geometry was edited; refuse the pick visibly instead of
-                // sampling transformed-wrong source pixels, and disarm so the
-                // stale mode does not linger.
-                if self.geometry_blocks_source_mapping() {
-                    self.wb_pick_mode = false;
-                    self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
-                } else if let Some(pos) = response.interact_pointer_pos() {
+                // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former geometry
+                // hard-lock is replaced by the tool switch committing the active
+                // crop/straighten draft; the pick is no longer refused.
+                if let Some(pos) = response.interact_pointer_pos() {
                     let full = self.image_dims().unwrap_or((1, 1));
                     // GUI-DRAFT-JUMP-1: map through the full-space ROI so the
                     // pick lands on the same source pixel on both paths.
@@ -373,10 +375,11 @@ impl LuminaApp {
                     egui::StrokeKind::Middle,
                 );
                 if response.clicked() {
-                    if self.geometry_blocks_source_mapping() {
-                        self.red_eye_pick_mode = false;
-                        self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
-                    } else if let Some(pos) = response.interact_pointer_pos() {
+                    // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): red-eye is now
+                    // freed like masks/WB — the tool switch commits the active
+                    // crop/straighten draft, so the pick is no longer refused
+                    // with the stale geometry lock.
+                    if let Some(pos) = response.interact_pointer_pos() {
                         let full = self.image_dims().unwrap_or((1, 1));
                         let roi = self.preview_roi.map(|r| {
                             Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src)

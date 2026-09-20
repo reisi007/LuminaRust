@@ -2368,6 +2368,18 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Weißabgleich („… unavailable while Crop … active", im Run 10× `mask tool
   Brush refused`) wird dadurch ersetzt — kein Sackgassen-Banner mehr, in beide
   Richtungen (Geometrie ↔ Masken/Weißabgleich).
+  **SOLL (normativ, User-Entscheid 2026-09-20, ersetzt REVIEW-GUI-MASKGEO-1
+  „harter Refusal"):** (1) Ein Werkzeugwechsel von der Geometrie (Crop/Straighten)
+  zu Masken/Weißabgleich committet den Geometrie-Session-Draft durch den
+  bestehenden `commit_crop_edit`-Pfad (Rezept, ein History-Eintrag, Sidecar über
+  die Debounce-Save) und armiert danach das neue Werkzeug — `info!`-sichtbar.
+  (2) Umgekehrt disarmt das Armen des Crop-Werkzeugs die Quellkoordinaten-Tools
+  (Maske/Weißabgleich/Rote-Augen/Spot) ohne Refusal. (3) Verlassen des
+  Crop-Werkzeugs committet den Draft (statt ihn zu verwerfen); `Esc` verwirft
+  weiterhin explizit. (4) Die F-041-Alignment-Grenze (Masken liegen im
+  ungedrehten Vollbild, die Vorschau zeigt die Geometrie) bleibt bestehen und
+  ist als bekannte Grenze dokumentiert — der Anwender hat den barrierefreien
+  Wechsel bewusst über die exakte Alignment-Sperre gestellt.
 - **R5-WARN-2 (mittel):** Denoise-Verweigerungen wiederholen sich pro Tick
   (7× `pending-integration`, 5× `gpu present refused … denoise_ai …, davon
   3× Recipe-Gate + 1× Timing-Pfad) — die R4-WARN-1-Dedup deckt nur den

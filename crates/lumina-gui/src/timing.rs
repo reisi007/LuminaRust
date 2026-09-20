@@ -87,6 +87,12 @@ pub(crate) struct TimingState {
     /// writer lives in the `gpu`-gated `note_vram_refusal`.
     #[cfg(feature = "gpu")]
     present_refusal_warned: Option<String>,
+    /// R5-WARN-2: the last denoise fallback `(status, reason)` that already
+    /// produced a core `warn!`. The GUI render loop resolves the denoise state
+    /// every tick; without this memo the core `fail_or_fallback` warned once per
+    /// tick inside a slider drag. `Ready`/`Inactive` re-arm it (R4-WARN-1
+    /// pattern) so a genuine recurrence stays visible.
+    denoise_refusal_warned: Option<(String, String)>,
 }
 
 // ---- Pure log-line builders (single source of truth for the format) ----
@@ -366,6 +372,45 @@ impl LuminaApp {
     /// path worked again is a genuinely new occurrence and must be visible.
     pub(crate) fn clear_present_refusal_warn(&mut self) {
         self.timing.present_refusal_warned = None;
+    }
+}
+
+// ---- R5-WARN-2: denoise fallback-warn throttle (the Denoise-Gate path) ----
+
+#[cfg(test)]
+thread_local! {
+    static DENOISE_REFUSAL_WARNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Test-only count of denoise fallback warnings that would be emitted (the
+/// first occurrence of each distinct `(status, reason)`).
+#[cfg(test)]
+pub(crate) fn take_denoise_refusal_warns() -> u32 {
+    DENOISE_REFUSAL_WARNS.with(|warns| warns.replace(0))
+}
+
+impl LuminaApp {
+    /// R5-WARN-2 (R4-WARN-1 pattern on the Denoise-Gate path): record a
+    /// denoise fallback `(status, reason)`. Returns `true` exactly once per
+    /// distinct pair — the `DenoiseStageInput::quiet` flag is then `false`, so
+    /// the core emits its `warn!` — and `false` for a per-tick repeat, which is
+    /// suppressed. `Ready`/`Inactive` re-arm via
+    /// [`Self::clear_denoise_refusal_warn`].
+    pub(crate) fn note_denoise_refusal(&mut self, status: &str, reason: &str) -> bool {
+        let key = (status.to_owned(), reason.to_owned());
+        if self.timing.denoise_refusal_warned.as_ref() == Some(&key) {
+            return false;
+        }
+        self.timing.denoise_refusal_warned = Some(key);
+        #[cfg(test)]
+        DENOISE_REFUSAL_WARNS.with(|warns| warns.set(warns.get() + 1));
+        true
+    }
+
+    /// R5-WARN-2: re-arm the denoise fallback warn once the stage is
+    /// `Ready`/`Inactive` (a later recurrence must be visible).
+    pub(crate) fn clear_denoise_refusal_warn(&mut self) {
+        self.timing.denoise_refusal_warned = None;
     }
 }
 

@@ -97,6 +97,9 @@ pub struct DenoiseGuiState {
     /// Persisted producer provenance read from the recipe extras.
     pub recorded: Option<DenoiseIdentity>,
     pub artifact_present: bool,
+    /// R5-WARN-2: the same (status, reason) was already surfaced once, so the
+    /// next render's fallback `warn!` is suppressed ([`DenoiseStageInput::quiet`]).
+    pub refusal_warned: bool,
 }
 
 impl DenoiseGuiState {
@@ -109,6 +112,7 @@ impl DenoiseGuiState {
             current: None,
             recorded: None,
             artifact_present: false,
+            refusal_warned: false,
         }
     }
 
@@ -298,6 +302,7 @@ impl LuminaApp {
     ) -> DenoiseGuiState {
         let policy = self.denoise_gui.policy;
         let Some(denoise) = self.recipe.denoise_ai.clone() else {
+            self.clear_denoise_refusal_warn();
             return DenoiseGuiState::inactive(policy);
         };
         let source_hash = self.resolved_source_hash();
@@ -337,6 +342,21 @@ impl LuminaApp {
         let status =
             resolve_denoise_status(&denoise, &current, &recorded_identity, artifact.is_some());
         let reason = denoise_status_reason(status, &current, recorded.as_ref(), &denoise);
+        // R5-WARN-2: dedup the per-tick fallback `warn!` (R4-WARN-1 pattern on
+        // the Denoise-Gate path). Only the first occurrence of a distinct
+        // (status, reason) lets the core warn; Ready/Inactive re-arms a later
+        // recurrence.
+        let refusal_warned = if matches!(
+            status,
+            DenoiseStageStatus::Ready | DenoiseStageStatus::Inactive
+        ) {
+            self.clear_denoise_refusal_warn();
+            false
+        } else if policy == DenoisePolicy::Warn {
+            !self.note_denoise_refusal(status.as_str(), &reason)
+        } else {
+            false
+        };
         DenoiseGuiState {
             status,
             reason,
@@ -344,6 +364,7 @@ impl LuminaApp {
             current: Some(current),
             recorded,
             artifact_present: artifact.is_some(),
+            refusal_warned,
         }
     }
 
@@ -371,6 +392,7 @@ impl LuminaApp {
             artifact,
             reason: self.denoise_gui.reason.clone(),
             policy: self.denoise_gui.policy,
+            quiet: self.denoise_gui.refusal_warned,
         }
     }
 

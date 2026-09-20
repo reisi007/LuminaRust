@@ -149,6 +149,13 @@ Quelle.
   (`move_library_selection`) überspringt bei zugeklapptem Stapel die
   verdeckten Mitglieder. Dadurch wirken Sync/Batch/Previous automatisch auf
   den Stapel als Einheit.
+  **Zugehörigkeits-Klammer (R5-STACK-3, User-Entscheid 2026-09-20):** Jedes
+  Zellen-Badge eines gestapelten Bildes trägt zusätzlich eine sichtbare
+  Zugehörigkeits-Klammer (Rahmen um die Zelle) und die Position im Stapel als
+  „&lt;Index&gt;/&lt;Anzahl&gt;“ (z. B. „1/2“); zugeklappt bleibt das klare
+  Stapel-Symbol „⊞ &lt;Index&gt;/&lt;Anzahl&gt;“ nur am Deckbild. Die Klammer ist
+  reine Anzeige (kein Rezept, kein Sidecar) und macht die Gruppierung auch ohne
+  Selektion erkennbar.
 - **Sichtbare Funktionen (klickbare Buttons im Library-Metadaten-Panel):**
   `Stack` (aus der Auswahl ≥2 Bilder desselben Ordners anlegen),
   `Unstack` (Stapel der Auswahl auflösen) und ein Zuklapp-/Aufklapp-Toggle.

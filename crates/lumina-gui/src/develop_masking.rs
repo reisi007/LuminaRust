@@ -74,35 +74,31 @@ impl LuminaApp {
             // the preview is interpreted; persistence goes through the sidecar.
             ui.separator();
             ui.label(Str::MaskTool.t());
-            // REVIEW-GUI-MASKGEO-1: while recipe geometry is active the drawn
-            // coordinates would land transformed-wrong, so the tool row is
-            // disabled and an explicit hint explains why (no silent fallback).
-            let geometry_blocked = self.geometry_blocks_source_mapping();
-            ui.add_enabled_ui(!geometry_blocked, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (tool, label) in [
-                        (MaskTool::Brush, Str::MaskToolBrush),
-                        (MaskTool::LinearGradient, Str::MaskToolGradient),
-                        (MaskTool::Radial, Str::MaskToolRadial),
-                    ] {
-                        if ui
-                            .selectable_label(self.mask_tool == tool, label.t())
-                            .clicked()
-                        {
-                            self.set_mask_tool(tool);
-                        }
-                    }
+            // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former geometry
+            // hard-lock is replaced by the tool switch committing the active
+            // crop/straighten draft first. The tools stay selectable; no
+            // dead-end banner.
+            ui.horizontal_wrapped(|ui| {
+                for (tool, label) in [
+                    (MaskTool::Brush, Str::MaskToolBrush),
+                    (MaskTool::LinearGradient, Str::MaskToolGradient),
+                    (MaskTool::Radial, Str::MaskToolRadial),
+                ] {
                     if ui
-                        .selectable_label(self.mask_tool == MaskTool::None, Str::MaskToolNone.t())
+                        .selectable_label(self.mask_tool == tool, label.t())
                         .clicked()
                     {
-                        self.set_mask_tool(MaskTool::None);
+                        self.commit_outgoing_tool_for_switch(ui.ctx());
+                        self.set_mask_tool(tool);
                     }
-                });
+                }
+                if ui
+                    .selectable_label(self.mask_tool == MaskTool::None, Str::MaskToolNone.t())
+                    .clicked()
+                {
+                    self.set_mask_tool(MaskTool::None);
+                }
             });
-            if geometry_blocked {
-                ui.colored_label(egui::Color32::YELLOW, Self::GEOMETRY_TOOL_BLOCKED);
-            }
             // G-11 overlay/panel comfort: global tool-overlay mode, edit-pin
             // visibility and solo mode. Session-only display state — never
             // recipe or sidecar.

@@ -120,6 +120,8 @@ impl LuminaApp {
                 .toggle_value(&mut pick, Str::RedEyePickMode.t())
                 .changed()
             {
+                // R5-TOOLFLOW-1: a tool switch commits the active tool first.
+                self.commit_outgoing_tool_for_switch(ui.ctx());
                 self.set_red_eye_pick_mode(pick);
             }
             // LRPAR-G14-REDEYE-AUTO-15: detection is explicit only. "Detect

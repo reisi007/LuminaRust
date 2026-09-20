@@ -322,28 +322,31 @@ fn crop_interactive_commit_converts_aspect_preset_to_free() {
     );
 }
 
-/// Leaving crop mode without `Enter` (e.g. `R` toggled off) discards the
-/// session draft loudly — it is never carried into a later crop session.
+/// R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): leaving crop mode without
+/// `Enter` (e.g. `R` toggled off) **commits** the session draft (rezept + one
+/// history step) instead of discarding it. Only `Esc` discards explicitly.
 #[test]
-fn leaving_crop_mode_discards_the_draft() {
+fn leaving_crop_mode_commits_the_draft() {
     let mut harness = CropHarness::new();
     let (_directory, mut app) = crop_app(&harness.ctx);
     drag_corner(&mut harness, &mut app, (0.0, 0.0), (0.3, 0.3));
     assert!(crop_draft(&harness.ctx).is_some(), "draft after the drag");
     app.toggle_crop_mode(); // R off
-                            // The next frame's key handler observes crop mode off and discards.
+                            // The next frame's key handler observes crop mode off and commits.
     harness.key_pass(&mut app, egui::Key::Z);
     assert!(
         crop_draft(&harness.ctx).is_none(),
-        "leaving crop mode must discard the session draft"
+        "leaving crop mode must consume the session draft"
     );
+    let committed = app
+        .recipe()
+        .geometry
+        .as_ref()
+        .and_then(|geometry| geometry.crop.clone())
+        .expect("leaving crop mode must commit the crop rectangle");
     assert!(
-        app.recipe()
-            .geometry
-            .as_ref()
-            .and_then(|geometry| geometry.crop.as_ref())
-            .is_none(),
-        "discarding must not touch the recipe"
+        matches!(committed, Crop::Free { .. }),
+        "the committed draft is a free rect: {committed:?}"
     );
 }
 

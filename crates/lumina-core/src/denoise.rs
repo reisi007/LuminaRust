@@ -255,65 +255,10 @@ pub fn resolve_denoise_status(
     DenoiseStageStatus::Ready
 }
 
-/// Caller-resolved KI-Denoise stage state: the §6 status, an optional
-/// matching artifact and the fallback policy.
-#[derive(Debug, Clone)]
-pub struct DenoiseStageInput<'a> {
-    pub status: DenoiseStageStatus,
-    pub artifact: Option<&'a DenoiseRgbArtifact>,
-    /// Human-readable explanation for a non-`Ready` status (empty otherwise).
-    pub reason: String,
-    pub policy: DenoisePolicy,
-}
-
-impl Default for DenoiseStageInput<'_> {
-    fn default() -> Self {
-        Self::inactive()
-    }
-}
-
-impl<'a> DenoiseStageInput<'a> {
-    /// The stage is not resolved by the caller. With an active recipe this is
-    /// treated as `Unavailable` (loud under `Strict`), never as a silent no-op.
-    #[must_use]
-    pub fn inactive() -> Self {
-        Self {
-            status: DenoiseStageStatus::Inactive,
-            artifact: None,
-            reason: String::new(),
-            policy: DenoisePolicy::Strict,
-        }
-    }
-
-    /// A matching, verified artifact.
-    #[must_use]
-    pub fn ready(artifact: &'a DenoiseRgbArtifact) -> Self {
-        Self {
-            status: DenoiseStageStatus::Ready,
-            artifact: Some(artifact),
-            reason: String::new(),
-            policy: DenoisePolicy::Strict,
-        }
-    }
-
-    /// A visible non-ready state (unavailable/stale/missing/corrupt).
-    #[must_use]
-    pub fn non_ready(status: DenoiseStageStatus, reason: impl Into<String>) -> Self {
-        Self {
-            status,
-            artifact: None,
-            reason: reason.into(),
-            policy: DenoisePolicy::Strict,
-        }
-    }
-
-    /// Selects the fallback policy ([`DenoisePolicy`]).
-    #[must_use]
-    pub fn with_policy(mut self, policy: DenoisePolicy) -> Self {
-        self.policy = policy;
-        self
-    }
-}
+/// R5-WARN-2: `DenoiseStageInput` lives in its own submodule so the
+/// over-500-line `denoise.rs` keeps its ratchet after the `quiet` field.
+mod stage_input;
+pub use stage_input::DenoiseStageInput;
 
 /// Outcome of [`apply_denoise_stage`], for CLI/GUI status reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,10 +335,12 @@ fn fail_or_fallback(
         }),
         DenoisePolicy::Warn => {
             let status_str = status.as_str();
-            warn!(
-                "denoise_ai is {status_str}: {reason}; falling back to manual noise reduction \
-                 (F-096) / identity — visible, not silent"
-            );
+            if !input.quiet {
+                warn!(
+                    "denoise_ai is {status_str}: {reason}; falling back to manual noise reduction \
+                     (F-096) / identity — visible, not silent"
+                );
+            }
             Ok(DenoiseOutcome {
                 applied: false,
                 status,

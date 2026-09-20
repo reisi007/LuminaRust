@@ -1,17 +1,25 @@
 //! UX-LOOK-CROP-18b: straighten rotation + auto-level inside the crop tool.
 //!
-//! The crop tool owns a **session-only rotation draft** alongside the crop
-//! rectangle draft (`crop_overlay.rs`). The angle is edited on a crop bar under
-//! the preview (the chosen gesture variant: a labeled slider, not an on-canvas
-//! drag — documented here and in the feature report). Nothing reaches the recipe
-//! until `Enter`:
+//! The crop tool owns a **session-only crop rectangle draft** alongside a
+//! session rotation draft (`crop_overlay.rs`). The angle is edited on a crop
+//! bar under the preview (the chosen gesture variant: a labeled slider, not an
+//! on-canvas drag — documented here and in the feature report).
 //!
-//! * `Enter` commits the crop and, when the draft differs from the committed
-//!   angle, the rotation through the existing [`LuminaApp::set_straighten`]
-//!   path (`geometry.rotation_degrees`, no new recipe field). Because all
-//!   setters run before the single debounced save, crop + rotation share **one**
-//!   geometry history step.
-//! * `Esc` (and leaving crop mode) discards everything bit-for-bit.
+//! R5-STRAIGHTEN-1 (User-Bug, 2026-09-20): the straighten **slider** commits
+//! through the existing [`LuminaApp::set_straighten`] path the moment it
+//! changes (`geometry.rotation_degrees`, no new recipe field, logged at
+//! `info!`). The former draft-only write never logged and never reached the
+//! recipe, so the slider looked dead and "Save Recipe" persisted nothing. The
+//! session rotation draft is kept in sync for Auto-Level and the `Enter`
+//! commit; the crop **rectangle** still only reaches the recipe on `Enter`.
+//!
+//! * `Enter` commits the crop rectangle and, when the draft differs from the
+//!   committed angle, the rotation through the same [`LuminaApp::set_straighten`]
+//!   path. Because all setters run before the single debounced save, a
+//!   draft-committed crop + rotation share **one** geometry history step.
+//! * `Esc` (and leaving crop mode) discards the crop rectangle draft; an
+//!   already slider-committed rotation stays (it is a real edit, like the
+//!   panel straighten slider).
 //!
 //! **Auto-Level** runs the deterministic, model-free
 //! `lumina_core::upright::analyze_upright` backend (not changed here, only
@@ -131,6 +139,37 @@ impl LuminaApp {
             .unwrap_or(0.0)
     }
 
+    /// Apply a crop-bar straighten edit (R5-STRAIGHTEN-1). Commits through
+    /// [`Self::set_straighten`], so the angle reaches the recipe, the render
+    /// and the sidecar immediately and is logged at `info!`; the session
+    /// rotation draft is kept in sync so a later `Enter`/Auto-Level commit
+    /// still coalesces (an equal draft is a no-op there).
+    pub(crate) fn set_crop_bar_rotation(&mut self, ctx: &egui::Context, degrees: f32) {
+        self.set_straighten(f64::from(degrees));
+        set_crop_rotation_draft(ctx, Some(degrees));
+    }
+
+    /// R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): commit the active tool's
+    /// session draft before another tool is armed. Today that is the
+    /// interactive crop tool — [`Self::commit_crop_edit`] writes the crop
+    /// rectangle + straighten draft through the regular setters (one history
+    /// step, debounced sidecar save). Leaving crop mode is explicit here (not
+    /// the old `cancel_crop_edit`) so a tool switch can never drop the user's
+    /// geometry silently. Masks/WB/red-eye/spot carry no cross-frame draft
+    /// beyond the current drag, which the receiving setter cancels.
+    pub(crate) fn commit_outgoing_tool_for_switch(&mut self, ctx: &egui::Context) {
+        if !self.crop_mode {
+            return;
+        }
+        let committed = self.commit_crop_edit(ctx);
+        self.crop_mode = false;
+        self.set_crop_mode_status();
+        self.mark_dirty();
+        info!(
+            "GUI interaction: tool switch commits the active crop/straighten draft (committed={committed})"
+        );
+    }
+
     /// Crop-bar Auto-Level button: run the deterministic upright analysis and
     /// set the session rotation draft. Loud low-confidence refusal (status +
     /// `warn!`, no save); at sufficient confidence the analysis is stashed with
@@ -199,8 +238,9 @@ impl LuminaApp {
     }
 
     /// Paint the crop bar (straighten slider + Auto-Level button) and react to
-    /// its controls. All edits stay in the session drafts; the recipe is only
-    /// written by `Enter`.
+    /// its controls. The straighten slider commits through
+    /// [`Self::set_crop_bar_rotation`] immediately (R5-STRAIGHTEN-1); the Auto
+    /// button stays a session draft until `Enter`.
     pub(crate) fn draw_crop_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -240,7 +280,14 @@ impl LuminaApp {
             ),
             SliderAction::Changed | SliderAction::ResetRequested
         ) {
-            set_crop_rotation_draft(ctx, Some(degrees));
+            // R5-STRAIGHTEN-1 (User-Bug): commit through the real straighten
+            // setter so the angle reaches the recipe, the render and the
+            // sidecar — and is logged (`set_straighten` logs `info!`). The
+            // former draft-only write never logged and never rotated, so the
+            // slider looked dead and "Save Recipe" persisted nothing. The
+            // session draft is kept in sync so `Enter`/Auto-Level still
+            // coalesce (an equal draft is skipped by `commit_crop_edit`).
+            self.set_crop_bar_rotation(ctx, degrees);
         }
         let mut button_ui = ui.new_child(
             egui::UiBuilder::new()

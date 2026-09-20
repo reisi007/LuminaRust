@@ -182,7 +182,12 @@ impl LuminaApp {
                             }
                             // LRPAR-G15-STACK-15: clickable stack badge toggles
                             // the collapse; it wins over the plain cell click.
-                            let stack_badge_clicked = self.paint_stack_badge(ui, rect, &entry);
+                            let stack_badge_clicked = self.paint_stack_badge(
+                                ui,
+                                rect,
+                                &entry,
+                                crate::library_stacks::StackBadgeSurface::Filmstrip,
+                            );
                             if resp.clicked() && !stack_badge_clicked {
                                 // Cmd/Ctrl-Click toggles, Shift-Click extends
                                 // the range from the anchor; a plain click

@@ -29,13 +29,10 @@ impl LuminaApp {
         if self.mask_tool == MaskTool::None || self.wb_pick_mode {
             return;
         }
-        // REVIEW-GUI-MASKGEO-1 defense in depth: the tool can only be armed via
-        // `set_mask_tool`, which already refuses while geometry is active — but
-        // geometry could be *edited* mid-session, so re-check before mapping
-        // any pointer position into source coordinates.
-        if self.geometry_blocks_source_mapping() {
-            return;
-        }
+        // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former geometry
+        // defense-in-depth refusal is replaced by the tool switch committing
+        // the active crop/straighten draft; drawn prompts map through the
+        // current `to_normalized`/ROI path.
         let Some(pos) = response.interact_pointer_pos() else {
             return;
         };

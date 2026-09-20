@@ -11,6 +11,8 @@ use super::*;
 // Rework B1/B2/B4: rejection-classes, sidecar-safety and drag-as-unit coverage
 // (split out so both files stay within the 500-line ratchet).
 mod rejections;
+// R5-FIX-WELLE-20: sort-row visibility + drop indicator.
+mod r5_sort;
 
 fn stub_identity(name: &str) -> SourceIdentity {
     SourceIdentity {

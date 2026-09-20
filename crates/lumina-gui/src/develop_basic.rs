@@ -10,7 +10,6 @@
 //! and `DEVELOP_SECTIONS` call them.
 
 use super::*;
-use log::warn;
 
 impl LuminaApp {
     /// One horizontal Lightroom-style adjustment row bound to a flat recipe key.
@@ -172,19 +171,11 @@ impl LuminaApp {
                 });
                 ui.label(Str::PickWhiteBalanceHint.t());
             } else if ui.button(Str::WbEyedropper.t()).clicked() {
-                // REVIEW-GUI-MASKGEO-1: with active Crop/Rotation/Mirror/
-                // Perspective the clicked preview position no longer maps
-                // 1:1 onto source pixels — refuse visibly instead of picking
-                // transformed-wrong values.
-                let geometry_blocked = self.geometry_blocks_source_mapping();
-                if geometry_blocked {
-                    warn!("WB eyedropper refused while recipe geometry is active");
-                    {
-                        self.status = Self::GEOMETRY_TOOL_BLOCKED.into();
-                    }
-                } else {
-                    self.arm_wb_picker();
-                }
+                // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former geometry
+                // hard-lock is replaced by committing the active crop/straighten
+                // draft on the tool switch (no dead-end banner).
+                self.commit_outgoing_tool_for_switch(ui.ctx());
+                self.arm_wb_picker();
             }
             ui.separator();
             self.adjustment_slider(

@@ -2,6 +2,10 @@
 
 use super::*;
 
+// R5-FIX-WELLE-20: nested test module (keeps `lib.rs`'s ratcheted `mod` list
+// and this 500-line file from growing).
+mod r5_loupe;
+
 #[test]
 fn w3_library_filter_matches_names_and_metadata() {
     // Empty query matches everything (default grid is unfiltered).
