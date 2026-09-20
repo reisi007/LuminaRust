@@ -56,6 +56,12 @@ mod selection_actions;
 // SIDECAR-REBASE-1: rebase a losing CAS save onto the current file instead of
 // dropping it on a concurrent change (slider/crop/batch save paths).
 mod sidecar_rebase;
+// R3-RENDER-SIZE-1 (2026-09-20): the preview viewport cap (device-pixel budget
+// for draft + full previews; export and the 1:1 loupe stay full resolution).
+mod preview_size;
+// R2-MODSWITCH-1 F8: the asynchronous folder scan (worker + main-thread drain)
+// and the moved `scan_entry`/recursive driver.
+mod library_scan;
 // GUI-REFACTOR-W1-20 S1.1: the interactive draft render and the coalesced
 // pointer-drag tick (Jank hot path) plus `DragTickTimings`.
 mod render_tick;
@@ -1675,8 +1681,8 @@ pub struct LuminaApp {
     /// R2-GUIMOD-04a: per-tick drag-render timings of the last coalesced
     /// pointer-drag tick (measurement only, feeds F-103-N6).
     last_drag_tick: Option<DragTickTimings>,
-    /// Long-edge cap (px) for the cached draft source (viewport resolution).
-    draft_max_dim: u32,
+    /// R3-RENDER-SIZE-1: preview viewport-cap state (dpr, draft edge, cache).
+    preview_cap_state: preview_size::PreviewCapState,
     /// Timestamp (egui `ctx.input(|i| i.time)`) of the last frame that still
     /// had pending edits; drives the 150 ms idle debounce (PERF-GUI-3/4).
     last_edit_time: f64,
@@ -1840,6 +1846,15 @@ pub struct LuminaApp {
     /// PERF-GUI-7: receiver for a background RAW/raster decode. `Some` while a
     /// decode is in flight on a worker thread.
     decode_rx: Option<std::sync::mpsc::Receiver<DecodeResult>>,
+    /// R2-MODSWITCH-1 F8: receiver for a background folder scan. `Some` while a
+    /// scan is in flight on its worker thread; drained by `poll_scan`.
+    scan_rx: Option<std::sync::mpsc::Receiver<library_scan::ScanResult>>,
+    /// R2-MODSWITCH-1 F8: latest-wins generation tag for the async folder scan;
+    /// a result tagged with an older generation is dropped (never merged).
+    scan_generation: u64,
+    /// R2-MODSWITCH-1 F8: a scan is in flight — drives the visible loading
+    /// status so the grid never stalls silently.
+    scan_pending: bool,
     /// REVIEW-GUI-N1: revision (BLAKE3 over the JSON) of the on-disk sidecar
     /// that the in-memory `document` lineage is based on. `None` means no
     /// sidecar file existed when this lineage started (fresh document). Passed
@@ -2615,7 +2630,7 @@ impl LuminaApp {
             last_stage_work: None,
             last_analysis_ms: 0.0,
             last_drag_tick: None,
-            draft_max_dim: 1280,
+            preview_cap_state: preview_size::PreviewCapState::default(),
             last_edit_time: 0.0,
             preview_zoom: 1.0,
             zoom_mode: ZoomMode::Fit,
@@ -2667,6 +2682,9 @@ impl LuminaApp {
             meta_embedded_cache: None,
             history_selected: None,
             decode_rx: None,
+            scan_rx: None,
+            scan_generation: 0,
+            scan_pending: false,
             sidecar_revision: None,
             pending_full_render: false,
             auto_load_attempted: false,
@@ -2874,111 +2892,27 @@ impl LuminaApp {
     /// relative subfolder in [`FileBrowserEntry::folder`] for the grid path
     /// badge. The RAW-only grid decision is unchanged — only aggregation.
     pub fn list_directory(&mut self) {
-        let directory = std::path::PathBuf::from(self.directory.trim());
-        let mut entries = Vec::new();
-        Self::collect_entries_recursive(&directory, &mut entries);
-        self.apply_listing(directory, entries);
+        self.request_scan(true);
     }
 
     /// Flat single-folder listing behind [`Self::set_directory`].
     pub fn list_directory_flat(&mut self) {
-        let directory = std::path::PathBuf::from(self.directory.trim());
-        let mut entries = Vec::new();
-        Self::collect_entries_flat(&directory, &mut entries);
-        self.apply_listing(directory, entries);
+        self.request_scan(false);
     }
 
-    /// Flat (single-folder) scan used by [`Self::list_directory_flat`].
-    fn collect_entries_flat(directory: &Path, out: &mut Vec<FileBrowserEntry>) {
-        Self::scan_single_dir(directory, directory, out);
-    }
-
-    /// Recursive aggregation used by [`Self::list_directory`].
-    fn collect_entries_recursive(root: &Path, out: &mut Vec<FileBrowserEntry>) {
-        let mut visited = std::collections::HashSet::new();
-        Self::scan_dir_recursive(root, root, FOLDER_SCAN_DEPTH, &mut visited, out);
-    }
-
-    /// Scan one directory level: supported images plus orphan sidecars whose
-    /// source file is missing. Directory entries are skipped here (the
-    /// recursive driver descends into them separately); every entry gets its
-    /// subfolder badge relative to `root` (`""` for top-level files).
-    fn scan_single_dir(root: &Path, dir: &Path, out: &mut Vec<FileBrowserEntry>) {
-        if let Ok(dir_entries) = std::fs::read_dir(dir) {
-            for entry in dir_entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    continue;
-                }
-                if let Some(mut scanned) = Self::scan_entry(&path) {
-                    scanned.folder = folder_badge(root, &path);
-                    out.push(scanned);
-                }
-            }
-        }
-        // Also pick up orphan sidecars whose source file is missing.
-        // After deleting the source, read_dir won't list it, but the
-        // .lumina.json sidecar still exists on disk.
-        if let Ok(sidecar_entries) = std::fs::read_dir(dir) {
-            for entry in sidecar_entries.flatten() {
-                let path = entry.path();
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".lumina.json") {
-                        if let Some(source_name) = name.strip_suffix(".lumina.json") {
-                            let source_path = dir.join(source_name);
-                            if !out.iter().any(|e| e.path == source_path) {
-                                if let Some(mut scanned) = Self::scan_entry(&source_path) {
-                                    scanned.folder = folder_badge(root, &source_path);
-                                    out.push(scanned);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Recursive driver behind [`Self::collect_entries_recursive`]:
-    /// depth-limited, symlink-/loop-safe via canonical `visited` paths.
-    /// `remaining_depth == 0` scans nothing (same convention as
-    /// `count_raw_files`).
-    fn scan_dir_recursive(
-        root: &Path,
-        dir: &Path,
-        remaining_depth: usize,
-        visited: &mut std::collections::HashSet<PathBuf>,
-        out: &mut Vec<FileBrowserEntry>,
-    ) {
-        if remaining_depth == 0 {
-            return;
-        }
-        let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        if !visited.insert(canonical) {
-            return;
-        }
-        Self::scan_single_dir(root, dir, out);
-        let mut subdirs: Vec<PathBuf> = std::fs::read_dir(dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .filter(|path| path.is_dir())
-                    // GUI-LIBRARY-LUMINA-DIR-1: never descend into `.lumina/`
-                    // cache directories (exact name, every level) — belt and
-                    // braces next to the `scan_entry` guard, so the cache is
-                    // not even walked (and costs no scan depth).
-                    .filter(|path| {
-                        path.file_name()
-                            .and_then(|name| name.to_str())
-                            .is_none_or(|name| name != ".lumina")
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        subdirs.sort();
-        for sub in subdirs {
-            Self::scan_dir_recursive(root, &sub, remaining_depth - 1, visited, out);
+    /// R2-MODSWITCH-1 F8: request a folder scan. Production runs it on the
+    /// worker thread ([`Self::begin_scan`], drained by [`Self::poll_scan`]) so
+    /// the UI thread never blocks. Headless tests have no event loop, so under
+    /// `cfg(test)` the same scan engine runs synchronously
+    /// ([`Self::scan_directory_blocking`]) — a test seam, not a production
+    /// fallback. The async worker path itself is covered by the dedicated
+    /// `begin_scan`/`poll_scan` tests (`tests/r3_f8_scan.rs`).
+    fn request_scan(&mut self, recursive: bool) {
+        #[cfg(test)]
+        self.scan_directory_blocking(recursive);
+        #[cfg(not(test))]
+        {
+            let _ = self.begin_scan(recursive);
         }
     }
 
@@ -3130,7 +3064,7 @@ impl LuminaApp {
     /// on folders with large RAWs on every slider-commit save (GUI-VIEW-2,
     /// N6 Develop→Library/save stall class).
     fn refresh_entry(&mut self, path: &Path) {
-        let Some(mut scanned) = Self::scan_entry(path) else {
+        let Some(mut scanned) = library_scan::scan_entry(path) else {
             return;
         };
         // VIEW-2 single-file refresh: keep the subfolder badge consistent
@@ -3149,143 +3083,6 @@ impl LuminaApp {
         &self.entries
     }
 
-    fn scan_entry(path: &Path) -> Option<FileBrowserEntry> {
-        // GUI-LIBRARY-LUMINA-DIR-1: `.lumina/` is deletable cache, never
-        // library content — its files must not land in the grid, Sync/Match,
-        // or sidecar writes. The guard lives here (not only in the recursive
-        // driver) so flat listings, direct `.lumina/` navigation,
-        // single-file refreshes, and orphan-sidecar derivations stay clean.
-        if is_lumina_cache_path(path) {
-            return None;
-        }
-        if !is_supported_image(path) {
-            return None;
-        }
-        let sidecar_path = lumina_sidecar::sidecar_path_for(path);
-        let has_sidecar = sidecar_path.is_file();
-        let mut virtual_copies = 0usize;
-        let mut missing_models = 0usize;
-        // LR-01: the grid badge shows the default copy's rating/flag — the
-        // canonical per-image organization state.
-        let mut rating = 0u8;
-        let mut flag = lumina_sidecar::Flag::Unflagged;
-        let mut color_label = 0u8;
-        // G-15 META-MVP (Slice 3): source-level keywords + static collection
-        // memberships for the extended Library filter / smart evaluation.
-        let mut keywords = Vec::new();
-        let mut collections = Vec::new();
-        let mut culling_section: Option<lumina_sidecar::CullingSection> = None;
-        let mut face_persons = Vec::new();
-        // LRPAR-G15-STACK-15: source-level image-stack membership.
-        let mut stack = None;
-        let source_status = if path.is_file() {
-            match lumina_sidecar::load_sidecar(&sidecar_path) {
-                Ok(document) => {
-                    keywords = document.keywords.clone();
-                    collections = document.collections.clone();
-                    culling_section = document.culling.clone();
-                    stack = document.stack.clone();
-                    face_persons = document
-                        .face
-                        .as_ref()
-                        .map(|analysis| {
-                            analysis
-                                .persons
-                                .iter()
-                                .map(|person| person.name.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    virtual_copies = document.virtual_copies.len();
-                    if let Some(default) = document
-                        .virtual_copies
-                        .iter()
-                        .find(|copy| copy.is_default)
-                        .or_else(|| document.virtual_copies.first())
-                    {
-                        rating = default.rating;
-                        flag = default.flag;
-                        color_label = color_label_of(&default.extras);
-                    }
-                    let bundle_root = path.parent().unwrap_or_else(|| Path::new("."));
-                    for copy in &document.virtual_copies {
-                        for mask in &copy.mask_library {
-                            let artifact_missing = mask.artifact.as_ref().is_some_and(|artifact| {
-                                lumina_sidecar::artifact_status(bundle_root, artifact)
-                                    != ArtifactStatus::Available
-                            });
-                            if matches!(
-                                mask.status,
-                                MaskStatus::Missing
-                                    | MaskStatus::Pending
-                                    | MaskStatus::Stale
-                                    | MaskStatus::Corrupt
-                            ) || artifact_missing
-                            {
-                                missing_models += 1;
-                            }
-                        }
-                    }
-                    lumina_sidecar::source_status(path, &document.source)
-                        .unwrap_or(SourceStatus::Unchanged)
-                }
-                Err(_) => SourceStatus::Unchanged,
-            }
-        } else {
-            SourceStatus::Missing
-        };
-        let cull_badge = cull_gui::scan_cull_badge(culling_section.as_ref(), source_status);
-        let conflict = has_sidecar && !matches!(source_status, SourceStatus::Unchanged);
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
-        // G-15 META-MVP (Slice 3): EXIF snapshot for the extended Library
-        // filter — best effort, never a scan failure. `read_metadata` is a
-        // metadata-only probe (no full decode); unreadable sources simply
-        // carry `None` (the corresponding predicates then match nothing).
-        let (camera, iso, focal_length, capture_timestamp) = match lumina_raw::read_metadata(path) {
-            Ok(metadata) => {
-                let camera = match (&metadata.camera_make, &metadata.camera_model) {
-                    (Some(make), Some(model)) => Some(format!("{make} {model}")),
-                    (Some(make), None) => Some(make.clone()),
-                    (None, Some(model)) => Some(model.clone()),
-                    (None, None) => None,
-                };
-                (
-                    camera,
-                    metadata.iso,
-                    metadata.focal_length,
-                    metadata.timestamp,
-                )
-            }
-            Err(_) => (None, None, None, None),
-        };
-        Some(FileBrowserEntry {
-            path: path.to_path_buf(),
-            name,
-            thumb_key: thumbnail_key(path),
-            has_sidecar,
-            source_status,
-            conflict,
-            virtual_copies,
-            missing_models,
-            rating,
-            flag,
-            color_label,
-            keywords,
-            collections,
-            camera,
-            iso,
-            focal_length,
-            capture_timestamp,
-            folder: String::new(),
-            cull_badge,
-            face_persons,
-            stack,
-        })
-    }
     pub fn status(&self) -> &str {
         &self.status
     }
@@ -8619,8 +8416,10 @@ impl LuminaApp {
         self.base_stage_cache.clear();
         self.source_hash_memo = None;
         self.last_stage_work = None;
-        // PERF-GUI-3: cache a downscaled source for fast draft renders.
-        self.draft_original = Some(frame.downscale(self.draft_max_dim));
+        // PERF-GUI-3: cache a downscaled source for fast draft renders; R3-RENDER-SIZE-1
+        // resets the preview-cap state (built edge + capped-preview cache + warning).
+        self.preview_cap_state = preview_size::PreviewCapState::new();
+        self.draft_original = Some(frame.downscale(self.preview_cap_state.draft_max_dim));
         #[cfg(feature = "gpu")]
         {
             // H1: invalidate the persistent R16 brush plane — a new source size needs
@@ -12467,6 +12266,10 @@ impl eframe::App for LuminaApp {
         // on the main thread here, so a slow decode never freezes interaction.
         self.poll_decode();
 
+        // R2-MODSWITCH-1 F8: drain a completed background folder scan and apply
+        // it atomically (visible loading status until it lands).
+        self.poll_scan();
+
         // PREVIEW-CACHE-FEATURE: drain neighbor-preview worker results (RAM LRU
         // insert + visible failure states) on the main thread; the prefetch
         // itself runs on dedicated background workers, never the IdleQueue.
@@ -12481,6 +12284,10 @@ impl eframe::App for LuminaApp {
         // the previous frame's `draw_preview`, so the render's ROI crop matches
         // the on-screen zoom (even on the frame a mode button/shortcut fires).
         self.sync_zoom();
+
+        // R3-RENDER-SIZE-1: refresh dpr + rebuild the draft source if the
+        // viewport cap changed (resize / display move), before the scheduler.
+        self.refresh_preview_cap(ctx.pixels_per_point());
 
         // PERF-GUI-3/4 + R2-JANK-1 F1/F4 + R2-MODSWITCH-1 F7: the per-frame
         // render scheduling (draft tick, debounce, module-switch deferral) lives
@@ -12734,6 +12541,13 @@ mod tests {
     mod panels;
     mod preview_placement;
     mod preview_render;
+    // R3-RENDER-SIZE-1: the preview viewport cap (draft + full) and its
+    // export / 1:1-loupe exemptions.
+    mod r3_render_size;
+    // R2-MODSWITCH-1 F8: the asynchronous folder scan (worker + drain).
+    mod r3_f8_scan;
+    // R3-CONFLICT-1: the CAS-rebase path under a real two-writer race.
+    mod r3_conflict;
     mod recipe_session;
     mod red_eye;
     mod render_cache;

@@ -67,7 +67,10 @@ impl LuminaApp {
         } else {
             (
                 PreviewKind::Screen,
-                (self.draft_max_dim, self.draft_max_dim),
+                (
+                    self.preview_cap_state.draft_max_dim,
+                    self.preview_cap_state.draft_max_dim,
+                ),
             )
         };
         // A6: when the kind/resolution changes (e.g. zoom → 1:1) the previously

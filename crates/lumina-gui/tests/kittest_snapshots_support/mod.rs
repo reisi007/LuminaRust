@@ -27,6 +27,41 @@ pub(crate) fn load_sample(harness: &mut Harness<'_, LuminaApp>) {
         .expect("sample image loads");
 }
 
+/// R2-MODSWITCH-1 F8: the folder scan is asynchronous in production (worker +
+/// `poll_scan` in the frame loop). A snapshot must be taken from the *settled*
+/// listing, so drive frames until the in-flight scan lands (bounded), then one
+/// extra frame so the applied status/list is painted. Without this the golden
+/// would capture the transient "Scanning folder…" status.
+pub(crate) fn settle_scan(harness: &mut Harness<'_, LuminaApp>) {
+    for _ in 0..500 {
+        // `step()` (not `run()`): a scheduled thumbnail/scan repaint would make
+        // `run()` exceed its max_steps bound. Settle both async background
+        // paths — the folder scan AND the auto-load decode it starts — so a
+        // decode failure surfaces in the status line before the snapshot.
+        harness.step();
+        if !harness.state().scan_pending() && !harness.state().decode_pending() {
+            harness.step();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("folder scan/decode did not settle within the bounded frame budget");
+}
+
+/// R2-MODSWITCH-1 F8: `LuminaApp::set_directory` (flat listing) followed by
+/// [`settle_scan`] — the async scan must land before a snapshot/assert.
+pub(crate) fn set_directory_and_settle(harness: &mut Harness<'_, LuminaApp>, directory: String) {
+    harness.state_mut().set_directory(directory);
+    settle_scan(harness);
+}
+
+/// R2-MODSWITCH-1 F8: `LuminaApp::list_directory` (recursive listing) followed
+/// by [`settle_scan`].
+pub(crate) fn list_directory_and_settle(harness: &mut Harness<'_, LuminaApp>) {
+    harness.state_mut().list_directory();
+    settle_scan(harness);
+}
+
 /// Assert that `label` is laid out inside the 1024x720 window (not below
 /// the ScrollArea fold): existence in the accesskit tree alone does not
 /// prove pixel-visibility.

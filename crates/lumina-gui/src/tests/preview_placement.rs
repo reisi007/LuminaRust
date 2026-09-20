@@ -58,11 +58,17 @@ fn roi_in_full_pixels_aligns_draft_and_full_crops() {
 
 /// GUI-DRAFT-JUMP-1: draft and full renders of the same zoomed view share
 /// on-screen placement (no geometry jump on mouse-up).
+///
+/// R3-RENDER-SIZE-1: the full path now also caps a large source at the viewport
+/// resolution × device pixel ratio (default dpr 1.0 → cap 1040×780), so
+/// `preview_render_src` is the capped source, not the 2000×1500 original. Both
+/// textures still draw to the same on-screen size and the ROI converts back to
+/// the same full-pixel window — the placement contract this test pins.
 #[test]
 fn draft_and_full_share_on_screen_placement() {
     let mut app = new_app();
-    // 2000×1500 source → the cached draft source is downscaled (long
-    // edge 1280), which is exactly the mismatch under test.
+    // 2000×1500 source → both the cached draft source and the capped full
+    // preview are downscaled, which is exactly the mismatch under test.
     let frame = ImageFrame::new(2000, 1500, [140_u8, 120, 100, 255].repeat(2000 * 1500)).unwrap();
     app.load_bytes(frame.encode(ImageFileFormat::Png).unwrap(), "draft.png")
         .unwrap();
@@ -91,7 +97,15 @@ fn draft_and_full_share_on_screen_placement() {
     app.render_full([800, 600], None).unwrap();
     let full_roi = app.preview_roi.expect("zoomed full ROI");
     let full_src = app.preview_render_src.expect("full source recorded");
-    assert_eq!(full_src, (full_w, full_h));
+    // R3-RENDER-SIZE-1: the full preview is capped too, so its render source is
+    // the capped whole frame, not the original (2000×1500 capped to the
+    // 800×600 pane → long edge 1040 → 1040×780). It must still be a real
+    // downscale of the original so the placement math stays comparable.
+    assert_ne!(full_src, (full_w, full_h));
+    assert!(
+        full_src.0 < full_w && full_src.1 < full_h,
+        "capped full source must be smaller than the original: {full_src:?}"
+    );
     let full_tex = (
         app.preview.as_ref().unwrap().width as f32,
         app.preview.as_ref().unwrap().height as f32,
@@ -120,12 +134,15 @@ fn draft_and_full_share_on_screen_placement() {
         (dh0 * scale - dh1 * scale).abs() <= 1.5,
         "draw heights must match: draft {dh0} vs full {dh1}"
     );
-    // Same ROI in full pixels (the pan-offset half of the jump).
+    // Same ROI in full pixels (the pan-offset half of the jump). R3-RENDER-SIZE-1:
+    // both ROIs now live in their own capped render-source space, so both are
+    // converted back into full-source pixels before comparing.
     let back = LuminaApp::roi_in_full_pixels(draft_roi, full_w, full_h, Some(draft_src));
+    let full_back = LuminaApp::roi_in_full_pixels(full_roi, full_w, full_h, Some(full_src));
     for i in 0..4 {
         assert!(
-            (back[i] as i32 - full_roi[i] as i32).abs() <= 2,
-            "axis {i}: draft {back:?} vs full {full_roi:?}"
+            (back[i] as i32 - full_back[i] as i32).abs() <= 2,
+            "axis {i}: draft {back:?} vs full {full_back:?}"
         );
     }
 }

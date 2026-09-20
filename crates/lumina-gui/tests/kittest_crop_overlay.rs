@@ -57,7 +57,16 @@ fn open_file_and_restore_fixture(harness: &mut Harness<'_, LuminaApp>, path: &Pa
     harness
         .state_mut()
         .set_directory(LIBRARY_FIXTURE_DIR.to_owned());
-    harness.run();
+    // R2-MODSWITCH-1 F8: the folder scan is async in production; settle it (and
+    // the auto-load decode) so the golden captures the applied status.
+    for _ in 0..500 {
+        harness.step();
+        if !harness.state().scan_pending() && !harness.state().decode_pending() {
+            harness.step();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 fn assert_preview_loaded(harness: &mut Harness<'_, LuminaApp>) {

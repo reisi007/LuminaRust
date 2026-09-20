@@ -119,9 +119,7 @@ const LIBRARY_FIXTURE_DIR: &str = "tests/fixtures/library";
 
 /// Point the app at the deterministic fixture directory (see above).
 fn use_library_fixture(harness: &mut Harness<'_, LuminaApp>) {
-    harness
-        .state_mut()
-        .set_directory(LIBRARY_FIXTURE_DIR.to_owned());
+    set_directory_and_settle(harness, LIBRARY_FIXTURE_DIR.to_owned());
 }
 
 #[test]
@@ -572,9 +570,7 @@ fn assert_filmstrip_single_row(harness: &mut Harness<'_, LuminaApp>) -> Vec<efra
 fn filmstrip_is_single_row_horizontal() {
     let dir = temp_raw_dir(20);
     let mut harness = build_harness();
-    harness
-        .state_mut()
-        .set_directory(dir.path().display().to_string());
+    set_directory_and_settle(&mut harness, dir.path().display().to_string());
     harness.state_mut().set_module(Module::Develop);
     // The app keeps requesting repaints while thumbnail jobs are scheduled, so
     // `run()` would exceed max_steps; run a fixed number of frames instead.
@@ -795,7 +791,7 @@ fn library_empty_suppresses_render_hash() {
         .state_mut()
         .set_directory(LIBRARY_VIEWS_FIXTURE_DIR.to_owned());
     // `set_directory` lists flat; mirror the views tests' recursive listing.
-    harness.state_mut().list_directory();
+    list_directory_and_settle(&mut harness);
     harness.state_mut().set_library_filter("no-such-entry");
     harness.run();
     assert!(
@@ -902,9 +898,7 @@ fn library_folders_root_is_workdir() {
         .to_owned();
 
     let mut harness = build_harness();
-    harness
-        .state_mut()
-        .set_directory(dir.path().display().to_string());
+    set_directory_and_settle(&mut harness, dir.path().display().to_string());
     harness.state_mut().set_module(Module::Library);
     harness.run_steps(3);
 
@@ -1068,7 +1062,7 @@ fn library_subfolder_badges() {
         .state_mut()
         .set_directory(LIBRARY_BADGES_FIXTURE_DIR.to_owned());
     // `set_directory` lists flat; the recursive aggregation carries badges.
-    harness.state_mut().list_directory();
+    list_directory_and_settle(&mut harness);
     // Non-vacuous guard: the recursive listing (not the flat one) must see
     // all three files, otherwise the golden below could pass on an empty
     // grid without any badge pixels. (`FileBrowserEntry` fields are
@@ -1213,7 +1207,7 @@ fn library_rated_badges() {
         .state_mut()
         .set_directory(LIBRARY_RATED_FIXTURE_DIR.to_owned());
     // `set_directory` lists flat; the grid's shared order is RAW-only.
-    harness.state_mut().list_directory();
+    list_directory_and_settle(&mut harness);
     let mut badges: Vec<String> = harness
         .state_mut()
         .entries()
@@ -1365,9 +1359,7 @@ fn open_file_and_restore_fixture(
         "decode of {} never settled in headed harness",
         path.display()
     );
-    harness
-        .state_mut()
-        .set_directory(LIBRARY_FIXTURE_DIR.to_owned());
+    set_directory_and_settle(harness, LIBRARY_FIXTURE_DIR.to_owned());
     harness.run();
 }
 
@@ -1903,7 +1895,7 @@ fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> Vec<String> {
         .set_directory(LIBRARY_VIEWS_FIXTURE_DIR.to_owned());
     // `set_directory` lists flat; the recursive aggregation is the views'
     // shared order (identical here — the fixture is flat).
-    harness.state_mut().list_directory();
+    list_directory_and_settle(harness);
     assert_eq!(
         harness.state_mut().directory(),
         LIBRARY_VIEWS_FIXTURE_DIR,
@@ -2807,9 +2799,7 @@ fn filmstrip_twenty_dummies() {
     // Load a valid source first: suppresses the RAW auto-load (which would
     // fail loudly on the sentinel bytes) and gives the preview real pixels.
     load_sample(&mut harness);
-    harness
-        .state_mut()
-        .set_directory(dir.path().display().to_string());
+    set_directory_and_settle(&mut harness, dir.path().display().to_string());
     harness.state_mut().set_module(Module::Develop);
     // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
     harness.run_steps(3);

@@ -18,8 +18,8 @@ fn thumbnail_keys_distinguish_same_filename_across_folders() {
     save_png(&path_a);
     save_png(&path_b);
 
-    let entry_a = LuminaApp::scan_entry(&path_a).unwrap();
-    let entry_b = LuminaApp::scan_entry(&path_b).unwrap();
+    let entry_a = crate::library_scan::scan_entry(&path_a).unwrap();
+    let entry_b = crate::library_scan::scan_entry(&path_b).unwrap();
     assert_eq!(entry_a.name, entry_b.name, "fixture must share a filename");
     assert_ne!(
         entry_a.thumb_key, entry_b.thumb_key,
@@ -28,7 +28,7 @@ fn thumbnail_keys_distinguish_same_filename_across_folders() {
     // Keys are stable across scans of the same file.
     assert_eq!(
         entry_a.thumb_key,
-        LuminaApp::scan_entry(&path_a).unwrap().thumb_key
+        crate::library_scan::scan_entry(&path_a).unwrap().thumb_key
     );
 
     // Manager-level: inserting under key A never satisfies lookups for B.

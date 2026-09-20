@@ -1979,8 +1979,8 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Preview-Decodes auf dem UI-Thread. Fix F7: metadata-only
   `PreviewIndexCache` (1 Build/Ordner, memoisiert, sichtbare Invalidierung) +
   Decode im Worker-Pool (`thumb_worker`) + Full-Render-Deferral um 1 Frame bei
-  Modulwechsel (Stale sichtbar, Debounce/Drossel unverändert). F8
-  (`list_directory`-Async-Scan) bleibt Folge-Task.
+  Modulwechsel (Stale sichtbar, Debounce/Drossel unverändert). **F8
+  (`list_directory`-Async-Scan) umgesetzt 2026-09-20** (s. u.).
 - **R2-CLAMP-1 (erledigt ohne Fix, 2026-09-19):** Untracked `gui.log` (23.08.) zeigte eine
   Render-Pfad-Panic (`f32::clamp`: min > max/NaN beim debounced Full
   Render, FitWidth-Rundung). Recherche-Beleg: Panic stammt aus einem Build 7
@@ -1998,7 +1998,8 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   4.2 ms, PreviewIndex-Build 0.1 ms (2 Einträge), Decode 283.1 ms (6032×4024),
   Full-Render 85.2 ms ohne / 2117.8 ms mit Denoise-Fallback. F7-Deferral
   feuerte 0×. Verdacht verengt: nicht der Wechsel-Frame, sondern Auswahlkette
-  + Full-Res-Upload (→ R3-RENDER-SIZE-1).
+  + Full-Res-Upload (→ R3-RENDER-SIZE-1; seit 2026-09-20 durch den
+  Viewport-Cap adressiert, s. u.).
 - **R3-GRIDSEL-1 (BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Grid-Highlight folgt der Selektion
   nicht — `library_grid.rs:206` malte aus `self.path` (geladenes Bild), nicht
   aus `filmstrip_selection`. Grid zeigt Landscape (geladen), Filmstrip darunter
@@ -2011,6 +2012,52 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   nach App-Start im Hintergrund (Worker/Idle), damit der erste Library-
   Wechsel kein 2.9-s-Loch mehr hat. Sichtbarer Fortschritt statt Stillstand,
   kein stiller Zustand.
+- **R2-MODSWITCH-1 F8 (`list_directory`-Async-Scan, umgesetzt 2026-09-20):**
+  Der Ordner-Scan (`scan_entry` liest jedes Sidecar + RAW-Metadaten und hasht
+  die Quelle) blockierte den UI-Thread beim Öffnen eines Ordners. Fix: eigener
+  kurzlebiger Worker-Thread je Scan (dasselbe Muster wie der PERF-GUI-7-Decode-
+  Pfad `begin_load_path`/`poll_decode`; **kein neuer Pool** — der Thumbnail-/
+  Neighbor-Pool ist für viele unabhängige Zellen gedacht), Drain über
+  `poll_scan` im Frame-Loop; latest-wins über eine Generationsmarke (ein
+  superseded Listing wird verworfen, nie gemergt). Sichtbarer Ladezustand:
+  Statuszeile `Scanning folder… <pfad>` solange der Scan läuft; ein
+  getrennter Worker wird laut als „directory not readable" gemeldet, kein
+  stiller Hänger. Code: `crates/lumina-gui/src/library_scan.rs` (Scan-Engine
+  `run_scan`, `ScanRequest`/`ScanResult`, `spawn_scan`, `begin_scan`/
+  `poll_scan`; `scan_entry` + rekursiver/flacher Driver aus `lib.rs`
+  extrahiert). Headless-Tests: `tests/r3_f8_scan.rs` (Worker läuft asynchron,
+  sichtbarer Status, superseded-Drop, lauter Disconnect, async == sync). Unter
+  `cfg(test)` läuft `list_directory` synchron über dieselbe Engine (Test-Seam,
+  kein Produktions-Fallback), damit die bestehende Listing-Suite ohne Event-Loop
+  grün bleibt.
+  **Golden-Rebaseline (Sichtprüfung 2026-09-20, nachgezogen):** Der asynchrone
+  Listing-Pfad (latest-wins) ändert den Status-Zeitpunkt und — in einem
+  Test-Idiom — das Auto-Load-Ziel. Vier kittest-Goldens bewusst rebaselined,
+  je Befund ehrlich beschrieben:
+  - `library_loupe`: bei diesem Golden fällt der einzeilige
+    Background-Decode-Fehler-Banner („background decode failed for …") **ganz
+    weg** (keine Ersatz-Statuszeile — der Banner fehlt schlicht) und der
+    Preview-Rahmen samt Labels rutscht dadurch um ~9 px nach oben. Kein
+    inhaltlicher Unterschied an Bild, Badges oder Filmstreifen.
+  - `library_compare` und `library_survey`: Diff **nur die Header-Statuszeile**
+    (`Error` → `Compare view on (Compare)`); der Banner und das restliche Layout
+    bleiben unverändert, **kein Reflow**.
+  - `library_subfolder_badges`: **Statuszeile + Auto-Load-Ziel**. Ursache: das
+    Fixture-Idiom ruft `set_directory` (flach) **und danach** `list_directory`
+    (rekursiv). Baseline (synchron) wandte erst das flache Listing an (nur
+    `top.arw`) → Auto-Load `top.arw`, dann das rekursive Listing;
+    `stabilize_selection` hielt `top.arw`. Neu (async, latest-wins) wird der
+    flache Scan durch den rekursiven **superseded** (verworfen, s. o.), es
+    gilt nur das rekursive Listing → Auto-Load `entries[0]` = `deep.arw`
+    (erstes Rasterelement). **Bewertung: kein F8-Regressions-Bug, abgesegnet.**
+    Kein Produktions-Pfad ruft `set_directory` + `list_directory` ohne geladenes
+    Bild in Folge (Open/Folder-Tree = flach, Refresh/`open_file` = rekursiv
+    mit vorab gesetzter Selektion); das Idiom existiert nur in kittest-Fixtures.
+    Das neue Ziel ist kohärenter: das geladene Bild entspricht dem **ersten
+    Eintrag der tatsächlich angezeigten** (rekursiven) Liste. Die
+    Grid-/Badge-/Filmstreifen-Reihenfolge (deep, mid, top) ist in beiden
+    Zuständen identisch; nur Selektion/Status folgen dem neuen Ziel.
+  Die übrigen Goldens blieben byte-identisch.
 - **R3-DENOISE-2 (BEHOBEN 2026-09-20):** Gelbes Badge „Render routed to CPU …
   [denoise_ai (not GPU-wired)]" ist per Design laut (Gewichte weiter pending),
   hatte aber KEINE Log-Zeile: Badge stammt aus dem Rezept-Gate
@@ -2074,11 +2121,72 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   `geometry (default content crop)`; 3 Ticks → genau 1 Refusal-Warn + 1
   Gate-Warn, Badge gesetzt; Mutationsbeweise: Gate-Mutation und
   Skip-Mutation jeder rot).
-- **R3-RENDER-SIZE-1 (offen, User-Frage 2026-09-19):** Weder Draft noch Full
-  rendern auf Anzeigegröße — Draft feste 1280-px-Kante (`lib.rs:2899`),
-  Full volle Quell-Auflösung (24 MP ≈ 96 MB RGBA, `render_entry.rs:24-84`).
-  Anzeigegröße wäre sinnvoll (Vorschlag: Full/Draft auf Viewport-Auflösung +
-  Device-Pixel-Ratio begrenzen, Full-Res nur für Export/1:1-Loupe).
+- **R3-RENDER-SIZE-1 (ENTSCHIEDEN Viewport-Cap, User 2026-09-20; umgesetzt
+  2026-09-20):** Weder Draft noch Full rendern auf Anzeigegröße — Draft feste
+  1280-px-Kante, Full volle Quell-Auflösung (24 MP ≈ 96 MB RGBA). **SOLL
+  (verbindlich):**
+  - **Cap-Formel:** Jeder Vorschau-Render (Draft **und** Full-Preview) ist auf
+    die Viewport-Auflösung × Device-Pixel-Ratio begrenzt:
+    `cap = ceil(pane_points · dpr · PREVIEW_ROI_MARGIN)` in **Device-Pixeln**,
+    mit demselben Panning-Margin (`PREVIEW_ROI_MARGIN`, 1.3) wie das Zoom-ROI,
+    damit das sichtbare Pane auf volle Device-Auflösung kommt. Der Cap
+    verkleinert nur, nie vergrößert (Quellen ≤ Cap bleiben unberührt).
+    Untergrenze `PREVIEW_MIN_CAP_EDGE` (256 px) gegen thumbnail-große Renders
+    eines noch nicht vermessenen Panes.
+  - **Ausnahmen (Full-Res):** **Export**, **1:1-Lupe** und die
+    **absolute-frame Stufen** (`denoise_ai` aktiv / aktive generative Canvas)
+    bleiben auf voller Quell-Auflösung. Export rendert aus dem Original über
+    `lumina_core::export_image` (unberührt vom Cap); die 1:1-Lupe ist per
+    Konstruktion ein exakter Fit **bei `dpr = 1`**: das gerenderte ROI-Fenster
+    ist `pane_points · PREVIEW_ROI_MARGIN` = `pane_points · 1.3` (dieselbe
+    [`PREVIEW_ROI_MARGIN`]-Konstante, die `roi_from_zoom` bei `zoom = 1/fit`
+    nutzt) in **Quell-Pixeln**, die Cap-Größe dieselbe Formel in
+    **Device-Pixeln** (`pane · dpr · 1.3`) — bei `dpr = 1` deckt der Cap das
+    1:1-Fenster exakt, bei `dpr > 1` ist das Device-Budget größer; unter die
+    1:1-Auflösung gedrückt wird das Fenster in keinem Fall, die Lupe bleibt
+    generell ausgenommen. Die absolute-frame Stufen sind
+    **dimensionsgebunden an den vollen Frame**: `apply_denoise_blend` verlangt
+    „frame dimensions must match artifact exactly", und `composite_auto_fill`
+    prüft `artifact.frame` exakt gegen den aktuellen Frame — eine gekappte
+    Quelle würde den Blend/Auto-Fill laut scheitern lassen. (Der generative
+    **Expand** prüft dagegen nur, dass die Quelle in die absolut dimensionierte
+    `canvas` passt; sein Artefakt ist canvas-groß, nicht frame-groß, wird aber
+    über dieselbe Gate-Bedingung mit vom Cap ausgenommen.) Der Cap wird für
+    diese Stufen **ausgesetzt** (analog zum bestehenden ROI-Disable in
+    `render_entry.rs`), die artefaktbewusste CPU-Vorschau ist maßgeblich und
+    läuft in voller Frame-Geometrie.
+  - **Fehlende Viewport-Info ist laut, nicht still:** Ist das Pane nicht
+    vermessen oder degeneriert (0/NaN), wird **nicht** still gekappt oder leer
+    gerendert, sondern die volle Quell-Auflösung gerendert und genau einmal je
+    Quelle `warn!` geloggt („viewport info missing … cap not applied").
+  - **Masken:** keine Sonderbehandlung — Core resampelt jede Maskenebene
+    bilinear auf die gerenderte Frame-Größe (`resample_plane_bilinear`), der Cap
+    ändert nur die Vorschau-Auflösung, nie die Maskengeometrie.
+  - **Geometrie bleibt deckungsgleich:** Die ROI wird in den gekappten
+    Quellraum skaliert (`scale_roi_to_source`) und über `preview_render_src`
+    zurück in Voll-Source-Pixel abgebildet — Pan/Zoom-Platzierung und
+    Pointer→Source-Mapping bleiben identisch (GUI-DRAFT-JUMP-1-Vertrag).
+  **Umsetzung (2026-09-20):** `crates/lumina-gui/src/preview_size.rs` (Cap-Formel,
+  `PreviewCapState`, `refresh_preview_cap`, `capped_source_max_dim`,
+  `scale_roi_to_source`, `capped_preview_source`); Verdrahtung in
+  `render_entry.rs::render_full` (Cap + ROI-Skalierung + laute Missing-Warnung)
+  und `render_tick.rs` (Draft-Quelle ist der Cap); `dpr` kommt je Frame aus
+  `ctx.pixels_per_point()` und `refresh_preview_cap` baut die gecachte Draft-
+  Quelle bei Cap-Wechsel neu. **B1-Rework (2026-09-20):** Bei aktiver
+  absolute-frame Stufe (Denoise/generative Canvas) wird der Cap — wie das
+  ROI — ausgesetzt; Regressionstests mit großer Quelle (400×300 > 256-px-Floor)
+  für Denoise-ready, generative Auto-Fill (frame-dimensioniert; Mutationsbeweis:
+  ohne Aussetzung scheitert der `composite_auto_fill`-Dimensionscheck),
+  generative Expand (Render-Source exakt `400×300`; ohne Aussetzung `256×192`)
+  und eine Kontrolle ohne aktive Stufe.
+  Headless-Tests: `tests/r3_render_size.rs`
+  (Formel, dpr-Skalierung, Draft-Cap, Export-Full-Res, 1:1-Ausnahme,
+  absolute-Stufen-Ausnahme + Kontrolle, laute Missing-Warnung genau einmal,
+  kleine Quellen unberührt). Bestehende
+  GUI-DRAFT-JUMP-/REVIEW-GUI-N6-Tests auf die Cap-Semantik nachgezogen. **Die
+  Cap-Logik selbst ändert kein kittest-Golden** (die Golden-Fixtures liegen
+  unter der 256-px-Floor); die vier geänderten Goldens stammen ausschließlich
+  aus dem asynchronen Listing-Pfad (F8, s. R2-MODSWITCH-1 F8).
 - **R3-DENOISE-1 (BEHOBEN 2026-09-20):** Der `pending-integration`-Fallback
   der aktiven Vorschau arbeitete sichtbar (Warn), während ein Nachbar-Preview
   (Landscape) hart fehlschlug — die Fallback-/Fail-Semantik hing am Pfad statt
@@ -2114,8 +2222,28 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Denoise-Einzeiler. Alle 7 Switch-Entry-Points über `set_module`. **Alle
   Trace-Meldungen tragen einen zentralen ISO-8601-UTC-Stempel**
   (`logger.rs`, std-only).
-- **R3-CONFLICT-1 (ungeprüft):** 6 Sidecar-Saves, 0 Rebases/Konflikte —
-  Single-Instance-Run; die Rebase-Logik ist per Log unbestätigt (nur per Test).
+- **R3-CONFLICT-1 (belegt 2026-09-20, headless Zweit-Schreiber-Race):** Im
+  Single-Instance-Run (6 Sidecar-Saves, 0 Rebases/Konflikte) war die
+  Rebase-Logik per Log unbestätigt. Beleg jetzt automatisiert über **zwei echte
+  Threads**, die dieselbe Sidecar-Datei durch den Produktions-CAS-Writer
+  (`sidecar_rebase::save_rebased`) racen (Barrier erzwingt die Kollision, 32
+  Iterationen): mindestens ein Writer rebased, **beide** konkurrierenden Felder
+  überleben (kein Datenverlust), und das gemergte Dokument ist byte-deterministisch
+  über wiederholte Läufe (`document_revision`-Set kollabiert auf einen Wert).
+  Tests: `tests/r3_conflict.rs::two_real_writers_rebase_without_data_loss`,
+  `race_outcome_is_deterministic_across_runs`,
+  `fresh_document_never_rebases_over_a_concurrent_file`. **Nicht automatisierbar
+  und daher nur manuell reproduzierbar:** ein echter zweiter **Prozess/Instanz**
+  (zwei `lumina-gui`-Binaries auf einem Sidecar) — braucht die native App mit
+  Fenster und ein Live-Sidecar-Verzeichnis; die dabei ausgeführte Logik ist
+  dieselbe `save_rebased`-Funktion, die die Thread-Tests fahren, es
+  unterscheidet sich nur die OS-Prozess-Schedulierung. Manuelle Reproduktion:
+  (1) `lumina-gui` auf Ordner mit einer datei starten, einen Regler ändern
+  (Sidecar geschrieben), (2) dieselbe Datei in einer zweiten `lumina-gui`-
+  Instanz öffnen, ein anderes Feld ändern und speichern, (3) in der ersten
+  Instanz ein weiteres Feld ändern und speichern — erwartet: `info!`
+  „sidecar rebased after concurrent change: …" (bzw. `warn!` mit
+  `overwritten_fields`), beide Felder im Sidecar vorhanden.
 
 ## Optionale zentrale Indizierung
 

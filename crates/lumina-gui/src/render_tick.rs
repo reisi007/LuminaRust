@@ -109,6 +109,11 @@ impl LuminaApp {
                 self.preview_pane_h,
             )
         });
+        // R3-RENDER-SIZE-1: the draft source IS the viewport cap (it is built at
+        // `draft_max_dim`, maintained by `refresh_preview_cap`). When no draft
+        // is cached yet (first tick on an uncapped small source, or a missing
+        // viewport) the full source is used — also capped by `render_full` in
+        // the absolute-frame branch, and by `refresh_preview_cap` otherwise.
         self.preview_is_draft = true;
         // No generative stage is active here (checked above), so the hook gets
         // an empty artifact set — the core render then cannot hit the

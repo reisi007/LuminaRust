@@ -190,9 +190,9 @@ fn library_scan_excludes_lumina_cache_dirs_flat_and_recursive() {
     std::fs::write(sub_cache.join("x.webp"), b"lumina-preview-fixture").unwrap();
 
     // Unit level: cache webps rejected, the real image accepted.
-    assert!(LuminaApp::scan_entry(&previews.join("top.preview.webp")).is_none());
-    assert!(LuminaApp::scan_entry(&sub_cache.join("x.webp")).is_none());
-    assert!(LuminaApp::scan_entry(&root.path().join("top.arw")).is_some());
+    assert!(crate::library_scan::scan_entry(&previews.join("top.preview.webp")).is_none());
+    assert!(crate::library_scan::scan_entry(&sub_cache.join("x.webp")).is_none());
+    assert!(crate::library_scan::scan_entry(&root.path().join("top.arw")).is_some());
 
     let mut app = new_app();
     // Flat: only the real top-level image lists.

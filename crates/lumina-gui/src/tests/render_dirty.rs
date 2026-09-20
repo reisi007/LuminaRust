@@ -217,8 +217,11 @@ fn failed_roi_crop_falls_back_to_full_frame_and_clears_preview_roi() {
     app.render_full([800, 600], Some([0, 0, 0, 9999])).unwrap();
     assert_eq!(app.preview_roi, None);
 
-    // An oversized request is clamped by `crop_region`; the *effective*
-    // rect is recorded so the mapping stays truthful.
+    // An oversized request is clamped by `crop_region`; the *effective* rect is
+    // recorded so the mapping stays truthful. R3-RENDER-SIZE-1 caps the 2×1
+    // source at the viewport cap (floored to 256 device px) — the source is
+    // already far below the cap, so no downscale happens and the recorded rect
+    // stays full-source geometry ([0, 0, 2, 1]).
     app.render_full([800, 600], Some([0, 0, 9999, 9999]))
         .unwrap();
     assert_eq!(app.preview_roi, Some([0, 0, 2, 1]));
