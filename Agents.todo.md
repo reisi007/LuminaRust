@@ -117,6 +117,7 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | LRPAR-G09-SORT-09 | G-09 | Sortierung + Custom-Sort |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
+| 2.0 | LRPAR-G12-FACE-ADAPTER-25 | G-12 | Face-I/O-Adapter |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
 | nie | — | G-12 | Karten-Modul/GPS (Nicht-Ziel) |
@@ -155,7 +156,7 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 - [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-IMPL-20 (Release: 2.0)** KI-Denoise-Implementierung nach Entscheid `feature/decisions/LRPAR-G14-DENOISE-20.md` (F-078-Fixture-Entscheid ✓, Schema ✓, Pipeline-Stufe + Persistenz + GPU-Refusal ✓, ONNX-Backend ✓, CLI ✓, GUI ✓, F-074-Budgets ✓ report-only; offen: Gewichte). Abnahme: CLI + GUI-headless + Golden/PSNR, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G09-CULL-IMPL-25 (Release: 2.5)** KI-Culling-Implementierung nach Entscheid `feature/decisions/LRPAR-G09-CULL-25.md` (Schema ✓, Heuristik `lumina-cull` ✓, CLI ✓, GUI ✓, F-074-Budgets ✓ report-only; offen: optional ONNX Stufe 2). Abnahme: CLI-Exit-Codes + GUI-headless + kittest, Vorschlag schreibt nie Rating/Flag/Label.
 
-- [ ] **[PRIO: niedrig] LRPAR-G12-FACE-IMPL-20 (Release: 2.0)** Gesichtserkennung-Implementierung nach Entscheid `feature/decisions/LRPAR-G12-FACE-20.md` (S1 Schema ✓, S2 ONNX ✓, S3 Clustering ✓, S4 CLI ✓, S5 GUI inkl. Masken-Brücke ✓, Vektor-Record-Kind `face_embedding` ✓ §3.2, S6 Lizenzen/Gewichte umgesetzt 2026-09-20 ✓ §3.3 — Verifizierung ausstehend). Abnahme: CLI + GUI-headless, Sidecar-first, kein stiller Fallback. Karten-Modul/GPS bleibt nie Ziel (kein Task).
+- [ ] **[PRIO: niedrig] LRPAR-G12-FACE-IMPL-20 (Release: 2.0)** Gesichtserkennung-Implementierung nach Entscheid `feature/decisions/LRPAR-G12-FACE-20.md` (S1 Schema ✓, S2 ONNX ✓, S3 Clustering ✓, S4 CLI ✓, S5 GUI inkl. Masken-Brücke ✓, Vektor-Record-Kind `face_embedding` ✓ §3.2, S6 Lizenzen/Gewichte verifiziert BESTANDEN 2026-09-20 ✓ §3.3, Commit 5e4affc; offen: ADAPTER-25). Abnahme: CLI + GUI-headless, Sidecar-first, kein stiller Fallback. Karten-Modul/GPS bleibt nie Ziel (kein Task).
 - [ ] **[PRIO: niedrig] LRPAR-G12-FACE-ADAPTER-25 (Release: 2.0)** Echter ONNX-I/O-Adapter für die verifizierten Face-Modelle nach `feature/decisions/LRPAR-G12-FACE-20.md` §3.3: YuNet-Dekodierung der zwölf Per-Stride-Tensoren (`cls_*`/`obj_*`/`bbox_*`/`kps_*`, Anchor-/Stride-Dekode + NMS) und korrekter SFace-Vertrag (`data`, 0..255 mit eingebackener `(x−127.5)·1/128`, Ausgang `fc1` 128-d) statt des kanonischen Single-Output-Vertrags. Erst danach sind die gepinnten Gewichte real nutzbar (danach optional Bundle hash-gepinnter Gewichte). Abnahme: netzwerkfreie Tests mit hash-gepinnten Fixtures beider Modelle, kein stiller Fallback.
 
 ### PRIO: niedrig (Block A, nicht-LRPAR)

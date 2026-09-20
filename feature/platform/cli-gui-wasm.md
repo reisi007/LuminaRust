@@ -2245,6 +2245,36 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   „sidecar rebased after concurrent change: …" (bzw. `warn!` mit
   `overwritten_fields`), beide Felder im Sidecar vorhanden.
 
+#### F-103-N6 Runde 4 Befunde (2026-09-20, manueller Akzeptanz-Run, Release `0fb2922`, 36-MB-Trace, ~80 s)
+
+- **R4-NAV-1 (hoch, offen):** Navigator-Box lässt sich nicht zum Pannen nutzen —
+  User-Befund mit Screenshots (Fit + Custom-Zoom). Log zeigt 36×
+  `navigator viewport drag` (State wird gepannt, Modus → Custom), aber Box/View
+  folgen sichtbar nicht (Box nicht greifbar / Renderbereich folgt nicht).
+  Verdacht Pan/Box-Mismatch (Rect-Math vs. `preview_pan` vs. ROI). Repro +
+  Headless-Test nötig (Pan → Box bewegt sich + ROI folgt).
+- **R4-RECT-1 (hoch, offen):** Weißes Rechteck überlagert die Preview bei Fit
+  (reicht über das Bild hinaus), ohne erkennbare Bedeutung. Ausgeschlossen per
+  Log: WB-/Red-Eye-Picker (0 Pick-Zeilen), Crop (0 Crop-Zeilen). Kandidaten:
+  Masken-/Expand-/Compare-Overlays oder veraltetes ROI-Rechteck. Identifizieren
+  (headless Repro Fit + gleiche Rezeptlage) + entfernen/laut machen.
+- **R4-WARN-1 (mittel, offen):** 35× `gpu present refused … geometry
+  (dimension-changing …)` in ~6 s (13:55:07–13, Zoom-Drag). Route ist
+  dokumentiert (committeter Crop im Sample-Sidecar, außerhalb Crop-Tool), aber
+  der Present-Pfad warnt pro Render — das Gate-Dedup (R3-DENOISE-2, 1× pro
+  Reason-Set) greift dort nicht. Present-Warn ebenfalls dedupieren.
+- **R4-SWITCH-2 (mittel, offen):** Erster Library-Paint 4286,1 ms (schlechter
+  als Runde-3-Kaltstart 2886,8 ms) bei NULL `lumina_gui`-Traces zwischen
+  Switch-Event und Paint → uninstrumentierter UI-Block (R3-LOG-1-Lücke).
+  Warmup („cold-start work scheduled") erst 13:54:39, also NACH dem Switch
+  (13:54:31) → Warmup-Arming/Idle-Timing prüfen (kam zu spät, um zu helfen).
+  Spätere Wechsel: Develop 20,3 ms (ok).
+- **R4-UX-1 (offen, User-Klärung läuft):** Rechte Seitenleiste/Filmstrip-Anordnung
+  in Develop „macht keinen Sinn" (User-Wortlaut) — betroffenes Element per
+  Rückfrage eingrenzen.
+- **Abdeckung Runde 4:** gefahren: Switches, Zoom, Navigator-Drag, Beenden.
+  Offen aus Fahrplan: Stapel, Sortierung/Drag-&-Drop, Crop-Tick, Neustart-Restore.
+
 ## Optionale zentrale Indizierung
 
 Die DB darf nur Pfade, Quellhashes, Metadaten, Sidecarstatus, Jobstatus,
