@@ -165,11 +165,14 @@ obligations that MUST be honored in any distributed build:
      committed and no download occurs at test time** (Agents.md); consumers
      supply artifacts via `--detector`/`--embedder`
      (`LUMINA_FACE_DETECT_MODEL_PATH` / `LUMINA_FACE_EMBED_MODEL_PATH`).
-     **Known I/O boundary (loud, no silent fallback):** the shipped graphs
-     (YuNet = 12 per-stride outputs; SFace = `data`→`fc1` with a baked-in
-     `(x−127.5)·1/128`) do not match the S2 canonical single-output contract,
-     so a real artifact hash-verifies but is refused loudly at load (available
-     tensors are listed) until a dedicated adapter slice lands. License texts:
+     **Real I/O adapter (LRPAR-G12-FACE-ADAPTER-25, 2026-09-20):** the shipped
+     graphs are now consumed through their real contract — YuNet `input` (raw
+     `0..=255`, BGR) → twelve per-stride outputs (`cls_/obj_/bbox_/kps_{8,16,32}`,
+     decode + NMS, `lumina-onnx` `face/yunet.rs`) and SFace `data` (raw
+     `0..=255`, RGB) → 128-d `fc1` (the `(x−127.5)·1/128` is baked in). A graph
+     that does not match its declared tensors is still refused loudly at load
+     (available tensors are listed) — no silent fallback. Tests use hash-pinned
+     crafted fixtures only. License texts:
      `licenses/models/YuNet-LICENSE-MIT.txt`,
      `licenses/models/SFace-LICENSE-Apache-2.0.txt`.
    - **ONNX Runtime** (`ort` 2.0.0-rc.13): **MIT OR Apache-2.0** (`ort`,

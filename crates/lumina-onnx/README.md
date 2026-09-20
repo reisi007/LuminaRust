@@ -166,18 +166,20 @@ native detection/embedding stages (S2) and the model-free clustering stage (S3).
   non-commercial weight licence and the AGPL `ultralytics` tooling are
   explicitly avoided. **No weights are committed and nothing is downloaded**;
   license texts live in `licenses/models/`.
-- **Known I/O boundary (loud, never silent):** the shipped graphs (YuNet = 12
-  per-stride outputs; SFace = `data`→`fc1` with a baked-in `(x−127.5)·1/128`)
-  do not yet match the S2 canonical single-output contract. A real artifact
-  hash-verifies but is refused loudly at load (`InferenceFailed` listing the
-  available tensors) until the dedicated multi-output adapter lands — no silent
-  re-shaping and no stub substitution.
+- **Real I/O adapter (LRPAR-G12-FACE-ADAPTER-25):** the shipped graphs are
+  consumed through their real contract — YuNet `input` (raw `0..=255`, BGR) →
+  twelve per-stride outputs decoded by `face::yunet` (decode + NMS) and SFace
+  `data` (raw `0..=255`, RGB) → 128-d `fc1` (the graph bakes
+  `(x−127.5)·1/128`). A graph that does not match its declared tensors is
+  refused loudly at load (`InferenceFailed` listing the available tensors) — no
+  silent re-shaping and no stub substitution.
 - **Capabilities:** `ModelCapabilities.face_detect` / `face_embed`
   (additive, `#[serde(default)]`; manifests written before them keep parsing).
 - **Identity (`face_identity`, `face_identity_digest`):** source + decode +
   geometry + both model identities (each carrying its input-spec digest) +
   inference resolution + shared preprocessing (alignment, normalization, score
-  threshold, embedding dimension) + clustering method/version/thresholds. A
+  threshold, NMS threshold, top-k, embedding dimension) + clustering
+  method/version/thresholds. A
   model, preprocessing or clustering change makes a persisted analysis `stale`;
   a missing/corrupt artifact is `missing`/`corrupt`
   (`face_artifact_status`). Clustering is image-local — no cross-catalogue

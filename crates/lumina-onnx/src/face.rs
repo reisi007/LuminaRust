@@ -20,14 +20,15 @@
 //! Two weight-verified OpenCV Zoo models are declared: **YuNet** (detection,
 //! MIT © 2020 Shiqi Yu) and **SFace/MobileFaceNet** (embedding, Apache-2.0).
 //! Licence, weight grant and exact SHA-256 were verified at the source
-//! (2026-09-20); the constants, provenance and the **known loud I/O boundary**
-//! (YuNet = 12 per-stride outputs; SFace = `data`→`fc1` with a baked-in
-//! `(x−127.5)·1/128`; neither yet matches the S2 canonical single-output
-//! contract) live in [`pins`]. A real artifact hash-verifies but is refused
-//! loudly at load (`InferenceFailed` listing the available tensors) until the
-//! dedicated multi-output adapter lands — no silent re-shaping, no stub
-//! substitution. Tests run against deterministic stubs and the local behavior
-//! fixture; **no weights are committed and nothing is downloaded** (Agents.md).
+//! (2026-09-20); the constants and provenance live in [`pins`]. The real I/O
+//! contract is decoded by [`yunet`] (YuNet: raw `0..=255` **BGR**, twelve
+//! per-stride tensors + NMS) and [`backend::decode_face_embedding`] (SFace:
+//! raw `0..=255` **RGB** `data` → 128-d `fc1`, the graph bakes
+//! `(x−127.5)·1/128`). A graph that does not match its declared contract is
+//! refused loudly (`InferenceFailed` listing the available tensors) — no silent
+//! re-shaping, no stub substitution. Tests run against deterministic stubs and
+//! the hash-pinned crafted behavior fixtures; **no weights are committed and
+//! nothing is downloaded** (Agents.md).
 //!
 //! ## No silent fallback
 //!
@@ -48,9 +49,21 @@
 
 pub mod backend;
 pub mod cluster;
+pub mod model;
 #[cfg(feature = "onnx-rt")]
 pub mod ort;
+#[cfg(feature = "onnx-rt")]
+pub mod ort_io;
 pub mod pins;
+pub mod yunet;
+
+pub use model::{
+    face_detect_manifest, face_embed_manifest, face_model_hash_is_pinned, FaceInferenceOptions,
+    FaceModelSuite, FACE_DETECTION_NMS_THRESHOLD_DEFAULT, FACE_DETECTION_SCORE_THRESHOLD_DEFAULT,
+    FACE_DETECTION_TOP_K_DEFAULT, FACE_DETECT_INFERENCE_HEIGHT, FACE_DETECT_INFERENCE_WIDTH,
+    FACE_EMBEDDING_NORMALIZATION, FACE_EMBED_DIMENSION, FACE_EMBED_INFERENCE_HEIGHT,
+    FACE_EMBED_INFERENCE_WIDTH,
+};
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -67,11 +80,7 @@ use lumina_sidecar::{
 /// [`face_artifact_status`] consumes it.
 pub use lumina_sidecar::FaceArtifactEvidence;
 
-use crate::hash::{compute_sha256_hex, PENDING_INTEGRATION_HASH};
-use crate::manifest::{
-    ChannelLayout, InputNormalization, ModelCapabilities, ModelInputSpec, ModelManifest,
-    Resolution as ModelResolution, TensorFormat,
-};
+use crate::hash::compute_sha256_hex;
 use crate::OnnxError;
 
 pub use backend::{
@@ -83,21 +92,6 @@ pub use cluster::{
     FaceClusteringParams, FACE_CLUSTERING_EPS_DEFAULT, FACE_CLUSTERING_METHOD,
     FACE_CLUSTERING_MIN_SAMPLES_DEFAULT, FACE_CLUSTERING_VERSION,
 };
-
-/// Detection inference resolution (square). Planned YuNet input; part of the
-/// face identity.
-pub const FACE_DETECT_INFERENCE_WIDTH: u32 = 640;
-/// Detection inference resolution (square). See [`FACE_DETECT_INFERENCE_WIDTH`].
-pub const FACE_DETECT_INFERENCE_HEIGHT: u32 = 640;
-/// Embedding inference resolution (square, `112×112` is the standard aligned
-/// face crop size of the ArcFace/MobileFaceNet family). Part of the shared
-/// preprocessing identity.
-pub const FACE_EMBED_INFERENCE_WIDTH: u32 = 112;
-/// Embedding inference resolution (square). See [`FACE_EMBED_INFERENCE_WIDTH`].
-pub const FACE_EMBED_INFERENCE_HEIGHT: u32 = 112;
-/// Planned embedding vector length (SFace/MobileFaceNet output). Part of the
-/// persisted [`FaceVectorRef::dimension`]; a change requires re-clustering.
-pub const FACE_EMBED_DIMENSION: u32 = 128;
 
 pub use pins::{
     FACE_DETECT_LICENSE, FACE_DETECT_MODEL_HASH, FACE_DETECT_MODEL_NAME, FACE_DETECT_MODEL_VERSION,
@@ -118,200 +112,10 @@ pub const FACE_PREPROCESSING_VERSION: &str = "1";
 /// The detector emits normalized (`0..=1`) boxes in the oriented source frame,
 /// so no further scaling is applied (`identity`).
 pub const FACE_RESCALING_METHOD: &str = "identity";
-/// Default detection score threshold applied when building persisted
-/// detections. It is part of the preprocessing identity, so changing it makes
-/// previously persisted analyses `stale` (never a silent re-filter).
-pub const FACE_DETECTION_SCORE_THRESHOLD_DEFAULT: f32 = 0.5;
-/// Documented embedding normalization applied before clustering and
-/// persistence.
-pub const FACE_EMBEDDING_NORMALIZATION: &str = "l2";
 /// Key under which the deterministic identity digest
 /// ([`face_identity_digest`]) is persisted in the sidecar
 /// [`FaceIdentity::extras`].
 pub const FACE_IDENTITY_DIGEST_KEY: &str = "face_identity_digest";
-
-/// Whether `manifest` carries a real (non-placeholder) `model_hash`.
-///
-/// FACE-20 §2.2 / FACE-20-S6: the shipped face manifests now carry the verified
-/// upstream SHA-256 pins, so this reports `true` for both. A descriptor still
-/// carrying [`PENDING_INTEGRATION_HASH`] must never be reported as verified.
-#[must_use]
-pub fn face_model_hash_is_pinned(manifest: &ModelManifest) -> bool {
-    manifest.model_hash != PENDING_INTEGRATION_HASH
-}
-
-/// Build the detection descriptor (YuNet, MIT, pinned `model_hash`).
-///
-/// Declares only `face_detect`. The tensor names are the **canonical pipeline
-/// contract** (single fused `detections` output, see
-/// [`crate::face::backend::decode_face_detections`]); the shipped YuNet graph
-/// emits twelve per-stride tensors instead, so a real YuNet artifact is
-/// hash-verified but refused loudly at load until a multi-output decoder lands
-/// (documented boundary, `feature/quality/fixtures-licensing.md` §5) — never a
-/// silent substitution.
-#[must_use]
-pub fn face_detect_manifest() -> ModelManifest {
-    ModelManifest {
-        model_name: FACE_DETECT_MODEL_NAME.into(),
-        model_version: FACE_DETECT_MODEL_VERSION.into(),
-        model_hash: FACE_DETECT_MODEL_HASH.into(),
-        license: FACE_DETECT_LICENSE.into(),
-        input: ModelInputSpec {
-            resolution: ModelResolution {
-                width: FACE_DETECT_INFERENCE_WIDTH,
-                height: FACE_DETECT_INFERENCE_HEIGHT,
-            },
-            channel_layout: ChannelLayout::Rgb,
-            tensor_name: "input".into(),
-            tensor_format: TensorFormat::Nchw,
-            normalization: InputNormalization::IMAGENET,
-        },
-        output_tensor_name: "detections".into(),
-        capabilities: ModelCapabilities {
-            face_detect: true,
-            ..Default::default()
-        },
-    }
-}
-
-/// Build the embedding descriptor (SFace/MobileFaceNet, Apache-2.0, pinned
-/// `model_hash`).
-///
-/// Declares only `face_embed`. Keeps the canonical pipeline I/O contract
-/// (`input` → single `output`, see
-/// [`crate::face::backend::decode_face_embedding`]); the shipped SFace graph
-/// uses `data` → `fc1` with a baked-in `(x − 127.5) · 1/128` transform, so a
-/// real SFace artifact is hash-verified but refused loudly at load until the
-/// adapter is reconciled (documented boundary) — never a silent substitution.
-#[must_use]
-pub fn face_embed_manifest() -> ModelManifest {
-    ModelManifest {
-        model_name: FACE_EMBED_MODEL_NAME.into(),
-        model_version: FACE_EMBED_MODEL_VERSION.into(),
-        model_hash: FACE_EMBED_MODEL_HASH.into(),
-        license: FACE_EMBED_LICENSE.into(),
-        input: ModelInputSpec {
-            resolution: ModelResolution {
-                width: FACE_EMBED_INFERENCE_WIDTH,
-                height: FACE_EMBED_INFERENCE_HEIGHT,
-            },
-            channel_layout: ChannelLayout::Rgb,
-            tensor_name: "input".into(),
-            tensor_format: TensorFormat::Nchw,
-            normalization: InputNormalization::IMAGENET,
-        },
-        output_tensor_name: "output".into(),
-        capabilities: ModelCapabilities {
-            face_embed: true,
-            ..Default::default()
-        },
-    }
-}
-
-/// The pair of face models plus the embedding dimension that fully describes
-/// stages 1/2 of the pipeline.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FaceModelSuite {
-    /// Detection model descriptor (must declare `face_detect`).
-    pub detection: ModelManifest,
-    /// Embedding model descriptor (must declare `face_embed`).
-    pub embedding: ModelManifest,
-    /// Embedding vector length (`> 0`), persisted in the vector reference.
-    pub embedding_dimension: u32,
-}
-
-impl FaceModelSuite {
-    /// Build a suite from explicit descriptors, validating the capability and
-    /// dimension contract loudly (no silent capability guessing).
-    pub fn new(
-        detection: ModelManifest,
-        embedding: ModelManifest,
-        embedding_dimension: u32,
-    ) -> Result<Self, OnnxError> {
-        let suite = Self {
-            detection,
-            embedding,
-            embedding_dimension,
-        };
-        suite.validate()?;
-        Ok(suite)
-    }
-
-    /// The shipped descriptor pair (YuNet MIT + SFace Apache-2.0, both with a
-    /// verified, pinned `model_hash`).
-    #[must_use]
-    pub fn candidate() -> Self {
-        Self {
-            detection: face_detect_manifest(),
-            embedding: face_embed_manifest(),
-            embedding_dimension: FACE_EMBED_DIMENSION,
-        }
-    }
-
-    /// Validate both manifests and the declared capabilities/dimension.
-    pub fn validate(&self) -> Result<(), OnnxError> {
-        self.detection.validate()?;
-        self.embedding.validate()?;
-        if !self.detection.capabilities.face_detect {
-            return Err(OnnxError::UnsupportedModel {
-                name: self.detection.model_name.clone(),
-                reason: "detection model does not declare the `face_detect` capability".into(),
-            });
-        }
-        if !self.embedding.capabilities.face_embed {
-            return Err(OnnxError::UnsupportedModel {
-                name: self.embedding.model_name.clone(),
-                reason: "embedding model does not declare the `face_embed` capability".into(),
-            });
-        }
-        if self.embedding_dimension == 0 {
-            return Err(OnnxError::InvalidFaceData(
-                "face embedding_dimension must be > 0".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Identity-bearing inference options (part of the persisted preprocessing
-/// contract, so a change invalidates persisted analyses).
-#[derive(Debug, Clone, PartialEq)]
-pub struct FaceInferenceOptions {
-    /// Detection score threshold applied when persisting detections.
-    pub detection_score_threshold: f32,
-    /// Embedding normalization applied before clustering/persistence.
-    pub embedding_normalization: String,
-}
-
-impl Default for FaceInferenceOptions {
-    fn default() -> Self {
-        Self {
-            detection_score_threshold: FACE_DETECTION_SCORE_THRESHOLD_DEFAULT,
-            embedding_normalization: FACE_EMBEDDING_NORMALIZATION.into(),
-        }
-    }
-}
-
-impl FaceInferenceOptions {
-    /// Validate the option contract loudly (finite threshold in `0..=1`,
-    /// non-empty normalization name).
-    pub fn validate(&self) -> Result<(), OnnxError> {
-        if !self.detection_score_threshold.is_finite()
-            || !(0.0..=1.0).contains(&self.detection_score_threshold)
-        {
-            return Err(OnnxError::InvalidFaceData(format!(
-                "face detection_score_threshold must be finite within 0..=1, got {}",
-                self.detection_score_threshold
-            )));
-        }
-        if self.embedding_normalization.trim().is_empty() {
-            return Err(OnnxError::InvalidFaceData(
-                "face embedding_normalization must not be empty".into(),
-            ));
-        }
-        Ok(())
-    }
-}
 
 /// Build the reproducible stage 1/2 identity for the sidecar
 /// ([`lumina_sidecar::FaceIdentity`]).
@@ -360,6 +164,14 @@ pub fn face_identity(
     parameters.insert(
         "detection_score_threshold".into(),
         format!("{:.6}", options.detection_score_threshold),
+    );
+    parameters.insert(
+        "detection_nms_threshold".into(),
+        format!("{:.6}", options.detection_nms_threshold),
+    );
+    parameters.insert(
+        "detection_top_k".into(),
+        options.detection_top_k.to_string(),
     );
     parameters.insert(
         "embedding_normalization".into(),

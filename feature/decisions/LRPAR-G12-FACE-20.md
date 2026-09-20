@@ -76,8 +76,9 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
 > `feature/quality/fixtures-licensing.md` §5. Die oben beschriebene
 > `pending-integration`-Regel gilt damit für Face **nicht mehr**; sie bleibt für
 > BiRefNet/SAM 2/Denoise/Inpaint in Kraft. Gewichte werden weiterhin nicht
-> committet (Nutzer-geliefert), und der reale ORT-Pfad ist bis zum
-> Multi-Output-Adapter eine laute, dokumentierte Grenze (§3.3).
+> committet (Nutzer-geliefert). Der reale ORT-Pfad ist über den
+> Multi-Output-Adapter (LRPAR-G12-FACE-ADAPTER-25, 2026-09-20) an den echten
+> I/O-Vertrag angebunden — siehe §3.3.
 
 ### 2.3 Capability (native-only, kein stiller Fallback)
 
@@ -219,16 +220,44 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   erst nach dem Adapter (siehe unten) nutzbar ist. Lizenztexte liegen in
   `licenses/models/`; getestet wird netzwerkfrei gegen Stubs und das lokale,
   hash-gepinnte Behavior-Fixture.
-- **Bekannte, laute Grenze (Folgearbeit):** Die ausgelieferten Graphen passen
-  **nicht** zum kanonischen Single-Output-Vertrag aus S2 —
-  **YuNet** liefert zwölf Per-Stride-Tensoren (`cls_*`/`obj_*`/`bbox_*`/`kps_*`)
-  und **SFace** konsumiert `data` (0..255, mit eingebackener
-  `(x−127.5)·1/128`-Normierung) und liefert `fc1` (128-d). Ein echtes Artefakt
-  wird daher hash-verifiziert, aber beim Laden **laut** abgelehnt
-  (`InferenceFailed` listet die verfügbaren Tensoren) — kein stiller Fallback
-  und kein stilles Umbiegen. Ein dedizierter Multi-Output-Adapter (YuNet-Dekode
-  inkl. NMS + korrekter SFace-I/O-Vertrag) ist eine eigene Folgearbeit
-  (`Agents.todo.md`).
+- **Adapter umgesetzt (LRPAR-G12-FACE-ADAPTER-25, 2026-09-20):** Die
+  ausgelieferten Graphen werden jetzt über ihren **echten** I/O-Vertrag
+  angebunden statt über den kanonischen Single-Output-Vertrag aus S2:
+  - **YuNet:** Eingang `input`, rohe `0..=255`-Bytes in **BGR**-Reihenfolge
+    (OpenCV `blobFromImage(.., swapRB = false)`; die Trainings-Mittelwerte sind
+    in die erste Faltung eingerechnet). Die zwölf Per-Stride-Tensoren
+    `cls_/obj_/bbox_/kps_{8,16,32}` werden exakt wie in OpenCVs
+    `FaceDetectorYNImpl::postProcess` dekodiert (`score = sqrt(clamp(cls)·clamp(obj))`,
+    Anchor-/Stride-Offset, `w = exp(bbox_w)·stride`, Keypoints zellrelativ) und
+    per greedy-NMS (`detection_nms_threshold`, Default 0.3) auf `detection_top_k`
+    (Default 5000) begrenzt. Boxen/Landmarken werden deterministisch auf
+    `0..=1` geklemmt und gegen den S1-Vertrag validiert; fehlende Tensoren,
+    falsche Shapes oder eine nicht durch die Stride teilbare Auflösung sind
+    laute `InferenceFailed`-Fehler (kein stiller Reshape).
+  - **SFace:** Eingang `data` (`112×112`, rohe `0..=255`-Bytes **RGB**; die
+    `(x−127.5)·1/128`-Normierung liegt im Graphen), Ausgang `fc1` (128-d),
+    L2-normalisiert wie bisher.
+  - **Identity/Re-Pin (Befund B2):** Beide Manifeste deklarieren jetzt
+    `InputNormalization::BYTE_RANGE` (keine ImageNet-Vorverarbeitung) und für
+    YuNet `ChannelLayout::Bgr` (neuer additiver Layout-Wert; OpenCV-native
+    Reihenfolge). Dadurch änderten sich die `input_spec_digest`-Werte; sie sind
+    neu gepinnt: YuNet `sha256:03ce26b0…78a8d9`, SFace `sha256:e2e2919a…2b01b6`
+    (verankert in `crates/lumina-onnx/tests/face_pins.rs`, dokumentiert in
+    `feature/quality/fixtures-licensing.md` §5). NMS-Schwelle und `top_k` sind
+    zusätzlich Teil der persistierten Face-Identität (`FaceInferenceOptions`
+    → `face_identity`), sodass eine Änderung persistierte Analysen sichtbar
+    `stale` macht.
+  - **Fail-statt-Fallback:** Ein Graph, der die deklarierte Tensor-Menge nicht
+    liefert (z. B. ein einzelner fehlender Per-Stride-Tensor), wird beim Laden
+    **laut** abgelehnt (`InferenceFailed` listet die verfügbaren Tensoren) —
+    kein stiller Fallback und kein stilles Umbiegen. Ein Manifest ohne die
+    gepinnte YuNet-Identität dekodiert weiterhin den kanonischen
+    Single-Output-Vertrag; die beiden Verträge mischen sich nie.
+  - **Tests netzwerkfrei:** Zwei hash-gepinnte, selbst erzeugte Graphen
+    (`crates/lumina-onnx/tests/fixtures/lumina-crafted-yunet.onnx` /
+    `…-sface.onnx`) treiben den echten ORT-Pfad ohne Gewichte; Decode-/NMS- und
+    Norm-Pfade sind zusätzlich rein getestet. Gewichte bleiben nutzer-geliefert
+    und uncommittet.
 
 ## 4. Persistenz-Scope (Sidecar-first)
 
@@ -316,7 +345,7 @@ Verifizierungs-Agenten; Reihenfolge seriell bei Schema-/API-Berührung:
 **Stand 2026-09-17 (S1–S5 + Vektor-Record-Kind, Verifizierung BESTANDEN):**
 S1 Schema, S2 ONNX, S3 Clustering, S4 CLI (Exit-Codes inkl. Usage-2), S5 GUI
 (People-Ansicht + Face→Masken-Brücke als Box-Region, kein GPS). **S6
-(Gewichte/Lizenzen) umgesetzt 2026-09-20, Verifizierung ausstehend (§3.3).** Der
+(Gewichte/Lizenzen) umgesetzt 2026-09-20 (§3.3).** Der
 Vektor-Record-Kind (§3.2) ist umgesetzt; der
 Face-Evidence-Helper liegt jetzt genau einmal in `lumina-sidecar` und wird von
 CLI und GUI gemeinsam genutzt. **Abdeckungsgrenze (B1, dokumentiert):** Die
@@ -324,9 +353,13 @@ CLI-Schreib-Orchestrierung (`face_analyze` ohne `onnx-rt` nicht kompiliert, mit
 `onnx-rt` nur mit echten Modellen ausführbar) ist code-review-verifiziert, nicht
 prozess-E2E; der Record-/Codec-/Checksum-/Evidence-Vertrag ist vollständig
 getestet. Ein stubbarer `FaceOnnxEngine`-Injektionspunkt wäre der Weg zu voller
-Prozess-Abdeckung. **Zusätzliche laute Grenze (S6):** der reale Detektor/
-Embedder passt noch nicht zum S2-I/O-Vertrag (YuNet 12 Outputs; SFace
-`data`/`fc1`) — Multi-Output-Adapter als Folgearbeit (§3.3).
+Prozess-Abdeckung. **Adapter (LRPAR-G12-FACE-ADAPTER-25, 2026-09-20):** Der
+reale Detektor/Embedder ist jetzt an den echten I/O-Vertrag angebunden (YuNet:
+`input`/12 Per-Stride-Outputs/BGR/raw, inkl. NMS; SFace: `data`/`fc1`/raw) —
+die frühere laute Grenze aus §3.3 ist damit aufgelöst. Die
+`input_spec_digest`-Werte wurden neu gepinnt; ein Graph, der seinen
+deklarierten Vertrag nicht erfüllt, wird weiterhin beim Laden laut abgelehnt.
+Verifizierung ausstehend.
 
 Jeder Slice braucht: SOLL-Satz im Feature-Dokument vor Code (falls Semantik
 unklar), Tests mit der Implementierung, Verifizierungsbericht mit

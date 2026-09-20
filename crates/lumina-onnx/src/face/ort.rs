@@ -34,11 +34,12 @@
 //! returns an error the caller must surface.
 //!
 //! The two shipped face weights carry verified `sha256:` pins (FACE-20-S6), so
-//! an artifact is hash-checked against a real identity; because the shipped
-//! graphs do not yet match the canonical single-output I/O contract (see
-//! `face::pins`), a real artifact is refused loudly at load until the
-//! multi-output adapter lands. The load/verify/contract paths are exercised
-//! against the committed behavior fixture in `tests/face_ort.rs`; no download
+//! an artifact is hash-checked against a real identity; the real graphs are
+//! decoded through their declared contract (YuNet = twelve per-stride outputs
+//! via `face::yunet`, SFace = `data`→`fc1`), see `face::pins`. A graph whose
+//! tensors do not match the manifest is refused loudly at load. The
+//! load/verify/contract paths are exercised against the committed behavior
+//! fixtures in `tests/face_adapter_ort.rs` / `tests/face_ort.rs`; no download
 //! occurs at build or test time.
 
 use std::cell::RefCell;
@@ -50,121 +51,16 @@ use crate::face::backend::{
     align_face_to_template, decode_face_detections, decode_face_embedding, DetectedFace,
     FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingVector,
 };
+use crate::face::ort_io::{
+    detection_output_names, find_output, load_session, run_model, run_model_named,
+};
+use crate::face::yunet::{
+    decode_yunet_detections, detection_head_for, FaceDetectHead, YunetStrideTensors, YUNET_STRIDES,
+};
 use crate::face::FaceInferenceOptions;
 use crate::hash::{verify_model_file, ModelHashStatus};
 use crate::manifest::ModelManifest;
-use crate::preprocess::{normalize_rgb_to_nchw, preprocess_rgb_to_model};
 use crate::OnnxError;
-
-/// Descriptive [`OnnxError::InferenceFailed`] for a manifest-declared tensor
-/// name missing from the loaded graph (mirrors `ort_backend.rs`).
-fn tensor_name_error<T: AsRef<str>>(
-    kind: &str,
-    requested: &str,
-    available: &[T],
-    model_name: &str,
-) -> OnnxError {
-    let listed = if available.is_empty() {
-        "<none>".to_owned()
-    } else {
-        available
-            .iter()
-            .map(|name| format!("`{}`", name.as_ref()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    OnnxError::InferenceFailed {
-        name: model_name.to_owned(),
-        reason: format!(
-            "the loaded ONNX graph has no {kind} tensor `{requested}` \
-             (available {kind}s: {listed})"
-        ),
-    }
-}
-
-/// Load a session and validate its declared I/O tensor names against
-/// `manifest`.
-fn load_session(
-    model_path: &Path,
-    manifest: &ModelManifest,
-) -> Result<ort::session::Session, OnnxError> {
-    if !model_path.exists() {
-        return Err(OnnxError::MissingModel {
-            path: model_path.display().to_string(),
-        });
-    }
-    let session = ort::session::Session::builder()
-        .and_then(|mut builder| builder.commit_from_file(model_path))
-        .map_err(|error| OnnxError::InferenceFailed {
-            name: manifest.model_name.clone(),
-            reason: format!("failed to load ONNX session: {error}"),
-        })?;
-    let input_names: Vec<&str> = session.inputs().iter().map(|io| io.name()).collect();
-    if !input_names
-        .iter()
-        .any(|name| *name == manifest.input.tensor_name)
-    {
-        return Err(tensor_name_error(
-            "input",
-            &manifest.input.tensor_name,
-            &input_names,
-            &manifest.model_name,
-        ));
-    }
-    let output_names: Vec<&str> = session.outputs().iter().map(|io| io.name()).collect();
-    if !output_names
-        .iter()
-        .any(|name| *name == manifest.output_tensor_name)
-    {
-        return Err(tensor_name_error(
-            "output",
-            &manifest.output_tensor_name,
-            &output_names,
-            &manifest.model_name,
-        ));
-    }
-    Ok(session)
-}
-
-/// Run one single-output session for `image`, returning the raw `f32` output
-/// and its shape (as `usize` axes). Preprocessing uses the manifest's declared
-/// resolution, tensor name and normalization.
-fn run_model(
-    manifest: &ModelManifest,
-    session: &mut ort::session::Session,
-    image: &ImageFrame,
-) -> Result<(Vec<usize>, Vec<f32>), OnnxError> {
-    let res = manifest.input.resolution;
-    let rgb = preprocess_rgb_to_model(image, res);
-    let data = normalize_rgb_to_nchw(&rgb, &manifest.model_name, &manifest.input.normalization)?;
-    let tensor =
-        ort::value::Tensor::from_array((vec![1i64, 3, res.height as i64, res.width as i64], data))
-            .map_err(|error| OnnxError::InferenceFailed {
-                name: manifest.model_name.clone(),
-                reason: format!("failed to build input tensor: {error}"),
-            })?;
-    let input_name = manifest.input.tensor_name.clone();
-    let outputs = session
-        .run(ort::inputs![input_name => tensor])
-        .map_err(|error| OnnxError::InferenceFailed {
-            name: manifest.model_name.clone(),
-            reason: format!("inference failed: {error}"),
-        })?;
-    let output_name = manifest.output_tensor_name.as_str();
-    let available: Vec<&str> = outputs.keys().collect();
-    let output = outputs.get(output_name).ok_or_else(|| {
-        tensor_name_error("output", output_name, &available, &manifest.model_name)
-    })?;
-    let (shape, raw) =
-        output
-            .try_extract_tensor::<f32>()
-            .map_err(|error| OnnxError::InferenceFailed {
-                name: manifest.model_name.clone(),
-                reason: format!("failed to read output tensor `{output_name}`: {error}"),
-            })?;
-    let shape: Vec<usize> = shape.iter().map(|axis| *axis as usize).collect();
-    Ok((shape, raw.to_vec()))
-}
 
 /// ONNX Runtime backed face detector.
 pub struct OrtFaceDetector {
@@ -193,7 +89,8 @@ impl OrtFaceDetector {
         options.validate()?;
         let path = model_path.as_ref().to_path_buf();
         let hash_status = verify_model_file(&path, &manifest.model_hash)?;
-        let session = load_session(&path, &manifest)?;
+        let expected_outputs = detection_output_names(&manifest);
+        let session = load_session(&path, &manifest, &expected_outputs)?;
         Ok(Self {
             manifest,
             options,
@@ -228,13 +125,42 @@ impl OrtFaceDetector {
             });
         }
         let mut session = self.session.borrow_mut();
-        let (shape, data) = run_model(&self.manifest, &mut session, image)?;
-        decode_face_detections(
-            &self.manifest.model_name,
-            &shape,
-            &data,
-            self.options.detection_score_threshold,
-        )
+        match detection_head_for(&self.manifest) {
+            Some(FaceDetectHead::YuNetPerStride) => {
+                let names = detection_output_names(&self.manifest);
+                let outputs = run_model_named(&self.manifest, &mut session, image, &names)?;
+                let mut per_stride = Vec::with_capacity(YUNET_STRIDES.len());
+                for stride in YUNET_STRIDES {
+                    let name = |kind: &str| format!("{kind}_{stride}");
+                    per_stride.push(YunetStrideTensors {
+                        stride,
+                        cls: find_output(&outputs, &name("cls"), &self.manifest.model_name)?,
+                        obj: find_output(&outputs, &name("obj"), &self.manifest.model_name)?,
+                        bbox: find_output(&outputs, &name("bbox"), &self.manifest.model_name)?,
+                        kps: find_output(&outputs, &name("kps"), &self.manifest.model_name)?,
+                    });
+                }
+                let resolution = self.manifest.input.resolution;
+                decode_yunet_detections(
+                    &self.manifest.model_name,
+                    resolution.width,
+                    resolution.height,
+                    &per_stride,
+                    self.options.detection_score_threshold,
+                    self.options.detection_nms_threshold,
+                    self.options.detection_top_k as usize,
+                )
+            }
+            None => {
+                let (shape, data) = run_model(&self.manifest, &mut session, image)?;
+                decode_face_detections(
+                    &self.manifest.model_name,
+                    &shape,
+                    &data,
+                    self.options.detection_score_threshold,
+                )
+            }
+        }
     }
 }
 
@@ -279,7 +205,11 @@ impl OrtFaceEmbedder {
         }
         let path = model_path.as_ref().to_path_buf();
         let hash_status = verify_model_file(&path, &manifest.model_hash)?;
-        let session = load_session(&path, &manifest)?;
+        let session = load_session(
+            &path,
+            &manifest,
+            std::slice::from_ref(&manifest.output_tensor_name),
+        )?;
         Ok(Self {
             manifest,
             dimension,
@@ -362,6 +292,7 @@ impl FaceEmbeddingInference for OrtFaceEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::face::ort_io::tensor_name_error;
     use crate::face::{face_detect_manifest, face_embed_manifest};
 
     #[test]

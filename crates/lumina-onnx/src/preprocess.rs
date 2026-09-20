@@ -6,7 +6,7 @@
 //! the adapter contract (resize to inference resolution, rescale the emitted
 //! matte back to source dimensions) and are shared by the stub and ORT backends.
 
-use crate::manifest::InputNormalization;
+use crate::manifest::{ChannelLayout, InputNormalization};
 use crate::{OnnxError, Resolution};
 use lumina_core::MaskError;
 use lumina_core::MaskPlane;
@@ -37,6 +37,27 @@ pub fn preprocess_rgb_to_model(image: &lumina_core::ImageFrame, target: Resoluti
         }
     }
     out
+}
+
+/// [`preprocess_rgb_to_model`] with the graph's declared channel `layout`.
+///
+/// `ChannelLayout::Rgb` returns the canonical Lumina order (R, G, B);
+/// `ChannelLayout::Bgr` swaps the first and third byte of every pixel, which is
+/// exactly OpenCV's `blobFromImage(.., swapRB = false)` behavior on a BGR
+/// `Mat`. The shipped YuNet detector declares `Bgr`, so the adapter never
+/// silently feeds the wrong order; the swap is deterministic and per pixel.
+pub fn preprocess_image_to_model(
+    image: &lumina_core::ImageFrame,
+    target: Resolution,
+    layout: ChannelLayout,
+) -> Vec<u8> {
+    let mut pixels = preprocess_rgb_to_model(image, target);
+    if layout == ChannelLayout::Bgr {
+        for pixel in pixels.as_chunks_mut::<3>().0 {
+            pixel.swap(0, 2);
+        }
+    }
+    pixels
 }
 
 /// Rescale a model-resolution [`MaskPlane`] (produced at `inference`

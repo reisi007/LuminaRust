@@ -42,9 +42,10 @@
 //! `onnx-rt`) and the model-free, deterministic clustering stage, plus the
 //! mapping onto the S1 sidecar `face` schema. Both shipped weight descriptors
 //! carry verified, pinned SHA-256 `model_hash` values (FACE-20-S6, licences
-//! MIT/Apache-2.0 verified at the OpenCV Zoo source) — there is no download and
-//! no silent fallback, and the known real-artifact I/O boundary is documented
-//! in [`face`].
+//! MIT/Apache-2.0 verified at the OpenCV Zoo source) and are consumed through
+//! their real I/O contract by the FACE-20-FACE-ADAPTER-25 adapter (YuNet
+//! per-stride decode + NMS, SFace `data`→`fc1`) — there is no download and no
+//! silent fallback; see [`face`].
 //!
 //! ## KI-denoise pipeline (LRPAR-G14-DENOISE-IMPL-20)
 //!
@@ -95,19 +96,23 @@ pub use face::cluster::{
     split_cluster, FaceClusteringParams, FACE_CLUSTERING_EPS_DEFAULT, FACE_CLUSTERING_METHOD,
     FACE_CLUSTERING_MIN_SAMPLES_DEFAULT, FACE_CLUSTERING_VERSION,
 };
+pub use face::yunet::{
+    decode_yunet_detections, detection_head_for, nms_faces, FaceDetectHead, YunetStrideTensors,
+    YUNET_OUTPUT_NAMES, YUNET_STRIDES,
+};
 pub use face::{
     detected_face_id, embedding_id_for, face_artifact_status, face_detect_manifest,
     face_embed_manifest, face_identity, face_identity_digest, face_identity_with_digest,
     face_model_hash_is_pinned, try_load_face_engine, DetectedFace, FaceAnalysisOutput,
     FaceArtifactEvidence, FaceDetectionInference, FaceEmbeddingInference, FaceEmbeddingRecord,
     FaceEmbeddingVector, FaceInferenceOptions, FaceModelSuite, FaceOnnxEngine, StubFaceDetector,
-    StubFaceEmbedder, FACE_DETECTION_SCORE_THRESHOLD_DEFAULT, FACE_DETECT_INFERENCE_HEIGHT,
-    FACE_DETECT_INFERENCE_WIDTH, FACE_DETECT_LICENSE, FACE_DETECT_MODEL_HASH,
-    FACE_DETECT_MODEL_NAME, FACE_DETECT_MODEL_VERSION, FACE_EMBEDDING_NORMALIZATION,
-    FACE_EMBED_DIMENSION, FACE_EMBED_INFERENCE_HEIGHT, FACE_EMBED_INFERENCE_WIDTH,
-    FACE_EMBED_LICENSE, FACE_EMBED_MODEL_HASH, FACE_EMBED_MODEL_NAME, FACE_EMBED_MODEL_VERSION,
-    FACE_IDENTITY_DIGEST_KEY, FACE_LANDMARK_NAMES_5PT, FACE_PREPROCESSING_NAME,
-    FACE_PREPROCESSING_VERSION, FACE_RESCALING_METHOD,
+    StubFaceEmbedder, FACE_DETECTION_NMS_THRESHOLD_DEFAULT, FACE_DETECTION_SCORE_THRESHOLD_DEFAULT,
+    FACE_DETECTION_TOP_K_DEFAULT, FACE_DETECT_INFERENCE_HEIGHT, FACE_DETECT_INFERENCE_WIDTH,
+    FACE_DETECT_LICENSE, FACE_DETECT_MODEL_HASH, FACE_DETECT_MODEL_NAME, FACE_DETECT_MODEL_VERSION,
+    FACE_EMBEDDING_NORMALIZATION, FACE_EMBED_DIMENSION, FACE_EMBED_INFERENCE_HEIGHT,
+    FACE_EMBED_INFERENCE_WIDTH, FACE_EMBED_LICENSE, FACE_EMBED_MODEL_HASH, FACE_EMBED_MODEL_NAME,
+    FACE_EMBED_MODEL_VERSION, FACE_IDENTITY_DIGEST_KEY, FACE_LANDMARK_NAMES_5PT,
+    FACE_PREPROCESSING_NAME, FACE_PREPROCESSING_VERSION, FACE_RESCALING_METHOD,
 };
 pub use generative::{
     fixture_manifest, fixture_model_hash, manifest_hash_is_pinned, outpaint_canvas_from_sidecar,
@@ -129,8 +134,8 @@ pub use manifest::{
 };
 pub use outpaint::{OutpaintCanvas, OutpaintRequest, StubOutpaintBackend};
 pub use preprocess::{
-    matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_rgb_to_model,
-    rescale_model_matte, validate_output_shape,
+    matte_values_from_unit_f32, normalize_rgb_to_nchw, preprocess_image_to_model,
+    preprocess_rgb_to_model, rescale_model_matte, validate_output_shape,
 };
 pub use resolve::{try_load_onnx_engine, OnnxEngine};
 pub use sam2::{

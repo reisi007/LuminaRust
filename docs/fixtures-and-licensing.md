@@ -111,8 +111,9 @@ Notes:
   "all files in this directory", i.e. the weights); their manifests now carry
   verified `sha256:` pins. The normative record is
   `feature/quality/fixtures-licensing.md` §5 and `THIRD-PARTY-NOTICES.md`
-  (item 6). Weights remain uncommitted (consumer-supplied); the real ORT I/O
-  adapter is a documented follow-up.
+  (item 6). Weights remain uncommitted (consumer-supplied). The real ORT I/O
+  adapter (LRPAR-G12-FACE-ADAPTER-25, 2026-09-20) decodes the actual graph
+  contract (YuNet per-stride + NMS, SFace `data`→`fc1`).
 
 ---
 

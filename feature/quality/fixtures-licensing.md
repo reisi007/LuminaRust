@@ -99,6 +99,8 @@ PSNR-Toleranzen stehen normativ in
 | Datei | Bytes | SHA-256-Pin | Verwendung |
 | --- | ---: | --- | --- |
 | `crates/lumina-onnx/tests/fixtures/lumina-crafted-reducemax.onnx` | 139 | `2a2ede6659e8c59b3fd972242b27677ef23cb98d3c422616a1c65f50dcaca18d` | `OrtBackend`-Verhalten: Tensor-Namen, Hash-Pin `Verified`, Output-Validierung, Inferenz; Resolver-Test; **Face-ORT-Gates** (`tests/face_ort.rs`): `OrtFaceDetector`/`OrtFaceEmbedder` (MissingModel, Stale-Gate, Tensor-Namen, kontraktwidrige Output-Form) und `try_load_face_engine` (Resolver, kein Stub-Fallback) |
+| `crates/lumina-onnx/tests/fixtures/lumina-crafted-yunet.onnx` | 2 490 | `b4c76993b06bcccf1a0495fa795b2de8be8263c448b83f62630d4227da8324b1` | FACE-20-FACE-ADAPTER-25: YuNet-Per-Stride-Adapter (`tests/face_adapter_ort.rs`) — zwölf `cls_/obj_/bbox_/kps_{8,16,32}`-Outputs, Decode + NMS über den echten ORT-Pfad, fehlender Tensor/Tensor-Kontrakt laut |
+| `crates/lumina-onnx/tests/fixtures/lumina-crafted-sface.onnx` | 659 | `d2919decc20b9fe62e0d99e544fd0243fda0f847f3b99f32500491f6d6a5738e` | FACE-20-FACE-ADAPTER-25: SFace-Vertrag (`data` → `fc1`) mit 5-Punkt-Alignment + `BYTE_RANGE`-Vorverarbeitung + L2-Decode |
 
 - **Provenance:** programmatisch erzeugt aus der dokumentierten
   Proto3-Encoder-Quelle (`crates/lumina-onnx/tests/ort_backend.rs` +
@@ -189,22 +191,33 @@ SHA-256 geprüft (Git-LFS-Objekt-ID = Inhalts-Hash); die Manifeste
 `face_detect_manifest`/`face_embed_manifest` tragen jetzt diesen Pin
 (`sha256:<hex>`) statt `pending-integration`. **Es werden weiterhin keine
 Gewichte committet oder zur Testzeit heruntergeladen**; Tests laufen gegen die
-deterministischen Stubs und das lokale, hash-gepinnte Behavior-Fixture
-(`lumina-crafted-reducemax.onnx`). **Bekannte, laute Grenze:** Die
-ausgelieferten Graphen (YuNet = 12 Per-Stride-Outputs; SFace = `data`→`fc1` mit
-eingebackener `(x−127.5)·1/128`-Normierung) passen **nicht** zum kanonischen
-Single-Output-Vertrag aus S2; ein echtes Artefakt wird daher hash-verifiziert,
-aber beim Laden laut abgelehnt (`InferenceFailed` listet die verfügbaren
-Tensoren) — kein stiller Fallback, kein stilles Umbiegen. Der dafür nötige
-Multi-Output-Adapter ist eine eigene Folgearbeit (siehe `Agents.todo.md`).
+deterministischen Stubs und die lokalen, hash-gepinnten Behavior-Fixtures
+(`lumina-crafted-reducemax.onnx`, `lumina-crafted-yunet.onnx`,
+`lumina-crafted-sface.onnx`). **Realer Adapter (FACE-20-FACE-ADAPTER-25,
+2026-09-20):** Die ausgelieferten Graphen werden jetzt über ihren **echten**
+I/O-Vertrag angebunden: YuNet = Eingang `input` (rohe `0..=255`-Bytes, **BGR**,
+OpenCV-native Reihenfolge) mit zwölf Per-Stride-Outputs
+(`cls_/obj_/bbox_/kps_{8,16,32}`, Decode + greedy-NMS); SFace = Eingang `data`
+(rohe `0..=255`-Bytes, **RGB**; die `(x−127.5)·1/128`-Normierung liegt im
+Graphen) mit Ausgang `fc1` (128-d). Ein Graph, der die deklarierte
+Tensor-Menge/-Form nicht erfüllt, wird weiterhin beim Laden laut abgelehnt
+(`InferenceFailed` listet die verfügbaren Tensoren) — kein stiller Fallback,
+kein stilles Umbiegen.
 Lizenztexte: `licenses/models/YuNet-LICENSE-MIT.txt`,
 `licenses/models/SFace-LICENSE-Apache-2.0.txt`.
-Gepinnte `input_spec_digest`-Werte (kanonischer I/O-Vertrag; in
-`crates/lumina-onnx/tests/face_pins.rs` verankert): YuNet
-`sha256:e992dce8b7c2c51bdd9872106550f57ebdaf0ee86c5774f2212b47a79182d5dc`
-(640×640, RGB, NCHW, ImageNet-Normierung), SFace
-`sha256:a5c289c6f0c6466b927a7c895db2fc35cc22c96846db950bdd13bc741012270f`
-(112×112, RGB, NCHW, ImageNet-Normierung).
+Gepinnte `input_spec_digest`-Werte (echter I/O-Vertrag, FACE-20-FACE-ADAPTER-25;
+in `crates/lumina-onnx/tests/face_pins.rs` verankert): YuNet
+`sha256:03ce26b03baf5d45f5905e4a84c4d6e0fe70ae6b2ceaffc398cd2dd5b178a8d9`
+(640×640, **BGR**, NCHW, rohe `0..=255`-Normierung), SFace
+`sha256:e2e2919ae7b8f18ef5c67598ed44d4dc9e258badc38bde47eef577af0f2b01b6`
+(112×112, **RGB**, NCHW, rohe `0..=255`-Normierung). Der frühere
+`ImageNet`-Vertrag war die in S6 dokumentierte kanonische Deklaration, nicht das
+reale Modell (Befund B2); die Umstellung invalidiert persistierte Analysen
+sichtbar (`stale`). Optionaler, netzwerkfreier Nachweis gegen die echten,
+nutzer-gelieferten Gewichte:
+`cargo test -p lumina-onnx --features onnx-rt real_weights_match_the_adapter_contract
+-- --ignored` (mit `LUMINA_FACE_DETECT_MODEL_PATH` /
+`LUMINA_FACE_EMBED_MODEL_PATH`; ohne die Variablen ein No-op).
 
 **SAM-2-Export-Pfad (AGPL-Falle):** Die SAM-2.1-Gewichte sind Apache-2.0,
 aber der übliche Lade-/Inferenzweg über das PyPI-Paket **`ultralytics`

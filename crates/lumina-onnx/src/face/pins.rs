@@ -12,11 +12,15 @@
 //! `pending-integration` candidate state waited for exactly this. Source:
 //! `opencv/opencv_zoo` `main` @ `47534e27c9851bb1128ccc0102f1145e27f23f98`.
 //!
-//! **Known I/O boundary (loud, never silent):** the shipped graphs do not match
-//! the S2 canonical single-output contract (YuNet = 12 per-stride outputs;
-//! SFace = `data`→`fc1` with a baked-in `(x−127.5)·1/128`). A real artifact
-//! therefore hash-verifies but is refused loudly at load until the dedicated
-//! multi-output adapter lands — see [`super`].
+//! **Real I/O contract (decoded by the FACE-20-FACE-ADAPTER-25 adapter):** the
+//! shipped graphs carry the real OpenCV contract, not the canonical fused
+//! single output. **YuNet** consumes raw `0..=255` **BGR** `input` and emits
+//! twelve per-stride tensors (`cls_/obj_/bbox_/kps_{8,16,32}`, decoded by
+//! [`super::yunet`]); **SFace** consumes raw `0..=255` **RGB** `data` and emits
+//! the 128-d `fc1` (its graph bakes `(x−127.5)·1/128` internally). Both
+//! manifests therefore declare [`crate::manifest::InputNormalization::BYTE_RANGE`].
+//! A graph that does not match its declared contract is refused loudly — no
+//! silent reshape and no stub substitution.
 
 /// Detection model name (OpenCV Zoo `face_detection_yunet`).
 pub const FACE_DETECT_MODEL_NAME: &str = "YuNet";
