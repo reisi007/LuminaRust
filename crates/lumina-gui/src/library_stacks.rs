@@ -88,7 +88,7 @@ impl LuminaApp {
     /// Display paths of the members of `index`'s stack that are present in the
     /// current listing (the cover is always included when listed). A single
     /// non-stacked entry yields its own path.
-    fn stack_present_paths(&self, index: usize) -> Vec<String> {
+    pub(crate) fn stack_present_paths(&self, index: usize) -> Vec<String> {
         let Some(entry) = self.entries.get(index) else {
             return Vec::new();
         };

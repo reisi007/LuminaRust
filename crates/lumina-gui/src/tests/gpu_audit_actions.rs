@@ -68,6 +68,9 @@ pub(super) fn drive_action(app: &mut LuminaApp, action: GuiAction, export_path: 
         }
         GuiAction::SetModule => app.set_module(Module::Develop),
         GuiAction::SetLibraryView => app.set_library_view(LibraryView::Grid),
+        GuiAction::SetLibrarySort => {
+            let _ = app.set_library_sort(LibrarySort::Name);
+        }
         GuiAction::SetZoomMode => app.set_zoom_mode(ZoomMode::Fit),
         GuiAction::RegenerateStale => {
             let _ = app.regenerate_stale();

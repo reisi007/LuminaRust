@@ -9,6 +9,7 @@
 //! because the app root and headless tests call it.
 
 use super::*;
+use crate::library_sort::sort_label;
 use log::trace;
 
 impl LuminaApp {
@@ -115,6 +116,26 @@ impl LuminaApp {
                     self.set_library_filter(query);
                 }
             });
+            // LRPAR-G09-SORT-09: Library sort modes (Name / Capture Date /
+            // Custom). The buttons are the clickable primary path; the grid and
+            // the filmstrip share this display order, and a grid drag-drop
+            // switches to Custom automatically.
+            ui.horizontal_wrapped(|ui| {
+                for sort in [
+                    LibrarySort::Name,
+                    LibrarySort::CaptureDate,
+                    LibrarySort::Custom,
+                ] {
+                    if ui
+                        .selectable_label(self.library_sort == sort, sort_label(sort))
+                        .clicked()
+                    {
+                        if let Err(message) = self.set_library_sort(sort) {
+                            self.show_error(message);
+                        }
+                    }
+                }
+            });
             ui.collapsing(Str::QuickDevelop.t(), |ui| {
                 for (key, label, range) in [
                     ("exposure", Str::Exposure, -10.0..=10.0),
@@ -188,6 +209,9 @@ impl LuminaApp {
         self.library_cols = cols;
         let count = raw_indices.len();
         let total_rows = count.div_ceil(cols);
+        // LRPAR-G09-SORT-09: the grid drag-drop reorder is applied after the
+        // paint loop so the running `raw_indices` stay valid for this frame.
+        let mut pending_reorder: Option<(String, String)> = None;
         // The closure returns the laid-out row window so scheduling below runs
         // with the exact visible range.
         let visible_rows = {
@@ -216,9 +240,9 @@ impl LuminaApp {
                                     let tex = self.thumbnails.get(&entry.thumb_key).cloned();
                                     let placeholder_label =
                                         self.thumbnail_placeholder_label(&entry);
-                                    let (rect, resp) = ui.allocate_exact_size(
+                                    let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(cell_inner, cell_inner),
-                                        egui::Sense::click(),
+                                        egui::Sense::hover(),
                                     );
                                     if selected {
                                         ui.painter().rect_stroke(
@@ -244,6 +268,26 @@ impl LuminaApp {
                                             egui::Color32::from_gray(40),
                                         );
                                         ui.put(rect, egui::Label::new(placeholder_label));
+                                    }
+                                    // LRPAR-G09-SORT-09: register the cell interaction
+                                    // after the placeholder image/label so the cell is
+                                    // the topmost interactive widget. A stable per-cell
+                                    // id makes the drag-drop reorder testable headlessly;
+                                    // click = select/open, drag = reorder.
+                                    let resp = ui.interact(
+                                        rect,
+                                        crate::library_sort::library_cell_id(&entry.thumb_key),
+                                        egui::Sense::click_and_drag(),
+                                    );
+                                    // The dragged cell carries its path; dropping it on
+                                    // another cell records "move before that cell"
+                                    // (applied after the paint loop).
+                                    resp.dnd_set_drag_payload(entry.path.display().to_string());
+                                    if let Some(dragged) = resp.dnd_release_payload::<String>() {
+                                        pending_reorder = Some((
+                                            dragged.to_string(),
+                                            entry.path.display().to_string(),
+                                        ));
                                     }
                                     // LRPAR-G15-STACK-15: the painted stack
                                     // badge is clickable (toggles the collapse
@@ -356,5 +400,13 @@ impl LuminaApp {
         // window (+ buffer), then a bounded nearest-first off-screen prefetch.
         let window = visible_rows.start * cols..(visible_rows.end * cols).min(count);
         self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, window);
+        // LRPAR-G09-SORT-09: apply a drop that happened this frame last, so the
+        // paint loop and the thumbnail scheduling above both used the pre-drop
+        // order consistently.
+        if let Some((dragged, target)) = pending_reorder {
+            if let Err(message) = self.reorder_library_entry(&dragged, &target) {
+                self.show_error(message);
+            }
+        }
     }
 }

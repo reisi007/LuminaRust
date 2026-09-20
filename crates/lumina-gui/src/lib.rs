@@ -34,6 +34,9 @@ mod people_panel;
 // artifact status (same `lumina-merge` entry points as the CLI).
 mod filmstrip;
 mod i18n;
+// LRPAR-G09-SORT-09: the Library-module strings (Filter/Compare/Survey, Stack,
+// Sort) live here; `Str::t` delegates to them (file-size ratchet).
+mod i18n_library;
 mod merge_gui;
 // GPU-LENSFUN-PARITY-1 (GUI-Wiring): build the CPU `LensfunMap` from the strict
 // auto-corrector and bind it on the `GpuContext`, so a corrector recipe presents
@@ -113,6 +116,12 @@ pub use library_filter::{
 // LRPAR-G15-STACK-15: source-level image stacks (Grid/Filmstrip collapse,
 // selection-as-unit, Sidecar-first persistence).
 mod library_stacks;
+// LRPAR-G09-SORT-09: Library sort modes + the portable custom-order file. The
+// display-order methods (`raw_entry_indices`/`filtered_library_order`/
+// `filmstrip_order`) moved here from `lib.rs` (file-size ratchet).
+mod library_sort;
+mod library_sort_file;
+pub use library_sort::LibrarySort;
 // GUI-REFACTOR-W2-20 S2.4-S2.8: Develop frame + ops sections, filmstrip frame,
 // navigator rail and the top-level app-frame pieces (the `eframe::App::ui`
 // frame stays at the crate root: > 500 lines, see its doc comment).
@@ -1577,6 +1586,13 @@ pub struct LuminaApp {
     /// same selection and filter. Display-only (never recipe/sidecar); a
     /// reload restores the default (`Grid`).
     library_view: LibraryView,
+    /// LRPAR-G09-SORT-09: active Library sort mode (Name/CaptureDate/Custom).
+    /// Display-only, but persisted per folder together with the custom order in
+    /// `lumina-sort.json` (see `library_sort`). Default `Name`.
+    library_sort: LibrarySort,
+    /// LRPAR-G09-SORT-09: custom order as relative keys of the listed folder
+    /// (stable names, never array positions). Empty when unused.
+    library_sort_order: Vec<String>,
     before_after_split: bool,
     fullscreen: bool,
     /// G-16 (LRPAR-G16-POWER) session-only display state. Never persisted to
@@ -2119,6 +2135,10 @@ pub struct FileBrowserEntry {
     /// Focal length in mm from `lumina_raw::read_metadata` (best effort).
     /// Powers `focal:`/`focal_length:`.
     focal_length: Option<f32>,
+    /// LRPAR-G09-SORT-09: EXIF capture timestamp (Unix seconds, best effort)
+    /// from `lumina_raw::read_metadata`. Powers the `CaptureDate` sort; `None`
+    /// when unreadable/absent (sorts after every known timestamp).
+    capture_timestamp: Option<i64>,
     /// Relative subfolder of the entry vs. the listed directory (`""` for
     /// top-level files). Powers the Library grid path badge (F-100): the
     /// recursive aggregation shows subfolder images with their relative
@@ -2566,6 +2586,8 @@ impl LuminaApp {
             library_filter: String::new(),
             compare_mode: None,
             library_view: LibraryView::Grid,
+            library_sort: LibrarySort::Name,
+            library_sort_order: Vec::new(),
             before_after_split: false,
             fullscreen: false,
             softproof_preview: false,
@@ -2974,7 +2996,15 @@ impl LuminaApp {
         }
         match std::fs::read_dir(&directory) {
             Ok(_) => {
-                entries.sort_by(|a, b| a.name.cmp(&b.name));
+                // LRPAR-G09-SORT-09: restore the folder's persisted sort mode +
+                // custom order (loud on a corrupt file; defaults Name/empty).
+                let sort_error = self.load_library_sort_for(&directory);
+                crate::library_sort::sort_entries_in(
+                    &directory,
+                    &mut entries,
+                    self.library_sort,
+                    &self.library_sort_order,
+                );
                 // GUI-STARTUP-SELECTION-1: remember the grid position of a
                 // single selection so a rescan that prunes it (e.g. the
                 // selected file was deleted on disk) can fall back to its
@@ -2994,6 +3024,12 @@ impl LuminaApp {
                 };
                 self.entries = entries;
                 self.status = Str::ImagesInDirectory.format_arg(&self.entries.len().to_string());
+                // LRPAR-G09-SORT-09: a corrupt sort-order file is surfaced
+                // visibly here (it was logged loudly in `load_library_sort_for`)
+                // instead of silently falling back to `Name`.
+                if let Some(message) = sort_error {
+                    self.status = message;
+                }
                 self.stabilize_selection(removed_index);
                 // PERF-GUI-6: when no specific file was requested (e.g. the user
                 // picked a directory, not a single image) and nothing is loaded
@@ -3099,7 +3135,8 @@ impl LuminaApp {
             *slot = scanned;
         } else {
             self.entries.push(scanned);
-            self.entries.sort_by(|a, b| a.name.cmp(&b.name));
+            // LRPAR-G09-SORT-09: keep the active sort order for a new entry.
+            self.sort_entries_now();
         }
     }
 
@@ -3203,7 +3240,7 @@ impl LuminaApp {
         // filter — best effort, never a scan failure. `read_metadata` is a
         // metadata-only probe (no full decode); unreadable sources simply
         // carry `None` (the corresponding predicates then match nothing).
-        let (camera, iso, focal_length) = match lumina_raw::read_metadata(path) {
+        let (camera, iso, focal_length, capture_timestamp) = match lumina_raw::read_metadata(path) {
             Ok(metadata) => {
                 let camera = match (&metadata.camera_make, &metadata.camera_model) {
                     (Some(make), Some(model)) => Some(format!("{make} {model}")),
@@ -3211,9 +3248,14 @@ impl LuminaApp {
                     (None, Some(model)) => Some(model.clone()),
                     (None, None) => None,
                 };
-                (camera, metadata.iso, metadata.focal_length)
+                (
+                    camera,
+                    metadata.iso,
+                    metadata.focal_length,
+                    metadata.timestamp,
+                )
             }
-            Err(_) => (None, None, None),
+            Err(_) => (None, None, None, None),
         };
         Some(FileBrowserEntry {
             path: path.to_path_buf(),
@@ -3232,6 +3274,7 @@ impl LuminaApp {
             camera,
             iso,
             focal_length,
+            capture_timestamp,
             folder: String::new(),
             cull_badge,
             face_persons,
@@ -4421,28 +4464,6 @@ impl LuminaApp {
                 self.status = Str::FacePeople.t().into();
             }
         }
-    }
-
-    /// Filtered Library raster order behind every G-09 view: the RAW-only
-    /// display order ([`Self::raw_entry_indices`]) narrowed by the active
-    /// collection view and the `\` query. Pure read over `&self`, shared by
-    /// grid painting and keyboard navigation so both see the same list.
-    pub fn filtered_library_order(&self) -> Vec<usize> {
-        let query = self.library_filter.clone();
-        let active_collection = self.active_collection.clone();
-        let smart_catalog = self.smart_catalog.clone();
-        self.raw_entry_indices()
-            .into_iter()
-            .filter(|&entry_idx| {
-                let entry = &self.entries[entry_idx];
-                if let Some(filter) = &active_collection {
-                    if !collection_filter_matches_entry(entry, filter, &smart_catalog) {
-                        return false;
-                    }
-                }
-                library_entry_matches(entry, &query)
-            })
-            .collect()
     }
 
     /// Toggle the split Before/After marker (`Shift+Y`, Welle 3, LR-09
@@ -8391,35 +8412,6 @@ impl LuminaApp {
             BTreeSet::from([clicked.to_string()]),
             Some(clicked.to_string()),
         )
-    }
-
-    /// Display-string paths of the filmstrip entries in strip order (the same
-    /// RAW-only order [`Self::draw_filmstrip`] renders).
-    fn filmstrip_order(&self) -> Vec<String> {
-        self.raw_entry_indices()
-            .iter()
-            .map(|&index| self.entries[index].path.display().to_string())
-            .collect()
-    }
-
-    /// Indices of the RAW entries in display order (GUI-FILMSTRIP-DUP-1):
-    /// the single source behind the filmstrip, the navigator rail and the
-    /// Library grid — every image appears exactly once per view, and every
-    /// view shares the same selection bookkeeping. A duplicated source path
-    /// (e.g. listed twice after overlapping rescans) collapses to its first
-    /// occurrence so no view ever shows the same image twice.
-    fn raw_entry_indices(&self) -> Vec<usize> {
-        let mut seen = BTreeSet::new();
-        let indices: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| is_raw_name(&entry.name))
-            .filter(|(_, entry)| seen.insert(entry.path.display().to_string()))
-            .map(|(index, _)| index)
-            .collect();
-        // LRPAR-G15-STACK-15: a collapsed stack contributes only its cover.
-        self.collapse_stacked_indices(indices)
     }
 
     /// Currently selected filmstrip paths, sorted.
@@ -12783,6 +12775,7 @@ mod tests {
     mod layout;
     mod lens_blur;
     mod library_scan;
+    mod library_sort;
     mod library_sync;
     mod library_views;
     // R2-MODSWITCH-1 F7: module-switch latency (off-thread thumbnail cache,
@@ -13266,6 +13259,7 @@ mod tests {
             camera: None,
             iso: None,
             focal_length: None,
+            capture_timestamp: None,
             folder: String::new(),
             cull_badge: cull_gui::CullBadge::None,
             face_persons: Vec::new(),
@@ -13313,6 +13307,7 @@ mod tests {
             camera: Some("Canon EOS R5".to_string()),
             iso: Some(400.0),
             focal_length: Some(50.0),
+            capture_timestamp: Some(1_700_000_000),
             folder: String::new(),
             cull_badge: cull_gui::CullBadge::Review,
             face_persons: vec!["Alex".to_string()],

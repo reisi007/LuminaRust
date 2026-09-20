@@ -147,7 +147,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] LRPAR-G09-SORT-09 (→ G-09, Release: 1.0)** Library-Sortierung: Sortieroptionen (Name, Aufnahmedatum, Custom) + persistente Custom-Sortierung (manuelle Reihenfolge, stabile IDs statt Arrayposition). **Schema-Entscheide (User 2026-09-19):** Modi = Name / Aufnahmedatum (EXIF) / Custom; Custom-Order liegt in einer Ordner-Datei (portabel, atomar); Drag-&-Drop-Umsortierung wechselt automatisch auf Custom. Abnahme: Sortierwahl wirkt in Grid + Filmstrip, Custom-Order überlebt Reload, headless GUI-Tests.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 

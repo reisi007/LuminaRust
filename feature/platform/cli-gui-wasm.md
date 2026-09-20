@@ -580,7 +580,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Im Scope der 17b/17c-Rework-Flächen bleibt kein user-sichtbarer, das
   Edit-Rezept oder Masken mutierender `ui.button`/`ui.checkbox` ohne
   `GuiAction`.
-  Vollständige Klassenprüfung: alle 101
+  Vollständige Klassenprüfung: alle 102
   `GuiAction`s sind über den Audit (`f100_action_button`, ohne `_`-Arm)
   einer gezeichneten Oberfläche zugeordnet, und jede instrumentierte Methode
   trägt das Makro als erste Anweisung (Klick-Tests je Button/Checkbox).
@@ -676,7 +676,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   eigentliche GPU-Pfad ist über `assert_path_parity` (`maxAbsDiff=0`) und die
   `gpu_present_frame_size`-Present-Prüfung gepinnt, nicht über den Snapshot.
 - **GUI-GPU-AUDIT-17 (Release 1.0, User-Vorgabe 2026-09-17, F-103-N6):**
-  Automatisierter headless Routing-Audit über **alle** 101 `GuiAction`s
+  Automatisierter headless Routing-Audit über **alle** 102 `GuiAction`s
   (Quelle der Aktionsliste: `ALL_GUI_ACTIONS`). Der Audit lädt eine
   deterministische synthetische Quelle in eine `LuminaApp` mit **echtem**
   GPU-Kontext (Standalone-Metal-Adapter über `attach_wgpu_render_state`),
@@ -698,7 +698,11 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     `GuiAction`-Klassen unten, `default content crop` zählt drei Aktionen),
     keine undokumentierte CPU-Route; der adapter-unabhängige Test pinnt die
     Ausnahmetabelle gegen die dokumentierten Grundklassen. Der Present-Pfad
-    selbst bleibt über `kittest_parity` abgedeckt.
+    selbst bleibt über `kittest_parity` abgedeckt. Mit **LRPAR-G09-SORT-09**
+    (2026-09-20) ist die Oberfläche auf **102** Aktionen gewachsen:
+    `set_library_sort` ist display-only (Sortier-/Anzeigezustand, kein
+    Render-Key, keine Bildstufe) und daher keine CPU-Ausnahme — der
+    Metal-Lauf über 101 Render-Aktionen bleibt unberührt.
   - **Dokumentierte CPU-Ausnahmen (explizite Liste, alle laut sichtbar per
     Badge):**
 
@@ -1366,6 +1370,72 @@ Zweit-Mechanismus.
   Tastatur-Navigation (Arrows/Home/End/Enter/Esc), Ordner-Operationen mit
   Sidecar-Begleitung + headless E2E-Tests (Setter → Datei → Reload),
   CLI-`relocate` mit Exit-Codes; kein KI-Culling (2.5).
+
+### Library-Sortierung (LRPAR-G09-SORT-09, Release 1.0)
+
+Normative Sortier-/Custom-Order-Fläche der Library (Grid + Filmstrip). Sie baut
+auf der bestehenden Display-Order (`raw_entry_indices`/`filtered_library_order`)
+und der Stapel-Logik (LRPAR-G15-STACK-15) auf — kein Zweit-Mechanismus. Die
+Sortierung ist reine Anzeige-Reihenfolge: sie verändert **nie** Rezept, Sidecar
+oder Original und erzeugt keine Kopien.
+
+- **Modi (abschließend, User-Entscheid 2026-09-19):** genau drei —
+  `Name` (Dateiname, lexikografisch, der Default), `Aufnahmedatum (EXIF)`
+  (aufsteigend nach `RawMetadata.timestamp`; Einträge ohne Zeitstempel
+  sortieren deterministisch **nach** allen mit Zeitstempel, Tie-Break
+  Dateiname) und `Custom` (manuelle Reihenfolge). Andere Modi gibt es nicht.
+- **Wirkung:** Die gewählte Reihenfolge gilt für **Grid und Filmstrip** (beide
+  lesen dieselbe Display-Order), ebenso für die Library-Navigation
+  (Pfeiltasten/Home/End) und die Loupe-/Survey-Reihenfolge. Sie ist reiner
+  Session-/Ordner-Anzeigezustand und wird **nicht** in Rezept oder Sidecar
+  geschrieben.
+- **Custom-Order liegt in einer Ordner-Datei.** Die Datei liegt direkt im
+  jeweils gelisteten Ordner und heißt `lumina-sort.json`
+  (`format = "lumina-folder-sort"`, `version = 1`). Sie ist portabel: die
+  Reihenfolge wird als Liste **relativer Namen** (Dateiname bzw.
+  `unterordner/dateiname`, `/`-getrennt, relativ zum gelisteten Ordner)
+  gespeichert — nie absolute Pfade, nie `.`/`..`, nie Array-Indizes. Die
+  Reihenfolge ist damit stabil gegen Umsortieren, Umbenennen einzelner
+  Einträge und das Verschieben des ganzen Ordner-Bundles.
+- **Persistenz-Semantik:** Die Datei trägt `mode` **und** `order`. Ein
+  Sortierwechsel oder eine Drag-&-Drop-Umsortierung schreibt sie atomar
+  (NamedTempFile + persist, gleiche Semantik wie Sidecar-Schreibvorgänge;
+  keine temporären Reste als gültig). Fehlt die Datei, gilt `mode = name` und
+  eine leere Order. Beim erneuten Listing wird der Ordner-Zustand wieder
+  hergestellt — die Custom-Order und der gewählte Modus überleben den Reload
+  sichtbar. Eine beschädigte Datei, eine unbekannte `format`-Kennung, eine
+  höhere `version` oder ein verbotener Pfad in `order` werden **laut**
+  abgelehnt (`error!` + sichtbarer Status) und auf `name`/leer
+  zurückgefallen — kein stilles Ignorieren.
+- **Interaktion mit Stapeln (LRPAR-G15-STACK-15):** Sortiert wird über die
+  sichtbaren Einträge, ein zugeklappter Stapel zählt als **eine** Einheit an
+  der Position seines Deckbilds. Die Custom-Order hält alle Mitglieder als
+  zusammenhängenden Block, sodass ein zugeklappter Stapel durch jede
+  Sortierung und jeden Reload intakt bleibt (nie halb getrennt). Eine
+  Drag-&-Drop-Umsortierung, die ein Stapelmitglied greift, verschiebt den
+  ganzen Stapel als Einheit.
+- **Drag-&-Drop:** Im Grid lässt sich eine Zelle per Drag-&-Drop vor eine
+  andere ziehen. Die Umsortierung wechselt automatisch auf `Custom`,
+  materialisiert dabei die aktuelle Anzeige-Reihenfolge (Name-/Datum-Sort
+  wird zur Custom-Basis), schreibt die Ordner-Datei atomar und loggt `info!`.
+- **Sichtbare Bedienung:** Klickbare Buttons im Library-Drawer (`\`) wählen
+  die drei Modi (jeder Button bleibt immer erreichbar, F-100-Klickbarkeit).
+  Ein Tastatur-Kürzel ist nicht erforderlich; ein späteres Kürzel wäre nur ein
+  Alias auf denselben `set_library_sort`-Pfad. Der Drawer ist der etablierte
+  Library-Listen-Bedienort (Filter/Quick Develop/Metadaten) und bleibt wie
+  diese standardmäßig zugeklappt, damit die Default-Goldens pixel-identisch
+  bleiben.
+- **Lautheit:** Jeder Sortierwechsel und jede Drag-&-Drop-Umsortierung loggt
+  mindestens `info!` (DoD §4). Fehler beim Schreiben/Validieren der
+  Ordner-Datei werden über `show_error` sichtbar gemeldet; es gibt keinen
+  stillen Fallback.
+- **Tests/Abnahme (headless, `cargo test -p lumina-gui` ohne GPU):** je Modus
+  ein Mapping-Test; Custom-Order über Reload (Datei → neue App → Reihenfolge
+  wiederhergestellt); Drag-&-Drop im Grid real per Pointer-Event → Modus
+  `Custom`, Ordner-Datei geschrieben, Reihenfolge geändert; Stapel als
+  Einheit bleibt bei Sortierung/Zuklappen intakt; beschädigte Ordner-Datei
+  wird laut abgelehnt; Grid **und** Filmstrip zeigen dieselbe Reihenfolge.
+  `cargo fmt --check`, `cargo clippy -p lumina-gui --all-targets -- -D warnings`.
 
 ### Power-Shortcuts Rest (G-16, LRPAR-G16-POWER)
 

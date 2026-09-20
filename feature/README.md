@@ -154,6 +154,7 @@ Sidecars vollständig wiederherstellbar sein.
 | SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
 | LRPAR-G15-IPTC-1 | IPTC-Metadaten (Draft, Presets, Sync, JPEG-Bake-In) | [IPTC Metadaten](product/iptc-metadata.md) | hoch |
 | LRPAR-G15-STACK-15 | Bilderstapel (G-15, Release 1.0): zuklappbare Stapel gleicher Ordner, Sidecar-first `SidecarDocument.stack` (stabile `stack_id`, `cover`, `members`, `collapsed` last-writer-wins, `schema_version` unverändert), Stapel-Selektion für Sync/Batch/Previous, Grid-/Filmstrip-Kollaps + klickbare Stack/Unstack/Toggle-Buttons | [Metadaten](product/metadata.md) | mittel |
+| LRPAR-G09-SORT-09 | Library-Sortierung (G-09, Release 1.0): Modi Name / Aufnahmedatum (EXIF) / Custom; Custom-Order portabel in `lumina-sort.json` im gelisteten Ordner (relative Namen, atomar, `format`/`version`), wirkt in Grid + Filmstrip, Drag-&-Drop wechselt automatisch auf Custom, zugeklappte Stapel bleiben sortiert intakt, klickbare Sort-Buttons im Library-Drawer | [CLI/GUI](platform/cli-gui-wasm.md) | mittel |
 | LRPAR-G13-MERGE-15 | HDR-/Panorama-Merge (G-13, Release 1.5): Merge-Rezept-Schema, `lumina-merge`-Alignment, linearer DNG-Writer + Re-Import, CLI `merge-hdr`/`merge-pano`, GUI-Aktionen, Golden-Gates; gemeinsame Orchestrierung `lumina-merge::bundle::run_merge` (F6) + F-074-N7-Merge-Benchmark/Budget | [HDR-/Panorama-Merge](decisions/LRPAR-G13-MERGE-15.md) | hoch |
 | LRPAR-G06-UPRIGHT-15 | Auto-Upright (G-06, Release 1.5): deterministische, modellfreie Linienanalyse als additive Rezept-Stufe `recipe.upright` (Fingerprint/Veraltung, effektive Perspektive vor F-099), CLI `upright`, GUI Geometry-Sektion, Golden-Gates | [Pipeline](architecture/pipeline.md) | hoch |
 | LRPAR-G14-REDEYE-15 | Rote Augen (G-14, Release 1.5): explizite Regionen `recipe.adjustments.red_eye` + deterministische, modellfreie Korrektur nach Schärfen, CLI `red-eye`, GUI Detail-Sektion mit Vorschau-Picker, Golden-Gates | [Pipeline](architecture/pipeline.md) | mittel |
@@ -194,6 +195,14 @@ Sidecars vollständig wiederherstellbar sein.
   Sidecar-first in jedem Mitglied (`SidecarDocument.stack`, additiv, kein
   `schema_version`-Bump). Der Zuklappstatus ist persistent im Sidecar; bei
   Konflikten gilt **last-writer-wins**. Details: `product/metadata.md` §6.
+- **Library-Sortierung (LRPAR-G09-SORT-09, User-Entscheid 2026-09-19):**
+  Genau drei Sortiermodi — `Name` (Default), `Aufnahmedatum (EXIF)` und
+  `Custom`; sonst keine. Die Custom-Reihenfolge liegt portabel in der
+  Ordner-Datei `lumina-sort.json` (relative Namen, keine absoluten Pfade,
+  atomar geschrieben) und wird zusammen mit dem gewählten Modus gespeichert;
+  eine Drag-&-Drop-Umsortierung im Grid wechselt automatisch auf `Custom`.
+  Die Sortierung ist reine Anzeige-Ordnung (Grid + Filmstrip), nie Rezept/
+  Sidecar. Details: `platform/cli-gui-wasm.md` § Library-Sortierung.
 - Maskenbibliotheken gehören zunächst zu virtuellen Kopien; Cross-Copy-
   Referenzen sind erlaubt und werden bei Löschung materialisiert.
 - RAW wird zunächst über einen gekapselten LibRaw-Adapter gelesen.

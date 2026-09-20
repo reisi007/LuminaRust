@@ -78,6 +78,10 @@ pub enum Str {
     Draft,
     Filmstrip,
     LibraryThumbSize,
+    LibrarySortName,
+    LibrarySortDate,
+    LibrarySortCustom,
+    LibrarySortReorderedPattern,
 
     // Basic section
     WhiteBalance,
@@ -761,6 +765,8 @@ pub enum Str {
     MergeAlreadyRunning,
     MergeNeedsSelection,
 }
+// LRPAR-G09-SORT-09: the Library strings live in `i18n_library.rs`.
+use crate::i18n_library::library_text;
 impl Str {
     /// Returns the English text for this key.  This is the only place literals
     /// live; the future `de` locale would be a second match arm selected by a
@@ -1180,16 +1186,14 @@ impl Str {
             Str::BlackWhiteOff => "Black & white treatment off (color restored)",
             Str::SliderResetHint => "Double-click or Alt-click to reset to default",
 
-            Str::FilterBar => "Filter (\\)",
-            Str::FilterPlaceholder => "Name, rating:0-5, flag:pick/reject, label:red/yellow/green/blue/none",
-            Str::FilterShown => "Library filter on (\\) — type to filter, Quick Develop below",
-            Str::FilterHidden => "Library filter off",
-            Str::QuickDevelop => "Quick Develop",
-            Str::CompareModeCompare => "Compare",
-            Str::CompareModeSurvey => "Survey",
-            Str::CompareOnPattern => "Compare view on ({})",
-            Str::CompareOff => "Compare view off",
-            Str::SurveyOn => "Survey (N): Library grid",
+            Str::FilterBar | Str::FilterPlaceholder | Str::FilterShown => library_text(self),
+            Str::FilterHidden | Str::QuickDevelop | Str::CompareModeCompare => library_text(self),
+            Str::CompareModeSurvey | Str::CompareOnPattern | Str::CompareOff => library_text(self),
+            Str::SurveyOn | Str::QuickDevelopAppliedPattern => library_text(self),
+            Str::StackGroupedPattern | Str::StackUngrouped => library_text(self),
+            Str::StackGroup | Str::StackUngroup => library_text(self),
+            Str::LibrarySortName | Str::LibrarySortDate => library_text(self),
+            Str::LibrarySortCustom | Str::LibrarySortReorderedPattern => library_text(self),
             Str::SplitViewOn => "Split Before/After on (Shift+Y, full-frame Before proxy)",
             Str::SplitViewOff => "Split Before/After off",
             Str::FullscreenOn => "Fullscreen preview on (F)",
@@ -1198,9 +1202,6 @@ impl Str {
             Str::SnapshotCreatedPattern => "Snapshot saved: {}",
             Str::InvalidSnapshotName => "Snapshot name must not be empty",
             Str::NotSnapshot => "History entry is not a snapshot",
-            Str::StackGroupedPattern => "Added to stack {}",
-            Str::StackUngrouped => "Removed from stack",
-            Str::QuickDevelopAppliedPattern => "Quick develop applied: {}",
             Str::GotoLibraryImport => "Library (import shortcut)",
             Str::GotoExport => "Export (export shortcut)",
             Str::ViewToolbarCrop => "Crop (R)",
@@ -1215,8 +1216,6 @@ impl Str {
             Str::CopySettings => "Copy Settings",
             Str::PasteSettings => "Paste Settings",
             Str::SnapshotButton => "Snapshot",
-            Str::StackGroup => "Stack",
-            Str::StackUngroup => "Unstack",
             Str::LibraryGridOn => "Library grid (G)",
             Str::LoupeOn => "Loupe (E): single image",
             Str::FolderExistsPattern => "Folder already exists: {}",

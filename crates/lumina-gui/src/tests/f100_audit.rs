@@ -125,6 +125,8 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
             F100Surface::LibraryGrid,
             ButtonRef::Icon(ToolbarIcon::ViewGrid),
         ),
+        // LRPAR-G09-SORT-09: the "Name" sort button is the default-active one.
+        GuiAction::SetLibrarySort => (F100Surface::LibraryGrid, Str::LibrarySortName.t().into()),
         GuiAction::SetZoomMode => (F100Surface::Preview, Str::ZoomFit.t().into()),
         GuiAction::RegenerateStale => (F100Surface::Develop, Str::RegenerateStale.t().into()),
         GuiAction::MatchExposure => (F100Surface::Develop, Str::MatchExposure.t().into()),
@@ -268,10 +270,16 @@ pub(super) fn f100_surface_frame(
         F100Surface::Rating => headless_click_labels_frame(app, &[Str::Rating.t()], |app, ui| {
             app.draw_rating_section(ui)
         }),
-        F100Surface::LibraryGrid => headless_frame(app, |app, ui| {
-            let ctx = ui.ctx().clone();
-            app.draw_library_grid(&ctx, ui);
-        }),
+        F100Surface::LibraryGrid => {
+            // LRPAR-G09-SORT-09: open the `\` drawer hosting the sort buttons.
+            if !app.filter_bar_visible {
+                app.toggle_filter_bar();
+            }
+            headless_frame(app, |app, ui| {
+                let ctx = ui.ctx().clone();
+                app.draw_library_grid(&ctx, ui);
+            })
+        }
         F100Surface::History => headless_click_labels_frame(app, &[Str::History.t()], |app, ui| {
             app.draw_history_section(ui)
         }),

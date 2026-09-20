@@ -148,7 +148,7 @@ fn audit_source_png() -> Vec<u8> {
 fn gpu_audit_exception_table_is_complete_without_gpu() {
     assert_eq!(
         ALL_GUI_ACTIONS.len(),
-        101,
+        102,
         "the F-100 action surface grew/shrank: update the audit (and its docs)"
     );
     let mut exceptions = 0usize;
@@ -243,6 +243,9 @@ fn gpu_action_routing_audit_metal() {
     let directory = tempfile::tempdir().expect("audit tempdir");
     let presets = directory.path().join("presets");
     std::fs::create_dir_all(&presets).expect("audit presets dir");
+    // LRPAR-G09-SORT-09: point the app at the tempdir so `set_library_sort`
+    // persists its folder file there instead of the process CWD.
+    app.directory = directory.path().display().to_string();
     let source = audit_source_png();
 
     // (action name, handler microseconds, documented route)
