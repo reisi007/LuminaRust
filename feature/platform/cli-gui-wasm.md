@@ -1399,9 +1399,12 @@ oder Original und erzeugt keine Kopien.
   (Pfeiltasten/Home/End) und die Loupe-/Survey-Reihenfolge. Sie ist reiner
   Session-/Ordner-Anzeigezustand und wird **nicht** in Rezept oder Sidecar
   geschrieben.
-- **Custom-Order liegt in einer Ordner-Datei.** Die Datei liegt direkt im
-  jeweils gelisteten Ordner und heißt `lumina-sort.json`
-  (`format = "lumina-folder-sort"`, `version = 1`). Sie ist portabel: die
+- **Custom-Order liegt in einer Ordner-Cache-Datei.** Die Datei liegt im
+  Cache-Ordner `.lumina/` des jeweils gelisteten Ordners und heißt
+  `.lumina/lumina-sort.json` (`format = "lumina-folder-sort"`,
+  `version = 1`). `.lumina/` ist der etablierte, bereits git-ignorierte
+  Lumina-Cache-Ordner (Previews, Settings, Index); die Sort-Datei ist damit
+  automatisch ignoriert. Sie ist portabel: die
   Reihenfolge wird als Liste **relativer Namen** (Dateiname bzw.
   `unterordner/dateiname`, `/`-getrennt, relativ zum gelisteten Ordner)
   gespeichert — nie absolute Pfade, nie `.`/`..`, nie Array-Indizes. Die
@@ -1410,13 +1413,23 @@ oder Original und erzeugt keine Kopien.
 - **Persistenz-Semantik:** Die Datei trägt `mode` **und** `order`. Ein
   Sortierwechsel oder eine Drag-&-Drop-Umsortierung schreibt sie atomar
   (NamedTempFile + persist, gleiche Semantik wie Sidecar-Schreibvorgänge;
-  keine temporären Reste als gültig). Fehlt die Datei, gilt `mode = name` und
+  keine temporären Reste als gültig; `.lumina/` wird bei Bedarf angelegt).
+  Fehlt die Datei, gilt `mode = name` und
   eine leere Order. Beim erneuten Listing wird der Ordner-Zustand wieder
   hergestellt — die Custom-Order und der gewählte Modus überleben den Reload
   sichtbar. Eine beschädigte Datei, eine unbekannte `format`-Kennung, eine
   höhere `version` oder ein verbotener Pfad in `order` werden **laut**
   abgelehnt (`error!` + sichtbarer Status) und auf `name`/leer
   zurückgefallen — kein stilles Ignorieren.
+- **Migration (2026-09-20):** Existiert beim Listing ausschließlich die alte
+  Datei direkt neben den Bildern (`<ordner>/lumina-sort.json`), wird sie
+  einmalig gelesen, validiert, nach `.lumina/lumina-sort.json` geschrieben und
+  die Altdatei danach entfernt (`info!`-Log). Kein stilles Fallenlassen, kein
+  stilles Beibehalten beider Kopien. Liegen beide Dateien vor, ist `.lumina/`
+  maßgeblich; die Altdatei wird als Relikt laut (`warn!`) ignoriert, nie
+  stillschweigend gemerged. Schlägt der Migrations-Schreibvorgang fehl, bleibt
+  die Altdatei erhalten (kein Datenverlust) und das nächste Listing versucht es
+  erneut (`error!`-Log).
 - **Interaktion mit Stapeln (LRPAR-G15-STACK-15):** Sortiert wird über die
   sichtbaren Einträge, ein zugeklappter Stapel zählt als **eine** Einheit an
   der Position seines Deckbilds. Die Custom-Order hält alle Mitglieder als
@@ -1444,7 +1457,9 @@ oder Original und erzeugt keine Kopien.
   wiederhergestellt); Drag-&-Drop im Grid real per Pointer-Event → Modus
   `Custom`, Ordner-Datei geschrieben, Reihenfolge geändert; Stapel als
   Einheit bleibt bei Sortierung/Zuklappen intakt; beschädigte Ordner-Datei
-  wird laut abgelehnt; Grid **und** Filmstrip zeigen dieselbe Reihenfolge.
+  wird laut abgelehnt; Grid **und** Filmstrip zeigen dieselbe Reihenfolge;
+  Legacy-Migration (alt neben den Bildern → `.lumina/`, Altdatei entfernt,
+  `.lumina/` maßgeblich bei beiden Dateien) mit Migrations-Tests.
   `cargo fmt --check`, `cargo clippy -p lumina-gui --all-targets -- -D warnings`.
 
 ### Power-Shortcuts Rest (G-16, LRPAR-G16-POWER)
@@ -2391,6 +2406,39 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Sort-Modi, Crop-Tick/Straighten, Geometrie→Masken-Sperre, Beenden. Offen:
   Maskengruppen-E2E (durch Geometrie-Sperre blockiert, nach R5-TOOLFLOW-1
   nachholen), Restart-Restore, Switch-Timings (kein Trace, s. R5-LOG-1).
+
+#### F-103-N6 Runde 6 Befunde (2026-09-20, manueller Akzeptanz-Run, Release `a3a2e5c`, 164-MB-Trace, EXIT 0)
+
+- **R5-LOG-1 (GESCHLOSSEN):** Trace läuft (`level=TRACE`), Switch-/Warmup-/
+  Folder-Traces sind da — die Agents.md-Regel wirkt.
+- **R6-SCAN-1 (hoch, neu):** Der Library-Erst-Paint-Block ist bewiesen der
+  synchrone Folder-Walk: 20× `folder raw count`, Summe **4257,5 ms** gegen
+  `switch_to_paint_ms=4258,7 ms` (R4-SWITCH-2-Instrumentierung zahlt sich aus).
+  Der Walk scannt das Repo-Root inkl. `.git`/`.codegraph` (je `scan_ms`
+  klein, in Summe der Block). Folge: Walk eingrenzen (versteckte/Build-Dirs
+  raus), async oder cachen — Warmup (`armed`, aber `deferred: no listing
+  yet`/`pointer down`) kam wieder zu spät.
+- **R5-TOOLFLOW-1 (im Log VERIFIZIERT):** `tool switch commits the active
+  crop/straighten draft (committed=true)` + `commit_crop_edit` — der
+  Auto-Commit arbeitet real.
+- **R5-SELECT-1 (teil-verifiziert):** Filmstrip-Multi-Select im Log
+  (`selected=2`); Grid-Cmd-Klick-Gegenprobe durch User offen.
+- **Stacks:** `unstacked` → neu `joined` (User-Test), Collapse/Expand aus
+  Runde 5 bestätigt; 1/2-2/2-Badges im Screenshot live (R5-STACK-3 wirkt).
+- **Denoise (dringlich, s. R5-DENOISEFIX-22):** 5× ERROR `no denoise artifact
+  resolved` (Full-Res-Pfad via Generative Expand) + 5× Recipe-Gate-Warn
+  `gpu present refused … denoise_ai` — das committete Sample-Sidecar
+  (`denoise_ai.enabled: true`, `pending-integration`) erzwingt CPU-Route und
+  harte Errors. WARN-2-Dedup deckt den Recipe-Gate-Pfad pro Switch nicht ab
+  (Rest).
+- **Manuell offen:** NAV-1-Drag-Gegenprobe (0 Drag-Traces im Run),
+  Straighten-Dreh-Gegenprobe (kein Slider-Log), Loupe-Größe, Sort-Drag-Linie,
+  Restart-Restore (nur 1 Session im Log).
+- **Neue UX-Tasks aus dem Run:** R5-DUST-23 (Dust-Tool in Toolbar, Größe,
+  Funktion), R5-BRUSH-24 („großer Fail": Größe/Weichheit/Fluss, Kreis-Cursor,
+  Mehrfach-Masken + komplette Maskenverwaltung), R5-MASKVIS-25 (Overlay-Toggle
+  ohne Panel + Bildbereich vergrößern), R5-STACKVIS-21 (Stack-Zeichen ≠
+  Selektions-Rahmen, kein Rechtsklick bleibt).
 
 ## Optionale zentrale Indizierung
 
