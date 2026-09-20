@@ -447,3 +447,54 @@ fn navigator_rect_matches_roi_from_zoom() {
         roi
     );
 }
+
+/// R4-NAV-1-Vorbereitung (Release 1.0): Navigator-Drag bewegt Pan, Box UND
+/// ROI konsistent — derselbe Produktions-Dreischritt wie
+/// `draw_navigator_viewport` (Helper → Custom-Pin → dirty), danach folgt das
+/// Render-ROI der Box. Fällt Box gegen ROI auseinander, ist das ein Befund
+/// (rot), kein Fix.
+#[test]
+fn navigator_drag_moves_pan_box_and_roi_consistently() {
+    let mut app = new_app();
+    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+        .unwrap();
+    app.zoom_mode = ZoomMode::Custom;
+    app.preview_zoom = 2.0;
+    app.preview_pan = egui::Vec2::ZERO;
+    app.preview_effective_scale = 2.0;
+    // Produktions-Dreischritt aus `draw_navigator_viewport`.
+    let drag = egui::vec2(20.0, 10.0);
+    app.preview_pan = LuminaApp::pan_for_navigator_drag(app.preview_pan, drag, 0.5, 2.0);
+    app.zoom_mode = ZoomMode::Custom;
+    app.mark_dirty();
+    assert_eq!(app.preview_pan, egui::vec2(-80.0, -40.0));
+    assert!(app.pending_full_render, "drag must arm the re-render");
+    // Box folgt dem Cursor exakt um den Drag (Navigator-Punkte) ...
+    let nav = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 200.0));
+    let before =
+        LuminaApp::navigator_viewport_rect(nav, 600.0, 400.0, 600.0, 400.0, 2.0, egui::Vec2::ZERO);
+    let after =
+        LuminaApp::navigator_viewport_rect(nav, 600.0, 400.0, 600.0, 400.0, 2.0, app.preview_pan);
+    assert!((after.center().x - before.center().x - drag.x).abs() < 1e-2);
+    assert!((after.center().y - before.center().y - drag.y).abs() < 1e-2);
+    // ... und das Render-ROI folgt proportional (Quell-Pixel).
+    let roi_before =
+        LuminaApp::roi_from_zoom(600, 400, 2.0, egui::Vec2::ZERO, 600.0, 400.0).unwrap();
+    let roi_after = LuminaApp::roi_from_zoom(600, 400, 2.0, app.preview_pan, 600.0, 400.0).unwrap();
+    let center = |roi: [u32; 4]| {
+        (
+            roi[0] as f32 + roi[2] as f32 / 2.0,
+            roi[1] as f32 + roi[3] as f32 / 2.0,
+        )
+    };
+    let (bx, by) = center(roi_before);
+    let (ax, ay) = center(roi_after);
+    assert!(
+        (ax - bx - drag.x * 2.0).abs() < 2.0,
+        "{roi_before:?} -> {roi_after:?}"
+    );
+    assert!(
+        (ay - by - drag.y * 2.0).abs() < 2.0,
+        "{roi_before:?} -> {roi_after:?}"
+    );
+}

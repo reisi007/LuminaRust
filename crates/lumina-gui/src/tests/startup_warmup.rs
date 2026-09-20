@@ -122,3 +122,79 @@ fn startup_warmup_arms_debounce_render_for_unrendered_source() {
     assert!(app.render_key.is_some(), "the full render must complete");
     assert!(app.error().is_none());
 }
+
+/// R4-SWITCH-2-Vorbereitung (Release 1.0): Warmup-Nachweis ohne Wanduhr.
+///
+/// Die R4-Messung zeigte den ersten Library-Paint bei 4286,1 ms, weil Ordner-
+/// Index, Thumbnails und Decode/Render beim Switch noch ausstanden — und das
+/// Warmup erst NACH dem Switch lief. Dieser Test fährt die Kaltstart-Sequenz
+/// zweimal (Warmup an/aus) und belegt relativ statt absolut: in der gewärmten
+/// App ist die Switch-Arbeit VOR dem Switch getan (Index-Build-Zähler > 0,
+/// Decode in flight), in der kalten erst DANACH (Zähler 0 vor, 1 nach dem
+/// ersten Thumbnail-Lauf). Beide Switches emittieren die vollständige
+/// Timing-Trace (Event + First-Paint mit `switch_to_paint_ms=`). Bewusst kein
+/// ms-Budget: Wanduhr flakt auf CI (R3-LOG-1 begründet nur Traces, keine Gates).
+#[test]
+fn warmup_frontloads_first_library_switch_work() {
+    use crate::timing::take_timing_log;
+
+    // Identical cold-start listings (fabricated RAW entries: extension-only
+    // scan, no startup auto-load — the warmup itself must start the decode).
+    let directory = tempfile::tempdir().unwrap();
+    let dir_string = directory.path().display().to_string();
+    let mut warm = new_app();
+    warm.directory = dir_string.clone();
+    warm.entries = vec![
+        raw_entry(directory.path(), "a.cr3"),
+        raw_entry(directory.path(), "b.cr3"),
+    ];
+    let mut cold = new_app();
+    cold.directory = dir_string;
+    cold.entries = vec![
+        raw_entry(directory.path(), "a.cr3"),
+        raw_entry(directory.path(), "b.cr3"),
+    ];
+    let ctx = egui::Context::default();
+
+    // Cold: nothing front-loaded before the first Library switch.
+    assert_eq!(cold.thumbnail_cache.builds(), 0);
+    assert!(cold.decode_rx.is_none());
+
+    // Warm: the armed one-shot warmup does the switch's work up front.
+    warm.schedule_startup_warmup();
+    assert!(warm.maybe_run_startup_warmup(&ctx));
+    let report = warm.warmup_report();
+    assert!(report.index_built);
+    assert!(report.decode_started);
+    assert!(warm.decode_rx.is_some());
+    let warm_builds = warm.thumbnail_cache.builds();
+    assert!(warm_builds >= 1, "the warmup must probe the folder index");
+
+    // Both switches emit the complete timing trace (no silent switch).
+    for app in [&mut warm, &mut cold] {
+        let _ = take_timing_log();
+        app.set_module(Module::Library);
+        app.note_first_paint_after_switch();
+        let log = take_timing_log();
+        assert_eq!(log.len(), 2, "one event + one first paint: {log:?}");
+        assert!(log[0].contains("module switch event") && log[0].contains("Library"));
+        assert!(
+            log[1].contains("module switch first paint")
+                && log[1].contains("Library")
+                && log[1].contains("switch_to_paint_ms=")
+        );
+        let raw = log[1].rsplit("switch_to_paint_ms=").next().unwrap();
+        assert!(raw.contains('.'), "one-decimal format: {}", log[1]);
+        let ms: f64 = raw.parse().expect("parseable milliseconds");
+        assert!(ms >= 0.0 && ms.is_finite());
+    }
+
+    // Warmed: the switch reuses the warm index (no second build). Cold: the
+    // same thumbnail run builds it only now (after the switch).
+    let indices: Vec<usize> = (0..warm.entries().len()).collect();
+    warm.ensure_thumbnail_priority(&ctx, &indices, 0..indices.len());
+    assert_eq!(warm.thumbnail_cache.builds(), warm_builds);
+    let indices: Vec<usize> = (0..cold.entries().len()).collect();
+    cold.ensure_thumbnail_priority(&ctx, &indices, 0..indices.len());
+    assert_eq!(cold.thumbnail_cache.builds(), 1);
+}

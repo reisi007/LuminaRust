@@ -335,3 +335,59 @@ fn draft_tick_throttle_fires_inside_the_budget() {
         "past the budget the tick renders again"
     );
 }
+
+/// R4-SWITCH-2-Anker (Release 1.0): `switch_to_paint_ms` je Richtung.
+///
+/// Library, Develop und Export emittieren je genau ein Event + einen
+/// First-Paint mit parsebarer, nicht-negativer, ein-dezimaler Kennzahl.
+/// Ändert sich Name, Format oder Paarung, fällt der Test und zwingt zur
+/// Auseinandersetzung — kein stilles Langsamerwerden. Bewusst kein ms-Budget:
+/// Wanduhr flakt auf CI (R3-LOG-1 begründet nur Traces, keine Gates).
+#[test]
+fn switch_to_paint_anchor_is_present_per_direction() {
+    fn paint_ms(line: &str) -> f64 {
+        let raw = line
+            .rsplit("switch_to_paint_ms=")
+            .next()
+            .expect("metric present");
+        assert!(raw.contains('.'), "one-decimal format: {line}");
+        raw.parse().expect("parseable milliseconds")
+    }
+
+    let mut app = app();
+    for module in [Module::Library, Module::Develop, Module::Export] {
+        let _ = take_timing_log();
+        app.set_module(module);
+        app.note_first_paint_after_switch();
+        let log = take_timing_log();
+        let events: Vec<_> = log
+            .iter()
+            .filter(|line| line.contains("module switch event"))
+            .collect();
+        let paints: Vec<_> = log
+            .iter()
+            .filter(|line| line.contains("module switch first paint"))
+            .collect();
+        assert_eq!(
+            events.len(),
+            1,
+            "one event per switch to {module:?}: {log:?}"
+        );
+        assert_eq!(
+            paints.len(),
+            1,
+            "one first paint per switch to {module:?}: {log:?}"
+        );
+        assert!(events[0].contains(&format!("{module:?}")));
+        assert!(paints[0].contains(&format!("{module:?}")));
+        let ms = paint_ms(paints[0]);
+        assert!(
+            ms >= 0.0 && ms.is_finite(),
+            "non-negative delta: {}",
+            paints[0]
+        );
+        // The anchor is consumed exactly once — no dangling second paint.
+        app.note_first_paint_after_switch();
+        assert!(take_timing_log().is_empty());
+    }
+}
