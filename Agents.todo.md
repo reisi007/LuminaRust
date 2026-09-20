@@ -147,6 +147,9 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
+- [ ] **[PRIO: hoch] R5-FIX-WELLE-20 (Release: 1.0, User-Order 2026-09-20, Ziel: manueller Run heute)** Runde-5-Befunde aus `feature/platform/cli-gui-wasm.md` (F-103-N6 Runde 5, Release `318a8dc`): R4-NAV-1 wieder offen (Pointer-Event-Logging + echter-Drag-Repro, Gate headless-grün reicht nicht); R5-SELECT-1 (Grid-Modifikatoren); R5-STRAIGHTEN-1 (Slider wirkungslos + still); R5-LOUPE-1 (Thumbnail statt Render); R5-STACK-2 (Badge-Toggle einzeln); R5-STACK-3 (Zugehörigkeits-Klammer); R5-SORT-1 (Drop-Indikator + Sort-Sichtbarkeit); R5-TOOLFLOW-1 ENTSCHIEDEN (Auto-Commit bei Werkzeugwechsel); R5-WARN-2 (Denoise-Dedup). R5-ROTATE-1 erst danach. Abnahme: headless Tests je Befund (Mutation wo sinnvoll) + kittest-Goldens bei visuellen Änderungen + unabhängige Verifizierung. Manueller Run mit `RUST_LOG=trace` (Agents.md-Regel).
+- [ ] **[PRIO: hoch] R5-MANUAL-2 (heute, nach R5-FIX-WELLE-20)** Zweiter manueller Akzeptanz-Run mit `RUST_LOG=trace`: Maskengruppen-E2E (durch TOOLFLOW-1 entsperrt), Restart-Restore, Switch-Timings, R4/R5-Gegenproben (NAV-Drag bei Zoom, Loupe groß, Straighten dreht, Grid-Multi-Select, Stack-Badge einzeln).
+
 ### PRIO: mittel
 
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.

@@ -259,6 +259,11 @@ Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
 - Golden-Image-Tests mit dokumentierten Toleranzen
 - CLI-End-to-End-Tests inklusive Exit-Codes
 - GUI-Features: Jede sichtbare GUI-Funktion (Regler, Module, Shortcuts, Preview, Sidecar-Persistenz) wird mit automatischem headless GUI-Test (egui Context + LuminaApp, tempdir) abgedeckt; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram (byte-identisch/PSNR, kein stiller Fallback), kein manueller Test als einzige Absicherung. Tests laufen in `cargo test -p lumina-gui` grün ohne GPU.
+- **Manuelle Akzeptanz-Runs (R5-LOG-1, User-Regel 2026-09-20):** Jeder manuelle
+  GUI-Run startet mit `RUST_LOG=trace` (Trace-Timings für Switch/Drag/Warmup
+  sind sonst unsichtbar), genau EINER App-Instanz, Log-Redirect in
+  `/tmp/lumina_manual_<datum>.log`. Der User steuert die GUI nach Fahrplan, der
+  Build-Agent verwaltet und analysiert den Log.
 - native Build-/Smoke-Tests (kein Browser-Build mehr)
 - Tests für fehlende Modelle, fehlende Maskenartefakte und veränderte Quellen
 - Performance-Methodik gemäß `feature/quality/performance-benchmarks.md`
