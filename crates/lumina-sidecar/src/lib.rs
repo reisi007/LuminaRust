@@ -87,6 +87,19 @@ pub use culling::{
     CULLING_SHA256_PREFIX, MAX_CULLING_ERROR_CHARS, MAX_CULLING_REASONS, MAX_CULLING_REASON_CHARS,
 };
 
+// G-15 META-MVP (Slice 1): the metadata batch-operation language. Moved out of
+// this root file (file-size ratchet) together with LRPAR-G15-STACK-15.
+mod batch;
+pub use batch::{apply_batch_op, BatchOp};
+
+// LRPAR-G15-STACK-15: source-level image-stack membership (sidecar-first,
+// same-folder, additive optional `SidecarDocument::stack` section).
+mod stack;
+pub use stack::{
+    validate_stack_id, validate_stack_member_name, StackMembership, MAX_STACK_ID_CHARS,
+    MAX_STACK_MEMBERS, MAX_STACK_MEMBER_CHARS, STACK_SCHEMA_VERSION,
+};
+
 pub const FORMAT: &str = "lumina-sidecar";
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -2167,121 +2180,6 @@ impl SmartCollectionDef {
     }
 }
 
-/// G-15 META-MVP (Slice 1): the metadata batch-operation language. Each
-/// variant applies to one sidecar document via [`apply_batch_op`]; CLI/GUI
-/// follow-up slices iterate it over sidecar files (one atomic write per
-/// file). Mutations are limited to keywords, static collection memberships,
-/// ratings and flags — recipes, masks and history are never touched.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub enum BatchOp {
-    /// Adds `keyword` when absent (idempotent; present → unchanged).
-    AddKeyword { keyword: String },
-    /// Removes `keyword` when present (idempotent; absent → unchanged).
-    RemoveKeyword { keyword: String },
-    /// Adds membership `{ id, name }` when `id` is absent; refreshes `name`
-    /// when the `id` already exists under a different name (rename propagation).
-    AddToCollection { id: String, name: String },
-    /// Removes membership `id` when present (idempotent).
-    RemoveFromCollection { id: String },
-    /// Sets the rating (`0..=5`) of one virtual copy.
-    SetRating { copy_id: String, rating: u8 },
-    /// Sets the flag of one virtual copy.
-    SetFlag { copy_id: String, flag: Flag },
-}
-
-/// Applies one metadata batch operation to `document`. Returns `Ok(true)`
-/// when the document changed and `Ok(false)` for idempotent no-ops. Every
-/// invalid input (bad keyword, bad collection id/name, unknown `copy_id`,
-/// `rating > 5`) fails loudly; a rejected operation leaves the document
-/// unchanged.
-pub fn apply_batch_op(document: &mut SidecarDocument, op: &BatchOp) -> Result<bool, SidecarError> {
-    match op {
-        BatchOp::AddKeyword { keyword } => {
-            validate_keyword(keyword)?;
-            if document.keywords.iter().any(|k| k == keyword) {
-                return Ok(false);
-            }
-            if document.keywords.len() >= MAX_KEYWORDS_PER_DOCUMENT {
-                return invalid(format!(
-                    "keyword list exceeds limit of {MAX_KEYWORDS_PER_DOCUMENT}"
-                ))
-                .map(|()| false);
-            }
-            document.keywords.push(keyword.clone());
-            Ok(true)
-        }
-        BatchOp::RemoveKeyword { keyword } => {
-            validate_keyword(keyword)?;
-            let before = document.keywords.len();
-            document.keywords.retain(|k| k != keyword);
-            Ok(document.keywords.len() != before)
-        }
-        BatchOp::AddToCollection { id, name } => {
-            validate_collection_id(id)?;
-            validate_collection_name(name)?;
-            if let Some(existing) = document.collections.iter_mut().find(|m| m.id == *id) {
-                if existing.name == *name {
-                    return Ok(false);
-                }
-                existing.name = name.clone();
-                return Ok(true);
-            }
-            if document.collections.len() >= MAX_COLLECTIONS_PER_DOCUMENT {
-                return invalid(format!(
-                    "collection list exceeds limit of {MAX_COLLECTIONS_PER_DOCUMENT}"
-                ))
-                .map(|()| false);
-            }
-            document.collections.push(CollectionMembership {
-                id: id.clone(),
-                name: name.clone(),
-            });
-            Ok(true)
-        }
-        BatchOp::RemoveFromCollection { id } => {
-            validate_collection_id(id)?;
-            let before = document.collections.len();
-            document.collections.retain(|m| m.id != *id);
-            Ok(document.collections.len() != before)
-        }
-        BatchOp::SetRating { copy_id, rating } => {
-            if *rating > 5 {
-                return invalid(format!(
-                    "virtual copy `{copy_id}` rating must be 0..=5, got {rating}"
-                ))
-                .map(|()| false);
-            }
-            let copy = document
-                .virtual_copies
-                .iter_mut()
-                .find(|copy| copy.id == *copy_id)
-                .ok_or_else(|| {
-                    SidecarError::Invalid(format!("unknown virtual copy `{copy_id}`"))
-                })?;
-            if copy.rating == *rating {
-                return Ok(false);
-            }
-            copy.rating = *rating;
-            Ok(true)
-        }
-        BatchOp::SetFlag { copy_id, flag } => {
-            let copy = document
-                .virtual_copies
-                .iter_mut()
-                .find(|copy| copy.id == *copy_id)
-                .ok_or_else(|| {
-                    SidecarError::Invalid(format!("unknown virtual copy `{copy_id}`"))
-                })?;
-            if copy.flag == *flag {
-                return Ok(false);
-            }
-            copy.flag = *flag;
-            Ok(true)
-        }
-    }
-}
-
 /// LRPAR-G15-IPTC-S1: one entry of the metadata draft history. The history
 /// is provenance/diagnostic context — **not** an undo log. Entries are
 /// stored newest-first (the first entry carries the highest `rev`);
@@ -2867,6 +2765,13 @@ pub struct SidecarDocument {
     /// serializes back absent. The proposal never writes rating/flag/label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub culling: Option<CullingSection>,
+    /// LRPAR-G15-STACK-15: optional source-level image-stack membership.
+    /// Additive schema-v2 field: absent is the legitimate "not stacked" state
+    /// and serializes back absent (legacy documents stay byte-stable).
+    /// Shared by all virtual copies — a stack is per source image, never a
+    /// recipe/mask/history mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<StackMembership>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
 }
@@ -3592,6 +3497,7 @@ impl SidecarDocument {
             metadata: MetadataDraft::default(),
             face: None,
             culling: None,
+            stack: None,
             extras: Extras::new(),
         }
     }
@@ -3800,6 +3706,13 @@ impl SidecarDocument {
         // "no proposal" state; a present section is validated loudly.
         if let Some(culling) = &self.culling {
             validate_culling_section(culling)?;
+        }
+        // LRPAR-G15-STACK-15: optional source-level image-stack membership.
+        // Absent is the valid "not stacked" state; a present section is
+        // validated loudly (version pin, bare same-folder member names,
+        // sorted/unique members, cover ∈ members).
+        if let Some(stack) = &self.stack {
+            stack.validate()?;
         }
         if self.virtual_copies.is_empty() {
             return invalid("at least one virtual copy is required");
@@ -4074,7 +3987,7 @@ impl SidecarDocument {
     }
 }
 
-fn invalid(message: impl Into<String>) -> Result<(), SidecarError> {
+pub(crate) fn invalid(message: impl Into<String>) -> Result<(), SidecarError> {
     Err(SidecarError::Invalid(message.into()))
 }
 fn validate_name(field: &str, value: &str) -> Result<(), SidecarError> {
@@ -4127,7 +4040,7 @@ fn validate_artifact(a: &ArtifactReference) -> Result<(), SidecarError> {
 /// non-empty, without leading/trailing whitespace or control characters, and
 /// within the character limit. Violations fail loudly — the loader never
 /// trims, coerces or deduplicates silently.
-fn validate_keyword(keyword: &str) -> Result<(), SidecarError> {
+pub(crate) fn validate_keyword(keyword: &str) -> Result<(), SidecarError> {
     if keyword.is_empty() || keyword.trim() != keyword {
         return invalid("keyword must be non-empty and without leading/trailing whitespace");
     }
@@ -4145,7 +4058,7 @@ fn validate_keyword(keyword: &str) -> Result<(), SidecarError> {
 /// G-15 META-MVP (Slice 1): collection ids are stable, portable identities —
 /// never paths. Besides the non-empty/trimmed contract they forbid `/`, `\`
 /// and `:` so a membership can never be mistaken for (or turned into) a path.
-fn validate_collection_id(id: &str) -> Result<(), SidecarError> {
+pub(crate) fn validate_collection_id(id: &str) -> Result<(), SidecarError> {
     if id.is_empty() || id.trim() != id {
         return invalid("collection id must be non-empty and without leading/trailing whitespace");
     }
@@ -4160,7 +4073,7 @@ fn validate_collection_id(id: &str) -> Result<(), SidecarError> {
     Ok(())
 }
 
-fn validate_collection_name(name: &str) -> Result<(), SidecarError> {
+pub(crate) fn validate_collection_name(name: &str) -> Result<(), SidecarError> {
     if name.is_empty() || name.trim() != name {
         return invalid(
             "collection name must be non-empty and without leading/trailing whitespace",

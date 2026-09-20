@@ -245,5 +245,46 @@ impl LuminaApp {
             });
             ui.label(format!("{} selected", self.filmstrip_selection.len()));
         });
+        // LRPAR-G15-STACK-15: image stacks (Grid/Filmstrip unit). Buttons are
+        // the primary, always-clickable path; `info!` logs each mutation and
+        // errors stay visible via `show_error` (no silent failure).
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .button(Str::StackGroup.t())
+                .on_hover_text("Group the selected images of this folder into a stack")
+                .clicked()
+            {
+                if let Err(message) = self.create_stack_from_selection() {
+                    self.show_error(message);
+                }
+            }
+            if ui
+                .button(Str::StackUngroup.t())
+                .on_hover_text("Dissolve the stack(s) of the selection")
+                .clicked()
+            {
+                if let Err(message) = self.unstack_selection() {
+                    self.show_error(message);
+                }
+            }
+            if let Some(collapsed) = self.active_stack_collapsed() {
+                let toggle = if collapsed { "⊞" } else { "⊟" };
+                if ui
+                    .button(toggle)
+                    .on_hover_text(if collapsed {
+                        "Expand this stack"
+                    } else {
+                        "Collapse this stack"
+                    })
+                    .clicked()
+                {
+                    if let Err(message) = self.toggle_stack_collapse() {
+                        self.show_error(message);
+                    }
+                }
+            }
+            ui.label(self.stack_status_label());
+        });
     }
 }

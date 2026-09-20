@@ -245,17 +245,30 @@ impl LuminaApp {
                                         );
                                         ui.put(rect, egui::Label::new(placeholder_label));
                                     }
+                                    // LRPAR-G15-STACK-15: the painted stack
+                                    // badge is clickable (toggles the collapse
+                                    // of this stack) and takes precedence over
+                                    // the plain cell click.
+                                    let stack_badge_clicked =
+                                        self.paint_stack_badge(ui, rect, &entry);
                                     // GUI-FILMSTRIP-DUP-1: single click selects
                                     // (shared filmstrip selection, no open);
                                     // double-click opens in Develop. All
                                     // views stay in sync through the same
                                     // selection bookkeeping.
-                                    if resp.clicked() {
+                                    if resp.clicked() && !stack_badge_clicked {
                                         self.select_filmstrip_path(
                                             entry.path.display().to_string(),
                                             false,
                                             false,
                                         );
+                                    }
+                                    if stack_badge_clicked {
+                                        if let Err(message) = self.toggle_stack_collapse_for_path(
+                                            &entry.path.display().to_string(),
+                                        ) {
+                                            self.show_error(message);
+                                        }
                                     }
                                     if resp.double_clicked() {
                                         trace!(

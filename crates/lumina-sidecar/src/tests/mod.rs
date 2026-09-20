@@ -23,5 +23,6 @@ mod presence_geometry;
 mod recipe_serde;
 mod roundtrip;
 mod source_actions;
+mod stacks;
 mod stage_serde_a;
 mod stage_serde_b;

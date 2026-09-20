@@ -153,6 +153,7 @@ Sidecars vollständig wiederherstellbar sein.
 | GEN-EXPAND-1 | Generatives Entfernen + Erweitern | [Generative Expand](product/generative-expand.md) | hoch |
 | SPOT-REMOVE-1 | Staub entfernen (schnell heuristisch vs. generativ lokal) | [Spot Removal](product/spot-removal.md) | hoch |
 | LRPAR-G15-IPTC-1 | IPTC-Metadaten (Draft, Presets, Sync, JPEG-Bake-In) | [IPTC Metadaten](product/iptc-metadata.md) | hoch |
+| LRPAR-G15-STACK-15 | Bilderstapel (G-15, Release 1.0): zuklappbare Stapel gleicher Ordner, Sidecar-first `SidecarDocument.stack` (stabile `stack_id`, `cover`, `members`, `collapsed` last-writer-wins, `schema_version` unverändert), Stapel-Selektion für Sync/Batch/Previous, Grid-/Filmstrip-Kollaps + klickbare Stack/Unstack/Toggle-Buttons | [Metadaten](product/metadata.md) | mittel |
 | LRPAR-G13-MERGE-15 | HDR-/Panorama-Merge (G-13, Release 1.5): Merge-Rezept-Schema, `lumina-merge`-Alignment, linearer DNG-Writer + Re-Import, CLI `merge-hdr`/`merge-pano`, GUI-Aktionen, Golden-Gates; gemeinsame Orchestrierung `lumina-merge::bundle::run_merge` (F6) + F-074-N7-Merge-Benchmark/Budget | [HDR-/Panorama-Merge](decisions/LRPAR-G13-MERGE-15.md) | hoch |
 | LRPAR-G06-UPRIGHT-15 | Auto-Upright (G-06, Release 1.5): deterministische, modellfreie Linienanalyse als additive Rezept-Stufe `recipe.upright` (Fingerprint/Veraltung, effektive Perspektive vor F-099), CLI `upright`, GUI Geometry-Sektion, Golden-Gates | [Pipeline](architecture/pipeline.md) | hoch |
 | LRPAR-G14-REDEYE-15 | Rote Augen (G-14, Release 1.5): explizite Regionen `recipe.adjustments.red_eye` + deterministische, modellfreie Korrektur nach Schärfen, CLI `red-eye`, GUI Detail-Sektion mit Vorschau-Picker, Golden-Gates | [Pipeline](architecture/pipeline.md) | mittel |
@@ -187,6 +188,12 @@ Sidecars vollständig wiederherstellbar sein.
   Post-MVP (Details: `product/iptc-metadata.md`).
 - Entwicklungshistorie ist persistent und kann für die ausgewählte virtuelle
   Kopie vollständig gelöscht werden.
+- **Bilderstapel (LRPAR-G15-STACK-15, User-Entscheid 2026-09-19):**
+  Stapelmitglieder stammen immer aus **demselben Ordner** und werden relativ
+  (Dateiname, nie absolut) im Sidecar referenziert. Die Mitgliedschaft liegt
+  Sidecar-first in jedem Mitglied (`SidecarDocument.stack`, additiv, kein
+  `schema_version`-Bump). Der Zuklappstatus ist persistent im Sidecar; bei
+  Konflikten gilt **last-writer-wins**. Details: `product/metadata.md` §6.
 - Maskenbibliotheken gehören zunächst zu virtuellen Kopien; Cross-Copy-
   Referenzen sind erlaubt und werden bei Löschung materialisiert.
 - RAW wird zunächst über einen gekapselten LibRaw-Adapter gelesen.

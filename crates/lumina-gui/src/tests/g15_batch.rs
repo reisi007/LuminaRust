@@ -261,3 +261,122 @@ fn g15_batch_rebases_overtaking_sidecar_and_keeps_foreign_edit() {
         "the foreign recipe edit must survive the batch rebase"
     );
 }
+
+// ---------------------------------------------------------------------------
+// LRPAR-G15-STACK-15 (B-1): stack writes collect per-image failures like
+// Sync/Batch. A failure while writing one member is loud and never aborts the
+// remaining members; the successful members carry the section (`error!` per
+// image, SOLL §6).
+// ---------------------------------------------------------------------------
+
+/// Three source images with valid sidecars (created through the normal edit
+/// path); returns their paths in `a`, `b`, `c` order.
+fn three_stacked_sources(directory: &Path) -> Vec<PathBuf> {
+    let sources: Vec<PathBuf> = ["a.png", "b.png", "c.png"]
+        .iter()
+        .map(|name| directory.join(name))
+        .collect();
+    for source in &sources {
+        save_png(source);
+        let mut setup = new_app();
+        open_and_decode(&mut setup, source.display().to_string());
+        setup.add_keyword("seed").unwrap();
+    }
+    sources
+}
+
+#[test]
+fn g15_stack_create_partial_failure_continues_and_is_loud() {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = three_stacked_sources(directory.path());
+    // Corrupt the middle sidecar: its write fails mid-loop.
+    std::fs::write(lumina_sidecar::sidecar_path_for(&sources[1]), b"{broken").unwrap();
+
+    let mut app = new_app();
+    open_and_decode(&mut app, sources[0].display().to_string());
+    for source in &sources {
+        app.filmstrip_selection.insert(source.display().to_string());
+    }
+    let message = app
+        .create_stack_from_selection()
+        .expect_err("partial failure must be loud");
+    assert!(
+        message.contains(&sources[1].display().to_string()),
+        "the error names the failed member: {message}"
+    );
+
+    // No abort, no rollback: the remaining members still got the section.
+    for path in [&sources[0], &sources[2]] {
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(path)).unwrap();
+        assert!(
+            document.stack.is_some(),
+            "{} must still be stacked",
+            path.display()
+        );
+    }
+    // The failed member is untouched (its corrupt bytes stay corrupt).
+    assert!(lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&sources[1])).is_err());
+}
+
+#[test]
+fn g15_stack_unstack_partial_failure_continues_and_is_loud() {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = three_stacked_sources(directory.path());
+    let mut app = new_app();
+    open_and_decode(&mut app, sources[0].display().to_string());
+    for source in &sources {
+        app.filmstrip_selection.insert(source.display().to_string());
+    }
+    app.create_stack_from_selection().unwrap();
+    // Corrupt one member after the stack exists: its unstack write fails.
+    std::fs::write(lumina_sidecar::sidecar_path_for(&sources[1]), b"{broken").unwrap();
+    let message = app
+        .unstack_selection()
+        .expect_err("partial failure must be loud");
+    assert!(
+        message.contains(&sources[1].display().to_string()),
+        "the error names the failed member: {message}"
+    );
+    for path in [&sources[0], &sources[2]] {
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(path)).unwrap();
+        assert!(
+            document.stack.is_none(),
+            "{} must be unstacked",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn g15_stack_toggle_partial_failure_continues_and_is_loud() {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = three_stacked_sources(directory.path());
+    let mut app = new_app();
+    app.path = sources[0].display().to_string();
+    app.directory = directory.path().display().to_string();
+    app.list_directory_flat();
+    for source in &sources {
+        app.filmstrip_selection.insert(source.display().to_string());
+    }
+    app.create_stack_from_selection().unwrap();
+    std::fs::write(lumina_sidecar::sidecar_path_for(&sources[1]), b"{broken").unwrap();
+
+    let message = app
+        .toggle_stack_collapse()
+        .expect_err("partial failure must be loud");
+    assert!(
+        message.contains(&sources[1].display().to_string()),
+        "the error names the failed member: {message}"
+    );
+    for path in [&sources[0], &sources[2]] {
+        let document =
+            lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(path)).unwrap();
+        assert!(
+            document.stack.unwrap().collapsed,
+            "{} must still be collapsed",
+            path.display()
+        );
+    }
+}
