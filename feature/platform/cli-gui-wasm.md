@@ -2252,7 +2252,7 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
 
 #### F-103-N6 Runde 4 Befunde (2026-09-20, manueller Akzeptanz-Run, Release `0fb2922`, 36-MB-Trace, ~80 s)
 
-- **R4-NAV-1 (BEHOBEN, verifiziert BESTANDEN 2026-09-20):** Navigator-Box ließ sich nicht zum Pannen
+- **R4-NAV-1 (TEIL-BEHOBEN, WIEDER OFFEN 2026-09-20 — s. Runde 5):** Navigator-Box ließ sich nicht zum Pannen
   nutzen — Log zeigte 36× `navigator viewport drag` (State gepannt, Modus →
   Custom), ohne dass Box/View sichtbar folgten. **Root Cause:** Der Drag-Pfad
   war nicht an eine vergrößerte Ansicht gegattert. Bei Fit/`zoom <= 1` ist das
@@ -2324,6 +2324,61 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   ist auf die rekursive Navigations-Semantik nachgezogen.
 - **Abdeckung Runde 4:** gefahren: Switches, Zoom, Navigator-Drag, Beenden.
   Offen aus Fahrplan: Stapel, Sortierung/Drag-&-Drop, Crop-Tick, Neustart-Restore.
+
+#### F-103-N6 Runde 5 Befunde (2026-09-20, manueller Akzeptanz-Run, Release `318a8dc`, 59-Zeilen-INFO-Log, EXIT 0, 0 Errors)
+
+- **R4-NAV-1 (WIEDER OFFEN 2026-09-20):** Der echte Box-Drag im Navigator bewegt
+  die Ansicht real weiter nicht — obwohl das R4-Gate (`zoom > 1.0` + Overflow)
+  headless grün ist (Draw-Pfad-Test + Mutation). Hypothese: Die Ursache liegt
+  noch weiter downstream (Drag-Delta-Ankunft aus der egui-Response oder
+  Draw-Time-Scale klemmt den Pan erneut). Nächster Schritt: Pointer-Event-
+  Logging im Navigator-Drag-Pfad, dann Re-Repro mit echtem Drag.
+- **R5-LOUPE-1 (hoch, User-Bug):** Die Library-Loupe malt die
+  Thumbnail-Textur (`draw_library_loupe`, `thumb_key`, Thumbnail-Size 221)
+  statt eines großen Renders — das Bild bleibt klein in der Mitte. Loupe muss
+  groß rendern (Draft/Full-Cap).
+- **R5-SORT-1 (mittel, User-Bug):** Custom-Drag-&-Drop ohne Landevorschau
+  (kein Drop-Indikator/Einfügelinie); zusätzlich sind die Sort-Buttons
+  (Name/Datum/Custom) hinter dem `\`-Drawer versteckt — ohne Hinweis
+  unauffindbar.
+- **R5-STACK-1 (mittel, Discoverability):** Kein Kontextmenü; Stack-Aktion nur
+  über den Button im Metadata-Panel; Mehrfachselektion (Cmd/Shift) funktioniert
+  nur im Filmstrip (s. R5-SELECT-1), im Grid nicht.
+- **R5-SELECT-1 (hoch, User-Bug):** Der Grid-Zellklick übergibt hartkodiert
+  `false, false` (`library_grid.rs`, `select_filmstrip_path`) — Cmd-/Shift-
+  Modifikatoren werden ignoriert, immer nur ein Bild selektiert. Der Filmstrip
+  liest sie korrekt (`filmstrip_frame.rs`); Compare/Survey sind gleich
+  betroffen (`library_views.rs`).
+- **R5-STACK-2 (hoch, User-Bug):** Das per-Stack-Badge an der Grid-Zelle
+  toggelt den einzelnen Stack nicht sichtbar; nur das Panel-⊞/⊟ schaltet
+  (global), im Log belegt (`collapsed`/`expanded`).
+- **R5-STACK-3 (mittel, User-Forderung):** Stack-Zugehörigkeit ist ohne
+  Selektion nicht erkennbar (nur Mini-Badge „⊟"/„⊟ 2"). Gefordert: sichtbare
+  Klammer (Rahmen/Gruppierung + „1/2"-Zählung), collapsed ein klares
+  Stapel-Symbol.
+- **R5-STRAIGHTEN-1 (hoch, User-Bug):** Der Straighten-Slider (Werte `98`,
+  `-126` im Run) dreht das Bild nicht — und erzeugt nicht einmal eine
+  Log-Zeile. Wertpersistenz (Sidecar) nach „Save Recipe" noch zu prüfen.
+- **R5-ROTATE-1 (SOLL, User-Wunsch):** Außengriff-Drehung am Crop-Rahmen wie in
+  Lightroom: Ziehen außerhalb = Drehen, begrenzt auf ±45°, darüber 90°-Schritte.
+  Gehört ins Crop/Geometry-SOLL, nach den Bugfixes.
+- **R5-TOOLFLOW-1 (ENTSCHIEDEN, User-Entscheid 2026-09-20):** Werkzeugwechsel
+  committet das aktive Werkzeug automatisch (Draft speichern + History-Eintrag,
+  `info!`-sichtbar) und öffnet das neue. Die Geometrie-Sperre für Masken/
+  Weißabgleich („… unavailable while Crop … active", im Run 10× `mask tool
+  Brush refused`) wird dadurch ersetzt — kein Sackgassen-Banner mehr, in beide
+  Richtungen (Geometrie ↔ Masken/Weißabgleich).
+- **R5-WARN-2 (mittel):** Denoise-Verweigerungen wiederholen sich pro Tick
+  (7× `pending-integration`, 5× `gpu present refused … denoise_ai …, davon
+  3× Recipe-Gate + 1× Timing-Pfad) — die R4-WARN-1-Dedup deckt nur den
+  Present-Pfad ab, nicht den Denoise-Gate-Pfad.
+- **R5-LOG-1 (Prozess):** Der Run lief mit Level INFO (59 Zeilen) — keine
+  Switch-/Drag-/Warmup-Traces. Nächste manuelle Runs mit `RUST_LOG=trace`
+  starten, sonst bleibt die Instrumentierung blind.
+- **Abdeckung Runde 5:** gefahren: Stacks (join/collapsed/expanded im Log),
+  Sort-Modi, Crop-Tick/Straighten, Geometrie→Masken-Sperre, Beenden. Offen:
+  Maskengruppen-E2E (durch Geometrie-Sperre blockiert, nach R5-TOOLFLOW-1
+  nachholen), Restart-Restore, Switch-Timings (kein Trace, s. R5-LOG-1).
 
 ## Optionale zentrale Indizierung
 
