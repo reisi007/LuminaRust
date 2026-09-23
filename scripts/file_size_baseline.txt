@@ -66,3 +66,4 @@
 552 crates/lumina-core/src/histogram.rs
 551 crates/lumina-gpu/src/tiling.rs
 531 crates/lumina-cli/tests/meta_preset_e2e.rs
+522 crates/lumina-gui/src/dropped_files.rs  # neu 2026-09-23: DnD latest-wins pro Drop-Event (pathless Read-Failure supersediert In-Flight-Decode via Generation-Bump/Receiver-Tausch; Doku + Regression in decode_state_tests.rs, kein Split ohne Kohäsion)

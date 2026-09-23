@@ -420,7 +420,17 @@ Job (`needs: detect`, `if: has_cargo == 'true'`), der `cargo bench -p lumina-ben
 `node scripts/perf/compare.mjs --mode warn --report-dir perf/results` und das
 Report-Artefakt hochlädt (`perf/results/`, gitignored). Das harte Gate läuft
 **bewusst nicht in CI** (CI-Runner-Rauschen-Regel); CI nutzt nur report/warn.
-Die bestehenden `rust`- und `docs`-Jobs bleiben unverändert. Feature-Wachstum
+Der `bench`-Job baut den `lumina-bench`-Harness mit Default-Features und
+versucht damit weiterhin den `lumina-bench`-GPU-Pfad (`bench/gpu.rs`,
+`required-features = ["gpu"]`); ohne gebundenen Adapter (z. B. headless CI
+ohne Metal/Vulkan) überspringt die Gruppe sauber ohne Panic und ohne erfundene
+Zahl (siehe Adapter-Gating oben). Seit CI-SHARD-26 (2026-09-20) ist der alte
+monolithische `rust`-Job in `rust-fast` (fmt + check + alle Clippy-Gates +
+Ratchet), `rust-test-gui` (nur `cargo test -p lumina-gui --all-targets`) und
+`rust-test-rest` (Rest-Workspace ohne GUI/GPU/Sidecar/Bench plus dedizierte
+libraw-ABI-, zdata-, lensfun- und onnx-rt-Läufe, alle mit geteiltem
+Cargo-Cache) aufgeteilt; der `docs`-Job (Planungsdokumente + actionlint) bleibt
+davon unberührt. Feature-Wachstum
 wird als bewusste Budget-Anpassung im selben Commit wie das Feature behandelt
 (Begründung im `note`-Feld und im betroffenen Feature-Dokument).
 

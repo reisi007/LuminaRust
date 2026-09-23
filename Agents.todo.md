@@ -118,7 +118,11 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | LRPAR-G15-STACK-15 | G-15 | Bilderstapel |
 | 1.0 | LRPAR-G09-SORT-09 | G-09 | Sortierung + Custom-Sort |
 | 1.0 | LRPAR-G03-MASKGROUP-03 | G-03 | Maskengruppen |
+| 1.0 | R5-DUST-23-FOLLOWUP | G-04 | Spot-Heal-Followup |
+| 1.0 | R5-BRUSH-24 | G-03 | Pinsel-Masken |
+| 1.0 | R5-MASKVIS-25 | G-03 | Masken-Overlay |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
+| fortlaufend | CI-SHARD-26 | alle G | CI-Shard |
 | 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
 | 2.0 | LRPAR-G12-FACE-ADAPTER-25 | G-12 | Face-I/O-Adapter |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
@@ -147,21 +151,19 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 `general`-Implementierungs-Agent + unabhängiger `general`-Verifizierungs-Agent
 (Regel oben). LR-Parität-Batch aus 2026-09-04 (teils erledigt s. Git-Historie; Rest s. Releaseplan/Blöcke).
 
-### PRIO: hoch
-
 - [ ] **[PRIO: hoch] CI-SHARD-26 (User-Order 2026-09-20)** CI-Wandzeit ~5:00 → ~3:00: `rust`-Job in `ci.yml` splitten (`rust-fast`: fmt+check+alle Clippy+Ratchet; `rust-test-gui`: nur `lumina-gui --all-targets` = Long Pole 2:35; `rust-test-rest`: Rest + libraw-ABI + zdata + lensfun + onnx-rt), Cargo-Cache über alle Jobs teilen. Analyse in Konversation 2026-09-20 (Run 35531727105). Abnahme: CI grün + Wandzeit-Beleg + unabhängige Verifizierung. **Stand 2026-09-23:** Shard-Implementierung, Cache-/Gate-Prüfung, Actionlint und unabhängige statische Verifizierung eingebaut; doppelte zdata-/Dokument-Gates bereinigt und GPU-Laufzeittests aus dem headless Rest-Shard ausgeschlossen. GitHub-Lauf und Wandzeit-Beleg stehen noch aus.
-- [ ] **[PRIO: mittel] GPU-PARITY-HW-28 (User-Order 2026-09-23)** Bestehende GPU-Parity-Laufzeitprüfung auf einer echten Hardware-Lösung (Metal/Vulkan) mit renderbaren `R32Float`-Render-Targets wiederholen. Der lokale `llvmpipe`-/GL-Softwareadapter ist keine zulässige Paritätsreferenz und erzeugte die reproduzierten `detail_stage_stack`-/Sharpening-Fehler; keine Toleranzen, Ignores oder CI-Skips als Ersatz. Abnahme: Hardware-Run mit `cargo test -p lumina-gpu --features gpu --test parity`, Protokoll und unabhängige Verifizierung.
 - [ ] **[PRIO: hoch] R5-DUST-23-FOLLOWUP (nächstes Mal, User-Order 2026-09-20)** Dust-Erweiterung: Anzeige nur bei Auswahl (Ausgewähltes wie Maske), Entfernungen bearbeitbar inkl. Neu-Generierung, Typ Generate/KI-generiert (Clone nie verwendet). Abnahme: SOLL zuerst + headless Tests + Golden + unabhängige Verifizierung.
 - [ ] **[PRIO: hoch] R5-BRUSH-24 (User-Order 2026-09-20, User-Urteil „großer Fail", nach Sort-Mini-Welle)** Pinsel-Masken auf Lightroom-Niveau: Größe/Weichheit/Fluss einstellbar (Slider + `[`/`]`-Shortcuts als Alias), Kreis-Cursor mit live Größe am Zeiger, mehrere Masken pro Bild anlegbar + einzeln wählbar (Pin-Liste klickbar), dazu vollständige Maskenverwaltung (Liste aller Masken mit Sichtbarkeits-Toggle, Umbenennen, Löschen, Reihenfolge, Duplizieren — alles klickbare Buttons).
 - [ ] **[PRIO: hoch] R5-MASKVIS-25 (User-Order 2026-09-20, präzisiert, nach Sort-Mini-Welle)** Masken-Overlay nur sichtbar, wenn die Masken-Ansicht geöffnet ist; togglebar: nur Pins für alle Masken vs. volles Overlay für die aktuell ausgewählte Maske. Dazu Bildbereich vergrößern (Seiten-Panels ausblendbar für maximale Preview). Abnahme: headless Tests (Sichtbarkeit nur bei offener Ansicht, Pin-vs-Full-Toggle, Panel-Hide) + Golden + unabhängige Verifizierung.
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
-- Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
+- [ ] **[PRIO: mittel] GPU-PARITY-HW-28 (User-Order 2026-09-23)** Bestehende GPU-Parity-Laufzeitprüfung auf einer echten Hardware-Lösung (Metal/Vulkan) mit renderbaren `R32Float`-Render-Targets wiederholen. Der lokale `llvmpipe`-/GL-Softwareadapter ist keine zulässige Paritätsreferenz und erzeugte die reproduzierten `detail_stage_stack`-/Sharpening-Fehler; keine Toleranzen, Ignores oder CI-Skips als Ersatz. Abnahme: Hardware-Run mit `cargo test -p lumina-gpu --features gpu --test parity`, Protokoll und unabhängige Verifizierung.
 
 ### PRIO: niedrig
 
+- [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
+- Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
 - [ ] **[PRIO: niedrig] LRPAR-G14-DENOISE-IMPL-20 (Release: 2.0)** KI-Denoise-Implementierung nach Entscheid `feature/decisions/LRPAR-G14-DENOISE-20.md` (F-078-Fixture-Entscheid ✓, Schema ✓, Pipeline-Stufe + Persistenz + GPU-Refusal ✓, ONNX-Backend ✓, CLI ✓, GUI ✓, F-074-Budgets ✓ report-only; offen: Gewichte). Abnahme: CLI + GUI-headless + Golden/PSNR, kein stiller Fallback.
 - [ ] **[PRIO: niedrig] LRPAR-G09-CULL-IMPL-25 (Release: 2.5)** KI-Culling-Implementierung nach Entscheid `feature/decisions/LRPAR-G09-CULL-25.md` (Schema ✓, Heuristik `lumina-cull` ✓, CLI ✓, GUI ✓, F-074-Budgets ✓ report-only; offen: optional ONNX Stufe 2). Abnahme: CLI-Exit-Codes + GUI-headless + kittest, Vorschlag schreibt nie Rating/Flag/Label.
 

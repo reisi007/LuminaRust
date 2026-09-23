@@ -162,6 +162,53 @@ fn superseded_deferred_worker_cannot_adopt_its_directory() {
 }
 
 #[test]
+fn pathless_read_failure_supersedes_inflight_path_decode() {
+    let (_dir_a, mut app) = load_a();
+    let source_a = app.path.clone();
+    let bytes_a = app.source_bytes.clone().expect("A bytes");
+    let recipe_before = app.recipe().clone();
+    let dir_b = tempfile::tempdir().unwrap();
+    let source_b = dir_b.path().join("b.png");
+    write_png(&source_b, [200, 100, 50]);
+
+    app.accept_dropped_file(&source_b, || panic!("path drop must not read bytes"));
+    assert!(app.decode_pending(), "B decode must be in flight");
+    let in_flight_generation = app.decode_generation;
+
+    // Drop-event latest-wins: this failed pathless drop is the newest drop
+    // event, so it invalidates the in-flight B decode (generation bump +
+    // receiver replaced) and the older worker must never land after it.
+    app.accept_dropped_file(Path::new(""), || Err("usb unplugged".to_string()));
+
+    assert!(
+        app.error()
+            .is_some_and(|error| error.contains("usb unplugged")),
+        "the failed drop must report loudly"
+    );
+    assert!(
+        !app.decode_pending(),
+        "the failed drop supersedes the B worker"
+    );
+    assert!(app.pending_load_path.is_none());
+    assert!(
+        app.decode_generation > in_flight_generation,
+        "the failed drop must invalidate the in-flight generation"
+    );
+
+    // Give the superseded B worker a chance to land: its receiver is gone, so
+    // its send is a silent no-op and `poll_decode` has nothing to apply.
+    for _ in 0..200 {
+        app.poll_decode();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    assert_eq!(app.path, source_a);
+    assert_eq!(app.source_name, "a.png");
+    assert_eq!(app.source_bytes.as_deref(), Some(bytes_a.as_slice()));
+    assert_eq!(app.recipe(), &recipe_before);
+}
+
+#[test]
 fn disconnected_decode_worker_clears_pending_and_is_loud() {
     let (tx, rx) = std::sync::mpsc::channel::<DecodeRequestResult>();
     drop(tx);

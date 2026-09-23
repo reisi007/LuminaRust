@@ -4,6 +4,16 @@
 //! the asynchronous decode/sidecar lineage while deferring target-directory
 //! adoption: synchronous byte loading pairs pixels with the wrong lineage, while
 //! eager navigation strands A in B's folder if B cannot be decoded.
+//!
+//! Drop-event latest-wins: every drop handed to [`LuminaApp::accept_dropped_file`]
+//! — path-bearing, bytes-bearing, or a failed pathless byte-read — is the newest
+//! source request and supersedes any in-flight decode. A newer drop bumps
+//! `decode_generation` and replaces (`take`s) the decode receiver, so an older
+//! worker result can never land after it (the generation check in `poll_decode`
+//! rejects already-staged results; a dropped receiver makes the worker's send a
+//! silent no-op). This includes the pathless byte-read failure: it reports
+//! loudly via `show_error` and additionally invalidates the in-flight decode
+//! instead of leaving it pending behind the error.
 
 use std::path::Path;
 
@@ -36,6 +46,18 @@ impl LuminaApp {
                 }
             }
             Err(read_error) => {
+                // Drop-event latest-wins (see module docs): this failed drop is
+                // the newest source request, so it supersedes any in-flight
+                // path decode exactly like a successful `load_bytes` would —
+                // bump the generation and drop the receiver so the older worker
+                // result can never land after this failure. The pending-path
+                // anchor belongs to the superseded request and is cleared with
+                // it; the previously loaded source itself is untouched.
+                if self.decode_rx.take().is_some() {
+                    self.note_decode_failed();
+                }
+                self.decode_generation += 1;
+                self.pending_load_path = None;
                 warn!("pathless dropped file could not be read: {read_error}");
                 self.show_error(format!("dropped file unreadable: {read_error}"));
             }
