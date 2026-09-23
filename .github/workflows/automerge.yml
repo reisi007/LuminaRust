@@ -2,7 +2,7 @@ name: Dependabot Auto-Merge
 
 # Keine Branch Protection vorhanden -> der Workflow wartet selbst auf grüne
 # CI-Checks (lewagon/wait-on-check-action; ci.yml triggert auf pull_request:
-# Jobs detect/rust/bench/wasm/docs), bevor er mergt.
+# Jobs detect/rust-fast/rust-test-gui/rust-test-rest/bench/docs), bevor er mergt.
 # pull_request_target wird nur mit striktem Actor-Gate auf dependabot[bot]
 # verwendet; es wird KEIN untrusted PR-Code ausgecheckt oder ausgeführt
 # (nur Metadaten lesen + API-merge), daher im public Repo vertretbar.

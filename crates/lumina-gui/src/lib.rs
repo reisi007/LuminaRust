@@ -22,6 +22,10 @@ mod denoise_gui;
 // GUI-INSTRDBG-17c-Rework F-A: the Detail-section denoise panel is extracted
 // (file-size ratchet) while the enable checkbox gains its `GuiAction`.
 mod denoise_panel;
+// F-103-N6-DND-PERSIST-01: path-first native drop routing + regressions.
+mod dropped_files;
+// File-open routing policies extracted for the GUI file-size ratchet.
+mod open_routing;
 // LRPAR-G09-CULL-25 (GUI slice): Library assisted-culling badges, filter and
 // the explicit adopt action (source-level `document.culling` only).
 mod cull_gui;
@@ -1862,8 +1866,12 @@ pub struct LuminaApp {
     /// entry id of the active virtual copy.
     history_selected: Option<String>,
     /// PERF-GUI-7: receiver for a background RAW/raster decode. `Some` while a
-    /// decode is in flight on a worker thread.
-    decode_rx: Option<std::sync::mpsc::Receiver<DecodeResult>>,
+    /// decode is in flight on a worker thread. The result carries the request
+    /// generation so a superseded worker can never adopt deferred navigation.
+    decode_rx: Option<std::sync::mpsc::Receiver<DecodeRequestResult>>,
+    /// Monotonic latest-wins tag for asynchronous decodes. A result is applied
+    /// only when it still belongs to the most recently started request.
+    decode_generation: u64,
     /// R2-MODSWITCH-1 F8: receiver for a background folder scan. `Some` while a
     /// scan is in flight on its worker thread; drained by `poll_scan`.
     scan_rx: Option<std::sync::mpsc::Receiver<library_scan::ScanResult>>,
@@ -2476,7 +2484,21 @@ struct CachedLensCorrector {
     gpu_map: Option<lumina_core::LensfunMap>,
 }
 
+/// Whether a background decode is allowed to adopt its target directory.
+///
+/// `None` is the ordinary lineage: `open_file` has already prepared the
+/// directory, while direct `begin_load_path` callers (the Develop path field,
+/// warmup, and tests) intentionally do not navigate. `Deferred` is reserved
+/// for native path drops, which must not mutate library navigation until their
+/// decode succeeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryOpenPolicy {
+    None,
+    Deferred,
+}
+
 type DecodeResult = Result<DecodedFrame, (String, String)>;
+type DecodeRequestResult = (u64, DirectoryOpenPolicy, DecodeResult);
 
 /// Draw method of one Develop section: `fn(&mut LuminaApp, &mut egui::Ui)`.
 /// Factored out so [`LuminaApp::DEVELOP_SECTIONS`] stays readable.
@@ -2705,6 +2727,7 @@ impl LuminaApp {
             meta_embedded_cache: None,
             history_selected: None,
             decode_rx: None,
+            decode_generation: 0,
             scan_rx: None,
             scan_generation: 0,
             scan_pending: false,
@@ -2811,58 +2834,6 @@ impl LuminaApp {
         }
         trace!("GUI save: flushing pending edit before source change");
         self.commit_pending_slider_save([0, 0]);
-    }
-
-    pub fn open_file(&mut self, path: impl Into<String>) {
-        let p = path.into();
-        trace!("GUI interaction: open_file {}", p);
-        // REVIEW-GUI-PATHDESYNC-1: `self.path` is NOT committed here. The decode
-        // runs asynchronously; adopting the new path before `finish_decode`
-        // would let Save Recipe / Export / mask fingerprints write the still-
-        // loaded image-A state under the new path B (phantom sidecar) — and on
-        // a failed decode the path would point at a file that never loaded.
-        // `finish_decode` commits the path only after a successful decode, so
-        // every write path stays consistent with original/document/recipe.
-        // GUI-SIDECAR-READ-1: flush an armed commit to the still-loaded image
-        // before the switch starts — otherwise the drag edit is dropped by
-        // `apply_decoded_frame` when the new frame lands.
-        self.flush_pending_edit();
-        // Populate the file browser with the directory containing the opened file.
-        // GUI-VIEW-2: rescan only when actually navigating (new directory or
-        // no entries yet). A same-folder switch (filmstrip clicks) reuses the
-        // live entries — our own saves keep them fresh via `refresh_entry` —
-        // instead of re-reading + re-hashing every source (the N6 stall:
-        // ~224 ms per switch with hashed sidecars). External folder changes
-        // still surface via Open/Refresh/`set_directory` rescans.
-        if let Some(parent) = Path::new(&p).parent() {
-            let dir = parent.display().to_string();
-            // LRPAR-G01-BASIC: the reset-sliders flag is folder-inherited —
-            // refresh it for the target folder on every open (no-op without
-            // a settings file).
-            self.refresh_reset_sliders_flag(parent);
-            if dir != self.directory || self.entries.is_empty() {
-                self.directory = dir;
-                // GUI-STARTUP-SELECTION-1: an explicit open discharges the
-                // startup load itself — the scan's auto-load is suppressed so
-                // it can neither start a second decode nor select a different
-                // first entry (selection and the loading path stay consistent,
-                // like the click path, which sets the selection beforehand).
-                // Seeding keeps any multi-selection; `p` is ensured a member
-                // (the file dialog / drop path never sets it).
-                if !self.filmstrip_selection.contains(&p) {
-                    self.filmstrip_selection.insert(p.clone());
-                    self.filmstrip_anchor = Some(p.clone());
-                }
-                self.auto_load_attempted = true;
-                self.list_directory();
-            } else {
-                self.directory = dir;
-            }
-        }
-        // PERF-GUI-7: decode off the main thread so switching files never
-        // blocks the UI; the decoded frame is delivered via `decode_rx` and
-        // applied in `update()`/`poll_decode()`.
-        self.begin_load_path(p);
     }
 
     /// Navigate to `directory` (folder tree click, `Open`, startup workdir).
@@ -8209,6 +8180,14 @@ impl LuminaApp {
         // replaces the source through `apply_decoded_frame`, which drops an
         // armed commit (no-op without a file-backed image loaded).
         self.flush_pending_edit();
+        // A synchronous bytes-only load is the newest source request. Cancel an
+        // older worker so it cannot overwrite these pixels after they land.
+        let superseded_decode = self.decode_rx.take().is_some();
+        self.decode_generation += 1;
+        self.pending_load_path = None;
+        if superseded_decode {
+            self.note_decode_failed();
+        }
         let source_is_raw = is_raw_name(&name);
         let (frame, orientation, camera_white_balance, lens_identity) = if source_is_raw {
             let image = lumina_raw::decode_bytes(&bytes, &name)?;
@@ -8233,6 +8212,9 @@ impl LuminaApp {
         } else {
             (ImageFrame::decode(&bytes)?, 1, None, None)
         };
+        // Bytes have no adjacent sidecar path. Detach only after a successful
+        // decode so a failed bytes-only load still preserves the current source.
+        self.path.clear();
         // PERF-GUI-7: shared post-decode setup (also used by the async path).
         self.apply_decoded_frame(
             &frame,
@@ -10345,9 +10327,27 @@ impl LuminaApp {
     /// Start a background decode of `path`. The previous preview stays on screen
     /// until the decoded frame arrives; failures are surfaced via `show_error`.
     fn begin_load_path(&mut self, path: String) {
+        self.begin_load_path_with_policy(path, DirectoryOpenPolicy::None);
+    }
+
+    /// Start a native path-drop decode whose directory navigation is deferred
+    /// until `finish_decode` confirms that the image decoded successfully.
+    fn begin_load_path_deferred(&mut self, path: String) {
+        self.begin_load_path_with_policy(path, DirectoryOpenPolicy::Deferred);
+    }
+
+    fn begin_load_path_with_policy(&mut self, path: String, directory_policy: DirectoryOpenPolicy) {
         if path.trim().is_empty() {
             return;
         }
+        // Latest-wins decode identity. Dropping the old receiver prevents its
+        // handoff; the generation check also rejects an already-staged stale
+        // result before it can adopt deferred directory state.
+        if self.decode_rx.take().is_some() {
+            self.note_decode_failed();
+        }
+        self.decode_generation += 1;
+        let request_generation = self.decode_generation;
         self.note_decode_start(&path);
         // R3-OPEN-1: remember which path this decode targets so the
         // Develop-switch open can reuse it instead of starting a duplicate.
@@ -10359,13 +10359,13 @@ impl LuminaApp {
                 .and_then(|n| n.to_str())
                 .unwrap_or("image")
         );
-        // PREVIEW-CACHE-FEATURE (A1/A4): if the target being navigated to was
-        // already prepared as a neighbor preview (change-of-active, same session
-        // or earlier prefetch), paint it immediately — RAM-LRU or disk hit —
-        // so the first frame shows no decode/render wait. The full-resolution
-        // decode below still runs in the background and `finish_decode` replaces
-        // this with the full render; a miss keeps the standard loading path.
-        self.paint_cached_neighbor_preview(&path);
+        // PREVIEW-CACHE-FEATURE (A1/A4): ordinary opens may paint a cached
+        // neighbor immediately. A deferred drop must preserve A's complete
+        // preview/source lineage until B actually decodes, so it skips this
+        // transient adoption and paints only through `finish_decode` on success.
+        if directory_policy == DirectoryOpenPolicy::None {
+            self.paint_cached_neighbor_preview(&path);
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         self.decode_rx = Some(rx);
         std::thread::spawn(move || {
@@ -10419,13 +10419,13 @@ impl LuminaApp {
                     lens_identity,
                 })
             })();
-            let _ = tx.send(result);
+            let _ = tx.send((request_generation, directory_policy, result));
         });
     }
 
     /// Apply a completed background decode: set the source, then restore the
     /// sidecar recipe for that path (mirroring the old synchronous `load_path`).
-    fn finish_decode(&mut self, result: DecodeResult) {
+    fn finish_decode(&mut self, result: DecodeResult, directory_policy: DirectoryOpenPolicy) {
         // R3-OPEN-1: the in-flight decode is settled either way.
         self.pending_load_path = None;
         match result {
@@ -10471,6 +10471,7 @@ impl LuminaApp {
                     frame.source_is_raw,
                     frame.lens_identity,
                 );
+                self.adopt_directory_after_decode(&frame.path, directory_policy);
                 if let Err(e) = self.render() {
                     error!("render after load failed for {}: {e}", self.source_name);
                     self.show_error(e);
@@ -10571,16 +10572,29 @@ impl LuminaApp {
             return;
         };
         match rx.try_recv() {
-            Ok(result) => {
+            Ok((request_generation, directory_policy, result)) => {
                 self.decode_rx = None;
-                self.finish_decode(result);
+                if request_generation != self.decode_generation {
+                    trace!(
+                        "GUI decode worker: dropping superseded result (gen {} != {})",
+                        request_generation,
+                        self.decode_generation
+                    );
+                    return;
+                }
+                self.finish_decode(result, directory_policy);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.decode_rx = None;
                 // R3-OPEN-1: a dropped decode sender must not leave the
                 // in-flight anchor behind (it would suppress a later open).
-                self.pending_load_path = None;
+                let path = self
+                    .pending_load_path
+                    .take()
+                    .unwrap_or_else(|| "unknown image".into());
+                self.note_decode_failed();
+                self.show_error_banner(format!("background decode worker disconnected for {path}"));
             }
         }
     }
@@ -12206,33 +12220,11 @@ impl eframe::App for LuminaApp {
         self.maybe_run_startup_warmup(&ctx);
         self.schedule_render(&ctx);
 
-        // Dropped files (path or bytes) load a new source (native only).
-        // egui 0.36: dropped files are trait objects (`DroppedFileHandle`)
-        // whose contents are read synchronously via `bytes() -> Result`.
+        // F-103-N6-DND-PERSIST-01: native path drops share asynchronous
+        // decode/sidecar handling but defer navigation. Bytes are requested only
+        // when an integration genuinely supplies no filesystem path.
         for file in ctx.input(|input| input.raw.dropped_files.clone()) {
-            match file.bytes() {
-                Ok(bytes) => {
-                    let name = file
-                        .path()
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    if let Err(error) = self.load_bytes(bytes, name) {
-                        self.show_error(error);
-                    }
-                }
-                Err(read_error) => {
-                    // No silent fallback: a dropped file that cannot be read is
-                    // surfaced as a visible error.
-                    log::warn!("dropped file could not be read: {read_error}");
-                    self.show_error(format!("dropped file unreadable: {read_error}"));
-                }
-            }
-            if !file.path().as_os_str().is_empty() {
-                // REVIEW-GUI-PATHDESYNC-1: no immediate `self.path` commit;
-                // `finish_decode` adopts the path after a successful decode.
-                self.begin_load_path(file.path().display().to_string());
-            }
+            self.accept_dropped_file(file.path(), || file.bytes());
         }
 
         // Top: brand + status/error.

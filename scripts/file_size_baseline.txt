@@ -58,7 +58,6 @@
 665 crates/lumina-merge/src/dng.rs
 611 crates/lumina-onnx/tests/face.rs
 625 crates/lumina-core/src/upright.rs
-613 crates/lumina-gui/src/matrix.rs
 611 crates/lumina-sidecar/src/culling.rs
 599 crates/lumina-core/src/lens_blur.rs
 584 crates/lumina-gpu/src/lens_blur.rs

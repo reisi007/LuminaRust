@@ -6,8 +6,9 @@
 //! committed `testdata/matrix` recipe set and compares the app's preview against
 //! the **same** committed goldens as the CLI runner, with the documented PSNR
 //! tolerance classes. It goes through the app pipeline (`load_bytes` → set
-//! recipe → `render()` → `preview()`), so there is no second render pipeline and
-//! no GPU-only path: the app preview *is* the shared CPU core render.
+//! recipe → full-resolution matrix render → `preview()`), so there is no second
+//! render pipeline and no GPU-only path: the app preview *is* the shared CPU
+//! core render.
 //!
 //! The committed CR3 samples make the full matrix RAW/fixture-dependent and
 //! slow, so `real_matrix_headless` is `#[ignore]`d and env-gated
@@ -30,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::LuminaApp;
+mod render;
 
 /// Recipe-set schema version this runner understands (matches the CLI).
 const MATRIX_SCHEMA_VERSION: u32 = 1;
@@ -301,7 +303,7 @@ pub(crate) fn run_matrix(
                 message: None,
             };
 
-            match app.render() {
+            match render::full_resolution(&mut app) {
                 Ok(()) => {}
                 Err(error) => {
                     report.status = "error";
@@ -424,122 +426,6 @@ fn max_abs_diff(a: &ImageFrame, b: &ImageFrame) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lumina_core::render_frame;
-    use lumina_core::{ImageFileFormat, RenderContext};
-
-    /// A deterministic gradient (64×48) so a tone stage has something to change.
-    fn sample_png() -> Vec<u8> {
-        let (width, height) = (64u32, 48u32);
-        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-        for y in 0..height {
-            for x in 0..width {
-                pixels.push((x * 4) as u8);
-                pixels.push((y * 5) as u8);
-                pixels.push(((x + y) * 2) as u8);
-                pixels.push(255);
-            }
-        }
-        ImageFrame::new(width, height, pixels)
-            .unwrap()
-            .encode(ImageFileFormat::Png)
-            .unwrap()
-    }
-
-    fn write_set(directory: &tempfile::TempDir) -> PathBuf {
-        fs::write(directory.path().join("sample.png"), sample_png()).unwrap();
-        let path = directory.path().join("recipe-set.json");
-        fs::write(
-            &path,
-            r#"{
-  "schema_version": 1,
-  "pipeline_version": "raster-mvp-1",
-  "comparison_width": 48,
-  "samples": [{ "id": "sample", "path": "sample.png" }],
-  "recipes": [
-    {
-      "id": "tone",
-      "goals": ["G-01"],
-      "stages": ["exposure", "contrast"],
-      "tolerance": "standard",
-      "expected_route": "gpu",
-      "recipe": { "adjustments": { "exposure": 0.4, "contrast": 0.2 } }
-    }
-  ]
-}"#,
-        )
-        .unwrap();
-        path
-    }
-
-    /// Hermetic: the headless app preview is byte-identical to the shared core
-    /// render for the same recipe (proof the GUI adds no second pipeline), and
-    /// the tolerance gate accepts it and rejects a perturbed golden.
-    #[test]
-    fn headless_preview_matches_core_and_tolerance_gate() {
-        let directory = tempfile::tempdir().unwrap();
-        let recipe_set = write_set(&directory);
-        let golden_dir = directory.path().join("golden");
-        fs::create_dir_all(&golden_dir).unwrap();
-
-        // Compute the core reference for the identical recipe + config.
-        let frame = ImageFrame::decode(&sample_png()).unwrap();
-        let recipe: EditRecipe =
-            serde_json::from_str(r#"{ "adjustments": { "exposure": 0.4, "contrast": 0.2 } }"#)
-                .unwrap();
-        let context = RenderContext {
-            recipe: &recipe,
-            camera_white_balance: None,
-            source_actions: &[],
-            masks: None,
-            lensfun: None,
-            depth: None,
-        };
-        let core = downscale_bilinear(&render_frame(&frame, &context).unwrap().frame, 48).unwrap();
-
-        // The app preview must reproduce the core reference exactly.
-        let mut app = LuminaApp::new(egui::Context::default());
-        app.load_bytes(sample_png(), "sample.png").unwrap();
-        app.recipe = recipe;
-        app.render().unwrap();
-        let preview = downscale_bilinear(app.preview().unwrap(), 48).unwrap();
-        assert_eq!(
-            preview.pixels, core.pixels,
-            "the GUI preview must be the shared core render (no second pipeline)"
-        );
-
-        // Baseline: the app render itself seeds the committed-contract golden.
-        fs::write(
-            golden_dir.join("sample__tone.png"),
-            preview.encode(ImageFileFormat::Png).unwrap(),
-        )
-        .unwrap();
-
-        let report = run_matrix(&recipe_set, Some(&golden_dir), None, &[]).unwrap();
-        assert!(
-            report.failed().is_empty(),
-            "green run must pass: {}",
-            report.summary()
-        );
-        assert!(report.pairs[0].psnr_db.unwrap().is_infinite());
-        assert_eq!(report.pairs[0].expected_route, "gpu");
-
-        // A perturbed golden must fail the `standard` tolerance loudly.
-        let mut perturbed = preview.clone();
-        for (index, byte) in perturbed.pixels.iter_mut().enumerate() {
-            if index % 4 != 3 {
-                *byte = 255 - *byte;
-            }
-        }
-        fs::write(
-            golden_dir.join("sample__tone.png"),
-            perturbed.encode(ImageFileFormat::Png).unwrap(),
-        )
-        .unwrap();
-        let report = run_matrix(&recipe_set, Some(&golden_dir), None, &[]).unwrap();
-        assert_eq!(report.failed().len(), 1, "{}", report.summary());
-        let message = report.failed()[0].message.clone().unwrap_or_default();
-        assert!(message.contains("requires PSNR"), "message: {message}");
-    }
 
     /// The committed `testdata/matrix/recipe-set.v1.json` must keep the schema
     /// this runner parses (fails loudly if the shared set drifts).

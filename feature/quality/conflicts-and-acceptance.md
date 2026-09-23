@@ -310,12 +310,22 @@ kostenpflichtig; Benchmarks bleiben der Ort für Mikro-Messungen.
 zusätzlich headless über `LuminaApp` (egui Context, tempdir) geladen, gerendert
 und gegen **dieselben** Goldens geprüft. Der Runner
 (`crates/lumina-gui/src/matrix.rs`, test-only) fährt die App-Pipeline
-(`load_bytes` → Rezept setzen → `render()` → `preview()`), es gibt also keine
-zweite Pipeline und keinen GPU-only-Weg: Die App-Vorschau **ist** der
-gemeinsame CPU-Core-Render (ein hermetischer Test pinnt die Byte-Identität).
-Wie beim CLI-Runner wird bewusst kein Lensfun-Auto-Korrektor gebunden, damit
-die Goldens feature-unabhängig bleiben. Der volle Lauf über beide CR3-Samples
-ist RAW-abhängig und deshalb `#[ignore]`d + env-gated (`LUMINA_MATRIX=1`),
+(`load_bytes` → Rezept setzen → expliziter Full-Resolution-Matrix-Eintrag →
+`preview()`). Dieser test-only Eintrag setzt die Preview-Geometrie auf die
+Source-Größe, sodass der R3-Viewport-Cap die 24-MP-Samples **nicht** vor dem
+Golden-Vergleich verkleinert, ruft aber weiterhin `LuminaApp::render()` und
+dessen gemeinsamen `render_from`-CPU-Pfad auf. Nach jedem Render muss
+`preview_render_src` exakt der Source-Geometrie entsprechen; eine Abweichung ist
+ein lauter Matrix-Fehler. Die normale interaktive Preview bleibt durch den
+R3-Cap unverändert. Wie beim CLI-CPU-Referenzpfad verwendet der Render denselben
+`RenderContext`: Rezept und dekodierte Kamera-Weißabgleich, keine
+Source-Actions, Masken, Lensfun-Auto-Korrektor oder Depth-Plane. Damit gibt es
+keine zweite Pipeline und keinen GPU-only-Weg: Die App-Vorschau **ist** der
+gemeinsame CPU-Core-Render (ein hermetischer Test mit einer Quelle oberhalb des
+Default-Viewport-Caps pinnt Full-Resolution und Byte-Identität). Wie beim
+CLI-Runner wird bewusst kein Lensfun-Auto-Korrektor gebunden, damit die
+Goldens feature-unabhängig bleiben. Der volle Lauf über beide CR3-Samples ist
+RAW-abhängig und deshalb `#[ignore]`d + env-gated (`LUMINA_MATRIX=1`),
 analog zum CLI-`matrix_e2e`; hermetisch (synthetisches PNG, tempdir) laufen ein
 Byte-Identitäts- und ein Toleranz-Gate-Test im Standard-`cargo test -p
 lumina-gui` ohne GPU. Das `.github`-Nightly fährt den vollen GUI-Lauf als
@@ -368,9 +378,10 @@ hermetisch mit synthetischen PNG-Samples in einem tempdir getestet.
   `--update-goldens` und CPU-Build laut abgelehnt), env-gated CR3-End-to-End-Lauf
   (siehe [Rezept-Matrix](#rezept-matrix-lrpar-matrix-recipe))
 - GUI-headless-Matrix: `LuminaApp` (egui Context + tempdir) fährt dasselbe
-  Rezept-Set gegen dieselben Goldens; hermetischer Byte-Identitäts-Test
-  (App-Vorschau == Core-Render) und Toleranz-Gate-Test ohne GPU, env-gated
-  CR3-Voll-Lauf
+  Rezept-Set gegen dieselben Goldens; hermetischer Regressionstest mit einer
+  Quelle oberhalb des Default-Viewport-Caps beweist Full-Resolution-Render und
+  Byte-Identität zum Core-Render mit demselben `RenderContext`; das
+  Toleranz-Gate bleibt ohne GPU aktiv, env-gated CR3-Voll-Lauf
 - native Build-/Smoke-Tests
 - Performance- und Speicherbenchmarks für RAW, Vorschau, Masken und Batch
 

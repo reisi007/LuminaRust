@@ -1955,6 +1955,26 @@ Drag-and-drop. Preview, Exposure
 gespeichert. ONNX,
 Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 
+> **DnD-Quellenidentität (`F-103-N6-DND-PERSIST-01`):** Ein nativer Drop mit
+> echtem Dateisystempfad verwendet dieselbe asynchrone Decode-/Sidecar-Lineage
+> wie Dateidialog, Filmstreifen und Library-Doppelklick, navigiert aber erst
+> nach erfolgreichem Decode zum Ziel. Bis dahin bleiben die vorige Quelle
+> samt Pfad sowie Verzeichnis, Listing, Filmstreifen-Auswahl und Anker aktiv;
+> ein ausstehender Edit wird vor dem Wechsel in das Sidecar der vorigen Quelle
+> committet. Nach erfolgreichem Decode gehören Pfad, Verzeichnis, Listing,
+> Auswahl, Quellenidentität und das benachbarte Sidecar zur gedroppten Quelle;
+> ein späterer Edit kann nie das Sidecar der vorherigen Datei überschreiben.
+> Nur ein Drop ohne Pfad nutzt den bytes-only In-Memory-Fallback; dieser löst
+> die Datei-Lineage vollständig, sodass auch danach kein Edit unter einen alten
+> Pfad geschrieben werden kann. Lese-, Decode- und Formatfehler bleiben sichtbar
+> und ändern die vorige Quelle samt Navigation nicht. Headless-Anker:
+> `dropped_path_uses_open_file_lineage`,
+> `drop_after_loaded_image_never_writes_previous_sidecar`,
+> `unreadable_drop_preserves_previous_source`,
+> `unsupported_drop_preserves_previous_source` und
+> `superseded_deferred_worker_cannot_adopt_its_directory`; der optionale echte
+> CR3-Nachweis nutzt das etablierte Env-Gate `LUMINA_RAW_FIXTURE`.
+
 #### F-103-N6 Runde 2 Runbook (manueller Test, 2026-09-19)
 
 **Arbeitsteilung (User-Regel):** Der User fährt die GUI, der Build-Agent

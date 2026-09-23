@@ -78,9 +78,9 @@ Feature-Dokumenten und der Git-Historie.
 Alle offenen Aufgaben sind in drei Blöcke gegliedert. Innerhalb jedes Blocks
 gilt die Sortierung `[PRIO: hoch]` → `[PRIO: mittel]` → `[PRIO: niedrig]`;
 die Priorisierung bewertet technische Tragweite/Risiko (kritische
-Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-17:
-13 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 6,
-Block B: 1, Block C: 6.
+Korrektheits-Bugs = hoch, Kosmetik/Doku = niedrig). Stand 2026-09-23:
+13 offene Tasks (Checkbox-Zählung dieser Datei) — Block A: 8,
+Block B: 1, Block C: 4.
 Der Abschnitt `Releaseplan` ordnet jede Task-ID genau einer Version zu
 (1.0 = MVP, 1.5, 2.0, 2.5, nie) — für Mensch und Maschine lesbar.
 
@@ -109,6 +109,8 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 1.0 | R2-GUIMOD-04b | G-10 | GPU-Drossel-Entscheid |
 | 1.0 | R2-GUIMOD-04c | G-10 | GPU-Histogramm |
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
+| 1.0 | F-103-N6-GUI-COVERAGE-27 | alle G | vollständige manuelle GUI-/Persistenz-Checks |
+| 1.0 | GPU-PARITY-HW-28 | alle G | Hardware-GPU-Parität |
 | 1.0 | GPU-RENDER-DENOISE-19 | G-14 | Denoise-WGSL-Pass |
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
@@ -147,7 +149,8 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: hoch
 
-- [ ] **[PRIO: hoch] CI-SHARD-26 (User-Order 2026-09-20)** CI-Wandzeit ~5:00 → ~3:00: `rust`-Job in `ci.yml` splitten (`rust-fast`: fmt+check+alle Clippy+Ratchet; `rust-test-gui`: nur `lumina-gui --all-targets` = Long Pole 2:35; `rust-test-rest`: Rest + libraw-ABI + zdata + lensfun + onnx-rt), Cargo-Cache über alle Jobs teilen. Analyse in Konversation 2026-09-20 (Run 35531727105). Abnahme: CI grün + Wandzeit-Beleg + unabhängige Verifizierung.
+- [ ] **[PRIO: hoch] CI-SHARD-26 (User-Order 2026-09-20)** CI-Wandzeit ~5:00 → ~3:00: `rust`-Job in `ci.yml` splitten (`rust-fast`: fmt+check+alle Clippy+Ratchet; `rust-test-gui`: nur `lumina-gui --all-targets` = Long Pole 2:35; `rust-test-rest`: Rest + libraw-ABI + zdata + lensfun + onnx-rt), Cargo-Cache über alle Jobs teilen. Analyse in Konversation 2026-09-20 (Run 35531727105). Abnahme: CI grün + Wandzeit-Beleg + unabhängige Verifizierung. **Stand 2026-09-23:** Shard-Implementierung, Cache-/Gate-Prüfung, Actionlint und unabhängige statische Verifizierung eingebaut; doppelte zdata-/Dokument-Gates bereinigt und GPU-Laufzeittests aus dem headless Rest-Shard ausgeschlossen. GitHub-Lauf und Wandzeit-Beleg stehen noch aus.
+- [ ] **[PRIO: mittel] GPU-PARITY-HW-28 (User-Order 2026-09-23)** Bestehende GPU-Parity-Laufzeitprüfung auf einer echten Hardware-Lösung (Metal/Vulkan) mit renderbaren `R32Float`-Render-Targets wiederholen. Der lokale `llvmpipe`-/GL-Softwareadapter ist keine zulässige Paritätsreferenz und erzeugte die reproduzierten `detail_stage_stack`-/Sharpening-Fehler; keine Toleranzen, Ignores oder CI-Skips als Ersatz. Abnahme: Hardware-Run mit `cargo test -p lumina-gpu --features gpu --test parity`, Protokoll und unabhängige Verifizierung.
 - [ ] **[PRIO: hoch] R5-DUST-23-FOLLOWUP (nächstes Mal, User-Order 2026-09-20)** Dust-Erweiterung: Anzeige nur bei Auswahl (Ausgewähltes wie Maske), Entfernungen bearbeitbar inkl. Neu-Generierung, Typ Generate/KI-generiert (Clone nie verwendet). Abnahme: SOLL zuerst + headless Tests + Golden + unabhängige Verifizierung.
 - [ ] **[PRIO: hoch] R5-BRUSH-24 (User-Order 2026-09-20, User-Urteil „großer Fail", nach Sort-Mini-Welle)** Pinsel-Masken auf Lightroom-Niveau: Größe/Weichheit/Fluss einstellbar (Slider + `[`/`]`-Shortcuts als Alias), Kreis-Cursor mit live Größe am Zeiger, mehrere Masken pro Bild anlegbar + einzeln wählbar (Pin-Liste klickbar), dazu vollständige Maskenverwaltung (Liste aller Masken mit Sichtbarkeits-Toggle, Umbenennen, Löschen, Reihenfolge, Duplizieren — alles klickbare Buttons).
 - [ ] **[PRIO: hoch] R5-MASKVIS-25 (User-Order 2026-09-20, präzisiert, nach Sort-Mini-Welle)** Masken-Overlay nur sichtbar, wenn die Masken-Ansicht geöffnet ist; togglebar: nur Pins für alle Masken vs. volles Overlay für die aktuell ausgewählte Maske. Dazu Bildbereich vergrößern (Seiten-Panels ausblendbar für maximale Preview). Abnahme: headless Tests (Sichtbarkeit nur bei offener Ansicht, Pin-vs-Full-Toggle, Panel-Hide) + Golden + unabhängige Verifizierung.
@@ -218,11 +221,39 @@ User-Test". Die implementierten Slices (Module, Develop-Sektionen, interaktive
 Maskenwerkzeuge, Exportmodul, i18n, Presence/Vibrance, kittest-Snapshots) sind
 unabhängig verifiziert; Details in Git-Historie und Feature-Dokument.
 
-Vor F-103-N6 empfohlen: nichts mehr offen — die Review-Befunde
-(REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1, REVIEW-GUI-MASKRENDER-1) sind mit
-Marker-Kommentaren im Code implementiert; die F-103-N6-Runde 1 hat eigene
-Befunde erzeugt (GUI-CLICK-ALL-17, GUI-ROUTING-N6, GUI-INSTRDBG-17 — alle
-BESTANDEN verifiziert).
+Vor F-103-N6 bleibt die nachstehende vollständige GUI-Checkliste offen; die
+Review-Befunde (REVIEW-CORE-CROP-1, REVIEW-GUI-DEBOUNCE-1,
+REVIEW-GUI-MASKRENDER-1) sind mit Marker-Kommentaren im Code implementiert;
+die F-103-N6-Runde 1 hat eigene Befunde erzeugt (GUI-CLICK-ALL-17,
+GUI-ROUTING-N6, GUI-INSTRDBG-17 — alle BESTANDEN verifiziert).
+
+- [ ] **[PRIO: hoch] F-103-N6-GUI-COVERAGE-27 (User-Order 2026-09-23; manueller GUI-Gate offen)** Vollständiger manueller/visueller Abnahmelauf für alle noch nicht durch einen normalen `cargo test -p lumina-gui` (ohne `--ignored`) belegten Desktop-GUI-Fälle. Diese Task bleibt offen, bis ein Lauf auf einer Display-/GPU-Maschine mit **genau einer** App-Instanz, `RUST_LOG=trace` und Log-Redirect nach `/tmp/lumina_manual_2026-09-23.log` erfolgt; die headless CI ersetzt diesen Lauf nicht. Jeder Fall wird mit Testanker, Logauszug und Ergebnis dokumentiert.
+
+  **P0 — DnD-/Persistenz-Risiko (`F-103-N6-DND-PERSIST-01`):** nativer Drop einer PNG/JPEG/WebP und einer CR3 in eine leere App; Drop von Quelle B nach geladener Quelle A; Exposure/Contrast-, Spot- und Maskenedit nach Drop; Sidecar adjacent zu B, frischer Neustart und byte-identisches Original; unlesbarer/unsupported Drop mit sichtbarem Fehler und unveränderter vorheriger Quelle. Regressionen müssen insbesondere `dropped_path_uses_open_file_lineage`, `drop_after_loaded_image_never_writes_previous_sidecar`, PNG-/RAW-Reload und `unreadable_drop_preserves_previous_source` abdecken. **Stand 2026-09-23:** Path-first-/Deferred-Decode-Produktionsfix und headless Regressionen sind eingebaut; der echte OS-DnD-Nachweis bleibt offen.
+
+  **1. Start, Eingabe und Shell:** leere App, Ordner-CLI, `--module library|develop|export`, `--fullscreen`, Open/Refresh/Up/Breadcrumb, nativer Datei-/Ordnerdialog, Drag-and-drop, Auto-Load des ersten Bildes, RAW-Orientierung/Metadaten, Status/Banner/Modal-Dialog, Toasts, Neustart und Rendern des tatsächlich geladenen Pfades.
+
+  **2. Responsive Layout und View-Toggles:** 1024×720, 1280×800, schmale/verbreiterte Panels, linke Rail/Navigator, rechte Histogramm-/Develop-Panels, Filmstrip, Toolbar, Lights-out/Fullscreen sowie `Tab`, `Shift+Tab`, `L`, `F`; die Preview-Rechtecke müssen tatsächlich wachsen/schrumpfen, nicht nur State-Flags toggeln. Vorher/Nachher-Goldens und Clip/Overlap-Prüfung sind Pflicht.
+
+  **3. Library-Navigation und Auswahl:** Grid/Loupe/Compare/Survey/People, Ordner-/Unterordnerbaum, Empty-State/CTA, Thumbnail-Größe, Filter, Name/Aufnahmedatum/Custom-Sortierung, Custom-Drag-Insertion, Click/Cmd/Shift-Auswahl, Doppelklick, Home/End/Enter/Esc, Rating/Flag/Color/Badges, Stacks (collapse/expand/select), R6-SCAN-1 erster Paint mit großem echten Verzeichnis.
+
+  **4. Develop-Grundlagen:** alle sichtbaren Basic-Slider (Exposure, Contrast, Highlights, Shadows, Whites, Blacks), Doppelklick-/Alt-Scroll-/Section-Reset, Preset/Profil/Treatment, Auto-Tone, WB-Pipette, Before/After und Split, Original/Softproof/Clipping, Histogramm, Export/Apply/Save/Reset/Match/Regenerate; jede Änderung muss `Edit → Debounce/Commit → Sidecar → Fresh Reopen → Wert/Preview` belegen.
+
+  **5. Farbe, Kurven und Detail:** Tone-Curve-Grafik (Punkt setzen/ziehen/löschen, Kanal Master/R/G/B), HSL/Color-Mixer, Point Color, Color Grading, Presence Texture/Clarity/Dehaze, Vibrance/Saturation, Detail (Schärfen, Rauschreduzierung, Rote-Augen-Picker/Detect/Apply/Remove/Clear), Denoise-Status, Effects (Vignette/Grain), Optics (Profil, Bokeh/Enable), Lens Blur und Generative-Controls inklusive Fehlermodi.
+
+  **6. Geometrie und Preview:** Crop-Handles/Drag/Aspect/Enter/Esc, Straighten, Rotate/Mirror, Perspective/Auto-Upright, Zoom Fit/100–200 %/Fit Width, Pan/Navigator-Drag, Loupe-Vergleich, Draft/Stale/Ready/Failed-Badges, GPU-Present versus CPU-Fallback und sichtbare Route-Gründe.
+
+  **7. Masken (`R5-BRUSH-24`/`R5-MASKVIS-25`):** Mask-Liste mit Anlegen/Mehrfachmasken, Auswahl, Pin-Liste, Sichtbarkeits-Auge, Umbenennen, Löschen, Reihenfolge, Duplizieren, Copy-vs-Duplicate-Gruppen, lokale Layerwerte; Brush-Größe/Weichheit/Fluss, `[`/`]`-Alias, live Kreis-Cursor, Pinsel/Gradient/Radial, Invert/Feather/Blur/Density, Show/Overlay-Farbe, Overlay nur bei geöffneter Masken-Ansicht, Modus „nur Pins aller Masken“ versus „volles Overlay der ausgewählten Maske“ und Panel-Hide mit vergrößerter Preview. Bestehende Headless-Anker (`brush_marks_roundtrip_through_sidecar`, `g03_*`, `g11_*`) sind kein Ersatz für die fehlenden Widget-/Pointer-/Snapshot-Fälle.
+
+  **8. Spot-Heal (`R5-DUST-23-FOLLOWUP`):** Toolbar-Heal/Q, Quick/Generativ-Modus, Size/Feather/Opacity, `[`/`]`, Cursor, Klick-Dab, Spot-Auswahl, Liste nur mit ausgewählter Entfernung, Typ/Status, Parameter editieren, Löschen einzelner Spots, Detect/Apply, Distraction-Schalter, Visualize, Regenerate-Variante ohne Clone-Fallback und Reload; fehlende/veraltete/fehlerhafte generative Artefakte müssen sichtbar bleiben.
+
+  **9. Metadaten, Sync und Export:** Keywords, Collections, Smart Collections, IPTC-Draft/Historie/Presets/Sync, Stack-/Batch-Aktionen, Sync Settings/Match Total Exposure/Previous, Merge, Exportziel/Format/Qualität, native Save-Dialog, PNG/JPEG/WebP/RAW-Export, Same-Path-Guard, Metadaten-Bake-In und Exportfehler.
+
+  **10. Persistenz, Fehler und Nebenläufer:** Sidecar-Roundtrip über mindestens zwei virtuelle Kopien, History/Undo/Reset, Source-Changed/Missing/Corrupt/Stale, CAS-Konflikt, echter Zwei-Prozess-Schreibkonflikt, Cache löschen/rebuilden, fehlende Modelle, Panic/Recovery, Abbruch während Debounce sowie Original-Bytes byteweise unverändert.
+
+  **11. Vollständigkeitsnachweis:** alle `ALL_GUI_ACTIONS` (aktuell 102) gegen eine gezeichnete, klickbare Fläche und einen PASS/FAIL-Test mappen; jede neue `GuiAction`/Enum-Variante erzwingt den Audit. Für visuelle Änderungen `egui_kittest`-Golden/PSNR/Histogram plus Vision-Review; für unveränderte Modelle genügt der jeweilige headless Test nicht als manueller GUI-Erfolg.
+
+  **Abnahme:** native PNG/JPEG/WebP/CR3- und DnD-Kette, Sidecar-Datei inspiziert, App neu gestartet, `cargo test -p lumina-gui`, gezielte Regressionstests, `cargo fmt --check`, Clippy mit `-D warnings`, `sh scripts/check_file_sizes.sh` und unabhängiger Verifizierungsbericht mit DoD-§7-Mapping; kein Befund darf als „manuell geprüft“ ohne Log-/Testbeleg gelten.
 
 - [ ] **[PRIO: mittel] R2-GUIMOD-04b (→ G-10, Release: 1.0)** (nach manuellem Test + 04a-Zahlen): CPU-Draft-Drossel auf GPU-Pfaden entscheiden (throttlen vs. GPU-Histogramm 04c vs. lassen). Eingang: 04a-Messwerte aus F-103-N6.
 - [ ] **[PRIO: mittel] R2-GUIMOD-04c (→ G-10, Release: 1.0)** (nach manuellem Test, Alternative zu 04b): Histogramm per GPU-Compute aus VRAM (1-KB-Readback statt Full-Frame-Analyse). Nur wenn 04a-Zahlen den Aufwand rechtfertigen; CPU-Pfad bleibt für Non-GPU (als Fallback, nicht WASM — WASM ist gestrichen).

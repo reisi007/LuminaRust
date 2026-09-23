@@ -93,9 +93,10 @@ jobs:
           key: matrix-nightly
 
       # Full-resolution 24 MP renders are too slow in a debug build; the
-      # nightly uses the optimised binary. No `gpu` feature here: GitHub runners
-      # have no Metal adapter, so this is the documented CPU reference
-      # regression (never a GPU-parity claim).
+      # nightly uses the optimised binary. The GUI default feature set may
+      # compile the WGPU path, but no GPU context is attached on GitHub runners;
+      # therefore this is the documented CPU reference regression (never a
+      # GPU-parity claim).
       - name: CLI matrix (CPU regression, JSON report)
         shell: bash
         run: |

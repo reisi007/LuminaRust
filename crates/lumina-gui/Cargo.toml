@@ -55,8 +55,9 @@ rfd = "0.17"
 default = ["lensfun", "gpu"]
 lensfun = ["lumina-core/lensfun", "lumina-lensfun/native"]
 # GPU-first rendering via `lumina-gpu` (wgpu/Metal). Enabled by default on
-# desktops; `--no-default-features` drops the wgpu stack and its native
-# dependencies.
+# desktops. The native eframe/winit presentation dependencies remain part
+# of the desktop shell; `--no-default-features` only disables this optional
+# Lumina GPU adapter, not the entire eframe/wgpu compile graph.
 gpu = ["lumina-gpu", "dep:bytemuck"]
 # GUI-JANKLOG-19: Ruckel-Attribution (slow GUI actions/render ticks emit one
 # greppable `LUMINA_JANK` line). Build-Opt-in und **nicht** im Default (U5):

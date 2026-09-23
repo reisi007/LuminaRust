@@ -16,7 +16,7 @@ on:
 
 permissions:
   contents: read
-  # Used by the rust job to authenticate the GHCR container pull
+  # Used by the Rust jobs to authenticate the GHCR container pull
   # (`container.credentials`); the image is public, this only future-proofs
   # the pull for private mirrors.
   packages: read
@@ -42,8 +42,12 @@ jobs:
             echo "has_cargo=false" >> "$GITHUB_OUTPUT"
           fi
 
-  rust:
-    name: Rust checks
+  # CI-SHARD-26: split the old serial Rust job into static, GUI, and remaining
+  # test shards. The explicit GUI/zdata exclusions in rust-test-rest are paired
+  # with their dedicated shards, so the former workspace gate is not silently
+  # narrowed. All three Rust shards share one Cargo cache key and image.
+  rust-fast:
+    name: Rust fast checks
     needs: detect
     # The repository starts with architecture and feature documents. The Rust
     # checks become active automatically once the Cargo workspace is present.
@@ -81,6 +85,9 @@ jobs:
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          # Stable across the three Rust shards; do not use the job ID here.
+          shared-key: lumina-rust-shards
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -88,8 +95,133 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --all-targets
 
-      - name: Run tests
-        run: cargo test --workspace --all-targets
+      # All static and supported-feature gates stay here; the test shards own
+      # runtime tests only and do not duplicate the lint/check gates.
+      # Clippy on workspace crates only, with `-D warnings`. We do NOT use
+      # `--all-features` here: `lumina-gpu/gpu` remains the only hard CI
+      # exclusion (requires Metal hardware; only `cargo check -p lumina-gpu
+      # --features gpu` in CI, see below). `lumina-onnx/onnx-rt` IS now
+      # CI-checked: the image ships `libssl-dev` + `clang` for `openssl-sys`
+      # and CI runners have network to fetch the `ort` prebuilt ONNX Runtime
+      # binaries (see crates/lumina-onnx/Cargo.toml). The dedicated
+      # `onnx-rt` Clippy/check steps here and its test step in rust-test-rest
+      # cover that path separately so the workspace clippy stays focused on
+      # pure-Rust features:
+      #   - lumina-sidecar/zdata (zstd-compressed binary sidecar)
+      #   - lumina-bench/raw-bench (LibRaw decode benchmarks)
+      # Only GPU stays hard CI-excluded; onnx-rt has no runner-hardware reason.
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings
+
+      # The workspace Clippy above enables only the zdata/raw-bench features,
+      # so the `lensfun`-gated code in `lumina-core` is not linted there. With
+      # `liblensfun-dev` present in the container we lint that path explicitly
+      # under `-D warnings`. Verified clean locally (liblensfun 0.3.4).
+      - name: Run Clippy (lensfun feature)
+        run: cargo clippy -p lumina-core --features lensfun -- -D warnings
+
+      # onnx-rt is now CI-checked (image provides libssl-dev + clang for
+      # openssl-sys; ort prebuilt binaries are fetched over network). Clippy
+      # and the feature check run explicitly here; the feature-specific tests
+      # run in rust-test-rest. If the runner has no network the build still at
+      # least `cargo check`s the crate; ort's download-binaries step needs
+      # network. Locally 91/105 tests are green; the rest are network/model-artifact
+      # gated and fail closed without silent fallback). CI runners do have network,
+      # so full `cargo test` is expected green; `cargo clippy` is the lint gate.
+      - name: Run Clippy (onnx-rt feature)
+        run: cargo clippy -p lumina-onnx --features onnx-rt -- -D warnings
+
+      - name: Check onnx-rt feature compiles
+        run: cargo check -p lumina-onnx --features onnx-rt
+
+      # The `gpu`-gated path in lumina-gpu cannot be runtime-tested in CI
+      # (GitHub runners have no GPU/Metal compute). We at least compile-check
+      # it here so that changes to the GPU code do not silently bit-rot.
+      # Runtime GPU tests MUST be run locally (see Agents.md "GPU-Tests").
+      # Only GPU remains hard CI-excluded; onnx-rt has no hardware reason.
+      - name: Check GPU feature compiles
+        run: cargo check -p lumina-gpu --features gpu
+
+      - name: Check benchmark harness (all features)
+        run: cargo check -p lumina-bench --all-features
+
+      # File-size ratchet (2026-09-17): .rs files over 500 lines must not
+      # grow (baseline in scripts/file_size_baseline.txt); shrink/extract
+      # freely and lower the baseline afterwards.
+      - name: Check file-size ratchet
+        run: sh scripts/check_file_sizes.sh
+
+  rust-test-gui:
+    name: Rust GUI tests
+    needs: detect
+    if: needs.detect.outputs.has_cargo == 'true'
+    # Same pinned image as rust-fast; the GUI test gate is isolated so its
+    # long pole runs in parallel with the remaining workspace tests.
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Same shared input as rust-fast and rust-test-rest.
+          shared-key: lumina-rust-shards
+
+      # This is the sole owner of lumina-gui tests; rust-test-rest explicitly
+      # excludes that package to avoid running the GUI suite twice.
+      - name: Run GUI tests
+        run: cargo test -p lumina-gui --all-targets
+
+  rust-test-rest:
+    name: Rust tests (excluding GUI)
+    needs: detect
+    if: needs.detect.outputs.has_cargo == 'true'
+    # Same pinned image as the other Rust shards; the test partition is
+    # intentional and paired with rust-test-gui, not a coverage reduction.
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Same shared input as rust-fast and rust-test-gui.
+          shared-key: lumina-rust-shards
+
+      # Partition invariant: every workspace package except GUI, GPU runtime,
+      # sidecar/zdata, and the lumina-bench harness is covered here; GUI and
+      # zdata have dedicated runtime steps. GPU parity is local-only (hosted
+      # runners have no hardware adapter); rust-fast retains the
+      # `lumina-gpu --features gpu` compile check. `lumina-bench`'s default GPU
+      # bench target is likewise compile/bench-only in CI: rust-fast
+      # compile-checks the harness, and the dedicated bench job owns its
+      # optional, non-blocking execution.
+      - name: Run non-GUI workspace tests
+        run: cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-gpu --exclude lumina-sidecar --exclude lumina-bench
 
       # vendor/libraw-sys is intentionally NOT a workspace member, so the
       # `cargo test --workspace` above never enters it. These ABI-layout
@@ -113,61 +245,10 @@ jobs:
         # are selected explicitly with their synchronized features.
         run: cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun
 
-      # Clippy on workspace crates only, with `-D warnings`. We do NOT use
-      # `--all-features` here: `lumina-gpu/gpu` remains the only hard CI
-      # exclusion (requires Metal hardware; only `cargo check -p lumina-gpu
-      # --features gpu` in CI, see below). `lumina-onnx/onnx-rt` IS now
-      # CI-checked: the image ships `libssl-dev` + `clang` for `openssl-sys`
-      # and CI runners have network to fetch the `ort` prebuilt ONNX Runtime
-      # binaries (see crates/lumina-onnx/Cargo.toml). The dedicated
-      # `onnx-rt` Clippy/Test steps below cover that path separately so the
-      # workspace clippy stays focused on pure-Rust features:
-      #   - lumina-sidecar/zdata (zstd-compressed binary sidecar)
-      #   - lumina-bench/raw-bench (LibRaw decode benchmarks)
-      # Only GPU stays hard CI-excluded; onnx-rt has no runner-hardware reason.
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings
-
-      # The workspace Clippy above enables only the zdata/raw-bench features,
-      # so the `lensfun`-gated code in `lumina-core` is not linted there. With
-      # `liblensfun-dev` present in the container we lint that path explicitly
-      # under `-D warnings`. Verified clean locally (liblensfun 0.3.4).
-      - name: Run Clippy (lensfun feature)
-        run: cargo clippy -p lumina-core --features lensfun -- -D warnings
-
-      # onnx-rt is now CI-checked (image provides libssl-dev + clang for
-      # openssl-sys; ort prebuilt binaries are fetched over network). Clippy
-      # and tests for this feature run explicitly here. If the runner has no
-      # network the build still at least `cargo check`s the crate (ort's
-      # download-binaries step needs network; locally 91/105 tests are green,
-      # the rest are network/model-artifact gated and fail closed without silent
-      # fallback). CI runners do have network, so full `cargo test` is expected
-      # green; `cargo clippy` is the lint gate.
-      - name: Run Clippy (onnx-rt feature)
-        run: cargo clippy -p lumina-onnx --features onnx-rt -- -D warnings
-
-      - name: Check onnx-rt feature compiles
-        run: cargo check -p lumina-onnx --features onnx-rt
-
+      # onnx-rt remains a required test gate; its Clippy/check counterpart is
+      # in rust-fast, while this shard owns the feature-specific test run.
       - name: Run onnx-rt tests
         run: cargo test -p lumina-onnx --features onnx-rt
-
-      # The `gpu`-gated path in lumina-gpu cannot be runtime-tested in CI
-      # (GitHub runners have no GPU/Metal compute). We at least compile-check
-      # it here so that changes to the GPU code do not silently bit-rot.
-      # Runtime GPU tests MUST be run locally (see Agents.md "GPU-Tests").
-      # Only GPU remains hard CI-excluded; onnx-rt has no hardware reason.
-      - name: Check GPU feature compiles
-        run: cargo check -p lumina-gpu --features gpu
-
-      - name: Check benchmark harness (all features)
-        run: cargo check -p lumina-bench --all-features
-
-      # File-size ratchet (2026-09-17): .rs files over 500 lines must not
-      # grow (baseline in scripts/file_size_baseline.txt); shrink/extract
-      # freely and lower the baseline afterwards.
-      - name: Check file-size ratchet
-        run: sh scripts/check_file_sizes.sh
 
   bench:
     name: Benchmarks (optional)
@@ -176,7 +257,7 @@ jobs:
     # benchmarks are pure-Rust (deterministic synthetic fixtures); the LibRaw
     # decode benches stay env-gated out of this fast set (see F-074 spec:
     # "Decode ... gehören nicht in das schnelle CI-Set"). Runs the same
-    # pinned-LibRaw container as the rust job for environment consistency.
+    # pinned-LibRaw container as the Rust shard jobs for environment consistency.
     # CI uses compare.mjs --mode warn ONLY (never the hard gate), so noisy
     # runners can never fail a merge. Budgets carry gate:true for a controlled
     # local gate on the capture machine, but CI deliberately does not enforce
@@ -243,7 +324,6 @@ jobs:
           test -f feature/platform/cli-gui-wasm.md
           test -f feature/platform/capability-matrix.md
           test -f feature/decisions.md
-          test -f feature/architecture/pipeline.md
           test -f feature/quality/performance-benchmarks.md
           test -f docs/adr/0003-performance-benchmarking.md
           test -f docs/adr/README.md
