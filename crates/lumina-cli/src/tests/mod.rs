@@ -28,5 +28,6 @@ mod migrate;
 mod red_eye;
 mod regenerate;
 mod spot;
+mod spot_followup;
 mod upright;
 mod wb_routing;

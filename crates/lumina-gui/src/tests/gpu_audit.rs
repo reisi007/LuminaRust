@@ -148,7 +148,7 @@ fn audit_source_png() -> Vec<u8> {
 fn gpu_audit_exception_table_is_complete_without_gpu() {
     assert_eq!(
         ALL_GUI_ACTIONS.len(),
-        102,
+        105,
         "the F-100 action surface grew/shrank: update the audit (and its docs)"
     );
     let mut exceptions = 0usize;
@@ -211,6 +211,11 @@ fn gpu_audit_exception_table_is_complete_without_gpu() {
         GuiAction::AutoTone,
         GuiAction::ClearLensProfile,
         GuiAction::SetLensBlurEnabled,
+        // R5-DUST-23-FOLLOWUP: spot selection/editing rides the same
+        // dirty → render path as the other spot actions (no badge).
+        GuiAction::SelectSpot,
+        GuiAction::UpdateSpot,
+        GuiAction::RemoveSpot,
     ] {
         assert_eq!(
             documented_cpu_exception(action),

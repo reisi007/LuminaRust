@@ -304,7 +304,7 @@ pub fn apply_spot_heals_from_recipe(
 /// is authoritative after a sidecar roundtrip (deserialization consumes the
 /// top-level key), so checking only extras would silently ignore typed
 /// entries. Typed heuristic entries carry no heal geometry in schema-v2
-/// (`SpotRemoval` holds only version/mode/artifact) and are therefore
+/// (`SpotRemoval` holds only id/version/mode/artifact) and are therefore
 /// unrenderable: they fail loudly here instead of rendering as if no spot
 /// existed.
 fn reject_unsupported_spot_modes(recipe: &EditRecipe) -> Result<(), CoreError> {
@@ -356,7 +356,7 @@ fn reject_unsupported_spot_modes_extras(recipe: &EditRecipe) -> Result<(), CoreE
 /// mirrors the raw `spot_removals` JSON back into `extras` on deserialize,
 /// a loaded healthy recipe carries BOTH the geometry-carrying extras view
 /// (source of truth for healing) AND a geometry-free typed mirror shadow
-/// (`SpotRemoval` holds only version/mode/artifact). Rejecting that shadow
+/// (`SpotRemoval` holds only id/version/mode/artifact). Rejecting that shadow
 /// loudly would be a false alarm on every healthy loaded recipe, so a
 /// geometry-free typed `Heuristic` entry is TOLERATED (skipped) exactly when
 /// the extras `spot_removals` key is present — healing comes from extras via
@@ -378,8 +378,8 @@ fn reject_unsupported_spot_modes_typed(recipe: &EditRecipe) -> Result<(), CoreEr
 }
 
 /// SPOT-CORE-SHADOW-FOLLOWUP: future-proof probe for typed heal geometry.
-/// `SpotRemoval` currently serializes only version/mode/artifact, so this
-/// is always false today; if the schema ever gains geometry fields
+/// `SpotRemoval` currently serializes id/version/mode/artifact, so this is
+/// always false today; if the schema ever gains geometry fields
 /// (center/radius/feather/offset/opacity/…), they appear in the serialized
 /// JSON and the entry takes the loud path in [`check_typed_spot_entry`].
 fn typed_entry_has_geometry(entry: &lumina_sidecar::SpotRemoval) -> bool {
@@ -399,7 +399,6 @@ fn typed_entry_has_geometry(entry: &lumina_sidecar::SpotRemoval) -> bool {
         "offset_dy",
         "source_offset",
         "opacity",
-        "id",
         "status",
     ]
     .iter()
@@ -3388,7 +3387,6 @@ mod tests {
             Err(CoreError::InvalidAdjustment { .. })
         ));
     }
-
     #[test]
     fn typed_generative_spot_is_hard_error_not_silent_skip() {
         // SPOT-TYPED-FIELD-FIX: a typed generative entry (schema-v2) needs
@@ -3397,6 +3395,7 @@ mod tests {
         let frame = checker_8x8();
         let mut recipe = EditRecipe::default();
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            id: "spot-render-generative".into(),
             version: lumina_sidecar::SPOT_REMOVAL_VERSION,
             mode: lumina_sidecar::SpotRemovalMode::Generative,
             artifact: None,
@@ -3404,7 +3403,6 @@ mod tests {
         let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
         assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
     }
-
     #[test]
     fn typed_heuristic_spot_without_geometry_is_hard_error() {
         // SPOT-CORE-SHADOW-FOLLOWUP: an ISOLATED geometry-free typed
@@ -3417,6 +3415,7 @@ mod tests {
         let frame = checker_8x8();
         let mut recipe = EditRecipe::default();
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            id: "spot-render-heuristic".into(),
             version: lumina_sidecar::SPOT_REMOVAL_VERSION,
             mode: lumina_sidecar::SpotRemovalMode::Heuristic,
             artifact: None,
@@ -3428,7 +3427,6 @@ mod tests {
         let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
         assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
     }
-
     #[test]
     fn typed_heuristic_mirror_shadow_with_extras_is_tolerated() {
         // SPOT-CORE-SHADOW-FOLLOWUP: a healthy loaded recipe carries the
@@ -3449,6 +3447,7 @@ mod tests {
             serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.25,"center_y":0.5,"radius":2.0,"feather":0.5,"offset_dx":0.5,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
         );
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            id: "spot-render-mirror".into(),
             version: lumina_sidecar::SPOT_REMOVAL_VERSION,
             mode: lumina_sidecar::SpotRemovalMode::Heuristic,
             artifact: None,
@@ -3459,13 +3458,13 @@ mod tests {
             "mirror-shadow recipe must visibly heal from extras"
         );
     }
-
     #[test]
     fn typed_spot_unknown_version_is_hard_error() {
         // Unknown typed spot versions are rejected, never silently migrated.
         let frame = checker_8x8();
         let mut recipe = EditRecipe::default();
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            id: "spot-render-unknown".into(),
             version: 99,
             mode: lumina_sidecar::SpotRemovalMode::Heuristic,
             artifact: None,

@@ -71,6 +71,13 @@ impl LuminaApp {
         if self.spot_mode == SpotMode::Generative {
             ui.colored_label(egui::Color32::YELLOW, "Generative inpaint requires model inpaint-heal-xl (lumina-onnx, BLAKE3 .lumina.zdata kind=spot_heal_generative). Missing → stale.");
         }
+        // R5-DUST-23-FOLLOWUP: when a removal is selected, keep its
+        // regeneration target and detail above the fold. The legacy expanded
+        // options path below is unchanged when there is no selection.
+        if self.selected_spot_id.is_some() {
+            self.draw_spot_generation_controls(ui);
+            self.draw_spot_selection_panel(ui);
+        }
         ui.collapsing("Remove options", |ui| {
             // G-04: tool-overlay modes (G-11 session state, never recipe).
             ui.horizontal(|ui| {
@@ -167,53 +174,172 @@ impl LuminaApp {
                 }
             }
             // G-04: generative variant regeneration (explicit, deterministic).
-            {
-                ui.text_edit_singleline(&mut self.spot_gen_prompt);
-                let mut seed = self.spot_gen_seed;
-                let mut variant = self.spot_gen_variant;
-                ui.horizontal(|ui| {
-                    ui.label("Seed:");
-                    ui.add(egui::DragValue::new(&mut seed));
-                    ui.label("Variant:");
-                    ui.add(egui::DragValue::new(&mut variant));
-                });
-                if seed != self.spot_gen_seed || variant != self.spot_gen_variant {
-                    let prompt = self.spot_gen_prompt.clone();
-                    self.set_spot_gen_inputs(prompt, seed, variant);
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Spot id:");
-                    ui.text_edit_singleline(&mut self.spot_gen_target);
-                    let target = self.spot_gen_target.trim().to_string();
-                    if ui.button("Regenerate variant").clicked() && !target.is_empty() {
-                        if let Err(error) = self.regenerate_spot_variant(&target).map(|_| ()) {
-                            self.show_error(error);
-                        }
-                    }
-                });
-                if !self.spot_gen_status.is_empty() {
-                    ui.label(&self.spot_gen_status);
-                }
+            // R5-DUST-23-FOLLOWUP: selected controls are painted above the
+            // collapsing group; keep the historical location for the
+            // unselected/list-only state so its golden remains stable.
+            if self.selected_spot_id.is_none() {
+                self.draw_spot_generation_controls(ui);
             }
             if ui.button("Clear spots").clicked() {
                 self.clear_spot_heals();
             }
-            let spots: Vec<serde_json::Value> = self
-                .recipe
-                .extras
-                .get("spot_removals")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default();
-            for spot in &spots {
-                let id = spot.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-                let status = spot
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("valid");
-                ui.label(format!("spot {id}: {status}"));
+            // R5-DUST-23-FOLLOWUP: keep the historical list/detail placement
+            // for the unselected state. A selected entry is painted above the
+            // collapsing group by `draw_spot_tool_options`, so its controls
+            // cannot disappear below the 1024×720 fold.
+            if self.selected_spot_id.is_none() {
+                self.draw_spot_selection_panel(ui);
             }
             ui.label(Str::SpotOverlayHint.t());
             ui.label("Click the image to heal a spot.");
         });
+    }
+
+    /// G-04 generative variant controls, kept as one painter so the selected
+    /// state can place them above the fold without duplicating the command.
+    fn draw_spot_generation_controls(&mut self, ui: &mut egui::Ui) {
+        ui.text_edit_singleline(&mut self.spot_gen_prompt);
+        let mut seed = self.spot_gen_seed;
+        let mut variant = self.spot_gen_variant;
+        ui.horizontal(|ui| {
+            ui.label("Seed:");
+            ui.add(egui::DragValue::new(&mut seed));
+            ui.label("Variant:");
+            ui.add(egui::DragValue::new(&mut variant));
+        });
+        if seed != self.spot_gen_seed || variant != self.spot_gen_variant {
+            let prompt = self.spot_gen_prompt.clone();
+            self.set_spot_gen_inputs(prompt, seed, variant);
+        }
+        ui.horizontal(|ui| match self.selected_spot_id.clone() {
+            Some(target) => {
+                ui.label(format!(
+                    "Target: {}",
+                    crate::spot_select::short_spot_id(&target)
+                ));
+                if ui.button("Regenerate variant").clicked() {
+                    if let Err(error) = self.regenerate_spot_variant(&target).map(|_| ()) {
+                        self.show_error(error);
+                    }
+                }
+            }
+            None => {
+                ui.label("Target: no spot selected");
+            }
+        });
+        if !self.spot_gen_status.is_empty() {
+            ui.label(&self.spot_gen_status);
+        }
+    }
+
+    /// List every operation and render the selected operation's editor/delete
+    /// controls. Invalid IDs are skipped only in an already-invalid in-memory
+    /// recipe; normal loaded documents are validated before reaching here.
+    fn draw_spot_selection_panel(&mut self, ui: &mut egui::Ui) {
+        let spots = self.spot_entries();
+        for spot in &spots {
+            let Some(id) = spot.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let mode = spot
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("heuristic");
+            let status = self.spot_status_text(spot);
+            let kind = crate::spot_select::spot_type_label(mode);
+            let id = id.to_string();
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "spot {}: {kind} {status}",
+                    crate::spot_select::short_spot_id(&id)
+                ));
+                if ui.button("Select").clicked() {
+                    if let Err(error) = self.select_spot(&id) {
+                        self.show_error(error);
+                    }
+                }
+            });
+        }
+        let Some(selected) = self.selected_spot_entry() else {
+            return;
+        };
+        let Some(id) = selected.get("id").and_then(|v| v.as_str()) else {
+            return;
+        };
+        let id = id.to_string();
+        let mode = selected
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("heuristic");
+        let status = self.spot_status_text(&selected);
+        let kind = crate::spot_select::spot_type_label(mode);
+        ui.separator();
+        ui.strong(format!(
+            "Selected spot {}",
+            crate::spot_select::short_spot_id(&id)
+        ));
+        ui.label(format!("Type: {kind}"));
+        ui.label(format!("Status: {status}"));
+        if mode == "heuristic" {
+            let mut radius = selected
+                .get("radius")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::from(self.spot_radius)) as f32;
+            let mut feather = selected
+                .get("feather")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::from(self.spot_feather)) as f32;
+            let mut opacity = selected
+                .get("opacity")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::from(self.spot_opacity)) as f32;
+            let mut dx = selected
+                .get("offset_dx")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0) as f32;
+            let mut dy = selected
+                .get("offset_dy")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0) as f32;
+            ui.horizontal(|ui| {
+                ui.label("Radius");
+                ui.add(egui::Slider::new(&mut radius, 1.0..=512.0).show_value(false));
+                ui.label(format!("{radius:.0} px"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Feather");
+                ui.add(egui::Slider::new(&mut feather, 0.0..=1.0).show_value(false));
+                ui.label(format!("{feather:.2}"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Opacity");
+                ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).show_value(false));
+                ui.label(format!("{opacity:.2}"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Offset dx");
+                ui.add(egui::DragValue::new(&mut dx).speed(0.01));
+                ui.label("dy");
+                ui.add(egui::DragValue::new(&mut dy).speed(0.01));
+            });
+            if ui.button("Apply spot edits").clicked() {
+                if let Err(error) = self.update_spot_heal(
+                    &id,
+                    radius,
+                    feather,
+                    opacity,
+                    lumina_sidecar::Point2 { x: dx, y: dy },
+                ) {
+                    self.show_error(error);
+                }
+            }
+        } else {
+            ui.label("Generate spots carry no Heal geometry: tune Seed/Variant above, then Regenerate variant.");
+        }
+        if ui.button("Delete spot").clicked() {
+            if let Err(error) = self.remove_spot(&id) {
+                self.show_error(error);
+            }
+        }
     }
 }

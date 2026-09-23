@@ -14,6 +14,55 @@ fn generative_artifact_link_roundtrips() {
 }
 
 #[test]
+fn typed_only_generative_roundtrip_materializes_a_compatibility_id() {
+    let mut document = SidecarDocument::new(source(), "pipeline-1");
+    document.virtual_copies[0].recipe.spot_removals = vec![SpotRemoval {
+        id: "typed-generative-1".into(),
+        version: SPOT_REMOVAL_VERSION,
+        mode: SpotRemovalMode::Generative,
+        artifact: None,
+    }];
+    let mut value: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+    value["virtual_copies"][0]["recipe"]["spot_removals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("id");
+    let decoded = SidecarDocument::from_json(&value.to_string()).unwrap();
+    let entries = decoded.virtual_copies[0]
+        .recipe
+        .extras
+        .get("spot_removals")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0]["id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("spot-")));
+    assert_eq!(
+        decoded.virtual_copies[0].recipe.spot_removals[0].id,
+        entries[0]["id"].as_str().unwrap()
+    );
+    assert_eq!(
+        spot_removal_status(&entries[0], std::path::Path::new(".")),
+        SpotRemovalStatus::Missing
+    );
+}
+
+#[test]
+fn duplicate_spot_ids_are_rejected_by_validation() {
+    let mut document = SidecarDocument::new(source(), "pipeline-1");
+    let first = heuristic_spot_extra();
+    let mut second = heuristic_spot_extra();
+    second["center_x"] = serde_json::json!(0.75);
+    document.virtual_copies[0]
+        .recipe
+        .extras
+        .insert("spot_removals".into(), Value::Array(vec![first, second]));
+    let error = document.validate().unwrap_err().to_string();
+    assert!(error.contains("duplicate spot_removal id"), "{error}");
+}
+
+#[test]
 fn generative_link_and_spot_removals_absent_keys_are_identity() {
     // Legacy documents without the additive keys read as no link / empty
     // list and require no migration.

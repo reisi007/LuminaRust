@@ -213,6 +213,58 @@ pub(super) fn drive_action(app: &mut LuminaApp, action: GuiAction, export_path: 
             let _ = app.regenerate_spot_variant("gpu-audit-missing");
         }
         GuiAction::ClearSpotHeals => app.clear_spot_heals(),
+        // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing.
+        GuiAction::SelectSpot => {
+            let _ = app.commit_spot_heal(
+                lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+                2.0,
+                0.0,
+                lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+                1.0,
+            );
+            if let Some(entry) = app.spot_entries().into_iter().next() {
+                if let Some(id) = entry.get("id").and_then(|v| v.as_str()) {
+                    let id = id.to_string();
+                    let _ = app.select_spot(&id);
+                }
+            }
+        }
+        GuiAction::UpdateSpot => {
+            let _ = app.commit_spot_heal(
+                lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+                2.0,
+                0.0,
+                lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+                1.0,
+            );
+            if let Some(entry) = app.spot_entries().into_iter().next() {
+                if let Some(id) = entry.get("id").and_then(|v| v.as_str()) {
+                    let id = id.to_string();
+                    let _ = app.update_spot_heal(
+                        &id,
+                        3.0,
+                        0.1,
+                        0.9,
+                        lumina_sidecar::Point2 { x: 0.05, y: 0.0 },
+                    );
+                }
+            }
+        }
+        GuiAction::RemoveSpot => {
+            let _ = app.commit_spot_heal(
+                lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+                2.0,
+                0.0,
+                lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+                1.0,
+            );
+            if let Some(entry) = app.spot_entries().into_iter().next() {
+                if let Some(id) = entry.get("id").and_then(|v| v.as_str()) {
+                    let id = id.to_string();
+                    let _ = app.remove_spot(&id);
+                }
+            }
+        }
         GuiAction::DetectRedEye => {
             let _ = app.detect_red_eye_candidates();
         }

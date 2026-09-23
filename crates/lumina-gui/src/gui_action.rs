@@ -111,6 +111,12 @@ pub enum GuiAction {
     ApplyDetectedSpots,
     RegenerateSpotVariant,
     ClearSpotHeals,
+    // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing (select is
+    // display-only session state like `SelectMask`; update/remove mutate the
+    // recipe like the other spot commands).
+    SelectSpot,
+    UpdateSpot,
+    RemoveSpot,
     DetectRedEye,
     ApplyDetectedRedEyes,
     RemoveRedEyeRegion,
@@ -237,6 +243,9 @@ impl GuiAction {
             GuiAction::ApplyDetectedSpots => "apply_detected_spots",
             GuiAction::RegenerateSpotVariant => "regenerate_spot_variant",
             GuiAction::ClearSpotHeals => "clear_spot_heals",
+            GuiAction::SelectSpot => "select_spot",
+            GuiAction::UpdateSpot => "update_spot",
+            GuiAction::RemoveSpot => "remove_spot",
             GuiAction::DetectRedEye => "detect_red_eye_candidates",
             GuiAction::ApplyDetectedRedEyes => "apply_detected_red_eyes",
             GuiAction::RemoveRedEyeRegion => "remove_red_eye_region",
@@ -346,6 +355,9 @@ pub const ALL_GUI_ACTIONS: &[GuiAction] = &[
     GuiAction::ApplyDetectedSpots,
     GuiAction::RegenerateSpotVariant,
     GuiAction::ClearSpotHeals,
+    GuiAction::SelectSpot,
+    GuiAction::UpdateSpot,
+    GuiAction::RemoveSpot,
     GuiAction::DetectRedEye,
     GuiAction::ApplyDetectedRedEyes,
     GuiAction::RemoveRedEyeRegion,

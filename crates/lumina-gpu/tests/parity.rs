@@ -2326,6 +2326,7 @@ fn denoise_ai_recipe(strength: f32) -> EditRecipe {
 fn typed_spot_recipe() -> EditRecipe {
     EditRecipe {
         spot_removals: vec![SpotRemoval {
+            id: "spot-parity-heuristic".into(),
             version: 1,
             mode: SpotRemovalMode::Heuristic,
             artifact: None,
@@ -2333,7 +2334,6 @@ fn typed_spot_recipe() -> EditRecipe {
         ..Default::default()
     }
 }
-
 /// A legacy `extras["spot_removals"]` entry with valid, pixel-effective heal
 /// geometry (`apply_spot_heals` copies an offset source patch).
 fn legacy_spot_recipe() -> EditRecipe {

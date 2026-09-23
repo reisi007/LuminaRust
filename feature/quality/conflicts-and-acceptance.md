@@ -233,6 +233,12 @@ Push mit `[matrix]`-Marker oder Breaking-Change (`type(scope)!:` /
 `BREAKING CHANGE`). Der Runner läuft als `lumina matrix` (verify) bzw.
 `lumina matrix --update-goldens` (baseline).
 
+**Lokale Vollmatrix-Abnahme (2026-09-23):** Der headless GUI-Matrixlauf auf den
+ beiden CR3-Beispielfotos bestand **22/22Pairs** (landscape/portrait; Rezept-
+und PSNR-Gates unverändert) in `4.829.741 ms`. Das ist ein CPU-Referenzlauf
+ohne GPU-Paritätsaussage; die Hardware-GPU-Parität bleibt ein separater
+Abnahme-Gate.
+
 **Route-Gate `--require-gpu` (Slice 2).** Jedes Rezept deklariert im Rezept-Set
 seine erwartete Route: `"gpu"` oder die einzige dokumentierte CPU-Ausnahme
 `{ "cpu": "geometry (default content crop)" }` (`g06-lens-perspective`).

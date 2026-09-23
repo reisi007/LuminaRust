@@ -11,8 +11,9 @@ use super::*;
 /// Spot extras, Detail, Optics, Tone Curve, Presets, WB eyedropper, Point
 /// Color, Spot distraction, Red-Eye picker, generative canvas, the generative
 /// checkboxes, the shared per-section Previous/Reset row, the lens-blur enable
-/// and the three filmstrip selection buttons).
-const INSTRDBG_REST_ACTIONS: [GuiAction; 65] = [
+/// and the three filmstrip selection buttons) plus the 3 R5-DUST-23-FOLLOWUP
+/// spot selection/editing actions.
+const INSTRDBG_REST_ACTIONS: [GuiAction; 68] = [
     GuiAction::ToggleCompareMode,
     GuiAction::ClearCrop,
     GuiAction::SetCropAspect,
@@ -51,6 +52,10 @@ const INSTRDBG_REST_ACTIONS: [GuiAction; 65] = [
     GuiAction::ApplyDetectedSpots,
     GuiAction::RegenerateSpotVariant,
     GuiAction::ClearSpotHeals,
+    // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing.
+    GuiAction::SelectSpot,
+    GuiAction::UpdateSpot,
+    GuiAction::RemoveSpot,
     GuiAction::DetectRedEye,
     GuiAction::ApplyDetectedRedEyes,
     GuiAction::RemoveRedEyeRegion,
@@ -106,6 +111,20 @@ fn prepare_rest_action(app: &mut LuminaApp, action: GuiAction) -> Option<String>
         GuiAction::RemoveRedEyeRegion | GuiAction::ClearRedEye => {
             let _ = app.add_red_eye_region(0.5, 0.5);
             None
+        }
+        // R5-DUST-23-FOLLOWUP: selection/editing need a committed spot; the
+        // returned id drives the trigger below (like the mask actions).
+        GuiAction::SelectSpot | GuiAction::UpdateSpot | GuiAction::RemoveSpot => {
+            let _ = app.commit_spot_heal(
+                lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+                2.0,
+                0.0,
+                lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+                1.0,
+            );
+            app.spot_entries()
+                .into_iter()
+                .find_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(str::to_string))
         }
         GuiAction::RemoveCurvePoint => {
             // One interior control point paints the per-point remove button.
@@ -238,6 +257,27 @@ fn trigger_rest_action(app: &mut LuminaApp, action: GuiAction, mask_id: Option<&
             let _ = app.regenerate_spot_variant("spot-missing");
         }
         GuiAction::ClearSpotHeals => app.clear_spot_heals(),
+        GuiAction::SelectSpot => {
+            if let Some(id) = mask_id {
+                let _ = app.select_spot(id);
+            }
+        }
+        GuiAction::UpdateSpot => {
+            if let Some(id) = mask_id {
+                let _ = app.update_spot_heal(
+                    id,
+                    3.0,
+                    0.1,
+                    0.9,
+                    lumina_sidecar::Point2 { x: 0.05, y: 0.0 },
+                );
+            }
+        }
+        GuiAction::RemoveSpot => {
+            if let Some(id) = mask_id {
+                let _ = app.remove_spot(id);
+            }
+        }
         GuiAction::DetectRedEye => {
             let _ = app.detect_red_eye_candidates();
         }

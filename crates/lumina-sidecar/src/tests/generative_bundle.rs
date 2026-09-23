@@ -111,6 +111,18 @@ fn generative_links_resolve_against_real_bundle_eager() {
         spot_link.artifact_status(directory.path()),
         ArtifactStatus::Available
     );
+    assert_eq!(
+        spot_link.spot_heal_artifact_status(directory.path()),
+        ArtifactStatus::Available
+    );
+    // A valid bundle with a mismatched recipe checksum is visibly corrupt,
+    // never accepted merely because the container itself parses.
+    let mut mismatched = spot_link.clone();
+    mismatched.checksum = "blake3:not-the-record".into();
+    assert_eq!(
+        mismatched.spot_heal_artifact_status(directory.path()),
+        ArtifactStatus::Corrupt
+    );
     // Kind separation is strict: neither id resolves under the other kind.
     let loaded = load_zdata(&bundle).unwrap();
     assert!(loaded.spot_heal_generative(&canvas.id).is_err());

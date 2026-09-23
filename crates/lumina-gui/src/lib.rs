@@ -101,6 +101,9 @@ mod preview_masks;
 // R5-DUST-23: interactive Spot-Heal tool (dab + live-size cursor + `[`/`]`
 // size shortcuts).
 mod spot_tool;
+// R5-DUST-23-FOLLOWUP: spot selection + per-spot editing (select/update/
+// remove); `commit_spot_heal`/`clear_spot_heals` live here (ratchet).
+mod spot_select;
 // GUI-REFACTOR-W2-20 S2.2: the Develop section renderers, one module per
 // F-100 section (plus the shared Basic-row helpers and the histogram).
 mod develop_basic;
@@ -1460,15 +1463,17 @@ pub struct LuminaApp {
     spot_radius: f32,
     spot_feather: f32,
     spot_opacity: f32,
+    /// R5-DUST-23-FOLLOWUP: selected spot removal (display-only session
+    /// state like `selected_mask_id`, never recipe/sidecar).
+    selected_spot_id: Option<String>,
     /// LRPAR-G04-REMOVE session/panel state (display inputs, never recipe —
     /// except where noted): `spot_detect_threshold` is the input for heuristic
     /// Detect-Objects (`0..=1`); `spot_detect_status` holds the last detection
     /// outcome text (candidates listed, never silently applied);
     /// `spot_gen_prompt`/`spot_gen_seed`/`spot_gen_variant` are the inputs for
-    /// generative variant regeneration (persisted per spot on Regenerate);
-    /// `spot_gen_status` holds the last regeneration outcome text and
-    /// `spot_gen_target` the target spot id (panel input, session state).
-    /// The visualize threshold itself is recipe-backed (see
+    /// generative variant regeneration (persisted per spot on Regenerate,
+    /// targeting the selected removal); `spot_gen_status` holds the last
+    /// regeneration outcome text. The visualize threshold itself is recipe-backed (see
     /// [`Self::set_spot_visualize`]); the distraction switches are
     /// recipe-backed too (see [`Self::set_spot_distraction`]).
     spot_detect_threshold: f32,
@@ -1477,8 +1482,6 @@ pub struct LuminaApp {
     spot_gen_seed: u64,
     spot_gen_variant: u64,
     spot_gen_status: String,
-    /// Target spot id for variant regeneration (panel input, session state).
-    spot_gen_target: String,
     preset_name: String,
     preset_fields: BTreeMap<String, bool>,
     preset_relative_exposure: bool,
@@ -2572,13 +2575,13 @@ impl LuminaApp {
             spot_radius: 18.0,
             spot_feather: 0.5,
             spot_opacity: 1.0,
+            selected_spot_id: None,
             spot_detect_threshold: 0.5,
             spot_detect_status: String::new(),
             spot_gen_prompt: String::new(),
             spot_gen_seed: 7,
             spot_gen_variant: 1,
             spot_gen_status: String::new(),
-            spot_gen_target: String::new(),
             preset_name: String::new(),
             preset_fields: BTreeMap::from([
                 ("exposure".into(), true),
@@ -4044,12 +4047,7 @@ impl LuminaApp {
                 kind: EditPinKind::Mask,
             });
         }
-        let spots: Vec<serde_json::Value> = self
-            .recipe
-            .extras
-            .get("spot_removals")
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or_default();
+        let spots = self.spot_entries();
         for spot in &spots {
             let centre = spot
                 .get("center_x")
@@ -4065,15 +4063,16 @@ impl LuminaApp {
             {
                 continue;
             }
-            let id = spot
-                .get("id")
-                .and_then(|value| value.as_str())
-                .unwrap_or("?");
+            let Some(id) = spot.get("id").and_then(|value| value.as_str()) else {
+                continue;
+            };
             pins.push(EditPin {
                 id: format!("spot:{id}"),
                 label: (pins.len() + 1).to_string(),
                 pos: (x as f32, y as f32),
-                selected: false,
+                // R5-DUST-23-FOLLOWUP: the selected spot pin paints
+                // accent-filled, like the selected mask pin.
+                selected: self.selected_spot_id.as_deref() == Some(id),
                 kind: EditPinKind::Spot,
             });
         }
@@ -5775,6 +5774,9 @@ impl LuminaApp {
             .mask_layers
             .first()
             .map(|layer| layer.mask.mask_id.clone());
+        // R5-DUST-23-FOLLOWUP: the spot selection is per-copy session state
+        // and must never leak into the newly selected copy.
+        self.selected_spot_id = None;
         // Per-copy session state resets (REVIEW-GUI-VCSWITCH-1): a history
         // selection or an in-progress drag of the previous copy must never
         // leak into the newly selected one.
@@ -6705,67 +6707,6 @@ impl LuminaApp {
     pub fn spot_mode(&self) -> SpotMode {
         self.spot_mode
     }
-    pub fn commit_spot_heal(
-        &mut self,
-        center: lumina_sidecar::Point2,
-        radius: f32,
-        feather: f32,
-        offset: lumina_sidecar::Point2,
-        opacity: f32,
-    ) -> Result<(), GuiError> {
-        if !center.x.is_finite()
-            || !center.y.is_finite()
-            || !(0.0..=1.0).contains(&center.x)
-            || !(0.0..=1.0).contains(&center.y)
-        {
-            return Err(GuiError::Io("Spot center must be 0..=1".into()));
-        }
-        if !radius.is_finite() || !(1.0..=512.0).contains(&radius) {
-            return Err(GuiError::Io("Spot radius must be 1..=512".into()));
-        }
-        if !feather.is_finite() || !(0.0..=1.0).contains(&feather) {
-            return Err(GuiError::Io("Spot feather must be 0..=1".into()));
-        }
-        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
-            return Err(GuiError::Io("Spot opacity must be 0..=1".into()));
-        }
-        let id = format!(
-            "spot-{}",
-            blake3::hash(format!("{:.6},{:.6},{:.2}", center.x, center.y, radius).as_bytes())
-                .to_hex()
-        );
-        let spot = serde_json::json!({"id": id, "version": 1, "mode": "heuristic", "center_x": center.x, "center_y": center.y, "radius": radius, "feather": feather, "offset_dx": offset.x, "offset_dy": offset.y, "opacity": opacity, "status": "valid"});
-        let mut spots: Vec<serde_json::Value> = self
-            .recipe
-            .extras
-            .get("spot_removals")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        spots.push(spot);
-        self.recipe
-            .extras
-            .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
-        self.mark_dirty();
-        self.save_sidecar();
-        // GEN-ONNX-1 Welle 2b (F4/F7): never swallow a render error — surface
-        // it loudly via the visible error dialog (the spot itself is already
-        // persisted; the render failure must not be discarded).
-        if let Err(error) = self.render() {
-            self.show_error(error);
-        }
-        Ok(())
-    }
-    pub fn clear_spot_heals(&mut self) {
-        instrument_gui_action!(self, GuiAction::ClearSpotHeals);
-        self.recipe.extras.remove("spot_removals");
-        self.mark_dirty();
-        self.save_sidecar();
-        // F4/F7: surface the render result instead of discarding it.
-        if let Err(error) = self.render() {
-            self.show_error(error);
-        }
-    }
-
     // ---- LRPAR-G04-REMOVE (G-04 Remove-Parität) ---------------------------
 
     /// Recipe-backed visualize threshold (`None` = off). Read-only accessor
@@ -6879,12 +6820,7 @@ impl LuminaApp {
             self.spot_detect_status = "No candidates to apply".into();
             return Ok(0);
         }
-        let mut spots: Vec<serde_json::Value> = self
-            .recipe
-            .extras
-            .get("spot_removals")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let mut spots = self.spot_entries();
         for candidate in candidates {
             if !candidate.x.is_finite()
                 || !candidate.y.is_finite()
@@ -6906,6 +6842,14 @@ impl LuminaApp {
                 )
                 .to_hex()
             );
+            if spots
+                .iter()
+                .any(|entry| entry.get("id").and_then(|value| value.as_str()) == Some(id.as_str()))
+            {
+                return Err(GuiError::Io(format!(
+                    "Spot `{id}` already exists; IDs must be unique"
+                )));
+            }
             spots.push(serde_json::json!({
                 "id": id, "version": 1, "mode": "heuristic",
                 "center_x": candidate.x, "center_y": candidate.y,
@@ -6915,9 +6859,7 @@ impl LuminaApp {
             }));
         }
         let applied = candidates.len();
-        self.recipe
-            .extras
-            .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
+        self.store_spot_entries(&spots)?;
         self.mark_dirty();
         self.save_sidecar();
         // F4/F7: no swallowed render error on the spot-apply path — surface it
@@ -7015,41 +6957,39 @@ impl LuminaApp {
     pub fn regenerate_spot_variant(&mut self, spot_id: &str) -> Result<u64, GuiError> {
         instrument_gui_action!(self, GuiAction::RegenerateSpotVariant);
         let derived = generative_variant_seed(self.spot_gen_seed, self.spot_gen_variant);
-        let mut spots: Vec<serde_json::Value> = self
-            .recipe
-            .extras
-            .get("spot_removals")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        let mut found = false;
-        for entry in &mut spots {
-            let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-            if id != spot_id {
-                continue;
-            }
-            let mode = entry
-                .get("mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("heuristic");
-            if mode != "generative" {
+        let mut spots = self.spot_entries();
+        let matches: Vec<usize> = spots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                (entry.get("id").and_then(|v| v.as_str()) == Some(spot_id)).then_some(index)
+            })
+            .collect();
+        let index = match matches.as_slice() {
+            [] => return Err(GuiError::Io(format!("Unknown spot `{spot_id}`"))),
+            [index] => *index,
+            _ => {
                 return Err(GuiError::Io(format!(
-                    "Spot `{spot_id}` is not generative (mode `{mode}`)"
-                )));
+                    "Spot `{spot_id}` is ambiguous: duplicate ids are not valid targets"
+                )))
             }
-            entry["seed"] = serde_json::json!(derived);
-            entry["variant"] = serde_json::json!(self.spot_gen_variant);
-            entry["base_seed"] = serde_json::json!(self.spot_gen_seed);
-            if !self.spot_gen_prompt.is_empty() {
-                entry["prompt"] = serde_json::json!(self.spot_gen_prompt);
-            }
-            found = true;
+        };
+        let mode = spots[index]
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("heuristic");
+        if mode != "generative" {
+            return Err(GuiError::Io(format!(
+                "Spot `{spot_id}` is not generative (mode `{mode}`)"
+            )));
         }
-        if !found {
-            return Err(GuiError::Io(format!("Unknown spot `{spot_id}`")));
+        spots[index]["seed"] = serde_json::json!(derived);
+        spots[index]["variant"] = serde_json::json!(self.spot_gen_variant);
+        spots[index]["base_seed"] = serde_json::json!(self.spot_gen_seed);
+        if !self.spot_gen_prompt.is_empty() {
+            spots[index]["prompt"] = serde_json::json!(self.spot_gen_prompt);
         }
-        self.recipe
-            .extras
-            .insert("spot_removals".into(), serde_json::to_value(spots).unwrap());
+        self.store_spot_entries(&spots)?;
         self.mark_dirty();
         self.save_sidecar();
         // F4/F7: no swallowed render error on the spot-variant path — surface
@@ -8281,6 +8221,7 @@ impl LuminaApp {
             self.document = None;
             self.virtual_copy_id = "vc-original".into();
             self.selected_mask_id = None;
+            self.selected_spot_id = None;
             // REVIEW-GUI-N1: a new image starts a fresh sidecar lineage.
             self.sidecar_revision = None;
             // REVIEW-GUI-N3: per-image session state must never leak from the
@@ -10504,6 +10445,9 @@ impl LuminaApp {
                             .mask_layers
                             .first()
                             .map(|layer| layer.mask.mask_id.clone());
+                        // R5-DUST-23-FOLLOWUP: a reloaded sidecar restores the
+                        // removals, never the (session-only) spot selection.
+                        self.selected_spot_id = None;
                         self.document = Some(document);
                         let config = AutoToneConfig {
                             target_luminance: candidate.auto_features.target_luminance,
@@ -12405,6 +12349,7 @@ mod tests {
     mod f100_audit;
     mod f100_buttons;
     mod f100_shortcuts;
+    mod f100_surface;
     mod g01_release;
     mod g15_batch;
     mod g15_collections;
@@ -12462,6 +12407,10 @@ mod tests {
     mod sliders_domain;
     mod sliders_filmstrip;
     mod spot_heal;
+    // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing (select/update/
+    // remove, detail-only-when-selected, no-Clone-fallback).
+    mod spot_followup;
+    mod spot_followup_ui;
     // R5-DUST-23: Dust-Removal toolbar tool (arming, size, dab, cursor).
     mod spot_tool;
     mod spot_visualize;

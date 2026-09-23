@@ -580,7 +580,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Im Scope der 17b/17c-Rework-Flächen bleibt kein user-sichtbarer, das
   Edit-Rezept oder Masken mutierender `ui.button`/`ui.checkbox` ohne
   `GuiAction`.
-  Vollständige Klassenprüfung: alle 102
+  Vollständige Klassenprüfung: alle 105
   `GuiAction`s sind über den Audit (`f100_action_button`, ohne `_`-Arm)
   einer gezeichneten Oberfläche zugeordnet, und jede instrumentierte Methode
   trägt das Makro als erste Anweisung (Klick-Tests je Button/Checkbox).
@@ -676,7 +676,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   eigentliche GPU-Pfad ist über `assert_path_parity` (`maxAbsDiff=0`) und die
   `gpu_present_frame_size`-Present-Prüfung gepinnt, nicht über den Snapshot.
 - **GUI-GPU-AUDIT-17 (Release 1.0, User-Vorgabe 2026-09-17, F-103-N6):**
-  Automatisierter headless Routing-Audit über **alle** 102 `GuiAction`s
+  Automatisierter headless Routing-Audit über **alle** 105 `GuiAction`s
   (Quelle der Aktionsliste: `ALL_GUI_ACTIONS`). Der Audit lädt eine
   deterministische synthetische Quelle in eine `LuminaApp` mit **echtem**
   GPU-Kontext (Standalone-Metal-Adapter über `attach_wgpu_render_state`),
@@ -693,21 +693,24 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     `gpu_audit_exception_table_is_complete_without_gpu`, läuft ohne GPU) und
     `cargo test -p lumina-gui --lib gpu_audit -- --ignored` (Metal-Audit;
     ohne Adapter SKIP statt Rot, wie `kittest_*`; CI-Gap kein Metal in CI).
-  - **Ergebnis (lokal, Metal, 2026-09-18; Stand nach GPU-LENSFUN-PARITY-1):** 101
-    Aktionen gefahren, 10 dokumentierte CPU-Ausnahmen (die vier
-    `GuiAction`-Klassen unten, `default content crop` zählt drei Aktionen),
-    keine undokumentierte CPU-Route; der adapter-unabhängige Test pinnt die
-    Ausnahmetabelle gegen die dokumentierten Grundklassen. Der Present-Pfad
-    selbst bleibt über `kittest_parity` abgedeckt. Mit **LRPAR-G09-SORT-09**
-    (2026-09-20) ist die Oberfläche auf **102** Aktionen gewachsen:
-    `set_library_sort` ist display-only (Sortier-/Anzeigezustand, kein
-    Render-Key, keine Bildstufe) und daher keine CPU-Ausnahme — der
-    Metal-Lauf über 101 Render-Aktionen bleibt unberührt. **R3-ROUTING-1
-    (2026-09-20):** Der Audit fährt jede Aktion aus dem dokumentierten neutralen
-    Anzeigezustand (`crop_mode = false`); ein armiertes Crop-Tool zeigt per
-    Design den geometriefreien Vollbild-Display-Recipe (`crop_mode_display_recipe`)
-    und würde die per-Aktion-Aussage verwischen. Ergebnis unverändert: 102
-    Aktionen, 10 dokumentierte CPU-Ausnahmen.
+  - **Historisches Ergebnis (lokaler Metal-Lauf, 2026-09-18):** Damals wurde
+    der zu diesem Zeitpunkt vorhandene Aktionsstand mit echtem
+    GPU-Kontext geprüft. Der Lauf ist **kein** Nachweis für die später
+    hinzugefügten Aktionen. Der adapter-unabhängige Audit umfasst heute 105
+    Aktionen, davon 103 Render-Aktionen; 10 dokumentierte CPU-Ausnahmen
+    (die vier `GuiAction`-Klassen unten, `default content crop` zählt drei
+    Aktionen), keine undokumentierte CPU-Route. Der vollständige
+    105-Aktionen-Audit ist auf dem lokalen Softwareadapter gelaufen; ein
+    aktueller Hardware-/Metal-Nachweis für alle 105 Aktionen bleibt offen.
+    Der Present-Pfad selbst bleibt über `kittest_parity` abgedeckt. Mit
+    **LRPAR-G09-SORT-09** (2026-09-20) ist die Oberfläche auf 105 Aktionen
+    gewachsen: `set_library_sort` ist display-only (Sortier-/Anzeigezustand,
+    kein Render-Key, keine Bildstufe) und daher keine CPU-Ausnahme.
+    **R3-ROUTING-1 (2026-09-20):** Der Audit fährt jede Aktion aus dem
+    dokumentierten neutralen Anzeigezustand (`crop_mode = false`); ein
+    armiertes Crop-Tool zeigt per Design den geometriefreien
+    Vollbild-Display-Recipe (`crop_mode_display_recipe`) und würde die
+    per-Aktion-Aussage verwischen.
   - **Dokumentierte CPU-Ausnahmen (explizite Liste, alle laut sichtbar per
     Badge):**
 
@@ -731,7 +734,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     `GuiAction`-Ausnahmen bleibt **10** (der Corrector war nie eine
     `GuiAction`).
 
-  - **Timing-Tabelle (report-only, unkalibriert; kein hartes Gate):** eine
+  - **Historische Timing-Tabelle (report-only, unkalibriert; kein hartes Gate; Messung vor R5-DUST-23-FOLLOWUP, daher 101 Aktionen):** eine
     repräsentative lokale Metal-Messung (Debug, 64×48-Quelle,
     Handler-Wanduhrzeit in Mikrosekunden; die absolute Zahl schwankt mit
     Maschine/Last und wird bewusst nicht gegated). Gesamt:
@@ -1626,7 +1629,7 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
   Entscheid: Merge, konsistent zum GUI-Einzeltoggle — siehe
   `feature/product/spot-removal.md` § „G-04 Remove-Parität“).
 - **Generativ-Varianten:** Prompt-/Seed-/Varianten-Steuerung in der
-  Spot-Tool-Leiste + CLI `lumina spot --regenerate-variant --spot-id <id> --variant <n>`;
+  Spot-Tool-Leiste + CLI `lumina spot --regenerate-variant <ID> --variant <N> --seed <N>`;
   deterministisch (`variant_seed`), persistiert, `info!`-Log.
 - **CLI:** `lumina spot --list` (Spots + Einstellungen je Kopie),
   `--add-heuristic`, `--clear`, `--set-visualize-threshold`,
@@ -1634,8 +1637,28 @@ Stufenregeln: `feature/product/spot-removal.md` § „G-04 Remove-Parität“):
   `--regenerate-variant`; Roundtrip über `save_sidecar`/`load_sidecar`,
   laute Fehler (Exit 1 Benutzungs-/Laufzeitfehler wie Bestand, kein stiller
   Fallback, keine absoluten Pfade). `--clear` entfernt alle Spots und
-  widerspricht `--add-heuristic`/`--detect-apply`/`--regenerate-variant`
-  (lauter Fehler, kein stilles Verwerfen des Adders).
+  widerspricht `--add-heuristic`/`--detect-apply`/`--regenerate-variant`/
+  `--remove-spot` (lauter Fehler, kein stilles Verwerfen des Adders).
+  `--remove-spot <ID>` ist außerdem exklusiv zu Add/Detect-Apply,
+  Parameter-Update (`--spot-id`/`--set-*`) und Regeneration; jeder Widerspruch
+  endet vor dem Schreiben mit Exit 1.
+- **R5-DUST-23-FOLLOWUP (normativ):** `feature/product/spot-removal.md`
+  § „R5-DUST-23-FOLLOWUP“): Spot-Auswahl (`select_spot`, Session-State wie
+  Maske, Pin-/Listen-Klick, Detail aus Typ/Status/Parameter-Editor/
+  Einzel-Löschen/Regenerate nur bei Auswahl, Reset bei Kopie-/Bildwechsel);
+  Entfernungen einzeln bearbeitbar (`update_spot_heal`,
+  CLI `--spot-id` + `--set-radius/--set-feather/--set-opacity/`
+  `--set-offset-dx/--set-offset-dy`, heuristisch-only) und einzeln löschbar
+  (`remove_spot`, CLI `--remove-spot`); jede gültige typed-only generative
+  `SpotRemoval`-Operation erhält eine deterministische ID und wird in GUI/CLI
+  auswählbar angezeigt (kein `?`). Typ-Labels `Heal` (Quick) vs.
+  `Generate (AI)`/`KI-generiert` (Drahtwerte unverändert, `Clone` wird
+  nirgends angeboten und nie als Fallback verwendet); der CLI-Term
+  `source-offset` beschreibt die unveränderten `offset_dx/offset_dy`-Werte,
+  nicht einen Clone-Modus. Generative Artefaktstatus wird aus der Referenz
+  ermittelt: fehlend/null → `missing`, Pfad fehlt → `missing`, Prüfsumme/
+  Container inkonsistent → `corrupt`, Identitätsdrift → `stale`; GUI und CLI
+  listen denselben Status.
 
 ### Lens Blur G-05 (LRPAR-G05-LENSBLUR, Release 1.0)
 

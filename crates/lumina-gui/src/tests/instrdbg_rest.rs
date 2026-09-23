@@ -98,7 +98,13 @@ fn f100_spot_apply_detected_button_logs_one_line() {
 #[test]
 fn f100_spot_regenerate_variant_button_logs_one_line() {
     let (_directory, mut app) = persistent_app();
-    app.spot_gen_target = "spot-missing".into();
+    // R5-DUST-23-FOLLOWUP: the regenerate target is the selected removal
+    // (the typed id field is gone) — seed a generative entry and select it.
+    app.recipe.extras.insert(
+        "spot_removals".into(),
+        serde_json::json!([{"id": "g1", "version": 1, "mode": "generative", "prompt": "x"}]),
+    );
+    app.select_spot("g1").unwrap();
     let lines = click_action_lines(
         &mut app,
         4096.0,
@@ -106,6 +112,71 @@ fn f100_spot_regenerate_variant_button_logs_one_line() {
         |app, ui| app.draw_spot_tool_options(ui),
     );
     assert_single_action_line(&lines, GuiAction::RegenerateSpotVariant);
+}
+
+#[test]
+fn f100_spot_select_button_logs_one_line() {
+    let (_directory, mut app) = persistent_app();
+    app.commit_spot_heal(
+        lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+        2.0,
+        0.0,
+        lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+        1.0,
+    )
+    .unwrap();
+    // A fresh dab selects itself; drop the selection so the row button has
+    // work to do (the click must route through `select_spot` either way).
+    app.selected_spot_id = None;
+    let lines = click_action_lines(
+        &mut app,
+        4096.0,
+        &["Remove options", "Select"],
+        |app, ui| app.draw_spot_tool_options(ui),
+    );
+    assert_single_action_line(&lines, GuiAction::SelectSpot);
+    assert!(app.selected_spot_id().is_some());
+}
+
+#[test]
+fn f100_spot_apply_edits_button_logs_one_line() {
+    let (_directory, mut app) = persistent_app();
+    app.commit_spot_heal(
+        lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+        2.0,
+        0.0,
+        lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+        1.0,
+    )
+    .unwrap();
+    let lines = click_action_lines(
+        &mut app,
+        4096.0,
+        &["Remove options", "Apply spot edits"],
+        |app, ui| app.draw_spot_tool_options(ui),
+    );
+    assert_single_action_line(&lines, GuiAction::UpdateSpot);
+}
+
+#[test]
+fn f100_spot_delete_button_logs_one_line() {
+    let (_directory, mut app) = persistent_app();
+    app.commit_spot_heal(
+        lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+        2.0,
+        0.0,
+        lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+        1.0,
+    )
+    .unwrap();
+    let lines = click_action_lines(
+        &mut app,
+        4096.0,
+        &["Remove options", "Delete spot"],
+        |app, ui| app.draw_spot_tool_options(ui),
+    );
+    assert_single_action_line(&lines, GuiAction::RemoveSpot);
+    assert!(app.selected_spot_id().is_none());
 }
 
 #[test]

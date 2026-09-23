@@ -55,7 +55,7 @@ impl LuminaApp {
         info!("GUI interaction: spot size -> {next:.0} px");
     }
 
-    /// Deterministic auto-clone source offset for a dab at `nx`: sample
+    /// Deterministic auto-source offset for a dab at `nx`: sample
     /// `1.5 * radius` source pixels toward the image interior (so the source
     /// stays in bounds and clears the dust) — horizontally only, matching the
     /// pipeline's `source_offset` semantics (`source-normalized`).
@@ -89,7 +89,8 @@ impl LuminaApp {
 
     /// Drive the armed spot tool on the preview widget: one dab per click plus
     /// the live-size circle cursor while hovering (`radius * view scale` screen
-    /// points). A disarmed tool is a hard no-op.
+    /// points). A disarmed tool is a hard no-op. R5-DUST-23-FOLLOWUP: a click
+    /// on an existing spot pin selects it (no new dab); any other click dabs.
     pub(crate) fn handle_spot_tool_interaction(
         &mut self,
         ui: &egui::Ui,
@@ -115,7 +116,11 @@ impl LuminaApp {
                     .preview_roi
                     .map(|r| Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src));
                 let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
-                if let Err(error) = self.spot_dab(nx, ny) {
+                if let Some(id) = self.spot_hit_at(nx, ny, scale) {
+                    if let Err(error) = self.select_spot(&id) {
+                        self.show_error(error);
+                    }
+                } else if let Err(error) = self.spot_dab(nx, ny) {
                     self.show_error(error);
                 }
             }

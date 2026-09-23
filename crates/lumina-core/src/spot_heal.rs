@@ -96,7 +96,7 @@ impl SpotHeuristic {
 ///
 /// SPOT-TYPED-FIELD-FIX + SPOT-CORE-SHADOW-FOLLOWUP note: the typed
 /// schema-v2 `recipe.spot_removals` is intentionally NOT converted here —
-/// `SpotRemoval` carries only version/mode/artifact and no heal geometry
+/// `SpotRemoval` carries only id/version/mode/artifact and no heal geometry
 /// (center/radius/feather/offset/opacity), so a typed entry cannot yield a
 /// `SpotHeuristic`. Healing always comes from the extras view. The render
 /// path (`render::apply_spot_heals_from_recipe`) skips a geometry-free typed
@@ -229,7 +229,6 @@ pub struct DetectedSpot {
     pub radius: f32,
     pub confidence: f32,
 }
-
 /// Distraction category (G-04 Distraction Removal). Only `Dust` is served by
 /// the heuristic stage 1; the others need an F-078-gated model and report
 /// [`DistractionStatus::NeedsModel`] instead of guessing silently.
@@ -239,7 +238,6 @@ pub enum DistractionKind {
     People,
     Dust,
 }
-
 /// Explicit distraction switches (G-04). All default to off; `auto_mode`
 /// only lists candidates and never applies anything silently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -602,7 +600,7 @@ mod tests {
         // SPOT-SCHEMA-GEOMETRY / SPOT-CORE-SHADOW-FOLLOWUP contract:
         // `EditRecipe` serde mirrors the raw `spot_removals` value back into
         // `extras` on deserialize (the typed schema-v2 `SpotRemoval` holds
-        // only version/mode/artifact, so the extras view remains the
+        // only id/version/mode/artifact, so the extras view remains the
         // geometry-carrying source of truth). A JSON roundtrip therefore
         // keeps the extras key AND populates the typed mirror shadow; the
         // render path heals from extras and tolerates that shadow (see
@@ -641,6 +639,7 @@ mod tests {
         // instead of silently skipped.
         let mut recipe = lumina_sidecar::EditRecipe::default();
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            id: "spot-typed-heuristic".into(),
             version: lumina_sidecar::SPOT_REMOVAL_VERSION,
             mode: lumina_sidecar::SpotRemovalMode::Heuristic,
             artifact: None,
@@ -655,6 +654,7 @@ mod tests {
         let s = spot(0.501, 0.498, 18.0, 0.5, 0.05, -0.02, 1.0);
         recipe.extras.insert("spot_removals".into(), serde_json::to_value(vec![serde_json::json!({"id":s.id,"version":s.version,"center_x":s.center_x,"center_y":s.center_y,"radius":s.radius,"feather":s.feather,"offset_dx":s.offset_dx,"offset_dy":s.offset_dy,"opacity":s.opacity,"status":s.status,"mode":"heuristic"})]).unwrap());
         recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
+            id: "spot-typed-generative".into(),
             version: lumina_sidecar::SPOT_REMOVAL_VERSION,
             mode: lumina_sidecar::SpotRemovalMode::Generative,
             artifact: None,

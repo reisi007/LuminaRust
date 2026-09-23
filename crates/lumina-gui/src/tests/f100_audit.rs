@@ -1,5 +1,6 @@
 //! F-100 exhaustive GuiAction → button guard and audit tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
+use super::f100_surface::{ButtonRef, F100Surface};
 use super::*;
 // UX-LOOK-TOOLBAR-18: icon buttons are audited by their stable widget id.
 use crate::develop_tone::tone_curve_graph::tone_curve_graph_id;
@@ -11,66 +12,9 @@ use crate::icon_toolbar::ToolbarIcon;
 // user shortcut is instrumented); this match is exhaustive over the enum,
 // so a future shortcut fails compilation until its button is mapped, and
 // the audit then fails unless that button is actually painted.
+// (Surface/button descriptors live in `super::f100_surface` — R5-DUST-23-
+// FOLLOWUP extraction, file-size ratchet.)
 // -----------------------------------------------------------------------
-
-/// The headless draw surface that hosts an action's clickable button.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum F100Surface {
-    Preview,
-    Histogram,
-    Rating,
-    LibraryGrid,
-    History,
-    ModuleBar,
-    Develop,
-    Export,
-    Basic,
-    Masking,
-    Spot,
-    Merge,
-    Geometry,
-    Metadata,
-    Detail,
-    Optics,
-    ToneCurve,
-    Presets,
-    // GUI-INSTRDBG-17c: Color (Point Color) and the generative canvas
-    // buttons.
-    Color,
-    Generative,
-    // GUI-INSTRDBG-17c-Rework F-1: the filmstrip selection buttons
-    // (Sync Settings / Match Total Exposures / Previous Image).
-    Filmstrip,
-    // GUI-INSTRDBG-17c-Rest: the Library People view (per-face
-    // "Use as mask" Develop bridge).
-    People,
-}
-
-/// UX-LOOK-TOOLBAR-18: a clickable button is either a painted text label or a
-/// vector-painted icon located by its stable widget id. `From` keeps the many
-/// existing text entries readable as `.into()`.
-///
-/// UX-LOOK-TONECURVE-18: `Widget` covers graph-hosted gestures that have no
-/// text label (the tone-curve graph adds on click, removes on double-click);
-/// it is audited by the widget id it registers via `Ui::interact`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ButtonRef {
-    Text(String),
-    Icon(ToolbarIcon),
-    Widget(egui::Id),
-}
-
-impl From<String> for ButtonRef {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl From<&str> for ButtonRef {
-    fn from(value: &str) -> Self {
-        Self::Text(value.to_string())
-    }
-}
 
 /// Exhaustive `GuiAction` → (`surface`, `button`). No `_` arm.
 fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
@@ -191,6 +135,12 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
         GuiAction::ApplyDetectedSpots => (F100Surface::Spot, "Apply detected".into()),
         GuiAction::RegenerateSpotVariant => (F100Surface::Spot, "Regenerate variant".into()),
         GuiAction::ClearSpotHeals => (F100Surface::Spot, "Clear spots".into()),
+        // R5-DUST-23-FOLLOWUP: the per-row select plus the selected-detail
+        // edit/delete buttons (static labels; the frame below commits and
+        // selects a spot so they paint).
+        GuiAction::SelectSpot => (F100Surface::Spot, "Select".into()),
+        GuiAction::UpdateSpot => (F100Surface::Spot, "Apply spot edits".into()),
+        GuiAction::RemoveSpot => (F100Surface::Spot, "Delete spot".into()),
         GuiAction::DetectRedEye => (F100Surface::Detail, Str::RedEyeDetect.t().into()),
         GuiAction::ApplyDetectedRedEyes => {
             (F100Surface::Detail, Str::RedEyeApplyDetected.t().into())
@@ -304,6 +254,16 @@ pub(super) fn f100_surface_frame(
             headless_frame_sized(app, 4096.0, |app, ui| app.draw_masking(ui))
         }
         F100Surface::Spot => {
+            // R5-DUST-23-FOLLOWUP: a committed + selected spot paints the
+            // per-row "Select" and the selected-detail "Apply spot edits" /
+            // "Delete spot" buttons (a fresh dab selects itself).
+            let _ = app.commit_spot_heal(
+                lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
+                2.0,
+                0.0,
+                lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
+                1.0,
+            );
             headless_click_labels_sized_frame(app, 8000.0, &["Remove options"], |app, ui| {
                 app.draw_spot_tool_options(ui)
             })

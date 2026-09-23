@@ -684,7 +684,6 @@ mod tests {
         );
         assert_ne!(a.digest(), b.digest());
     }
-
     fn base_key() -> RenderKey {
         RenderKey::new(
             "source",
@@ -1043,6 +1042,7 @@ mod tests {
     fn spot_removal_link_changes_render_and_mask_not_decode() {
         fn generative_spot(checksum: Option<&str>) -> lumina_sidecar::SpotRemoval {
             lumina_sidecar::SpotRemoval {
+                id: "spot-render-key".into(),
                 version: lumina_sidecar::SPOT_REMOVAL_VERSION,
                 mode: lumina_sidecar::SpotRemovalMode::Generative,
                 artifact: checksum.map(|checksum| lumina_sidecar::GenerativeArtifactRef {
@@ -1124,6 +1124,7 @@ mod tests {
             "p",
             "v",
             &recipe_with_spots(vec![lumina_sidecar::SpotRemoval {
+                id: "spot-heuristic-key".into(),
                 version: lumina_sidecar::SPOT_REMOVAL_VERSION,
                 mode: lumina_sidecar::SpotRemovalMode::Heuristic,
                 artifact: None,
@@ -1157,7 +1158,6 @@ mod tests {
             ]
         );
     }
-
     fn recipe_with_generative(seed: Option<u64>, expand: Option<bool>) -> EditRecipe {
         EditRecipe {
             generative_edit: Some(lumina_sidecar::GenerativeEdit {

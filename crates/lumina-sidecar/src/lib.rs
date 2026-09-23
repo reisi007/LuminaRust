@@ -24,6 +24,15 @@ pub use zdata::{
     FACE_EMBEDDING_ENCODING_VERSION, MAX_FACE_EMBEDDING_DIMENSION, RGB_ENCODING_VERSION,
 };
 
+// R5-DUST-23-FOLLOWUP: shared spot IDs, entry normalization and artifact
+// status live in one small module so CLI and GUI cannot classify the same
+// typed/extras operation differently.
+mod spot;
+pub use spot::{
+    set_spot_removal_entries, spot_removal_entries, spot_removal_status,
+    spot_removal_status_for_identity, stable_spot_id, SpotRemovalStatus, SPOT_REMOVAL_ID_PREFIX,
+};
+
 // LRPAR-G15-IPTC-S4: file-backed IPTC metadata presets (static + dynamic).
 mod meta_preset;
 pub use meta_preset::{
@@ -376,7 +385,7 @@ impl GenerativeArtifactRef {
     /// absent, `Corrupt` when present but unusable. Callers must treat any
     /// non-`Available` status as visible, never as a silent fallback.
     pub fn artifact_status(&self, bundle_root: &Path) -> ArtifactStatus {
-        artifact_status(bundle_root, &self.as_artifact_reference())
+        spot::verified_generative_artifact_status(self, bundle_root)
     }
 
     /// GEN-ONNX-1: build the portable recipe link for a persisted
@@ -467,9 +476,14 @@ pub enum SpotRemovalMode {
 /// `spot_removals` key deserializes as the empty list, requires no migration
 /// and does not change `schema_version`.
 ///
+/// R5-DUST-23-FOLLOWUP: every operation has a stable `id`, including a
+/// typed-only generative operation which has no geometry view. Older
+/// documents without that field are assigned a deterministic compatibility ID
+/// while loading; explicit IDs remain untouched.
+///
 /// SPOT-SCHEMA-GEOMETRY: this typed view intentionally carries only
-/// version/mode/artifact. The heal geometry (center/radius/feather/offset/
-/// opacity/id/status) travels in the mirrored `extras["spot_removals"]` view
+/// id/version/mode/artifact. The heal geometry (center/radius/feather/offset/
+/// opacity/status) travels in the mirrored `extras["spot_removals"]` view
 /// (see `EditRecipe`'s `Deserialize` impl) and is validated by
 /// `validate_spot_removal_extras`. Extending this struct with geometry fields
 /// was rejected: it would break every existing struct literal in downstream
@@ -480,11 +494,12 @@ pub enum SpotRemovalMode {
 /// `kind = 3` record link after generation (`None` before generation means
 /// `missing`, never a silent heuristic fallback).
 ///
-/// Recipe-identity note (core follow-up, not implemented here): `mode` and,
-/// for generative spots, every field of `artifact` MUST be included in the
-/// core `recipe_hash`/`RenderKey`.
+/// Recipe-identity note: `id`, `mode` and, for generative spots, every field of
+/// `artifact` are included in the core `recipe_hash`/`RenderKey`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpotRemoval {
+    #[serde(default)]
+    pub id: String,
     pub version: u8,
     pub mode: SpotRemovalMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1292,18 +1307,15 @@ impl Serialize for EditRecipe {
         }
         // GEN-ZDATA-LINK-1: `spot_removals` is a top-level additive key,
         // skipped entirely when empty so legacy documents without the key
-        // deserialize as empty.
-        // SPOT-SCHEMA-GEOMETRY: when the geometry-carrying extras mirror (see
-        // `Deserialize`) holds the same key, the extras loop below overwrites
-        // this lossy typed view with the full entry — that precedence is
-        // intentional: the typed `SpotRemoval` holds only
-        // version/mode/artifact, while the extras view carries the heal
-        // geometry. A typed-only recipe (no extras key) still serializes here
-        // with no silent key loss.
-        if !self.spot_removals.is_empty() {
+        // deserialize as empty. R5-DUST-23-FOLLOWUP fills compatibility IDs
+        // for typed-only generative entries before either view is written.
+        let mut normalized_spot_removals = self.spot_removals.clone();
+        spot::normalize_typed_spot_removals(&mut normalized_spot_removals);
+        if !normalized_spot_removals.is_empty() {
             root.insert(
                 "spot_removals".into(),
-                serde_json::to_value(&self.spot_removals).map_err(serde::ser::Error::custom)?,
+                serde_json::to_value(&normalized_spot_removals)
+                    .map_err(serde::ser::Error::custom)?,
             );
         }
         if let Some(generative_edit) = &self.generative_edit {
@@ -1322,7 +1334,11 @@ impl Serialize for EditRecipe {
             serde_json::to_value(&self.auto_features).map_err(serde::ser::Error::custom)?,
         );
         for (key, value) in &self.extras {
-            root.insert(key.clone(), value.clone());
+            let mut value = value.clone();
+            if key == "spot_removals" {
+                spot::normalize_spot_removal_array(&mut value);
+            }
+            root.insert(key.clone(), value);
         }
         Value::Object(root).serialize(serializer)
     }
@@ -1387,14 +1403,21 @@ impl<'de> Deserialize<'de> for EditRecipe {
             .unwrap_or_default();
         // SPOT-SCHEMA-GEOMETRY: the raw `spot_removals` JSON value is mirrored
         // into `extras` below (the typed parse reads from a clone). Rationale:
-        // `SpotRemoval` carries only version/mode/artifact and no heal geometry
+        // `SpotRemoval` carries only id/version/mode/artifact and no heal geometry
         // (center/radius/feather/offset/opacity/id/status), and serde drops
         // unknown fields silently — so consuming the top-level key into the
         // typed field alone irreversibly loses heuristic parameters (69dad91).
         // Keeping the raw value preserves them; on serialize the extras view
         // (geometry-carrying) shadows the lossy typed view for the same key.
         // GEN-ZDATA-LINK-1: an absent `spot_removals` key is the empty list.
-        let spot_removals_raw = root.remove("spot_removals");
+        let mut spot_removals_raw = root.remove("spot_removals");
+        if let Some(raw) = &mut spot_removals_raw {
+            // R5-DUST-23-FOLLOWUP: a valid typed-only generative operation
+            // written before explicit IDs receives a deterministic ID while
+            // loading. The normalized raw value is also retained in extras so
+            // GUI/CLI selection and status use the same identity.
+            spot::normalize_spot_removal_array(raw);
+        }
         let spot_removals = spot_removals_raw
             .clone()
             .map(serde_json::from_value)
@@ -4265,6 +4288,7 @@ fn validate_spot_removal(spot: &SpotRemoval) -> Result<(), SidecarError> {
     if spot.version != SPOT_REMOVAL_VERSION {
         return invalid("unsupported spot_removal version");
     }
+    validate_name("spot_removal id", &spot.id)?;
     match spot.mode {
         SpotRemovalMode::Heuristic => {
             if spot.artifact.is_some() {
@@ -4282,7 +4306,7 @@ fn validate_spot_removal(spot: &SpotRemoval) -> Result<(), SidecarError> {
 
 /// SPOT-SCHEMA-GEOMETRY: validates the geometry-carrying
 /// `extras["spot_removals"]` view of a recipe (heal parameters live here; the
-/// typed `EditRecipe::spot_removals` holds only version/mode/artifact and is
+/// typed `EditRecipe::spot_removals` holds only id/version/mode/artifact and is
 /// checked by `validate_spot_removal`). Runs alongside the typed check from
 /// `validate_adjustments`, so both views stay consistent.
 ///
@@ -4310,6 +4334,9 @@ fn validate_spot_removal_extras(recipe: &EditRecipe) -> Result<(), SidecarError>
         .ok_or_else(|| SidecarError::Invalid("extras `spot_removals` must be an array".into()))?;
     for entry in entries {
         validate_spot_removal_extra_entry(entry)?;
+    }
+    if let Some(id) = spot::duplicate_spot_id(entries) {
+        return invalid(format!("duplicate spot_removal id `{id}`"));
     }
     Ok(())
 }
@@ -4397,6 +4424,10 @@ fn validate_spot_removal_extra_entry(entry: &Value) -> Result<(), SidecarError> 
             }
         }
         "generative" => {
+            let id = object.get("id").and_then(Value::as_str).unwrap_or_default();
+            if id.trim().is_empty() {
+                return invalid("generative spot_removal requires a non-empty `id`");
+            }
             if let Some(link_value) = object.get("artifact") {
                 if !link_value.is_null() {
                     let link: GenerativeArtifactRef = serde_json::from_value(link_value.clone())
@@ -4749,8 +4780,12 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         }
         validate_source_action_ref(&action.artifact)?;
     }
+    let mut spot_ids = BTreeSet::new();
     for spot in &a.spot_removals {
         validate_spot_removal(spot)?;
+        if !spot_ids.insert(spot.id.as_str()) {
+            return invalid(format!("duplicate spot_removal id `{}`", spot.id));
+        }
     }
     validate_spot_removal_extras(a)?;
     validate_spot_g04_extras(a)?;

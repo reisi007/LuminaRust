@@ -377,8 +377,16 @@ fn g04_spot_panel_paints_g04_controls() {
     // The Dust Removal panel exposes every G-04 control headless (no GPU):
     // overlay modes, visualize slider, detect + apply, all four
     // distraction switches, seed/variant regeneration, clear.
+    // R5-DUST-23-FOLLOWUP: the regenerate target is the selected removal,
+    // so a generative entry is seeded + selected first (otherwise the
+    // button stays hidden behind "Target: no spot selected").
     let mut app = new_app();
     app.load_bytes(dark_block_png(), "dark.png").unwrap();
+    app.recipe.extras.insert(
+        "spot_removals".into(),
+        serde_json::json!([{"id": "g1", "version": 1, "mode": "generative", "prompt": "x"}]),
+    );
+    app.select_spot("g1").unwrap();
     let ctx = egui::Context::default();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
     let mut t = 0.0;

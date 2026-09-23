@@ -1658,11 +1658,14 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Verdrahtung (`bind_test_lensfun_corrector` → Map-Bau → Present-Gate) und der
   headless Badge-Abwesenheitstest sind Teil desselben Tasks in `lumina-gui`.
 - **GUI-GPU-AUDIT-17 (Release 1.0, verifiziert-offen 2026-09-18):** Der
-  automatisierte headless Routing-Audit fährt alle 101 `GuiAction`s mit echtem
-  Metal-Kontext und prüft `gpu_routing_fallback_badge() == None` außer den hier
-  und in `feature/platform/cli-gui-wasm.md` § GUI-GPU-AUDIT-17 gelisteten
+  automatisierte headless Routing-Audit fährt alle 101 `GuiAction`s des damaligen
+  Aktionsstandes mit echtem Metal-Kontext und prüft
+  `gpu_routing_fallback_badge() == None` außer den hier und in
+  `feature/platform/cli-gui-wasm.md` § GUI-GPU-AUDIT-17 gelisteten
   dokumentierten CPU-Ausnahmen (default content crop, dimension-changing
-  output, generative_edit, denoise_ai not GPU-wired). Der frühere
+  output, generative_edit, denoise_ai not GPU-wired). Der spätere
+  adapter-unabhängige Audit umfasst inzwischen 105 Aktionen; ein aktueller
+  105-Aktionen-Metal-Nachweis ist separat offen. Der frühere
   Lensfun-Corrector-Eintrag ist mit dem GUI-Wiring entfallen: seit
   **GPU-LENSFUN-PARITY-1 GUI-Wiring (2026-09-18)** bindet der Present-Pfad die
   `LensfunMap` des strikt gematchten Correctors vor `render_to_vram`
@@ -1670,12 +1673,13 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Core-Guards `lensfun_map.default_content_crop` (Distortion ohne expliziten
   Crop) und `lensfun_map.dimensions` (Map passt nicht zum Frame), als Badge über
   `classify_vram_refusal` benannt. Headless-Belege:
-  `gpu_audit_lensfun_corrector_presents_gpu_without_badge` (Metal; kein Badge,
-  Negativ-Distortion-Fall laut) und die gedrehte `kittest_parity`-Zelle
-  `lensfun_corrector_cell_presents_gpu_without_badge` (CPU↔GPU `maxAbsDiff=0`).
-  Der adapter-unabhängige Vollständigkeitstest läuft in `cargo test -p lumina-gui`;
-  der Metal-Lauf ist `cargo test -p lumina-gui --lib gpu_audit -- --ignored`
-  (lokales Timing report-only, kein Gate).
+  `gpu_audit_lensfun_corrector_presents_gpu_without_badge` (damaliger
+  Metal-Lauf; kein Badge, Negativ-Distortion-Fall laut) und die gedrehte
+  `kittest_parity`-Zelle `lensfun_corrector_cell_presents_gpu_without_badge`
+  (CPU↔GPU `maxAbsDiff=0`). Der adapter-unabhängige Vollständigkeitstest läuft
+  in `cargo test -p lumina-gui`; der Metal-Lauf ist
+  `cargo test -p lumina-gui --lib gpu_audit -- --ignored` (lokales Timing
+  report-only, kein Gate).
 - **F7 CLI-Wiring (2026-09-18, verifiziert BESTANDEN):** Der CLI-GPU-Renderpfad
   bindet die `LensfunMap` analog (`crates/lumina-cli/src/lensfun_gpu.rs`;
   `main.rs` netto ±0); CPU-Routen nur bei Build-/Bind-Fehler und Distortion

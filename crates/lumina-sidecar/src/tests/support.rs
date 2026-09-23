@@ -159,7 +159,12 @@ pub(crate) fn spot_removal(
     mode: SpotRemovalMode,
     artifact: Option<GenerativeArtifactRef>,
 ) -> SpotRemoval {
+    let mode_id = match mode {
+        SpotRemovalMode::Heuristic => "heuristic",
+        SpotRemovalMode::Generative => "generative",
+    };
     SpotRemoval {
+        id: format!("spot-test-{mode_id}"),
         version: SPOT_REMOVAL_VERSION,
         mode,
         artifact,

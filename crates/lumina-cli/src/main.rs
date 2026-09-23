@@ -66,23 +66,23 @@ use lumina_sidecar::{
     generative_artifact_status, is_metadata_field, load_meta_preset_file, load_sidecar,
     now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path, save_denoise_rgb,
     save_generative_canvas, save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir,
-    sidecar_path_for, validate_metadata_field_value, validate_smart_collection_def, AiSelect,
-    AiSelectKind, AnalysisFingerprint, ArtifactStatus, AspectPreset, BatchOp, BokehShape,
-    CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem, Crop, CurveChannels,
-    CurvePoint, Curves, DecodeFingerprint, DenoiseAi, DenoiseArtifactKind, DenoiseArtifactRef,
-    DenoiseModelIdentity, DenoiseRgbArtifact as SidecarDenoiseRgbArtifact, DepthArtifactRef,
-    EditRecipe, ExportRecord, FaceAnalysis, FaceArtifactStatus, FocusRect, GenerativeArtifactRef,
-    GenerativeArtifactStatus, GenerativeCanvas,
-    GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit, Geometry,
-    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, LensCorrection,
-    MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
-    MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective, PointColor,
-    PointColorEntry, Preprocessing, Preset, PromptTransform, RecordSpec, RedEyeCorrection,
-    RedEyeRegion, Resolution, SidecarDocument, SmartCollectionDef, SourceActionArtifactRef,
-    SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity, SpotDistraction,
+    sidecar_path_for, spot_removal_entries, validate_metadata_field_value,
+    validate_smart_collection_def, AiSelect, AiSelectKind, AnalysisFingerprint, ArtifactStatus,
+    AspectPreset, BatchOp, BokehShape, CollectionMembership, ColorGrading, ColorGradingRange,
+    CoordinateSystem, Crop, CurveChannels, CurvePoint, Curves, DecodeFingerprint, DenoiseAi,
+    DenoiseArtifactKind, DenoiseArtifactRef, DenoiseModelIdentity,
+    DenoiseRgbArtifact as SidecarDenoiseRgbArtifact, DepthArtifactRef, EditRecipe, ExportRecord,
+    FaceAnalysis, FaceArtifactStatus, FocusRect, GenerativeArtifactRef, GenerativeArtifactStatus,
+    GenerativeCanvas, GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit,
+    Geometry, GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur,
+    LensCorrection, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference,
+    MaskStatus, MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective,
+    PointColor, PointColorEntry, Preprocessing, Preset, PromptTransform, RecordSpec,
+    RedEyeCorrection, RedEyeRegion, Resolution, SidecarDocument, SmartCollectionDef,
+    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity,
     Upright, DENOISE_AI_VERSION, MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS,
     MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, RED_EYE_MAX_REGIONS,
-    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION, SPOT_REMOVAL_VERSION,
+    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION,
 };
 #[cfg(feature = "onnx-rt")]
 use lumina_sidecar::{save_face_embeddings, FaceEmbeddingArtifact as SidecarFaceEmbeddingArtifact};
@@ -116,6 +116,13 @@ mod matrix;
 // GPU-LENSFUN-PARITY-1 (F7): CLI-side strict-corrector map bind (ratchet §8).
 #[cfg(feature = "gpu")]
 mod lensfun_gpu;
+// R5-DUST-23-FOLLOWUP: spot-removal mutation ops (add/update/remove-single/
+// regenerate-variant/distraction-spec) — extracted for the file-size ratchet.
+mod spot_ops;
+use spot_ops::{
+    display_spot_entries_for_input, parse_distraction_spec, reject_spot_remove_conflicts,
+    spot_add_heuristic, spot_regenerate_variant, spot_remove_entry, spot_update_params,
+};
 
 /// Minimal stderr logger installed once so the backend-selection `info!` is
 /// actually visible. It only installs when no other logger has been registered
@@ -1275,6 +1282,28 @@ struct SpotArgs {
     /// Remove all heuristic/generative spot entries of the copy.
     #[arg(long)]
     clear: bool,
+    /// Select one spot by id for the `--set-*` updates below (requires at
+    /// least one `--set-*`; heuristic entries only).
+    #[arg(long, value_name = "ID")]
+    spot_id: Option<String>,
+    /// Update the selected heuristic spot's radius (`(0,512]`).
+    #[arg(long, value_name = "(0,512]")]
+    set_radius: Option<f32>,
+    /// Update the selected heuristic spot's feather (`0..=1`).
+    #[arg(long, value_name = "0..=1")]
+    set_feather: Option<f32>,
+    /// Update the selected heuristic spot's opacity (`0..=1`).
+    #[arg(long, value_name = "0..=1")]
+    set_opacity: Option<f32>,
+    /// Update the selected heuristic spot's source-offset x value (`-1..=1`).
+    #[arg(long, value_name = "-1..=1")]
+    set_offset_dx: Option<f32>,
+    /// Update the selected heuristic spot's source-offset y value (`-1..=1`).
+    #[arg(long, value_name = "-1..=1")]
+    set_offset_dy: Option<f32>,
+    /// Remove one spot entry by id (loud on unknown ids).
+    #[arg(long, value_name = "ID")]
+    remove_spot: Option<String>,
     /// Set the visualize threshold (`0..=1`).
     #[arg(long, value_name = "0..=1")]
     set_visualize_threshold: Option<f32>,
@@ -1301,8 +1330,8 @@ struct SpotArgs {
     /// Detection cap (`1..=4096`, default 32).
     #[arg(long, value_name = "1..=4096")]
     detect_max: Option<usize>,
-    /// Regenerate a generative spot variant: sets
-    /// `seed = variant_seed(base, variant)` on `--spot-id`.
+    /// Regenerate the generative spot identified by `<ID>`: sets
+    /// `seed = variant_seed(base, variant)`.
     #[arg(long, value_name = "ID")]
     regenerate_variant: Option<String>,
     /// Variant index for `--regenerate-variant` (0 keeps the base seed).
@@ -5173,6 +5202,7 @@ fn apply_previous_to_target(
 /// (`CliError::Message`, exit 1) and `--detect-objects` never applies
 /// silently (only `--detect-apply` persists candidates).
 fn spot(args: SpotArgs) -> Result<(), CliError> {
+    reject_spot_remove_conflicts(&args)?;
     if args.regenerate_variant.is_some() && (args.variant.is_none() || args.seed.is_none()) {
         return Err(CliError::Message(
             "--regenerate-variant requires --variant <N> and --seed <N>".into(),
@@ -5190,11 +5220,35 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
     }
     // `--clear` removes every spot after the adders ran, so combining it with
     // an adder is a contradiction (the requested edit would be discarded).
-    if args.clear && (args.add_heuristic || args.detect_apply || args.regenerate_variant.is_some())
+    // R5-DUST-23-FOLLOWUP: the single-spot editor (`--spot-id` + `--set-*`,
+    // `--remove-spot`) contradicts `--clear` the same way.
+    if args.clear
+        && (args.add_heuristic
+            || args.detect_apply
+            || args.regenerate_variant.is_some()
+            || args.remove_spot.is_some()
+            || args.spot_id.is_some())
     {
         return Err(CliError::Message(
-            "--clear removes every spot and contradicts --add-heuristic/--detect-apply/--regenerate-variant"
+            "--clear removes every spot and contradicts --add-heuristic/--detect-apply/--regenerate-variant/--spot-id/--remove-spot"
                 .into(),
+        ));
+    }
+    // R5-DUST-23-FOLLOWUP: `--set-*` needs `--spot-id` (and vice versa) —
+    // either alone would be a silent no-op.
+    let wants_update = args.set_radius.is_some()
+        || args.set_feather.is_some()
+        || args.set_opacity.is_some()
+        || args.set_offset_dx.is_some()
+        || args.set_offset_dy.is_some();
+    if wants_update && args.spot_id.is_none() {
+        return Err(CliError::Message(
+            "--set-radius/--set-feather/--set-opacity/--set-offset-dx/--set-offset-dy require --spot-id <ID>".into(),
+        ));
+    }
+    if args.spot_id.is_some() && !wants_update {
+        return Err(CliError::Message(
+            "--spot-id requires at least one --set-radius/--set-feather/--set-opacity/--set-offset-dx/--set-offset-dy".into(),
         ));
     }
     let wants_mutation = args.add_heuristic
@@ -5203,7 +5257,9 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
         || args.clear_visualize
         || args.set_distraction.is_some()
         || args.detect_apply
-        || args.regenerate_variant.is_some();
+        || args.regenerate_variant.is_some()
+        || args.spot_id.is_some()
+        || args.remove_spot.is_some();
     // Detection needs the decoded frame even in list-only mode.
     let needs_frame = args.detect_objects || args.add_heuristic || args.detect_apply;
     let frame = if needs_frame {
@@ -5331,6 +5387,27 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
         info!("spot: regenerated variant {variant} (seed {derived}) for `{spot_id}` on copy `{copy_id}`");
         actions.push(format!("regenerate-variant:{spot_id}:{variant}"));
     }
+    // R5-DUST-23-FOLLOWUP: per-spot param edits (heuristic only, loud
+    // otherwise) and single-spot removal (loud on unknown ids).
+    if let Some(spot_id) = args.spot_id.as_deref() {
+        spot_update_params(
+            &mut document,
+            &copy_id,
+            spot_id,
+            args.set_radius,
+            args.set_feather,
+            args.set_opacity,
+            args.set_offset_dx,
+            args.set_offset_dy,
+        )?;
+        info!("spot: updated `{spot_id}` on copy `{copy_id}`");
+        actions.push(format!("update-spot:{spot_id}"));
+    }
+    if let Some(spot_id) = args.remove_spot.as_deref() {
+        spot_remove_entry(&mut document, &copy_id, spot_id)?;
+        info!("spot: removed `{spot_id}` on copy `{copy_id}`");
+        actions.push(format!("remove-spot:{spot_id}"));
+    }
     if args.clear {
         let copy = spot_copy_mut(&mut document, &copy_id)?;
         copy.recipe.extras.remove("spot_removals");
@@ -5347,171 +5424,14 @@ fn spot(args: SpotArgs) -> Result<(), CliError> {
     spot_list(&args, &document, &copy_id, &detected, &actions)
 }
 
+/// R5-DUST-23-FOLLOWUP: spot mutation ops live in `spot_ops` (ratchet);
+///
 /// Mutable access to one virtual copy's recipe owner (loud on unknown ids).
 fn spot_copy_mut<'a>(
     document: &'a mut SidecarDocument,
     copy_id: &str,
 ) -> Result<&'a mut lumina_sidecar::VirtualCopy, CliError> {
     mask_copy_mut(document, copy_id)
-}
-
-/// Appends one heuristic spot entry to the extras view (validated loudly on
-/// save; the typed mirror shadow is derived by the sidecar serde layer).
-#[allow(clippy::too_many_arguments)]
-fn spot_add_heuristic(
-    document: &mut SidecarDocument,
-    copy_id: &str,
-    center_x: f32,
-    center_y: f32,
-    radius: f32,
-    feather: f32,
-    offset_dx: f32,
-    offset_dy: f32,
-    opacity: f32,
-) -> Result<(), CliError> {
-    for (name, value, lo, hi) in [
-        ("center_x", center_x, 0.0, 1.0),
-        ("center_y", center_y, 0.0, 1.0),
-        ("radius", radius, f32::MIN_POSITIVE, 512.0),
-        ("feather", feather, 0.0, 1.0),
-        ("offset_dx", offset_dx, -1.0, 1.0),
-        ("offset_dy", offset_dy, -1.0, 1.0),
-        ("opacity", opacity, 0.0, 1.0),
-    ] {
-        if !value.is_finite() || value < lo || value > hi {
-            return Err(CliError::Message(format!(
-                "invalid heuristic spot `{name}`: value {value} outside allowed range {lo}..={hi}"
-            )));
-        }
-    }
-    if radius <= 0.0 {
-        return Err(CliError::Message(
-            "invalid heuristic spot `radius`: must be > 0".into(),
-        ));
-    }
-    let id = format!(
-        "spot-{}",
-        blake3::hash(format!("{center_x:.6},{center_y:.6},{radius:.2}").as_bytes()).to_hex()
-    );
-    let entry = serde_json::json!({
-        "id": id,
-        "version": SPOT_REMOVAL_VERSION,
-        "mode": "heuristic",
-        "center_x": center_x,
-        "center_y": center_y,
-        "radius": radius,
-        "feather": feather,
-        "offset_dx": offset_dx,
-        "offset_dy": offset_dy,
-        "opacity": opacity,
-        "status": "valid",
-    });
-    let copy = spot_copy_mut(document, copy_id)?;
-    let mut spots: Vec<serde_json::Value> = copy
-        .recipe
-        .extras
-        .get("spot_removals")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    spots.push(entry);
-    copy.recipe.extras.insert(
-        "spot_removals".into(),
-        serde_json::to_value(spots).map_err(|error| CliError::Message(error.to_string()))?,
-    );
-    Ok(())
-}
-
-/// Parses `--set-distraction k=v,...` (keys `reflections|people|dust|auto`,
-/// values `true|false`) as deltas merged into `current` (G04-FOLLOWUP-1
-/// merge decision). Unknown keys or values fail loudly.
-fn parse_distraction_spec(
-    spec: &str,
-    mut setting: SpotDistraction,
-) -> Result<SpotDistraction, CliError> {
-    if spec.trim().is_empty() {
-        return Err(CliError::Message(
-            "invalid distraction spec: expected `k=v,...` with keys reflections|people|dust|auto"
-                .into(),
-        ));
-    }
-    for part in spec.split(',') {
-        let (key, value) = part.split_once('=').ok_or_else(|| {
-            CliError::Message(format!(
-                "invalid distraction assignment `{part}`: expected `k=v`"
-            ))
-        })?;
-        let enabled = match value.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => true,
-            "false" | "0" | "no" => false,
-            _ => {
-                return Err(CliError::Message(format!(
-                    "invalid distraction value `{value}`: expected true|false"
-                )));
-            }
-        };
-        match key.trim().to_ascii_lowercase().as_str() {
-            "reflections" => setting.reflections = enabled,
-            "people" => setting.people = enabled,
-            "dust" => setting.dust = enabled,
-            "auto" | "auto_mode" => setting.auto_mode = enabled,
-            _ => {
-                return Err(CliError::Message(format!(
-                    "unknown distraction key `{key}`: expected reflections|people|dust|auto"
-                )));
-            }
-        }
-    }
-    Ok(setting)
-}
-
-/// Sets `seed = derived` (+ `variant`, preserving `prompt`) on a generative
-/// extras entry. Heuristic entries and unknown ids fail loudly — a variant
-/// never silently retargets another spot.
-fn spot_regenerate_variant(
-    document: &mut SidecarDocument,
-    copy_id: &str,
-    spot_id: &str,
-    base: u64,
-    variant: u64,
-    derived: u64,
-) -> Result<(), CliError> {
-    let copy = spot_copy_mut(document, copy_id)?;
-    let mut spots: Vec<serde_json::Value> = copy
-        .recipe
-        .extras
-        .get("spot_removals")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let mut found = false;
-    for entry in &mut spots {
-        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-        if id != spot_id {
-            continue;
-        }
-        let mode = entry
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("heuristic");
-        if mode != "generative" {
-            return Err(CliError::Message(format!(
-                "spot `{spot_id}` is not generative (mode `{mode}`); variants apply to generative spots only"
-            )));
-        }
-        entry["seed"] = serde_json::json!(derived);
-        entry["variant"] = serde_json::json!(variant);
-        entry["base_seed"] = serde_json::json!(base);
-        found = true;
-    }
-    if !found {
-        return Err(CliError::Message(format!(
-            "unknown spot `{spot_id}` on copy `{copy_id}`"
-        )));
-    }
-    copy.recipe.extras.insert(
-        "spot_removals".into(),
-        serde_json::to_value(spots).map_err(|error| CliError::Message(error.to_string()))?,
-    );
-    Ok(())
 }
 
 /// Reports the copy's spots, G-04 settings and (when requested) detection
@@ -5528,12 +5448,10 @@ fn spot_list(
         .iter()
         .find(|copy| copy.id == copy_id)
         .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
-    let spots: Vec<serde_json::Value> = copy
-        .recipe
-        .extras
-        .get("spot_removals")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let spots = spot_removal_entries(&copy.recipe);
+    // Preserve every entry (including null/missing references) and annotate
+    // status from the same decision layer used by the GUI.
+    let display_spots = display_spot_entries_for_input(&spots, &args.input);
     let distraction = copy.recipe.spot_distraction();
     // reflections/people without a model are visibly NeedsModel (F-078 gate,
     // heuristic stage 1 covers dust only) — surfaced in both formats.
@@ -5551,7 +5469,7 @@ fn spot_list(
                 "command": "spot",
                 "input": args.input,
                 "copy": copy_id,
-                "spots": spots,
+                "spots": display_spots,
                 "visualize_threshold": copy.recipe.spot_visualize_threshold(),
                 "distraction": distraction,
                 "distraction_needs_model": needs_model,
@@ -5566,7 +5484,7 @@ fn spot_list(
     } else {
         println!("copy: {} [{}]", copy.name, copy.id);
         println!("  spots: {}", spots.len());
-        for entry in &spots {
+        for entry in &display_spots {
             let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("?");
             let mode = entry
                 .get("mode")

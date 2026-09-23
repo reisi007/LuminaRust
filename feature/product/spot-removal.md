@@ -349,6 +349,113 @@ laut — kein stiller Fallback, keine Original-Mutation, keine absoluten Pfade.
   (unverändert); der Stub (`lumina-onnx::heal_variant`) nutzt denselben
   Seed-Pfad.
 
+## R5-DUST-23-FOLLOWUP (Release 1.0, normativ)
+
+Normative Dust-Erweiterung gegenüber R5-DUST-23 (User-Order 2026-09-20):
+Anzeige nur bei Auswahl (Ausgewähltes wie Maske), Entfernungen bearbeitbar
+inkl. Neu-Generierung, Typ Generate/KI-generiert (Clone nie verwendet).
+Alle vier Bausteine sind additiv, deterministisch und laut — kein stiller
+Fallback, keine Original-Mutation, keine absoluten Pfade. Rezept-Drahtwerte
+(`mode = "heuristic"`/`"generative"`, Schema-v2 `SpotRemoval`) bleiben
+unverändert (kein Schema-Bump, keine Migration).
+
+### Spot-Auswahl (Session, wie Maske)
+
+- Session-State `selected_spot_id` (`Option`, display-only wie
+  `selected_mask_id`, nie Rezept/Sidecar): Klick auf einen Spot-Pin oder auf
+  eine Listen-Zeile wählt die Entfernung aus (`select_spot`, `info!`-Log,
+  eigene `GuiAction` `select_spot`); unbekannte ID scheitert laut ohne
+  Zustandsänderung.
+- Pins: der ausgewählte Pin malt accent-gefüllt (`visible_edit_pins`
+  markiert `selected`, analog Masken-Pins); alle übrigen Pins bleiben
+  sichtbar (G-11 `pins_visible`-Gate unverändert).
+- **Anzeige nur bei Auswahl:** Typ/Status/Parameter-Editor, Einzel-Löschen
+  und Regenerate-Ziel rendern ausschließlich für die ausgewählte Entfernung.
+  Die Liste zeigt alle Entfernungen als wählbare Zeilen (ID + Typ + Status);
+  ohne Auswahl ist kein Detail sichtbar. Deutung: „Liste nur mit
+  ausgewählter Entfernung" (Block C Punkt 8) heißt Liste-mit-Auswahl plus
+  Detail-nur-bei-Auswahl — kein Spot-Detail ohne explizite Auswahl.
+- Pointer: ein Klick nahe (Bildschirmraum, 12-px-Toleranz) eines bestehenden
+  Spot-Zentrums wählt ihn aus statt einen neuen Dab zu setzen; jeder andere
+  Klick dabbt wie bisher. Ein frisch gesetzter Dab wählt sich selbst aus.
+- Auswahl resettet auf Kopie-/Bildwechsel (kein Leck über
+  `select_virtual_copy`/Open-Pfade); ein Reload stellt Entfernungen, aber
+  nie die Auswahl wieder her (Session-State).
+
+### Entfernungen bearbeitbar inkl. Neu-Generierung
+
+- `update_spot_heal(id, radius/feather/opacity/offset)` (eigene `GuiAction`
+  `update_spot`): validiert wie `commit_spot_heal` (`radius 1..=512`,
+  `feather`/`opacity 0..=1`, `offset -1..=1`, endlich), erhält
+  ID/Modus/Status, schreibt Rezept-dirty + Sidecar-Save + Render
+  (`info!`-Log). Die Drahtfelder `offset_dx`/`offset_dy` bleiben unverändert;
+  `source-offset` ist nur die technische Bezeichnung des Heuristik-Parameters,
+  kein sichtbarer `Clone`-Modus. Unbekannte oder doppelte IDs scheitern laut;
+  Geometrie-Edits an generativen Einträgen scheitern laut (generative
+  Einträge tragen keine heuristische Geometrie — ein stilles Umschreiben wäre
+  Datenverlust).
+- `remove_spot(id)` (eigene `GuiAction` `remove_spot`): löscht genau eine
+  Entfernung (letzte Entfernung entfernt den Schlüssel), schreibt
+  Sidecar-Save + Render (`info!`-Log), räumt die Auswahl bei Treffer ab;
+  unbekannte ID scheitert laut. `clear_spot_heals` bleibt für „alle".
+- CLI-Parität: `--spot-id ID` + `--set-radius/--set-feather/--set-opacity/`
+  `--set-offset-dx/--set-offset-dy` (heuristisch-only, laut sonst),
+  `--remove-spot ID` (laut bei unbekannter ID); Widersprüche
+  (`--remove-spot` + `--clear`/`--add-heuristic`/`--detect-apply`/
+  Parameter-Update/Regeneration, `--set-*` ohne `--spot-id`, `--spot-id` ohne
+  `--set-*`) sind laute Fehler wie Bestand (`CliError::Message`, kein stilles
+  Verwerfen). Doppelte Spot-IDs sind ungültig; jede Zieloperation verlangt
+  genau einen Treffer.
+- Neu-Generierung (`spot --regenerate-variant` / `regenerate_spot_variant`,
+  generativ-only, `seed = variant_seed(base, variant)`) bleibt bestehen und
+  zielt in der GUI per Default auf die ausgewählte Entfernung; heuristische
+  Ziele und unbekannte IDs scheitern laut — eine Variante fällt nie still
+  auf Clone/Heuristik zurück.
+
+### Typ Generate/KI-generiert (Clone nie verwendet)
+
+- Typ-Labels (Anzeige only, Drahtwerte unverändert): heuristisch → `Heal`
+  (Quick), generativ → `Generate (AI)` / `KI-generiert`. Ein Modus oder
+  Label `Clone` wird nirgends angeboten.
+- **Clone nie verwendet:** generative Einträge werden nie über den
+  Clone-/Heal-Pfad gerendert (`lumina-core` lehnt `mode = "generative"` im
+  Render laut ab statt zu heilen oder zu ignorieren); Regenerate auf
+  heuristischen Einträgen scheitert laut statt heuristisch zu
+  regenerieren; der deterministische `heal_variant`-Stub (`lumina-onnx`,
+  Mittelwert-Fill + Seed-Offset) ist Test-only und kein Clone-Pfad
+  (dokumentiert, kein Modell-Ersatz).
+- Sichtbarkeit: ein generativer Eintrag ohne Artefakt meldet Anzeige-Status
+  `missing` (Liste + Detail, nie gerendert); fehlende/veraltete/
+  fehlerhafte generative Artefakte bleiben sichtbar (`missing`/`stale`/
+  `corrupt`), kein stiller Fallback auf Quick-Heal oder auf „ohne Heilung".
+  Der Status wird aus der tatsächlichen Referenz ermittelt: `artifact: null`
+  oder fehlender Pfad ist `missing`, eine abweichende Prüfsumme/ein defekter
+  Container ist `corrupt`, eine nicht mehr passende Identität ist `stale`.
+  GUI und CLI verwenden dafür dieselbe Sidecar-Entscheidung; ein Eintrag wird
+  nie wegen eines fehlenden/ungültigen Artefakts stillschweigend aus der
+  Liste entfernt. Jede gültige typed-only generative `SpotRemoval`-Operation
+  besitzt eine deterministische `id` (fehlende Alt-ID wird beim Laden
+  materialisiert und serialisiert), damit Auswahl/Regeneration niemals `?`
+  anzeigen.
+
+### Testanforderungen (FOLLOWUP)
+
+- Headless GUI (`cargo test -p lumina-gui`): Auswahl (Pin-/Listen-Klick,
+  Detail-nur-bei-Auswahl, Reset bei Kopiewechsel, unbekannte ID laut),
+  Update (Wert→Render→Reload, Validierung laut, Originalbytes unverändert),
+  Einzel-Löschen (genau ein Eintrag weg, Auswahl abgeräumt, Reload),
+  No-Clone (generativer Eintrag ohne Artefakt rendert laut-fehlernd statt
+  geheilt; Regenerate auf heuristisch scheitert laut), Typ/Status-Labels.
+- CLI (`cargo test -p lumina-cli --test ... spot`): `--set-*`-Roundtrip,
+  `--remove-spot` einzeln + Reload, laute Nonzero-Fehler und unveränderte
+  Sidecars für Remove+Add/Detect-Apply/Update/Regenerate/Clear, unbekannte
+  oder doppelte IDs, `--set-*` ohne `--spot-id`; Status-Listen behalten
+  missing/null-Einträge und klassifizieren Referenzfehler sichtbar.
+- Golden: kittest `develop_spot_selected` (Detail der ausgewählten
+  Entfernung); bestehende `develop_spot_tool_options[_expanded]`-Goldens
+  nur für die beabsichtigte Panel-Änderung rebaselined (keine geschwächten
+  Toleranzen, kein `UPDATE_SNAPSHOTS`-Blind-Bless ohne Diff-Review).
+
 ## Offene Punkte und Abhängigkeiten
 
 - **Abhängigkeiten:** F-042 (Source-Actions, `lumina-onnx` existiert), F-082/F-083 (SAM-Adapter existiert; Inpaint-Modelle `pending-integration`), GUI-STAGE-1/GUI-WGPU-PRESENT-1; `lumina-gpu`/Present-Pfad berührt (Staub-Heal auf GPU optional, Post-MVP).

@@ -588,7 +588,6 @@ fn validate_spot_modes(recipe: &EditRecipe) -> Result<(), GpuError> {
                             "offset_dy",
                             "source_offset",
                             "opacity",
-                            "id",
                             "status",
                         ]
                         .iter()
@@ -721,6 +720,7 @@ mod tests {
     fn typed_spot_without_extras_is_rejected() {
         let recipe = EditRecipe {
             spot_removals: vec![lumina_sidecar::SpotRemoval {
+                id: "spot-gpu-heuristic".into(),
                 version: 1,
                 mode: lumina_sidecar::SpotRemovalMode::Heuristic,
                 artifact: None,
@@ -729,11 +729,11 @@ mod tests {
         };
         assert!(validate_gpu_recipe(&recipe).is_err());
     }
-
     #[test]
     fn generative_mode_spot_is_rejected() {
         let recipe = EditRecipe {
             spot_removals: vec![lumina_sidecar::SpotRemoval {
+                id: "spot-gpu-generative".into(),
                 version: 1,
                 mode: lumina_sidecar::SpotRemovalMode::Generative,
                 artifact: None,

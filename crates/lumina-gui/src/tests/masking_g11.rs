@@ -80,7 +80,9 @@ fn g11_pin_visibility_modes_cover_masks_and_spots() {
     assert_eq!(pins[1].label, "2");
     assert!((pins[1].pos.0 - 0.25).abs() < 1e-6);
     assert!((pins[1].pos.1 - 0.5).abs() < 1e-6);
-    assert!(!pins[1].selected);
+    // R5-DUST-23-FOLLOWUP: a fresh dab selects itself, so the spot pin
+    // paints selected (like the selected mask pin above).
+    assert!(pins[1].selected);
     // Never: no pins even with an armed tool.
     app.set_pin_visibility(PinVisibility::Never);
     app.set_mask_tool(MaskTool::Brush);
