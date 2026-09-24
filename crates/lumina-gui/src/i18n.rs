@@ -43,7 +43,6 @@ pub enum Str {
     ChooseFile,
     Copies,
     Sidecar,
-
     // Panels / sections
     Basic,
     ToneCurve,
@@ -82,7 +81,6 @@ pub enum Str {
     LibrarySortDate,
     LibrarySortCustom,
     LibrarySortReorderedPattern,
-
     // Basic section
     WhiteBalance,
     Temperature,
@@ -94,7 +92,6 @@ pub enum Str {
     Whites,
     Blacks,
     Auto,
-
     // Tone curve (parametric region sliders)
     CurveRegions,
     ToneCurveShadows,
@@ -113,13 +110,11 @@ pub enum Str {
     ToneCurvePointInput,
     ToneCurvePointOutput,
     ToneCurveInvalidPattern,
-
     // Color — HSL mixer
     HslMixer,
     Hue,
     Saturation,
     Luminance,
-
     // Color — HSL channel names
     HslRed,
     HslOrange,
@@ -129,7 +124,6 @@ pub enum Str {
     HslBlue,
     HslViolet,
     HslMagenta,
-
     // Color — Color Grading
     ColorGrading,
     GradingShadows,
@@ -148,14 +142,12 @@ pub enum Str {
     PointColorLumShift,
     PointColorFull,
     PointColorRangePattern,
-
     // Color — Presence (F-094) and Dynamics/Saturation (F-092)
     Presence,
     Texture,
     Clarity,
     Dehaze,
     Vibrance,
-
     // Effects
     Vignette,
     Amount,
@@ -267,6 +259,8 @@ pub enum Str {
     MaskToolRadial,
     MaskToolNone,
     BrushSize,
+    BrushSoftness,
+    BrushFlow,
     BrushEraser,
     DrawMaskHint,
     Blur,
@@ -331,10 +325,19 @@ pub enum Str {
     MaskStaleRecalc,
     MaskCurrentNoRecalc,
     ExplicitRecalcRequested,
+    BrushRadiusInvalid,
+    BrushSoftnessInvalid,
+    BrushFlowInvalid,
+    BrushMarkInvalid,
+    BrushStrokeEmpty,
+    MaskOrderInvalid,
+    DuplicateSourceOnly,
+    MaskResolutionMismatchPattern,
+    MaskLivePlaneMissing,
+    MaskLivePlaneRebuildPattern,
     IdleQueueFull,
     RecalcRequested,
-    /// GUI-GEN-GRANULAR-10 (F-100): collective regeneration action and its
-    /// outcomes.
+    /// GUI-GEN-GRANULAR-10 (F-100): collective regeneration action and its outcomes.
     RegenerateStale,
     NothingStale,
     RegeneratedStale,
@@ -545,6 +548,12 @@ pub enum Str {
     // LRPAR-G03-MASKGROUP-03: group panel (Copy vs. Duplicate, collapsible
     // groups, member reorder, shared offsets, loud deletion).
     MaskGroupsLabel,
+    MaskPin,
+    MaskVisible,
+    MaskHidden,
+    RenameMask,
+    MoveMaskUp,
+    MoveMaskDown,
     GroupMembersLabel,
     GroupSelected,
     DuplicateGroup,
@@ -1031,25 +1040,6 @@ impl Str {
             Str::RedEyeDetect => "Detect pupils",
             Str::RedEyeApplyDetected => "Apply detected",
 
-            Str::NewMask => "New Mask",
-            Str::SelectMask => "Select Mask",
-            Str::Invert => "Invert",
-            Str::OfferRecalculation => "Recalculation",
-            Str::LocalAdjustments => "Local adjustments",
-
-            Str::MaskTool => "Tool",
-            Str::MaskToolBrush => "Brush",
-            Str::MaskToolGradient => "Linear Gradient",
-            Str::MaskToolRadial => "Radial Gradient",
-            Str::MaskToolNone => "Off",
-            Str::BrushSize => "Brush Size",
-            Str::BrushEraser => "Eraser",
-            Str::DrawMaskHint => {
-                "Drag on the preview to draw the mask; the overlay shows the exact matte."
-            }
-            Str::Blur => "Blur",
-            Str::Density => "Density",
-
             Str::BeforeAfter => "Before / After (Y)",
             Str::WbEyedropper => "WB Eyedropper",
             Str::WbEyedropperActive => "WB Eyedropper (Esc to cancel)",
@@ -1078,22 +1068,6 @@ impl Str {
             Str::LibraryEmptyTitle => "No images",
             Str::OpenFolder => "Open Folder",
             Str::PresetNameEmpty => "Preset name must not be empty",
-            Str::NoSidecarLoaded => "No sidecar loaded",
-            Str::VirtualCopyNotFound => "Virtual copy not found",
-            Str::MaskNotFound => "Mask not found",
-            Str::MaskNameEmpty => "Mask name must not be empty",
-            Str::NoImageLoaded => "No image loaded",
-            Str::MaskNameExists => "A mask with this name already exists",
-            Str::MaskCreated => "Mask created; recalculation explicitly required",
-            Str::MaskRenamed => "Mask renamed; save sidecar",
-            Str::InvalidLocalAdjustment => "Invalid local adjustment",
-            Str::LocalAdjustmentSaved => {
-                "Local mask adjustment saved (pipeline support pending)"
-            }
-            Str::NoMaskSelected => "No mask selected",
-            Str::MaskStaleRecalc => "Mask stale/unavailable; start recalculation?",
-            Str::MaskCurrentNoRecalc => "Mask current; no recalculation required",
-            Str::ExplicitRecalcRequested => "Explicit recalculation requested",
             Str::IdleQueueFull => "Idle queue is full",
             Str::RecalcRequested => "Recalculation requested; job control required",
             Str::RegenerateStale => "Regenerate Stale / Missing",
@@ -1248,6 +1222,30 @@ impl Str {
             Str::CompareBefore => "Before",
             Str::CompareAfter => "After",
             Str::SelectionCountPattern => "{} selected",
+            Str::NewMask | Str::SelectMask | Str::Invert | Str::OfferRecalculation => {
+                masking_text(self)
+            }
+            Str::LocalAdjustments | Str::MaskTool | Str::MaskToolBrush => masking_text(self),
+            Str::MaskToolGradient | Str::MaskToolRadial | Str::MaskToolNone => masking_text(self),
+            Str::BrushSize | Str::BrushSoftness | Str::BrushFlow | Str::BrushEraser => {
+                masking_text(self)
+            }
+            Str::DrawMaskHint | Str::Blur | Str::Density => masking_text(self),
+            Str::NoSidecarLoaded | Str::VirtualCopyNotFound | Str::MaskNotFound => {
+                masking_text(self)
+            }
+            Str::MaskNameEmpty | Str::NoImageLoaded | Str::MaskNameExists => masking_text(self),
+            Str::MaskCreated | Str::MaskRenamed | Str::InvalidLocalAdjustment => {
+                masking_text(self)
+            }
+            Str::LocalAdjustmentSaved | Str::NoMaskSelected | Str::MaskStaleRecalc => {
+                masking_text(self)
+            }
+            Str::MaskCurrentNoRecalc | Str::ExplicitRecalcRequested => masking_text(self),
+            Str::BrushRadiusInvalid | Str::BrushSoftnessInvalid | Str::BrushFlowInvalid
+            | Str::BrushMarkInvalid | Str::BrushStrokeEmpty | Str::MaskOrderInvalid
+            | Str::DuplicateSourceOnly | Str::MaskResolutionMismatchPattern
+            | Str::MaskLivePlaneMissing | Str::MaskLivePlaneRebuildPattern => masking_text(self),
             Str::OverlayModeLabel => "Tool overlay",
             Str::OverlayAlways => "Always",
             Str::OverlayAuto => "Auto",
@@ -1262,7 +1260,9 @@ impl Str {
             Str::SoftproofToggle | Str::AutoEndpointAppliedPattern => masking_text(self),
             Str::MaskingPreviewPattern | Str::SoloMode | Str::SoloModeOn => masking_text(self),
             Str::SoloModeOff | Str::AllPanelsHiddenOn | Str::AllPanelsHiddenOff => masking_text(self),
-            Str::MaskGroupsLabel | Str::GroupMembersLabel | Str::GroupSelected => masking_text(self),
+            Str::MaskGroupsLabel | Str::MaskPin | Str::MaskVisible | Str::MaskHidden => masking_text(self),
+            Str::RenameMask | Str::MoveMaskUp | Str::MoveMaskDown => masking_text(self),
+            Str::GroupMembersLabel | Str::GroupSelected => masking_text(self),
             Str::DuplicateGroup | Str::Ungroup | Str::GroupActive => masking_text(self),
             Str::GroupFeatherOffset | Str::GroupDensityOffset | Str::GroupApplyOffsets => masking_text(self),
             Str::GroupOffsetsApplied | Str::MaskGroupedPattern | Str::MaskGroupDissolved => masking_text(self),

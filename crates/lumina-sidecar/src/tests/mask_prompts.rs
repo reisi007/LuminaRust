@@ -22,6 +22,8 @@ fn mask_prompt_variants_serde_roundtrip() {
                 y: 0.5,
                 radius: 0.2,
                 sign: BrushMarkSign::Positive,
+                softness: 0.35,
+                flow: 0.7,
             }],
             resolution: (64, 64),
             transformation: PromptTransform {
@@ -54,6 +56,98 @@ fn mask_prompt_variants_serde_roundtrip() {
         let decoded: MaskPrompt = serde_json::from_str(&json).unwrap();
         assert_eq!(original, &decoded, "prompt roundtrip failed for {json}");
     }
+}
+
+#[test]
+fn brush_softness_and_flow_are_additive_roundtrip_values() {
+    let legacy: BrushMark =
+        serde_json::from_str(r#"{"x":0.5,"y":0.5,"radius":0.1,"sign":"positive"}"#)
+            .expect("legacy brush mark remains readable");
+    assert_eq!(legacy.softness, 0.0);
+    assert_eq!(legacy.flow, 1.0);
+
+    let current = BrushMark {
+        softness: 0.4,
+        flow: 0.65,
+        ..legacy
+    };
+    let json = serde_json::to_string(&current).unwrap();
+    assert!(json.contains("\"softness\":0.4"));
+    assert!(json.contains("\"flow\":0.65"));
+    assert_eq!(serde_json::from_str::<BrushMark>(&json).unwrap(), current);
+}
+
+#[test]
+fn brush_softness_and_flow_are_loudly_range_validated() {
+    for (softness, flow) in [(f32::NAN, 1.0), (-0.01, 1.0), (0.5, 1.01)] {
+        let mut document = SidecarDocument::new(source(), "p");
+        let mut definition = mask("bad-brush-controls");
+        definition.prompt = Some(MaskPrompt::Brush {
+            marks: vec![BrushMark {
+                x: 0.5,
+                y: 0.5,
+                radius: 0.1,
+                sign: BrushMarkSign::Positive,
+                softness,
+                flow,
+            }],
+            resolution: (64, 64),
+            transformation: PromptTransform::default(),
+        });
+        document.virtual_copies[0].mask_library.push(definition);
+        assert!(document.validate().is_err());
+    }
+}
+
+fn brush_sidecar_json(resolution: (u32, u32)) -> String {
+    let mut document = SidecarDocument::new(source(), "p");
+    let mut definition = mask("brush-resolution");
+    definition.prompt = Some(MaskPrompt::Brush {
+        marks: vec![BrushMark {
+            x: 0.5,
+            y: 0.5,
+            radius: 0.1,
+            sign: BrushMarkSign::Positive,
+            softness: 0.0,
+            flow: 1.0,
+        }],
+        resolution: (64, 64),
+        transformation: PromptTransform::default(),
+    });
+    document.virtual_copies[0].mask_library.push(definition);
+    let mut json: serde_json::Value = document.to_json().unwrap().parse().unwrap();
+    json["virtual_copies"][0]["mask_library"][0]["prompt"]["brush"]["resolution"] =
+        serde_json::json!([resolution.0, resolution.1]);
+    json.to_string()
+}
+
+fn assert_brush_resolution_sidecar_is_invalid(resolution: (u32, u32)) {
+    let error = SidecarDocument::from_json(&brush_sidecar_json(resolution)).unwrap_err();
+    assert!(
+        matches!(&error, SidecarError::Invalid(message) if message.contains("brush resolution")),
+        "unexpected error for {resolution:?}: {error}"
+    );
+}
+
+#[test]
+fn brush_zero_width_resolution_rejects_invalid_sidecar() {
+    assert_brush_resolution_sidecar_is_invalid((0, 64));
+}
+
+#[test]
+fn brush_zero_height_resolution_rejects_invalid_sidecar() {
+    assert_brush_resolution_sidecar_is_invalid((64, 0));
+}
+
+#[test]
+fn valid_legacy_brush_sidecar_without_softness_or_flow_remains_readable() {
+    let mut legacy: serde_json::Value = serde_json::from_str(&brush_sidecar_json((1, 1))).unwrap();
+    let mark = legacy["virtual_copies"][0]["mask_library"][0]["prompt"]["brush"]["marks"][0]
+        .as_object_mut()
+        .unwrap();
+    mark.remove("softness");
+    mark.remove("flow");
+    assert!(SidecarDocument::from_json(&legacy.to_string()).is_ok());
 }
 
 #[test]
@@ -155,6 +249,8 @@ fn mask_prompt_out_of_range_is_rejected() {
             y: 0.5,
             radius: 0.0,
             sign: BrushMarkSign::Positive,
+            softness: 0.0,
+            flow: 1.0,
         }],
         resolution: (512, 512),
         transformation: PromptTransform::default(),

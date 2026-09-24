@@ -392,6 +392,107 @@ Maskenliste mit Sichtbarkeits-Auge.
   `overlay_color` (Default Rot `[255, 0, 0]`, `0..=255` je Kanal) tönt das
   Matte-Overlay; beide mit `info!`-Log und headless Test-Anker.
 
+## R5-BRUSH-24 — Pinsel-Masken und Maskenverwaltung (Release 1.0, SOLL)
+
+Die User-Entscheidung vom 2026-09-20 („großer Fail“) ist normativ: Das
+Maskierungs-Panel muss eine echte Lightroom-nahe Pinsel- und
+Mehrfachmasken-Arbeitsfläche bieten, nicht nur API-/Sidecar-Anker. Alle
+Änderungen bleiben additiv, deterministisch und nicht-destruktiv; das R5-Spot-
+Heal bleibt ein getrenntes, weiterhin exklusiv armiertes Werkzeug.
+
+### Pinsel-Parameter und Live-Cursor
+
+- **Size** ist der normalisierte Quellradius `(0, 1]` (Anzeige in Prozent),
+  Default `0.05` (5 %). **Softness/Weichheit** und **Flow/Fluss** liegen jeweils
+  endlich in `0..=1`, Defaults `0.0` und `1.0`. Die drei Slider sind nur bei
+  armiertem Pinselwerkzeug sichtbar; ungültige Werte werden laut abgelehnt und
+  lassen den vorherigen Wert unverändert.
+- `[` verkleinert und `]` vergrößert ausschließlich die **Size** des armierten
+  Pinselwerkzeugs um den deterministischen Faktor `1 / 1.1` bzw. `1.1`, an den
+  gültigen Grenzen geklemmt. Das Key-Event wird nie verarbeitet, wenn ein Widget
+  Tastatureingabe anfordert. Bei armiertem Spot-Heal gilt unverändert der
+  bestehende R5-Dust-Pfad; Maske und Spot können nie gleichzeitigarmiert sein.
+- Jeder neue `BrushMark` speichert Radius, Vorzeichen, Softness und Flow im
+  `MaskPrompt::Brush`; die Werte gehören damit zur Maskenidentität und
+  überleben Save/Reopen. Alt-Daten ohne die additiven Felder lesen als
+  `softness = 0`, `flow = 1` (harte, volle Dabs) und werden nicht still auf
+  einen anderen Wert umgerechnet. Die Core-Rasterung und der GPU-Tile-Pfad
+  verwenden denselben Kernel: Softness bildet eine deterministische
+  Smoothstep-Rampe vom inneren harten Kern bis zum Radius; Flow skaliert die
+  Dabe-Abdeckung. Pro Pixel innerhalb des Dabs gilt exakt
+  `deckung = round(65535 × Smoothstep × Flow)`,
+  `positiv = max(aktuell, deckung)` und
+  `negativ = min(aktuell, 65535 - deckung)`. Samples außerhalb des Radius
+  sind No-op; insbesondere ist `flow = 0` bei beiden Vorzeichen No-op. Das ist
+  bewusst Auswahl statt Alpha-Attentuierung. `softness`/`flow` außerhalb
+  `0..=1`, nicht-endliche Werte oder ein leerer Stroke sind harte
+  Sidecar-/GUI-Fehler.
+- Solange das Pinselwerkzeug armiert ist und der Zeiger über dem Preview liegt,
+  malt der echte Preview-Painter **am Zeiger** einen Live-Kreis mit
+  `normalisierter Radius × min(Quelle-Breite, Quelle-Höhe) × aktuelle
+  Ansicht-Skala`. Fit, Zoom, Pan, DPI und Source-Aspect ändern nur diesen
+  Bildschirmradius; der persistierte Quellradius ändert sich nicht. Der Kreis
+  wird bei ausgerüsteter Tastatureingabe, außerhalb des Preview-Rechtecks und
+  nach Spot-/Crop-Armierung nicht gemalt.
+
+### Mehrfachmasken, Pins und Verwaltung
+
+- Eine virtuelle Kopie besitzt beliebig viele `MaskDefinition`-Einträge. Jeder
+  Eintrag hat eine stable ID, einen persistierten `MaskLayer`-Verweis und eine
+  eigene Sichtbarkeit sowie lokale Layerwerte. Auswahl verändert nur den
+  Session-State und den aktiven Layer-Verweis; sie überschreibt weder Prompt
+  noch Sichtbarkeit/Layerwerte einer previously selected Maske. Beim ersten
+  Anfassen wird ein fehlender Layer genau einmal angelegt; danach wird er
+  wiederverwendet.
+- Die Liste zeigt **alle** Masken der aktiven virtuellen Kopie in ihrer
+  Sidecar-Reihenfolge mit Name, Status und Nummerierung. Eine Zeile ist eine
+  echte klickbare Auswahl. Hat eine Maske einen deterministischen Prompt-Anker,
+  entspricht ihre Nummer dem gemalten Edit-Pin; Listen- und Pin-Klick
+  laufen beide durch `select_mask`, akzeptieren nur genau einen Treffer und
+  ändern bei unbekannter/ungültiger ID nichts. Pins bleiben G-11-Display-State;
+  das Anklicken ist kein neuer Brush-Dab.
+- Jede Listenzeile besitzt reale, direkt zeichnbare Buttons: **Sichtbarkeit**
+  (`MaskLayer.visible`, Default `true`), **Umbenennen**, **Löschen**,
+  **Nach oben/Nach unten** und **Duplizieren/Kopieren**. Reihenfolge ist die
+  Reihenfolge des `mask_library`-Vektors, Identität bleibt die stabile
+  Masken-ID; ein Verschieben an ein Ende ist ein sichtbarer No-op bzw. nur
+  einmal wirksam, kein stiller Wrap. Rename validiert Trim/Leer/Name-
+  Kollision. Delete verwendet die bestehende lautere Graph-Materialisierung
+  (Referenzen/Gruppen werden vor dem Löschen eingefroren, nie dangling). Copy
+  bleibt tiefe unabhängige Definition, Duplicate-Group bleibt Pointer-
+  Semantik gemäß G-03.
+- Jede erfolgreiche Verwaltungsoperation schreibt genau einen normalen
+  Sidecar-Stand (bei lokalem Quellpfad), invalidiert die Vorschau und loggt
+  `info!`; unbekannte IDs, leere Namen und Validierungsfehler bleiben loud und
+  lassen Sidecar, Reihenfolge und Auswahl unverändert. Source-/Originalbytes
+  werden nie geschrieben.
+
+### Abnahme und visuelle Coverage
+
+- **Normaler No-GPU-Testlauf (keine Adapter-Voraussetzung):** die CPU-/egui-
+  Modell-, Widget-, Layout- und echten Input-Pointer-Anker laufen in
+  `cargo test -p lumina-gui` und im `--no-default-features`-GUI-Lauf. Dazu
+  gehören `brush_interaction` (Key-Handler, Cursor-Radius/Gating, Preview-Drag
+  und Pin-Klick), die Softness-/Flow-Setter-Validierung sowie
+  `mask_management_controls_have_headless_structural_action_coverage`. Diese
+  Tests benötigen keinen wgpu-Adapter und werden nicht pauschal übersprungen.
+- **Ignorierter nativer Visual-Golden:** `mask_management_controls_have_a_representative_kittest_golden`
+  ist mit einem konkreten `#[ignore = "native wgpu adapter required; …"]`-Grund
+  als 1024×720-Repräsentant markiert. Er armt Brush und rendert die echten
+  Size/Softness/Flow-Regler, mehrere Masken, Eye, Rename, Delete, Move und
+  Copy/Duplicate über den bestehenden `egui_kittest::snapshot`-Vergleich; der
+  beabsichtigte Snapshot ist `tests/snapshots/mask_management_controls.png`.
+  Manueller Lauf: `cargo test -p lumina-gui --lib mask_management_controls_have_a_representative_kittest_golden -- --ignored`
+  (mit `UPDATE_SNAPSHOTS=true` nur für diesen absichtlich geänderten Snapshot).
+  Der Ignore gilt nur für diesen adapterabhängigen Golden, nicht für die
+  strukturelle oder die CPU-/No-GPU-Suite.
+- **Noch offener Hardware-Gate:** unabhängige Verifizierung auf echter
+  Metal- oder Vulkan-Hardware mit DPI/Zoom/Pan, echtem Zeiger-Cursor und
+  GPU-Tile-/CPU-Overlay-Parität bleibt erforderlich. Headless CPU-/kittest-
+  Anker ersetzen diesen Lauf nicht; R5-BRUSH-24 bleibt bis zu dieser
+  unabhängigen Bestätigung unchecked. Bestehende Pixel-/PSNR-Toleranzen und
+  Goldens werden nicht geschwächt.
+
 ## Implementierungsstatus (F-047 / F-080)
 
 **Stand 2026-08-19 (F-047 Adapter-Crate `lumina-onnx` implementiert):**

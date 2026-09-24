@@ -20,6 +20,7 @@ use log::trace;
 // R5-FIX-WELLE-20 / R4-NAV-1: pan-clamp + ROI placement geometry (new file so
 // neither this 500-line-ratcheted module nor `lib.rs` has to grow).
 mod preview_geometry;
+mod preview_mapping;
 
 impl LuminaApp {
     pub(crate) fn draw_preview(&mut self, ui: &mut egui::Ui) {
@@ -221,10 +222,30 @@ impl LuminaApp {
                 pane.height(),
             );
 
-            let armed = self.mask_tool != MaskTool::None;
-            let spot_armed = self.spot_tool != SpotTool::None;
-            let pick = self.wb_pick_mode;
-            let red_eye_pick = self.red_eye_pick_mode;
+            // Resolve one effective preview gesture owner. The arming setters
+            // clear competitors, and this defensive gate also keeps a stale
+            // flag from making two handlers consume the same click.
+            let owner_free = !self.crop_mode;
+            let pick = self.wb_pick_mode
+                && !self.red_eye_pick_mode
+                && self.mask_tool == MaskTool::None
+                && self.spot_tool == SpotTool::None
+                && owner_free;
+            let red_eye_pick = self.red_eye_pick_mode
+                && !self.wb_pick_mode
+                && self.mask_tool == MaskTool::None
+                && self.spot_tool == SpotTool::None
+                && owner_free;
+            let armed = self.mask_tool != MaskTool::None
+                && self.spot_tool == SpotTool::None
+                && !self.wb_pick_mode
+                && !self.red_eye_pick_mode
+                && owner_free;
+            let spot_armed = self.spot_tool != SpotTool::None
+                && self.mask_tool == MaskTool::None
+                && !self.wb_pick_mode
+                && !self.red_eye_pick_mode
+                && owner_free;
 
             // A mask tool arms the preview for a drag gesture; the armed spot
             // tool, the WB eyedropper and the red-eye region picker keep a
@@ -394,7 +415,7 @@ impl LuminaApp {
                     }
                 }
             }
-            self.handle_mask_tool_drag(&response, rect);
+            self.handle_mask_tool_drag(ui, &response, rect, scale);
             // R5-DUST-23: the armed spot tool dabs on click and paints the
             // live-size circle cursor (the sidebar panel never wired a pointer
             // handler, so the tool did nothing on the image).
@@ -433,63 +454,18 @@ impl LuminaApp {
         }
     }
 
-    /// Map a pointer position to normalized (0..=1) *full-frame* source
-    /// coordinates. The displayed rect may be only a zoomed/panned sub-crop of
-    /// the source (see [`Self::preview_roi`]); `roi`/`full` translate the local
-    /// rect fraction into absolute source space so the WB eyedropper and mask
-    /// tools stay accurate at any zoom/offset.
-    pub(crate) fn to_normalized(
-        pos: egui::Pos2,
-        rect: egui::Rect,
-        roi: Option<[u32; 4]>,
-        full: (u32, u32),
-    ) -> (f32, f32) {
-        // Guard the pointer→source division against a zero-width/height rect
-        // (e.g. a momentarily empty texture) so we never divide by zero and
-        // produce NaN/Infinity into the normalized coordinates.
-        let rw = rect.width().max(1e-6);
-        let rh = rect.height().max(1e-6);
-        let fx = ((pos.x - rect.min.x) / rw).clamp(0.0, 1.0);
-        let fy = ((pos.y - rect.min.y) / rh).clamp(0.0, 1.0);
-        let roi = roi.unwrap_or([0, 0, full.0, full.1]);
-        // L1: the picker contract is normalized `0..=1`; clamp the internal
-        // mapping so floating-point rounding can never push a click past the
-        // (now loud) `add_red_eye_region` validation.
-        let nx = ((roi[0] as f32 + fx * roi[2] as f32) / full.0 as f32).clamp(0.0, 1.0);
-        let ny = ((roi[1] as f32 + fy * roi[3] as f32) / full.1 as f32).clamp(0.0, 1.0);
-        (nx, ny)
-    }
-
     /// The prompt to display in the overlay: the live in-progress gesture while
     /// drawing, otherwise the selected mask's saved prompt (if any).
     pub(crate) fn current_overlay_prompt(&self) -> Option<MaskPrompt> {
         if self.drawing && self.mask_tool != MaskTool::None {
             let (start, end) = (self.drag_start?, self.drag_current?);
             return match self.mask_tool {
-                MaskTool::Brush => {
-                    if self.pending_brush_marks.is_empty() {
-                        None
-                    } else {
-                        let (w, h) = self.image_dims().unwrap_or((1, 1));
-                        Some(MaskPrompt::Brush {
-                            marks: self.pending_brush_marks.clone(),
-                            resolution: (w, h),
-                            transformation: PromptTransform::default(),
-                        })
-                    }
-                }
+                MaskTool::Brush => self.pending_brush_overlay_prompt(),
                 MaskTool::LinearGradient => Some(Self::gradient_prompt_from_drag(start, end)),
                 MaskTool::Radial => Some(Self::ellipse_prompt_from_drag(start, end)),
                 MaskTool::None => None,
             };
         }
-        let id = self.selected_mask_id.as_ref()?;
-        let document = self.document.as_ref()?;
-        let copy = document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == self.virtual_copy_id)?;
-        let mask = copy.mask_library.iter().find(|mask| mask.id == *id)?;
-        mask.prompt.clone()
+        self.selected_mask_prompt()
     }
 }

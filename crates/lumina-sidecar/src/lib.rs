@@ -24,6 +24,8 @@ pub use zdata::{
     FACE_EMBEDDING_ENCODING_VERSION, MAX_FACE_EMBEDDING_DIMENSION, RGB_ENCODING_VERSION,
 };
 
+mod brush_prompt;
+
 // R5-DUST-23-FOLLOWUP: shared spot IDs, entry normalization and artifact
 // status live in one small module so CLI and GUI cannot classify the same
 // typed/extras operation differently.
@@ -890,13 +892,27 @@ pub enum BrushMarkSign {
     Negative,
 }
 
-/// A single brush stamp: a normalized centre, a normalized radius and a sign.
+/// A single brush stamp: a normalized centre, a normalized radius, a sign and
+/// the R5-BRUSH-24 edge/opacity controls.
+///
+/// `softness` and `flow` are additive fields: legacy sidecars without them
+/// decode as the original hard, fully opaque brush (`0.0` / `1.0`). New marks
+/// snapshot the live tool controls so reopening the mask reconstructs the same
+/// matte instead of depending on later session state.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BrushMark {
     pub x: f32,
     pub y: f32,
     pub radius: f32,
     pub sign: BrushMarkSign,
+    #[serde(default)]
+    pub softness: f32,
+    #[serde(default = "default_brush_flow")]
+    pub flow: f32,
+}
+
+const fn default_brush_flow() -> f32 {
+    1.0
 }
 
 /// The prompt→model coordinate transformation stored as part of the mask
@@ -4128,21 +4144,13 @@ fn validate_prompt(prompt: &Option<MaskPrompt>) -> Result<(), SidecarError> {
                 return invalid("prompt box must have finite normalized coordinates within 0..=1 with positive width/height");
             }
         }
-        MaskPrompt::Brush { marks, .. } => {
-            if marks.is_empty() {
-                return invalid("prompt brush must contain at least one mark");
+        MaskPrompt::Brush {
+            marks, resolution, ..
+        } => {
+            if resolution.0 == 0 || resolution.1 == 0 {
+                return invalid("prompt brush resolution width/height must be strictly positive");
             }
-            for mark in marks {
-                if !in_unit(mark.x)
-                    || !in_unit(mark.y)
-                    || !in_unit(mark.radius)
-                    || mark.radius <= 0.0
-                {
-                    return invalid(
-                        "prompt brush marks must have finite normalized coordinates within 0..=1 with positive radius",
-                    );
-                }
-            }
+            brush_prompt::validate_brush_marks(marks)?;
         }
         MaskPrompt::Polygon { points, .. } => {
             if points.is_empty() {

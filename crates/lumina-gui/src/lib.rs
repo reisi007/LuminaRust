@@ -97,7 +97,14 @@ mod render_pipeline;
 mod preview_draws;
 // GUI-REFACTOR-W2-20 S2.1: preview mask-tool interaction and the preview
 // overlays (mask matte, G-11 pins, lens-blur/crop rects).
+mod brush_plane;
 mod preview_masks;
+// R5-BRUSH-24: size/softness/flow controls, `[`/`]` aliases and persisted
+// per-dab snapshots.
+mod brush_tool;
+// R5-BRUSH-24 follow-up: one checked, rollback-capable transaction for
+// definition + layer + selection management changes.
+mod mask_persistence;
 // R5-DUST-23: interactive Spot-Heal tool (dab + live-size cursor + `[`/`]`
 // size shortcuts).
 mod spot_tool;
@@ -235,7 +242,7 @@ use lumina_sidecar::{
     HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
     MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Point2, Preprocessing,
     PromptTransform, Resolution, SidecarDocument, SmartCollectionDef, SmartRule, SourceFingerprint,
-    SourceIdentity, SourceStatus, BW_STASH_KEY, DEVELOP_PROFILES, DEVELOP_PROFILE_KEY,
+    SourceIdentity, SourceStatus, VirtualCopy, BW_STASH_KEY, DEVELOP_PROFILES, DEVELOP_PROFILE_KEY,
     TREATMENT_BW, TREATMENT_COLOR, TREATMENT_KEY,
 };
 use lumina_sidecar::{
@@ -1446,9 +1453,19 @@ pub struct LuminaApp {
     virtual_copy_id: String,
     selected_mask_id: Option<String>,
     mask_name_input: String,
+    /// R5-BRUSH-24 rename field; kept in sync by `select_mask` and persisted
+    /// only when the user presses the real Rename button.
+    mask_rename_input: String,
+    /// Per-row rename drafts so every mask row owns a real editable control;
+    /// entries are session UI state and are synchronized on copy/source load.
+    mask_rename_inputs: BTreeMap<String, String>,
     mask_tool: MaskTool,
-    /// Normalized brush radius (0..=1 in source space). Driven by a slider.
+    /// Normalized brush radius (0..=1 relative to the shorter source axis).
     brush_radius: f32,
+    /// R5-BRUSH-24 edge softness, snapshotted into every persisted brush mark.
+    brush_softness: f32,
+    /// R5-BRUSH-24 per-dab flow, snapshotted into every persisted brush mark.
+    brush_flow: f32,
     /// When true, brush marks use the negative (eraser) sign.
     brush_eraser: bool,
     /// Marks accumulated during an in-progress brush drag (cleared on release).
@@ -1916,6 +1933,10 @@ pub struct LuminaApp {
     brush_mask_plane: Option<Vec<u16>>,
     #[cfg(feature = "gpu")]
     brush_mask_plane_dims: Option<(u32, u32)>,
+    /// Identity of the retained live plane: source hash, copy id, mask id and
+    /// dimensions. A mismatch forces a full selected-prompt rebuild/upload.
+    #[cfg(feature = "gpu")]
+    brush_mask_plane_scope: Option<(String, String, String, u32, u32)>,
     /// GUI-WGPU-PRESENT-1: the eframe wgpu renderer's shared state. When
     /// present, `lumina-gpu` was constructed on the *same* Device/Queue
     /// (see `attach_wgpu_render_state`), so the VRAM overlay composite can be
@@ -2563,8 +2584,12 @@ impl LuminaApp {
             virtual_copy_id: "vc-original".into(),
             selected_mask_id: None,
             mask_name_input: String::new(),
+            mask_rename_input: String::new(),
+            mask_rename_inputs: BTreeMap::new(),
             mask_tool: MaskTool::None,
             brush_radius: 0.05,
+            brush_softness: 0.0,
+            brush_flow: 1.0,
             brush_eraser: false,
             pending_brush_marks: Vec::new(),
             drag_start: None,
@@ -2771,6 +2796,8 @@ impl LuminaApp {
             brush_mask_plane: None,
             #[cfg(feature = "gpu")]
             brush_mask_plane_dims: None,
+            #[cfg(feature = "gpu")]
+            brush_mask_plane_scope: None,
             frame_thumb_enqueued: 0,
             frame_thumbs_ready: 0,
             // PREVIEW-CACHE-FEATURE: lazy — no worker pool until the first
@@ -4033,6 +4060,9 @@ impl LuminaApp {
             None => return pins,
         };
         for mask in &copy.mask_library {
+            if !self.mask_visible(&mask.id) {
+                continue;
+            }
             let Some(prompt) = mask.prompt.as_ref() else {
                 continue;
             };
@@ -5770,10 +5800,14 @@ impl LuminaApp {
         // G04-FOLLOWUP-1: per-copy session default — the detect input tracks
         // the newly adopted recipe's visualize threshold (else 0.5).
         self.spot_detect_threshold = self.recipe.spot_visualize_threshold().unwrap_or(0.5);
-        self.selected_mask_id = copy
-            .mask_layers
-            .first()
-            .map(|layer| layer.mask.mask_id.clone());
+        self.selected_mask_id = Self::first_local_mask_id(copy);
+        self.mask_rename_input = self
+            .selected_mask_id
+            .as_deref()
+            .and_then(|id| copy.mask_library.iter().find(|mask| mask.id == id))
+            .map(|mask| mask.name.clone())
+            .unwrap_or_default();
+        self.mask_rename_inputs.clear();
         // R5-DUST-23-FOLLOWUP: the spot selection is per-copy session state
         // and must never leak into the newly selected copy.
         self.selected_spot_id = None;
@@ -5787,6 +5821,7 @@ impl LuminaApp {
             self.drag_current = None;
             self.drawing = false;
         }
+        self.reset_brush_mask_plane();
         if discarded_unsaved {
             warn!(
                 "virtual-copy switch from `{previous_id}` to `{}` discarded unsaved edits",
@@ -5815,47 +5850,31 @@ impl LuminaApp {
     pub fn select_mask(&mut self, mask_id: &str) -> Result<(), GuiError> {
         instrument_gui_action!(self, GuiAction::SelectMask);
         self.ensure_document_loaded()?;
-        let document = self.document.as_mut().expect("document was ensured");
-        let copy = document
-            .virtual_copies
-            .iter_mut()
-            .find(|copy| copy.id == self.virtual_copy_id)
-            .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
-        if !copy.mask_library.iter().any(|mask| mask.id == mask_id) {
-            return Err(GuiError::Io(Str::MaskNotFound.t().to_string()));
-        }
-        if let Some(layer) = copy.mask_layers.first_mut() {
-            layer.mask = MaskReference {
-                copy_id: copy.id.clone(),
-                mask_id: mask_id.into(),
-                extras: BTreeMap::new(),
-            };
-        } else {
-            copy.mask_layers.push(MaskLayer {
-                id: "layer-1".into(),
-                mask: MaskReference {
-                    copy_id: copy.id.clone(),
-                    mask_id: mask_id.into(),
-                    extras: BTreeMap::new(),
-                },
-                inverted: false,
-                feather: 0.0,
-                blur: 0.0,
-                density: 1.0,
-                extras: BTreeMap::new(),
-                visible: true,
-            });
-        }
-        self.selected_mask_id = Some(mask_id.into());
-        // LRPAR-G03-MASKGROUP-03: selecting a single mask leaves group mode.
-        self.selected_group_id = None;
-        self.render_key = None;
+        let needs_persistence = {
+            let copy_id = self.virtual_copy_id.clone();
+            let copy = self
+                .document
+                .as_ref()
+                .and_then(|document| {
+                    document
+                        .virtual_copies
+                        .iter()
+                        .find(|copy| copy.id == copy_id)
+                })
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            !copy
+                .mask_layers
+                .iter()
+                .any(|layer| layer.mask.copy_id == copy.id && layer.mask.mask_id == mask_id)
+        };
+        let mut materialized = false;
+        self.transact_mask_mutation(needs_persistence, |app| {
+            materialized = app.select_mask_in_memory(mask_id)?;
+            Ok(())
+        })?;
+        info!("GUI interaction: select_mask {mask_id} materialized={materialized}");
         self.status = Str::MaskSelected.format_arg(mask_id);
         Ok(())
-    }
-
-    pub fn selected_mask_id(&self) -> Option<&str> {
-        self.selected_mask_id.as_deref()
     }
 
     /// Create a pending library entry. Inference is deliberately not started here.
@@ -5878,85 +5897,110 @@ impl LuminaApp {
             .map(|b| format!("blake3:{}", blake3::hash(b).to_hex()))
             .unwrap_or_else(|| "blake3:unknown".into());
         let source_byte_length = self.source_bytes.as_ref().map_or(0, |b| b.len() as u64);
-        let document = self.document.as_mut().expect("document was ensured");
-        let copy = document
-            .virtual_copies
-            .iter_mut()
-            .find(|copy| copy.id == self.virtual_copy_id)
-            .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
-        if copy.mask_library.iter().any(|mask| mask.id == id) {
-            return Err(GuiError::Io(Str::MaskNameExists.t().to_string()));
-        }
-        copy.mask_library.push(MaskDefinition {
-            id: id.clone(),
-            name,
-            source_fingerprint: SourceFingerprint {
-                content_hash: source_hash,
-                byte_length: source_byte_length,
+        let definition = {
+            let document = self.document.as_mut().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == self.virtual_copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            if copy.mask_library.iter().any(|mask| mask.id == id) {
+                return Err(GuiError::Io(Str::MaskNameExists.t().to_string()));
+            }
+            MaskDefinition {
+                id: id.clone(),
+                name,
+                source_fingerprint: SourceFingerprint {
+                    content_hash: source_hash,
+                    byte_length: source_byte_length,
+                    extras: BTreeMap::new(),
+                },
+                decode_context: DecodeFingerprint {
+                    decoder: "pending".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    parameters: BTreeMap::new(),
+                    extras: BTreeMap::new(),
+                },
+                geometry_context: GeometryFingerprint {
+                    width: frame.width,
+                    height: frame.height,
+                    orientation: self.raw_orientation,
+                    pixel_aspect_ratio: 1.0,
+                    extras: BTreeMap::new(),
+                },
+                model: ModelIdentity {
+                    name: "unavailable".into(),
+                    version: "pending".into(),
+                    hash: "pending".into(),
+                    extras: BTreeMap::new(),
+                },
+                inference_resolution: Resolution {
+                    width: frame.width,
+                    height: frame.height,
+                    extras: BTreeMap::new(),
+                },
+                preprocessing: Preprocessing {
+                    name: "pending".into(),
+                    version: "1".into(),
+                    parameters: BTreeMap::new(),
+                    extras: BTreeMap::new(),
+                },
+                rescaling_method: "none".into(),
+                rescaling_parameters: BTreeMap::new(),
+                coordinate_system: CoordinateSystem::SourceOriented,
+                status: MaskStatus::Pending,
+                created_at: "pending".into(),
+                generator_version: env!("CARGO_PKG_VERSION").into(),
+                error_text: None,
+                artifact: None,
+                operation: MaskOperation::Source,
+                references: vec![],
+                prompt: None,
                 extras: BTreeMap::new(),
-            },
-            decode_context: DecodeFingerprint {
-                decoder: "pending".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            geometry_context: GeometryFingerprint {
-                width: frame.width,
-                height: frame.height,
-                orientation: self.raw_orientation,
-                pixel_aspect_ratio: 1.0,
-                extras: BTreeMap::new(),
-            },
-            model: ModelIdentity {
-                name: "unavailable".into(),
-                version: "pending".into(),
-                hash: "pending".into(),
-                extras: BTreeMap::new(),
-            },
-            inference_resolution: Resolution {
-                width: frame.width,
-                height: frame.height,
-                extras: BTreeMap::new(),
-            },
-            preprocessing: Preprocessing {
-                name: "pending".into(),
-                version: "1".into(),
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            rescaling_method: "none".into(),
-            rescaling_parameters: BTreeMap::new(),
-            coordinate_system: CoordinateSystem::SourceOriented,
-            status: MaskStatus::Pending,
-            created_at: "pending".into(),
-            generator_version: env!("CARGO_PKG_VERSION").into(),
-            error_text: None,
-            artifact: None,
-            operation: MaskOperation::Source,
-            references: vec![],
-            prompt: None,
-            extras: BTreeMap::new(),
-            ai_select: None,
-        });
-        self.select_mask(&id)?;
+                ai_select: None,
+            }
+        };
+        self.push_mask_definition(definition)?;
+        info!("GUI interaction: create_mask -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
     }
 
     pub fn rename_mask(&mut self, mask_id: &str, name: impl Into<String>) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::RenameMask);
         self.ensure_document_loaded()?;
-        let name = name.into();
-        if name.trim().is_empty() {
+        let name = name.into().trim().to_owned();
+        if name.is_empty() {
             return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
         }
-        let copy = self.active_copy_mut()?;
-        let mask = copy
-            .mask_library
-            .iter_mut()
-            .find(|m| m.id == mask_id)
-            .ok_or_else(|| GuiError::Io(Str::MaskNotFound.t().to_string()))?;
-        mask.name = name;
+        self.transact_mask_mutation(true, |app| {
+            let copy_id = app.virtual_copy_id.clone();
+            let document = app.document.as_mut().expect("document was ensured");
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            if !copy.mask_library.iter().any(|mask| mask.id == mask_id) {
+                return Err(GuiError::Io(Str::MaskNotFound.t().to_string()));
+            }
+            if copy
+                .mask_library
+                .iter()
+                .any(|mask| mask.id != mask_id && mask.name == name)
+            {
+                return Err(GuiError::Io(Str::MaskNameExists.t().to_string()));
+            }
+            copy.mask_library
+                .iter_mut()
+                .find(|mask| mask.id == mask_id)
+                .expect("mask existence checked")
+                .name = name.clone();
+            app.mask_rename_input = name.clone();
+            app.mask_rename_inputs.insert(mask_id.into(), name.clone());
+            Ok(())
+        })?;
+        info!("GUI interaction: rename_mask {mask_id} -> `{name}`");
         self.status = Str::MaskRenamed.t().into();
         Ok(())
     }
@@ -6037,15 +6081,16 @@ impl LuminaApp {
         })
     }
 
-    /// Push a library definition with validate-then-save and in-memory
-    /// rollback: a rejected definition never reaches the file (loud, never
-    /// partial). Returns the new mask id.
+    /// Push, select, materialize, validate, and persist a new definition as one
+    /// transaction.  A rejected graph or failed CAS/IO write restores the full
+    /// previous document and selection state; callers must not perform a second
+    /// selection save after this returns.
     fn push_mask_definition(&mut self, definition: MaskDefinition) -> Result<String, GuiError> {
         self.ensure_document_loaded()?;
         let id = definition.id.clone();
-        let copy_id = self.virtual_copy_id.clone();
-        {
-            let document = self.document.as_mut().expect("document was ensured");
+        self.transact_mask_mutation(true, |app| {
+            let copy_id = app.virtual_copy_id.clone();
+            let document = app.document.as_mut().expect("document was ensured");
             let copy = document
                 .virtual_copies
                 .iter_mut()
@@ -6055,29 +6100,9 @@ impl LuminaApp {
                 return Err(GuiError::Io(Str::MaskNameExists.t().to_string()));
             }
             copy.mask_library.push(definition);
-        }
-        // Validate outside the copy borrow; roll the push back in memory when
-        // the graph (arity, cycles, ranges, ai_select placement) rejects it.
-        if let Err(error) = self
-            .document
-            .as_ref()
-            .expect("document was ensured")
-            .validate()
-        {
-            self.document
-                .as_mut()
-                .expect("document was ensured")
-                .virtual_copies
-                .iter_mut()
-                .find(|copy| copy.id == copy_id)
-                .expect("copy was found above")
-                .mask_library
-                .retain(|mask| mask.id != id);
-            return Err(GuiError::Io(error.to_string()));
-        }
-        self.save_sidecar();
-        self.mark_dirty();
-        Ok(id)
+            app.select_mask_in_memory(&id)?;
+            Ok(id.clone())
+        })
     }
 
     /// Create an AI-select source mask (G-03). Status `Pending` until a model
@@ -6116,7 +6141,6 @@ impl LuminaApp {
             extras: BTreeMap::new(),
         });
         let id = self.push_mask_definition(definition)?;
-        self.select_mask(&id)?;
         info!("GUI interaction: create_ai_mask {kind:?} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
@@ -6149,7 +6173,6 @@ impl LuminaApp {
             transformation: PromptTransform::default(),
         });
         let id = self.push_mask_definition(definition)?;
-        self.select_mask(&id)?;
         info!("GUI interaction: create_luminance_range_mask {min}/{max}/{feather} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
@@ -6190,7 +6213,6 @@ impl LuminaApp {
             transformation: PromptTransform::default(),
         });
         let id = self.push_mask_definition(definition)?;
-        self.select_mask(&id)?;
         info!("GUI interaction: create_color_range_mask {hue_center}/{hue_width} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
@@ -6284,7 +6306,6 @@ impl LuminaApp {
         definition.operation = operation;
         definition.references = references;
         let id = self.push_mask_definition(definition)?;
-        self.select_mask(&id)?;
         info!("GUI interaction: combine_masks {operation:?} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
@@ -6298,6 +6319,17 @@ impl LuminaApp {
         instrument_gui_action!(self, GuiAction::SetMaskVisible);
         self.ensure_document_loaded()?;
         let copy_id = self.virtual_copy_id.clone();
+        let copy_snapshot = self
+            .document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter()
+                    .find(|copy| copy.id == copy_id)
+            })
+            .cloned()
+            .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
         {
             let document = self.document.as_mut().expect("document was ensured");
             let copy = document
@@ -6310,7 +6342,7 @@ impl LuminaApp {
             }
             // Snapshot for rollback: the eye must never leave a half-written
             // layer list behind when validation rejects the result.
-            let snapshot: Vec<(String, bool)> = copy
+            let layer_snapshot: Vec<(String, bool)> = copy
                 .mask_layers
                 .iter()
                 .map(|layer| (layer.id.clone(), layer.visible))
@@ -6355,14 +6387,24 @@ impl LuminaApp {
                     .expect("copy was found above");
                 copy.mask_layers.truncate(layer_count);
                 for layer in copy.mask_layers.iter_mut() {
-                    if let Some((_, was)) = snapshot.iter().find(|(id, _)| id == &layer.id) {
+                    if let Some((_, was)) = layer_snapshot.iter().find(|(id, _)| id == &layer.id) {
                         layer.visible = *was;
                     }
                 }
                 return Err(GuiError::Io(error.to_string()));
             }
         }
-        self.save_sidecar();
+        if let Err(error) = self.save_sidecar_checked() {
+            if let Some(copy) = self.document.as_mut().and_then(|document| {
+                document
+                    .virtual_copies
+                    .iter_mut()
+                    .find(|copy| copy.id == copy_id)
+            }) {
+                *copy = copy_snapshot;
+            }
+            return Err(error);
+        }
         self.mark_dirty();
         info!("GUI interaction: set_mask_visible {mask_id} -> {visible}");
         Ok(())
@@ -6460,10 +6502,10 @@ impl LuminaApp {
         let layer = self.active_layer_mut()?;
         layer.inverted = inverted;
         // REVIEW-GUI-MASKRENDER-1: layer edits change the evaluated matte, so
-        // the preview must actually re-render — route through `mark_dirty`
-        // (which also schedules the debounced render), not just invalidate
-        // the key.
-        self.mark_dirty();
+        // the preview must actually re-render. GUI-SLIDER-SAVE-1: the layer
+        // value is persistent data too, so arm the same debounced CAS save
+        // path as the other mask controls instead of merely invalidating.
+        self.mark_recipe_dirty("mask.inverted", f64::from(u8::from(inverted)));
         Ok(())
     }
 
@@ -6635,15 +6677,15 @@ impl LuminaApp {
     pub fn set_mask_tool(&mut self, tool: MaskTool) {
         instrument_gui_action!(self, GuiAction::SetMaskTool);
         self.mask_tool = tool;
-        // R5-DUST-23: arming a mask tool disarms the spot tool (the reverse is
-        // handled in `set_spot_tool`), so the preview never holds two tools.
+        // R5-DUST-23 / R5-BRUSH-24: arming a source tool disarms every
+        // competing preview picker/tool, so a stale click handler cannot
+        // intercept the first gesture of the newly armed tool.
         if tool != MaskTool::None {
             self.spot_tool = SpotTool::None;
+            self.wb_pick_mode = false;
+            self.red_eye_pick_mode = false;
         }
-        self.pending_brush_marks.clear();
-        self.drag_start = None;
-        self.drag_current = None;
-        self.drawing = false;
+        self.clear_mask_gesture();
     }
 
     /// G-14 (H1): arm the WB eyedropper and disarm the red-eye region picker.
@@ -6654,6 +6696,9 @@ impl LuminaApp {
         instrument_gui_action!(self, GuiAction::ArmWbEyedropper);
         self.wb_pick_mode = true;
         self.red_eye_pick_mode = false;
+        self.mask_tool = MaskTool::None;
+        self.spot_tool = SpotTool::None;
+        self.clear_mask_gesture();
         info!("GUI interaction: white-balance pick mode armed");
     }
 
@@ -6664,6 +6709,9 @@ impl LuminaApp {
         self.red_eye_pick_mode = armed;
         if armed {
             self.wb_pick_mode = false;
+            self.mask_tool = MaskTool::None;
+            self.spot_tool = SpotTool::None;
+            self.clear_mask_gesture();
         }
         info!("GUI interaction: red-eye pick mode -> {armed}");
     }
@@ -6695,6 +6743,9 @@ impl LuminaApp {
         self.spot_tool = tool;
         if tool != SpotTool::None {
             self.mask_tool = MaskTool::None;
+            self.wb_pick_mode = false;
+            self.red_eye_pick_mode = false;
+            self.clear_mask_gesture();
         }
     }
     pub fn spot_tool(&self) -> SpotTool {
@@ -7009,9 +7060,7 @@ impl LuminaApp {
     /// or outside the open-closed `(0, 1]` range.
     pub fn set_brush_radius(&mut self, radius: f32) -> Result<(), GuiError> {
         if !radius.is_finite() || !(0.0..=1.0).contains(&radius) || radius <= 0.0 {
-            return Err(GuiError::Io(
-                "Brush radius must be finite and within (0, 1]".into(),
-            ));
+            return Err(GuiError::Io(Str::BrushRadiusInvalid.t().to_string()));
         }
         self.brush_radius = radius;
         // GUI-SLIDER-SAVE-1: the brush-size slider arms a save commit like any
@@ -7785,94 +7834,6 @@ impl LuminaApp {
         )
     }
 
-    /// Returns the active virtual copy's source dimensions, used as the brush
-    /// prompt resolution and overlay rasterization size.
-    fn image_dims(&self) -> Result<(u32, u32), GuiError> {
-        let frame = self
-            .original
-            .as_ref()
-            .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
-        Ok((frame.width, frame.height))
-    }
-
-    /// Ensure a mask is selected; create a default one if the active copy has
-    /// none yet so a drawn prompt always has a home.
-    fn ensure_selected_mask(&mut self) -> Result<String, GuiError> {
-        if let Some(id) = self.selected_mask_id.clone() {
-            return Ok(id);
-        }
-        let count = self
-            .document
-            .as_ref()
-            .and_then(|d| {
-                d.virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-            })
-            .map_or(0, |c| c.mask_library.len());
-        self.create_mask(format!("Mask {}", count + 1))
-    }
-
-    /// Persist a finished [`MaskPrompt`] onto the selected mask and write the
-    /// sidecar. A hand-drawn prompt mask is complete without a model — the
-    /// geometric rasterizer (F-079) supplies the matte — so it is marked
-    /// `Valid` (the file browser would otherwise report a phantom "missing
-    /// model"). No silent fallback: a missing sidecar/document is a hard error.
-    fn apply_mask_prompt(&mut self, prompt: MaskPrompt) -> Result<(), GuiError> {
-        let mask_id = self.ensure_selected_mask()?;
-        let document = self
-            .document
-            .as_mut()
-            .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?;
-        let copy = document
-            .virtual_copies
-            .iter_mut()
-            .find(|copy| copy.id == self.virtual_copy_id)
-            .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
-        let mask = copy
-            .mask_library
-            .iter_mut()
-            .find(|mask| mask.id == mask_id)
-            .ok_or_else(|| GuiError::Io(Str::MaskNotFound.t().to_string()))?;
-        mask.prompt = Some(prompt);
-        mask.status = MaskStatus::Valid;
-        mask.error_text = None;
-        self.render_key = None;
-        self.save_sidecar();
-        self.status = Str::MaskPromptSaved.format_arg(&mask_id);
-        Ok(())
-    }
-
-    /// Finalize a brush stroke. An empty stroke is a hard error and writes
-    /// nothing (no silent fallback). Every mark is validated against the F-079
-    /// prompt rules before persistence.
-    pub fn commit_brush_stroke(&mut self, marks: Vec<BrushMark>) -> Result<(), GuiError> {
-        if marks.is_empty() {
-            return Err(GuiError::Io("A brush mask needs at least one mark".into()));
-        }
-        for mark in &marks {
-            if !mark.x.is_finite()
-                || !mark.y.is_finite()
-                || !mark.radius.is_finite()
-                || !(0.0..=1.0).contains(&mark.x)
-                || !(0.0..=1.0).contains(&mark.y)
-                || !(0.0..=1.0).contains(&mark.radius)
-                || mark.radius <= 0.0
-            {
-                return Err(GuiError::Io(
-                    "Brush marks must have finite normalized coordinates within 0..=1 and a positive radius".into(),
-                ));
-            }
-        }
-        let (w, h) = self.image_dims()?;
-        let prompt = MaskPrompt::Brush {
-            marks,
-            resolution: (w, h),
-            transformation: PromptTransform::default(),
-        };
-        self.apply_mask_prompt(prompt)
-    }
-
     /// Build a linear-gradient prompt from a drag (start→end, normalized 0..=1).
     ///
     /// Behaviour (documented): both endpoints are clamped to `0..=1` before use,
@@ -7957,33 +7918,6 @@ impl LuminaApp {
         self.apply_mask_prompt(Self::ellipse_prompt_from_drag(a, b))
     }
 
-    /// Finish the in-progress mask-tool drag, dispatching to the right commit
-    /// based on the active tool. Errors are surfaced as visible [`GuiError`]s.
-    fn finish_drawing(&mut self) {
-        let tool = self.mask_tool;
-        let start = self.drag_start;
-        let end = self.drag_current;
-        let marks = std::mem::take(&mut self.pending_brush_marks);
-        self.drawing = false;
-        self.drag_start = None;
-        self.drag_current = None;
-        let result = match tool {
-            MaskTool::None => return,
-            MaskTool::Brush => self.commit_brush_stroke(marks),
-            MaskTool::LinearGradient => match (start, end) {
-                (Some(a), Some(b)) => self.commit_gradient(a, b),
-                _ => Ok(()),
-            },
-            MaskTool::Radial => match (start, end) {
-                (Some(a), Some(b)) => self.commit_radial(a, b),
-                _ => Ok(()),
-            },
-        };
-        if let Err(error) = result {
-            self.show_error(error);
-        }
-    }
-
     fn ensure_document_loaded(&mut self) -> Result<(), GuiError> {
         if self.document.is_none() {
             let frame = self
@@ -8008,13 +7942,6 @@ impl LuminaApp {
                     .find(|c| c.id == self.virtual_copy_id)
             })
             .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))
-    }
-
-    fn active_layer_mut(&mut self) -> Result<&mut MaskLayer, GuiError> {
-        self.active_copy_mut()?
-            .mask_layers
-            .first_mut()
-            .ok_or_else(|| GuiError::Io(Str::NoMaskSelected.t().to_string()))
     }
 
     /// GUI-FILMSTRIP-SYNC-1: pure filmstrip click semantics (Lightroom-like),
@@ -8221,6 +8148,8 @@ impl LuminaApp {
             self.document = None;
             self.virtual_copy_id = "vc-original".into();
             self.selected_mask_id = None;
+            self.mask_rename_input.clear();
+            self.mask_rename_inputs.clear();
             self.selected_spot_id = None;
             // REVIEW-GUI-N1: a new image starts a fresh sidecar lineage.
             self.sidecar_revision = None;
@@ -8290,6 +8219,7 @@ impl LuminaApp {
             // a fresh zeroed plane; stale dimensions would mis-align tile uploads.
             self.brush_mask_plane = None;
             self.brush_mask_plane_dims = None;
+            self.brush_mask_plane_scope = None;
             // R2-GUI-FOLLOWUP: a source switch must not reuse VRAM/present state
             // from the previous image. `vram_fresh = false` drops any stale
             // VRAM tone result and forces a fresh full render through the
@@ -10441,10 +10371,14 @@ impl LuminaApp {
                     if let Some(copy) = resolved {
                         let candidate = copy.recipe.clone();
                         self.virtual_copy_id = copy.id.clone();
-                        self.selected_mask_id = copy
-                            .mask_layers
-                            .first()
-                            .map(|layer| layer.mask.mask_id.clone());
+                        self.selected_mask_id = Self::first_local_mask_id(&copy);
+                        self.mask_rename_input = self
+                            .selected_mask_id
+                            .as_deref()
+                            .and_then(|id| copy.mask_library.iter().find(|mask| mask.id == id))
+                            .map(|mask| mask.name.clone())
+                            .unwrap_or_default();
+                        self.mask_rename_inputs.clear();
                         // R5-DUST-23-FOLLOWUP: a reloaded sidecar restores the
                         // removals, never the (session-only) spot selection.
                         self.selected_spot_id = None;
@@ -10835,96 +10769,8 @@ impl LuminaApp {
     /// source/conflict state (the fresh identity is only set for documents
     /// newly created in this session).
     fn save_sidecar(&mut self) {
-        if self.path.trim().is_empty() {
-            self.show_error(Str::SaveNeedsLocalPath.t());
-            return;
-        }
-        let path = std::path::PathBuf::from(self.path.trim());
-        let Some(frame) = &self.original else {
-            self.show_error(Str::NoImageLoaded.t());
-            return;
-        };
-        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
-        // REVIEW-GUI-N1 + SIDECAR-REBASE-1: compare-and-swap against the
-        // revision this document lineage was loaded from (`self.sidecar_revision`,
-        // captured at load time and refreshed after each successful save). An
-        // overtaking save is rebased onto the current file (field-selectively);
-        // a conflict that persists over the bounded retries stays visible
-        // instead of being silently overwritten. `None` expects the file not to
-        // exist yet (fresh document): a concurrently appearing file is refused.
-        let expected_revision = self.sidecar_revision.clone();
-        let mut document = self
-            .document
-            .take()
-            .unwrap_or_else(|| SidecarDocument::new(self.source_identity(frame), "raster-mvp-1"));
-        // REVIEW-GUI-N1: the identity of an already-loaded document stays
-        // exactly as loaded — recomputing it here from the live bytes would
-        // silently launder an externally changed source (conflict laundering).
-        // A document newly created above already carries the current identity
-        // via `SidecarDocument::new(self.source_identity(frame), ..)`.
-        // SIDECAR-REBASE-1: the pre-edit state is the three-way-merge ancestor
-        // for a `Conflict` rebase (local edits survive on the current file).
-        let base_document = document.clone();
-        let Some(copy) = document
-            .virtual_copies
-            .iter_mut()
-            .find(|copy| copy.id == self.virtual_copy_id)
-        else {
-            self.show_error(Str::VirtualCopyNotFound.t());
-            self.document = Some(document);
-            return;
-        };
-        let previous_recipe = copy.recipe.clone();
-        copy.recipe = self.recipe.clone();
-        // G-06 (LRPAR-G06-GEO): an armed geometry edit becomes exactly one
-        // visible history step. The entry stores the saved (final) recipe,
-        // like the CLI `geometry` command; slider drags coalesce because the
-        // label is armed once per debounce window and consumed here.
-        if let Some(step) = self.pending_history_step.take() {
-            let mut counter = copy.history.len() + 1;
-            while copy
-                .history
-                .iter()
-                .any(|entry| entry.id == format!("geometry-{counter}"))
-            {
-                counter += 1;
-            }
-            let mut extras = BTreeMap::new();
-            extras.insert("step".into(), Value::String("geometry".into()));
-            extras.insert("action".into(), Value::String(step));
-            // UX-LOOK-HISTORY-18: persist the readable step (control + old→new
-            // + time) so the history panel shows more than a machine id.
-            let mut entry = HistoryEntry {
-                id: format!("geometry-{counter}"),
-                recipe: copy.recipe.clone(),
-                recorded_at: Some(self.history_timestamp()),
-                extras,
-            };
-            if let Err(error) = entry.set_changes(history_changes::recipe_changes(
-                &previous_recipe,
-                &self.recipe,
-            )) {
-                error!("geometry history changes rejected: {error}");
-            }
-            copy.history.push(entry);
-        }
-        match sidecar_rebase::save_rebased(
-            &sidecar_path,
-            &base_document,
-            &document,
-            expected_revision.as_deref(),
-            sidecar_rebase::MAX_REBASE_ATTEMPTS,
-        ) {
-            // LRPAR-G01-BASIC / GUI-VIEW-2: the shared finish helper moves the
-            // Previous baseline and refreshes the single entry on success.
-            Ok(saved) => self.finish_sidecar_save(&path, saved),
-            Err(save_error) => {
-                error!("sidecar save failed for {}: {save_error}", path.display());
-                self.show_error(save_error);
-                // Keep the local document so the failed edit is not lost; the
-                // conflict stays visible until resolved.
-                self.document = Some(document);
-            }
+        if let Err(error) = self.save_sidecar_result() {
+            self.show_error(error);
         }
     }
 
@@ -11789,7 +11635,10 @@ impl eframe::App for LuminaApp {
             // UX-LOOK-TOOLBAR-18: shared with the icon toolbar (same status).
             self.toggle_spot_heal_tool();
         }
-        // R5-DUST-23: `[`/`]` resize the armed spot tool (alias, shared path).
+        // R5-BRUSH-24 / R5-DUST-23: `[`/`]` resize the exclusively armed mask
+        // brush or spot tool. Each handler is widget-gated and inert while the
+        // other tool owns the preview.
+        self.handle_brush_size_shortcuts(&ctx);
         self.handle_spot_size_shortcuts(&ctx);
         self.handle_crop_shortcuts(&ctx);
 
@@ -12321,6 +12170,7 @@ mod tests {
     // GUI-INSTRDBG-17b: the remaining section-action logging tests, extracted
     // to keep this root test module within the file-size ratchet.
     mod instrdbg;
+    mod instrdbg_prepare;
     // GUI-INSTRDBG-17b-REST: the click tests for the Spot/Detail/Optics/
     // Tone-Curve/Presets buttons (second extracted slice).
     mod instrdbg_rest;
@@ -12344,6 +12194,10 @@ mod tests {
     mod badges;
     mod basic_commit;
     mod brush_gradient;
+    mod brush_interaction;
+    mod brush_lifecycle;
+    mod brush_management;
+    mod brush_management_ui;
     mod distortion;
     mod export;
     mod f100_audit;

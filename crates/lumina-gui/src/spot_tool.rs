@@ -98,16 +98,23 @@ impl LuminaApp {
         rect: egui::Rect,
         scale: f32,
     ) {
-        if self.spot_tool == SpotTool::None {
+        if self.spot_tool == SpotTool::None
+            || self.mask_tool != MaskTool::None
+            || self.wb_pick_mode
+            || self.red_eye_pick_mode
+            || self.crop_mode
+        {
             return;
         }
-        if let Some(pos) = response.hover_pos() {
-            let radius = (self.spot_radius * scale).clamp(2.0, 4000.0);
-            ui.painter().circle_stroke(
-                pos,
-                radius,
-                egui::Stroke::new(1.5_f32, crate::theme::ACCENT),
-            );
+        if self.spot_cursor_allowed(ui) {
+            if let Some(pos) = response.hover_pos().filter(|pos| rect.contains(*pos)) {
+                let radius = (self.spot_radius * scale).clamp(2.0, 4000.0);
+                ui.painter().circle_stroke(
+                    pos,
+                    radius,
+                    egui::Stroke::new(1.5_f32, crate::theme::ACCENT),
+                );
+            }
         }
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {

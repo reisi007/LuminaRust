@@ -95,19 +95,24 @@ const DOCUMENTED_CPU_REASONS: &[&str] = &[
 /// (GPU-LENSFUN-PARITY-1): it is exercised by
 /// `gpu_audit_lensfun_corrector_presents_gpu_without_badge`, which asserts the
 /// GPU present route and the absence of a badge.
+const DOCUMENTED_CPU_EXCEPTIONS: &[(GuiAction, &str)] = &[
+    (GuiAction::SetLensProfile, REASON_DEFAULT_CONTENT_CROP),
+    (GuiAction::AnalyzeUpright, REASON_DEFAULT_CONTENT_CROP),
+    (GuiAction::SetUprightEnabled, REASON_DEFAULT_CONTENT_CROP),
+    (GuiAction::SetCropAspect, REASON_DIMENSION_CHANGING),
+    (GuiAction::RotateStep, REASON_DIMENSION_CHANGING),
+    (GuiAction::SetDenoiseEnabled, REASON_DENOISE),
+    (GuiAction::SetExpandCanvas, REASON_GENERATIVE),
+    (GuiAction::GenerateCanvas, REASON_GENERATIVE),
+    (GuiAction::SetExpandBeyondImage, REASON_GENERATIVE),
+    (GuiAction::SetAutoFillTransparent, REASON_GENERATIVE),
+];
+
 fn documented_cpu_exception(action: GuiAction) -> Option<&'static str> {
-    match action {
-        GuiAction::SetLensProfile | GuiAction::AnalyzeUpright | GuiAction::SetUprightEnabled => {
-            Some(REASON_DEFAULT_CONTENT_CROP)
-        }
-        GuiAction::SetCropAspect | GuiAction::RotateStep => Some(REASON_DIMENSION_CHANGING),
-        GuiAction::SetDenoiseEnabled => Some(REASON_DENOISE),
-        GuiAction::SetExpandCanvas
-        | GuiAction::GenerateCanvas
-        | GuiAction::SetExpandBeyondImage
-        | GuiAction::SetAutoFillTransparent => Some(REASON_GENERATIVE),
-        _ => None,
-    }
+    DOCUMENTED_CPU_EXCEPTIONS
+        .iter()
+        .find(|(candidate, _)| *candidate == action)
+        .map(|(_, reason)| *reason)
 }
 
 /// Deterministic gradient source with a fixed high-frequency texture, encoded
@@ -148,7 +153,7 @@ fn audit_source_png() -> Vec<u8> {
 fn gpu_audit_exception_table_is_complete_without_gpu() {
     assert_eq!(
         ALL_GUI_ACTIONS.len(),
-        105,
+        109,
         "the F-100 action surface grew/shrank: update the audit (and its docs)"
     );
     let mut exceptions = 0usize;

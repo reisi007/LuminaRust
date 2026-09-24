@@ -26,6 +26,57 @@ pub(crate) fn masking_text(s: Str) -> &'static str {
         Str::AiObjects => "Objects",
         Str::AiPeople => "People",
         Str::DetailLabel => "Detail (optional)",
+        Str::NewMask => "New Mask",
+        Str::SelectMask => "Select Mask",
+        Str::Invert => "Invert",
+        Str::OfferRecalculation => "Recalculation",
+        Str::LocalAdjustments => "Local adjustments",
+        Str::MaskTool => "Tool",
+        Str::MaskToolBrush => "Brush",
+        Str::MaskToolGradient => "Linear Gradient",
+        Str::MaskToolRadial => "Radial Gradient",
+        Str::MaskToolNone => "Off",
+        Str::BrushSize => "Brush Size",
+        Str::BrushSoftness => "Softness",
+        Str::BrushFlow => "Flow",
+        Str::BrushEraser => "Eraser",
+        Str::BrushRadiusInvalid => "Brush radius must be finite and within (0, 1]",
+        Str::BrushSoftnessInvalid => "Brush softness must be finite and within 0..=1",
+        Str::BrushFlowInvalid => "Brush flow must be finite and within 0..=1",
+        Str::BrushMarkInvalid => {
+            "Brush marks need finite normalized coordinates, positive radius, and softness/flow within 0..=1"
+        }
+        Str::BrushStrokeEmpty => "A brush mask needs at least one mark",
+        Str::MaskOrderInvalid => "Mask order changes must be exactly -1 or +1",
+        Str::DuplicateSourceOnly => {
+            "Only source masks duplicate; rebuild derived masks with Combine"
+        }
+        Str::MaskResolutionMismatchPattern => {
+            "Brush prompt resolution {} does not match source {}"
+        }
+        Str::MaskLivePlaneMissing => "Live brush plane was not rebuilt",
+        Str::MaskLivePlaneRebuildPattern => {
+            "Cannot rebuild live brush plane for {}: {}"
+        }
+        Str::DrawMaskHint => {
+            "Drag on the preview to draw the mask; the overlay shows the exact matte."
+        }
+        Str::Blur => "Blur",
+        Str::Density => "Density",
+        Str::NoSidecarLoaded => "No sidecar loaded",
+        Str::VirtualCopyNotFound => "Virtual copy not found",
+        Str::MaskNotFound => "Mask not found",
+        Str::MaskNameEmpty => "Mask name must not be empty",
+        Str::NoImageLoaded => "No image loaded",
+        Str::MaskNameExists => "A mask with this name already exists",
+        Str::MaskCreated => "Mask created; recalculation explicitly required",
+        Str::MaskRenamed => "Mask renamed; save sidecar",
+        Str::InvalidLocalAdjustment => "Invalid local adjustment",
+        Str::LocalAdjustmentSaved => "Local mask adjustment saved (pipeline support pending)",
+        Str::NoMaskSelected => "No mask selected",
+        Str::MaskStaleRecalc => "Mask stale/unavailable; start recalculation?",
+        Str::MaskCurrentNoRecalc => "Mask current; no recalculation required",
+        Str::ExplicitRecalcRequested => "Explicit recalculation requested",
         Str::AddAiMask => "Add AI mask",
         Str::LuminanceRange => "Luminance range",
         Str::ColorRange => "Color range",
@@ -53,6 +104,12 @@ pub(crate) fn masking_text(s: Str) -> &'static str {
         Str::AllPanelsHiddenOff => "All panels shown",
         // LRPAR-G03-MASKGROUP-03: group panel.
         Str::MaskGroupsLabel => "Mask groups",
+        Str::MaskPin => "Pin list",
+        Str::MaskVisible => "Visible",
+        Str::MaskHidden => "Hidden",
+        Str::RenameMask => "Rename",
+        Str::MoveMaskUp => "Move up",
+        Str::MoveMaskDown => "Move down",
         Str::GroupMembersLabel => "Members",
         Str::GroupSelected => "Group selected",
         Str::DuplicateGroup => "Duplicate (group)",

@@ -67,7 +67,8 @@ impl LuminaApp {
             }
         };
 
-        ui.separator();
+        // The per-mask management strip above already separates the sections;
+        // keep the group header compact so the complete controls fit 1024×720.
         ui.label(Str::MaskGroupsLabel.t());
         for (id, name) in &library {
             let mut checked = self.group_member_selected(id);

@@ -176,7 +176,7 @@ fn escape_cancels_armed_preview_pickers() {
 
     app.set_red_eye_pick_mode(true);
     app.set_spot_tool(SpotTool::Heal);
-    assert!(app.red_eye_pick_mode && app.spot_tool == SpotTool::Heal);
+    assert!(!app.red_eye_pick_mode && app.spot_tool == SpotTool::Heal);
     escape(&mut app);
     assert!(!app.red_eye_pick_mode, "Esc must disarm the red-eye picker");
     assert_eq!(app.spot_tool, SpotTool::None);

@@ -12,8 +12,8 @@ use super::*;
 /// Color, Spot distraction, Red-Eye picker, generative canvas, the generative
 /// checkboxes, the shared per-section Previous/Reset row, the lens-blur enable
 /// and the three filmstrip selection buttons) plus the 3 R5-DUST-23-FOLLOWUP
-/// spot selection/editing actions.
-const INSTRDBG_REST_ACTIONS: [GuiAction; 68] = [
+/// spot selection/editing actions and the four mask-management actions.
+const INSTRDBG_REST_ACTIONS: [GuiAction; 72] = [
     GuiAction::ToggleCompareMode,
     GuiAction::ClearCrop,
     GuiAction::SetCropAspect,
@@ -32,6 +32,10 @@ const INSTRDBG_REST_ACTIONS: [GuiAction; 68] = [
     GuiAction::CreateColorRangeMask,
     GuiAction::CombineMasks,
     GuiAction::DuplicateMask,
+    GuiAction::RenameMask,
+    GuiAction::DeleteMask,
+    GuiAction::MoveMask,
+    GuiAction::GroupDuplicateMask,
     GuiAction::SetOverlayMode,
     GuiAction::SetPinVisibility,
     GuiAction::SetSoloMode,
@@ -88,64 +92,7 @@ const INSTRDBG_REST_ACTIONS: [GuiAction; 68] = [
     GuiAction::ApplyPreviousToSelection,
 ];
 
-/// State an action needs before its trigger. Runs *before* the capture is
-/// drained, so a preparation step (which itself may be an instrumented
-/// action) can never masquerade as the trigger's line.
-#[cfg(debug_assertions)]
-fn prepare_rest_action(app: &mut LuminaApp, action: GuiAction) -> Option<String> {
-    match action {
-        GuiAction::SelectMask
-        | GuiAction::SetMaskVisible
-        | GuiAction::CombineMasks
-        | GuiAction::DuplicateMask
-        | GuiAction::SetMaskInverted
-        | GuiAction::OfferMaskRecalculation => {
-            let id = app.create_mask("audit-mask").ok()?;
-            let _ = app.select_mask(&id);
-            Some(id)
-        }
-        GuiAction::PasteMetadataDraft => {
-            let _ = app.copy_metadata_draft();
-            None
-        }
-        GuiAction::RemoveRedEyeRegion | GuiAction::ClearRedEye => {
-            let _ = app.add_red_eye_region(0.5, 0.5);
-            None
-        }
-        // R5-DUST-23-FOLLOWUP: selection/editing need a committed spot; the
-        // returned id drives the trigger below (like the mask actions).
-        GuiAction::SelectSpot | GuiAction::UpdateSpot | GuiAction::RemoveSpot => {
-            let _ = app.commit_spot_heal(
-                lumina_sidecar::Point2 { x: 0.2, y: 0.2 },
-                2.0,
-                0.0,
-                lumina_sidecar::Point2 { x: 0.1, y: 0.0 },
-                1.0,
-            );
-            app.spot_entries()
-                .into_iter()
-                .find_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(str::to_string))
-        }
-        GuiAction::RemoveCurvePoint => {
-            // One interior control point paints the per-point remove button.
-            app.add_curve_point("master", 0.5, 0.5);
-            None
-        }
-        GuiAction::SavePresetFile => {
-            app.preset_name = "instrdbg-preset".into();
-            None
-        }
-        GuiAction::RemovePointColor => {
-            app.add_point_color();
-            None
-        }
-        GuiAction::GenerateCanvas => {
-            let _ = app.set_expand_beyond_image(true);
-            None
-        }
-        _ => None,
-    }
-}
+use super::instrdbg_prepare::prepare_rest_action;
 
 /// One trigger per GUI-INSTRDBG-17b action. Results are ignored: this test
 /// proves the logging wiring, not the action semantics (covered by the
@@ -200,6 +147,26 @@ fn trigger_rest_action(app: &mut LuminaApp, action: GuiAction, mask_id: Option<&
         GuiAction::DuplicateMask => {
             if let Some(id) = mask_id {
                 let _ = app.duplicate_mask(id, "copy-mask");
+            }
+        }
+        GuiAction::RenameMask => {
+            if let Some(id) = mask_id {
+                let _ = app.rename_mask(id, "renamed-mask");
+            }
+        }
+        GuiAction::DeleteMask => {
+            if let Some(id) = mask_id {
+                let _ = app.delete_mask(id);
+            }
+        }
+        GuiAction::MoveMask => {
+            if let Some(id) = mask_id {
+                let _ = app.move_mask(id, 1);
+            }
+        }
+        GuiAction::GroupDuplicateMask => {
+            if let Some(id) = mask_id {
+                let _ = app.group_duplicate_mask(id, "grouped-mask");
             }
         }
         GuiAction::SetOverlayMode => app.set_overlay_mode(OverlayMode::Never),
@@ -346,7 +313,43 @@ fn trigger_rest_action(app: &mut LuminaApp, action: GuiAction, mask_id: Option<&
         GuiAction::ApplyPreviousToSelection => {
             let _ = app.apply_previous_to_selection();
         }
-        _ => panic!("not a GUI-INSTRDBG-17b action: {action:?}"),
+        GuiAction::ToggleBeforeAfter
+        | GuiAction::ToggleSplitView
+        | GuiAction::ToggleCropMode
+        | GuiAction::ToggleClipping
+        | GuiAction::ToggleSoftproof
+        | GuiAction::ToggleOriginalHistogram
+        | GuiAction::ToggleLightsOut
+        | GuiAction::TogglePanelsHidden
+        | GuiAction::ToggleAllPanelsHidden
+        | GuiAction::ToggleFullscreen
+        | GuiAction::ToggleFilterBar
+        | GuiAction::ToggleBlackWhite
+        | GuiAction::ToggleStackGroup
+        | GuiAction::CreateSnapshot
+        | GuiAction::DuplicateCopy
+        | GuiAction::CopySettings
+        | GuiAction::PasteSettings
+        | GuiAction::SetRating
+        | GuiAction::SetFlag
+        | GuiAction::SetColorLabel
+        | GuiAction::SetMaskTool
+        | GuiAction::SetSpotTool
+        | GuiAction::SetTreatment
+        | GuiAction::SetModule
+        | GuiAction::SetLibraryView
+        | GuiAction::SetLibrarySort
+        | GuiAction::SetZoomMode
+        | GuiAction::RegenerateStale
+        | GuiAction::MatchExposure
+        | GuiAction::AutoTone
+        | GuiAction::SaveRecipe
+        | GuiAction::Reset
+        | GuiAction::Render
+        | GuiAction::Export
+        | GuiAction::StartMerge
+        | GuiAction::SetDenoiseEnabled
+        | GuiAction::CreateFaceMask => panic!("not a GUI-INSTRDBG-17b action: {action:?}"),
     }
 }
 

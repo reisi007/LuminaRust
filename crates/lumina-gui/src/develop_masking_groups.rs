@@ -43,9 +43,7 @@ impl LuminaApp {
                 .ok_or_else(|| GuiError::Io(Str::MaskNotFound.t().to_string()))?
         };
         if template.operation != MaskOperation::Source {
-            return Err(GuiError::Io(
-                "Only source masks duplicate; rebuild derived masks with Combine".into(),
-            ));
+            return Err(GuiError::Io(Str::DuplicateSourceOnly.t().to_string()));
         }
         let id = format!(
             "mask-{}",
@@ -57,7 +55,6 @@ impl LuminaApp {
         duplicated.created_at = "pending".into();
         duplicated.generator_version = env!("CARGO_PKG_VERSION").into();
         let id = self.push_mask_definition(duplicated)?;
-        self.select_mask(&id)?;
         info!("GUI interaction: duplicate_mask (Copy) {mask_id} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)
@@ -71,10 +68,12 @@ impl LuminaApp {
         mask_id: &str,
         name: impl Into<String>,
     ) -> Result<String, GuiError> {
+        instrument_gui_action!(self, GuiAction::GroupDuplicateMask);
         let name = name.into();
         if name.trim().is_empty() {
             return Err(GuiError::Io(Str::MaskNameEmpty.t().to_string()));
         }
+        self.ensure_document_loaded()?;
         let copy_id = self.virtual_copy_id.clone();
         let member = MaskReference {
             copy_id: copy_id.clone(),
@@ -83,11 +82,29 @@ impl LuminaApp {
         };
         let group_id = MaskGroup::group_id_for_members(&copy_id, std::slice::from_ref(&member));
         let member_id = member.mask_id.clone();
-        self.mutate_active_copy(|copy| {
-            lumina_sidecar::group_masks(copy, group_id.clone(), name.clone(), &[member_id])
+        self.transact_mask_mutation(true, |app| {
+            let active_copy_id = app.virtual_copy_id.clone();
+            {
+                let copy = app
+                    .document
+                    .as_mut()
+                    .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?
+                    .virtual_copies
+                    .iter_mut()
+                    .find(|copy| copy.id == active_copy_id)
+                    .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+                lumina_sidecar::group_masks(
+                    copy,
+                    group_id.clone(),
+                    name.clone(),
+                    std::slice::from_ref(&member_id),
+                )
+                .map_err(|error| GuiError::Io(error.to_string()))?;
+            }
+            app.select_mask_in_memory(mask_id)?;
+            app.selected_group_id = Some(group_id.clone());
+            Ok(())
         })?;
-        self.select_mask(mask_id)?;
-        self.selected_group_id = Some(group_id.clone());
         info!("GUI interaction: group_duplicate_mask {mask_id} -> {group_id}");
         self.status = Str::MaskGroupedPattern.format_arg(&group_id);
         Ok(group_id)
@@ -241,64 +258,93 @@ impl LuminaApp {
         Ok(touched)
     }
 
+    /// Move one mask by exactly one position in the persisted list. Identity
+    /// remains the stable mask id; the operation never wraps at an end.
+    pub fn move_mask(&mut self, mask_id: &str, delta: isize) -> Result<bool, GuiError> {
+        instrument_gui_action!(self, GuiAction::MoveMask);
+        if !matches!(delta, -1 | 1) {
+            return Err(GuiError::Io(Str::MaskOrderInvalid.t().to_string()));
+        }
+        let index = {
+            let copy = self.active_copy_ref()?;
+            copy.mask_library
+                .iter()
+                .position(|mask| mask.id == mask_id)
+                .ok_or_else(|| GuiError::Io(Str::MaskNotFound.t().to_string()))?
+        };
+        let target = index.checked_add_signed(delta);
+        let mask_library_len = self.active_copy_ref()?.mask_library.len();
+        let Some(target) = target.filter(|target| *target < mask_library_len) else {
+            return Ok(false);
+        };
+        self.mutate_active_copy(|copy| {
+            let mask = copy.mask_library.remove(index);
+            copy.mask_library.insert(target, mask);
+            Ok(())
+        })?;
+        info!("GUI interaction: move_mask {mask_id} {index} -> {target}");
+        Ok(true)
+    }
+
     /// Deletes one mask node. References (derived inputs, group memberships,
     /// layers) are materialized as one frozen copy first — loud, with a history
     /// entry — never a dangling reference and never a silent member deletion.
     pub fn delete_mask(&mut self, mask_id: &str) -> Result<(), GuiError> {
+        instrument_gui_action!(self, GuiAction::DeleteMask);
         self.ensure_document_loaded()?;
         let copy_id = self.virtual_copy_id.clone();
         let timestamp = self.history_timestamp();
-        let snapshot = self.active_copy_ref()?.clone();
-        let outcome = {
-            let document = self.document.as_mut().expect("document was ensured");
-            let copy = document
-                .virtual_copies
-                .iter_mut()
-                .find(|copy| copy.id == copy_id)
-                .expect("active copy exists");
-            match lumina_sidecar::delete_mask_node(copy, mask_id) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    *copy = snapshot.clone();
-                    return Err(GuiError::Io(error.to_string()));
+        let outcome = self.transact_mask_mutation(true, |app| {
+            let outcome = {
+                let document = app.document.as_mut().expect("document was ensured");
+                let copy = document
+                    .virtual_copies
+                    .iter_mut()
+                    .find(|copy| copy.id == copy_id)
+                    .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+                lumina_sidecar::delete_mask_node(copy, mask_id)
+                    .map_err(|error| GuiError::Io(error.to_string()))?
+            };
+            if !outcome.frozen_copies.is_empty() {
+                let copy = app
+                    .document
+                    .as_mut()
+                    .expect("document was ensured")
+                    .virtual_copies
+                    .iter_mut()
+                    .find(|copy| copy.id == copy_id)
+                    .expect("active copy exists");
+                let mut counter = copy.history.len() + 1;
+                while copy
+                    .history
+                    .iter()
+                    .any(|entry| entry.id == format!("mask-delete-{counter}"))
+                {
+                    counter += 1;
                 }
+                let mut extras = BTreeMap::new();
+                extras.insert(
+                    "action".into(),
+                    Value::String("mask.group.materialize".into()),
+                );
+                extras.insert(
+                    "frozen".into(),
+                    Value::String(outcome.frozen_copies.join(",")),
+                );
+                copy.history.push(HistoryEntry {
+                    id: format!("mask-delete-{counter}"),
+                    recipe: copy.recipe.clone(),
+                    recorded_at: Some(timestamp),
+                    extras,
+                });
             }
-        };
-        if !outcome.frozen_copies.is_empty() {
-            let copy = self.active_copy_mut()?;
-            let mut counter = copy.history.len() + 1;
-            while copy
-                .history
-                .iter()
-                .any(|entry| entry.id == format!("mask-delete-{counter}"))
-            {
-                counter += 1;
+            if app.selected_mask_id.as_deref() == Some(mask_id) {
+                app.selected_mask_id = None;
+                app.mask_rename_input.clear();
             }
-            let mut extras = BTreeMap::new();
-            extras.insert(
-                "action".into(),
-                Value::String("mask.group.materialize".into()),
-            );
-            extras.insert(
-                "frozen".into(),
-                Value::String(outcome.frozen_copies.join(",")),
-            );
-            copy.history.push(HistoryEntry {
-                id: format!("mask-delete-{counter}"),
-                recipe: copy.recipe.clone(),
-                recorded_at: Some(timestamp),
-                extras,
-            });
-        }
-        if let Err(error) = self.document.as_ref().expect("document").validate() {
-            self.restore_active_copy(snapshot);
-            return Err(GuiError::Io(error.to_string()));
-        }
-        self.save_sidecar();
-        self.mark_dirty();
-        if self.selected_mask_id.as_deref() == Some(mask_id) {
-            self.selected_mask_id = None;
-        }
+            app.mask_rename_inputs.remove(mask_id);
+            Ok(outcome)
+        })?;
         info!(
             "GUI interaction: delete_mask {mask_id} frozen={:?} repointed={} removed={}",
             outcome.frozen_copies, outcome.layers_repointed, outcome.layers_removed
@@ -343,50 +389,25 @@ impl LuminaApp {
             .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))
     }
 
-    fn restore_active_copy(&mut self, snapshot: lumina_sidecar::VirtualCopy) {
-        if let Some(copy) = self.document.as_mut().and_then(|document| {
-            document
-                .virtual_copies
-                .iter_mut()
-                .find(|copy| copy.id == self.virtual_copy_id)
-        }) {
-            *copy = snapshot;
-        }
-    }
-
-    /// Mutates the active copy and persists it, rolling the whole copy back in
-    /// memory when the operation or the resulting validation fails (loud, never
-    /// a half-written group state).
+    /// Mutates the active copy and persists it through the same full-document
+    /// rollback transaction as mask constructors. Group operations therefore
+    /// cannot leave a saved layer/order change with a failed selection update.
     fn mutate_active_copy<T>(
         &mut self,
         mutate: impl FnOnce(&mut lumina_sidecar::VirtualCopy) -> Result<T, lumina_sidecar::SidecarError>,
     ) -> Result<T, GuiError> {
         self.ensure_document_loaded()?;
-        let copy_id = self.virtual_copy_id.clone();
-        let snapshot = self.active_copy_ref()?.clone();
-        let result = {
-            let document = self.document.as_mut().expect("document was ensured");
-            let copy = document
+        self.transact_mask_mutation(true, |app| {
+            let copy_id = app.virtual_copy_id.clone();
+            let copy = app
+                .document
+                .as_mut()
+                .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?
                 .virtual_copies
                 .iter_mut()
                 .find(|copy| copy.id == copy_id)
-                .expect("active copy exists");
-            mutate(copy)
-        };
-        match result {
-            Ok(value) => {
-                if let Err(error) = self.document.as_ref().expect("document").validate() {
-                    self.restore_active_copy(snapshot);
-                    return Err(GuiError::Io(error.to_string()));
-                }
-                self.save_sidecar();
-                self.mark_dirty();
-                Ok(value)
-            }
-            Err(error) => {
-                self.restore_active_copy(snapshot);
-                Err(GuiError::Io(error.to_string()))
-            }
-        }
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            mutate(copy).map_err(|error| GuiError::Io(error.to_string()))
+        })
     }
 }

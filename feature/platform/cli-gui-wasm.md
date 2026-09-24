@@ -580,7 +580,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Im Scope der 17b/17c-Rework-Flächen bleibt kein user-sichtbarer, das
   Edit-Rezept oder Masken mutierender `ui.button`/`ui.checkbox` ohne
   `GuiAction`.
-  Vollständige Klassenprüfung: alle 105
+  Vollständige Klassenprüfung: alle 109
   `GuiAction`s sind über den Audit (`f100_action_button`, ohne `_`-Arm)
   einer gezeichneten Oberfläche zugeordnet, und jede instrumentierte Methode
   trägt das Makro als erste Anweisung (Klick-Tests je Button/Checkbox).
@@ -676,7 +676,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   eigentliche GPU-Pfad ist über `assert_path_parity` (`maxAbsDiff=0`) und die
   `gpu_present_frame_size`-Present-Prüfung gepinnt, nicht über den Snapshot.
 - **GUI-GPU-AUDIT-17 (Release 1.0, User-Vorgabe 2026-09-17, F-103-N6):**
-  Automatisierter headless Routing-Audit über **alle** 105 `GuiAction`s
+  Automatisierter headless Routing-Audit über **alle** 109 `GuiAction`s
   (Quelle der Aktionsliste: `ALL_GUI_ACTIONS`). Der Audit lädt eine
   deterministische synthetische Quelle in eine `LuminaApp` mit **echtem**
   GPU-Kontext (Standalone-Metal-Adapter über `attach_wgpu_render_state`),
@@ -696,14 +696,14 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   - **Historisches Ergebnis (lokaler Metal-Lauf, 2026-09-18):** Damals wurde
     der zu diesem Zeitpunkt vorhandene Aktionsstand mit echtem
     GPU-Kontext geprüft. Der Lauf ist **kein** Nachweis für die später
-    hinzugefügten Aktionen. Der adapter-unabhängige Audit umfasst heute 105
-    Aktionen, davon 103 Render-Aktionen; 10 dokumentierte CPU-Ausnahmen
+    hinzugefügten Aktionen. Der adapter-unabhängige Audit umfasst heute 109
+    Aktionen, davon 107 Render-Aktionen; 10 dokumentierte CPU-Ausnahmen
     (die vier `GuiAction`-Klassen unten, `default content crop` zählt drei
     Aktionen), keine undokumentierte CPU-Route. Der vollständige
-    105-Aktionen-Audit ist auf dem lokalen Softwareadapter gelaufen; ein
-    aktueller Hardware-/Metal-Nachweis für alle 105 Aktionen bleibt offen.
+    109-Aktionen-Audit ist auf dem lokalen Softwareadapter gelaufen; ein
+    aktueller Hardware-/Metal-Nachweis für alle 109 Aktionen bleibt offen.
     Der Present-Pfad selbst bleibt über `kittest_parity` abgedeckt. Mit
-    **LRPAR-G09-SORT-09** (2026-09-20) ist die Oberfläche auf 105 Aktionen
+    **LRPAR-G09-SORT-09** (2026-09-20) ist die Oberfläche auf 109 Aktionen
     gewachsen: `set_library_sort` ist display-only (Sortier-/Anzeigezustand,
     kein Render-Key, keine Bildstufe) und daher keine CPU-Ausnahme.
     **R3-ROUTING-1 (2026-09-20):** Der Audit fährt jede Aktion aus dem
@@ -2489,9 +2489,13 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Funktion — **implementiert 2026-09-20**: Toolbar-Arming `Heal`/`Q` ohne
   Sidebar-Abschnitt, Size-Slider + `[`/`]`, Dab→Heilung, Kreis-Cursor;
   Verifizierung offen), R5-BRUSH-24 („großer Fail": Größe/Weichheit/Fluss, Kreis-Cursor,
-  Mehrfach-Masken + komplette Maskenverwaltung), R5-MASKVIS-25 (Overlay-Toggle
-  ohne Panel + Bildbereich vergrößern), R5-STACKVIS-21 (Stack-Zeichen ≠
-  Selektions-Rahmen, kein Rechtsklick bleibt).
+  Mehrfach-Masken + komplette Maskenverwaltung; normale CPU/no-GPU- und
+  `--no-default-features`-Tests laufen ohne Adapter, der 1024×720-Kittest-Golden
+  `mask_management_controls_have_a_representative_kittest_golden` ist wegen des
+  Native-Adapters explizit ignoriert und separat mit `--ignored` zu prüfen; der
+  echte Metal/Vulkan/DPI-Hardware-Nachweis bleibt offen), R5-MASKVIS-25
+  (Overlay-Toggle ohne Panel + Bildbereich vergrößern), R5-STACKVIS-21
+  (Stack-Zeichen ≠ Selektions-Rahmen, kein Rechtsklick bleibt).
 
 ## Optionale zentrale Indizierung
 

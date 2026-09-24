@@ -6,16 +6,17 @@
 //! * [`MaskTileGrid`] — per-512²-tile dirty flags. A brush mark only dirties
 //!   the tiles its disc touches, so only those tiles are re-stamped/re-uploaded
 //!   each frame (the rest of the mask plane is left untouched).
-//! * [`stamp_brush_mark`] — single-mark incremental rasterizer whose per-pixel
-//!   semantics are byte-identical to the reference brush kernel in
-//!   [`crate::masks::rasterize_prompt`] (`MaskPrompt::Brush`): a pixel belongs
-//!   to a mark iff its centre `(x+0.5)/w, (y+0.5)/h` lies within the mark's
-//!   normalized radius; marks applied in order override earlier ones.
+//! * [`stamp_brush_mark_with_options`] — single-mark incremental rasterizer
+//!   whose per-pixel semantics are byte-identical to the reference brush kernel in
+//!   [`crate::masks::rasterize_prompt`] (`MaskPrompt::Brush`): softness creates
+//!   a full-coverage inner radius and a smoothstep edge, then flow scales the
+//!   resulting coverage. Positive marks blend with `max`; negative marks blend
+//!   with the smaller complementary value, so strokes accumulate cumulatively.
 //!
 //! No GPU, filesystem or GUI dependency in this module (Agents.md: core stays
 //! platform-neutral).
 
-use lumina_sidecar::BrushMarkSign;
+use lumina_sidecar::{BrushMark, BrushMarkSign};
 
 /// Tile edge length in pixels for the mask overlay grid. Must stay identical
 /// to `lumina_gpu::tiling::TILE_SIZE` (which re-exports this constant).
@@ -165,18 +166,98 @@ impl MaskTileGrid {
     }
 }
 
-/// Stamp a single brush mark into `values` (row-major `u16`, `width × height`)
-/// using exactly the same pixel test as the [`MaskPrompt::Brush`] branch of
-/// [`crate::masks::rasterize_prompt`]: later marks override earlier ones, a
-/// negative mark paints 0, a positive mark paints `u16::MAX`, and a pixel is
-/// covered by the mark when its centre lies within the normalized radius.
+/// Deterministic R5-BRUSH-24 coverage for one brush sample.
 ///
-/// Only the pixels inside the mark's disc are touched, so callers can update a
-/// persistent mask plane incrementally instead of re-rasterizing the whole
-/// prompt per frame.
+/// `distance` and `radius` use the normalized-min-source-axis domain. The
+/// hard inner radius is `radius * (1 - softness)`; the outer band uses a
+/// smoothstep ramp, then the result is scaled by flow. Invalid controls and
+/// points outside the disc return zero. This is the one kernel shared by the
+/// full CPU rasterizer and incremental GPU tile stamps.
+#[must_use]
+pub fn brush_mark_alpha(distance: f32, radius: f32, softness: f32, flow: f32) -> u16 {
+    if !distance.is_finite()
+        || !radius.is_finite()
+        || radius <= 0.0
+        || !softness.is_finite()
+        || !(0.0..=1.0).contains(&softness)
+        || !flow.is_finite()
+        || !(0.0..=1.0).contains(&flow)
+        || distance > radius
+    {
+        return 0;
+    }
+    let inner = radius * (1.0 - softness);
+    let edge = if softness == 0.0 || distance <= inner {
+        1.0
+    } else {
+        let t = ((distance - inner) / (radius - inner).max(f32::EPSILON)).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    };
+    (edge * flow * u16::MAX as f32 + 0.5) as u16
+}
+
+/// Blend one [`brush_mark_alpha`] coverage into the current mask value. Positive
+/// marks take the larger coverage; negative marks take the complementary
+/// smaller value (`65535 - coverage`). This is selection, not alpha
+/// attenuation.
+#[must_use]
+pub fn blend_brush_value(current: u16, sign: BrushMarkSign, alpha: u16) -> u16 {
+    match sign {
+        BrushMarkSign::Positive => current.max(alpha),
+        BrushMarkSign::Negative => current.min(u16::MAX - alpha),
+    }
+}
+
+/// Stamp one R5-BRUSH-24 brush mark into a row-major `u16` plane.
 ///
-/// Returns the pixel-space bounding box actually written
-/// `(x0, y0, w, h)` (empty box `(0, 0, 0, 0)` for non-finite/degenerate input).
+/// The radius is relative to the shorter source axis, making both the painted
+/// mark and the preview cursor true source-pixel circles on non-square images.
+/// Returns the touched pixel-space bounding box `(x0, y0, w, h)`.
+pub fn stamp_brush_mark_with_options(
+    values: &mut [u16],
+    width: u32,
+    height: u32,
+    mark: BrushMark,
+) -> (u32, u32, u32, u32) {
+    let empty = (0u32, 0u32, 0u32, 0u32);
+    if !mark.x.is_finite() || !mark.y.is_finite() || !mark.radius.is_finite() || mark.radius <= 0.0
+    {
+        return empty;
+    }
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || values.len() < w.saturating_mul(h) {
+        return empty;
+    }
+    let (fw, fh) = (width as f32, height as f32);
+    let min_axis = fw.min(fh);
+    let cx = mark.x * fw;
+    let cy = mark.y * fh;
+    let pixel_radius = mark.radius * min_axis;
+    let x0 = (cx - pixel_radius).floor().max(0.0) as usize;
+    let y0 = (cy - pixel_radius).floor().max(0.0) as usize;
+    let x1 = (cx + pixel_radius).ceil().min(fw) as usize;
+    let y1 = (cy + pixel_radius).ceil().min(fh) as usize;
+    if x0 >= x1 || y0 >= y1 {
+        return empty;
+    }
+    for py in y0..y1 {
+        let dy_px = (py as f32 + 0.5) - cy;
+        for px in x0..x1 {
+            let dx_px = (px as f32 + 0.5) - cx;
+            let distance = (dx_px * dx_px + dy_px * dy_px).sqrt() / min_axis;
+            let alpha = brush_mark_alpha(distance, mark.radius, mark.softness, mark.flow);
+            if alpha != 0 {
+                let index = py * w + px;
+                values[index] = blend_brush_value(values[index], mark.sign, alpha);
+            }
+        }
+    }
+    (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
+}
+
+/// Legacy hard/full stamp retained as the compatibility entry point. R5
+/// brush sessions use [`stamp_brush_mark_with_options`] so softness and flow
+/// reach both CPU and GPU paths.
 pub fn stamp_brush_mark(
     values: &mut [u16],
     width: u32,
@@ -186,48 +267,19 @@ pub fn stamp_brush_mark(
     radius: f32,
     sign: BrushMarkSign,
 ) -> (u32, u32, u32, u32) {
-    let empty = (0u32, 0u32, 0u32, 0u32);
-    if !x.is_finite() || !y.is_finite() || !radius.is_finite() || radius <= 0.0 {
-        return empty;
-    }
-    let (w, h) = (width as usize, height as usize);
-    if w == 0 || h == 0 || values.len() < w.saturating_mul(h) {
-        return empty;
-    }
-    let (fw, fh) = (width as f32, height as f32);
-    // Pixel-space bounding box of the disc (clamped to the plane).
-    let cx = x * fw;
-    let cy = y * fh;
-    // The disc is defined in normalized space; its aspect on screen follows the
-    // larger dimension so the test below uses per-axis radii derived from the
-    // same normalization the reference kernel performs implicitly via nx/ny.
-    let rx = radius * fw;
-    let ry = radius * fh;
-    let x0 = ((cx - rx).floor().max(0.0)) as usize;
-    let y0 = ((cy - ry).floor().max(0.0)) as usize;
-    let x1 = ((cx + rx).ceil().min(fw)) as usize;
-    let y1 = ((cy + ry).ceil().min(fh)) as usize;
-    if x0 >= x1 || y0 >= y1 {
-        return empty;
-    }
-    let value = if matches!(sign, BrushMarkSign::Positive) {
-        u16::MAX
-    } else {
-        0
-    };
-    let r_sq = radius * radius;
-    for py in y0..y1 {
-        let ny = (py as f32 + 0.5) / fh;
-        for px in x0..x1 {
-            let nx = (px as f32 + 0.5) / fw;
-            let ddx = nx - x;
-            let ddy = ny - y;
-            if ddx * ddx + ddy * ddy <= r_sq {
-                values[py * w + px] = value;
-            }
-        }
-    }
-    (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
+    stamp_brush_mark_with_options(
+        values,
+        width,
+        height,
+        BrushMark {
+            x,
+            y,
+            radius,
+            sign,
+            softness: 0.0,
+            flow: 1.0,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -236,7 +288,14 @@ mod tests {
     use lumina_sidecar::{BrushMark, MaskPrompt};
 
     fn mark(x: f32, y: f32, radius: f32, sign: BrushMarkSign) -> BrushMark {
-        BrushMark { x, y, radius, sign }
+        BrushMark {
+            x,
+            y,
+            radius,
+            sign,
+            softness: 0.0,
+            flow: 1.0,
+        }
     }
 
     #[test]
@@ -327,7 +386,7 @@ mod tests {
         let mut incremental = vec![0u16; (w * h) as usize];
         let mut total_bbox = (0u32, 0u32, 0u32, 0u32);
         for m in &marks {
-            let bbox = stamp_brush_mark(&mut incremental, w, h, m.x, m.y, m.radius, m.sign);
+            let bbox = stamp_brush_mark_with_options(&mut incremental, w, h, *m);
             // Union of bboxes for coverage sanity (not asserted precisely).
             total_bbox.2 += bbox.2;
             total_bbox.3 += bbox.3;
@@ -337,6 +396,42 @@ mod tests {
         assert_eq!(
             reference.values, incremental,
             "incremental stamp diverges from the reference brush kernel"
+        );
+    }
+
+    #[test]
+    fn brush_alpha_is_monotonic_and_flow_scaled() {
+        let hard = brush_mark_alpha(0.1, 1.0, 0.0, 1.0);
+        let soft_mid = brush_mark_alpha(0.5, 1.0, 1.0, 1.0);
+        let soft_edge = brush_mark_alpha(0.99, 1.0, 1.0, 1.0);
+        assert_eq!(hard, u16::MAX);
+        assert!((0..u16::MAX).contains(&soft_mid));
+        assert!(soft_edge < soft_mid);
+        assert_eq!(
+            brush_mark_alpha(0.5, 1.0, 1.0, 0.5),
+            (soft_mid as f32 * 0.5).round() as u16
+        );
+        assert_eq!(brush_mark_alpha(0.5, 1.0, 1.0, 0.0), 0);
+        assert_eq!(brush_mark_alpha(0.5, 1.0, f32::NAN, 1.0), 0);
+    }
+
+    #[test]
+    fn negative_blend_selects_the_smallest_complementary_value() {
+        assert_eq!(
+            blend_brush_value(20_000, BrushMarkSign::Negative, u16::MAX),
+            0
+        );
+        assert_eq!(
+            blend_brush_value(u16::MAX, BrushMarkSign::Negative, 32_768),
+            32_767
+        );
+        assert_eq!(
+            blend_brush_value(12_345, BrushMarkSign::Negative, 0),
+            12_345
+        );
+        assert_eq!(
+            blend_brush_value(12_345, BrushMarkSign::Positive, 12_000),
+            12_345
         );
     }
 

@@ -18,12 +18,16 @@ fn brush_marks_roundtrip_through_sidecar() {
             y: 0.3,
             radius: 0.05,
             sign: BrushMarkSign::Positive,
+            softness: 0.0,
+            flow: 1.0,
         },
         BrushMark {
             x: 0.5,
             y: 0.6,
             radius: 0.05,
             sign: BrushMarkSign::Positive,
+            softness: 0.0,
+            flow: 1.0,
         },
     ];
     app.commit_brush_stroke(marks).unwrap();
@@ -44,12 +48,16 @@ fn brush_marks_roundtrip_through_sidecar() {
                     y: 0.3,
                     radius: 0.05,
                     sign: BrushMarkSign::Positive,
+                    softness: 0.0,
+                    flow: 1.0,
                 },
                 BrushMark {
                     x: 0.5,
                     y: 0.6,
                     radius: 0.05,
                     sign: BrushMarkSign::Positive,
+                    softness: 0.0,
+                    flow: 1.0,
                 },
             ],
             resolution: (2, 1),
@@ -80,6 +88,8 @@ fn empty_brush_stroke_is_visible_error_and_writes_no_sidecar() {
     let mut app = new_app();
     open_and_decode(&mut app, source.display().to_string());
     app.create_mask("Subject").unwrap();
+    let sidecar = lumina_sidecar::sidecar_path_for(&source);
+    let persisted_before_empty_stroke = std::fs::read(&sidecar).unwrap();
     // An empty stroke is rejected by the commit path (returns Err, no write).
     let result = app.commit_brush_stroke(vec![]);
     assert!(result.is_err());
@@ -95,9 +105,12 @@ fn empty_brush_stroke_is_visible_error_and_writes_no_sidecar() {
     assert_eq!(app.status(), Str::Error.t());
     assert!(app.error().is_some());
 
-    // No sidecar was written (the empty stroke never persisted).
-    let sidecar = lumina_sidecar::sidecar_path_for(&source);
-    assert!(!sidecar.is_file());
+    // Mask creation already persisted its selected layer; the rejected empty
+    // stroke must leave that normal sidecar byte-for-byte unchanged.
+    assert_eq!(
+        std::fs::read(&sidecar).unwrap(),
+        persisted_before_empty_stroke
+    );
 }
 
 #[test]

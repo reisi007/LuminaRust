@@ -20,14 +20,53 @@
 use super::*;
 #[cfg(feature = "gpu")]
 use log::trace;
-#[cfg(feature = "gpu")]
-use log::warn;
 
 impl LuminaApp {
-    /// Drive an interactive mask-tool drag on the preview widget.
-    pub(crate) fn handle_mask_tool_drag(&mut self, response: &egui::Response, rect: egui::Rect) {
-        if self.mask_tool == MaskTool::None || self.wb_pick_mode {
+    /// Drive an interactive mask-tool drag on the preview widget. For Brush,
+    /// paint the live source-pixel cursor and route a pin click to selection
+    /// before any dab is accumulated.
+    pub(crate) fn handle_mask_tool_drag(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        rect: egui::Rect,
+        scale: f32,
+    ) {
+        if self.wb_pick_mode
+            || self.red_eye_pick_mode
+            || self.spot_tool != SpotTool::None
+            || self.crop_mode
+        {
             return;
+        }
+        if self.mask_tool == MaskTool::None {
+            // Pins remain selectable even while no paint tool is armed, except
+            // when another image-click picker (Spot/Red-eye) owns the gesture.
+            if self.spot_tool == SpotTool::None && !self.red_eye_pick_mode && response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let full = self.image_dims().unwrap_or((1, 1));
+                    let roi = self.preview_roi.map(|roi| {
+                        Self::roi_in_full_pixels(roi, full.0, full.1, self.preview_render_src)
+                    });
+                    let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
+                    if let Some(mask_id) = self.mask_pin_hit_at(nx, ny, scale) {
+                        if let Err(error) = self.select_mask(&mask_id) {
+                            self.show_error(error);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        if self.brush_cursor_allowed(ui) {
+            if let Some(pos) = response.hover_pos().filter(|pos| rect.contains(*pos)) {
+                let radius = self.brush_cursor_radius(scale);
+                ui.painter().circle_stroke(
+                    pos,
+                    radius,
+                    egui::Stroke::new(1.5_f32, crate::theme::ACCENT),
+                );
+            }
         }
         // R5-TOOLFLOW-1 (User-Entscheid 2026-09-20): the former geometry
         // defense-in-depth refusal is replaced by the tool switch committing
@@ -43,22 +82,30 @@ impl LuminaApp {
             .preview_roi
             .map(|r| Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src));
         let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
+        if let Some(mask_id) = self.mask_pin_hit_at(nx, ny, scale) {
+            if response.drag_started() || response.clicked() {
+                if let Err(error) = self.select_mask(&mask_id) {
+                    self.show_error(error);
+                }
+                self.drag_current = Some(Point2 { x: nx, y: ny });
+                self.pending_brush_marks.clear();
+                self.drawing = false;
+                return;
+            }
+        }
         if response.drag_started() {
+            if self.mask_tool == MaskTool::Brush {
+                if let Err(error) = self.ensure_selected_mask() {
+                    self.show_error(error);
+                    return;
+                }
+            }
             self.drawing = true;
             self.drag_start = Some(Point2 { x: nx, y: ny });
             self.drag_current = Some(Point2 { x: nx, y: ny });
             if self.mask_tool == MaskTool::Brush {
                 self.pending_brush_marks.clear();
-                self.pending_brush_marks.push(BrushMark {
-                    x: nx,
-                    y: ny,
-                    radius: self.brush_radius,
-                    sign: if self.brush_eraser {
-                        BrushMarkSign::Negative
-                    } else {
-                        BrushMarkSign::Positive
-                    },
-                });
+                self.pending_brush_marks.push(self.brush_mark_at(nx, ny));
                 #[cfg(feature = "gpu")]
                 self.gpu_upload_brush_tile(nx, ny);
             }
@@ -68,111 +115,53 @@ impl LuminaApp {
                 if let Some(last) = self.pending_brush_marks.last() {
                     let dist = ((last.x - nx).powi(2) + (last.y - ny).powi(2)).sqrt();
                     if dist > self.brush_radius * 0.5 {
-                        self.pending_brush_marks.push(BrushMark {
-                            x: nx,
-                            y: ny,
-                            radius: self.brush_radius,
-                            sign: if self.brush_eraser {
-                                BrushMarkSign::Negative
-                            } else {
-                                BrushMarkSign::Positive
-                            },
-                        });
+                        self.pending_brush_marks.push(self.brush_mark_at(nx, ny));
                         #[cfg(feature = "gpu")]
                         self.gpu_upload_brush_tile(nx, ny);
                     }
                 }
             }
         }
-        if response.drag_stopped() {
+        if response.drag_stopped() && self.drawing {
             self.finish_drawing();
         }
     }
 
-    #[cfg(feature = "gpu")]
-    fn gpu_upload_brush_tile(&mut self, nx: f32, ny: f32) {
-        let Some(gpu) = self.gpu.as_ref() else {
-            return;
-        };
-        if !gpu.is_available() {
-            return;
+    /// Screen radius for the live brush cursor. The source radius is relative
+    /// to the shorter image axis, so this remains a true circle under fit/zoom.
+    pub(crate) fn brush_cursor_radius(&self, scale: f32) -> f32 {
+        if !scale.is_finite() || scale <= 0.0 {
+            return 0.0;
         }
-        let Ok((w, h)) = self.image_dims() else {
-            return;
-        };
-        // Ensure the persistent R16 plane exists and matches the current source dims.
-        let dims_changed = self.brush_mask_plane_dims != Some((w, h));
-        if dims_changed || self.brush_mask_plane.is_none() {
-            let len = (w as usize).saturating_mul(h as usize);
-            self.brush_mask_plane = Some(vec![0u16; len]);
-            self.brush_mask_plane_dims = Some((w, h));
-            // Also ensure VRAM mask texture is sized for this source; stale
-            // dimensions are handled lazily in `ensure_vram` at render time.
-            if let Err(e) = gpu.ensure_vram(w, h) {
-                warn!("gpu ensure_vram({}x{}) failed: {}", w, h, e);
-            }
+        let (width, height) = self.image_dims().unwrap_or((1, 1));
+        (self.brush_radius * width.min(height) as f32 * scale).clamp(2.0, 4000.0)
+    }
+
+    /// Hit-test visible mask prompt pins. The 12-point screen tolerance matches
+    /// Spot pins, but interaction honors the exact G-11 visibility gate used by
+    /// the painter: a hidden pin is neither painted nor clickable. More than one
+    /// pin in the tolerance is deliberately ambiguous and selects nothing.
+    pub(crate) fn mask_pin_hit_at(&self, nx: f32, ny: f32, scale: f32) -> Option<String> {
+        if !self.pins_visible() || !scale.is_finite() || scale <= 0.0 {
+            return None;
         }
-        let Some(plane) = self.brush_mask_plane.as_mut() else {
-            return;
-        };
-        let sign = if self.brush_eraser {
-            lumina_sidecar::BrushMarkSign::Negative
-        } else {
-            lumina_sidecar::BrushMarkSign::Positive
-        };
-        let tiles = lumina_gpu::tiling::dirty_tiles_for_brush_mark(nx, ny, self.brush_radius, w, h);
-        // Persistent plane: stamp once, then upload only dirty 512² tiles.
-        // `stamp_brush_mark` is the canonical per-pixel kernel from
-        // `lumina_core::mask_tiles` (byte-identical to `rasterize_prompt` Brush).
-        lumina_core::mask_tiles::stamp_brush_mark(plane, w, h, nx, ny, self.brush_radius, sign);
-        for tile in tiles {
-            let x0 = tile.tx * lumina_gpu::tiling::TILE_SIZE;
-            let y0 = tile.ty * lumina_gpu::tiling::TILE_SIZE;
-            let tw = (lumina_gpu::tiling::TILE_SIZE)
-                .min(w.saturating_sub(x0))
-                .max(1);
-            let th = (lumina_gpu::tiling::TILE_SIZE)
-                .min(h.saturating_sub(y0))
-                .max(1);
-            // Extract this tile's u16 row-major subregion from the persistent plane
-            // and upload as u8 LE bytes via `bytemuck::cast_slice` (no per-pixel copy).
-            let mut tile_u16 = Vec::with_capacity((tw * th) as usize);
-            for row in 0..th {
-                let src_y = y0 + row;
-                let src_start = (src_y * w + x0) as usize;
-                let src_end = src_start + tw as usize;
-                if src_end <= plane.len() {
-                    tile_u16.extend_from_slice(&plane[src_start..src_end]);
+        let (width, height) = self.image_dims().unwrap_or((1, 1));
+        let tolerance_px = 12.0 / scale;
+        let mut hits = Vec::new();
+        for pin in self
+            .visible_edit_pins()
+            .into_iter()
+            .filter(|pin| pin.kind == EditPinKind::Mask)
+        {
+            let dx = (f64::from(nx) - f64::from(pin.pos.0)) * f64::from(width);
+            let dy = (f64::from(ny) - f64::from(pin.pos.1)) * f64::from(height);
+            if (dx * dx + dy * dy).sqrt() as f32 <= tolerance_px {
+                if let Some(id) = pin.id.strip_prefix("mask:") {
+                    hits.push(id.to_owned());
                 }
             }
-            if tile_u16.len() != (tw * th) as usize {
-                warn!(
-                    "brush tile slice length mismatch {} vs {}x{}",
-                    tile_u16.len(),
-                    tw,
-                    th
-                );
-                continue;
-            }
-            let tile_bytes: &[u8] = bytemuck::cast_slice(&tile_u16);
-            if let Err(e) = gpu.upload_mask_tile(x0, y0, tw, th, tile_bytes) {
-                warn!(
-                    "gpu_upload_brush_tile upload failed at tile {}x{} ({}x{}): {}",
-                    x0, y0, tw, th, e
-                );
-            } else {
-                trace!(
-                    "gpu_upload_brush_tile stamped ({:.3},{:.3}) r={:.3} -> tile ({},{}) {}x{}",
-                    nx,
-                    ny,
-                    self.brush_radius,
-                    x0,
-                    y0,
-                    tw,
-                    th
-                );
-            }
         }
+        (hits.len() == 1).then(|| hits.remove(0))
     }
 
     /// Draw the currently relevant mask as a translucent overlay on the preview:

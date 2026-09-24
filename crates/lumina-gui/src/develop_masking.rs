@@ -137,36 +137,19 @@ impl LuminaApp {
             if ui.checkbox(&mut solo, Str::SoloMode.t()).changed() {
                 self.set_solo_mode(solo);
             }
-            if self.mask_tool == MaskTool::Brush {
-                let mut radius = self.brush_radius;
-                if ui
-                    .add(egui::Slider::new(&mut radius, 0.005..=1.0).text(Str::BrushSize.t()))
-                    .changed()
-                {
-                    if let Err(e) = self.set_brush_radius(radius) {
-                        self.show_error(e);
-                    }
-                }
-                ui.checkbox(&mut self.brush_eraser, Str::BrushEraser.t());
-            }
+            self.draw_brush_controls(ui);
             ui.label(Str::DrawMaskHint.t());
             if self.selected_mask_id.is_some() {
-                let mut inverted = document
-                    .virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-                    .and_then(|c| c.mask_layers.first())
+                let mut inverted = self
+                    .selected_mask_layer()
                     .is_some_and(|layer| layer.inverted);
                 if ui.checkbox(&mut inverted, Str::Invert.t()).changed() {
                     if let Err(e) = self.set_mask_inverted(inverted) {
                         self.show_error(e);
                     }
                 }
-                let mut feather = document
-                    .virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-                    .and_then(|c| c.mask_layers.first())
+                let mut feather = self
+                    .selected_mask_layer()
                     .map_or(0.0, |layer| layer.feather);
                 if ui
                     .add(egui::Slider::new(&mut feather, 0.0..=1.0).text(Str::Feather.t()))
@@ -176,12 +159,7 @@ impl LuminaApp {
                         self.show_error(e);
                     }
                 }
-                let mut blur = document
-                    .virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-                    .and_then(|c| c.mask_layers.first())
-                    .map_or(0.0, |layer| layer.blur);
+                let mut blur = self.selected_mask_layer().map_or(0.0, |layer| layer.blur);
                 if ui
                     .add(egui::Slider::new(&mut blur, 0.0..=1.0).text(Str::Blur.t()))
                     .changed()
@@ -190,11 +168,8 @@ impl LuminaApp {
                         self.show_error(e);
                     }
                 }
-                let mut density = document
-                    .virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-                    .and_then(|c| c.mask_layers.first())
+                let mut density = self
+                    .selected_mask_layer()
                     .map_or(1.0, |layer| layer.density);
                 if ui
                     .add(egui::Slider::new(&mut density, 0.0..=1.0).text(Str::Density.t()))
@@ -217,11 +192,8 @@ impl LuminaApp {
                 }
                 ui.label(Str::LocalAdjustments.t());
                 for (key, label) in [("exposure", Str::Exposure), ("contrast", Str::Contrast)] {
-                    let stored = document
-                        .virtual_copies
-                        .iter()
-                        .find(|c| c.id == self.virtual_copy_id)
-                        .and_then(|c| c.mask_layers.first())
+                    let stored = self
+                        .selected_mask_layer()
                         .and_then(|layer| layer.extras.get(&format!("adjustment_{key}")))
                         .and_then(Value::as_f64)
                         .unwrap_or(0.0);
@@ -245,5 +217,51 @@ impl LuminaApp {
         if section_response.header_response.clicked() {
             self.set_section_open(SECTION_MASKING, !section_was_open);
         }
+    }
+
+    /// Paint the brush-specific controls used by the real Masking section and
+    /// by the native R5-BRUSH-24 representative snapshot. Keeping this as a
+    /// shared method means the golden cannot accidentally test a hand-built
+    /// approximation of the Size/Softness/Flow controls.
+    pub(crate) fn draw_brush_controls(&mut self, ui: &mut egui::Ui) {
+        if self.mask_tool != MaskTool::Brush {
+            return;
+        }
+        // Keep the stored normalized radius untouched while presenting the
+        // Lightroom-facing unit as percent (0.05 -> 5%). The range is the
+        // exact same normalized domain after scaling.
+        let mut size_percent = self.brush_radius * 100.0;
+        if ui
+            .add(
+                egui::Slider::new(&mut size_percent, 0.5..=100.0)
+                    .text(Str::BrushSize.t())
+                    .custom_formatter(|value, _| format!("{value:.0}%"))
+                    .custom_parser(|text| text.trim().trim_end_matches('%').parse::<f64>().ok()),
+            )
+            .changed()
+        {
+            if let Err(e) = self.set_brush_radius(size_percent / 100.0) {
+                self.show_error(e);
+            }
+        }
+        let mut softness = self.brush_softness;
+        if ui
+            .add(egui::Slider::new(&mut softness, 0.0..=1.0).text(Str::BrushSoftness.t()))
+            .changed()
+        {
+            if let Err(e) = self.set_brush_softness(softness) {
+                self.show_error(e);
+            }
+        }
+        let mut flow = self.brush_flow;
+        if ui
+            .add(egui::Slider::new(&mut flow, 0.0..=1.0).text(Str::BrushFlow.t()))
+            .changed()
+        {
+            if let Err(e) = self.set_brush_flow(flow) {
+                self.show_error(e);
+            }
+        }
+        ui.checkbox(&mut self.brush_eraser, Str::BrushEraser.t());
     }
 }

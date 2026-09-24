@@ -253,6 +253,104 @@ fn g03_all_ai_kinds_and_range_rejections() {
     assert!(app.document.as_ref().unwrap().validate().is_ok());
 }
 
+#[test]
+fn g03_management_row_buttons_are_real_clicks() {
+    let mut app = new_app();
+    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+        .unwrap();
+    let first = app
+        .create_luminance_range_mask(0.0, 0.5, 0.0, "First")
+        .unwrap();
+    app.create_luminance_range_mask(0.5, 1.0, 0.0, "Second")
+        .unwrap();
+    app.mask_rename_inputs
+        .insert(first.clone(), "Widget renamed".into());
+    let draw = |app: &mut LuminaApp, ui: &mut egui::Ui| {
+        let document = app.document.clone().expect("document loaded");
+        app.draw_masking_g03(ui, &document);
+    };
+    headless_click_labels_sized(&mut app, 2400.0, &[Str::RenameMask.t()], draw);
+    assert_eq!(
+        app.document.as_ref().unwrap().virtual_copies[0].mask_library[0].name,
+        "Widget renamed"
+    );
+    let before = app.document.as_ref().unwrap().virtual_copies[0].mask_library[0]
+        .id
+        .clone();
+    headless_click_labels_sized(&mut app, 2400.0, &[Str::MoveMaskDown.t()], draw);
+    assert_eq!(
+        app.document.as_ref().unwrap().virtual_copies[0].mask_library[1].id,
+        before
+    );
+    let count = app.document.as_ref().unwrap().virtual_copies[0]
+        .mask_library
+        .len();
+    headless_click_labels_sized(&mut app, 2400.0, &[Str::DuplicateMask.t()], draw);
+    assert_eq!(
+        app.document.as_ref().unwrap().virtual_copies[0]
+            .mask_library
+            .len(),
+        count + 1
+    );
+    headless_click_labels_sized(&mut app, 2400.0, &[Str::DeleteMaskButton.t()], draw);
+    assert_eq!(
+        app.document.as_ref().unwrap().virtual_copies[0]
+            .mask_library
+            .len(),
+        count
+    );
+}
+
+#[test]
+fn g03_management_rows_fit_1024x720_panel_width() {
+    let mut app = new_app();
+    app.load_bytes(LuminaApp::sample_image_png(), "sample.png")
+        .unwrap();
+    app.create_luminance_range_mask(0.0, 0.5, 0.0, "First")
+        .unwrap();
+    app.create_luminance_range_mask(0.5, 1.0, 0.0, "Second")
+        .unwrap();
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
+    let mut panel = egui::Rect::NOTHING;
+    let mut shapes = Vec::new();
+    for frame in 0..3 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(frame as f64 / 60.0),
+                ..Default::default()
+            },
+            |ui| {
+                let response = egui::Panel::right("mask-management")
+                    .resizable(true)
+                    .default_size(320.0)
+                    .show(ui, |ui| {
+                        let document = app.document.clone().expect("document loaded");
+                        app.draw_masking_g03(ui, &document);
+                    })
+                    .response;
+                panel = response.rect;
+            },
+        );
+        output.textures_delta.clear();
+        shapes = output.shapes;
+    }
+    assert!(
+        panel.width() <= 321.0,
+        "management rows widened panel: {panel:?}"
+    );
+    for clipped in &shapes {
+        if let egui::Shape::Text(text) = &clipped.shape {
+            assert!(
+                text.pos.x <= panel.max.x + 0.5,
+                "management text escaped the 320px panel: {:?}",
+                text.pos
+            );
+        }
+    }
+}
+
 /// Panel-Präsenz headless (DoD §5-Anker für jede sichtbare G-03-Fläche):
 /// Maskenliste mit Auge, Show + Farbe, AI-/Range-/Combine-Zeilen und alle
 /// vier Kombinator-Buttons malen im 320px-Panel. Malt `draw_masking_g03`
@@ -310,6 +408,11 @@ fn g03_panel_paints_all_controls_inside_panel() {
         Str::MaskGroupsLabel.t(),
         Str::GroupSelected.t(),
         Str::MaskEye.t(),
+        Str::MoveMaskUp.t(),
+        Str::MoveMaskDown.t(),
+        Str::RenameMask.t(),
+        Str::DeleteMaskButton.t(),
+        Str::DuplicateMask.t(),
     ] {
         assert_fully_visible(&shapes, needle);
     }

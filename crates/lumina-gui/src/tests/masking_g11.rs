@@ -119,6 +119,8 @@ fn g11_pin_anchor_covers_all_prompt_variants() {
             y: 0.9,
             radius: 0.05,
             sign: BrushMarkSign::Positive,
+            softness: 0.0,
+            flow: 1.0,
         }],
         resolution: (8, 8),
         transformation: PromptTransform::default(),

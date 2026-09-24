@@ -221,7 +221,6 @@ impl LuminaApp {
             },
         });
         let id = self.push_mask_definition(definition)?;
-        self.select_mask(&id)?;
         info!("GUI interaction: create_face_mask {detection_id} -> {id}");
         self.status = Str::MaskCreated.t().into();
         Ok(id)

@@ -148,6 +148,27 @@ pub(super) fn drive_action(app: &mut LuminaApp, action: GuiAction, export_path: 
                 let _ = app.duplicate_mask(&id, "gpu-audit-copy");
             }
         }
+        GuiAction::RenameMask => {
+            if let Ok(id) = app.create_mask("gpu-audit-mask") {
+                let _ = app.rename_mask(&id, "gpu-audit-renamed");
+            }
+        }
+        GuiAction::DeleteMask => {
+            if let Ok(id) = app.create_mask("gpu-audit-mask") {
+                let _ = app.delete_mask(&id);
+            }
+        }
+        GuiAction::MoveMask => {
+            if let Ok(first) = app.create_mask("gpu-audit-first") {
+                let _ = app.create_mask("gpu-audit-second");
+                let _ = app.move_mask(&first, 1);
+            }
+        }
+        GuiAction::GroupDuplicateMask => {
+            if let Ok(id) = app.create_mask("gpu-audit-mask") {
+                let _ = app.group_duplicate_mask(&id, "gpu-audit-group");
+            }
+        }
         GuiAction::SetOverlayMode => app.set_overlay_mode(OverlayMode::Never),
         GuiAction::SetPinVisibility => app.set_pin_visibility(PinVisibility::Never),
         GuiAction::SetSoloMode => {

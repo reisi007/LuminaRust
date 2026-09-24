@@ -7,55 +7,150 @@
 
 use super::*;
 
+pub(crate) type MaskLibraryRow = (String, String, String, Option<String>, Option<String>);
+
+fn available_mask_name(rows: &[MaskLibraryRow], stem: &str, kind: &str) -> String {
+    let mut candidate = format!("{stem} {kind}");
+    let mut suffix = 2;
+    while rows.iter().any(|(_, name, ..)| name == &candidate) {
+        candidate = format!("{stem} {kind} {suffix}");
+        suffix += 1;
+    }
+    candidate
+}
+
 impl LuminaApp {
-    /// G-03 masking-parity rows of the Masking section (list with eye,
-    /// status line, Show + color overlay, AI-select and range adds,
-    /// Add/Subtract/Invert/Duplicate combinators). Own method so the
-    /// headless panel test paints exactly this block without the
-    /// collapsing-header open animation. Every button routes through the
-    /// tested model methods; failures surface via `show_error` (loud).
-    pub(crate) fn draw_masking_g03(&mut self, ui: &mut egui::Ui, document: &SidecarDocument) {
-        // G-03 masking parity: mask list with visibility eye, AI-select
-        // and range adds, Add/Subtract/Invert/Duplicate combinators, Show
-        // + color overlay. Every button routes through the tested model
-        // methods below; failures surface via `show_error` (loud).
+    /// Paint the mask-library rows and their complete management surface.
+    ///
+    /// This is shared by the production G-03 editor and the R5-BRUSH-24
+    /// structural/native snapshot tests. The returned rows are the immutable
+    /// list snapshot used by the combine controls below, so actions dispatched
+    /// after painting cannot borrow a stale document.
+    pub(crate) fn draw_mask_library(
+        &mut self,
+        ui: &mut egui::Ui,
+        document: &SidecarDocument,
+    ) -> Vec<MaskLibraryRow> {
         ui.separator();
-        let library: Vec<(String, String, String, Option<String>)> = document
+        let library: Vec<MaskLibraryRow> = document
             .virtual_copies
             .iter()
             .find(|c| c.id == self.virtual_copy_id)
             .map(|c| {
+                let mut pin_number = 0usize;
                 c.mask_library
                     .iter()
                     .map(|m| {
+                        let pin = m
+                            .prompt
+                            .as_ref()
+                            .filter(|_| self.mask_visible(&m.id))
+                            .and_then(pin_anchor_for_prompt)
+                            .map(|_| {
+                                pin_number += 1;
+                                pin_number.to_string()
+                            });
                         (
                             m.id.clone(),
                             m.name.clone(),
                             format!("{:?}", m.status).to_lowercase(),
                             m.error_text.clone(),
+                            pin,
                         )
                     })
                     .collect()
             })
             .unwrap_or_default();
-        for (id, name, status, _error) in &library {
-            ui.horizontal(|ui| {
-                let mut eye = self.mask_visible(id);
-                if ui.checkbox(&mut eye, Str::MaskEye.t()).changed() {
-                    if let Err(e) = self.set_mask_visible(id, eye) {
+        for (index, (id, name, status, _error, pin)) in library.iter().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                if index == 0 {
+                    ui.label(Str::MaskPin.t());
+                }
+                let mut visible = self.mask_visible(id);
+                if ui.checkbox(&mut visible, Str::MaskEye.t()).changed() {
+                    if let Err(e) = self.set_mask_visible(id, visible) {
                         self.show_error(e);
                     }
                 }
                 let selected = self.selected_mask_id.as_deref() == Some(id.as_str());
-                if ui
-                    .selectable_label(selected, format!("{name} [{status}]"))
-                    .clicked()
-                {
+                let label = pin.as_ref().map_or_else(
+                    || format!("{name} [{status}]"),
+                    |pin| format!("{pin} · {name} [{status}]"),
+                );
+                if ui.selectable_label(selected, label).clicked() {
                     if let Err(e) = self.select_mask(id) {
                         self.show_error(e);
                     }
                 }
             });
+
+            // Every row owns its complete management surface. Actions are
+            // collected while painting and dispatched after the closure so a
+            // row can be reordered/deleted without borrowing a stale document.
+            let mut move_up = false;
+            let mut move_down = false;
+            let mut rename = false;
+            let mut delete = false;
+            let mut copy = false;
+            let mut duplicate = false;
+            let mut draft = self
+                .mask_rename_inputs
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button(Str::MoveMaskUp.t()).clicked() {
+                    move_up = true;
+                }
+                if ui.small_button(Str::MoveMaskDown.t()).clicked() {
+                    move_down = true;
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft)
+                        .desired_width(72.0)
+                        .hint_text(Str::RenameMask.t()),
+                );
+                if ui.small_button(Str::RenameMask.t()).clicked() {
+                    rename = true;
+                }
+                if ui.small_button(Str::DeleteMaskButton.t()).clicked() {
+                    delete = true;
+                }
+                if ui.small_button(Str::DuplicateMask.t()).clicked() {
+                    copy = true;
+                }
+                if ui.small_button(Str::DuplicateGroup.t()).clicked() {
+                    duplicate = true;
+                }
+            });
+            self.mask_rename_inputs.insert(id.clone(), draft.clone());
+            if move_up {
+                if let Err(e) = self.move_mask(id, -1) {
+                    self.show_error(e);
+                }
+            } else if move_down {
+                if let Err(e) = self.move_mask(id, 1) {
+                    self.show_error(e);
+                }
+            } else if rename {
+                if let Err(e) = self.rename_mask(id, draft) {
+                    self.show_error(e);
+                }
+            } else if delete {
+                if let Err(e) = self.delete_mask(id) {
+                    self.show_error(e);
+                }
+            } else if copy {
+                let name = available_mask_name(&library, name, "copy");
+                if let Err(e) = self.duplicate_mask(id, name) {
+                    self.show_error(e);
+                }
+            } else if duplicate {
+                let name = available_mask_name(&library, name, "duplicate");
+                if let Err(e) = self.group_duplicate_mask(id, name) {
+                    self.show_error(e);
+                }
+            }
         }
         if let Some((status, error)) = self.selected_mask_status() {
             let mut line = format!(
@@ -80,6 +175,15 @@ impl LuminaApp {
                 self.set_overlay_color(color);
             }
         });
+        library
+    }
+
+    /// G-03 masking-parity editor (mask list with eye, status line, Show +
+    /// color overlay, AI-select and range adds, Add/Subtract/Invert/Duplicate
+    /// combinators). The list is delegated to [`Self::draw_mask_library`] so
+    /// the same painted rows are covered by structural and native tests.
+    pub(crate) fn draw_masking_g03(&mut self, ui: &mut egui::Ui, document: &SidecarDocument) {
+        let library = self.draw_mask_library(ui, document);
         // AI-select add row.
         ui.separator();
         ui.label(Str::AiSelectLabel.t());
@@ -173,8 +277,8 @@ impl LuminaApp {
         ui.label(Str::CombineLabel.t());
         let others: Vec<(String, String)> = library
             .iter()
-            .filter(|(id, _, _, _)| self.selected_mask_id.as_deref() != Some(id.as_str()))
-            .map(|(id, name, _, _)| (id.clone(), name.clone()))
+            .filter(|(id, _, _, _, _)| self.selected_mask_id.as_deref() != Some(id.as_str()))
+            .map(|(id, name, _, _, _)| (id.clone(), name.clone()))
             .collect();
         egui::ComboBox::from_id_salt("g03_combine_other")
             .selected_text(

@@ -79,9 +79,17 @@ pub(crate) enum RebaseSection {
 #[cfg(test)]
 type ConflictHook = Box<dyn FnMut(usize)>;
 
+/// Optional deterministic I/O failure seam used by GUI regressions. It runs
+/// immediately before a CAS attempt, so a test can prove both that a failed
+/// operation returns an error and that the target bytes were never touched.
+#[cfg(test)]
+type SaveFailureHook = Box<dyn FnMut(usize) -> Option<SidecarError>>;
+
 #[cfg(test)]
 thread_local! {
     static CONFLICT_HOOK: std::cell::RefCell<Option<ConflictHook>> =
+        std::cell::RefCell::new(None);
+    static SAVE_FAILURE_HOOK: std::cell::RefCell<Option<SaveFailureHook>> =
         std::cell::RefCell::new(None);
 }
 
@@ -91,15 +99,29 @@ pub(crate) fn set_conflict_hook(hook: Option<ConflictHook>) {
     CONFLICT_HOOK.with(|slot| *slot.borrow_mut() = hook);
 }
 
-fn run_before_attempt(attempt: usize) {
+/// Install (or clear with `None`) a deterministic pre-CAS I/O failure hook.
+#[cfg(test)]
+pub(crate) fn set_save_failure_hook(hook: Option<SaveFailureHook>) {
+    SAVE_FAILURE_HOOK.with(|slot| *slot.borrow_mut() = hook);
+}
+
+fn run_before_attempt(attempt: usize) -> Result<(), SidecarError> {
     #[cfg(test)]
-    CONFLICT_HOOK.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().as_mut() {
-            hook(attempt);
+    {
+        if let Some(error) =
+            SAVE_FAILURE_HOOK.with(|slot| slot.borrow_mut().as_mut().and_then(|hook| hook(attempt)))
+        {
+            return Err(error);
         }
-    });
+        CONFLICT_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(attempt);
+            }
+        });
+    }
     #[cfg(not(test))]
     let _ = attempt;
+    Ok(())
 }
 
 /// CAS save with rebase: apply the local changes onto the current file on a
@@ -125,7 +147,7 @@ pub(crate) fn save_rebased(
     )
 }
 
-fn save_rebased_inner<B: FnMut(usize)>(
+fn save_rebased_inner<B: FnMut(usize) -> Result<(), SidecarError>>(
     path: &Path,
     base: &SidecarDocument,
     local: &SidecarDocument,
@@ -139,7 +161,7 @@ fn save_rebased_inner<B: FnMut(usize)>(
     let mut overwritten_fields = Vec::new();
     let mut retries = 0usize;
     loop {
-        before_attempt(retries);
+        before_attempt(retries)?;
         match lumina_sidecar::save_sidecar_if_unchanged(path, &candidate, expected.as_deref()) {
             Ok(revision) => {
                 return Ok(RebaseOutcome {
@@ -254,6 +276,98 @@ pub(crate) fn save_section_rebased(
 }
 
 impl LuminaApp {
+    /// Run the GUI sidecar save and return its real outcome. The ordinary
+    /// [`LuminaApp::save_sidecar`] wrapper keeps the historical fire-and-forget
+    /// call sites, while management actions use this checked form so a CAS/IO
+    /// failure cannot be reported as a successful mutation.
+    pub(crate) fn save_sidecar_result(&mut self) -> Result<(), GuiError> {
+        if self.path.trim().is_empty() {
+            return Err(GuiError::Io(Str::SaveNeedsLocalPath.t().to_string()));
+        }
+        let path = std::path::PathBuf::from(self.path.trim());
+        let Some(frame) = &self.original else {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        };
+        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
+        let expected_revision = self.sidecar_revision.clone();
+        let mut document = self
+            .document
+            .take()
+            .unwrap_or_else(|| SidecarDocument::new(self.source_identity(frame), "raster-mvp-1"));
+        let base_document = document.clone();
+        let Some(copy) = document
+            .virtual_copies
+            .iter_mut()
+            .find(|copy| copy.id == self.virtual_copy_id)
+        else {
+            self.document = Some(document);
+            return Err(GuiError::Io(Str::VirtualCopyNotFound.t().to_string()));
+        };
+        let previous_recipe = copy.recipe.clone();
+        copy.recipe = self.recipe.clone();
+        if let Some(step) = self.pending_history_step.take() {
+            let mut counter = copy.history.len() + 1;
+            while copy
+                .history
+                .iter()
+                .any(|entry| entry.id == format!("geometry-{counter}"))
+            {
+                counter += 1;
+            }
+            let mut extras = BTreeMap::new();
+            extras.insert("step".into(), Value::String("geometry".into()));
+            extras.insert("action".into(), Value::String(step));
+            let mut entry = HistoryEntry {
+                id: format!("geometry-{counter}"),
+                recipe: copy.recipe.clone(),
+                recorded_at: Some(self.history_timestamp()),
+                extras,
+            };
+            if let Err(error) = entry.set_changes(history_changes::recipe_changes(
+                &previous_recipe,
+                &self.recipe,
+            )) {
+                log::error!("geometry history changes rejected: {error}");
+            }
+            copy.history.push(entry);
+        }
+        match save_rebased(
+            &sidecar_path,
+            &base_document,
+            &document,
+            expected_revision.as_deref(),
+            MAX_REBASE_ATTEMPTS,
+        ) {
+            Ok(saved) => {
+                self.finish_sidecar_save(&path, saved);
+                Ok(())
+            }
+            Err(save_error) => {
+                log::error!("sidecar save failed for {}: {save_error}", path.display());
+                self.document = Some(document);
+                Err(save_error.into())
+            }
+        }
+    }
+
+    /// Checked save for management operations: the same visible error banner
+    /// as the normal wrapper is retained while the caller receives `Err`.
+    pub(crate) fn save_sidecar_checked(&mut self) -> Result<(), GuiError> {
+        // In-memory/headless sessions have no persistence target. Their model
+        // operations remain valid; the explicit Save Recipe action still uses
+        // `save_sidecar_result` and reports the missing path above.
+        if self.path.trim().is_empty() {
+            return Ok(());
+        }
+        match self.save_sidecar_result() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.show_error(error.to_string());
+                Err(error)
+            }
+        }
+    }
+
     /// SIDECAR-REBASE-1: persist a source-level section (`culling`/`face`)
     /// through the CAS writer with rebase. On success the merged document and
     /// its revision are adopted; on failure the (unsaved) local document stays

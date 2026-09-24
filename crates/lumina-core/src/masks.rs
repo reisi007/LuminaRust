@@ -1,8 +1,9 @@
 //! Portable evaluation of the validated sidecar mask DAG.
 
-use lumina_sidecar::{
-    BrushMarkSign, MaskDefinition, MaskOperation, MaskPrompt, MaskReference, VirtualCopy,
-};
+#[path = "brush_raster.rs"]
+mod brush_raster;
+
+use lumina_sidecar::{MaskDefinition, MaskOperation, MaskPrompt, MaskReference, VirtualCopy};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -408,27 +409,7 @@ pub fn rasterize_prompt(
             }
         }
         MaskPrompt::Brush { marks, .. } => {
-            // Start at zero; paint marks in order so later marks override
-            // earlier ones (a negative mark erases a positive one).
-            for (y, row) in values.chunks_exact_mut(w).enumerate() {
-                let ny = (y as f32 + 0.5) / height as f32;
-                for (x, pixel) in row.iter_mut().enumerate() {
-                    let nx = (x as f32 + 0.5) / width as f32;
-                    let mut value = 0u16;
-                    for mark in marks {
-                        let ddx = nx - mark.x;
-                        let ddy = ny - mark.y;
-                        if ddx * ddx + ddy * ddy <= mark.radius * mark.radius {
-                            value = if matches!(mark.sign, BrushMarkSign::Positive) {
-                                u16::MAX
-                            } else {
-                                0
-                            };
-                        }
-                    }
-                    *pixel = value;
-                }
-            }
+            brush_raster::rasterize_brush_marks_into(marks, width, height, &mut values);
         }
         // G-03: range stages need source pixels and cannot be rasterized from
         // geometry alone — the loader evaluates them against the frame.
@@ -883,12 +864,16 @@ mod tests {
                     y: 0.5,
                     radius: 0.4,
                     sign: BrushMarkSign::Positive,
+                    softness: 0.0,
+                    flow: 1.0,
                 },
                 BrushMark {
                     x: 0.2,
                     y: 0.5,
                     radius: 0.2,
                     sign: BrushMarkSign::Negative,
+                    softness: 0.0,
+                    flow: 1.0,
                 },
             ],
             resolution: (32, 32),
