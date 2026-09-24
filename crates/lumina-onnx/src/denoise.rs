@@ -11,9 +11,8 @@
 //!   ([`denoise_manifest`]) — RGB-to-RGB, full-resolution tiled inference,
 //!   identity preprocessing, and
 //! * the [`DenoiseModelSuite`] (descriptor + [`DenoiseTileSpec`]) with a
-//!   deterministic `input_spec_digest` producer that covers inference
-//!   resolution, tile size/overlap and preprocessing (a change invalidates
-//!   persisted artifacts visibly),
+//!   deterministic v2 `input_spec_digest` over model, tile, preprocessing and
+//!   versioned core blend/distance-to-edge assembly contracts,
 //! * the deterministic, tests-only [`StubDenoiseBackend`] and the
 //!   [`DenoiseInference`] surface (the real ORT path lives behind `onnx-rt` in
 //!   [`ort`]),
@@ -38,6 +37,7 @@
 //! All failures are explicit [`OnnxError`]s; nothing is clamped, repaired or
 //! guessed.
 
+mod input_spec;
 #[cfg(feature = "onnx-rt")]
 pub mod ort;
 
@@ -58,6 +58,19 @@ use crate::manifest::{
     Resolution as ModelResolution, TensorFormat, INPUT_SPEC_DIGEST_KEY,
 };
 use crate::OnnxError;
+
+pub use input_spec::{
+    canonical_input_spec_text, input_spec_digest, DenoiseBlendIdentity, DenoiseInputSpecContract,
+    DenoiseInputSpecParameters, DenoiseOutputIdentity, DenoiseTileAssemblyIdentity,
+    DENOISE_ALPHA_POLICY, DENOISE_BLEND_ALGORITHM, DENOISE_BLEND_ALGORITHM_VERSION,
+    DENOISE_BLEND_FORMULA, DENOISE_BLEND_ROUNDING, DENOISE_DEFAULT_FIXTURE_MODEL_HASH,
+    DENOISE_DEFAULT_INPUT_SPEC_DIGEST, DENOISE_DETAIL_SCALE_UNITS, DENOISE_DETAIL_WINDOW,
+    DENOISE_INPUT_SPEC_ALGORITHM, DENOISE_LUMINANCE_STANDARD, DENOISE_OUTPUT_ENCODING,
+    DENOISE_OUTPUT_LAYOUT, DENOISE_OUTPUT_RANGE, DENOISE_OUTPUT_SHAPE,
+    DENOISE_TILE_ASSEMBLY_ALGORITHM, DENOISE_TILE_ASSEMBLY_ALGORITHM_VERSION,
+    DENOISE_TILE_ASSEMBLY_MATH, DENOISE_TILE_ASSEMBLY_ROUNDING, DENOISE_TILE_ASSEMBLY_WEIGHT,
+    DENOISE_TILE_COVERAGE, DENOISE_WORKING_SPACE, DENOISE_ZERO_STRENGTH_POLICY,
+};
 
 /// Planned KI-Denoise model name (RGB-to-RGB denoiser, F-078 candidate class
 /// only — the concrete checkpoint is not fixed yet, see the decision §3/§4).
@@ -95,14 +108,8 @@ pub const DENOISE_RESCALING_METHOD: &str = "identity";
 /// decision §3.1). Changing the algorithm requires a new tag and therefore a
 /// new, explicit identity — never a silent re-interpretation.
 pub const DENOISE_FIXTURE_ALGORITHM: &str = "lumina-denoise-fixture-v1";
-/// Leading schema tag of the denoise `input_spec_digest` text.
-pub const DENOISE_INPUT_SPEC_ALGORITHM: &str = "lumina-denoise-input-spec-v1";
 
-/// Tile geometry of a tiled KI-Denoise run.
-///
-/// Tile size, overlap and the (core) blend are part of the `input_spec_digest`,
-/// so changing any of them invalidates persisted `denoise_rgb` artifacts
-/// visibly (`feature/architecture/pipeline.md` §F-096a).
+/// Tile geometry of a tiled KI-Denoise run; size/overlap and core blend are part of the v2 `input_spec_digest` (F-096a).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DenoiseTileSpec {
     /// Tile width in pixels (`> 0`).
@@ -165,18 +172,10 @@ impl DenoiseTileSpec {
     pub fn stride_y(&self) -> u32 {
         self.tile_height - self.overlap
     }
-
-    fn canonical_text(&self) -> String {
-        format!(
-            "tile={}x{}|overlap={}",
-            self.tile_width, self.tile_height, self.overlap
-        )
-    }
 }
 
-/// Build the planned KI-Denoise descriptor: declares **only** the additive
-/// `denoise` capability, full-resolution RGB(RGB) identity preprocessing and
-/// `pending-integration` weights (F-078 gate, decision §3.1).
+/// Build the planned KI-Denoise descriptor: additive `denoise`, full-resolution
+/// RGB identity preprocessing and `pending-integration` weights (F-078 gate).
 #[must_use]
 pub fn denoise_manifest() -> ModelManifest {
     ModelManifest {
@@ -204,18 +203,14 @@ pub fn denoise_manifest() -> ModelManifest {
     }
 }
 
-/// Whether `manifest` carries a real (non-placeholder) `model_hash`.
-///
-/// The planned descriptor stays `pending-integration` and can never report
-/// `Verified` (decision §3.1); the deterministic fixture suite is pinned with a
-/// real digest.
+/// Whether `manifest` carries a real (non-placeholder) `model_hash`; the planned
+/// descriptor stays `pending-integration` (F-078 gate).
 #[must_use]
 pub fn denoise_model_hash_is_pinned(manifest: &ModelManifest) -> bool {
     manifest.model_hash != PENDING_INTEGRATION_HASH
 }
 
-/// KI-Denoise model suite: the descriptor plus the tile geometry that fully
-/// determines the inference input contract.
+/// KI-Denoise model suite: descriptor plus tile geometry defining the input contract.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DenoiseModelSuite {
     /// Model descriptor (must declare `denoise`).
@@ -282,22 +277,29 @@ impl DenoiseModelSuite {
         Ok(())
     }
 
-    /// Deterministic SHA-256 identity digest of the complete denoise inference
-    /// input contract (`sha256:<64 lowercase hex>`): the model input spec
-    /// (inference resolution, channel layout, tensor names, tensor format,
-    /// normalization) **plus** tile size/overlap and the preview/rescaling
-    /// contract. Any change flips the digest and invalidates persisted
-    /// artifacts visibly.
+    /// SHA-256 identity (`sha256:<64 lowercase hex>`) of the model input,
+    /// tile/preprocessing/rescaling and versioned core blend/assembly contract.
+    /// The v2 tag makes every behavior change visibly stale; v1 is not reused.
     #[must_use]
     pub fn input_spec_digest(&self) -> String {
-        let digest = compute_sha256_hex(canonical_input_spec_text(self).as_bytes())
-            .expect("hashing an in-memory buffer cannot fail");
-        format!("{DENOISE_SHA256_PREFIX}{digest}")
+        let model_input_digest = self.model.input.identity_digest();
+        let parameters = DenoiseInputSpecParameters {
+            model_input_digest: &model_input_digest,
+            input_tensor_name: &self.model.input.tensor_name,
+            output_tensor_name: &self.model.output_tensor_name,
+            tile_width: self.tiles.tile_width,
+            tile_height: self.tiles.tile_height,
+            overlap: self.tiles.overlap,
+            preprocessing_name: DENOISE_PREPROCESSING_NAME,
+            preprocessing_version: DENOISE_PREPROCESSING_VERSION,
+            rescaling_method: DENOISE_RESCALING_METHOD,
+        };
+        input_spec_digest(&parameters, &DenoiseInputSpecContract::default())
     }
 
     /// Map the suite identity onto the sidecar [`ModelIdentity`] used by the
     /// §6 stale-detection comparison, carrying the **denoise** input-spec
-    /// digest (tile geometry included) under [`INPUT_SPEC_DIGEST_KEY`].
+    /// digest (model/tile/core behavior included) under [`INPUT_SPEC_DIGEST_KEY`].
     #[must_use]
     pub fn to_model_identity(&self) -> ModelIdentity {
         let mut identity = self.model.to_model_identity();
@@ -309,22 +311,15 @@ impl DenoiseModelSuite {
     }
 }
 
-/// Canonical, versioned text form of the denoise input contract.
+/// Digest of the documented default denoise input contract.
 ///
-/// Encoded by hand (fixed field order, leading schema tag) so the digest has no
-/// error path and is stable independent of any serializer. It embeds the
-/// manifest's own deterministic input-spec digest (which hashes resolution,
-/// layout, tensor names, format and normalization) and adds the tile geometry,
-/// preprocessing contract and rescaling method.
-fn canonical_input_spec_text(suite: &DenoiseModelSuite) -> String {
-    format!(
-        "{DENOISE_INPUT_SPEC_ALGORITHM}|model={}|{}|preprocessing={}:{}|rescaling={}",
-        suite.model.input.identity_digest(),
-        suite.tiles.canonical_text(),
-        DENOISE_PREPROCESSING_NAME,
-        DENOISE_PREPROCESSING_VERSION,
-        DENOISE_RESCALING_METHOD,
-    )
+/// This helper computes the contract from the same [`DenoiseModelSuite`]
+/// producer used by the ONNX path; it does not select, load, or promote a
+/// model.  GUI and other recipe builders can use it instead of maintaining a
+/// second hard-coded digest.
+#[must_use]
+pub fn default_denoise_input_spec_digest() -> String {
+    DenoiseModelSuite::planned().input_spec_digest()
 }
 
 /// Canonical, versioned text form of the deterministic fixture specification.
@@ -963,6 +958,11 @@ mod tests {
             ModelHashStatus::Verified
         );
         assert!(fixture.validate().is_ok());
+        assert_eq!(
+            DenoiseModelSuite::planned().input_spec_digest(),
+            DENOISE_DEFAULT_INPUT_SPEC_DIGEST
+        );
+        assert_eq!(fixture.model.model_hash, DENOISE_DEFAULT_FIXTURE_MODEL_HASH);
 
         // Deterministic across calls.
         assert_eq!(

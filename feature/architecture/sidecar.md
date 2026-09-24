@@ -275,18 +275,20 @@ nicht erforderlich. Ein Preset enthält keine binären Maskenpayloads.
   historische Bump läuft ausschließlich über den expliziten Migrationspfad.
 - **Verbraucherhinweis:** Konsumenten müssen auf `!= Available` prüfen, um
   `Corrupt` zu erfassen (CLI tut dies; GUI seit 2026-08-25 ebenfalls).
-- **Neue Schema-Sektionen (2026-09-16, verifiziert BESTANDEN):**
+- **Neue Schema-Sektionen (2026-09-16/24, verifiziert BESTANDEN):**
   `face: Option<FaceAnalysis>` (Quellebene: Detektionen, Embeddings als
   `FaceVectorRef`, Cluster, Personen mit stabilen IDs, Identität/Status;
   kein Float-Array im JSON), `denoise_ai: Option<DenoiseAi>` (additiv v2,
   `None`/`enabled:false`/`strength:0` = Identität, `kind = "denoise_rgb"`;
   der zdata-`RecordKind` ist implementiert: `kind = 4` / `"denoise_rgb"`,
   RGB8-Codec mit kanonischem `encoding_version || width || height || RGB8`-
-  Strom und BLAKE3-Prüfsumme, atomar unter `.zdata.lock`), `culling:
-  Option<CullingSection>` (Quellebene, fehlend = gültig „kein Vorschlag",
-  offene `reasons[]`-Registry nur formvalidiert). Alle additiv-optional,
-  `schema_version` 2 unverändert, Roundtrip/Migration/Atomic/Recovery getestet
-  (sidecar `199p` ohne / `239p` mit `zdata`).
+  Strom und BLAKE3-Prüfsumme, atomar unter `.zdata.lock`; der
+  `DenoiseArtifactRef` verlangt `format` mit `zdata`, `channels = "rgb8"`
+  und `data_version = "1"`), `culling: Option<CullingSection>` (Quellebene,
+  fehlend = gültig „kein Vorschlag", offene `reasons[]`-Registry nur
+  formvalidiert). Alle additiv-optional, `schema_version` 2 unverändert,
+  Roundtrip/Migration/Atomic/Recovery getestet (sidecar `199p` ohne /
+  `239p` mit `zdata`).
 - **zdata `face_embedding` (FACE-20-IMPL-20-REST, 2026-09-17, Verifizierung
   ausstehend):** `RecordKind::FaceEmbedding` (`kind = 5`, Container-`VERSION`
   bleibt 1) speichert einen normierten Gesichts-Identitätsvektor. Kanonischer

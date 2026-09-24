@@ -20,6 +20,7 @@ CLI und nativer Desktop-GUI.
 | Virtuelle Kopien / Presets | ja | ja |
 | Sidecar schreiben (nativ, neben Original) | ja | ja |
 | ONNX-Inferenz (BiRefNet/SAM2) | ja (MVP) | ja (MVP) |
+| KI-Denoise (lokales ONNX, `denoise`) | **ja, nativ; `pending-integration` → `unavailable` (F-078-Gate)** | **ja, nativ; Panel/Status, `pending-integration` → `unavailable` (F-078-Gate)** |
 | Persistente AI-Masken | post-MVP | post-MVP |
 | Export (PNG/JPEG/WebP) | ja | ja |
 | IPTC-/XMP-Metadaten in JPEG-Exporte (`--write-metadata`, Opt-in) | ja (LRPAR-G15-IPTC) | ja (Metadaten-Panel) |
@@ -100,6 +101,19 @@ report/warn/gate). Kurzfassung (implementiert):
   `StubBackend` der Default-Draht; mit `onnx-rt` ist ein fehlendes/stale/
   unkonfiguriertes Artefakt ein harter CLI-Fehler — nie ein stiller
   Stub-Ersatz (Details in `feature/product/ai-masks.md`, F-082-FOLLOWUP-Rest).
+
+## KI-Denoise (native-only, F-096a / LRPAR-G14-DENOISE-20)
+
+- `denoise` ist eine getrennte lokale ONNX-Capability; sie wird weder als
+  Masken- noch als generative Fähigkeit geraten und hat keinen Cloud-Fallback.
+- CLI und Desktop können den Status `unavailable`/`stale`/`missing`/`corrupt`
+  sichtbar melden und die manuelle F-096-NR als ausgewiesenen Fallback
+  verwenden. `pending-integration` bleibt bis zum F-078-Gate (Gewichts-Lizenz,
+  Provenienz und Hash-Pin) **keine** Produktionsfreigabe.
+- Die Core-/Sidecar-/Input-Spec-Verträge (u. a. `lumina-denoise-input-spec-v2`,
+  Core-Blend v1 und Distance-to-Edge-Assembly v1) sind native Vertragsbestandteile,
+  keine Cloud-Fähigkeit. Der tests-only Fixture-/Stub-Pfad wird nicht als
+  echtes Denoise-Modell ausgeliefert.
 
 ## Geplante generative Capabilities (Doku-first, 2026-09-02, GEN-EXPAND-1 / SPOT-REMOVE-1)
 

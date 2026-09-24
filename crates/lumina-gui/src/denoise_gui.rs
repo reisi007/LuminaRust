@@ -76,13 +76,10 @@ use crate::{GuiError, LuminaApp};
 pub(crate) const GUI_DENOISE_MODEL_NAME: &str = "nafnet-srgb";
 /// Planned model version (decision §5 sketch).
 pub(crate) const GUI_DENOISE_MODEL_VERSION: &str = "1.0";
-/// Digest of the documented tiled input contract (512×512 tiles, 64 px
-/// overlap, identity normalisation, RGB/NCHW, tensor names `input`/`output`,
-/// identity rescaling) — `sha256` over the canonical text quoted in the module
-/// docs. A change to the tiling contract must update this constant (and
-/// therefore invalidate persisted artifacts).
-pub(crate) const GUI_DENOISE_INPUT_SPEC_DIGEST: &str =
-    "sha256:1da068a7d38fe6866d3a3f91872f81f14bfd38567d234aca58fe667cf1f322ca";
+/// The GUI obtains the v2 digest from the shared ONNX contract producer rather
+/// than carrying a second hard-coded hash. This does not select or load a
+/// model; it only hashes the documented input/algorithm contract.
+pub(crate) use lumina_onnx::default_denoise_input_spec_digest as gui_denoise_input_spec_digest;
 
 /// Resolved GUI-side denoise state (display + render decision). Session state;
 /// never persisted (the recipe is the persistence).
@@ -134,7 +131,7 @@ pub(crate) fn default_denoise_ai() -> DenoiseAi {
             model_hash: DENOISE_PENDING_MODEL_HASH.into(),
             extras: Default::default(),
         },
-        input_spec_digest: GUI_DENOISE_INPUT_SPEC_DIGEST.into(),
+        input_spec_digest: gui_denoise_input_spec_digest(),
         strength: 0.5,
         preserve_detail: 0.5,
         artifact: None,
@@ -628,7 +625,11 @@ mod tests {
         denoise.validate().unwrap();
         assert!(!denoise.is_identity());
         assert_eq!(denoise.model.model_hash, DENOISE_PENDING_MODEL_HASH);
-        assert_eq!(denoise.input_spec_digest, GUI_DENOISE_INPUT_SPEC_DIGEST);
+        assert_eq!(denoise.input_spec_digest, gui_denoise_input_spec_digest());
+        assert_eq!(
+            denoise.input_spec_digest,
+            lumina_onnx::DENOISE_DEFAULT_INPUT_SPEC_DIGEST
+        );
     }
 
     /// E2E (DoD §1): enabling the stage writes the recipe to the sidecar and a
@@ -653,7 +654,7 @@ mod tests {
         assert!((stored.strength - 0.25).abs() < 1e-6);
         assert!((stored.preserve_detail - 0.75).abs() < 1e-6);
         assert_eq!(stored.model.name, GUI_DENOISE_MODEL_NAME);
-        assert_eq!(stored.input_spec_digest, GUI_DENOISE_INPUT_SPEC_DIGEST);
+        assert_eq!(stored.input_spec_digest, gui_denoise_input_spec_digest());
 
         let mut reopened = new_app();
         open_and_decode(&mut reopened, &source);

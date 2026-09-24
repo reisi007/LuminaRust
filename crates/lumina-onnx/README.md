@@ -48,13 +48,20 @@ ONNX inference is a native capability, the browser remains explicitly "offen"
   `onnx-rt` (`face/ort.rs`).
 - `denoise.rs` + `denoise/` — LRPAR-G14-DENOISE-IMPL-20: KI-denoise manifest
   (`denoise` capability, `pending-integration`), `DenoiseModelSuite`/
-  `DenoiseTileSpec` with the deterministic `input_spec_digest`
-  (resolution + tile/overlap + identity preprocessing), the GEN-ONNX-1-style
-  fixture pin, the tiled producer (`produce_denoise_artifact`, seam-free via
-  the core `assemble_denoise_tiles` contract, provenance persisted through
+  `DenoiseTileSpec` with the deterministic versioned
+  `lumina-denoise-input-spec-v2` `input_spec_digest` (resolution +
+  tile/overlap + identity preprocessing + core blend-v1 and
+  distance-to-edge-assembly-v1 contracts), the GEN-ONNX-1-style fixture pin,
+  the tiled producer (`produce_denoise_artifact`, seam-free via the core
+  `assemble_denoise_tiles` contract, provenance persisted through
   `set_denoise_producer_provenance`), the deterministic, tests-only stub and
   the real ORT backend behind `onnx-rt` (`denoise/ort.rs`). A
   `pending-integration` manifest is refused loudly as `ModelUnavailable`.
+  The default v2 input-spec pin is
+  `sha256:e02314484356c026f5f4f64d4823450a450a833945a163f9d9abe07e024cda07`;
+  the deterministic fixture-spec pin is
+  `sha256:0a5917d19b0e786042e493eb967bb02ca024c51a5711703d6357815c067feca0`
+  (fixture identity only, never a weight-file pin).
 - `preprocess.rs` — pure, deterministic, dependency-free resize /
   rescale helpers (nearest-neighbor, documented integer mapping).
 - `backend.rs` — the `SubjectInference` trait and the deterministic

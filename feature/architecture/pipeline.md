@@ -682,9 +682,10 @@ manuelle Stufe nie). Abhängigkeiten: F-031, F-036.
 
 ### F-096a KI-Denoise (DenoiseAI, Release 2.0)
 
-**Status:** Kern-Slice umgesetzt (LRPAR-G14-DENOISE-IMPL-20, 2026-09-16).
-ONNX-Verdrahtung, CLI/GUI-Anbindung und Perf-Budgets folgen als getrennte
-Slices. Entscheid: `feature/decisions/LRPAR-G14-DENOISE-20.md`.
+**Status:** Kern-, ONNX-, CLI/GUI- und Perf-Slices umgesetzt; der begrenzte
+F1/F3-Vertragsabschluss (LRPAR-G14-DENOISE-IMPL-20, 2026-09-24) ist
+dokumentiert. Die echten Modellgewichte und das F-078-Gate bleiben offen.
+Entscheid: `feature/decisions/LRPAR-G14-DENOISE-20.md`.
 
 **Ziel:** Optionales, austauschbares KI-Denoise als additive Stufe, die das
 manuelle F-096-NR **nie ersetzt**, sondern davor läuft; `None`/`enabled:false`/
@@ -696,8 +697,12 @@ Migration).
 `strength` `0..=1`, `preserve_detail` `0..=1`, optionaler
 `artifact`-Verweis `kind = "denoise_rgb"`). Additives Schema-v2-Feld, `None`
 ist Identität; `version == 1`, endliche `0..=1`-Werte und vollständige
-Modellidentität werden laut validiert (kein Clipping, keine Defaults).
-Der Denoise-`model_hash` ist bis zur F-078-Freigabe `pending-integration`.
+Modellidentität werden laut validiert (kein Clipping, keine Defaults). Wenn
+ein Artefaktverweis vorhanden ist, muss sein `format` den Marker `zdata`
+enthalten (z. B. `lumina-zdata`), `channels` exakt `rgb8` und
+`data_version` exakt `1` sein; fehlende oder abweichende Werte werden vor
+jedem Render abgelehnt. Der Denoise-`model_hash` ist bis zur F-078-Freigabe
+`pending-integration`.
 
 **Reihenfolge (normativ, in `Adjustments`):**
 `… → Farbkorrekturen → DenoiseAI (optional) → NoiseReduction (F-096, manuell)
@@ -713,6 +718,31 @@ stilles Ummappen.
 (Rec.709); pro Kanal `out = round(clamp(src + w * (artifact - src), 0, 255))`,
 `strength == 0` ist strenge Identität (keine Inferenz, kein Modell nötig).
 Gleiche Eingaben → byte-identisches Ergebnis.
+
+**F1-Vertragsidentität (canonical input-spec v2):** Der Digest ist der
+SHA-256 über einen versionierten, kanonischen Text mit dem Leading-Tag
+`lumina-denoise-input-spec-v2`; eine Änderung der Bedeutung von v1 ist damit
+sichtbar und invalidiert bestehende Artefakte. Er enthält neben dem
+Model-Input-Spec, der Preprocessing-/Rescaling-Identität und Kachelgeometrie
+mindestens diese verhaltensbestimmenden Komponenten:
+
+- **Core-Blend:** `lumina-denoise-core-blend` Version `1`; die Formel
+  `strength * (1 - preserve_detail * detail)`, die 3×3-Box-Mittelung mit
+  Randklemmung, Rec.709-Luminanz, Detail-Skala `32`, Rundung/Clipping auf
+  `0..=255`, unverändertes Alpha und `strength == 0` als strikte Identität.
+- **Tile-Assembly:** `lumina-denoise-distance-to-edge-assembly` Version `1`;
+  Gewicht `min(Abstand zur nächsten Kachelkante) + 1`, normalisierte
+  gewichtete Mittelung, RGB8-Rundung/Clipping und zwingende vollständige
+  Abdeckung (unvollständig = `missing`/`corrupt`, nie schwarzer Rest).
+- **Ausgabe-/Persistenzvertrag:** row-major RGB8, Modell-Output
+  `NCHW [1,3,H,W]` aus dem Bereich `[0,1]` mit Rundung/Clipping, unveränderte
+  Geometrie, kanonischer RGB-Encoding-Vertrag `1`; Nutzerwerte `strength`
+  und `preserve_detail` bleiben Rezeptwerte und werden separat über den
+  Rezept-/Render-Key invalidiert.
+
+Eine Änderung eines dieser Werte, der Kachel-/Overlap-Geometrie oder des
+Input-/Output-Tensorvertrags ändert den Digest. `strength == 0`,
+`enabled == false` und ein fehlendes Feld bleiben davon unabhängig Identität.
 
 **Getilte Inferenz (Nahtlosigkeit):** Der Kern besitzt die kanonische
 Kachel-Assemblierung: überlappende RGB8-Kacheln werden mit
@@ -751,6 +781,12 @@ kein stilles `ready`. Eine fehlende/kaputte Provenienz wird als nicht-`ready`
 `MaskPolicy`: `Strict` bricht laut ab, `Warn` protokolliert `warn!` und lässt
 das manuelle F-096-NR als ausgewiesenen Fallback laufen. Eine
 Neuberechnung ist nur explizit (Button/Flag), nie die einzige Option.
+
+**F3-Vertragsabschluss (2026-09-24):** Die Sidecar-Validierung verlangt
+beim `denoise_rgb`-Verweis zusätzlich einen `zdata`-Formatmarker,
+`channels = "rgb8"` und `data_version = "1"`. Core-Tests decken fehlende und
+ungültige Werte jeweils über `CoreError::Denoise { status: "invalid" }` ab;
+die Validierung läuft vor jeder Pixelmutation.
 
 **Abnahme:** Schema-Anbindung/Roundtrip, `strength:0`/`enabled:false`/`None`
 = Identität (byte-identisch), Determinismus/BLAKE3, Veraltung je

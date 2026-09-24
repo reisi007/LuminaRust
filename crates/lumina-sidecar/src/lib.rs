@@ -83,7 +83,8 @@ pub use face::{
 mod denoise;
 pub use denoise::{
     validate_denoise_ai, validate_denoise_sha256, DenoiseAi, DenoiseArtifactKind,
-    DenoiseArtifactRef, DenoiseModelIdentity, DENOISE_AI_VERSION, DENOISE_ARTIFACT_KIND,
+    DenoiseArtifactRef, DenoiseModelIdentity, DENOISE_AI_VERSION, DENOISE_ARTIFACT_CHANNELS,
+    DENOISE_ARTIFACT_DATA_VERSION, DENOISE_ARTIFACT_FORMAT_MARKER, DENOISE_ARTIFACT_KIND,
     DENOISE_HASH_HEX_LEN, DENOISE_PENDING_MODEL_HASH, DENOISE_SHA256_PREFIX,
 };
 

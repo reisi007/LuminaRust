@@ -1,9 +1,9 @@
 # KI-Denoise — Modell-, Lizenz- und Capability-Entscheid (Doku-first)
 
 **Task:** LRPAR-G14-DENOISE-20 (Release 2.0, G-14-Abspaltung, User-Entscheid 2026-09-03)
-**Status:** Entscheid dokumentiert (Doku-first, kein Code) — Abnahme „Entscheid in `feature/` + Folge-Task"
-**Bezug:** G-14 Ist ~15 % (`.goal/Goal.md`); manuelles NR F-096 + Schärfen F-095 bleiben MVP; `feature/architecture/pipeline.md` wird hier bewusst **nicht** geändert (nur gelesen)
-**Normativ für:** spätere Implementierung (Schema, Pipeline-Stufe, ONNX-Modell, Persistenz)
+**Status:** Entscheid und begrenzter F1/F3-Vertragsabschluss dokumentiert (2026-09-24); der Release-Gate für echte Gewichte/F-078 bleibt offen.
+**Bezug:** G-14 Ist ~15 % (`.goal/Goal.md`); manuelles NR F-096 + Schärfen F-095 bleiben MVP; `feature/architecture/pipeline.md` und die capability-/TODO-Statusdokumente werden für diesen Abschluss synchronisiert.
+**Normativ für:** Implementierung (Schema, Pipeline-Stufe, ONNX-Modell, Persistenz) und die versionierte Input-Spec-Identität
 
 ## 1. Entscheidung (Kurzform)
 
@@ -72,17 +72,33 @@ Gewichte *pending integration* (`model_hash = "pending-integration"`)" plus der
 ## 4. ONNX-Einordnung (Modellfamilie, Auflösung, Vorverarbeitung)
 
 - **Modellklasse:** RGB-zu-RGB-Denoiser (kein Masken-/Matten-Modell, kein generatives Canvas): Eingang sRGB-codiertes RGB(A)-Raster, Ausgang entrauschtes RGB in gleicher Geometrie. Kandidatenfamilien (alle erst nach F-078-Prüfung zulässig): **DnCNN-artige** CNN-Baseline (klein, schnell, schwache High-ISO-Leistung), **UNet/NAFNet-artige** Encoder-Decoder (ausgewogen, Favorit für v1), **Restormer/SCUNet-artige** Transformer (beste Qualität, schwer, ggf. nur Desktop-GPU/CPU-langsam). Keine Festlegung hier — die Folgearbeit evaluiert genau einen v1-Kandidaten gegen Golden/PSNR-Gates.
-- **Auflösung:** Tiled Full-Resolution-Inferenz (kein 1024-Downscale wie BiRefNet/SAM 2 — Denoise muss Vollauflösung bedienen): inferiert wird in Kacheln (z. B. 512×512 mit Overlap-Blend gegen Kantenartefakte; exakte Kachel/Overlap-Werte legt die Implementierung fest) direkt auf dem Decode-Frame. Kachelgröße, Overlap und Blend-Verfahren sind Teil des `input_spec_digest` — jede Änderung invalidiert persistierte Artefakte sichtbar.
+- **Auflösung:** Tiled Full-Resolution-Inferenz (kein 1024-Downscale wie BiRefNet/SAM 2 — Denoise muss Vollauflösung bedienen): inferiert wird in Kacheln (Default 512×512 mit 32 px Overlap; exakte Kachel-/Overlap-Werte werden in der versionierten Input-Spec festgeschrieben) direkt auf dem Decode-Frame. Kachelgröße, Overlap und die Core-Blend-/Assembly-Algorithmen sind Teil des `input_spec_digest` — jede Änderung invalidiert persistierte Artefakte sichtbar.
 - **Vorverarbeitung:** pro Manifest `ModelInputSpec` (Analogie `ai-masks.md` §Maskenidentität): Normalisierung (vorzugsweise Identität/`[0,1]`-Skalierung statt ImageNet-mean/std — Denoiser sind in der Regel nicht ImageNet-normalisiert; Festlegung mit Modellwahl), Kanal-Layout `Rgb`, Tensor-Format `Nchw`, dokumentierte Tensor-Namen. Nachskalierung: Identität (kein Upsampling — Ausgabegeometrie = Eingabegeometrie; anders als Masken-Resample).
 - **Farbraum-Hinweis:** MVP-Pipeline arbeitet sRGB-codiert (`Rgba8Srgb`); KI-Denoise v1 arbeitet ebenfalls dort. Ein linearer Denoise-Pfad ist erst mit einer linearen Pipelineversion zulässig (getrennt migriert/validiert, kein stiller Wechsel).
 
-> **Umsetzungs-Nachtrag ONNX-Slice (LRPAR-G14-DENOISE-IMPL-20, 2026-09-16):**
+> **F1-Vertragsabschluss (2026-09-24):** Der kanonische Input-Spec-Tag
+> wurde von `lumina-denoise-input-spec-v1` auf
+> **`lumina-denoise-input-spec-v2`** angehoben; v1 bedeutet keine neue
+> Semantik. Der v2-Text enthält explizit `lumina-denoise-core-blend` Version `1`
+> und `lumina-denoise-distance-to-edge-assembly` Version `1` sowie die
+> verhaltensbestimmenden F-096a-Werte: Rec.709-Luminanz, 3×3-Box-Mittelung,
+> Detail-Skala `32`, Formel `strength * (1 - preserve_detail * detail)`,
+> Alpha-Erhalt, strikte Identität bei `strength == 0`, row-major RGB8,
+> Modell-Output `NCHW [1,3,H,W]` aus `[0,1]`, Rundung/Clipping `0..=255`,
+> Gewicht `min(Abstand zur Kachelkante)+1`, normalisierte gewichtete Mittelung
+> und vollständige Kachelabdeckung. Input- und Output-Tensor-Namen sind
+> ebenfalls explizite Digest-Komponenten. Änderungen an diesen Komponenten ändern den
+> Digest; die bestehende Rezept-/Artefaktidentität wird dadurch sichtbar stale.
+
+> **Umsetzungs-Nachtrag ONNX-Slice (LRPAR-G14-DENOISE-IMPL-20, 2026-09-16/24):**
 > Die in §4 skizzierte ONNX-Einordnung ist im `lumina-onnx`-Backend umgesetzt:
 > additive, getrennte `denoise`-Capability (`ModelCapabilities.denoise`, Muster
 > `face_detect`/`face_embed`), Deskriptor + `DenoiseModelSuite` mit
 > `DenoiseTileSpec`, deterministischer `input_spec_digest` (Modell-Input-Spec
-> **plus** Kachelgröße/Overlap, Identitäts-/`[0,1]`-Vorverarbeitung und
-> Identitäts-Nachskalierung), Fixture-Pin nach GEN-ONNX-1 (§3.1) sowie der echte
+> **plus** Kachelgröße/Overlap, Identitäts-/`[0,1]`-Vorverarbeitung,
+> Identitäts-Nachskalierung, Input-/Output-Tensor-Namen/-Form und die
+> versionierten Core-Blend-/Assembly-Vertragswerte), Fixture-Pin nach
+> GEN-ONNX-1 (§3.1) sowie der echte
 > ORT-Pfad hinter `onnx-rt` (SHA-256-Verifikation, Tensor-Namen-Gates,
 > `ModelArtifactStale` bei Hash-Abweichung). Ein `pending-integration`-Manifest
 > wird dort **laut** als `ModelUnavailable` abgelehnt — das ist der sichtbare
@@ -90,12 +106,13 @@ Gewichte *pending integration* (`model_hash = "pending-integration"`)" plus der
 > gekachelt und assembliert nahtlos über den Core-Vertrag
 > `assemble_denoise_tiles`; die Produzenten-Herkunft wird über
 > `set_denoise_producer_provenance` in `DenoiseAi.extras` persistiert. Die
-> konkreten Werte (Default 512×512, Overlap 32, keine Reskalierung) sind Teil
-> des `input_spec_digest` und damit invalidierungsrelevant.
+> konkreten Werte (Default 512×512, Overlap 32, keine Reskalierung, Core-
+> Blend v1 und Distance-to-Edge-Assembly v1) sind Teil des v2-Digests und
+> damit invalidierungsrelevant.
 
-## 5. Rezept-Stufen-Vorschlag + Persistenz (noch nicht normativ)
+## 5. Rezept-Stufe + Persistenz (normativ)
 
-Vorschlag für die Implementierungs-Folgearbeit (erst dort nach `sidecar.md`-Vertrag zu normieren; `pipeline.md` bleibt bis dahin unverändert):
+Der folgende Sidecar-/Pipeline-Vertrag ist für die Implementierung verbindlich; die JSON-Skizze ist nur eine verkürzte Lesedarstellung:
 
 ```jsonc
 // additives Schema-v2-Feld, None = Identität (MVP-Rezepte unverändert)
@@ -110,11 +127,15 @@ Vorschlag für die Implementierungs-Folgearbeit (erst dort nach `sidecar.md`-Ver
 }
 ```
 
-> **Umsetzungs-Nachtrag (Schema-Slice 2026-09-16, verifiziert BESTANDEN):**
+> **Umsetzungs-Nachtrag (Schema-Slice 2026-09-16/24, F3 verifiziert):**
 > Die Skizze oben war Kurzform. Umgesetzt ist die volle `DenoiseArtifactRef`
 > nach Sidecar-Artefaktvertrag (`relative_path`, `format`, `checksum` =
 > BLAKE3 über den unkomprimierten RGB-Strom, `width`/`height`, `channels`,
-> `data_version`, `kind = "denoise_rgb"`); der zdata-`RecordKind`
+> `data_version`, `kind = "denoise_rgb"`). Die Validierung verlangt beim
+> Artefaktverweis zusätzlich: `format` enthält `zdata`, `channels == "rgb8"`
+> und `data_version == "1"`; relative Pfade und nicht-null Auflösung bleiben
+> Pflicht. Fehlende oder ungültige Werte werden als `CoreError::Denoise` mit
+> Status `invalid` vor jeder Pixelmutation abgewiesen. Der zdata-`RecordKind`
 > (`RecordKind::DenoiseRgb = 4`) ist im Kern-Slice implementiert
 > (Codec + atomarer Write unter `.zdata.lock`, s. `sidecar.md`).
 > Diese Form ist normativ, die Skizze nur illustrativ.
@@ -193,9 +214,9 @@ G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rot
 1. **F-078-Modellfreigabe Denoise:** Kandidat wählen, Gewichts-Lizenz verifizieren, Hash + Input-Spec pinnen, `fixtures-licensing.md` §5 + `THIRD-PARTY-NOTICES.md` ergänzen (Gate für alles Weitere).
 2. **Schema + Persistenz:** `denoise_ai`-Feld (additiv, v2), `kind = "denoise_rgb"` in zdata, JSON-Roundtrip-/Migrations-/Atomic-Write-/Recovery-Tests.
 3. **Pipeline-Stufe:** Einordnung `DenoiseAI → F-096 → F-095` in `pipeline.md` normieren (Version, Reihenfolge, Render-Key), Core-Implementierung + Golden/PSNR-Gates (u. a. `strength: 0` = Identität, Determinismus, Kachel-Blend-Nahtlosigkeit).
-4. **ONNX-Verdrahtung:** `denoise`-Capability in Manifest + Capability-Matrix (`platform/capability-matrix.md`, native CLI/Desktop, Cloud explizit nicht geplant), `lumina-onnx`-Backend, Veraltungs-/Statusmodell aus §6, CLI/GUI-Anbindung (Fehler laut, Badges). Auflagen aus der Kern-Verifizierung (2026-09-16, mitzuziehen): CPU-seitiger `CoreError::Denoise{invalid}`-Mapping-Test (F3, 11 Fälle; `format`/`channels`/`data_version` offen), `recorded`-Aufruferkonvention (`None` → `DenoiseIdentity::default()`, R1), CLI wählt explizit `DenoisePolicy::Warn` für §6-Exit-0 (R2), Cross-Crate-Checksum-Test Core↔Sidecar (B4, umgesetzt). Folgearbeit aus der ONNX-Verifizierung (2026-09-16): Blend-/Assembly-Version in den `input_spec_digest` aufnehmen (F1 — derzeit flippt eine Gewichtungsänderung den Digest nicht; folgenlos solange `pending-integration`, aber SOLL-Abweichung zu §4).
+4. **ONNX-Verdrahtung:** `denoise`-Capability in Manifest + Capability-Matrix (`platform/capability-matrix.md`, native CLI/Desktop, Cloud explizit nicht geplant), `lumina-onnx`-Backend, Veraltungs-/Statusmodell aus §6, CLI/GUI-Anbindung (Fehler laut, Badges). Auflagen aus der Kern-Verifizierung (2026-09-16/24, mitgezogen): CPU-seitiger `CoreError::Denoise{invalid}`-Mapping-Test (F3, jetzt vollständig für `relative_path`, `resolution`, `checksum`, `format`, `channels` und `data_version` inkl. fehlender/ungültiger Werte), `recorded`-Aufruferkonvention (`None` → `DenoiseIdentity::default()`, R1), CLI wählt explizit `DenoisePolicy::Warn` für §6-Exit-0 (R2), Cross-Crate-Checksum-Test Core↔Sidecar (B4, umgesetzt). F1 ist als `lumina-denoise-input-spec-v2` mit expliziten Core-Blend-v1- und Distance-to-Edge-Assembly-v1-Komponenten umgesetzt; Fixture-/GUI-Digestquellen wurden synchronisiert.
 
-   > **Status ONNX-Slice (2026-09-16):** `denoise`-Capability + Deskriptor +
+   > **Status ONNX-Slice (2026-09-16/24):** `denoise`-Capability + Deskriptor +
    > `DenoiseModelSuite`/`DenoiseTileSpec` + Fixture-Pin (§3.1) +
    > `input_spec_digest`-Produzent + ORT-Pfad (`onnx-rt`: SHA-256-Gate,
    > Tensor-Namen-Gates, `pending-integration` → `ModelUnavailable`) +
@@ -203,11 +224,11 @@ G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rot
    > `assemble_denoise_tiles` + Produzenten-Provenienz sind umgesetzt und
    > getestet (Capability-/Hash-Gates, Stub-Determinismus, Modellwechsel →
    > `stale`, `unavailable` ohne stillen Fallback, Kachel-Nahtlosigkeit).
-   > Die Auflagen F3 (Core-Mapping-Test) und B4 (Core↔Sidecar-Checksum) sind
-   > umgesetzt. Offen und damit weiter in `Agents.todo.md`: Capability-Matrix-
-   > Eintrag (native CLI/Desktop, Cloud explizit nein), CLI-Anbindung
-   > (`DenoisePolicy::Warn`, Exit 0, `stderr`), GUI-Badges/Panel, R1/R2-
-   > Aufruferkonvention und Perf-Budgets (Punkt 5).
+   > Die Auflagen F3 (Core-Mapping-Test inklusive `format`/`channels`/
+   > `data_version`), B4 (Core↔Sidecar-Checksum) und F1 (v2-Identität mit
+   > Core-Blend-/Assembly-Version) sind umgesetzt. Offen und damit weiter in
+   > `Agents.todo.md`: echte, lizenzgeklärte und gepinnte Gewichte/F-078;
+   > Fixture-/Stub-Pfade bleiben ausdrücklich keine Produktionsfreigabe.
 5. **Perf-Budgets:** Denoise-Benchmarks nach `performance-benchmarks.md` (F-074), Budgets im selben Commit wie das Feature begründen.
    > **Status Perf-Slice (F-074-N8, 2026-09-17):** Umgesetzt. Die Denoise-Klasse
    > (`denoise/blend__*`, `denoise/assemble_tiles__*`, `denoise/render_ready__*`,
@@ -219,19 +240,20 @@ G-14 ist in zwei Tasks gespalten (Releaseplan, User-Entscheid 2026-09-03): **Rot
    > §F-074-N8.
 6. **V1-Modellvergleich (optional):** DnCNN- vs. NAFNet- vs. Transformer-Kandidat an High-ISO-Fixtures messen; Ergebnis als Entscheid-Nachtrag hier dokumentieren.
 
-**Stand 2026-09-16 (Kern + ONNX + CLI + GUI, Verifizierung BESTANDEN):**
+**Stand 2026-09-24 (Kern + ONNX + CLI + GUI + F1/F3-Vertragsabschluss):**
 Kern-Stufe (GPU-Refusal, Provenienz-`extras`, zdata `kind = 4`), ONNX-Backend
 (`denoise`-Capability, `pending-integration` → `unavailable`, B4-Kreuzprobe),
 CLI (`--status`/`--render`/`--record-rgb` mutually exclusive, Exit 2 bei
 Konflikt; `--render` honoriert `--format`/`--quality` wie `render`; echte
-Masken-Ablehnung), GUI (Panel + Badges + Persistenz-E2E). Offen: Gewichte
-(S6/F-078), F1-Blend-Digest, F3-Restfelder.
+Masken-Ablehnung), GUI (Panel + Badges + Persistenz-E2E), F3-Validierung und
+F1-Input-Spec-v2 sind umgesetzt. Offen bleibt der übergeordnete
+F-078-Gate: echte, lizenzgeklärte und gepinnte Gewichte; der Parent-Task in
+`Agents.todo.md` bleibt deshalb ausdrücklich offen.
 
-**Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung ausstehend):** Die in
+**Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung abgeschlossen 2026-09-24):** Die in
 §8 Punkt 5 geforderten Denoise-Budgets sind registriert
 (`denoise/*`, report-only). Damit ist der Perf-Punkt dieses Entscheids
-erledigt; offen bleiben nur noch Gewichte (S6/F-078), F1-Blend-Digest und die
-F3-Restfelder.
+erledigt; offen bleiben nur noch Gewichte (S6/F-078).
 
 ## 9. Referenzen
 

@@ -218,23 +218,23 @@ fn schema_loaded_denoise_ai_is_applied_by_the_render_path() {
     assert_eq!(actual.pixels, expected.pixels);
 }
 
-/// F3 (Auflage aus der Kern-Verifizierung 2026-09-16): a directly
+/// F3 (Auflage aus der Kern-Verifizierung 2026-09-16/24): a directly
 /// constructed (not sidecar-loaded) recipe reaches the CPU render path's
 /// `validate_nested_adjustments`, which maps every malformed `denoise_ai`
 /// deviation onto the documented `CoreError::Denoise { status: "invalid" }`
 /// — loud, before any pixel is written, never a clipped/defaulted stage.
 ///
-/// The class is checked across 11 cases (version, model identity,
-/// digest, bounded strengths and the artifact fields `relative_path`,
-/// `resolution`, `checksum`); `format`/`channels`/`data_version` remain
-/// open (Folgearbeit, s. Entscheid §8).
+/// The class covers version/model identity, the digest, bounded strengths and
+/// every artifact contract field. Each new zdata field is tested both when it
+/// is missing/empty and when it has a plausible but invalid value; the
+/// existing path, resolution and checksum checks remain covered as well.
 #[test]
 fn malformed_denoise_ai_maps_to_invalid_denoise_error_via_validation() {
     // (expected reason fragment, mutator) — mirrors the sidecar validation
     // matrix, exercised through the render entry point instead of the
     // sidecar loader.
     type Mutator = fn(&mut DenoiseAi);
-    let cases: [(&str, Mutator); 11] = [
+    let cases: [(&str, Mutator); 18] = [
         ("unsupported denoise_ai.version", |d| d.version = 2),
         ("denoise_ai.model.name", |d| d.model.name.clear()),
         ("denoise_ai.model.version", |d| {
@@ -255,8 +255,29 @@ fn malformed_denoise_ai_maps_to_invalid_denoise_error_via_validation() {
         ("denoise_ai artifact resolution", |d| {
             d.artifact.as_mut().unwrap().width = 0
         }),
+        ("denoise_ai artifact resolution", |d| {
+            d.artifact.as_mut().unwrap().height = 0
+        }),
         ("denoise_ai artifact checksum", |d| {
             d.artifact.as_mut().unwrap().checksum.clear()
+        }),
+        ("denoise_ai artifact format", |d| {
+            d.artifact.as_mut().unwrap().format.clear()
+        }),
+        ("denoise_ai artifact format", |d| {
+            d.artifact.as_mut().unwrap().format = "png".into()
+        }),
+        ("denoise_ai artifact channels", |d| {
+            d.artifact.as_mut().unwrap().channels.clear()
+        }),
+        ("denoise_ai artifact channels", |d| {
+            d.artifact.as_mut().unwrap().channels = "rgba8".into()
+        }),
+        ("denoise_ai artifact data_version", |d| {
+            d.artifact.as_mut().unwrap().data_version.clear()
+        }),
+        ("denoise_ai artifact data_version", |d| {
+            d.artifact.as_mut().unwrap().data_version = "2".into()
         }),
     ];
     let frame = test_frame(6, 5);

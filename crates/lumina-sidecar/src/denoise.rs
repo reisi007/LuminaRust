@@ -43,6 +43,14 @@ pub const DENOISE_AI_VERSION: u8 = 1;
 
 /// The persisted artefact kind of a denoised RGB payload (§5).
 pub const DENOISE_ARTIFACT_KIND: &str = "denoise_rgb";
+/// Required marker in a denoise artifact's portable format field.  The
+/// concrete producer may use `lumina-zdata`; the contract intentionally only
+/// requires the documented `zdata` marker.
+pub const DENOISE_ARTIFACT_FORMAT_MARKER: &str = "zdata";
+/// Required channel contract for a `denoise_rgb` payload.
+pub const DENOISE_ARTIFACT_CHANNELS: &str = "rgb8";
+/// Required data/payload version for a `denoise_rgb` payload.
+pub const DENOISE_ARTIFACT_DATA_VERSION: &str = "1";
 
 /// F-078 gate marker: until licence-checked, hash-pinned weights exist, the
 /// manifest carries `pending-integration` instead of a `sha256:<hex>` pin.
@@ -157,10 +165,22 @@ fn validate_denoise_model_hash(field: &str, value: &str) -> Result<(), SidecarEr
 
 fn validate_denoise_artifact(artifact: &DenoiseArtifactRef) -> Result<(), SidecarError> {
     validate_relative_path("denoise_ai artifact relative_path", &artifact.relative_path)?;
-    validate_name("denoise_ai artifact format", &artifact.format)?;
+    if !artifact.format.contains(DENOISE_ARTIFACT_FORMAT_MARKER) {
+        return invalid(format!(
+            "denoise_ai artifact format must contain `{DENOISE_ARTIFACT_FORMAT_MARKER}`"
+        ));
+    }
     validate_name("denoise_ai artifact checksum", &artifact.checksum)?;
-    validate_name("denoise_ai artifact channels", &artifact.channels)?;
-    validate_name("denoise_ai artifact data_version", &artifact.data_version)?;
+    if artifact.channels != DENOISE_ARTIFACT_CHANNELS {
+        return invalid(format!(
+            "denoise_ai artifact channels must equal `{DENOISE_ARTIFACT_CHANNELS}`"
+        ));
+    }
+    if artifact.data_version != DENOISE_ARTIFACT_DATA_VERSION {
+        return invalid(format!(
+            "denoise_ai artifact data_version must equal `{DENOISE_ARTIFACT_DATA_VERSION}`"
+        ));
+    }
     if artifact.width == 0 || artifact.height == 0 {
         return invalid("denoise_ai artifact resolution must be non-zero");
     }
@@ -359,7 +379,7 @@ mod tests {
 
     #[test]
     fn denoise_validation_matrix_rejects_every_deviation() {
-        let cases: [fn(&mut DenoiseAi); 12] = [
+        let cases: [fn(&mut DenoiseAi); 19] = [
             |d| d.version = 2,
             |d| d.model.name.clear(),
             |d| d.model.version = "  ".into(),
@@ -371,7 +391,14 @@ mod tests {
             |d| d.preserve_detail = -0.1,
             |d| d.artifact.as_mut().unwrap().relative_path = "/abs/out.bin".into(),
             |d| d.artifact.as_mut().unwrap().width = 0,
+            |d| d.artifact.as_mut().unwrap().height = 0,
             |d| d.artifact.as_mut().unwrap().checksum.clear(),
+            |d| d.artifact.as_mut().unwrap().format.clear(),
+            |d| d.artifact.as_mut().unwrap().format = "png".into(),
+            |d| d.artifact.as_mut().unwrap().channels.clear(),
+            |d| d.artifact.as_mut().unwrap().channels = "rgba8".into(),
+            |d| d.artifact.as_mut().unwrap().data_version.clear(),
+            |d| d.artifact.as_mut().unwrap().data_version = "2".into(),
         ];
         for mutate in cases {
             let mut value = denoise();
