@@ -102,6 +102,10 @@ mod preview_masks;
 // R5-BRUSH-24: size/softness/flow controls, `[`/`]` aliases and persisted
 // per-dab snapshots.
 mod brush_tool;
+// R5-MASKVIS-25: mask-view gate, pins-only/full-selected display mode and the
+// GPU-present selection check. The public mode enum is re-exported below.
+mod mask_visibility;
+pub use mask_visibility::MaskOverlayMode;
 // R5-BRUSH-24 follow-up: one checked, rollback-capable transaction for
 // definition + layer + selection management changes.
 mod mask_persistence;
@@ -1576,6 +1580,10 @@ pub struct LuminaApp {
     all_panels_hidden: bool,
     overlay_mode: OverlayMode,
     pin_visibility: PinVisibility,
+    /// R5-MASKVIS-25: pins-only versus the full selected-mask matte. This is
+    /// session display state and is intentionally separate from the legacy
+    /// global G-11 `OverlayMode` gate.
+    mask_overlay_mode: MaskOverlayMode,
     solo_mode: bool,
     section_open: [bool; SECTION_COUNT],
     /// G-03 (LRPAR-G03-MASK) mask-overlay + panel session state. Display-only
@@ -2647,6 +2655,7 @@ impl LuminaApp {
             all_panels_hidden: false,
             overlay_mode: OverlayMode::Always,
             pin_visibility: PinVisibility::Auto,
+            mask_overlay_mode: MaskOverlayMode::default(),
             solo_mode: false,
             section_open: [false; SECTION_COUNT],
             show_mask_overlay: true,
@@ -3956,6 +3965,12 @@ impl LuminaApp {
         self.all_panels_hidden
     }
 
+    /// Whether the plain `Tab` side-panel hide is armed (read-only accessor
+    /// for the R5-MASKVIS-25 preview-growth test).
+    pub fn panels_hidden(&self) -> bool {
+        self.panels_hidden
+    }
+
     /// Whether any side chrome is hidden: plain `Tab` panels-hide, `L`
     /// lights-out, `F` fullscreen or `Shift+Tab` all-panels-hide. Shared by
     /// the side-panel and navigator draw gates; [`Self::chrome_hidden`] keeps
@@ -3996,12 +4011,12 @@ impl LuminaApp {
         }
     }
 
-    /// The overlay prompt gated by [`Self::overlay_visible`] (G-11): `None`
-    /// when the current mode hides the overlay, otherwise the live drag or
-    /// the selected mask's saved prompt. Single draw-path gate for
-    /// `draw_mask_overlay`, headless-testable without pixels.
+    /// The overlay prompt gated by the single mask visibility predicate: `None`
+    /// when the current view, display mode, Show switch, global G-11 mode, or
+    /// selected-mask eye hides the overlay; otherwise the live drag or saved
+    /// prompt is returned. Kept headless-testable without pixels.
     fn effective_overlay_prompt(&self) -> Option<MaskPrompt> {
-        if !self.overlay_visible() {
+        if !self.mask_overlay_allowed() {
             return None;
         }
         self.current_overlay_prompt()
@@ -4036,12 +4051,13 @@ impl LuminaApp {
         }
     }
 
-    /// The edit pins to paint (G-11): one pin per mask of the active copy with
-    /// a derivable anchor ([`pin_anchor_for_prompt`]) plus one pin per stored
-    /// spot heal with finite `0..=1` centre coordinates. Empty unless
-    /// [`Self::pins_visible`]. Pins are Painter-content (invisible to
-    /// AccessKit per HARNESS-2), so this getter is the testable model state;
-    /// the painter loop paints exactly this list in order (labels `1..=n`).
+    /// The edit pins to paint (G-11/R5-MASKVIS-25): one pin per mask of the
+    /// active copy with a derivable anchor while the Masking view is open,
+    /// plus one pin per stored spot heal with finite `0..=1` centre coordinates.
+    /// Empty unless [`Self::pins_visible`]. Pins are Painter-content
+    /// (invisible to AccessKit per HARNESS-2), so this getter is the testable
+    /// model state; the painter loop paints exactly this list in order (labels
+    /// `1..=n`).
     pub fn visible_edit_pins(&self) -> Vec<EditPin> {
         if !self.pins_visible() {
             return Vec::new();
@@ -4060,7 +4076,10 @@ impl LuminaApp {
             None => return pins,
         };
         for mask in &copy.mask_library {
-            if !self.mask_visible(&mask.id) {
+            // R5-MASKVIS-25: mask pins belong to the open Masking view. Spot
+            // pins remain global retouch anchors and are appended below even
+            // when the mask view is closed.
+            if !self.mask_view_open() || !self.mask_visible(&mask.id) {
                 continue;
             }
             let Some(prompt) = mask.prompt.as_ref() else {
@@ -6477,24 +6496,6 @@ impl LuminaApp {
             "GUI interaction: set_overlay_color -> #{:02X}{:02X}{:02X}",
             color[0], color[1], color[2]
         );
-    }
-
-    /// Whether the selected mask's matte paints right now (G-03): the Show
-    /// switch AND the G-11 mode must allow it, plus the mask's own eye — a
-    /// mask whose layers are all invisible paints no overlay (the mask is
-    /// "off"). A live in-progress gesture always paints; without a selection
-    /// there is nothing to show.
-    pub fn mask_overlay_allowed(&self) -> bool {
-        if !self.show_mask_overlay || !self.overlay_visible() {
-            return false;
-        }
-        if self.drawing && self.mask_tool != MaskTool::None {
-            return true;
-        }
-        let Some(id) = self.selected_mask_id.as_deref() else {
-            return false;
-        };
-        self.mask_visible(id)
     }
 
     pub fn set_mask_inverted(&mut self, inverted: bool) -> Result<(), GuiError> {
@@ -12231,6 +12232,7 @@ mod tests {
     mod library_views;
     // R2-MODSWITCH-1 F7: module-switch latency (off-thread thumbnail cache,
     // metadata-only probe, deferred full render).
+    mod mask_visibility;
     mod masking_g03;
     mod masking_g11;
     mod masking_groups;

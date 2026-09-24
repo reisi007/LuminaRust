@@ -64,6 +64,7 @@ pub const ALL_GUI_ACTIONS: &[GuiAction] = &[
     GuiAction::MoveMask,
     GuiAction::GroupDuplicateMask,
     GuiAction::SetOverlayMode,
+    GuiAction::SetMaskOverlayMode,
     GuiAction::SetPinVisibility,
     GuiAction::SetSoloMode,
     GuiAction::SetMaskInverted,

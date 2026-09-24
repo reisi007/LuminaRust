@@ -2084,8 +2084,9 @@ fn library_survey() {
 // Pattern per test (68215fd/7fd528b/dd73806/182dfc1): deterministic seeds
 // through the public API, non-vacuous model guard + on-screen assert, cursor
 // parked outside the frame, then `snapshot`. The mask-matte follow-up
-// required a production fix (retained overlay texture) plus a rebaseline of
-// `develop_overlay_mask.png`; no other golden was rebaselined.
+// required a production fix (retained overlay texture) plus its historical
+// rebaseline. R5-MASKVIS-25 intentionally rebaselines only `develop_overlay_pins`
+// below because opening Masking exposes the new Tool overlay/Panels controls.
 //
 // The overlays themselves are Painter content (invisible to AccessKit, like
 // the G-11 pins documented on `visible_edit_pins`), so the on-screen assert
@@ -2240,6 +2241,7 @@ fn develop_overlay_mask() {
     harness.state_mut().set_module(Module::Develop);
     open_file_and_restore_fixture(&mut harness, &photo, |app| app.preview_generation() >= 1);
     assert_no_tmp_leak(&mut harness, tmp.path());
+    harness.state_mut().set_section_open(SECTION_MASKING, true);
     harness
         .state_mut()
         .commit_gradient(
@@ -2315,6 +2317,10 @@ fn develop_overlay_pins() {
     harness.state_mut().set_module(Module::Develop);
     use_library_fixture(&mut harness);
     load_sample(&mut harness);
+    // R5-MASKVIS-25: this is the sole intentional existing-golden layout
+    // rebaseline. Opening the view exposes the new Tool overlay and Panels
+    // controls; the preview, navigator and numbered spot pin remain unchanged.
+    harness.state_mut().set_section_open(SECTION_MASKING, true);
     harness
         .state_mut()
         .create_mask("Snapshot Pins")
@@ -2363,6 +2369,8 @@ fn develop_overlay_pins() {
     // the pin circle paints over the preview (primitive content).
     expand_and_scroll_to(&mut harness, SECTION_MASKING, "Edit pins");
     assert_label_on_screen(&mut harness, "Edit pins");
+    assert_label_on_screen(&mut harness, "Tool overlay");
+    assert_label_on_screen(&mut harness, "Panels (Tab)");
     harness.hover_at(eframe::egui::Pos2::new(2000.0, 2000.0));
     harness.run_steps(2);
     harness.snapshot("develop_overlay_pins");

@@ -9,6 +9,7 @@ fn g11_overlay_modes_gate_the_draw_prompt() {
     // The mode setters are session-only: the recipe never changes.
     let mut app = new_app();
     app.load_bytes(png(), "test.png").unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     assert_eq!(app.overlay_mode(), OverlayMode::Always);
     // No prompt yet: nothing to show in any mode.
     assert!(app.effective_overlay_prompt().is_none());
@@ -51,6 +52,7 @@ fn g11_pin_visibility_modes_cover_masks_and_spots() {
     // the box geometry, selected flag) plus one spot pin.
     let mut app = new_app();
     app.load_bytes(png(), "test.png").unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     assert_eq!(app.pin_visibility(), PinVisibility::Auto);
     let mask_id = mask_with_box_prompt(&mut app, "m1", (0.2, 0.3, 0.4, 0.2));
     app.commit_spot_heal(
@@ -304,6 +306,8 @@ fn g11_session_state_survives_no_sidecar_roundtrip() {
         "pin_visibility",
         "solo_mode",
         "all_panels_hidden",
+        "mask_overlay_mode",
+        "panels_hidden",
         "section_open",
     ] {
         assert!(!raw.contains(key), "session-only key leaked: {key}");
@@ -317,6 +321,7 @@ fn g11_session_state_survives_no_sidecar_roundtrip() {
     assert!(!reopened.all_panels_hidden());
     assert!(!reopened.is_section_open(SECTION_COLOR));
     let pins = {
+        reopened.set_section_open(SECTION_MASKING, true);
         reopened.set_pin_visibility(PinVisibility::Always);
         reopened.visible_edit_pins()
     };

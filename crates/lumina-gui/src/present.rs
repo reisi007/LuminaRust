@@ -191,6 +191,14 @@ impl LuminaApp {
         if !self.vram_fresh || self.before_after || self.preview_roi.is_some() {
             return None;
         }
+        // R5-MASKVIS-25: the VRAM overlay pass combines all evaluated layers.
+        // Present from the CPU texture when any editorial mask-overlay gate is
+        // closed, when a live gradient/radial prompt needs the CPU painter, or
+        // when the evaluated plane set is not exactly the selected mask;
+        // otherwise the CPU painter can show the required selected matte.
+        if !self.gpu_mask_overlay_is_selected() {
+            return None;
+        }
         let dims = self.gpu.as_ref()?.vram_dimensions()?;
         if !self.gpu.as_ref()?.is_available() {
             return None;
@@ -217,7 +225,11 @@ impl LuminaApp {
         }
         let texture = self.present_target.as_ref()?.texture.clone();
         let id = self.present_target.as_ref()?.id;
-        if let Err(err) = self.gpu.as_ref()?.copy_vram_to_texture(&texture) {
+        if let Err(err) = self
+            .gpu
+            .as_ref()?
+            .copy_vram_to_texture(&texture, self.overlay_color)
+        {
             log::warn!("gpu overlay present failed: {err}");
             return None;
         }

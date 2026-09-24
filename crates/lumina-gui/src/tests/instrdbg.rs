@@ -12,8 +12,9 @@ use super::*;
 /// Color, Spot distraction, Red-Eye picker, generative canvas, the generative
 /// checkboxes, the shared per-section Previous/Reset row, the lens-blur enable
 /// and the three filmstrip selection buttons) plus the 3 R5-DUST-23-FOLLOWUP
-/// spot selection/editing actions and the four mask-management actions.
-const INSTRDBG_REST_ACTIONS: [GuiAction; 72] = [
+/// spot selection/editing actions, the four mask-management actions, and the
+/// R5-MASKVIS-25 display-mode toggle.
+const INSTRDBG_REST_ACTIONS: [GuiAction; 73] = [
     GuiAction::ToggleCompareMode,
     GuiAction::ClearCrop,
     GuiAction::SetCropAspect,
@@ -37,6 +38,7 @@ const INSTRDBG_REST_ACTIONS: [GuiAction; 72] = [
     GuiAction::MoveMask,
     GuiAction::GroupDuplicateMask,
     GuiAction::SetOverlayMode,
+    GuiAction::SetMaskOverlayMode,
     GuiAction::SetPinVisibility,
     GuiAction::SetSoloMode,
     GuiAction::SetMaskInverted,
@@ -170,6 +172,7 @@ fn trigger_rest_action(app: &mut LuminaApp, action: GuiAction, mask_id: Option<&
             }
         }
         GuiAction::SetOverlayMode => app.set_overlay_mode(OverlayMode::Never),
+        GuiAction::SetMaskOverlayMode => app.set_mask_overlay_mode(MaskOverlayMode::PinsOnly),
         GuiAction::SetPinVisibility => app.set_pin_visibility(PinVisibility::Never),
         GuiAction::SetSoloMode => {
             let enabled = app.solo_mode();

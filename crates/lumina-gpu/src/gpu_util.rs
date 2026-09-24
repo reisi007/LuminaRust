@@ -2,7 +2,23 @@
 //! ratchet, DoD §8): the fullscreen-pass encoder, the geometry sub-stage encoder
 //! and the two texture/buffer readback helpers.
 
+use crate::shaders::OverlayUniforms;
 use crate::{Frame, GpuError, GpuResources};
+
+/// Convert the GUI/session's byte-domain overlay tint to the existing overlay
+/// uniform. There is deliberately no default color: the caller must pass the
+/// effective CPU/GPU tint, keeping the two present paths on one contract.
+pub(crate) fn overlay_uniforms(rgb: [u8; 3]) -> OverlayUniforms {
+    let [red, green, blue] = rgb;
+    OverlayUniforms {
+        color: [
+            f32::from(red) / 255.0,
+            f32::from(green) / 255.0,
+            f32::from(blue) / 255.0,
+            0.45,
+        ],
+    }
+}
 
 /// Map a 4-byte `MAP_READ` staging buffer and reinterpret its `u32` payload as
 /// the sharpening gradient maximum (`f32::from_bits`). Used by

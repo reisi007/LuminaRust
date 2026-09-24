@@ -116,6 +116,7 @@ pub(super) fn prepare_rest_action(app: &mut LuminaApp, action: GuiAction) -> Opt
         | GuiAction::CreateLuminanceRangeMask
         | GuiAction::CreateColorRangeMask
         | GuiAction::SetOverlayMode
+        | GuiAction::SetMaskOverlayMode
         | GuiAction::SetPinVisibility
         | GuiAction::SetSoloMode
         | GuiAction::AddKeyword

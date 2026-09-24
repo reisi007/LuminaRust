@@ -184,6 +184,13 @@ impl LuminaApp {
     /// `combine_mask_planes` + `upload_mask_plane`) are shown by the GPU
     /// composite instead — same tint strength, same u16 coverage domain.
     pub(crate) fn draw_mask_overlay(&mut self, ui: &mut egui::Ui, full_rect: egui::Rect) {
+        // R5-MASKVIS-25: the view/mode gate must run before the GPU-present
+        // early return as well as before the CPU rasterizer. Otherwise a
+        // combined VRAM mask could remain painted while the Masking section is
+        // closed or while pins-only mode is selected.
+        if !self.mask_overlay_allowed() {
+            return;
+        }
         #[cfg(feature = "gpu")]
         if self.gpu_present_frame.is_some() {
             let live_brush_in_vram = self.drawing && self.mask_tool == MaskTool::Brush;
@@ -201,11 +208,8 @@ impl LuminaApp {
         let Some(prompt) = self.effective_overlay_prompt() else {
             return;
         };
-        // G-03: the Show switch and the mask's own eye gate the overlay on top
-        // of the G-11 mode (`effective_overlay_prompt` already applied it).
-        if !self.mask_overlay_allowed() {
-            return;
-        }
+        // G-03: the Show switch and the mask's own eye are part of the single
+        // `mask_overlay_allowed` gate above; no second mutable draw decision.
         let (w, h) = self.image_dims().unwrap_or((1, 1));
         // Cap the rasterization so live drags stay smooth on large sources.
         let max_dim = 1024u32;

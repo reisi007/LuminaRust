@@ -388,6 +388,7 @@ fn hidden_mask_pins_are_not_hit_testable() {
     let id = app.create_mask("Pinned").unwrap();
     app.commit_brush_stroke(vec![mark(0.5, 0.5, BrushMarkSign::Positive)])
         .unwrap();
+    app.set_section_open(SECTION_MASKING, true);
 
     app.set_pin_visibility(PinVisibility::Never);
     assert!(app.visible_edit_pins().is_empty());
@@ -412,6 +413,7 @@ fn overlapping_pins_are_ambiguous_and_a_single_pin_is_nearest_hit() {
     let second = app.create_mask("Second pin").unwrap();
     app.commit_brush_stroke(vec![mark(0.5, 0.5, BrushMarkSign::Positive)])
         .unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     app.set_pin_visibility(PinVisibility::Always);
     assert_eq!(
         app.mask_pin_hit_at(0.5, 0.5, 100.0),
@@ -434,6 +436,7 @@ fn an_invisible_mask_pin_is_not_hit_testable() {
     let id = app.create_mask("Hidden eye").unwrap();
     app.commit_brush_stroke(vec![mark(0.5, 0.5, BrushMarkSign::Positive)])
         .unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     app.set_pin_visibility(PinVisibility::Always);
     app.set_mask_visible(&id, false).unwrap();
     assert!(!app.mask_visible(&id));

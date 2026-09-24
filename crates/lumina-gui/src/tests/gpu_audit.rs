@@ -153,7 +153,7 @@ fn audit_source_png() -> Vec<u8> {
 fn gpu_audit_exception_table_is_complete_without_gpu() {
     assert_eq!(
         ALL_GUI_ACTIONS.len(),
-        109,
+        110,
         "the F-100 action surface grew/shrank: update the audit (and its docs)"
     );
     let mut exceptions = 0usize;

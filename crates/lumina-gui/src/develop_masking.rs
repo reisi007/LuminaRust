@@ -99,11 +99,27 @@ impl LuminaApp {
                     self.set_mask_tool(MaskTool::None);
                 }
             });
+            // G-11 overlay/panel comfort plus R5-MASKVIS-25: the button is a
+            // real two-state display toggle (pins-only ↔ full selected mask),
+            // and the adjacent text names the current state. It is deliberately
+            // separate from the legacy G-11 Always/Auto/Never switch below.
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button(Str::OverlayModeLabel.t()).clicked() {
+                    self.toggle_mask_overlay_mode();
+                }
+                ui.label(match self.mask_overlay_mode() {
+                    MaskOverlayMode::PinsOnly => {
+                        format!("{}: {}", Str::MaskPin.t(), Str::OverlayNever.t())
+                    }
+                    MaskOverlayMode::SelectedFull => {
+                        format!("{}: {}", Str::ShowOverlay.t(), Str::OverlayAlways.t())
+                    }
+                });
+            });
             // G-11 overlay/panel comfort: global tool-overlay mode, edit-pin
             // visibility and solo mode. Session-only display state — never
             // recipe or sidecar.
-            ui.separator();
-            ui.label(Str::OverlayModeLabel.t());
             ui.horizontal_wrapped(|ui| {
                 for (mode, name) in [
                     (OverlayMode::Always, Str::OverlayAlways),
@@ -136,6 +152,12 @@ impl LuminaApp {
             let mut solo = self.solo_mode;
             if ui.checkbox(&mut solo, Str::SoloMode.t()).changed() {
                 self.set_solo_mode(solo);
+            }
+            // R5-MASKVIS-25: a panel-hide control is a real layout action,
+            // not a status-only hint. The same `Tab`/toolbar handler is used
+            // so the preview expands and the state remains reversible.
+            if ui.button(Str::ViewToolbarPanels.t()).clicked() {
+                self.toggle_panels_hidden();
             }
             self.draw_brush_controls(ui);
             ui.label(Str::DrawMaskHint.t());

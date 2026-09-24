@@ -170,6 +170,7 @@ fn g03_visibility_eye_persists_and_reloads() {
 fn g03_show_and_color_overlay_gate_without_touching_recipe() {
     let mut app = new_app();
     app.load_bytes(png(), "test.png").unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     let recipe = app.recipe().clone();
     assert!(app.show_mask_overlay());
     assert_eq!(app.overlay_color(), [255, 0, 0]);

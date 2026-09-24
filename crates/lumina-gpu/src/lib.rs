@@ -178,7 +178,8 @@ mod gpu_util;
 pub mod tiling;
 #[cfg(feature = "gpu")]
 use gpu_util::{
-    encode_fullscreen_pass, encode_geometry_pass, readback_gradient_max, readback_texture,
+    encode_fullscreen_pass, encode_geometry_pass, overlay_uniforms, readback_gradient_max,
+    readback_texture,
 };
 
 /// A rendered frame.
@@ -2813,16 +2814,17 @@ impl GpuContext {
     /// egui-managed `dest` texture. No CPU readback — the copy is an overlay
     /// render pass directly on the queue. `dest` must be created with
     /// `TEXTURE_BINDING|COPY_DST|RENDER_ATTACHMENT`, `Rgba8Unorm`, and the same
-    /// dimensions as the active VRAM cache entry (a mismatch is a hard error —
-    /// the previous silent stretch would have presented distorted pixels).
+    /// dimensions as the active VRAM cache entry (a mismatch is a hard error).
+    /// `overlay_color` is the effective session/selected-mask tint and is
+    /// uploaded to the existing overlay uniform; this entry has no default.
     ///
-    /// ✅ On-screen present (GUI-WGPU-PRESENT-1): since the `eframe` wgpu
-    /// renderer migration, `GpuContext` shares the renderer's device/queue via
-    /// [`Self::from_parts`], so a `dest` texture created by the GUI on that
-    /// same device can be registered as an egui user image
-    /// (`egui_wgpu::Renderer::register_native_texture`) and drawn with
-    /// `ui.painter().image(..)` — the preview never touches the CPU anymore.
-    pub fn copy_vram_to_texture(&self, dest: &wgpu::Texture) -> Result<(), GpuError> {
+    /// The GUI shares the eframe device/queue via [`Self::from_parts`], registers
+    /// `dest` as a native egui texture and paints it without a CPU readback.
+    pub fn copy_vram_to_texture(
+        &self,
+        dest: &wgpu::Texture,
+        overlay_color: [u8; 3],
+    ) -> Result<(), GpuError> {
         let Some(resources) = self.resources.as_ref() else {
             return Ok(());
         };
@@ -2847,19 +2849,12 @@ impl GpuContext {
                 v.height
             )));
         }
-        // Overlay tint: Lumina accent blue with 0.45 strength matches CPU overlay.
-        let uniforms = shaders::OverlayUniforms {
-            color: [80.0 / 255.0, 160.0 / 255.0, 1.0, 0.45],
-        };
+        let uniforms = overlay_uniforms(overlay_color);
         shaders::write_overlay_uniforms(&resources.queue, &v.overlay_uniform, &uniforms);
         let dest_view = dest.create_view(&wgpu::TextureViewDescriptor::default());
-        // R2-GPU-02: cache the overlay pipeline per target format so the present
-        // shader is compiled once, not on every repaint. The bind group is
-        // built once in `create_vram_state` (all its parts are stable in VRAM).
+        // R2-GPU-02: the existing pipeline is cached per target format; its bind
+        // group remains stable because all referenced VRAM parts are pooled.
         let format = dest.format();
-        // R2-GPU-02: cache the overlay pipeline per target format so the present
-        // shader is compiled once, not on every repaint. The bind group is
-        // built once in `create_vram_state` (all its parts are stable in VRAM).
         if let std::collections::hash_map::Entry::Vacant(e) = v.overlay_pipelines.entry(format) {
             let pipe = shaders::create_overlay_pipeline(&resources.device, format)
                 .map_err(|e| GpuError::RenderFailed(e.to_string()))?;
@@ -3828,7 +3823,7 @@ impl GpuContext {
     ) -> Result<(), GpuError> {
         Ok(())
     }
-    pub fn copy_vram_to_texture(&self, _d: &()) -> Result<(), GpuError> {
+    pub fn copy_vram_to_texture(&self, _d: &(), _overlay_color: [u8; 3]) -> Result<(), GpuError> {
         Ok(())
     }
 }

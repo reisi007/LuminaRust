@@ -108,6 +108,7 @@ fn f100_action_button(action: GuiAction) -> (F100Surface, ButtonRef) {
         GuiAction::MoveMask => (F100Surface::Masking, Str::MoveMaskUp.t().into()),
         GuiAction::GroupDuplicateMask => (F100Surface::Masking, Str::DuplicateGroup.t().into()),
         GuiAction::SetOverlayMode => (F100Surface::Masking, Str::OverlayAlways.t().into()),
+        GuiAction::SetMaskOverlayMode => (F100Surface::Masking, Str::OverlayModeLabel.t().into()),
         GuiAction::SetPinVisibility => (F100Surface::Masking, Str::OverlayAlways.t().into()),
         GuiAction::SetSoloMode => (F100Surface::Masking, Str::SoloMode.t().into()),
         GuiAction::SetMaskInverted => (F100Surface::Masking, Str::Invert.t().into()),

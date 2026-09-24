@@ -580,7 +580,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Im Scope der 17b/17c-Rework-Flächen bleibt kein user-sichtbarer, das
   Edit-Rezept oder Masken mutierender `ui.button`/`ui.checkbox` ohne
   `GuiAction`.
-  Vollständige Klassenprüfung: alle 109
+  Vollständige Klassenprüfung: alle 110
   `GuiAction`s sind über den Audit (`f100_action_button`, ohne `_`-Arm)
   einer gezeichneten Oberfläche zugeordnet, und jede instrumentierte Methode
   trägt das Makro als erste Anweisung (Klick-Tests je Button/Checkbox).
@@ -676,7 +676,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   eigentliche GPU-Pfad ist über `assert_path_parity` (`maxAbsDiff=0`) und die
   `gpu_present_frame_size`-Present-Prüfung gepinnt, nicht über den Snapshot.
 - **GUI-GPU-AUDIT-17 (Release 1.0, User-Vorgabe 2026-09-17, F-103-N6):**
-  Automatisierter headless Routing-Audit über **alle** 109 `GuiAction`s
+  Automatisierter headless Routing-Audit über **alle** 110 `GuiAction`s
   (Quelle der Aktionsliste: `ALL_GUI_ACTIONS`). Der Audit lädt eine
   deterministische synthetische Quelle in eine `LuminaApp` mit **echtem**
   GPU-Kontext (Standalone-Metal-Adapter über `attach_wgpu_render_state`),
@@ -696,16 +696,19 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   - **Historisches Ergebnis (lokaler Metal-Lauf, 2026-09-18):** Damals wurde
     der zu diesem Zeitpunkt vorhandene Aktionsstand mit echtem
     GPU-Kontext geprüft. Der Lauf ist **kein** Nachweis für die später
-    hinzugefügten Aktionen. Der adapter-unabhängige Audit umfasst heute 109
-    Aktionen, davon 107 Render-Aktionen; 10 dokumentierte CPU-Ausnahmen
+    hinzugefügten Aktionen. Der adapter-unabhängige Audit umfasst heute 110
+    Aktionen, davon 108 Render-Aktionen; 10 dokumentierte CPU-Ausnahmen
     (die vier `GuiAction`-Klassen unten, `default content crop` zählt drei
     Aktionen), keine undokumentierte CPU-Route. Der vollständige
-    109-Aktionen-Audit ist auf dem lokalen Softwareadapter gelaufen; ein
-    aktueller Hardware-/Metal-Nachweis für alle 109 Aktionen bleibt offen.
+    110-Aktionen-Audit ist auf dem lokalen Softwareadapter gelaufen; ein
+    aktueller Hardware-/Metal-Nachweis für alle 110 Aktionen bleibt offen.
     Der Present-Pfad selbst bleibt über `kittest_parity` abgedeckt. Mit
     **LRPAR-G09-SORT-09** (2026-09-20) ist die Oberfläche auf 109 Aktionen
     gewachsen: `set_library_sort` ist display-only (Sortier-/Anzeigezustand,
     kein Render-Key, keine Bildstufe) und daher keine CPU-Ausnahme.
+    **R5-MASKVIS-25** fügt `set_mask_overlay_mode` als display-only Aktion
+    hinzu; sie ändert weder Render-Key noch Rezept und ist deshalb ebenfalls
+    keine CPU-Ausnahme.
     **R3-ROUTING-1 (2026-09-20):** Der Audit fährt jede Aktion aus dem
     dokumentierten neutralen Anzeigezustand (`crop_mode = false`); ein
     armiertes Crop-Tool zeigt per Design den geometriefreien
@@ -1896,10 +1899,14 @@ ein Reload stellt die Defaults wieder her, das Rezept wird nie berührt.
   existiert (Live-Drag oder gespeicherter Prompt der selektierten Maske) —
   das ist das bisherige Verhalten und daher der Default; `Auto` malt nur,
   solange ein Masken- (`K`/`M`/`Shift+M`) oder Spot-Heal-Werkzeug (`Q`)
-  armiert ist oder ein Drag läuft; `Never` malt nie. Umschalter in der
-  Masking-Sektion, Statuszeile + `info!`-Log.
+  armiert ist oder ein Drag läuft; `Never` malt nie. Für die normative
+  R5-MASKVIS-25-Semantik gilt zusätzlich: Das Masken-Matte und die Masken-
+  Pins sind nur sichtbar, solange die Masken-Ansicht (`Masking`) geöffnet
+  ist; ein gespeicherter Prompt allein malt außerhalb dieser Ansicht nichts.
+  Umschalter in der Masking-Sektion, Statuszeile + `info!`-Log.
 - **Edit-Pin-Sichtbarkeit** (`PinVisibility`, global, Default `Auto`):
-  `Always` zeigt alle Pins ohne armiertes Werkzeug, `Never` zeigt keine,
+  `Always` zeigt alle Spot-Pins und — solange die Masken-Ansicht geöffnet
+  ist — alle Masken-Pins ohne armiertes Werkzeug, `Never` zeigt keine,
   `Auto` zeigt Pins nur bei armiertem Masken-/Spot-Werkzeug. Ein Pin steht
   für jede Maske der aktiven Kopie mit ableitbarem Anker (Box: Rechteck-
   Mitte; Brush: erster Mark; Polygon: erster Vertex; Ellipse: Zentrum;
@@ -1926,6 +1933,32 @@ ein Reload stellt die Defaults wieder her, das Rezept wird nie berührt.
   Clipboard/Import/Export nutzen andere Tasten; `Shift+Tab` fiel bisher in
   den `Tab`-Zweig und ist jetzt disambiguiert).
 
+### R5-MASKVIS-25 — Maskenansicht und Fokusfläche (GUI-only, Release 1.0, SOLL)
+
+Die Masken-Overlay-Anzeige ist an die geöffnete `Masking`-Ansicht gebunden.
+`PinsOnly` und `SelectedFull` sind zwei benannte, direkt zeichnbare Toggle-
+Zustände: Pins-only zeigt alle sichtbaren Masken-Pins ohne Matte; Selected-full
+zeigt das Matte der aktuell ausgewählten Maske inklusive Live-Drag. Beide
+Zustände bleiben Session-Display-State; `MaskLayer.visible`, `show_mask_overlay`,
+Overlay-Farbe und der bestehende globale `OverlayMode` sind zusätzliche Gates.
+CPU-Raster und GPU-Present übernehmen dieselbe effektive Session-Farbe; der GPU-
+Pfad schreibt sie in den vorhandenen Overlay-Uniform (keine zweite Pipeline, kein
+privater Default). Das Schließen der Maskenansicht beendet keinen Brush-/Spot-Drag
+und schreibt nichts in Rezept oder Sidecar.
+
+Der Panel-Hide-Schalter ist ein echter Layout-Schalter: `Tab` bzw. der
+Toolbar-Panels-Button blendet linke und rechte Seitenfläche aus und lässt den
+zentralen Preview-Bereich wachsen; `Shift+Tab`/`All Panels` entfernt zusätzlich
+Navigator und Filmstreifen. Header/Modulleiste und der Preview bleiben sichtbar,
+sodass der Zustand verlassen werden kann. Ein Headless-Test misst vor/nach dem
+Toggle `preview_pane_rect`/`preview_screen_rect`; der absichtliche Native-Golden
+`mask_view_visibility` ist bei `1024×720` und wird separat mit
+`cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored` geprüft.
+Von den bestehenden Goldens wird absichtlich nur `develop_overlay_pins` für die
+neuen Tool-overlay/Panels-Zeilen aktualisiert; alle anderen Snapshots und
+Toleranzen bleiben unverändert. Die unabhängige Metal-/Vulkan-/DPI-/Pointer-
+Verifikation bleibt ein natives Hardware-Gate.
+
 ## WASM — ENTFERNT (2026-09-04)
 
 WASM/Browser ist ersatzlos gestrichen (Eigentümer-Entscheidung). F-069…F-071
@@ -1949,7 +1982,7 @@ der frühere glow/wgpu-Dual-Backend-Konflikt ist aufgelöst.
 | Color/Tone GPU Shader (`lumina-gpu::shaders`) | ✅ `render_with_gpu` / `render_to_vram` | ✅ VRAM-resident (`render_to_vram`, Uniform → UBO) |
 | SourceAction GPU Stage (`SOURCE_ACTION_STAGE_SRC`) | ✅ bei gebundenen Artefakten (`set_source_action_artifacts`), sonst CPU-Route | ✅ Drag-Pfad compositiert vor Tone; Present-Gate hält nicht unterstützte Rezepte auf CPU |
 | Masken‑Brush + evaluierte Ebenen im VRAM (`R16Uint`) | — | ✅ persistente `Vec<u16>` Plane → dirty 512² Tiles (`upload_mask_tile`) + evaluierte Planes nach Full-Render (`combine_mask_planes` → `upload_mask_plane`, byte-exakt) |
-| Overlay‑Composite + Present | — | ✅ readback-frei: `copy_vram_to_texture(present_target)` → `register_native_texture` → `painter().image`; CPU-Upload als Fallback erhalten | — |
+| Overlay‑Composite + Present | — | ✅ readback-frei: `copy_vram_to_texture(present_target, overlay_color)` → `register_native_texture` → `painter().image`; effektive Session-Farbe im vorhandenen Uniform, CPU-Upload als Fallback erhalten | — |
 | `VramState` Management | — | LRU-Pool dimensionsschlüsselt (`LUMINA_GPU_VRAM_POOL_ENTRIES`=4, `LUMINA_GPU_VRAM_BUDGET_MB`=1024); 512² `TiledCache`/`DraftPyramid` bleibt M2 | — |
 | Fehlerreporting | `warn!`/CPU-Route-Logs einmal pro Grundmenge | `warn!` bei Tile-/Plane-/Overlay-Fehlern; Init-Fehler via `log_gpu_init_failure` (getestet) | — |
 

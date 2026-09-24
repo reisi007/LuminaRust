@@ -1664,8 +1664,8 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   `feature/platform/cli-gui-wasm.md` § GUI-GPU-AUDIT-17 gelisteten
   dokumentierten CPU-Ausnahmen (default content crop, dimension-changing
   output, generative_edit, denoise_ai not GPU-wired). Der spätere
-  adapter-unabhängige Audit umfasst inzwischen 109 Aktionen; ein aktueller
-  109-Aktionen-Metal-Nachweis ist separat offen. Der frühere
+  adapter-unabhängige Audit umfasst inzwischen 110 Aktionen; ein aktueller
+  110-Aktionen-Metal-Nachweis ist separat offen. Der frühere
   Lensfun-Corrector-Eintrag ist mit dem GUI-Wiring entfallen: seit
   **GPU-LENSFUN-PARITY-1 GUI-Wiring (2026-09-18)** bindet der Present-Pfad die
   `LensfunMap` des strikt gematchten Correctors vor `render_to_vram`

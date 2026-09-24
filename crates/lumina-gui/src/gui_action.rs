@@ -97,6 +97,8 @@ pub enum GuiAction {
     MoveMask,
     GroupDuplicateMask,
     SetOverlayMode,
+    // R5-MASKVIS-25: pins-only ↔ full selected-mask matte display mode.
+    SetMaskOverlayMode,
     SetPinVisibility,
     SetSoloMode,
     SetMaskInverted,
@@ -235,6 +237,7 @@ impl GuiAction {
             GuiAction::MoveMask => "move_mask",
             GuiAction::GroupDuplicateMask => "group_duplicate_mask",
             GuiAction::SetOverlayMode => "set_overlay_mode",
+            GuiAction::SetMaskOverlayMode => "set_mask_overlay_mode",
             GuiAction::SetPinVisibility => "set_pin_visibility",
             GuiAction::SetSoloMode => "set_solo_mode",
             GuiAction::SetMaskInverted => "set_mask_inverted",

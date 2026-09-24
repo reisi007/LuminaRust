@@ -150,7 +150,8 @@ the *same* device that presents to the swapchain.
    `vram_fresh` flag.
 2. `update_texture` → `gpu_present_if_ready`: eligibility gate (fresh VRAM, not
    Before/After, no CPU ROI crop, recipe fully GPU-supported), then
-   `copy_vram_to_texture(&present_target)` composites output+mask on the GPU.
+   `copy_vram_to_texture(&present_target, self.overlay_color)` composites
+   output+mask on the GPU with the same effective overlay tint as the CPU path.
 3. The target is registered once per size via
    `egui_wgpu::Renderer::register_native_texture`; `draw_preview` paints it via
    `painter().image(id, …)`.

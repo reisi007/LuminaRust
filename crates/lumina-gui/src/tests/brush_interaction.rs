@@ -200,6 +200,7 @@ fn cpu_live_brush_overlay_combines_committed_and_pending_marks() {
     let mut app = new_app();
     app.load_bytes(png(), "brush-live-overlay.png").unwrap();
     let id = app.create_mask("Overlay").unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     app.commit_brush_stroke(vec![dab(0.25, BrushMarkSign::Positive, 1.0)])
         .unwrap();
 
@@ -308,6 +309,8 @@ fn preview_pointer_drag_commits_a_real_brush_mark_with_live_controls() {
     let mut app = new_app();
     app.load_bytes(png(), "brush-pointer.png").unwrap();
     let mask_id = app.create_mask("Pointer target").unwrap();
+    app.set_section_open(SECTION_MASKING, true);
+    app.set_mask_overlay_mode(MaskOverlayMode::PinsOnly);
     app.set_brush_radius(0.2).unwrap();
     app.set_brush_softness(0.35).unwrap();
     app.set_brush_flow(0.65).unwrap();
@@ -380,6 +383,7 @@ fn preview_pin_click_selects_the_pin_without_committing_a_new_dab() {
     let first_before = prompt_marks(&app, &first);
     let second_before = prompt_marks(&app, &second);
     assert_eq!(app.selected_mask_id(), Some(second.as_str()));
+    app.set_section_open(SECTION_MASKING, true);
     app.set_pin_visibility(PinVisibility::Always);
     app.set_mask_tool(MaskTool::Brush);
     let ctx = egui::Context::default();

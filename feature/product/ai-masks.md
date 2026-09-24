@@ -493,6 +493,63 @@ Heal bleibt ein getrenntes, weiterhin exklusiv armiertes Werkzeug.
   unabhängigen Bestätigung unchecked. Bestehende Pixel-/PSNR-Toleranzen und
   Goldens werden nicht geschwächt.
 
+## R5-MASKVIS-25 — Maskenansicht, Overlay-Modi und Fokusfläche (Release 1.0, SOLL)
+
+Die User-Entscheidung vom 2026-09-20 ist normativ: Das Maskierungs-Overlay
+ist ein Arbeitsmodus der geöffneten Masken-Ansicht, kein dauerhaft sichtbarer
+Zustand der Develop-Vorschau. Die Implementierung muss die bestehende
+Brush-/Spot-Interaktion und die persistierten Masken unverändert lassen; der
+Panel-Zustand selbst bleibt Session-Display-State.
+
+- **Sichtbarkeits-Gate:** „Masken-Ansicht geöffnet“ bedeutet exakt
+  `section_open[SECTION_MASKING] == true`. Ist sie geschlossen, malt der
+  Preview-Painter weder das Masken-Matte-Overlay noch die Masken-Edit-Pins —
+  auch nicht bei einem gespeicherten Prompt, einem aktiven Brush oder einem
+  laufenden Drag. Globale Spot-Edit-Pins bleiben als unabhängige Retusche-
+  Anker sichtbar. Das Gate ist eine einzige, headless testbare Vorbedingung
+  für den Draw-Pfad; Renderer-/Export-Daten werden dadurch nicht verändert.
+  Das Öffnen/Schließen der Sektion ändert weder Rezept noch Sidecar und
+  disarmt Brush oder Spot-Heal nicht.
+- **Zwei Masken-Overlay-Ansichten:** Ein echter, direkt zeichnbarer Toggle
+  schaltet zwischen `PinsOnly` und `SelectedFull` (`SelectedFull` ist der
+  Default):
+  - `PinsOnly` zeigt die nummerierten Pins aller sichtbaren Masken der
+    aktiven virtuellen Kopie, aber kein Masken-Matte.
+  - `SelectedFull` zeigt das volle Matte der aktuell ausgewählten Maske
+    (inklusive Live-Drag während eines Brush-/Gradient-/Radial-Gests) und
+    kennzeichnet den ausgewählten Pin; die Pin-Anker der übrigen
+    sichtbaren Masken bleiben
+    für den Auswahlwechsel klickbar, werden
+    aber nicht als Matte gezeichnet.
+  Der Modus ist Session-Display-State, wird weder in Rezept noch Sidecar
+  geschrieben und ist nach App-Neustart wieder auf seinem Default. `Show`,
+  Overlay-Farbe, Masken-Auge und die globale G-11-`OverlayMode`-
+  Kompatibilitätsstufe bleiben zusätzliche multiplicative Gates; ein
+  `Never`/`Show=false`/unsichtbares Auge darf keine sichtbare Matte erzeugen.
+- **Fokusfläche / Panel-Hide:** Ein realer, klickbarer Toggle blendet die
+  linke und rechte Seitenfläche aus (Toolbar-Button sowie `Tab`-Alias; der
+  bestehende `Shift+Tab`-/`All Panels`-Schalter blendet zusätzlich Navigator
+  und Filmstreifen aus). Der Preview-/Bildbereich wird dadurch in derselben
+  UI-Frame tatsächlich größer; `preview_pane_rect` und `preview_screen_rect`
+  müssen das nachweisen. Header/Modulleiste und der Maskenansicht-Zustand
+  bleiben erreichbar, damit der Toggle nicht in einen Zustand ohne Rückweg
+  führt. Der Panel-Toggle verändert weder Zoom-Persistenz, Brush-/Spot-
+  Armierung noch Sidecar-Daten.
+- **Interaktions- und Persistenzgarantie:** Ein Pin-Klick wählt weiterhin
+  genau eine Maske über `select_mask` und erzeugt keinen Brush-Dab; ein
+  Brush-Drag und Spot-Heal bleiben auch bei geöffnetem Full-Overlay, Pin-only
+  und Panel-Hide pointer- und renderer-seitig funktionsfähig. Dokumentierte
+  Brush-/Spot-Maskenwerte bleiben nach Save/Reopen byte-/parameterstabil.
+- **Headless und visuelle Abnahme:** mindestens je ein CPU-/egui-Test für
+  geschlossene/geöffnete Maskenansicht, `PinsOnly`↔`SelectedFull`,
+  Panel-Hide mit nachweisbar vergrößertem Preview-Rechteck sowie Brush- und
+  Spot-Regression. Ein absichtlicher, ignorierter Native-Golden bei exakt
+  `1024×720` (`tests/snapshots/mask_view_visibility.png`) zeigt den
+  Full-Overlay-Modus mit geöffneter Maskenansicht; bestehende Goldens und
+  Pixel-/PSNR-Toleranzen bleiben unverändert. Unabhängige Verifikation auf
+  echter Metal-/Vulkan-Hardware mit DPI/Zoom/Pan und echtem Zeiger-Cursor
+  bleibt bis dahin ein natives Hardware-Gate.
+
 ## Implementierungsstatus (F-047 / F-080)
 
 **Stand 2026-08-19 (F-047 Adapter-Crate `lumina-onnx` implementiert):**

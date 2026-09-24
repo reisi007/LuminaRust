@@ -170,6 +170,7 @@ pub(super) fn drive_action(app: &mut LuminaApp, action: GuiAction, export_path: 
             }
         }
         GuiAction::SetOverlayMode => app.set_overlay_mode(OverlayMode::Never),
+        GuiAction::SetMaskOverlayMode => app.set_mask_overlay_mode(MaskOverlayMode::PinsOnly),
         GuiAction::SetPinVisibility => app.set_pin_visibility(PinVisibility::Never),
         GuiAction::SetSoloMode => {
             let enabled = app.solo_mode();
