@@ -278,3 +278,129 @@ fn force_reanalyzes_and_replaces_the_stored_proposal() {
     );
     assert!((0.0..=1.0).contains(&rewritten));
 }
+
+/// Status compares the persisted proposal with the source bytes read in this
+/// invocation, so replacing the file makes the source identity visibly stale.
+#[test]
+fn status_uses_live_source_identity_after_source_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = gradient_png(&dir, "input.png", 0);
+    import(&input);
+    let analyzed = run(&[
+        "cull",
+        "--input",
+        input.to_str().unwrap(),
+        "--analyze",
+        "--json",
+    ]);
+    assert!(analyzed.status.success());
+    let sidecar = sidecar_path_for(&input);
+    let sidecar_before = fs::read(&sidecar).unwrap();
+
+    gradient_png(&dir, "input.png", 211);
+    let output = run(&[
+        "cull",
+        "--input",
+        input.to_str().unwrap(),
+        "--status",
+        "--json",
+    ]);
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let item = &report["items"][0];
+    assert_eq!(item["status"], "stale");
+    assert!(item["proposal"]["mismatches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|mismatch| mismatch == "SourceContentHash"));
+    assert_eq!(fs::read(&sidecar).unwrap(), sidecar_before);
+}
+
+/// A stale sidecar source is a per-item write refusal (exit 3). The normal and
+/// forced paths both leave the sidecar byte-identical.
+#[test]
+fn changed_source_analysis_exits_three_and_never_writes_even_with_force() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = gradient_png(&dir, "input.png", 17);
+    import(&input);
+    let first = run(&[
+        "cull",
+        "--input",
+        input.to_str().unwrap(),
+        "--analyze",
+        "--json",
+    ]);
+    assert!(first.status.success());
+    let sidecar = sidecar_path_for(&input);
+    let sidecar_before = fs::read(&sidecar).unwrap();
+    gradient_png(&dir, "input.png", 199);
+
+    for force in [false, true] {
+        let mut args = vec![
+            "cull",
+            "--input",
+            input.to_str().unwrap(),
+            "--analyze",
+            "--json",
+        ];
+        if force {
+            args.push("--force");
+        }
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(3), "force={force}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["items"][0]["status"], "failed");
+        assert!(report["items"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("source identity conflict"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("refusing culling write"));
+        assert_eq!(fs::read(&sidecar).unwrap(), sidecar_before);
+    }
+}
+
+/// One conflicted source does not abort or roll back a healthy batch item.
+#[test]
+fn mixed_healthy_and_conflicted_batch_is_isolated() {
+    let dir = tempfile::tempdir().unwrap();
+    let healthy = gradient_png(&dir, "healthy.png", 23);
+    let conflicted = gradient_png(&dir, "conflicted.png", 71);
+    import(&healthy);
+    import(&conflicted);
+    let conflicted_sidecar = sidecar_path_for(&conflicted);
+    let conflicted_before = fs::read(&conflicted_sidecar).unwrap();
+    gradient_png(&dir, "conflicted.png", 173);
+
+    let output = run(&[
+        "cull",
+        "--input",
+        healthy.to_str().unwrap(),
+        "--input",
+        conflicted.to_str().unwrap(),
+        "--analyze",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(3));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let items = report["items"].as_array().unwrap();
+    let healthy_item = items
+        .iter()
+        .find(|item| item["input"] == serde_json::json!(healthy))
+        .unwrap();
+    let conflicted_item = items
+        .iter()
+        .find(|item| item["input"] == serde_json::json!(conflicted))
+        .unwrap();
+    assert_eq!(healthy_item["status"], "analyzed");
+    assert_eq!(conflicted_item["status"], "failed");
+    assert!(conflicted_item["error"]
+        .as_str()
+        .unwrap()
+        .contains("source identity conflict"));
+    assert!(load_sidecar(&sidecar_path_for(&healthy))
+        .unwrap()
+        .culling
+        .is_some());
+    assert_eq!(fs::read(conflicted_sidecar).unwrap(), conflicted_before);
+}

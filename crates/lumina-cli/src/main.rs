@@ -93,8 +93,8 @@ use lumina_iptc::{embed_metadata, extract_metadata, IptcMetadata};
 // The command orchestrates `lumina-cull` (analysis + source-level sidecar
 // binding) and never touches rating/flag/label. Reads/writes are explicit.
 use lumina_cull::{
-    analyze_selection, evaluate_culling, heuristic_identity, record_culling, save_culling,
-    CullConfig, CullSourceInput, CullingReadState,
+    analyze_selection, evaluate_culling, heuristic_identity, CullConfig, CullSourceInput,
+    CullingReadState,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -105,6 +105,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+// LRPAR-G09-CULL-IMPL-25: live-source persistence guard extracted from the
+// oversized CLI entrypoint (file-size ratchet; orchestration remains in main).
+mod cull_cli;
 // LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands
 // (orchestration; alignment/merge/DNG live in `lumina-merge`).
 mod merge;
@@ -10862,14 +10865,6 @@ fn cull_selection(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, CliError> {
     Ok(selection)
 }
 
-fn cull_source_fingerprint(document: &SidecarDocument) -> SourceFingerprint {
-    SourceFingerprint {
-        content_hash: document.source.content_hash.clone(),
-        byte_length: document.source.byte_length,
-        extras: Default::default(),
-    }
-}
-
 fn cull(args: CullArgs) -> Result<(), CliError> {
     if args.status && args.analyze {
         return Err(CliError::Usage(
@@ -10922,7 +10917,7 @@ fn cull_status_one(input: &Path, config: &CullConfig) -> Result<serde_json::Valu
     let document = load_sidecar(&sidecar_path_for(input))?;
     let analysis_frame = lumina_core::downscale_bilinear(&frame, config.analysis_max_width)?;
     let current = heuristic_identity(
-        cull_source_fingerprint(&document),
+        cull_cli::source_fingerprint(&bytes),
         document.source.decode_fingerprint.clone(),
         document.source.geometry_fingerprint.clone(),
         Resolution {
@@ -10975,15 +10970,19 @@ fn cull_analyze(args: &CullArgs, selection: &[PathBuf]) -> Result<(), CliError> 
     let mut frames: Vec<ImageFrame> = Vec::new();
     let mut isos: Vec<Option<u32>> = Vec::new();
     let mut inputs: Vec<PathBuf> = Vec::new();
+    let mut source_fingerprints: Vec<SourceFingerprint> = Vec::new();
     let mut items: Vec<serde_json::Value> = Vec::new();
     let mut failed = 0usize;
 
     for input in selection {
         let decoded = fs::read(input)
             .map_err(|error| io_error(input, error))
-            .and_then(|bytes| decode_input(input, &bytes));
+            .and_then(|bytes| {
+                let source = cull_cli::source_fingerprint(&bytes);
+                decode_input(input, &bytes).map(|decoded| (decoded, source))
+            });
         match decoded {
-            Ok((frame, raw)) => {
+            Ok(((frame, raw), source)) => {
                 isos.push(
                     raw.as_ref()
                         .and_then(|metadata| metadata.iso)
@@ -10991,6 +10990,7 @@ fn cull_analyze(args: &CullArgs, selection: &[PathBuf]) -> Result<(), CliError> 
                 );
                 frames.push(frame);
                 inputs.push(input.clone());
+                source_fingerprints.push(source);
             }
             Err(error) => {
                 failed += 1;
@@ -11018,7 +11018,7 @@ fn cull_analyze(args: &CullArgs, selection: &[PathBuf]) -> Result<(), CliError> 
 
     for (index, analysis) in selection_analysis.images.iter().enumerate() {
         let input = inputs[index].clone();
-        match cull_persist_one(&input, analysis, args.force) {
+        match cull_cli::persist_one(&input, &source_fingerprints[index], analysis, args.force) {
             Ok(item) => items.push(item),
             Err(error) => {
                 failed += 1;
@@ -11049,55 +11049,6 @@ fn cull_analyze(args: &CullArgs, selection: &[PathBuf]) -> Result<(), CliError> 
         });
     }
     Ok(())
-}
-
-fn cull_persist_one(
-    input: &Path,
-    analysis: &lumina_cull::HeuristicAnalysis,
-    force: bool,
-) -> Result<serde_json::Value, CliError> {
-    let path = sidecar_path_for(input);
-    let mut document = load_sidecar(&path)?;
-    let source = cull_source_fingerprint(&document);
-    let decode = document.source.decode_fingerprint.clone();
-    let geometry = document.source.geometry_fingerprint.clone();
-    let current = heuristic_identity(
-        source.clone(),
-        decode.clone(),
-        geometry.clone(),
-        analysis.core.analysis_resolution.clone(),
-    );
-    // No automatic re-computation: an existing valid, identity-matching
-    // proposal is kept untouched unless `--force`.
-    if !force
-        && matches!(
-            evaluate_culling(&document, &current),
-            CullingReadState::Valid(_)
-        )
-    {
-        return Ok(serde_json::json!({
-            "input": input,
-            "status": "current",
-            "proposal": analysis.proposal(),
-            "score": analysis.score(),
-            "reasons": analysis.reasons(),
-        }));
-    }
-    let section = analysis
-        .core
-        .to_section(source, decode, geometry, &now_rfc3339_utc())?;
-    record_culling(&mut document, section)?;
-    save_culling(&path, &document)?;
-    Ok(serde_json::json!({
-        "input": input,
-        "status": "analyzed",
-        "proposal": analysis.proposal(),
-        "score": analysis.score(),
-        "reasons": analysis.reasons(),
-        "diagnostics": analysis.diagnostics,
-        "similar_group": analysis.similar_group,
-        "similar_redundant": analysis.similar_redundant,
-    }))
 }
 
 // ===========================================================================

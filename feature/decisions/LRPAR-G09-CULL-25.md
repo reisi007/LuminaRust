@@ -109,6 +109,17 @@ Normative Abgrenzungsregeln für 2.5:
   Option. Artefakt-Prüfsumme, falls Scores in `.lumina.zdata` ausgelagert
   werden (kleine Scores bevorzugt inline im JSON; keine
   Float-Arrays im JSON über kleine Score-Structs hinaus).
+- **Live-Quellenidentität vor jedem Culling-Write:** CLI und GUI bilden die
+  `SourceFingerprint` aus den aktuell gelesenen Quell-Bytes (Hash **und**
+  Byte-Länge) und vergleichen sie vor der Persistierung mit
+  `SidecarDocument.source`. `cull status` bewertet ebenfalls die Live-Quelle,
+  nicht den potenziell veralteten Sidecar-Eintrag. Ein Hash- oder
+  Längenkonflikt ist ein sichtbarer Fehler: Der betroffene CLI-Analyselauf
+  beziehungsweise die GUI-Übernahme schreibt weder `culling` noch andere
+  Felder und lässt das Sidecar byte-identisch. Das gilt auch bei
+  gemischten Batches isoliert pro Element und bei `--force`; `--force`
+  überschreibt keine Quellenidentitätsprüfung und blessiert kein global
+  konfligiertes Sidecar.
 - Standardkopie-Regel unberührt; ein Sidecar ohne `culling`-Sektion ist
   gültig („kein Vorschlag") und kein Fehler.
 - Optionale zentrale Indizierung darf Culling-Scores nur als
@@ -169,6 +180,14 @@ Offen: Slice 5 (Stufe 2 ONNX).
 **Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung ausstehend):** Die in
 §7 Punkt 6 geforderten Culling-Budgets sind registriert (`cull/*`,
 report-only). Offen bleibt nur noch Slice 5 (Stufe 2 ONNX).
+
+**Stand 2026-09-24 (Follow-up Live-Quellenidentität):** CLI-Status und
+CLI-Persistenz bilden Hash und Byte-Länge aus den aktuell gelesenen Bytes;
+Hash-/Längenkonflikte mit `SidecarDocument.source` werden vor jedem Write
+sichtbar abgewiesen, auch mit `--force` und pro Element in gemischten Batches.
+Die GUI-Übernahme nutzt `source_bytes.len()` und verweigert bei Konflikt ohne
+Sidecar-Mutation. CLI-E2E, GUI-headless sowie Core-/Culling-/Sidecar-Tests
+sind grün; der Parent-Task bleibt wegen Stufe 2 ONNX und kittest offen.
 
 ## 8. Abnahme dieses Entscheids
 
