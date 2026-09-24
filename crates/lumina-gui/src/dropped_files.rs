@@ -50,14 +50,14 @@ impl LuminaApp {
                 // the newest source request, so it supersedes any in-flight
                 // path decode exactly like a successful `load_bytes` would —
                 // bump the generation and drop the receiver so the older worker
-                // result can never land after this failure. The pending-path
-                // anchor belongs to the superseded request and is cleared with
-                // it; the previously loaded source itself is untouched.
+                // result can never land after this failure; pending anchors
+                // are cleared while the previously loaded source remains.
                 if self.decode_rx.take().is_some() {
                     self.note_decode_failed();
                 }
                 self.decode_generation += 1;
                 self.pending_load_path = None;
+                self.pending_directory_open = None;
                 warn!("pathless dropped file could not be read: {read_error}");
                 self.show_error(format!("dropped file unreadable: {read_error}"));
             }

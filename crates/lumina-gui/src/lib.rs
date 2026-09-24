@@ -1909,6 +1909,9 @@ pub struct LuminaApp {
     /// R2-MODSWITCH-1 F8: a scan is in flight — drives the visible loading
     /// status so the grid never stalls silently.
     scan_pending: bool,
+    /// A successful cross-directory decode keeps its active path here until
+    /// the matching scan applies the target listing and schedules neighbors.
+    pending_directory_open: Option<PendingDirectoryOpen>,
     /// REVIEW-GUI-N1: revision (BLAKE3 over the JSON) of the on-disk sidecar
     /// that the in-memory `document` lineage is based on. `None` means no
     /// sidecar file existed when this lineage started (fresh document). Passed
@@ -2529,6 +2532,15 @@ enum DirectoryOpenPolicy {
     Deferred,
 }
 
+/// A decoded cross-directory target whose neighbor window must wait for the
+/// directory scan that will provide its authoritative listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingDirectoryOpen {
+    directory: String,
+    active_path: String,
+    scan_generation: Option<u64>,
+}
+
 type DecodeResult = Result<DecodedFrame, (String, String)>;
 type DecodeRequestResult = (u64, DirectoryOpenPolicy, DecodeResult);
 
@@ -2768,6 +2780,7 @@ impl LuminaApp {
             scan_rx: None,
             scan_generation: 0,
             scan_pending: false,
+            pending_directory_open: None,
             sidecar_revision: None,
             pending_full_render: false,
             auto_load_attempted: false,
@@ -2949,8 +2962,29 @@ impl LuminaApp {
         }
     }
 
-    fn apply_listing(&mut self, directory: std::path::PathBuf, mut entries: Vec<FileBrowserEntry>) {
+    fn apply_listing(
+        &mut self,
+        directory: std::path::PathBuf,
+        mut entries: Vec<FileBrowserEntry>,
+        generation: u64,
+    ) {
         debug!("listing directory: {}", directory.display());
+        let pending_matches = self.pending_directory_open.as_ref().is_some_and(|pending| {
+            pending.directory == directory.to_string_lossy()
+                && pending.scan_generation == Some(generation)
+        });
+        let pending_active_path = pending_matches
+            .then(|| self.pending_directory_open.take())
+            .flatten()
+            .map(|pending| pending.active_path);
+        if !pending_matches
+            && self
+                .pending_directory_open
+                .as_ref()
+                .is_some_and(|pending| pending.directory == directory.to_string_lossy())
+        {
+            self.pending_directory_open = None;
+        }
         // REVIEW-GUI-THUMB-1: drop cached thumbnails of a previous folder so
         // they neither resurface nor accumulate unboundedly across a session.
         self.thumbnails
@@ -3038,6 +3072,9 @@ impl LuminaApp {
                     self.filmstrip_anchor = Some(first.clone());
                     self.begin_load_path(first);
                     self.auto_load_attempted = true;
+                }
+                if let Some(active_path) = pending_active_path {
+                    self.schedule_neighbor_previews(&active_path);
                 }
             }
             Err(error) => {
@@ -8053,6 +8090,7 @@ impl LuminaApp {
         let superseded_decode = self.decode_rx.take().is_some();
         self.decode_generation += 1;
         self.pending_load_path = None;
+        self.pending_directory_open = None;
         if superseded_decode {
             self.note_decode_failed();
         }
@@ -8233,7 +8271,9 @@ impl LuminaApp {
             // source may leak into the new one.
             self.vram_render_refusal = None;
         }
-        self.status = Str::Loaded.format_arg(&self.source_name);
+        if !self.scan_pending {
+            self.status = Str::Loaded.format_arg(&self.source_name);
+        }
         info!(
             "loaded image {} (raw={}, camera_white_balance={:?})",
             self.source_name, source_is_raw, self.camera_white_balance
@@ -10212,6 +10252,9 @@ impl LuminaApp {
         if path.trim().is_empty() {
             return;
         }
+        // A newer source request invalidates any listing that was waiting to
+        // schedule neighbors for the previous target.
+        self.pending_directory_open = None;
         // Latest-wins decode identity. Dropping the old receiver prevents its
         // handoff; the generation check also rejects an already-staged stale
         // result before it can adopt deferred directory state.
@@ -10330,10 +10373,6 @@ impl LuminaApp {
                     );
                     self.previous_reference = Some(reference);
                 }
-                // PREVIEW-CACHE-FEATURE: the active image just changed — plan
-                // the +4/−2 neighbor window around it (lazy, on workers).
-                let active_path = self.path.clone();
-                self.schedule_neighbor_previews(&active_path);
                 self.apply_decoded_frame(
                     &frame.frame,
                     frame.orientation,
@@ -10343,7 +10382,6 @@ impl LuminaApp {
                     frame.source_is_raw,
                     frame.lens_identity,
                 );
-                self.adopt_directory_after_decode(&frame.path, directory_policy);
                 if let Err(e) = self.render() {
                     error!("render after load failed for {}: {e}", self.source_name);
                     self.show_error(e);
@@ -10422,8 +10460,14 @@ impl LuminaApp {
                         self.show_error(GuiError::Io(Str::VirtualCopyNotFound.t().to_string()));
                     }
                 }
+                // Navigation is adopted only after the decoded image and its
+                // sidecar are fully applied. This keeps the scan status (and
+                // therefore the target listing) authoritative for neighbors.
+                self.adopt_directory_after_decode(&frame.path, directory_policy);
+                self.schedule_neighbor_previews_after_open(&frame.path);
             }
             Err((path, message)) => {
+                self.pending_directory_open = None;
                 self.note_decode_failed();
                 // REVIEW-GUI-PATHDESYNC-1: a failed decode must NOT adopt the
                 // new path — original/document/recipe still belong to the
@@ -10472,6 +10516,7 @@ impl LuminaApp {
                     .pending_load_path
                     .take()
                     .unwrap_or_else(|| "unknown image".into());
+                self.pending_directory_open = None;
                 self.note_decode_failed();
                 self.show_error_banner(format!("background decode worker disconnected for {path}"));
             }

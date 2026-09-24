@@ -1,12 +1,12 @@
 //! Decode-policy state tests: immediate navigation, latest-wins handoff, and
 //! disconnected-worker cleanup.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use lumina_core::{ImageFileFormat, ImageFrame};
 
-use super::super::{DecodeRequestResult, LuminaApp};
+use super::super::{library_scan, DecodeRequestResult, LuminaApp, PendingDirectoryOpen};
 
 fn new_app() -> LuminaApp {
     LuminaApp::new(egui::Context::default())
@@ -43,6 +43,158 @@ fn load_a() -> (tempfile::TempDir, LuminaApp) {
     app.accept_dropped_file(&source, || panic!("path drop must not read bytes"));
     settle_decode(&mut app);
     (directory, app)
+}
+
+fn write_three_pngs(directory: &Path) -> [PathBuf; 3] {
+    [
+        directory.join("b0.png"),
+        directory.join("b1.png"),
+        directory.join("b2.png"),
+    ]
+    .into_iter()
+    .zip([[10, 20, 30], [40, 50, 60], [70, 80, 90]])
+    .map(|(path, rgb)| {
+        write_png(&path, rgb);
+        path
+    })
+    .collect::<Vec<_>>()
+    .try_into()
+    .unwrap()
+}
+
+fn arm_async_target(app: &mut LuminaApp, directory: &Path, active: &Path) {
+    app.directory = directory.display().to_string();
+    app.path = active.display().to_string();
+    app.pending_directory_open = Some(PendingDirectoryOpen {
+        directory: directory.display().to_string(),
+        active_path: active.display().to_string(),
+        scan_generation: None,
+    });
+}
+
+#[test]
+fn deferred_cross_directory_neighbors_wait_for_async_listing() {
+    let (_dir_a, mut app) = load_a();
+    let a_entry = app.entries[0].path.clone();
+    let a_key = app.entries[0].thumb_key.clone();
+    let dir_b = tempfile::tempdir().unwrap();
+    let paths = write_three_pngs(dir_b.path());
+    let active = &paths[1];
+
+    // This is the state produced by a successful deferred B decode. Drive the
+    // production worker explicitly; `list_directory()` is synchronous only in
+    // cfg(test) and would hide the pending-listing window this test owns.
+    arm_async_target(&mut app, dir_b.path(), active);
+    let generation = app.begin_scan(false);
+
+    assert!(app.scan_pending());
+    assert_eq!(
+        app.pending_directory_open.as_ref().unwrap().scan_generation,
+        Some(generation)
+    );
+    assert!(app.status().contains("Scanning folder"));
+    assert_eq!(app.entries[0].path, a_entry, "A stays listed while B scans");
+    assert!(
+        app.preview_ctrl
+            .as_ref()
+            .is_none_or(|ctrl| ctrl.in_flight_probes().is_empty()),
+        "no neighbors use A's listing"
+    );
+    let bytes = std::fs::read(active).unwrap();
+    let frame = ImageFrame::decode(&bytes).unwrap();
+    app.apply_decoded_frame(&frame, 1, None, "b1.png", &bytes, false, None);
+    assert!(
+        app.status().contains("Scanning folder"),
+        "a decoded frame must not replace the pending scan status"
+    );
+
+    let mut applied = false;
+    for _ in 0..2_000 {
+        if app.poll_scan() {
+            applied = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(applied, "the production scan must land");
+    assert!(!app.scan_pending());
+    assert!(!app.status().contains("Scanning folder"));
+    assert_eq!(app.frame_previews_enqueued, 2);
+
+    let expected: Vec<String> = [&paths[0], &paths[2]]
+        .iter()
+        .map(|path| path.canonicalize().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let mut probes = app
+        .preview_ctrl
+        .as_ref()
+        .expect("B listing schedules its neighbor controller")
+        .in_flight_probes();
+    probes.sort();
+    assert_eq!(probes, expected, "only B -1/+1 may be scheduled");
+    assert!(!probes.contains(&a_key));
+}
+
+#[test]
+fn disconnected_scan_clears_pending_target_without_scheduling_a() {
+    let (_dir_a, mut app) = load_a();
+    let dir_b = tempfile::tempdir().unwrap();
+    let paths = write_three_pngs(dir_b.path());
+    arm_async_target(&mut app, dir_b.path(), &paths[1]);
+    let (tx, rx) = std::sync::mpsc::channel::<library_scan::ScanResult>();
+    drop(tx);
+    app.scan_rx = Some(rx);
+    app.scan_pending = true;
+    app.status = library_scan::SCAN_PROGRESS.into();
+
+    assert!(!app.poll_scan());
+    assert!(!app.scan_pending());
+    assert!(app.pending_directory_open.is_none());
+    assert!(
+        app.preview_ctrl
+            .as_ref()
+            .is_none_or(|ctrl| ctrl.in_flight_probes().is_empty()),
+        "a failed scan cannot schedule A"
+    );
+    assert!(!app.status().contains("Scanning folder"));
+    assert!(app
+        .entries
+        .iter()
+        .all(|entry| !entry.path.starts_with(dir_b.path())));
+}
+
+#[test]
+fn stale_scan_does_not_schedule_pending_target_neighbors() {
+    let (_dir_a, mut app) = load_a();
+    let dir_b = tempfile::tempdir().unwrap();
+    let paths = write_three_pngs(dir_b.path());
+    arm_async_target(&mut app, dir_b.path(), &paths[1]);
+    let old_generation = app.scan_generation + 1;
+    app.pending_directory_open.as_mut().unwrap().scan_generation = Some(old_generation);
+    app.scan_generation = old_generation + 1;
+    let (tx, rx) = std::sync::mpsc::channel::<library_scan::ScanResult>();
+    tx.send(library_scan::ScanResult {
+        directory: dir_b.path().to_path_buf(),
+        entries: Vec::new(),
+        generation: old_generation,
+    })
+    .unwrap();
+    app.scan_rx = Some(rx);
+    app.scan_pending = true;
+    app.status = library_scan::SCAN_PROGRESS.into();
+
+    assert!(!app.poll_scan());
+    assert!(app.pending_directory_open.is_none());
+    assert!(
+        app.preview_ctrl
+            .as_ref()
+            .is_none_or(|ctrl| ctrl.in_flight_probes().is_empty()),
+        "stale completion cannot schedule A"
+    );
+    assert!(app
+        .entries
+        .iter()
+        .all(|entry| !entry.path.starts_with(dir_b.path())));
 }
 
 #[test]

@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use super::{DirectoryOpenPolicy, LuminaApp};
+use super::{DirectoryOpenPolicy, LuminaApp, PendingDirectoryOpen};
 
 impl LuminaApp {
     /// Open a file through the ordinary immediate-navigation policy.
@@ -40,12 +40,63 @@ impl LuminaApp {
         if policy != DirectoryOpenPolicy::Deferred {
             return;
         }
-        self.prepare_open_directory(path);
+        if let Some(parent) = Path::new(path).parent() {
+            // Arm the target before `prepare_open_directory` starts its
+            // worker. The scan can then carry the active path all the way to
+            // the point where B's listing is authoritative.
+            self.pending_directory_open = Some(PendingDirectoryOpen {
+                directory: parent.display().to_string(),
+                active_path: path.to_string(),
+                scan_generation: None,
+            });
+            self.prepare_open_directory(path);
+        }
         // A native drop is a single explicit target, not an extension of a
         // multi-selection. Keep filmstrip state aligned with the loaded path.
         self.filmstrip_selection.clear();
         self.filmstrip_selection.insert(path.to_string());
         self.filmstrip_anchor = Some(path.to_string());
+    }
+
+    /// Schedule the active image's neighbors now, or carry the request until
+    /// the current directory scan applies its listing. Same-folder opens have
+    /// no scan and retain the fast path.
+    pub(super) fn schedule_neighbor_previews_after_open(&mut self, path: &str) {
+        let directory = Path::new(path)
+            .parent()
+            .map(|parent| parent.display().to_string());
+        let directory_key = directory.as_deref();
+        if self.scan_pending {
+            if directory_key == Some(self.directory.trim()) {
+                let generation = self.scan_generation;
+                if let Some(pending) = self
+                    .pending_directory_open
+                    .as_mut()
+                    .filter(|pending| Some(pending.directory.as_str()) == directory_key)
+                {
+                    pending.active_path = path.to_string();
+                    pending.scan_generation = Some(generation);
+                } else if let Some(directory) = directory_key {
+                    self.pending_directory_open = Some(PendingDirectoryOpen {
+                        directory: directory.to_string(),
+                        active_path: path.to_string(),
+                        scan_generation: Some(generation),
+                    });
+                }
+                return;
+            }
+            // Never use a listing that belongs to another in-flight scan.
+            self.pending_directory_open = None;
+            return;
+        }
+        if self
+            .pending_directory_open
+            .as_ref()
+            .is_some_and(|pending| Some(pending.directory.as_str()) == directory_key)
+        {
+            self.pending_directory_open = None;
+        }
+        self.schedule_neighbor_previews(path);
     }
 
     /// Populate the file browser with the directory containing `path`.

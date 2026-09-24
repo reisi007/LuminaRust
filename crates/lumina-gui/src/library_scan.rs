@@ -84,12 +84,30 @@ pub(crate) fn spawn_scan(request: ScanRequest) -> mpsc::Receiver<ScanResult> {
 }
 
 impl LuminaApp {
+    /// Bind a deferred directory open to the scan generation that will apply
+    /// its listing. A different folder supersedes the old target immediately.
+    fn bind_pending_directory_open(&mut self, directory: &Path, generation: u64) {
+        let directory = directory.to_string_lossy().into_owned();
+        let matches = self
+            .pending_directory_open
+            .as_ref()
+            .is_some_and(|pending| pending.directory == directory);
+        if !matches {
+            self.pending_directory_open = None;
+            return;
+        }
+        if let Some(pending) = self.pending_directory_open.as_mut() {
+            pending.scan_generation = Some(generation);
+        }
+    }
+
     /// R2-MODSWITCH-1 F8: start an asynchronous scan of `self.directory` and
     /// show the visible loading status. Supersedes any in-flight scan
     /// (latest-wins). Returns the generation just started.
     pub(crate) fn begin_scan(&mut self, recursive: bool) -> u64 {
         let directory = PathBuf::from(self.directory.trim());
         self.scan_generation += 1;
+        self.bind_pending_directory_open(&directory, self.scan_generation);
         let request = ScanRequest {
             directory: directory.clone(),
             recursive,
@@ -115,9 +133,12 @@ impl LuminaApp {
             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 // The worker died without sending: surface the stall loudly
-                // instead of leaving the grid pending forever.
+                // instead of leaving the grid pending forever. A target that
+                // was waiting for this listing must not fall back to A's
+                // entries and schedule A's neighbors.
                 self.scan_rx = None;
                 self.scan_pending = false;
+                self.pending_directory_open = None;
                 self.status = Str::DirectoryNotReadable
                     .format_arg("scan worker disconnected before returning a listing");
                 log::warn!("GUI scan worker disconnected without a listing");
@@ -127,6 +148,14 @@ impl LuminaApp {
         self.scan_rx = None;
         self.scan_pending = false;
         if result.generation != self.scan_generation {
+            let stale_target = self.pending_directory_open.as_ref().is_some_and(|pending| {
+                pending.scan_generation == Some(result.generation)
+                    || (pending.scan_generation.is_none()
+                        && pending.directory == result.directory.to_string_lossy())
+            });
+            if stale_target {
+                self.pending_directory_open = None;
+            }
             trace!(
                 "GUI scan worker: dropping superseded listing for {} (gen {} != {})",
                 result.directory.display(),
@@ -135,7 +164,7 @@ impl LuminaApp {
             );
             return false;
         }
-        self.apply_listing(result.directory, result.entries);
+        self.apply_listing(result.directory, result.entries, result.generation);
         true
     }
 
@@ -158,6 +187,9 @@ impl LuminaApp {
     #[cfg(test)]
     pub(crate) fn scan_directory_blocking(&mut self, recursive: bool) {
         let directory = PathBuf::from(self.directory.trim());
+        self.scan_generation += 1;
+        self.scan_rx = None;
+        self.bind_pending_directory_open(&directory, self.scan_generation);
         let request = ScanRequest {
             directory: directory.clone(),
             recursive,
@@ -165,7 +197,7 @@ impl LuminaApp {
         };
         let result = run_scan(&request);
         self.scan_pending = false;
-        self.apply_listing(result.directory, result.entries);
+        self.apply_listing(result.directory, result.entries, result.generation);
     }
 }
 
