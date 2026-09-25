@@ -15,6 +15,7 @@ mod history_change;
 mod iptc_a;
 mod iptc_b;
 mod local_adjustments;
+mod local_adjustments_curves;
 mod locks;
 mod mask_graph;
 mod mask_groups;

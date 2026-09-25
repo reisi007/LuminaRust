@@ -111,8 +111,9 @@ use thiserror::Error;
 // LRPAR-G09-CULL-IMPL-25: live-source persistence guard extracted from the
 // oversized CLI entrypoint (file-size ratchet; orchestration remains in main).
 mod cull_cli;
-// MASK-LOCAL-P0: typed local-adjustment flag parsing and mutation.
+// MASK-LOCAL-P0/P1.2a: typed local-adjustment flag parsing and mutation.
 mod mask_local;
+mod mask_local_curves;
 use mask_local::{mask_copy_mut, require_mask_name, resolve_mask_copy};
 // LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands
 // (orchestration; alignment/merge/DNG live in `lumina-merge`).
@@ -886,11 +887,11 @@ struct MaskArgs {
     #[arg(long, value_name = "LAYER")]
     local_layer: Option<String>,
     /// Set one local control (`exposure|contrast|highlights|shadows|
-    /// temperature_delta_k|tint_delta=value`). Repeatable; all values are
-    /// validated before the sidecar is written.
+    /// temperature_delta_k|tint_delta=value`; local tone curves use the
+    /// `curves.<master|red|green|blue>=I,O;I,O;...` namespace). Repeatable.
     #[arg(long = "set-local-adjustment", value_name = "KEY=VALUE")]
     set_local_adjustments: Vec<String>,
-    /// Reset one local control to zero. Repeatable.
+    /// Reset one local control (`curves` resets all local curves). Repeatable.
     #[arg(long = "reset-local-adjustment", value_name = "KEY")]
     reset_local_adjustments: Vec<String>,
 }
@@ -2794,6 +2795,7 @@ fn mask_list(args: &MaskArgs, document: &SidecarDocument) -> Result<(), CliError
                     layer.visible,
                     layer
                         .local_adjustments
+                        .as_ref()
                         .map(|adjustments| adjustments.to_string())
                         .unwrap_or_else(|| "none".into())
                 );

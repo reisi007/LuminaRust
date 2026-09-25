@@ -313,6 +313,13 @@ impl LuminaApp {
                         }
                     }
                 }
+                // MASK-LOCAL-P1.2a: the mask-local tone-curve editor. It is a
+                // local adjustment like the sliders above, so it shares the
+                // same coalesced history snapshot, the same debounced save and
+                // the same CPU-first routing — and it never touches the global
+                // `EditRecipe::curves`.
+                ui.separator();
+                self.draw_mask_local_tone_curve(ui);
             }
         });
         if section_response.header_response.clicked() {

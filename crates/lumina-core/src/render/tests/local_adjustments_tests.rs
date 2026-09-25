@@ -102,9 +102,9 @@ fn local_layers_composite_in_persisted_order() {
         ..LocalAdjustments::default()
     };
     let mut first_layer = local_layer("first-layer", reference("vc", "first"), 1.0);
-    first_layer.local_adjustments = Some(first);
+    first_layer.local_adjustments = Some(first.clone());
     let mut second_layer = local_layer("second-layer", reference("vc", "second"), 0.0);
-    second_layer.local_adjustments = Some(second);
+    second_layer.local_adjustments = Some(second.clone());
     let copies = vec![copy_with(
         "vc",
         definitions,

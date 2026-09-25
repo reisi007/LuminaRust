@@ -6,7 +6,8 @@
 //!
 //! This lives beside `local_adjustments` (the P0 compositor) because it is the
 //! same per-layer stage: the relative-WB pass runs inside the local compositing
-//! and shares its validation and quantization contract.
+//! and shares its validation and quantization contract. The P1.2a tone stage
+//! extends the very same float chain in `local_tone`.
 
 use crate::{for_each_rgba_mut, CoreError, ImageFrame};
 
@@ -14,11 +15,21 @@ impl ImageFrame {
     /// Apply one typed mask-local recipe to the current post-global frame.
     ///
     /// The local white balance is a relative delta, not a second absolute
-    /// global WB recipe. When a delta is present, the WB gains and the four
-    /// P0 Basic controls are evaluated in `f64` and rounded to RGBA8 only at
-    /// the end of the local pass. With a neutral delta this delegates to the
-    /// established P0 kernel so existing local-adjustment bytes remain
-    /// unchanged. Alpha is never touched.
+    /// global WB recipe, and the local tone curve (MASK-LOCAL-P1.2a) is a
+    /// separate block that runs after the local Basic controls — mirroring the
+    /// global kernel, where the curve stage follows the scalar stage.
+    ///
+    /// The kernel path is selected by *what the layer actually contains*, so
+    /// every previously pinned P0/P1.1 byte is preserved:
+    ///
+    /// * no relative delta and no local curve → the established P0
+    ///   `apply_recipe` delegation (global fused LUT, byte-identical),
+    /// * a relative delta but no local curve → the P1.1 float chain
+    ///   (WB → Basic, one quantization),
+    /// * a local curve → the P1.2a float chain (WB → Basic → tone curve,
+    ///   one quantization), whether or not a delta is present.
+    ///
+    /// Alpha is never touched.
     pub fn apply_mask_local_recipe(
         &mut self,
         recipe: &lumina_sidecar::MaskLocalRecipe,
@@ -28,10 +39,16 @@ impl ImageFrame {
             .map_err(|error| CoreError::InvalidLocalAdjustment {
                 reason: error.to_string(),
             })?;
-        if recipe.temperature_delta_k == 0.0 && recipe.tint_delta == 0.0 {
+        let has_wb_delta = recipe.temperature_delta_k != 0.0 || recipe.tint_delta != 0.0;
+        let has_curves = recipe.has_local_curves();
+        if !has_wb_delta && !has_curves {
             return self.apply_recipe(&recipe.as_recipe());
         }
-        apply_mask_local_wb_and_basic(&mut self.pixels, recipe);
+        if !has_curves {
+            apply_mask_local_wb_and_basic(&mut self.pixels, recipe);
+            return Ok(());
+        }
+        super::local_tone::apply_mask_local_wb_basic_and_tone(&mut self.pixels, recipe);
         Ok(())
     }
 }
@@ -43,21 +60,48 @@ impl ImageFrame {
 /// between stages, and rounds once when writing the destination byte.
 fn apply_mask_local_wb_and_basic(pixels: &mut [u8], recipe: &lumina_sidecar::MaskLocalRecipe) {
     let gains = recipe.relative_white_balance_gains();
-    let exposure_multiplier = 2.0_f64.powf(recipe.exposure);
-    let contrast_factor = 1.0 + recipe.contrast;
     for_each_rgba_mut(pixels, |pixel| {
-        for channel in 0..3 {
-            let mut value = f64::from(pixel[channel]) * gains[channel];
-            value = (value * exposure_multiplier).clamp(0.0, 255.0);
-            value = ((value - 128.0) * contrast_factor + 128.0).clamp(0.0, 255.0);
-            let x = value / 255.0;
-            let shadow_weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
-            value = (x + recipe.shadows * shadow_weight * 0.25).clamp(0.0, 1.0) * 255.0;
-            let x = value / 255.0;
-            let highlight_weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
-            value = (x + recipe.highlights * highlight_weight * 0.25).clamp(0.0, 1.0) * 255.0;
-            pixel[channel] = value.round().clamp(0.0, 255.0) as u8;
+        for (channel, value) in pixel.iter_mut().enumerate().take(3) {
+            *value = scale_and_round_local_channel(f64::from(*value), &gains, recipe, channel);
         }
         // Deliberately leave pixel[3] (alpha) unchanged.
     });
+}
+
+/// The relative-WB gain, then the four P0 Basic controls, evaluated in `f64`
+/// on one channel. This is the shared prefix of the P1.1 and P1.2a local
+/// kernels: both start from exactly this value, and it is never quantized, so
+/// the tone stage can continue from the same float the WB/Basic stage saw.
+pub(super) fn scale_mask_local_wb_basic(
+    value: f64,
+    gains: &[f64; 3],
+    recipe: &lumina_sidecar::MaskLocalRecipe,
+    channel: usize,
+) -> f64 {
+    let exposure_multiplier = 2.0_f64.powf(recipe.exposure);
+    let contrast_factor = 1.0 + recipe.contrast;
+    let mut value = value * gains[channel];
+    value = (value * exposure_multiplier).clamp(0.0, 255.0);
+    value = ((value - 128.0) * contrast_factor + 128.0).clamp(0.0, 255.0);
+    let x = value / 255.0;
+    let shadow_weight = ((0.5 - x) / 0.5).max(0.0).powi(2);
+    value = (x + recipe.shadows * shadow_weight * 0.25).clamp(0.0, 1.0) * 255.0;
+    let x = value / 255.0;
+    let highlight_weight = ((x - 0.5) / 0.5).max(0.0).powi(2);
+    (x + recipe.highlights * highlight_weight * 0.25).clamp(0.0, 1.0) * 255.0
+}
+
+/// The one and only local quantization boundary: round and clamp into `u8`.
+pub(super) fn round_local_channel(value: f64) -> u8 {
+    value.round().clamp(0.0, 255.0) as u8
+}
+
+/// [`scale_mask_local_wb_basic`] followed by [`round_local_channel`].
+pub(super) fn scale_and_round_local_channel(
+    value: f64,
+    gains: &[f64; 3],
+    recipe: &lumina_sidecar::MaskLocalRecipe,
+    channel: usize,
+) -> u8 {
+    round_local_channel(scale_mask_local_wb_basic(value, gains, recipe, channel))
 }

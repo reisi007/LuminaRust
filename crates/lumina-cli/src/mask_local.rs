@@ -1,10 +1,13 @@
-//! MASK-LOCAL-P0/P1.1 CLI mutation helpers.
+//! MASK-LOCAL-P0/P1.1/P1.2a CLI mutation helpers.
 //!
 //! The `mask` command keeps orchestration in `main`; parsing, target
 //! resolution and the typed local-state transaction live here so validation
-//! happens before the sidecar write. Cross-image `previous` stays a
+//! happens before the sidecar write. Local tone curves reuse the same generic
+//! `KEY=VALUE` flag with the `curves.` key namespace (see `mask_local_curves`),
+//! which is why no extra clap flag exists. Cross-image `previous` stays a
 //! recipe-only transfer and refuses non-neutral local mask state.
 
+use super::mask_local_curves;
 use super::CliError;
 use lumina_sidecar::{
     document_revision, load_sidecar, sidecar_path_for, EditRecipe, HistoryChange, HistoryEntry,
@@ -53,7 +56,11 @@ pub(crate) fn resolve_mask_copy(
         .ok_or_else(|| CliError::Message("sidecar has no virtual copies".into()))
 }
 
-/// Apply the repeatable local P0/P1.1 flags as one prevalidated transaction.
+/// Apply the repeatable local P0/P1.1/P1.2a flags as one prevalidated
+/// transaction.  Curve requests use the same `KEY=VALUE` channel with the
+/// `curves.` key namespace (see [`super::mask_local_curves`]), so this
+/// function stays the single place where a local edit becomes a staged,
+/// validated layer.
 pub(crate) fn apply_local_adjustment_flags(
     document: &mut SidecarDocument,
     copy_id: &str,
@@ -81,18 +88,17 @@ pub(crate) fn apply_local_adjustment_flags(
     layer
         .normalize_local_adjustments()
         .map_err(|error| CliError::Message(error.to_string()))?;
-    let mut adjustments = layer.local_adjustments.unwrap_or_default();
+    let mut adjustments = layer.local_adjustments.take().unwrap_or_default();
     let mut staged_actions = Vec::new();
     for spec in set_specs {
-        let (key, value) = parse_local_adjustment_spec(spec)?;
-        adjustments
-            .set_value(key, value)
-            .map_err(CliError::Message)?;
-        staged_actions.push(format!("local:{key}={value}"));
+        let parsed = mask_local_curves::parse_local_set_spec(spec)?;
+        mask_local_curves::apply_set_spec(&mut adjustments, &parsed)?;
+        staged_actions.push(mask_local_curves::action_label(&parsed));
     }
     for key in reset_keys {
-        adjustments.set_value(key, 0.0).map_err(CliError::Message)?;
-        staged_actions.push(format!("local-reset:{key}"));
+        let parsed = mask_local_curves::parse_local_reset_spec(key)?;
+        mask_local_curves::apply_reset_spec(&mut adjustments, &parsed)?;
+        staged_actions.push(mask_local_curves::reset_label(&parsed));
     }
     layer.local_adjustments = Some(adjustments);
     let target = document
@@ -186,14 +192,14 @@ impl LocalAdjustmentTransaction {
             .layers
             .iter()
             .find(|layer| layer.id == self.layer_id)
-            .and_then(|layer| layer.local_adjustments)
+            .and_then(|layer| layer.local_adjustments.as_ref())
             .map(|adjustments| adjustments.to_string())
             .unwrap_or_else(|| "none".into());
         let after = copy
             .mask_layers
             .iter()
             .find(|layer| layer.id == self.layer_id)
-            .and_then(|layer| layer.local_adjustments)
+            .and_then(|layer| layer.local_adjustments.as_ref())
             .map(|adjustments| adjustments.to_string())
             .unwrap_or_else(|| "none".into());
         entry.set_changes(vec![HistoryChange {
@@ -274,25 +280,6 @@ pub(crate) fn apply_previous_to_target(
     document.validate()?;
     lumina_sidecar::save_sidecar_if_unchanged(&sidecar, &document, Some(&expected_revision))?;
     Ok(())
-}
-
-fn parse_local_adjustment_spec(spec: &str) -> Result<(&str, f64), CliError> {
-    let (key, value) = spec.split_once('=').ok_or_else(|| {
-        CliError::Message(format!(
-            "invalid --set-local-adjustment `{spec}`; expected KEY=VALUE"
-        ))
-    })?;
-    let value = value.parse::<f64>().map_err(|_| {
-        CliError::Message(format!(
-            "invalid --set-local-adjustment `{spec}`; VALUE must be a finite number"
-        ))
-    })?;
-    if !value.is_finite() {
-        return Err(CliError::Message(format!(
-            "invalid --set-local-adjustment `{spec}`; VALUE must be finite"
-        )));
-    }
-    Ok((key, value))
 }
 
 fn resolve_local_layer(
@@ -403,6 +390,7 @@ mod tests {
         assert_eq!(
             saved.virtual_copies[0].mask_layers[0]
                 .local_adjustments
+                .as_ref()
                 .unwrap()
                 .exposure,
             1.0

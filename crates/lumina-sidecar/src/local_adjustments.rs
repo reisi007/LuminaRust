@@ -7,13 +7,14 @@
 //! keeping schema and migration together prevents GUI, CLI and core from
 //! inventing subtly different interpretations of the same layer.
 
-use super::{Extras, MaskLayer, MaskReference};
+use super::{Curves, Extras, MaskLayer, MaskReference};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::{EditRecipe, SidecarError};
 
+mod curves;
 mod migration;
 mod wire;
 use migration::normalize_legacy_layer_extras;
@@ -22,11 +23,21 @@ pub use migration::validate_mask_layer_local_state;
 /// Current version of the typed local-adjustment object.
 ///
 /// Version 1 is the P0 object (the four scalar local controls only). Version 2
-/// adds the explicitly relative white-balance delta; loading version 1 is an
-/// explicit, lossless migration with both new deltas set to zero.
-pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 2;
-/// The last accepted P0-only typed version.
+/// adds the explicitly relative white-balance delta. Version 3
+/// (`MASK-LOCAL-P1.2a`) adds the local tone curve. Loading an older version is
+/// an explicit, lossless migration: the fields that version cannot express stay
+/// absent, and a payload that writes them is rejected instead of dropped.
+pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 3;
+/// The P0-only typed version (four scalar controls).
 pub const LEGACY_LOCAL_ADJUSTMENTS_VERSION: u8 = 1;
+/// The P1.1 typed version (P0 scalars plus the relative white-balance delta).
+pub const RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION: u8 = 2;
+/// Every typed version that may be read and migrated forward. A version
+/// outside this list is a loud error, never a best-effort interpretation.
+pub const LEGACY_LOCAL_ADJUSTMENTS_VERSIONS: [u8; 2] = [
+    LEGACY_LOCAL_ADJUSTMENTS_VERSION,
+    RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
+];
 
 /// Maximum number of layer snapshots retained in one history entry.  The
 /// active-copy validator has its own copy/layer limits; this smaller bound
@@ -50,12 +61,13 @@ pub const LOCAL_ADJUSTMENT_RANGES: [(&str, f64, f64); 6] = [
 pub const LOCAL_WB_TEMPERATURE_DELTA_RANGE: (f64, f64) = (-5000.0, 5000.0);
 pub const LOCAL_WB_TINT_DELTA_RANGE: (f64, f64) = (-1.0, 1.0);
 
-/// A typed, versioned local recipe.  The P0 scalar fields are retained and
-/// version 2 adds only an explicitly relative WB delta.  In particular, this
-/// type has no absolute `wb_temperature`/`wb_tint` fields: those names belong
-/// to the global recipe and are rejected here rather than being ambiguous
-/// aliases.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+/// A typed, versioned local recipe.  The P0 scalar fields and the P1.1
+/// relative WB delta are retained; version 3 adds only the local tone curve.
+/// In particular, this type has no absolute `wb_temperature`/`wb_tint` fields:
+/// those names belong to the global recipe and are rejected here rather than
+/// being ambiguous aliases.  There is deliberately no local HSL, point-color,
+/// grading, presence or detail field either — those stay disabled.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LocalAdjustments {
     pub version: u8,
     pub exposure: f64,
@@ -64,6 +76,13 @@ pub struct LocalAdjustments {
     pub shadows: f64,
     pub temperature_delta_k: f64,
     pub tint_delta: f64,
+    /// MASK-LOCAL-P1.2a local tone curve (master plus optional RGB channels),
+    /// reusing the global `Curves` types and point rules. `None` and a
+    /// persisted identity are both pixel-neutral; the option distinguishes
+    /// "no curve" from "an explicitly stored identity curve" for history and
+    /// digest purposes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curves: Option<Curves>,
 }
 
 /// The task-facing name for the typed local recipe.  Keep the P0 name as an
@@ -80,29 +99,34 @@ impl Default for LocalAdjustments {
             shadows: 0.0,
             temperature_delta_k: 0.0,
             tint_delta: 0.0,
+            curves: None,
         }
     }
 }
 
 /// Stable human-readable representation used by CLI status output.
 ///
-/// The documented grammar is `v2 exposure=<number> contrast=<number>
+/// The documented grammar is `v3 exposure=<number> contrast=<number>
 /// highlights=<number> shadows=<number> temperature_delta_k=<number>
-/// tint_delta=<number>`, always in that field order. It is a presentation
-/// contract independent of the derived `Debug` layout; JSON consumers should
-/// continue to use the structured object instead.
+/// tint_delta=<number> curves=<summary>`, always in that field order. The
+/// curve summary is `curves=none` for a neutral block, otherwise
+/// `curves=<channel>:<point-count>[,...]` in the canonical
+/// master/red/green/blue order, listing only stored channels. It is a
+/// presentation contract independent of the derived `Debug` layout; JSON
+/// consumers should continue to use the structured object instead.
 impl fmt::Display for LocalAdjustments {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={}",
+            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={} curves={}",
             self.version,
             self.exposure,
             self.contrast,
             self.highlights,
             self.shadows,
             self.temperature_delta_k,
-            self.tint_delta
+            self.tint_delta,
+            self.curve_summary(),
         )
     }
 }
@@ -111,11 +135,11 @@ impl LocalAdjustments {
     /// Validate the typed object without clipping or defaulting any value.
     pub fn validate(&self) -> Result<(), SidecarError> {
         if self.version != LOCAL_ADJUSTMENTS_VERSION
-            && self.version != LEGACY_LOCAL_ADJUSTMENTS_VERSION
+            && !LEGACY_LOCAL_ADJUSTMENTS_VERSIONS.contains(&self.version)
         {
             return Err(SidecarError::Invalid(format!(
-                "unsupported local_adjustments version {} (expected {LEGACY_LOCAL_ADJUSTMENTS_VERSION} or {LOCAL_ADJUSTMENTS_VERSION})",
-                self.version
+                "unsupported local_adjustments version {} (expected one of {:?} or {LOCAL_ADJUSTMENTS_VERSION})",
+                self.version, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS
             )));
         }
         if self.version == LEGACY_LOCAL_ADJUSTMENTS_VERSION
@@ -125,6 +149,15 @@ impl LocalAdjustments {
                 "local_adjustments version 1 cannot contain relative white-balance delta fields"
                     .into(),
             ));
+        }
+        // Mirrors the wire decoder exactly: a version that cannot express a
+        // curve must not carry one, not even an identity one, so a
+        // hand-constructed object can never disagree with a loaded one.
+        if self.version != LOCAL_ADJUSTMENTS_VERSION && self.curves.is_some() {
+            return Err(SidecarError::Invalid(format!(
+                "local_adjustments version {} cannot contain a tone curve",
+                self.version
+            )));
         }
         for (name, value) in [
             ("exposure", self.exposure),
@@ -144,6 +177,10 @@ impl LocalAdjustments {
                 )));
             }
         }
+        if let Some(curves) = &self.curves {
+            crate::validate_curves(curves)
+                .map_err(|error| SidecarError::Invalid(format!("local tone curve: {error}")))?;
+        }
         Ok(())
     }
 
@@ -162,6 +199,7 @@ impl LocalAdjustments {
             && self.shadows == 0.0
             && self.temperature_delta_k == 0.0
             && self.tint_delta == 0.0
+            && self.curves.as_ref().is_none_or(Curves::is_identity)
     }
 
     /// Return one scalar value by its stable local key.
@@ -238,7 +276,9 @@ impl LocalAdjustments {
 
     /// Canonical digest of this typed object.  JSON object key ordering and
     /// the explicit version are part of the identity; no map iteration or
-    /// display formatting is involved.
+    /// display formatting is involved.  The optional tone-curve block is part
+    /// of the serialized object, so a local curve edit can never reuse stale
+    /// pixels.
     #[must_use]
     pub fn digest(&self) -> String {
         let bytes = serde_json::to_vec(self).expect("LocalAdjustments is serializable");
@@ -281,16 +321,16 @@ impl<'de> Deserialize<'de> for MaskStateSnapshot {
     {
         let wire = MaskStateSnapshotWire::deserialize(deserializer)?;
         if wire.version != LOCAL_ADJUSTMENTS_VERSION
-            && wire.version != LEGACY_LOCAL_ADJUSTMENTS_VERSION
+            && !LEGACY_LOCAL_ADJUSTMENTS_VERSIONS.contains(&wire.version)
         {
             return Err(serde::de::Error::custom(format!(
-                "unsupported mask state snapshot version {} (expected {LEGACY_LOCAL_ADJUSTMENTS_VERSION} or {LOCAL_ADJUSTMENTS_VERSION})",
-                wire.version
+                "unsupported mask state snapshot version {} (expected one of {:?} or {LOCAL_ADJUSTMENTS_VERSION})",
+                wire.version, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS
             )));
         }
-        // A v1 snapshot is normalized at the input boundary.  Its P0 layers
-        // are already migrated by MaskLayer's deserializer, and v1 has no WB
-        // delta by definition.
+        // A legacy snapshot is normalized at the input boundary.  Its layers
+        // are already migrated by MaskLayer's deserializer, and the fields an
+        // older snapshot version cannot express stay absent.
         let snapshot = Self {
             version: LOCAL_ADJUSTMENTS_VERSION,
             layers: wire.layers,
@@ -322,7 +362,7 @@ impl MaskStateSnapshot {
 
     pub fn validate(&self) -> Result<(), SidecarError> {
         if self.version != LOCAL_ADJUSTMENTS_VERSION
-            && self.version != LEGACY_LOCAL_ADJUSTMENTS_VERSION
+            && !LEGACY_LOCAL_ADJUSTMENTS_VERSIONS.contains(&self.version)
         {
             return Err(SidecarError::Invalid(format!(
                 "unsupported mask state snapshot version {}",

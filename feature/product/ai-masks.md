@@ -461,6 +461,86 @@ Layer werden weiterhin in der persistierten Listenreihenfolge ausgewertet.
   deaktiviert; der lokale Renderer darf sie weder aktivieren noch als Stub
   vortäuschen.
 
+## P1.2a SOLL — mask-local Tone Curves (`MASK-LOCAL-P1.2a`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+`global result → local relative WB → local Basic (exposure → contrast → shadows → highlights) → local tone curve → fractional mask blend`;
+der in P1.2b folgende lokale Color-Stage schließt sich danach an. Die lokale
+Kurve steht damit an **exakt derselben** Stelle wie der globale Kurven-Stage —
+nach den Scalar-Basic-Stufen, vor dem Color-Stage. Überlappende Layer werden in
+der **persistierten Listenreihenfolge** ausgewertet; ein Reordering ist eine
+Änderung der Render-Identität, keine äquivalente Umordnung. Das globale WB
+bleibt **absolute-only** mit explizitem **Reset to As Shot** — kein stiller
+Fallback, kein relatives globales Alias, kein Auto-WB. Bis zur echten
+GPU-Parität ist die lokale Kurve **CPU-first**: GPU-/Stand-in-Routen müssen
+sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 3**
+  gehoben. Neu ist ausschließlich `curves` (`Option<Curves>`), reusing der
+  bestehenden `lumina_sidecar::Curves`/`CurveChannels`/`CurvePoint`-Typen und
+  deren bestehenden Punkt-Regeln und Ranges: `version == 1`, 2..=32 Punkte,
+  endlich, Input/Output in `0..=1`, strikt steigender Input und feste
+  Endpunkte `(0,0)`/`(1,1)`. Es gibt keine lokalen HSL-/Point-Color-/
+  Grading-/Presence-/Detail-Felder; diese bleiben deaktiviert und ein
+  entsprechender `--set-local-adjustment`-Key ist ein lauter „unknown local
+  adjustment"-Fehler statt eines stillen No-Op.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar) und v2 (P1.1-WB-Delta)
+  migrieren **verlustfrei** nach v3 mit `curves: None`. Ein v1/v2-Payload, der
+  ein `curves`-Feld enthält, ist ein **lauter** Fehler — kein stiller Drop und
+  kein Smuggling einer späteren Version. Die historischen `adjustment_*`-Extras
+  bleiben auf die vier P0-Keys beschränkt; `adjustment_curves` bleibt „unknown
+  local adjustment". Fehlende Kurvenkanäle, eine Identitätskurve
+  (`[(0,0),(1,1)]`) und ein explizit gespeichertes `curves: None` sind
+  byte-identisch neutral.
+- **Deterministische Reihenfolge und Quantisierung:** Für jede persistierte Maske
+  gilt `global result → local relative WB → local Basic (exposure → contrast →
+  shadows → highlights) → local tone curve → fractional mask blend`; der in
+  P1.2b folgende lokale Color-Stage schließt sich danach an. Die lokale Kurve
+  steht damit an **exakt derselben** Stelle wie der globale Kurven-Stage — nach
+  den Scalar-Basic-Stufen, vor dem Color-Stage. „Exakte Global-Kernel-Reihenfolge"
+  heißt hier wörtlich: derselbe `Curves`-/`CurvePoint`-Typ, derselbe Validator
+  (`lumina_sidecar::validate_curves`), derselbe PCHIP-Evaluator
+  (`lumina_core::curve_math::monotone_curve`) und dieselbe
+  `value * master / luminance`-Komposition mit `luminance > 1e-9`-Guard. Der
+  lokale Layer wertet WB-Gains, die vier Basic-Stufen und die Kurve vollständig
+  in `f64` ab und quantisiert **genau einmal** am Ende auf RGBA8; der globale
+  Kernel rundet dazwischen, weil er auf einem `u8`-Frame arbeitet — die lokale
+  Kurve sieht daher nie einen gerundeten Zwischenwert. Bild-Alpha bleibt
+  unberührt. Alpha-0 lässt alle Bytes unverändert, Alpha-1 übernimmt das
+  vollständige lokale Rezept, partielle Alpha bleiben deterministisch fraktional
+  gemischt.
+- **Zustand, Reset und Persistenz:** Expliziter Reset pro Kanal sowie für alle
+  lokalen Curves; History, Reset und Previous der **aktuellen** virtuellen
+  Kopie übernehmen den vollständigen additiven `MaskStateSnapshot` (inklusive
+  Kurvenblock). Der Kurvenblock gehört in die kanonische
+  `LocalAdjustments::digest` und `mask_layers_digest` — sowohl die
+  Persistenzform als auch die Werte. Ein lokaler Layer darf keine globalen
+  Rezeptfelder verändern.
+- **Cross-image Previous bleibt recipe-only (P0/P1.1-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer
+  und keine P0-/P1.1-/P1.2a-Deltas auf andere Bilder. Nicht-neutraler lokaler
+  Maskenzustand — auf der Quell-Kopie oder auf dem Ziel — wird laut
+  verweigert: die Quelle bricht den gesamten Lauf ab (Exit 1, kein Ziel
+  angefasst), ein betroffenes Ziel schlägt isoliert fehl (Exit 3,
+  Ziel-Bytes unverändert). **Eine lokale Kurve allein ist bereits ein
+  Verweigerungsgrund**; es gibt keine „nur P0/P1.1"-Ausnahme. Sync Settings
+  bleibt recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Kurven-Editor (Kanalwahl
+  Master/R/G/B, Punkt setzen/verschieben/löschen, Reset pro Kanal und für alle
+  lokalen Curves) mit **keiner** globalen Rezeptmutation. Die CLI nutzt keine
+  zweite, fast identische Flag-Partei, sondern den bestehenden generischen
+  Kanal: `--set-local-adjustment 'curves.<master|red|green|blue>=I,O;I,O;...'`
+  (dieselbe Punkt-Syntax wie das globale `--curve-points`) und
+  `--reset-local-adjustment curves[.<channel>]`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Master, einzelnen Kanal,
+  Stack (Master plus Kanal), Halbmaske, Überlappungs-Reihenfolge, ungültige
+  Punkte, Null/Identität und Legacy-Dokumente sowie CLI/GUI-Parität. P1.2b
+  Color (HSL/Point Color/Color Grading), Presence, Detail und Optics bleiben
+  deaktiviert.
+
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
 Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/

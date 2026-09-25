@@ -70,13 +70,20 @@ pub use history::{
     MAX_HISTORY_CHANGE_VALUE_CHARS,
 };
 
-// MASK-LOCAL-P0/P1.1: typed local mask recipes and the loud legacy migration.
+// Tone-curve channel accessors plus the one shared point-rule validator,
+// reused by the global recipe and the typed mask-local recipe (P1.2a).
+mod curves;
+pub use curves::{
+    curve_points_are_identity, identity_curve_points, validate_curves, CURVE_CHANNELS,
+};
+
+// MASK-LOCAL-P0/P1.1/P1.2a: typed local mask recipes and the loud legacy migration.
 mod local_adjustments;
 pub use local_adjustments::{
     mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe,
-    MaskStateSnapshot, LEGACY_LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENTS_VERSION,
-    LOCAL_ADJUSTMENT_RANGES, LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
-    MAX_MASK_STATE_LAYERS,
+    MaskStateSnapshot, LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS,
+    LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENT_RANGES, LOCAL_WB_TEMPERATURE_DELTA_RANGE,
+    LOCAL_WB_TINT_DELTA_RANGE, MAX_MASK_STATE_LAYERS, RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
 };
 
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
@@ -4516,16 +4523,7 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         }
     }
     if let Some(c) = &a.curves {
-        if c.version != 1 {
-            return invalid("unsupported curves version");
-        }
-        validate_curve(&c.master)?;
-        for curve in [&c.channels.red, &c.channels.green, &c.channels.blue]
-            .into_iter()
-            .flatten()
-        {
-            validate_curve(curve)?;
-        }
+        validate_curves(c)?;
     }
     if let Some(h) = &a.hsl {
         if h.version != 1 {
@@ -4951,30 +4949,6 @@ fn validate_spot_g04_extras(recipe: &EditRecipe) -> Result<(), SidecarError> {
                 "extras `{SPOT_DISTRACTION_KEY}` must be an object of bools"
             ))
         })?;
-    }
-    Ok(())
-}
-
-fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
-    if !(2..=32).contains(&c.len()) {
-        return invalid("curve must contain 2..=32 points");
-    }
-    let mut previous = -1.0;
-    for p in c {
-        if !p.input.is_finite()
-            || !p.output.is_finite()
-            || !(0.0..=1.0).contains(&p.input)
-            || !(0.0..=1.0).contains(&p.output)
-            || p.input <= previous
-        {
-            return invalid("curve points must be finite, bounded and strictly increasing");
-        }
-        previous = p.input;
-    }
-    let first = c.first().unwrap();
-    let last = c.last().unwrap();
-    if first.input != 0.0 || first.output != 0.0 || last.input != 1.0 || last.output != 1.0 {
-        return invalid("curve must have (0,0) and (1,1) endpoints");
     }
     Ok(())
 }

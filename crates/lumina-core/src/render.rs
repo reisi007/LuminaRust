@@ -14,6 +14,7 @@ use lumina_sidecar::{EditRecipe, VirtualCopy};
 use std::collections::BTreeMap;
 
 mod local_adjustments;
+mod local_tone;
 mod local_wb;
 mod mask_evaluation;
 mod source_stage;
@@ -1205,6 +1206,12 @@ mod tests {
 
     #[path = "local_white_balance_tests.rs"]
     mod local_white_balance;
+
+    #[path = "local_tone_curve_tests.rs"]
+    mod local_tone_curve;
+
+    #[path = "local_tone_curve_contract_tests.rs"]
+    mod local_tone_curve_contract;
 
     #[test]
     fn invisible_layer_is_skipped_silently() {

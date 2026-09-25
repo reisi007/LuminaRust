@@ -120,6 +120,8 @@ pub use mask_visibility::MaskOverlayMode;
 mod mask_persistence;
 // MASK-LOCAL-P0: typed local-control transactions live outside the app root.
 mod mask_local_controls;
+// MASK-LOCAL-P1.2a: the mask-local tone-curve editor and its setters.
+mod mask_local_curves;
 // R5-DUST-23: interactive Spot-Heal tool (dab + live-size cursor + `[`/`]`
 // size shortcuts).
 mod spot_tool;
@@ -1713,6 +1715,10 @@ pub struct LuminaApp {
     /// Local relative-WB picker armed state. It is intentionally separate from
     /// `wb_pick_mode` so a local sample can never mutate global WB fields.
     local_wb_pick_mode: bool,
+    /// MASK-LOCAL-P1.2a: selected channel of the mask-local tone-curve editor
+    /// (0 = master, 1..=3 = red/green/blue). Display-only session state, like
+    /// `tone_curve_channel`; the curve itself lives on the mask layer.
+    mask_local_curve_channel: usize,
     /// LRPAR-G14-REDEYE-15: red-eye region picker armed state (click the
     /// preview to mark a pupil; regions are persisted explicitly).
     red_eye_pick_mode: bool,
@@ -2744,6 +2750,7 @@ impl LuminaApp {
             mask_baseline: Vec::new(),
             wb_pick_mode: false,
             local_wb_pick_mode: false,
+            mask_local_curve_channel: 0,
             red_eye_pick_mode: false,
             red_eye_detect_status: String::new(),
             thumbnails: ThumbnailManager::new(),
@@ -12342,6 +12349,8 @@ mod tests {
     // R2-MODSWITCH-1 F7: module-switch latency (off-thread thumbnail cache,
     // metadata-only probe, deferred full render).
     mod mask_local;
+    mod mask_local_curve_graph;
+    mod mask_local_curves;
     mod mask_local_previous;
     mod mask_visibility;
     mod masking_g03;

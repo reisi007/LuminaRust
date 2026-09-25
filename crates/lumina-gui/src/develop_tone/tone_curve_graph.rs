@@ -29,15 +29,15 @@ use super::*;
 use log::{info, warn};
 
 /// Side length (points) of the square curve graph.
-const TONE_CURVE_GRAPH_SIDE: f32 = 184.0;
+pub(crate) const TONE_CURVE_GRAPH_SIDE: f32 = 184.0;
 /// Radius (points) of a drawn control point.
 const TONE_CURVE_POINT_RADIUS: f32 = 4.0;
 /// Screen radius (points) that grabs/deletes a control point.
-const TONE_CURVE_HIT_RADIUS: f32 = 10.0;
+pub(crate) const TONE_CURVE_HIT_RADIUS: f32 = 10.0;
 /// Screen distance (points) within which a click counts as "on the curve".
 const TONE_CURVE_LINE_TOLERANCE: f32 = 8.0;
 /// Minimum input gap between neighbouring control points (strictly ascending).
-const TONE_CURVE_MIN_GAP: f32 = 0.005;
+pub(crate) const TONE_CURVE_MIN_GAP: f32 = 0.005;
 /// Polyline resolution used to stroke the spline.
 const TONE_CURVE_SAMPLES: usize = 72;
 
@@ -45,6 +45,110 @@ const TONE_CURVE_SAMPLES: usize = 72;
 /// (`f100_audit.rs`) and the headless gesture tests to locate the widget.
 pub(crate) fn tone_curve_graph_id(channel: &str) -> egui::Id {
     egui::Id::new("lumina.tone_curve_graph").with(channel)
+}
+
+/// Stable widget id of the **mask-local** curve graph (MASK-LOCAL-P1.2a).
+///
+/// A separate id is mandatory, not cosmetic: the local and the global graph
+/// are painted in the same UI tree (Masking next to Tone Curve) and must not
+/// share egui interaction state — a drag on one could otherwise move a point
+/// of the other.
+pub(crate) fn local_tone_curve_graph_id(channel: &str) -> egui::Id {
+    egui::Id::new("lumina.local_tone_curve_graph").with(channel)
+}
+
+/// One decoded point-curve gesture. Both the global editor and the mask-local
+/// editor (MASK-LOCAL-P1.2a) consume the *same* gesture decoder, so the two
+/// graphs cannot drift apart in hit radius, minimum gap, mandatory endpoints
+/// or the "click only counts on the curve" rule.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CurveGesture {
+    Move {
+        index: usize,
+        input: f32,
+        output: f32,
+    },
+    Add {
+        input: f32,
+        output: f32,
+    },
+    Remove {
+        index: usize,
+    },
+    /// A drag/click targeted a mandatory endpoint.
+    EndpointRefused,
+}
+
+/// Decode the pointer gestures of one curve graph into intent.
+///
+/// `memory_id` is the caller's per-graph drag slot, so two graphs on screen
+/// never share the "currently dragged point" state.
+pub(crate) fn curve_graph_gesture(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    response: &egui::Response,
+    points: &[CurvePoint],
+    memory_id: egui::Id,
+) -> Vec<CurveGesture> {
+    let mut gestures = Vec::new();
+    if response.drag_started() {
+        // Grab the point under the *press origin*: by the time a drag is
+        // recognized the pointer has already moved past the point.
+        let origin = ui
+            .input(|i| i.pointer.press_origin())
+            .or_else(|| response.interact_pointer_pos());
+        if let Some(pos) = origin {
+            match nearest_point_index(points, rect, pos, TONE_CURVE_HIT_RADIUS) {
+                Some(index) if index > 0 && index + 1 < points.len() => {
+                    ui.memory_mut(|m| m.data.insert_temp(memory_id, index));
+                }
+                Some(_) => gestures.push(CurveGesture::EndpointRefused),
+                None => {}
+            }
+        }
+    }
+    if response.dragged() {
+        if let Some(index) = ui.memory(|m| m.data.get_temp::<usize>(memory_id)) {
+            if let (Some(pos), Some(point)) = (response.interact_pointer_pos(), points.get(index)) {
+                let (input, output) = graph_to_curve(rect, pos);
+                let (input, output) = clamped_point_move(points, index, input, output);
+                if (input - point.input).abs() > f32::EPSILON
+                    || (output - point.output).abs() > f32::EPSILON
+                {
+                    gestures.push(CurveGesture::Move {
+                        index,
+                        input,
+                        output,
+                    });
+                }
+            }
+        }
+    }
+    if response.drag_stopped() {
+        ui.memory_mut(|m| m.data.remove::<usize>(memory_id));
+    }
+    if response.double_clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            if let Some(index) = nearest_point_index(points, rect, pos, TONE_CURVE_HIT_RADIUS) {
+                gestures.push(CurveGesture::Remove { index });
+            }
+        }
+    } else if response.clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            if nearest_point_index(points, rect, pos, TONE_CURVE_HIT_RADIUS).is_none() {
+                let (input, _) = graph_to_curve(rect, pos);
+                let on_curve = tone_curve_display_output(points, input);
+                if curve_to_graph(rect, input, on_curve).distance(pos) <= TONE_CURVE_LINE_TOLERANCE
+                {
+                    gestures.push(CurveGesture::Add {
+                        input,
+                        output: on_curve,
+                    });
+                }
+            }
+        }
+    }
+    gestures
 }
 
 /// The stored control points of one curve channel. A channel without an
@@ -109,7 +213,7 @@ pub(crate) fn tone_curve_display_output(points: &[CurvePoint], x: f32) -> f32 {
 }
 
 /// Map a control point to the graph rectangle (`output` grows upwards).
-fn curve_to_graph(rect: egui::Rect, input: f32, output: f32) -> egui::Pos2 {
+pub(crate) fn curve_to_graph(rect: egui::Rect, input: f32, output: f32) -> egui::Pos2 {
     egui::pos2(
         rect.left() + input.clamp(0.0, 1.0) * rect.width(),
         rect.bottom() - output.clamp(0.0, 1.0) * rect.height(),
@@ -117,7 +221,7 @@ fn curve_to_graph(rect: egui::Rect, input: f32, output: f32) -> egui::Pos2 {
 }
 
 /// Inverse of [`curve_to_graph`], clamped to the normative `0..=1` square.
-fn graph_to_curve(rect: egui::Rect, pos: egui::Pos2) -> (f32, f32) {
+pub(crate) fn graph_to_curve(rect: egui::Rect, pos: egui::Pos2) -> (f32, f32) {
     (
         ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
         ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0),
@@ -125,7 +229,7 @@ fn graph_to_curve(rect: egui::Rect, pos: egui::Pos2) -> (f32, f32) {
 }
 
 /// Index of the control point within `max_dist` screen points of `pos`.
-fn nearest_point_index(
+pub(crate) fn nearest_point_index(
     points: &[CurvePoint],
     rect: egui::Rect,
     pos: egui::Pos2,
@@ -147,7 +251,12 @@ fn nearest_point_index(
 
 /// Clamp a dragged interior point to the strictly-ascending input range between
 /// its neighbours and to the normative `0..=1` output range.
-fn clamped_point_move(points: &[CurvePoint], index: usize, input: f32, output: f32) -> (f32, f32) {
+pub(crate) fn clamped_point_move(
+    points: &[CurvePoint],
+    index: usize,
+    input: f32,
+    output: f32,
+) -> (f32, f32) {
     let lower = points[index - 1].input + TONE_CURVE_MIN_GAP;
     let upper = points[index + 1].input - TONE_CURVE_MIN_GAP;
     // `f32::clamp` panics when the neighbours are closer than the minimum gap;
@@ -173,7 +282,7 @@ fn curve_color(channel: &str) -> egui::Color32 {
 
 /// Paint the graph chrome, the spline and the control points. `active`/`hover`
 /// highlight the currently dragged / under-pointer point.
-fn paint_tone_curve_graph(
+pub(crate) fn paint_tone_curve_graph(
     painter: egui::Painter,
     rect: egui::Rect,
     points: &[CurvePoint],
@@ -276,61 +385,22 @@ impl LuminaApp {
         points: &[CurvePoint],
     ) {
         let memory_id = tone_curve_graph_id(channel).with("drag");
-        if response.drag_started() {
-            // Grab the point under the *press origin*: by the time a drag is
-            // recognized the pointer has already moved past the point.
-            let origin = ui
-                .input(|i| i.pointer.press_origin())
-                .or_else(|| response.interact_pointer_pos());
-            if let Some(pos) = origin {
-                match nearest_point_index(points, rect, pos, TONE_CURVE_HIT_RADIUS) {
-                    Some(index) if index > 0 && index + 1 < points.len() => {
-                        ui.memory_mut(|m| m.data.insert_temp(memory_id, index));
-                    }
-                    Some(_) => {
-                        // Endpoints are mandatory: refuse loudly, never silently.
-                        self.status = Str::ToneCurveInvalidPattern
-                            .format_arg("endpoints (0,0)/(1,1) are mandatory");
-                        warn!("tone_curve_graph: endpoints (0,0)/(1,1) are fixed");
-                    }
-                    None => {}
+        for gesture in curve_graph_gesture(ui, rect, response, points, memory_id) {
+            match gesture {
+                CurveGesture::Move {
+                    index,
+                    input,
+                    output,
+                } => self.move_curve_point(channel, index, f64::from(input), f64::from(output)),
+                CurveGesture::Add { input, output } => {
+                    self.add_curve_point(channel, f64::from(input), f64::from(output));
                 }
-            }
-        }
-        if response.dragged() {
-            if let Some(index) = ui.memory(|m| m.data.get_temp::<usize>(memory_id)) {
-                if let (Some(pos), Some(point)) =
-                    (response.interact_pointer_pos(), points.get(index))
-                {
-                    let (input, output) = graph_to_curve(rect, pos);
-                    let (input, output) = clamped_point_move(points, index, input, output);
-                    if (input - point.input).abs() > f32::EPSILON
-                        || (output - point.output).abs() > f32::EPSILON
-                    {
-                        self.move_curve_point(channel, index, f64::from(input), f64::from(output));
-                    }
-                }
-            }
-        }
-        if response.drag_stopped() {
-            ui.memory_mut(|m| m.data.remove::<usize>(memory_id));
-        }
-        if response.double_clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if let Some(index) = nearest_point_index(points, rect, pos, TONE_CURVE_HIT_RADIUS) {
-                    self.remove_curve_point(channel, index);
-                }
-            }
-        } else if response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if nearest_point_index(points, rect, pos, TONE_CURVE_HIT_RADIUS).is_none() {
-                    let (input, _) = graph_to_curve(rect, pos);
-                    let on_curve = tone_curve_display_output(points, input);
-                    if curve_to_graph(rect, input, on_curve).distance(pos)
-                        <= TONE_CURVE_LINE_TOLERANCE
-                    {
-                        self.add_curve_point(channel, f64::from(input), f64::from(on_curve));
-                    }
+                CurveGesture::Remove { index } => self.remove_curve_point(channel, index),
+                CurveGesture::EndpointRefused => {
+                    // Endpoints are mandatory: refuse loudly, never silently.
+                    self.status = Str::ToneCurveInvalidPattern
+                        .format_arg("endpoints (0,0)/(1,1) are mandatory");
+                    warn!("tone_curve_graph: endpoints (0,0)/(1,1) are fixed");
                 }
             }
         }
