@@ -17,10 +17,15 @@
 //! | `--reset-local-adjustment curves.master` | reset one channel to the identity     |
 //! | `--reset-local-adjustment curves`      | reset every local curve of the layer    |
 //!
-//! The local HSL, point-color, grading, presence and detail controls stay
-//! deliberately unimplemented: they have no key here, so a request for one is
-//! the generic "unknown local adjustment" error rather than a silent no-op.
+//! MASK-LOCAL-P1.2b extends the same generic channel with the colour key
+//! namespaces (`hsl.`, `point_color.`, `color_grading.`, plus the `vibrance` /
+//! `saturation` scalars and the `color` reset); see `mask_local_color`. The
+//! local presence, detail, AI-denoise, noise-reduction, sharpening and optics
+//! controls stay deliberately unimplemented: they have no key here, so a
+//! request for one is the generic "unknown local adjustment" error rather than
+//! a silent no-op.
 
+use super::mask_local_color::{self, LocalColorResetSpec, LocalColorSetSpec};
 use super::CliError;
 use lumina_sidecar::{CurvePoints, LocalAdjustments};
 
@@ -34,6 +39,7 @@ pub(crate) enum LocalSetSpec {
         channel: String,
         points: CurvePoints,
     },
+    Color(LocalColorSetSpec),
 }
 
 /// One parsed `--reset-local-adjustment` request.
@@ -41,6 +47,7 @@ pub(crate) enum LocalResetSpec {
     Scalar(String),
     Channel(String),
     All,
+    Color(LocalColorResetSpec),
 }
 
 /// The key prefix that routes a local-adjustment spec to the tone curve.
@@ -65,6 +72,12 @@ pub(crate) fn parse_local_set_spec(spec: &str) -> Result<LocalSetSpec, CliError>
             "invalid --set-local-adjustment `{spec}`; expected KEY=VALUE"
         ))
     })?;
+    // The colour namespaces are checked before the curve namespace so a
+    // `hsl.`/`point_color.`/`color_grading.` key never reaches the scalar
+    // parser, and vice versa.
+    if let Some(color) = mask_local_color::parse_color_set_spec(spec)? {
+        return Ok(LocalSetSpec::Color(color));
+    }
     if let Some(channel) = curve_channel_of(key) {
         if channel.is_empty() {
             return Err(CliError::Message(format!(
@@ -97,6 +110,9 @@ pub(crate) fn parse_local_set_spec(spec: &str) -> Result<LocalSetSpec, CliError>
 
 /// Parse one `--reset-local-adjustment KEY` request.
 pub(crate) fn parse_local_reset_spec(key: &str) -> Result<LocalResetSpec, CliError> {
+    if let Some(color) = mask_local_color::parse_color_reset_spec(key)? {
+        return Ok(LocalResetSpec::Color(color));
+    }
     match curve_channel_of(key) {
         None => Ok(LocalResetSpec::Scalar(key.into())),
         Some("") => Ok(LocalResetSpec::All),
@@ -114,6 +130,7 @@ pub(crate) fn action_label(spec: &LocalSetSpec) -> String {
         LocalSetSpec::Curve { channel, points } => {
             format!("local:curves.{channel}={}pts", points.len())
         }
+        LocalSetSpec::Color(color) => mask_local_color::set_label(color),
     }
 }
 
@@ -123,6 +140,7 @@ pub(crate) fn reset_label(spec: &LocalResetSpec) -> String {
         LocalResetSpec::Scalar(key) => format!("local-reset:{key}"),
         LocalResetSpec::Channel(channel) => format!("local-reset:curves.{channel}"),
         LocalResetSpec::All => "local-reset:curves".into(),
+        LocalResetSpec::Color(color) => mask_local_color::reset_label(color),
     }
 }
 
@@ -142,6 +160,7 @@ pub(crate) fn apply_set_spec(
         LocalSetSpec::Curve { channel, points } => adjustments
             .set_local_curve_channel(channel, points.clone())
             .map_err(CliError::Message),
+        LocalSetSpec::Color(color) => mask_local_color::apply_set_spec(adjustments, color),
     }
 }
 
@@ -159,5 +178,6 @@ pub(crate) fn apply_reset_spec(
             adjustments.reset_local_curves();
             Ok(())
         }
+        LocalResetSpec::Color(color) => mask_local_color::apply_reset_spec(adjustments, color),
     }
 }

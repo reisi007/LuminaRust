@@ -265,7 +265,6 @@ fn local_wb_basic_and_tone_share_exactly_one_quantization_boundary() {
     curves.master = lifted_master();
     let definition = mask_definition("subject", MaskStatus::Valid, MaskOperation::Source, vec![]);
     let recipe = LocalAdjustments {
-        version: lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION,
         exposure: 1.0,
         contrast: 0.25,
         shadows: 0.5,
@@ -273,6 +272,7 @@ fn local_wb_basic_and_tone_share_exactly_one_quantization_boundary() {
         temperature_delta_k: 1100.0,
         tint_delta: -0.2,
         curves: Some(curves),
+        ..LocalAdjustments::default()
     };
     let mut layer = curve_layer("layer-1", reference("vc", "subject"), None);
     layer.local_adjustments = Some(recipe.clone());

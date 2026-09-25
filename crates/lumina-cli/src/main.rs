@@ -113,6 +113,7 @@ use thiserror::Error;
 mod cull_cli;
 // MASK-LOCAL-P0/P1.2a: typed local-adjustment flag parsing and mutation.
 mod mask_local;
+mod mask_local_color;
 mod mask_local_curves;
 use mask_local::{mask_copy_mut, require_mask_name, resolve_mask_copy};
 // LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands

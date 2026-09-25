@@ -541,6 +541,116 @@ sichtbar CPU-routen oder verweigern.
   Color (HSL/Point Color/Color Grading), Presence, Detail und Optics bleiben
   deaktiviert.
 
+## P1.2b SOLL — mask-local Color (`MASK-LOCAL-P1.2b`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+
+```text
+global result
+  → local relative WB      (P1.1)
+  → local Basic            (P0, exposure → contrast → shadows → highlights)
+  → local tone curve       (P1.2a)
+  → local HSL              (P1.2b)
+  → local Point Color      (P1.2b)
+  → local Vibrance/Saturation (P1.2b)
+  → local Color Grading    (P1.2b)
+  → fractional mask blend  (P0)
+```
+
+Der lokale Color-Block steht damit an **exakt denselben vier Positionen** wie
+der globale Color-Block im globalen Kernel
+(`HSL → Point Color → Vibrance/Saturation → Color Grading`, siehe
+`lumina-core` `apply_recipe_with_scale_white_balance_and_denoise`). Überlappende
+Layer werden in der **persistierten Listenreihenfolge** ausgewertet; ein
+Reordering ist eine Änderung der Render-Identität, keine äquivalente
+Umordnung. Das globale WB bleibt **absolute-only** mit explizitem
+**Reset to As Shot** — kein stiller Fallback, kein relatives globales Alias,
+kein Auto-WB. Bis zur echten GPU-Parität ist der lokale Color-Stage
+**CPU-first**: GPU-/Stand-in-Routen (VRAM-Present, GPU-Parity-Readback,
+Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 4**
+  gehoben. Neu sind ausschließlich `hsl` (`Option<HslAdjustments>`),
+  `point_color` (`Option<PointColor>`), `color_grading` (`Option<ColorGrading>`)
+  sowie die zwei Skalare `vibrance` und `saturation` (je `-1..=1`, `0` =
+  neutral). Es sind **dieselben** `lumina_sidecar::HslAdjustments`/
+  `HslChannel`/`PointColor`/`PointColorEntry`/`ColorGrading`/
+  `ColorGradingRange`-Typen und **dieselben** Validatoren, die das globale
+  Rezept benutzt (`validate_hsl`/`validate_point_color`/
+  `validate_color_grading`); es gibt keine lokalen Kopien, Umbenennungen oder
+  gelockerten Bereiche. `HslAdjustments`/`PointColor`/`ColorGrading` tragen wie
+  global `version == 1`; eine andere Blockversion ist ein lauter Fehler. Es gibt
+  weiterhin **keine** lokalen Presence-, Detail-, AI-Denoise-, Noise-Reduction-,
+  Sharpening- oder Optics-Felder: diese bleiben deaktiviert, und ein
+  entsprechender `--set-local-adjustment`-Key ist ein lauter
+  „unknown local adjustment"-Fehler statt eines stillen No-Op.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar), v2 (P1.1-WB-Delta) und
+  v3 (P1.2a-Kurve) migrieren **verlustfrei** nach v4 mit `hsl: None`,
+  `point_color: None`, `color_grading: None`, `vibrance: 0.0` und
+  `saturation: 0.0`. Ein v1/v2/v3-Payload, der eines dieser Felder enthält, ist
+  ein **lauter** Fehler — kein stiller Drop und kein Smuggling einer späteren
+  Version; ein explizites `null` oder ein Nicht-Objekt ebenso. Die historischen
+  `adjustment_*`-Extras bleiben auf die vier P0-Keys beschränkt;
+  `adjustment_hsl`/`adjustment_vibrance` bleiben „unknown local adjustment".
+  `None`, eine neutrale HSL-Kombination, eine leere Point-Color-Liste, eine
+  neutrale Grading-Instanz und `vibrance = saturation = 0` sind byte-identisch
+  neutral (und fallen nach einem Reset vollständig weg).
+- **Deterministische Reihenfolge und Quantisierung:** Der lokale Layer wertet
+  WB-Gains, die vier Basic-Stufen, die Kurve und alle vier Color-Stufen
+  vollständig in Fließkomma ab und quantisiert **genau einmal** am Ende auf
+  RGBA8. „Exakte Global-Kernel-Reihenfolge" heißt hier wörtlich: dieselben
+  `HslAdjustments`/`PointColor`/`ColorGrading`-Typen, dieselben Validatoren,
+  dieselben Per-Pixel-Stage-Funktionen (`hsl_stage`, `point_color_stage`,
+  `vibrance_saturation_stage`, `color_grading_stage`) und dieselbe
+  RGB↔HSL-Hilfsfunktion wie der globale Kernel. Die Color-Stufen sind
+  rechnerisch `f32`-Kernfunktionen auf normierten Werten; die float-Kette
+  davor und die Quantisierung danach bleiben `f64`. Bild-Alpha bleibt
+  unberührt. Alpha-0 lässt alle Bytes unverändert, Alpha-1 übernimmt das
+  vollständige lokale Rezept, partielle Alpha bleiben deterministisch fraktional
+  gemischt. Die Kernel-Pfadwahl ist **inhaltsabhängig**: ohne lokalen
+  Color-Block bleiben die P0-, P1.1- und P1.2a-Bytes exakt erhalten, und ohne
+  Kurve sieht der Color-Stage nie einen Kurven-Zwischenwert.
+- **Zustand, Reset und Persistenz:** Expliziter Reset pro HSL-Kanal, pro
+  Point-Color-Eintrag, pro Grading-Range (samt `balance`/`blending`) sowie für
+  den gesamten lokalen Color-Block. History, Reset und Previous der
+  **aktuellen** virtuellen Kopie übernehmen den vollständigen additiven
+  `MaskStateSnapshot` **inklusive des kompletten Color-Blocks**. Der
+  Color-Block gehört in die kanonische `LocalAdjustments::digest` und
+  `mask_layers_digest` und damit in die Render-Identität — sowohl die
+  Persistenzform als auch die Werte. Ein lokaler Layer darf keine globalen
+  Rezeptfelder verändern; die lokale Color-Sektion schreibt nie
+  `EditRecipe::hsl`/`point_color`/`color_grading`/`adjustments["vibrance"|"saturation"]`.
+- **Cross-image Previous bleibt recipe-only (P0/P1.1/P1.2a-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer
+  und keine P0-/P1.1-/P1.2a-/P1.2b-Deltas auf andere Bilder. Nicht-neutraler
+  lokaler Maskenzustand — auf der Quell-Kopie oder auf dem Ziel — wird laut
+  verweigert: die Quelle bricht den gesamten Lauf ab (Exit 1, kein Ziel
+  angefasst), ein betroffenes Ziel schlägt isoliert fehl (Exit 3,
+  Ziel-Bytes unverändert). **Ein lokaler Color-Block allein ist bereits ein
+  Verweigerungsgrund**; es gibt keine „nur P0/P1.1/P1.2a"-Ausnahme. Sync
+  Settings bleibt recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Color-Editor (HSL-Kanalwahl mit
+  Hue/Saturation/Luminance, Vibrance/Saturation, Point-Color-Einträge mit
+  Hinzufügen/Entfernen, Grading-Ranges mit `balance`/`blending`, Reset pro
+  Bereich und für den ganzen lokalen Color-Block) mit **keiner** globalen
+  Rezeptmutation. Die CLI nutzt keine zweite, fast identische Flag-Partei,
+  sondern den bestehenden generischen Kanal:
+  `--set-local-adjustment 'hsl.<channel>.<hue|saturation|luminance>=<n>'`,
+  `--set-local-adjustment 'vibrance=<n>'` / `'saturation=<n>'`,
+  `--set-local-adjustment 'point_color.add=<hue_center,hue_range,hue_shift,sat_shift,lum_shift>'`,
+  `--set-local-adjustment 'color_grading.<range>.<field>=<n>'` und
+  `--reset-local-adjustment hsl[.<channel>] | point_color[.<id>] |
+  color_grading[.<range>|balance|blending] | color`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für HSL, Vibrance/Saturation,
+  Point Color, Color Grading, den vollen Stack (WB + Basic + Kurve + Color),
+  Halbmaske, Überlappungs-Reihenfolge, ungültige Werte, Null/Identität,
+  Legacy-Dokumente (v1/v2/v3) sowie CLI/GUI-Parität und die sichtbare
+  Verweigerung der weiterhin deaktivierten Presence/Detail/AI-Denoise/Optics-
+  Stufen. Presence, Detail und Optics bleiben deaktiviert.
+
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
 Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/

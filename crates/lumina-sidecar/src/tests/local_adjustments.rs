@@ -207,7 +207,7 @@ fn typed_legacy_conflict_unknown_key_and_invalid_range_are_loud() {
         .local_adjustments
         .as_mut()
         .unwrap()
-        .version = 4;
+        .version = LOCAL_ADJUSTMENTS_VERSION + 1;
     assert!(version
         .to_json()
         .unwrap_err()

@@ -1,4 +1,5 @@
 use super::*;
+use crate::color_stages::{hsl_to_rgb, rgb_to_hsl};
 
 #[test]
 fn hsl_violet_and_magenta_have_distinct_centres() {

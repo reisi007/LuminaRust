@@ -9,7 +9,7 @@
 //!   → local relative WB        (P1.1, `local_wb`)
 //!   → local Basic              (P1.1, `local_wb`)
 //!   → local tone curve         (P1.2a, this module)
-//!   → local color              (P1.2b — deliberately not implemented)
+//!   → local color              (P1.2b, `local_color`)
 //!   → fractional mask blend    (P0, `local_adjustments`)
 //! ```
 //!
@@ -62,7 +62,7 @@ pub(super) fn apply_mask_local_wb_basic_and_tone(
 /// documented `luminance > 1e-9` guard. Only the input differs — the global
 /// stage reads rounded `u8` values, the local stage reads the float chain
 /// result.
-fn apply_local_tone(scaled: &[f64; 3], curves: &Curves) -> [f64; 3] {
+pub(super) fn apply_local_tone(scaled: &[f64; 3], curves: &Curves) -> [f64; 3] {
     let original = [scaled[0] / 255.0, scaled[1] / 255.0, scaled[2] / 255.0];
     let luminance = 0.2126 * original[0] + 0.7152 * original[1] + 0.0722 * original[2];
     let master = f64::from(monotone_curve(&curves.master, luminance as f32));

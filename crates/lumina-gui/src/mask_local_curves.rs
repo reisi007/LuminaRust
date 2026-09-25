@@ -33,7 +33,10 @@ fn local_curve_points(adjustments: &LocalAdjustments, channel: &str) -> CurvePoi
 
 impl LuminaApp {
     /// The selected layer's effective local recipe (loud on malformed state).
-    fn selected_local_recipe(&self) -> Result<LocalAdjustments, GuiError> {
+    ///
+    /// Shared with the MASK-LOCAL-P1.2b colour editor so both surfaces read the
+    /// exact same layer through the exact same loud migration view.
+    pub(crate) fn selected_local_recipe(&self) -> Result<LocalAdjustments, GuiError> {
         let Some(layer) = self.selected_mask_layer() else {
             return Err(GuiError::Io(Str::NoMaskSelected.t().to_string()));
         };

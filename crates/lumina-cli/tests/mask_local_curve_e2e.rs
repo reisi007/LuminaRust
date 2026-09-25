@@ -162,9 +162,10 @@ fn local_curve_round_trips_through_the_sidecar_file_and_resets() {
         "set local red curve",
     );
 
-    // The typed object lands in the file with both channels and version 3.
+    // The typed object lands in the file with both channels and the current
+    // schema version.
     let local = stored_local(&input);
-    assert_eq!(local.version, 3);
+    assert_eq!(local.version, lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION);
     let curves = local.curves.as_ref().expect("curve block");
     assert_eq!(curves.version, 1);
     assert_eq!(curves.master.len(), 4);
@@ -257,8 +258,11 @@ fn invalid_local_curve_specs_are_loud_and_change_no_bytes() {
         "curves_master=0,0;1,1",
         // a malformed pair
         "curves.master=0,0;x,1",
-        // a still-disabled local colour control
+        // the P1.2b colour block needs its full key, not a bare scalar
         "hsl=0.5",
+        // and a still-disabled local stage stays a loud unknown key
+        "presence=0.5",
+        "detail=0.5",
     ] {
         let output = set_local(&input, &layer_id, spec);
         assert_eq!(

@@ -1,8 +1,8 @@
 //! Versioned wire decoding for the local mask recipe.
 
 use super::{
-    LocalAdjustments, LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS,
-    LOCAL_ADJUSTMENTS_VERSION,
+    LocalAdjustments, CURVE_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSION,
+    LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
 };
 use crate::Curves;
 use serde::{Deserialize, Deserializer};
@@ -43,6 +43,26 @@ impl<'de> Deserialize<'de> for WireCurves {
     }
 }
 
+/// One raw JSON value of a *versioned block* field.
+///
+/// This is the same "presence is tracked exactly like a delta" rule the
+/// relative-WB fields use: `None` means *the key was absent* and is reachable
+/// only through `#[serde(default)]`, while everything a payload actually wrote
+/// stays a real [`Value`]. So a v1/v2/v3 payload that writes `hsl`, an explicit
+/// `null`, or a non-object is a loud error instead of a silently dropped or
+/// silently coerced colour block.
+#[derive(Default)]
+struct WireBlock(Option<Value>);
+
+impl<'de> Deserialize<'de> for WireBlock {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(|value| WireBlock(Some(value)))
+    }
+}
+
 /// Wire-only shape.  Delta values are kept raw until the version is known, so
 /// a v1 payload cannot smuggle a v2 field and a JSON `null` cannot be silently
 /// treated as the default zero.
@@ -64,6 +84,16 @@ struct LocalAdjustmentsWire {
     tint_delta: WireDelta,
     #[serde(default)]
     curves: WireCurves,
+    #[serde(default)]
+    hsl: WireBlock,
+    #[serde(default)]
+    point_color: WireBlock,
+    #[serde(default)]
+    color_grading: WireBlock,
+    #[serde(default)]
+    vibrance: WireDelta,
+    #[serde(default)]
+    saturation: WireDelta,
 }
 
 impl<'de> Deserialize<'de> for LocalAdjustments {
@@ -89,9 +119,34 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
         }
         // A payload that cannot express a curve must not carry one: dropping
         // it silently would lose an edit the user can see in the file.
-        if wire.version != LOCAL_ADJUSTMENTS_VERSION && wire.curves.0.is_some() {
+        if wire.version < CURVE_LOCAL_ADJUSTMENTS_VERSION && wire.curves.0.is_some() {
             return Err(serde::de::Error::custom(format!(
                 "local_adjustments version {} cannot contain a tone curve",
+                wire.version
+            )));
+        }
+        // The same rule for the P1.2b color block: an older version must not be
+        // able to smuggle a later field, not even a neutral one.
+        for (present, label) in [
+            (wire.hsl.0.is_some(), "a local HSL block"),
+            (wire.point_color.0.is_some(), "a local point color block"),
+            (
+                wire.color_grading.0.is_some(),
+                "a local color grading block",
+            ),
+        ] {
+            if wire.version < LOCAL_ADJUSTMENTS_VERSION && present {
+                return Err(serde::de::Error::custom(format!(
+                    "local_adjustments version {} cannot contain {label}",
+                    wire.version
+                )));
+            }
+        }
+        if wire.version < LOCAL_ADJUSTMENTS_VERSION
+            && (wire.vibrance.0.is_some() || wire.saturation.0.is_some())
+        {
+            return Err(serde::de::Error::custom(format!(
+                "local_adjustments version {} cannot contain local vibrance or saturation",
                 wire.version
             )));
         }
@@ -99,6 +154,12 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
             parse_wire_number(wire.temperature_delta_k.0, "temperature_delta_k")?;
         let tint_delta = parse_wire_number(wire.tint_delta.0, "tint_delta")?;
         let curves = parse_wire_curves(wire.curves.0)?;
+        let hsl = parse_wire_block(wire.hsl.0, "hsl", "local hsl")?;
+        let point_color = parse_wire_block(wire.point_color.0, "point color", "local point color")?;
+        let color_grading =
+            parse_wire_block(wire.color_grading.0, "color grading", "local color grading")?;
+        let vibrance = parse_wire_number(wire.vibrance.0, "vibrance")?;
+        let saturation = parse_wire_number(wire.saturation.0, "saturation")?;
         let value = Self {
             version: LOCAL_ADJUSTMENTS_VERSION,
             exposure: wire.exposure,
@@ -108,6 +169,11 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
             temperature_delta_k,
             tint_delta,
             curves,
+            hsl,
+            point_color,
+            color_grading,
+            vibrance,
+            saturation,
         };
         value
             .validate()
@@ -132,6 +198,24 @@ where
                     "local tone curve must be a valid curve object: {error}"
                 ))
             }),
+    }
+}
+
+/// Decode one optional versioned color block.
+///
+/// Only an absent key yields `None`; everything a payload actually wrote must
+/// be an object of the *global* type, so a local block can never be a looser
+/// dialect of the global one.
+fn parse_wire_block<E, T>(value: Option<Value>, label: &str, context: &str) -> Result<Option<T>, E>
+where
+    E: serde::de::Error,
+    T: serde::de::DeserializeOwned,
+{
+    match value {
+        None => Ok(None),
+        Some(raw) => serde_json::from_value::<T>(raw).map(Some).map_err(|error| {
+            E::custom(format!("{context} must be a valid {label} object: {error}"))
+        }),
     }
 }
 

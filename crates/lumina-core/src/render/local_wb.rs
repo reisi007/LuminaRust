@@ -15,19 +15,25 @@ impl ImageFrame {
     /// Apply one typed mask-local recipe to the current post-global frame.
     ///
     /// The local white balance is a relative delta, not a second absolute
-    /// global WB recipe, and the local tone curve (MASK-LOCAL-P1.2a) is a
-    /// separate block that runs after the local Basic controls — mirroring the
-    /// global kernel, where the curve stage follows the scalar stage.
+    /// global WB recipe, and the local tone curve (MASK-LOCAL-P1.2a) and the
+    /// local colour block (MASK-LOCAL-P1.2b) are separate blocks that run
+    /// after the local Basic controls — mirroring the global kernel, where the
+    /// curve stage follows the scalar stage and the colour stages follow the
+    /// curve.
     ///
     /// The kernel path is selected by *what the layer actually contains*, so
-    /// every previously pinned P0/P1.1 byte is preserved:
+    /// every previously pinned P0/P1.1/P1.2a byte is preserved:
     ///
     /// * no relative delta and no local curve → the established P0
     ///   `apply_recipe` delegation (global fused LUT, byte-identical),
-    /// * a relative delta but no local curve → the P1.1 float chain
-    ///   (WB → Basic, one quantization),
-    /// * a local curve → the P1.2a float chain (WB → Basic → tone curve,
-    ///   one quantization), whether or not a delta is present.
+    /// * a relative delta but no local curve and no local colour → the P1.1
+    ///   float chain (WB → Basic, one quantization),
+    /// * a local curve but no local colour → the P1.2a float chain
+    ///   (WB → Basic → tone curve, one quantization), whether or not a delta
+    ///   is present,
+    /// * any local colour block → the P1.2b float chain
+    ///   (WB → Basic → tone curve → HSL → Point Color → Vibrance/Saturation →
+    ///   Color Grading, one quantization).
     ///
     /// Alpha is never touched.
     pub fn apply_mask_local_recipe(
@@ -41,8 +47,13 @@ impl ImageFrame {
             })?;
         let has_wb_delta = recipe.temperature_delta_k != 0.0 || recipe.tint_delta != 0.0;
         let has_curves = recipe.has_local_curves();
-        if !has_wb_delta && !has_curves {
+        let has_color = recipe.has_local_color();
+        if !has_wb_delta && !has_curves && !has_color {
             return self.apply_recipe(&recipe.as_recipe());
+        }
+        if has_color {
+            super::local_color::apply_mask_local_wb_basic_tone_color(&mut self.pixels, recipe);
+            return Ok(());
         }
         if !has_curves {
             apply_mask_local_wb_and_basic(&mut self.pixels, recipe);

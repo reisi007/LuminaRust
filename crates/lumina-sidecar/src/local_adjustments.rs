@@ -14,9 +14,16 @@ use std::fmt;
 
 use crate::{EditRecipe, SidecarError};
 
+mod color;
+mod color_grading;
 mod curves;
+pub use color::{
+    local_point_color_entry, LOCAL_GRADING_RANGES, LOCAL_HSL_FIELDS, LOCAL_POINT_COLOR_FIELDS,
+};
+pub(crate) mod mask_state;
 mod migration;
 mod wire;
+pub use mask_state::{mask_layers_digest, MaskStateSnapshot};
 use migration::normalize_legacy_layer_extras;
 pub use migration::validate_mask_layer_local_state;
 
@@ -24,36 +31,40 @@ pub use migration::validate_mask_layer_local_state;
 ///
 /// Version 1 is the P0 object (the four scalar local controls only). Version 2
 /// adds the explicitly relative white-balance delta. Version 3
-/// (`MASK-LOCAL-P1.2a`) adds the local tone curve. Loading an older version is
-/// an explicit, lossless migration: the fields that version cannot express stay
-/// absent, and a payload that writes them is rejected instead of dropped.
-pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 3;
+/// (`MASK-LOCAL-P1.2a`) adds the local tone curve, and version 4
+/// (`MASK-LOCAL-P1.2b`) adds the local per-pixel color block. Loading an older
+/// version is an explicit, lossless migration: the fields that version cannot
+/// express stay absent, and a payload that writes them is rejected instead of
+/// dropped.
+pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 4;
 /// The P0-only typed version (four scalar controls).
 pub const LEGACY_LOCAL_ADJUSTMENTS_VERSION: u8 = 1;
 /// The P1.1 typed version (P0 scalars plus the relative white-balance delta).
 pub const RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION: u8 = 2;
+/// The P1.2a typed version (adds the local tone curve).
+pub const CURVE_LOCAL_ADJUSTMENTS_VERSION: u8 = 3;
 /// Every typed version that may be read and migrated forward. A version
 /// outside this list is a loud error, never a best-effort interpretation.
-pub const LEGACY_LOCAL_ADJUSTMENTS_VERSIONS: [u8; 2] = [
+pub const LEGACY_LOCAL_ADJUSTMENTS_VERSIONS: [u8; 3] = [
     LEGACY_LOCAL_ADJUSTMENTS_VERSION,
     RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
+    CURVE_LOCAL_ADJUSTMENTS_VERSION,
 ];
-
-/// Maximum number of layer snapshots retained in one history entry.  The
-/// active-copy validator has its own copy/layer limits; this smaller bound
-/// keeps hostile history payloads from becoming unbounded allocations.
-pub const MAX_MASK_STATE_LAYERS: usize = 4096;
 
 /// Local scalar controls.  The P0 ranges intentionally mirror the global
 /// raster controls, while the kernel order is owned by the core compositor.
-/// The two WB entries are *relative deltas*, never absolute WB values.
-pub const LOCAL_ADJUSTMENT_RANGES: [(&str, f64, f64); 6] = [
+/// The two WB entries are *relative deltas*, never absolute WB values; the two
+/// vibrance/saturation entries are additive local colour scalars, never the
+/// global `adjustments["vibrance"|"saturation"]` keys.
+pub const LOCAL_ADJUSTMENT_RANGES: [(&str, f64, f64); 8] = [
     ("exposure", -10.0, 10.0),
     ("contrast", -1.0, 1.0),
     ("highlights", -1.0, 1.0),
     ("shadows", -1.0, 1.0),
     ("temperature_delta_k", -5000.0, 5000.0),
     ("tint_delta", -1.0, 1.0),
+    ("vibrance", -1.0, 1.0),
+    ("saturation", -1.0, 1.0),
 ];
 
 /// Named range aliases for callers that need to render/document the local WB
@@ -61,12 +72,13 @@ pub const LOCAL_ADJUSTMENT_RANGES: [(&str, f64, f64); 6] = [
 pub const LOCAL_WB_TEMPERATURE_DELTA_RANGE: (f64, f64) = (-5000.0, 5000.0);
 pub const LOCAL_WB_TINT_DELTA_RANGE: (f64, f64) = (-1.0, 1.0);
 
-/// A typed, versioned local recipe.  The P0 scalar fields and the P1.1
-/// relative WB delta are retained; version 3 adds only the local tone curve.
-/// In particular, this type has no absolute `wb_temperature`/`wb_tint` fields:
-/// those names belong to the global recipe and are rejected here rather than
-/// being ambiguous aliases.  There is deliberately no local HSL, point-color,
-/// grading, presence or detail field either — those stay disabled.
+/// A typed, versioned local recipe.  The P0 scalar fields, the P1.1 relative
+/// WB delta and the P1.2a tone curve are retained; version 4 adds the local
+/// per-pixel color block.  In particular, this type has no absolute
+/// `wb_temperature`/`wb_tint` fields: those names belong to the global recipe
+/// and are rejected here rather than being ambiguous aliases.  There is
+/// deliberately no local presence, detail, AI-denoise, noise-reduction,
+/// sharpening or optics field either — those stay disabled.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LocalAdjustments {
     pub version: u8,
@@ -83,6 +95,24 @@ pub struct LocalAdjustments {
     /// digest purposes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curves: Option<Curves>,
+    /// MASK-LOCAL-P1.2b local HSL block, reusing the global `HslAdjustments`
+    /// type and the shared band rules. `None` and an all-zero block are both
+    /// pixel-neutral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hsl: Option<crate::HslAdjustments>,
+    /// MASK-LOCAL-P1.2b local Point Color block, reusing the global
+    /// `PointColor` type, its stable entry ids and its 8-entry limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point_color: Option<crate::PointColor>,
+    /// MASK-LOCAL-P1.2b local Color Grading block, reusing the global
+    /// `ColorGrading` type including `balance` and `blending`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_grading: Option<crate::ColorGrading>,
+    /// MASK-LOCAL-P1.2b additive local vibrance (`-1..=1`, `0` = neutral).
+    /// This is a local scalar, never the global `adjustments["vibrance"]` key.
+    pub vibrance: f64,
+    /// MASK-LOCAL-P1.2b additive local saturation (`-1..=1`, `0` = neutral).
+    pub saturation: f64,
 }
 
 /// The task-facing name for the typed local recipe.  Keep the P0 name as an
@@ -100,25 +130,32 @@ impl Default for LocalAdjustments {
             temperature_delta_k: 0.0,
             tint_delta: 0.0,
             curves: None,
+            hsl: None,
+            point_color: None,
+            color_grading: None,
+            vibrance: 0.0,
+            saturation: 0.0,
         }
     }
 }
 
 /// Stable human-readable representation used by CLI status output.
 ///
-/// The documented grammar is `v3 exposure=<number> contrast=<number>
+/// The documented grammar is `v4 exposure=<number> contrast=<number>
 /// highlights=<number> shadows=<number> temperature_delta_k=<number>
-/// tint_delta=<number> curves=<summary>`, always in that field order. The
-/// curve summary is `curves=none` for a neutral block, otherwise
-/// `curves=<channel>:<point-count>[,...]` in the canonical
-/// master/red/green/blue order, listing only stored channels. It is a
-/// presentation contract independent of the derived `Debug` layout; JSON
-/// consumers should continue to use the structured object instead.
+/// tint_delta=<number> curves=<summary> hsl=<summary> point_color=<summary>
+/// color_grading=<summary> vibrance=<number> saturation=<number>`, always in
+/// that field order. The `curves` summary is `curves=none` for a neutral block,
+/// otherwise `curves=<channel>:<point-count>[,...]` in the canonical
+/// master/red/green/blue order, listing only stored channels. The color
+/// summaries use the same `none` convention. It is a presentation contract
+/// independent of the derived `Debug` layout; JSON consumers should continue to
+/// use the structured object instead.
 impl fmt::Display for LocalAdjustments {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={} curves={}",
+            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={} curves={} hsl={} point_color={} color_grading={} vibrance={} saturation={}",
             self.version,
             self.exposure,
             self.contrast,
@@ -127,6 +164,11 @@ impl fmt::Display for LocalAdjustments {
             self.temperature_delta_k,
             self.tint_delta,
             self.curve_summary(),
+            self.hsl_summary(),
+            self.point_color_summary(),
+            self.color_grading_summary(),
+            self.vibrance,
+            self.saturation,
         )
     }
 }
@@ -152,12 +194,43 @@ impl LocalAdjustments {
         }
         // Mirrors the wire decoder exactly: a version that cannot express a
         // curve must not carry one, not even an identity one, so a
-        // hand-constructed object can never disagree with a loaded one.
-        if self.version != LOCAL_ADJUSTMENTS_VERSION && self.curves.is_some() {
+        // hand-constructed object can never disagree with a loaded one. The
+        // boundary is "older than the version that introduced the curve", so
+        // the version that *does* own the curve still round-trips.
+        if self.version < CURVE_LOCAL_ADJUSTMENTS_VERSION && self.curves.is_some() {
             return Err(SidecarError::Invalid(format!(
                 "local_adjustments version {} cannot contain a tone curve",
                 self.version
             )));
+        }
+        // Same rule for the P1.2b color block: a v1/v2/v3 object must not carry
+        // it, not even a neutral one, so no surface can smuggle a later field
+        // into an older version.
+        if self.version < LOCAL_ADJUSTMENTS_VERSION {
+            if self.hsl.is_some() {
+                return Err(SidecarError::Invalid(format!(
+                    "local_adjustments version {} cannot contain a local HSL block",
+                    self.version
+                )));
+            }
+            if self.point_color.is_some() {
+                return Err(SidecarError::Invalid(format!(
+                    "local_adjustments version {} cannot contain a local point color block",
+                    self.version
+                )));
+            }
+            if self.color_grading.is_some() {
+                return Err(SidecarError::Invalid(format!(
+                    "local_adjustments version {} cannot contain a local color grading block",
+                    self.version
+                )));
+            }
+            if self.vibrance != 0.0 || self.saturation != 0.0 {
+                return Err(SidecarError::Invalid(format!(
+                    "local_adjustments version {} cannot contain local vibrance or saturation",
+                    self.version
+                )));
+            }
         }
         for (name, value) in [
             ("exposure", self.exposure),
@@ -166,6 +239,8 @@ impl LocalAdjustments {
             ("shadows", self.shadows),
             ("temperature_delta_k", self.temperature_delta_k),
             ("tint_delta", self.tint_delta),
+            ("vibrance", self.vibrance),
+            ("saturation", self.saturation),
         ] {
             let (_, minimum, maximum) = LOCAL_ADJUSTMENT_RANGES
                 .iter()
@@ -180,6 +255,21 @@ impl LocalAdjustments {
         if let Some(curves) = &self.curves {
             crate::validate_curves(curves)
                 .map_err(|error| SidecarError::Invalid(format!("local tone curve: {error}")))?;
+        }
+        // The color blocks are validated by exactly the validators the global
+        // recipe uses, so a local block can never accept a value the global
+        // pipeline would reject (or the other way round).
+        if let Some(hsl) = &self.hsl {
+            crate::validate_hsl(hsl)
+                .map_err(|error| SidecarError::Invalid(format!("local hsl: {error}")))?;
+        }
+        if let Some(point_color) = &self.point_color {
+            crate::validate_point_color(point_color)
+                .map_err(|error| SidecarError::Invalid(format!("local point color: {error}")))?;
+        }
+        if let Some(grading) = &self.color_grading {
+            crate::validate_color_grading(grading)
+                .map_err(|error| SidecarError::Invalid(format!("local color grading: {error}")))?;
         }
         Ok(())
     }
@@ -199,7 +289,10 @@ impl LocalAdjustments {
             && self.shadows == 0.0
             && self.temperature_delta_k == 0.0
             && self.tint_delta == 0.0
+            && self.vibrance == 0.0
+            && self.saturation == 0.0
             && self.curves.as_ref().is_none_or(Curves::is_identity)
+            && !self.has_local_color()
     }
 
     /// Return one scalar value by its stable local key.
@@ -212,6 +305,8 @@ impl LocalAdjustments {
             "shadows" => Some(self.shadows),
             "temperature_delta_k" => Some(self.temperature_delta_k),
             "tint_delta" => Some(self.tint_delta),
+            "vibrance" => Some(self.vibrance),
+            "saturation" => Some(self.saturation),
             _ => None,
         }
     }
@@ -236,6 +331,8 @@ impl LocalAdjustments {
             "shadows" => self.shadows = value,
             "temperature_delta_k" => self.temperature_delta_k = value,
             "tint_delta" => self.tint_delta = value,
+            "vibrance" => self.vibrance = value,
+            "saturation" => self.saturation = value,
             _ => unreachable!("validated local adjustment key"),
         }
         Ok(())
@@ -244,7 +341,10 @@ impl LocalAdjustments {
     /// Build a minimal global-recipe-shaped object for the shared core kernel.
     /// The core compositor uses this rather than reimplementing exposure,
     /// contrast, shadows or highlights arithmetic.  Relative WB is deliberately
-    /// absent: it is applied by the core's post-global local WB pass.
+    /// absent: it is applied by the core's post-global local WB pass. The local
+    /// curve and color blocks are absent for the same reason — they are applied
+    /// by the core's own float chain, and putting them into the *global* recipe
+    /// shape would be exactly the global mutation this type must never cause.
     #[must_use]
     pub fn as_recipe(&self) -> EditRecipe {
         let mut adjustments = BTreeMap::new();
@@ -283,114 +383,6 @@ impl LocalAdjustments {
     pub fn digest(&self) -> String {
         let bytes = serde_json::to_vec(self).expect("LocalAdjustments is serializable");
         format!("blake3:{}", blake3::hash(&bytes).to_hex())
-    }
-}
-
-/// Canonical digest for the complete ordered mask-layer state.  The vector is
-/// intentionally serialized in persisted order: reordering overlapping layers
-/// is an edit, not an equivalent state.
-#[must_use]
-pub fn mask_layers_digest(layers: &[MaskLayer]) -> String {
-    let value = serde_json::to_value(layers).expect("MaskLayer is serializable");
-    let bytes = serde_json::to_vec(&value).expect("canonical mask state is serializable");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lumina-mask-state-v2\0");
-    hasher.update(&(bytes.len() as u64).to_le_bytes());
-    hasher.update(&bytes);
-    format!("blake3:{}", hasher.finalize().to_hex())
-}
-
-/// A complete additive mask-state snapshot for a history entry.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct MaskStateSnapshot {
-    pub version: u8,
-    pub layers: Vec<MaskLayer>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MaskStateSnapshotWire {
-    version: u8,
-    layers: Vec<MaskLayer>,
-}
-
-impl<'de> Deserialize<'de> for MaskStateSnapshot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = MaskStateSnapshotWire::deserialize(deserializer)?;
-        if wire.version != LOCAL_ADJUSTMENTS_VERSION
-            && !LEGACY_LOCAL_ADJUSTMENTS_VERSIONS.contains(&wire.version)
-        {
-            return Err(serde::de::Error::custom(format!(
-                "unsupported mask state snapshot version {} (expected one of {:?} or {LOCAL_ADJUSTMENTS_VERSION})",
-                wire.version, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS
-            )));
-        }
-        // A legacy snapshot is normalized at the input boundary.  Its layers
-        // are already migrated by MaskLayer's deserializer, and the fields an
-        // older snapshot version cannot express stay absent.
-        let snapshot = Self {
-            version: LOCAL_ADJUSTMENTS_VERSION,
-            layers: wire.layers,
-        };
-        snapshot
-            .validate()
-            .map_err(|error| serde::de::Error::custom(error.to_string()))?;
-        Ok(snapshot)
-    }
-}
-
-impl MaskStateSnapshot {
-    #[must_use]
-    pub fn new(layers: Vec<MaskLayer>) -> Self {
-        Self {
-            version: LOCAL_ADJUSTMENTS_VERSION,
-            layers,
-        }
-    }
-
-    /// Canonical digest for a complete history/Previous snapshot. It includes
-    /// the snapshot version and persisted layer order, including the new WB
-    /// delta fields.
-    #[must_use]
-    pub fn digest(&self) -> String {
-        let bytes = serde_json::to_vec(self).expect("MaskStateSnapshot is serializable");
-        format!("blake3:{}", blake3::hash(&bytes).to_hex())
-    }
-
-    pub fn validate(&self) -> Result<(), SidecarError> {
-        if self.version != LOCAL_ADJUSTMENTS_VERSION
-            && !LEGACY_LOCAL_ADJUSTMENTS_VERSIONS.contains(&self.version)
-        {
-            return Err(SidecarError::Invalid(format!(
-                "unsupported mask state snapshot version {}",
-                self.version
-            )));
-        }
-        if self.layers.len() > MAX_MASK_STATE_LAYERS {
-            return Err(SidecarError::Invalid(format!(
-                "mask state snapshot has {} layers (limit {MAX_MASK_STATE_LAYERS})",
-                self.layers.len()
-            )));
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        for layer in &self.layers {
-            if layer.id.is_empty() {
-                return Err(SidecarError::Invalid(
-                    "mask state snapshot contains an empty layer id".into(),
-                ));
-            }
-            if !ids.insert(&layer.id) {
-                return Err(SidecarError::Invalid(format!(
-                    "mask state snapshot contains duplicate layer id `{}`",
-                    layer.id
-                )));
-            }
-            validate_mask_layer_local_state(layer)?;
-        }
-        Ok(())
     }
 }
 

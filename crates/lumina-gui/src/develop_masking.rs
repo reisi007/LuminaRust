@@ -320,6 +320,11 @@ impl LuminaApp {
                 // `EditRecipe::curves`.
                 ui.separator();
                 self.draw_mask_local_tone_curve(ui);
+                // MASK-LOCAL-P1.2b: the mask-local colour block. Same
+                // transaction, save and CPU-first routing as every other local
+                // adjustment, and never a global recipe mutation.
+                ui.separator();
+                self.draw_mask_local_color(ui);
             }
         });
         if section_response.header_response.clicked() {

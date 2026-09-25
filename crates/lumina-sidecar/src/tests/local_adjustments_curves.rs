@@ -52,7 +52,14 @@ fn local_curve_round_trips_through_the_sidecar_file() {
     assert_eq!(loaded.to_json().unwrap(), json);
     // The stable CLI status line names the stored channels.
     assert_eq!(local.curve_summary(), "master:3,green:3");
-    assert!(local.to_string().ends_with("curves=master:3,green:3"));
+    // The P1.2b colour fields follow the curve summary in the status line.
+    assert!(
+        local
+            .to_string()
+            .contains("curves=master:3,green:3 hsl=none point_color=none color_grading=none"),
+        "{}",
+        local
+    );
 }
 
 /// A v1 and a v2 payload migrate forward without loss; the curve namespace of
@@ -339,29 +346,20 @@ fn legacy_extras_still_accept_only_the_four_p0_keys() {
     assert!(local.curves.is_none());
 }
 
-/// The local HSL, point-color, grading, presence and detail controls stay
-/// disabled: the typed object has no such field, and the key namespace
-/// rejects them loudly instead of accepting a silent no-op.
+/// The local tone curve itself is still addressed only through the typed
+/// `curves` block: a curve is not a scalar key, and the P1.2b colour controls
+/// are not curve controls. The presence/detail/optics stages stay disabled.
 #[test]
-fn disabled_local_colour_and_detail_controls_stay_rejected() {
+fn curves_are_not_a_scalar_key_and_detail_stages_stay_rejected() {
     let mut local = LocalAdjustments::default();
-    for key in [
-        "hsl",
-        "point_color",
-        "color_grading",
-        "presence",
-        "detail",
-        "noise_reduction",
-        "sharpening",
-        "vibrance",
-        "saturation",
-    ] {
+    for key in ["curves", "curve_points", "presence", "detail", "optics"] {
         assert!(
             local.set_value(key, 0.1).is_err(),
             "{key} must not be a local adjustment key"
         );
     }
-    // And the serialized object has exactly the documented field set.
+    // A default object has no optional block at all: neither the curve nor the
+    // P1.2b colour areas are written.
     let json = serde_json::to_value(&local).unwrap();
     let mut keys: Vec<&String> = json.as_object().unwrap().keys().collect();
     keys.sort();
@@ -371,10 +369,12 @@ fn disabled_local_colour_and_detail_controls_stay_rejected() {
             "contrast",
             "exposure",
             "highlights",
+            "saturation",
             "shadows",
             "temperature_delta_k",
             "tint_delta",
             "version",
+            "vibrance",
         ]
     );
 }

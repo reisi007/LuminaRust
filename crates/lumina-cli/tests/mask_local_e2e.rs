@@ -214,7 +214,7 @@ fn local_history_snapshot_restores_complete_state_and_reset_preserves_prior_snap
     let listed = mask_list(&input, false);
     assert_success(&listed, "list restored state");
     assert!(String::from_utf8_lossy(&listed.stdout)
-        .contains("local=v3 exposure=0.5 contrast=0.25 highlights=0 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none"));
+        .contains("local=v4 exposure=0.5 contrast=0.25 highlights=0 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none hsl=none point_color=none color_grading=none vibrance=0 saturation=0"));
 
     let reset = reset_local(&input, &layer_id, "contrast");
     assert_success(&reset, "reset local adjustment");
@@ -280,7 +280,7 @@ fn local_status_text_is_stable_while_json_stays_structured() {
     let text_output = mask_list(&input, false);
     assert_success(&text_output, "list local adjustments as text");
     let stdout = String::from_utf8_lossy(&text_output.stdout);
-    assert!(stdout.contains("local=v3 exposure=1.25 contrast=0 highlights=-0.2 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none"));
+    assert!(stdout.contains("local=v4 exposure=1.25 contrast=0 highlights=-0.2 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none hsl=none point_color=none color_grading=none vibrance=0 saturation=0"));
     assert!(!stdout.contains("LocalAdjustments {"));
     assert!(!stdout.contains("version:"));
 
@@ -289,15 +289,24 @@ fn local_status_text_is_stable_while_json_stays_structured() {
     let document: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
     let local = &document["copies"][0]["layers"][0]["local_adjustments"];
     assert!(local.is_object());
-    assert_eq!(local["version"], 3);
+    assert_eq!(
+        local["version"].as_u64(),
+        Some(u64::from(lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION))
+    );
     assert_eq!(local["temperature_delta_k"], 0.0);
     assert_eq!(local["tint_delta"], 0.0);
     assert_eq!(local["exposure"], 1.25);
     assert_eq!(local["contrast"], 0.0);
     assert_eq!(local["highlights"], -0.2);
     assert_eq!(local["shadows"], 0.0);
-    // MASK-LOCAL-P1.2a: an unedited local recipe stores no curve block at all.
+    // MASK-LOCAL-P1.2a/P1.2b: an unedited local recipe stores no curve and no
+    // colour block at all — the scalars are still there and neutral.
     assert!(local.get("curves").is_none(), "{local}");
+    assert!(local.get("hsl").is_none(), "{local}");
+    assert!(local.get("point_color").is_none(), "{local}");
+    assert!(local.get("color_grading").is_none(), "{local}");
+    assert_eq!(local["vibrance"], 0.0);
+    assert_eq!(local["saturation"], 0.0);
 }
 
 #[test]

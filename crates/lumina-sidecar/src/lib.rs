@@ -77,13 +77,27 @@ pub use curves::{
     curve_points_are_identity, identity_curve_points, validate_curves, CURVE_CHANNELS,
 };
 
-// MASK-LOCAL-P0/P1.1/P1.2a: typed local mask recipes and the loud legacy migration.
+// The one set of range validators for the per-pixel color blocks, reused by
+// the global recipe and the typed mask-local recipe (P1.2b).
+mod color_blocks;
+pub use color_blocks::{
+    color_grading_is_neutral, color_grading_is_unset, color_grading_range_mut,
+    color_grading_ranges, hsl_band, hsl_band_mut, hsl_band_slot_mut, hsl_is_neutral,
+    point_color_is_neutral, validate_color_grading, validate_hsl, validate_point_color, HSL_BANDS,
+    MAX_POINT_COLOR_ENTRIES,
+};
+
+// MASK-LOCAL-P0/P1.1/P1.2a/P1.2b: typed local mask recipes and the loud legacy
+// migration.
 mod local_adjustments;
+pub use local_adjustments::mask_state::MAX_MASK_STATE_LAYERS;
 pub use local_adjustments::{
-    mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe,
-    MaskStateSnapshot, LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS,
-    LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENT_RANGES, LOCAL_WB_TEMPERATURE_DELTA_RANGE,
-    LOCAL_WB_TINT_DELTA_RANGE, MAX_MASK_STATE_LAYERS, RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
+    local_point_color_entry, mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments,
+    MaskLocalRecipe, MaskStateSnapshot, CURVE_LOCAL_ADJUSTMENTS_VERSION,
+    LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
+    LOCAL_ADJUSTMENT_RANGES, LOCAL_GRADING_RANGES, LOCAL_HSL_FIELDS, LOCAL_POINT_COLOR_FIELDS,
+    LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
+    RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
 };
 
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
@@ -1620,7 +1634,7 @@ impl ColorGradingRange {
 }
 
 fn default_color_grading_blending() -> f32 {
-    0.5
+    color_blocks::default_color_grading_blending()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4526,85 +4540,13 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         validate_curves(c)?;
     }
     if let Some(h) = &a.hsl {
-        if h.version != 1 {
-            return invalid("unsupported hsl version");
-        }
-        for (name, c) in [
-            ("red", h.red),
-            ("orange", h.orange),
-            ("yellow", h.yellow),
-            ("green", h.green),
-            ("cyan", h.cyan),
-            ("blue", h.blue),
-            ("violet", h.violet),
-            ("magenta", h.magenta),
-        ] {
-            let Some(c) = c else { continue };
-            for (field, v) in [
-                ("hue", c.hue),
-                ("saturation", c.saturation),
-                ("luminance", c.luminance),
-            ] {
-                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
-                    return invalid(format!("invalid hsl {name}.{field}"));
-                }
-            }
-        }
+        validate_hsl(h)?;
     }
     if let Some(c) = &a.color_grading {
-        if c.version != 1 {
-            return invalid("unsupported color_grading version");
-        }
-        if !c.balance.is_finite() || !(-1.0..=1.0).contains(&c.balance) {
-            return invalid("invalid color_grading balance");
-        }
-        if !c.blending.is_finite() || !(0.0..=1.0).contains(&c.blending) {
-            return invalid("invalid color_grading blending");
-        }
-        for (name, range) in [
-            ("shadows", c.shadows),
-            ("midtones", c.midtones),
-            ("highlights", c.highlights),
-        ] {
-            if !range.hue_degrees.is_finite() || !(0.0..=360.0).contains(&range.hue_degrees) {
-                return invalid(format!("invalid color_grading {name}.hue_degrees"));
-            }
-            if !range.saturation.is_finite() || !(0.0..=1.0).contains(&range.saturation) {
-                return invalid(format!("invalid color_grading {name}.saturation"));
-            }
-            if !range.luminance.is_finite() || !(-1.0..=1.0).contains(&range.luminance) {
-                return invalid(format!("invalid color_grading {name}.luminance"));
-            }
-        }
+        validate_color_grading(c)?;
     }
     if let Some(p) = &a.point_color {
-        if p.version != 1 {
-            return invalid("unsupported point_color version");
-        }
-        if p.entries.len() > 8 {
-            return invalid("too many point_color entries (max 8)");
-        }
-        let mut seen = std::collections::HashSet::new();
-        for entry in &p.entries {
-            if entry.id.is_empty() || !seen.insert(entry.id.clone()) {
-                return invalid("invalid point_color entry id (empty or duplicate)");
-            }
-            if !entry.hue_center.is_finite() || !(0.0..=360.0).contains(&entry.hue_center) {
-                return invalid(format!("invalid point_color {} hue_center", entry.id));
-            }
-            if !entry.hue_range.is_finite() || !(0.0..=180.0).contains(&entry.hue_range) {
-                return invalid(format!("invalid point_color {} hue_range", entry.id));
-            }
-            for (field, v) in [
-                ("hue_shift", entry.hue_shift),
-                ("saturation_shift", entry.saturation_shift),
-                ("luminance_shift", entry.luminance_shift),
-            ] {
-                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
-                    return invalid(format!("invalid point_color {} {field}", entry.id));
-                }
-            }
-        }
+        validate_point_color(p)?;
     }
     if let Some(p) = &a.presence {
         if p.version != 1 {
