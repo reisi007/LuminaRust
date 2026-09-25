@@ -36,6 +36,7 @@ impl LuminaApp {
         with_masks: bool,
         roi: Option<[u32; 4]>,
         generative: GenerativeArtifacts,
+        source_actions: ResolvedSourceActions,
     ) -> Result<(), GuiError> {
         // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
         // the full frame is never processed for a magnified view.
@@ -58,6 +59,10 @@ impl LuminaApp {
         // The source hash is memoized per loaded file (PERF-GUI-1): hashing the
         // whole RAW file used to run on EVERY preview tick.
         let source_hash = self.resolved_source_hash();
+        // GUI-SRCACC-1: these are the checksums of artifacts actually resolved
+        // and applied below, not the recipe's reference strings. The recipe
+        // hash covers references; this list covers runtime bundle contents.
+        let source_action_hashes = source_actions.artifact_checksums();
         let decode_version = if self.source_is_raw {
             lumina_raw::libraw_decode_version()
         } else {
@@ -101,6 +106,7 @@ impl LuminaApp {
                 format: "rgba8".into(),
             },
         )
+        .with_source_action_hashes(source_action_hashes.clone())
         .with_base_roi(effective_roi)
         .stage_digest(CacheStage::Base);
 
@@ -130,7 +136,8 @@ impl LuminaApp {
                     Some(f) => f,
                     None => source,
                 };
-                let prepared = prepare_source_base(cropped_source, &[], &mut work)?;
+                let prepared =
+                    prepare_source_base(cropped_source, source_actions.artifacts(), &mut work)?;
                 // Cache ONLY entries whose bytes match their digest identity
                 // exactly. A (defensively handled) failed ROI crop fell back
                 // to the full frame; caching it under the requested window's
@@ -253,40 +260,34 @@ impl LuminaApp {
                         format: "rgba8".into(),
                     },
                 )
+                .with_source_action_hashes(source_action_hashes.clone())
                 .stage_digest(CacheStage::Base),
             )
         } else {
             None
         };
-        // REVIEW-CORE-DIGEST-WIRING: this preview key deliberately stays on the
-        // neutral `RenderKey::new` defaults instead of attaching the `with_*`
-        // builders, because neither builder input exists at this site:
-        // - No `with_export_options`: the render target is a plain in-memory
-        //   RGBA8 frame (`format: "rgba8"`) displayed as a texture; it is never
-        //   encoded here, so there are no encoder parameters to identify. The
-        //   core digest distinguishes that state explicitly (`None` differs
-        //   from every attached `Some(_)`), and the real export path
-        //   (`export_to`) re-renders from the original via `export_image`
-        //   without consulting any cache keyed by this preview key.
-        // - No `with_source_action_hashes`: the `RenderContext` above passes
-        //   `source_actions: &[]`, so no repair-region pixels were applied and
-        //   the empty hash list truthfully describes exactly these pixels.
-        //   Recipe-referenced artifact checksums must not be mixed in here —
-        //   that would claim repair content this frame does not contain.
-        self.render_key = Some(RenderKey::new(
-            source_hash,
-            decode_version,
-            "raster-mvp-1",
-            copy_id,
-            render_recipe,
-            mask_hashes,
-            OutputSpec {
-                profile: "sRGB".into(),
-                width: preview.width,
-                height: preview.height,
-                format: "rgba8".into(),
-            },
-        ));
+        // REVIEW-CORE-DIGEST-WIRING: this is a plain in-memory RGBA8 preview,
+        // so no export encoder options are attached. Resolved source-action
+        // checksums are attached because `prepare_source_base` above actually
+        // composited those artifacts into this frame; the downstream context is
+        // source-action-empty to avoid applying the same stage twice.
+        self.render_key = Some(
+            RenderKey::new(
+                source_hash,
+                decode_version,
+                "raster-mvp-1",
+                copy_id,
+                render_recipe,
+                mask_hashes,
+                OutputSpec {
+                    profile: "sRGB".into(),
+                    width: preview.width,
+                    height: preview.height,
+                    format: "rgba8".into(),
+                },
+            )
+            .with_source_action_hashes(source_action_hashes.clone()),
+        );
         // GUI-HISTOGRAM-FULL-1 (F-100): one shared pass yields both the tone
         // panel values and the 256-bin histogram feeding the Painter curve.
         // The analysis input is ALWAYS the un-cropped full frame — never the
@@ -339,7 +340,11 @@ impl LuminaApp {
                             hit
                         }
                         None => {
-                            let prepared = prepare_source_base(source, &[], &mut analysis_work)?;
+                            let prepared = prepare_source_base(
+                                source,
+                                source_actions.artifacts(),
+                                &mut analysis_work,
+                            )?;
                             self.base_stage_cache
                                 .insert(full_digest.clone(), prepared.clone());
                             analysis_work.base_cache_hit = false;

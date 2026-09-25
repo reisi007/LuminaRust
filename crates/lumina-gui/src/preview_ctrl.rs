@@ -27,6 +27,10 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 
+#[cfg(test)]
+#[path = "preview_ctrl_tests.rs"]
+mod preview_ctrl_tests;
+
 /// Maximum neighbor decode/preview attempts before the cell keeps a *visible*
 /// failure state instead of retrying forever (mirrors
 /// [`crate::filmstrip::THUMBNAIL_MAX_ATTEMPTS`]).
@@ -34,11 +38,9 @@ pub const PREVIEW_MAX_ATTEMPTS: u32 = 3;
 
 /// A request to prepare one neighbor's screen/1:1 preview.
 ///
-/// The field set is deliberately lightweight so the main thread enqueues jobs
-/// without any file I/O: `probe_id` is a stable source identity (canonical path)
-/// used for dedup/in-flight tracking; the **worker** computes the authoritative
-/// `PreviewKey` + digest by reading the source, so a changed source/render is
-/// reflected in a new digest (stale detection) without a main-thread read.
+/// Planning stays lightweight. `probe_id` is a stable source identity (canonical
+/// path) used for dedup; the controller captures the exact input identity when
+/// enqueueing, and the worker independently returns the identity it prepared.
 pub struct PreviewJob {
     /// Stable source identity (canonical absolute path). Never a bare filename.
     pub probe_id: String,
@@ -57,38 +59,6 @@ pub struct PreviewJob {
     pub denoise_policy: DenoisePolicy,
 }
 
-/// Cheap staleness fingerprint of a source + its sidecar, captured by the
-/// worker when it prepares a preview and re-validated on the UI thread at
-/// enqueue / neighbor-preview time (A3).
-///
-/// This follows the pipeline's fast-fingerprint rule: the cheap mtime/len pair
-/// is the UI-side staleness gate; the **authoritative** validation for every
-/// disk/RAM hit remains the full content/recipe key computed by the worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PreviewStamp {
-    pub source_mtime: (i64, u32),
-    pub source_len: u64,
-    pub sidecar_mtime: (i64, u32),
-}
-
-/// Capture the cheap fingerprint of `path` (mtime seconds/nanos + — for the
-/// source — byte length). A missing/unreadable file yields the default stamp,
-/// which never equals a previously recorded live stamp, so the entry staleness
-/// check re-renders instead of serving a frame of a vanished source.
-/// `pub(crate)`: the background worker (`preview_jobs`) captures the same stamp.
-pub(crate) fn file_stamp(path: &std::path::Path, with_len: bool) -> ((i64, u32), u64) {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return ((-1, 0), 0);
-    };
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| (d.as_secs() as i64, d.subsec_nanos()))
-        .unwrap_or((-1, 0));
-    (mtime, if with_len { meta.len() } else { 0 })
-}
-
 /// What a neighbor worker produced.
 pub enum PreviewOutcome {
     /// A decoded RGBA8 frame (already rendered + downscaled to target).
@@ -100,30 +70,57 @@ pub enum PreviewOutcome {
 /// Result travelling back to the UI thread.
 pub struct PreviewResult {
     /// The authoritative digest (from the worker's key), or empty on failure.
-    pub digest: String,
-    pub probe_id: String,
-    pub name: String,
-    /// Cheap source/sidecar fingerprint at prepare time (A3 staleness gate).
-    pub stamp: PreviewStamp,
-    pub outcome: PreviewOutcome,
+    pub(crate) digest: String,
+    pub(crate) probe_id: String,
+    pub(crate) name: String,
+    pub(crate) source: PathBuf,
+    pub(crate) virtual_copy: String,
+    /// Identity captured before the worker was queued.
+    pub(crate) enqueued_identity: crate::source_actions::NeighborInputIdentity,
+    /// Identity derived from the exact source/sidecar/zdata inputs the worker
+    /// used. `None` on failure, where no frame can be inserted.
+    pub(crate) prepared_identity: Option<crate::source_actions::NeighborInputIdentity>,
+    pub(crate) outcome: PreviewOutcome,
+}
+
+struct QueuedPreviewJob {
+    job: PreviewJob,
+    enqueued_identity: crate::source_actions::NeighborInputIdentity,
 }
 
 /// Shared priority-ordered job queue backed by a condvar so workers block when
 /// idle and drain by priority (lowest `priority` first) instead of FIFO.
 #[derive(Default)]
 pub struct PreviewQueue {
-    jobs: Mutex<Vec<PreviewJob>>,
+    jobs: Mutex<Vec<QueuedPreviewJob>>,
     notify: Condvar,
 }
 
 impl PreviewQueue {
-    pub fn push(&self, job: PreviewJob) {
-        self.jobs.lock().expect("preview queue poisoned").push(job);
+    #[cfg(test)]
+    fn push(&self, job: PreviewJob) {
+        let identity =
+            crate::source_actions::NeighborInputIdentity::capture(&job.source, &job.virtual_copy);
+        self.push_with_identity(job, identity);
+    }
+
+    fn push_with_identity(
+        &self,
+        job: PreviewJob,
+        enqueued_identity: crate::source_actions::NeighborInputIdentity,
+    ) {
+        self.jobs
+            .lock()
+            .expect("preview queue poisoned")
+            .push(QueuedPreviewJob {
+                job,
+                enqueued_identity,
+            });
         self.notify.notify_one();
     }
 
     /// Block until a job is available, then return the highest-priority one.
-    fn pop(&self) -> PreviewJob {
+    fn pop(&self) -> QueuedPreviewJob {
         let mut jobs = self.jobs.lock().expect("preview queue poisoned");
         loop {
             if jobs.is_empty() {
@@ -133,7 +130,7 @@ impl PreviewQueue {
             let idx = jobs
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, job)| job.priority)
+                .min_by_key(|(_, queued)| queued.job.priority)
                 .map(|(idx, _)| idx)
                 .unwrap();
             return jobs.swap_remove(idx);
@@ -185,16 +182,15 @@ pub struct PreviewController {
     failed: BTreeMap<String, String>,
     /// Pending failures not yet drained for logging (keeps `failed` persistent for the visible badge, A2).
     pending_failed: BTreeMap<String, String>,
-    in_flight: BTreeMap<String, ()>,
+    in_flight: BTreeMap<String, crate::source_actions::NeighborInputIdentity>,
     /// probe_id -> the last successfully produced digest for that probe. This
     /// is what [`Self::needs_job`] and [`Self::neighbor_preview`] consult; it is
     /// the *availability/veraltung* anchor (A1/A3/A4) — there is no probe-keyed
     /// "permanently done" set.
     probe_digests: BTreeMap<String, String>,
-    /// probe_id -> the source/sidecar fingerprint captured when the digest above
-    /// was produced. The UI thread compares it cheaply (mtime/len) before
-    /// serving an entry (A3: source/recipe change → stale → re-render).
-    probe_stamps: BTreeMap<String, PreviewStamp>,
+    /// probe_id -> exact source/document/artifact identity captured when the
+    /// latest accepted result (success or visible failure) was recorded.
+    probe_identities: BTreeMap<String, crate::source_actions::NeighborInputIdentity>,
     /// The preview kind last announced via [`Self::plan_kind`] (A6).
     planned_kind: Option<PreviewKind>,
     active_probe_id: Option<String>,
@@ -207,6 +203,23 @@ pub struct PreviewController {
 }
 
 impl PreviewController {
+    fn with_queue(queue: Arc<PreviewQueue>, result_rx: mpsc::Receiver<PreviewResult>) -> Self {
+        Self {
+            lru: LruPreviewCache::default(),
+            queue,
+            result_rx,
+            attempts: BTreeMap::new(),
+            failed: BTreeMap::new(),
+            pending_failed: BTreeMap::new(),
+            in_flight: BTreeMap::new(),
+            probe_digests: BTreeMap::new(),
+            probe_identities: BTreeMap::new(),
+            planned_kind: None,
+            active_probe_id: None,
+            directory: None,
+        }
+    }
+
     /// Spawn `pool_size` workers sharing `queue`. Results arrive on
     /// [`Self::poll`].
     pub fn spawn(pool_size: usize) -> (Self, Arc<PreviewQueue>) {
@@ -217,37 +230,40 @@ impl PreviewController {
             let queue = Arc::clone(&queue_worker);
             let tx = result_tx.clone();
             std::thread::spawn(move || loop {
-                let job = queue.pop();
-                log::trace!("preview worker {i}: preparing {}", job.name);
-                let probe = job.probe_id.clone();
-                let result = match crate::preview_jobs::worker_preview(job) {
+                let queued = queue.pop();
+                log::trace!("preview worker {i}: preparing {}", queued.job.name);
+                let probe = queued.job.probe_id.clone();
+                let name = queued.job.name.clone();
+                let source = queued.job.source.clone();
+                let virtual_copy = queued.job.virtual_copy.clone();
+                let enqueued_identity = queued.enqueued_identity.clone();
+                let result = match crate::preview_jobs::worker_preview_with_identity(
+                    queued.job,
+                    enqueued_identity.clone(),
+                ) {
                     Ok(result) => result,
                     Err(message) => PreviewResult {
                         digest: String::new(),
                         probe_id: probe,
-                        name: String::new(),
-                        stamp: PreviewStamp::default(),
+                        name,
+                        source,
+                        virtual_copy,
+                        enqueued_identity,
+                        prepared_identity: None,
                         outcome: PreviewOutcome::Failed(message),
                     },
                 };
                 let _ = tx.send(result);
             });
         }
-        let controller = Self {
-            lru: LruPreviewCache::default(),
-            queue: Arc::clone(&queue),
-            result_rx,
-            attempts: BTreeMap::new(),
-            failed: BTreeMap::new(),
-            pending_failed: BTreeMap::new(),
-            in_flight: BTreeMap::new(),
-            probe_digests: BTreeMap::new(),
-            probe_stamps: BTreeMap::new(),
-            planned_kind: None,
-            active_probe_id: None,
-            directory: None,
-        };
-        (controller, queue)
+        (Self::with_queue(Arc::clone(&queue), result_rx), queue)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn manual() -> (Self, mpsc::Sender<PreviewResult>) {
+        let (result_tx, result_rx) = mpsc::channel();
+        let controller = Self::with_queue(Arc::new(PreviewQueue::default()), result_rx);
+        (controller, result_tx)
     }
 
     /// The RAM LRU (read access for drawing / diagnostics).
@@ -279,38 +295,46 @@ impl PreviewController {
         }
     }
 
-    /// Whether the current source/sidecar fingerprint differs from the one
-    /// captured when the probe's preview was prepared (A3 staleness gate). A
-    /// changed source or recipe must re-render, never silently serve the old
-    /// frame. Returns `false` when nothing was prepared yet.
+    /// Whether the current source/document/artifact content differs from the
+    /// identity captured for the latest accepted result. Returns `false` when
+    /// nothing has been accepted yet.
+    #[cfg(test)]
     pub fn probe_is_stale(&self, probe_id: &str, source: &std::path::Path) -> bool {
-        let Some(recorded) = self.probe_stamps.get(probe_id) else {
-            return false;
-        };
-        let (src_mtime, src_len) = file_stamp(source, true);
-        let (side_mtime, _) = file_stamp(&lumina_sidecar::sidecar_path_for(source), false);
-        src_mtime != recorded.source_mtime
-            || src_len != recorded.source_len
-            || side_mtime != recorded.sidecar_mtime
+        self.probe_identity_is_stale(
+            probe_id,
+            &crate::source_actions::NeighborInputIdentity::capture(source, "vc-original"),
+        )
     }
 
-    /// Enqueue one neighbor job (see [`plan_window_jobs`]). Returns `false`
-    /// when it was skipped (in flight / retries exhausted / current frame
-    /// already available).
-    ///
-    /// A3: if the source or its sidecar changed since the probe's preview was
-    /// prepared, the old entry is invalidated first so a re-render happens
-    /// instead of dedup-ing against a stale digest.
+    fn probe_identity_is_stale(
+        &self,
+        probe_id: &str,
+        current: &crate::source_actions::NeighborInputIdentity,
+    ) -> bool {
+        self.probe_identities
+            .get(probe_id)
+            .is_some_and(|recorded| recorded != current)
+    }
+
+    /// Enqueue one neighbor job. The deterministic input identity is captured
+    /// before dispatch and travels with the queued job through its result.
     pub fn enqueue(&mut self, job: PreviewJob) -> bool {
         let probe = job.probe_id.clone();
-        if self.probe_is_stale(&probe, &job.source) {
+        let identity =
+            crate::source_actions::NeighborInputIdentity::capture(&job.source, &job.virtual_copy);
+        if self.probe_identity_is_stale(&probe, &identity)
+            || self
+                .in_flight
+                .get(&probe)
+                .is_some_and(|in_flight| in_flight != &identity)
+        {
             self.invalidate_probe(&probe);
         }
         if !self.needs_job(&probe) {
             return false;
         }
-        self.in_flight.insert(probe.clone(), ());
-        self.queue.push(job);
+        self.in_flight.insert(probe, identity.clone());
+        self.queue.push_with_identity(job, identity);
         true
     }
 
@@ -327,40 +351,57 @@ impl PreviewController {
         self.active_probe_id.as_deref()
     }
 
-    /// Drain completed results. On `Ready`, the decoded frame is inserted into
-    /// the RAM LRU under the authoritative digest and the probe's current
-    /// digest is recorded. A changed source/recipe lands under a *new* digest —
-    /// the old entry stays stale (never silently shown) and the probe becomes
-    /// eligible for a lazy re-render via [`Self::needs_job`] (A3).
+    /// Drain completed results. A result is accepted only when its enqueue
+    /// identity still matches the controller's in-flight token and the exact
+    /// source/document/artifact content on disk. Stale pixels and stale
+    /// failures are discarded before either can become visible.
     pub fn poll(&mut self) {
         while let Ok(result) = self.result_rx.try_recv() {
             let probe = result.probe_id.clone();
+            let Some(expected) = self.in_flight.get(&probe).cloned() else {
+                log::debug!("discarding neighbor result for unknown probe {}", probe);
+                continue;
+            };
+            if result.enqueued_identity != expected {
+                log::debug!("discarding superseded neighbor result for {}", probe);
+                continue;
+            }
+            let current = crate::source_actions::NeighborInputIdentity::capture(
+                &result.source,
+                &result.virtual_copy,
+            );
+            if current != expected {
+                log::debug!("discarding stale neighbor result for {}", probe);
+                self.invalidate_probe(&probe);
+                continue;
+            }
+            if result
+                .prepared_identity
+                .as_ref()
+                .is_some_and(|prepared| prepared != &current)
+            {
+                log::debug!("discarding neighbor result with raced inputs for {}", probe);
+                self.invalidate_probe(&probe);
+                continue;
+            }
+
+            self.in_flight.remove(&probe);
+            self.probe_identities.insert(probe.clone(), current);
             match result.outcome {
                 PreviewOutcome::Ready(frame) => {
                     if !result.digest.is_empty() {
                         log::trace!("neighbor preview ready: {}", result.name);
                         self.lru.insert(result.digest.clone(), frame);
-                        // The probe's latest authoritative digest (used by
-                        // `needs_job`, `neighbor_preview` and `probe_state`).
                         self.probe_digests
                             .insert(probe.clone(), result.digest.clone());
-                        // Cheap source/sidecar fingerprint for the A3 staleness
-                        // gate on later navigation.
-                        self.probe_stamps.insert(probe.clone(), result.stamp);
-                        // Promotion: when the *active* image's own preview lands,
-                        // pin its RAM entry so it can never be evicted (SOLL:
-                        // „das aktive Bild wird nie evictet").
                         if self.active_probe_id.as_deref() == Some(probe.as_str()) {
                             self.lru.set_active(&result.digest);
                         }
                     }
-                    self.in_flight.remove(&probe);
                     self.failed.remove(&probe);
                     self.pending_failed.remove(&probe);
                 }
                 PreviewOutcome::Failed(message) => {
-                    // R3-DENOISE-1: the one visible warn! lives in the app drain.
-                    self.in_flight.remove(&probe);
                     let attempts = self.attempts.get(&probe).copied().unwrap_or(0) + 1;
                     self.attempts.insert(probe.clone(), attempts);
                     self.failed.insert(probe.clone(), message.clone());
@@ -382,7 +423,9 @@ impl PreviewController {
             self.lru.remove_entry(&digest);
         }
         self.probe_digests.remove(probe_id);
-        self.probe_stamps.remove(probe_id);
+        self.probe_identities.remove(probe_id);
+        self.in_flight.remove(probe_id);
+        self.attempts.remove(probe_id);
         self.failed.remove(probe_id);
         self.pending_failed.remove(probe_id);
     }
@@ -412,10 +455,11 @@ impl PreviewController {
         probe_id: &str,
         source: &std::path::Path,
     ) -> Result<Option<ImageFrame>, String> {
-        // A3: never serve a frame whose source/sidecar changed since prepare —
-        // that would be a silent stale display. The stale entry is invalidated
-        // and reported as a miss so the lazy re-render path applies.
-        if self.probe_is_stale(probe_id, source) {
+        // Never serve a frame after any source/document/artifact content change.
+        // The exact identity is rechecked at the paint boundary, so preserving
+        // mtime/length cannot make an old frame look current.
+        let current = crate::source_actions::NeighborInputIdentity::capture(source, "vc-original");
+        if self.probe_identity_is_stale(probe_id, &current) {
             self.invalidate_probe(probe_id);
             return Ok(None);
         }
@@ -486,7 +530,7 @@ impl PreviewController {
         self.pending_failed.clear();
         self.attempts.clear();
         self.probe_digests.clear();
-        self.probe_stamps.clear();
+        self.probe_identities.clear();
         self.planned_kind = None;
         self.active_probe_id = None;
         self.directory = Some(directory.to_owned());
@@ -630,12 +674,18 @@ mod tests {
             probe_digests: BTreeMap::new(),
             planned_kind: None,
             active_probe_id: None,
-            probe_stamps: BTreeMap::new(),
+            probe_identities: BTreeMap::new(),
             directory: None,
         };
         let mut ctrl = ctrl;
         // Fake an in-flight entry.
-        ctrl.in_flight.insert("k".into(), ());
+        ctrl.in_flight.insert(
+            "k".into(),
+            crate::source_actions::NeighborInputIdentity::capture(
+                std::path::Path::new("k"),
+                "vc-original",
+            ),
+        );
         assert!(!ctrl.needs_job("k"));
         ctrl.in_flight.remove("k");
         assert!(ctrl.needs_job("k"));
@@ -695,7 +745,7 @@ mod tests {
             probe_digests: BTreeMap::new(),
             planned_kind: None,
             active_probe_id: None,
-            probe_stamps: BTreeMap::new(),
+            probe_identities: BTreeMap::new(),
             directory: None,
         };
         assert!(ctrl.lru().is_empty());
@@ -850,7 +900,7 @@ mod tests {
             probe_digests: BTreeMap::new(),
             planned_kind: None,
             active_probe_id: None,
-            probe_stamps: BTreeMap::new(),
+            probe_identities: BTreeMap::new(),
             directory: None,
         };
         // Simulate a successfully prepared neighbor under digest "d1".
@@ -876,7 +926,13 @@ mod tests {
         );
 
         // In-flight → loading; ready → visible as ready.
-        ctrl.in_flight.insert("p".into(), ());
+        ctrl.in_flight.insert(
+            "p".into(),
+            crate::source_actions::NeighborInputIdentity::capture(
+                std::path::Path::new("p"),
+                "vc-original",
+            ),
+        );
         assert_eq!(ctrl.probe_state("p"), PreviewProbeState::Loading);
         ctrl.in_flight.remove("p");
         ctrl.lru.insert("d2", make_frame(2, 2, 2));
@@ -899,7 +955,7 @@ mod tests {
             probe_digests: BTreeMap::new(),
             planned_kind: None,
             active_probe_id: None,
-            probe_stamps: BTreeMap::new(),
+            probe_identities: BTreeMap::new(),
             directory: None,
         };
         ctrl.failed.insert("p".into(), "decode exploded".into());
@@ -1043,7 +1099,7 @@ mod tests {
             probe_digests: BTreeMap::new(),
             planned_kind: None,
             active_probe_id: None,
-            probe_stamps: BTreeMap::new(),
+            probe_identities: BTreeMap::new(),
             directory: None,
         };
         ctrl.failed.insert("p".into(), "boom".into());
@@ -1215,62 +1271,6 @@ mod tests {
         // Store again correctly after prune
         disk.store(digest, &webp).unwrap();
         assert!(disk.load(digest).unwrap().is_some());
-    }
-
-    // ---- T08 GUI-FILM-01: Worker-Prio-Queue sortiert nach priority ----
-    #[test]
-    fn preview_queue_respects_priority_not_fifo() {
-        let queue = PreviewQueue::default();
-        // Push mixed priorities; insertion order deliberately shuffled.
-        for prio in [3u8, 0, 5, 2, 1, 4] {
-            queue.push(PreviewJob {
-                probe_id: format!("p{prio}"),
-                source: PathBuf::from(format!("/tmp/a{prio}")),
-                name: format!("a{prio}.png"),
-                virtual_copy: "vc-original".into(),
-                target: (64, 64),
-                kind: PreviewKind::Screen,
-                priority: prio,
-                denoise_policy: DenoisePolicy::Warn,
-            });
-        }
-        let mut popped = Vec::new();
-        for _ in 0..6 {
-            popped.push(queue.pop().priority);
-        }
-        assert_eq!(
-            popped,
-            vec![0, 1, 2, 3, 4, 5],
-            "GUI-FILM-01: pop must be prio-sorted"
-        );
-
-        // Larger batch maintains sorting
-        let queue2 = PreviewQueue::default();
-        for prio in (0..20).rev() {
-            queue2.push(PreviewJob {
-                probe_id: format!("q{prio}"),
-                source: PathBuf::from(format!("/tmp/b{prio}")),
-                name: format!("b{prio}.png"),
-                virtual_copy: "vc-original".into(),
-                target: (32, 32),
-                kind: PreviewKind::Screen,
-                priority: (prio % 6) as u8,
-                denoise_policy: DenoisePolicy::Warn,
-            });
-        }
-        let mut last = 0u8;
-        let mut first = true;
-        for _ in 0..20 {
-            let job = queue2.pop();
-            if !first {
-                assert!(
-                    job.priority >= last,
-                    "GUI-FILM-01: prio must be non-decreasing"
-                );
-            }
-            last = job.priority;
-            first = false;
-        }
     }
 
     // ---- T09 GUI-PREV-07: Disk löschbar + prune verwaister Einträge ----

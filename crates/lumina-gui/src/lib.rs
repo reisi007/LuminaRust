@@ -87,6 +87,10 @@ mod present;
 // Lensfun map bind, refusal classification and the parity diagnostic hooks.
 #[cfg(feature = "gpu")]
 mod gpu_routing;
+// GUI-SRCACC-1: one strict resolver for persisted repair-region artifacts,
+// shared by active preview/export and the navigator/neighbor/thumbnail paths.
+mod source_actions;
+use source_actions::ResolvedSourceActions;
 // GUI-REFACTOR-W1-20 S1.2a: source content hash + mask-plane loading.
 mod render_source;
 // GUI-REFACTOR-W1-20 S1.2b: the committed full-quality render entry points and
@@ -7494,10 +7498,17 @@ impl LuminaApp {
     /// resolved source hash + recipe digest. The per-role identity digest is
     /// still compared on every resolve, so this only skips recomputation — it
     /// never serves a stale canvas.
-    fn generative_memo_key(&mut self) -> String {
+    fn generative_memo_key(&mut self, source_actions: &ResolvedSourceActions) -> String {
         let source_hash = self.resolved_source_hash();
         let recipe = serde_json::to_vec(&self.recipe).unwrap_or_default();
-        format!("{source_hash}|blake3:{}", blake3::hash(&recipe).to_hex())
+        let mut key = format!("{source_hash}|blake3:{}", blake3::hash(&recipe).to_hex());
+        for identity in source_actions.identities() {
+            key.push('|');
+            key.push_str(&identity.id);
+            key.push('@');
+            key.push_str(&identity.checksum);
+        }
+        key
     }
 
     /// GEN-ONNX-1 Welle 2b: the explicit GUI "Generieren" action.
@@ -7527,6 +7538,15 @@ impl LuminaApp {
                     .into(),
             ));
         }
+        // GUI-SRCACC-1: generative inputs are downstream of SourceActions and
+        // must observe the same repaired pixels as preview/export.
+        let source_actions = match self.resolve_current_source_actions(&frame) {
+            Ok(actions) => actions,
+            Err(error) => {
+                self.invalidate_source_action_preview();
+                return Err(GuiError::Io(error.to_string()));
+            }
+        };
         let mut edit = self.recipe.generative_edit.clone().ok_or_else(|| {
             GuiError::Io("No generative edit in the recipe; enable the Expand mode first".into())
         })?;
@@ -7540,7 +7560,7 @@ impl LuminaApp {
             ));
         }
         // The frames entering each role, computed exactly like the render does
-        // (same corrector, same white balance, same empty source actions).
+        // (same corrector, white balance, and resolved source actions).
         #[cfg(feature = "lensfun")]
         self.ensure_lensfun_cache(frame.width, frame.height);
         #[cfg(feature = "lensfun")]
@@ -7551,7 +7571,7 @@ impl LuminaApp {
             &frame,
             &self.recipe,
             self.camera_white_balance,
-            &[],
+            source_actions.artifacts(),
             lensfun,
         )?;
         let zdata_path = zdata_path_for(Path::new(self.path.trim()));
@@ -7672,6 +7692,7 @@ impl LuminaApp {
     fn resolve_generative_artifacts(
         &mut self,
         full_source: &ImageFrame,
+        source_actions: &ResolvedSourceActions,
     ) -> Result<GenerativeArtifacts, GuiError> {
         let Some(edit) = self.recipe.generative_edit.clone() else {
             return Ok(GenerativeArtifacts::default());
@@ -7683,7 +7704,7 @@ impl LuminaApp {
         }
         // The input frames (and therefore the identity digests) are expensive
         // to rebuild; reuse them while neither source nor recipe changed.
-        let memo_key = self.generative_memo_key();
+        let memo_key = self.generative_memo_key(source_actions);
         if self.generative_memo.as_deref() == Some(memo_key.as_str()) {
             return Ok(self.generative_artifacts.clone());
         }
@@ -7697,7 +7718,7 @@ impl LuminaApp {
             full_source,
             &self.recipe,
             self.camera_white_balance,
-            &[],
+            source_actions.artifacts(),
             lensfun,
         )?;
         let seed = edit.seed.unwrap_or(0);
@@ -10346,18 +10367,63 @@ impl LuminaApp {
         match result {
             Ok(frame) => {
                 self.note_decode_finish(frame.frame.width, frame.frame.height);
-                // GUI-SIDECAR-READ-1: edits made while this decode was in
-                // flight target the still-loaded image — flush them to its
-                // path now, before the new path is adopted below (a flush
-                // afterwards would write the old recipe under the new path).
+                // Validate the sidecar against the exact bytes just decoded
+                // before changing the active source. A stale sidecar must not
+                // be adopted merely because its recipe happens to be valid.
+                let path = PathBuf::from(&frame.path);
+                let sidecar_path = sidecar_path_for(&path);
+                let sidecar_exists = sidecar_path.exists();
+                let document = if sidecar_exists {
+                    match load_sidecar(&sidecar_path) {
+                        Ok(document) => {
+                            let live = crate::source_actions::source_fingerprint(&frame.bytes);
+                            if !crate::source_actions::source_fingerprint_matches(
+                                &document.source,
+                                &live,
+                            ) {
+                                let message = format!(
+                                    "source identity conflict: source content conflict between decoded `{}` (hash {}, byte length {}) and sidecar `{}` (hash {}, byte length {}); sidecar not adopted and repair actions were not applied",
+                                    path.display(),
+                                    live.content_hash,
+                                    live.byte_length,
+                                    sidecar_path.display(),
+                                    document.source.content_hash,
+                                    document.source.byte_length,
+                                );
+                                self.pending_directory_open = None;
+                                if self.original.is_none() {
+                                    self.path = frame.path.clone();
+                                }
+                                self.invalidate_source_action_preview();
+                                self.show_error_banner(message);
+                                return;
+                            }
+                            Some(document)
+                        }
+                        Err(error) => {
+                            let message = format!(
+                                "could not load sidecar `{}`: {error}",
+                                sidecar_path.display()
+                            );
+                            self.pending_directory_open = None;
+                            if self.original.is_none() {
+                                self.path = frame.path.clone();
+                            }
+                            self.invalidate_source_action_preview();
+                            self.show_error_banner(message);
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+                // GUI-SIDECAR-READ-1: only a validated target may displace the
+                // still-loaded image; flush its armed edit before adoption.
                 self.flush_pending_edit();
                 // LRPAR-G08-PREVIOUS: a successful switch to a different
                 // image displaces the current one — stash it (path + recipe
                 // snapshot) as the cross-image Previous reference before the
-                // new path is adopted below. Same-path reloads and switches
-                // with nothing loaded leave the reference untouched, so
-                // "no previously edited image" stays a loud error instead of
-                // silently applying defaults.
+                // new path is adopted below.
                 let displaced = (!self.path.trim().is_empty()
                     && self.path != frame.path
                     && self.original.is_some())
@@ -10382,14 +10448,13 @@ impl LuminaApp {
                     frame.source_is_raw,
                     frame.lens_identity,
                 );
-                if let Err(e) = self.render() {
-                    error!("render after load failed for {}: {e}", self.source_name);
-                    self.show_error(e);
-                }
-                let path = std::path::PathBuf::from(self.path.trim());
-                if let Ok(document) =
-                    lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&path))
-                {
+                // Do not render once with the reset default recipe: a valid
+                // sidecar may contain persisted SourceActions, and a corrupt
+                // sidecar must not silently degrade to the original image.
+                // Adopt the sidecar first, then perform the single authoritative
+                // render below (or render the clean default when no sidecar
+                // exists).
+                if let Some(document) = document {
                     // REVIEW-GUI-N1: remember the revision this document was
                     // loaded from — the save path compares against it (CAS).
                     self.sidecar_revision = lumina_sidecar::document_revision(&document).ok();
@@ -10458,6 +10523,11 @@ impl LuminaApp {
                         // keeping an unrelated recipe.
                         warn!("sidecar for {} has no virtual copies", path.display());
                         self.show_error(GuiError::Io(Str::VirtualCopyNotFound.t().to_string()));
+                    }
+                } else if !sidecar_exists {
+                    if let Err(e) = self.render() {
+                        error!("render after load failed for {}: {e}", self.source_name);
+                        self.show_error(e);
                     }
                 }
                 // Navigation is adopted only after the decoded image and its
@@ -10916,6 +10986,22 @@ impl LuminaApp {
             self.show_error(message);
             return Err(error);
         }
+        // GUI-SRCACC-1: resolve strict source actions before generative inputs,
+        // target encoding, or writing. Generative identities then observe the
+        // same post-action pixels as preview and the shared export pipeline.
+        let source_actions = {
+            let original = self
+                .original
+                .as_ref()
+                .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
+            match self.resolve_current_source_actions(original) {
+                Ok(actions) => actions,
+                Err(error) => {
+                    self.invalidate_source_action_preview();
+                    return Err(GuiError::Io(error.to_string()));
+                }
+            }
+        };
         // GEN-ONNX-1 Welle 2b: resolve the generative canvases before any
         // shared borrow of `self` (the resolver needs `&mut self` for the
         // corrector cache). Only done when a generative role is active, so a
@@ -10925,7 +11011,7 @@ impl LuminaApp {
                 .original
                 .clone()
                 .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
-            self.resolve_generative_artifacts(&original)?
+            self.resolve_generative_artifacts(&original, &source_actions)?
         } else {
             GenerativeArtifacts::default()
         };
@@ -10982,7 +11068,7 @@ impl LuminaApp {
         let context = RenderContext {
             recipe: &self.recipe,
             camera_white_balance: self.camera_white_balance,
-            source_actions: &[],
+            source_actions: source_actions.artifacts(),
             masks: masks_context,
             lensfun: export_lensfun,
             depth: None,
@@ -12304,9 +12390,12 @@ mod tests {
     mod shortcuts;
     mod sidecar;
     mod sidecar_restore;
+    // GUI-SRCACC-1: strict resolver, active/export parity, cache identity,
+    // and navigator/neighbor/thumbnail stand-in coverage.
     mod sliders_commit;
     mod sliders_domain;
     mod sliders_filmstrip;
+    mod source_actions;
     mod spot_heal;
     // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing (select/update/
     // remove, detail-only-when-selected, no-Clone-fallback).

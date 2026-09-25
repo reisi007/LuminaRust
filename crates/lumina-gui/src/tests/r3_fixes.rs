@@ -251,7 +251,7 @@ fn neighbor_denoise_stage_follows_the_app_policy() {
     // denoise stage (non-ready by design, no weights).
     let identity = SourceIdentity {
         relative_name: "denoise-neighbor.png".into(),
-        content_hash: "blake3:fixture".into(),
+        content_hash: format!("blake3:{}", blake3::hash(&png).to_hex()),
         byte_length: png.len() as u64,
         modified_at: None,
         raw_format: "PNG".into(),

@@ -264,7 +264,7 @@ impl LuminaApp {
                                     let selected = self
                                         .filmstrip_selection
                                         .contains(&entry.path.display().to_string());
-                                    let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                                    let tex = self.thumbnail_for_entry(&entry);
                                     let placeholder_label =
                                         self.thumbnail_placeholder_label(&entry);
                                     let (rect, _) = ui.allocate_exact_size(

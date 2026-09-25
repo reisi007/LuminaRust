@@ -105,7 +105,7 @@ impl LuminaApp {
         } else {
             None
         };
-        let texture = render_texture.or_else(|| self.thumbnails.get(&entry.thumb_key).cloned());
+        let texture = render_texture.or_else(|| self.thumbnail_for_entry(&entry));
         if let Some(texture) = texture {
             // Contain-fit to the whole pane so the loupe is actually large for
             // small sources too (the thumbnail fallback keeps the same fit).
@@ -173,7 +173,7 @@ impl LuminaApp {
                     ui.label(title);
                     let size = egui::vec2((ui.available_width() / 2.0).max(64.0), 360.0);
                     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                    if let Some(texture) = self.thumbnails.get(&left.thumb_key).cloned() {
+                    if let Some(texture) = self.thumbnail_for_entry(&left) {
                         ui.put(
                             rect,
                             egui::Image::from_texture(&texture).max_size(rect.size()),
@@ -244,7 +244,7 @@ impl LuminaApp {
                                 egui::StrokeKind::Outside,
                             );
                         }
-                        if let Some(texture) = self.thumbnails.get(&entry.thumb_key).cloned() {
+                        if let Some(texture) = self.thumbnail_for_entry(&entry) {
                             ui.put(
                                 rect,
                                 egui::Image::from_texture(&texture).max_size(rect.size()),

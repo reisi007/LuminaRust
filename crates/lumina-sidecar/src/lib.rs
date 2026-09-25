@@ -25,6 +25,12 @@ pub use zdata::{
 };
 
 mod brush_prompt;
+mod source_action_refs;
+#[cfg(feature = "zdata")]
+pub use source_action_refs::load_validated_source_action_bundle;
+pub use source_action_refs::{
+    validate_source_action_bundle_reference, validate_source_action_spec, SourceActionArtifactRef,
+};
 
 // R5-DUST-23-FOLLOWUP: shared spot IDs, entry normalization and artifact
 // status live in one small module so CLI and GUI cannot classify the same
@@ -276,20 +282,6 @@ pub struct ArtifactReference {
     pub data_version: String,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
-}
-
-/// F-042-N1: reference to a repair-region artifact stored in the sidecar's
-/// `.lumina.zdata` bundle. `id` is the record id inside the bundle,
-/// `relative_path` is the portable (never absolute) bundle file name, and
-/// `checksum` is the BLAKE3 checksum of the artifact bytes. The existing
-/// `ArtifactReference` is intentionally *not* reused here: it has no record
-/// `id` field and carries mask-specific metadata (`channels`, `data_version`)
-/// that a repair region does not need.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SourceActionArtifactRef {
-    pub id: String,
-    pub relative_path: String,
-    pub checksum: String,
 }
 
 /// F-042-N1: the kind of a persisted source action. Mirrors the core

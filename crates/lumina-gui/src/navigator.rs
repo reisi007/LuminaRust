@@ -71,18 +71,57 @@ impl LuminaApp {
     /// aborts. A genuine failure is logged once per (source, recipe) key and
     /// remembered so it cannot spam per frame.
     pub(crate) fn navigator_zoomed_overview(&mut self) -> Option<ImageFrame> {
-        let (width, height) = self
-            .navigator_frame()
-            .map(|frame| (frame.width, frame.height))?;
+        let source = self.navigator_frame()?;
+        let (width, height) = (source.width, source.height);
+        // GUI-SRCACC-1: the zoomed overview is a stand-in, not an exemption.
+        // Resolve and apply repair regions at full source geometry before the
+        // overview downscale; resolver/composite errors are logged and yield
+        // the existing visible `Not current` state, never a raw approximation.
+        let source_actions = match self.resolve_current_source_actions(source) {
+            Ok(actions) => actions,
+            Err(error) => {
+                warn!("navigator source-action resolution failed: {error}");
+                self.navigator_overview = None;
+                self.navigator_overview_key = None;
+                return None;
+            }
+        };
         let recipe_json = serde_json::to_vec(&self.recipe).ok()?;
-        let digest = format!("blake3:{}", blake3::hash(&recipe_json).to_hex());
+        let source_content_identity = self
+            .source_bytes
+            .as_ref()
+            .map(|bytes| format!("blake3:{}:{}", blake3::hash(bytes).to_hex(), bytes.len()))
+            .unwrap_or_else(|| "blake3:unknown:0".to_owned());
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"source-content\0");
+        hasher.update(source_content_identity.as_bytes());
+        hasher.update(b"\0recipe\0");
+        hasher.update(&recipe_json);
+        for identity in source_actions.identities() {
+            hasher.update(&[0]);
+            hasher.update(identity.id.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(identity.checksum.as_bytes());
+        }
+        let digest = format!("blake3:{}", hasher.finalize().to_hex());
         let key = (self.path.clone(), width, height, digest);
         if self.navigator_overview_key.as_ref() == Some(&key) {
             return self.navigator_overview.clone();
         }
-        let small = self
-            .navigator_frame()
-            .map(|frame| frame.downscale(NAVIGATOR_OVERVIEW_MAX_DIM))?;
+        let small = if source_actions.is_empty() {
+            source.downscale(NAVIGATOR_OVERVIEW_MAX_DIM)
+        } else {
+            let mut source_work = StageWork::default();
+            match prepare_source_base(source, source_actions.artifacts(), &mut source_work) {
+                Ok(frame) => frame.downscale(NAVIGATOR_OVERVIEW_MAX_DIM),
+                Err(error) => {
+                    warn!("navigator source-action composition failed: {error}");
+                    self.navigator_overview = None;
+                    self.navigator_overview_key = None;
+                    return None;
+                }
+            }
+        };
         // G-06: Lensfun auto-corrector for the navigator overview (same
         // cached lookup as the preview render).
         #[cfg(feature = "lensfun")]

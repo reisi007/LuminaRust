@@ -125,7 +125,7 @@ impl LuminaApp {
                         }
                         for i in buffered.clone() {
                             let entry = self.entries[raw_indices[i]].clone();
-                            let tex = self.thumbnails.get(&entry.thumb_key).cloned();
+                            let tex = self.thumbnail_for_entry(&entry);
                             let placeholder_label = self.thumbnail_placeholder_label(&entry);
                             let (rect, resp) = ui.allocate_exact_size(
                                 egui::vec2(CELL_W, CELL_H),
@@ -223,6 +223,30 @@ impl LuminaApp {
         self.frame_thumb_enqueued += self.ensure_thumbnail_priority(ctx, &raw_indices, visible);
     }
 
+    /// Refresh one source's persisted-artifact identity before a lookup.
+    /// Keeping this at the entry boundary means every Library/Develop view
+    /// drops a stale RAM texture before it can paint it.
+    pub(crate) fn refresh_thumbnail_source(&mut self, entry: &FileBrowserEntry) {
+        self.thumbnails
+            .refresh_source(&entry.thumb_key, &entry.path);
+    }
+
+    /// Return an entry's current thumbnail, invalidating it first if its
+    /// sidecar/bundle changed since the last worker result.
+    pub(crate) fn thumbnail_for_entry(
+        &mut self,
+        entry: &FileBrowserEntry,
+    ) -> Option<egui::TextureHandle> {
+        self.refresh_thumbnail_source(entry);
+        self.thumbnails.get(&entry.thumb_key).cloned()
+    }
+
+    /// Whether an entry needs a worker job under its current artifact identity.
+    pub(crate) fn thumbnail_needs_job(&mut self, entry: &FileBrowserEntry) -> bool {
+        self.refresh_thumbnail_source(entry);
+        self.thumbnails.needs_job(&entry.thumb_key)
+    }
+
     /// GUI-SCROLL-200-1: visible-first thumbnail scheduling.
     ///
     /// Enqueues thumbnail work for the entries in `visible_window` (widened by
@@ -263,14 +287,13 @@ impl LuminaApp {
             if budget == 0 {
                 break;
             }
-            let key = &self.entries[raw_indices[i]].thumb_key;
+            let entry = self.entries[raw_indices[i]].clone();
             // Free check: skips cells with a texture / in-flight job without
             // any disk IO. Only real candidates consume the per-frame budget.
-            if !self.thumbnails.needs_job(key) {
+            if !self.thumbnail_needs_job(&entry) {
                 continue;
             }
             budget -= 1;
-            let entry = self.entries[raw_indices[i]].clone();
             if self.ensure_thumbnail(ctx, &entry) {
                 enqueued += 1;
             }
@@ -299,7 +322,12 @@ impl LuminaApp {
         entry: &FileBrowserEntry,
     ) -> bool {
         // Key is the canonicalized absolute path, never the bare filename
-        // (REVIEW-GUI-THUMB-1).
+        // (REVIEW-GUI-THUMB-1). The manager separately fingerprints the
+        // persisted sidecar/bundle so an unchanged key cannot retain stale
+        // action-aware pixels.
+        let source_identity = self
+            .thumbnails
+            .refresh_source(&entry.thumb_key, &entry.path);
         let key = entry.thumb_key.clone();
         if self.thumbnails.get(&key).is_some() {
             return false;
@@ -309,6 +337,13 @@ impl LuminaApp {
         }
         let folder = entry.path.parent().unwrap_or_else(|| Path::new("."));
         let probe = self.thumbnail_cache.probe(folder, &entry.name);
+        // The metadata probe proves only that a record exists. Source-action
+        // thumbnails bypass it because this cache has no recipe/artifact
+        // component; recipe-free hits are accepted by the worker only after the
+        // persisted record proves the exact current source-content hash.
+        let cached = probe.cached
+            && !self.thumbnails.source_rebuild_pending(&key)
+            && !source_identity.has_source_action_bundle();
         // Enqueue a background thumbnail job on the dedicated thread pool rather
         // than the bounded `IdleQueue`. The channel is unbounded, so it never
         // drops jobs under load. The key is marked in-flight (NOT probed) so a
@@ -318,12 +353,17 @@ impl LuminaApp {
         match self.thumbnail_tx.send(ThumbnailJob {
             source: entry.path.clone(),
             name: entry.name.clone(),
-            key,
+            key: key.clone(),
+            source_identity,
             cache: probe.cache,
-            cached: probe.cached,
+            cached,
             enqueued_at: std::time::Instant::now(),
         }) {
             Ok(()) => {
+                // Keep an untrusted/source-rebuild marker until the worker has
+                // actually produced a fresh resolver-backed frame. Clearing it
+                // on enqueue would let a failed retry consume legacy disk
+                // pixels from the replaced source.
                 debug!("enqueued thumbnail job for {}", entry.name);
                 true
             }

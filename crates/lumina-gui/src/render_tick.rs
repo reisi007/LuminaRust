@@ -77,7 +77,12 @@ impl LuminaApp {
         // LRPAR-G14-DENOISE-IMPL-20: the `denoise_rgb` artifact is full-frame
         // (dimension-checked against the input frame by the core blend), so an
         // active denoise stage is upgraded to a full render the same way.
-        if self.generative_stage_active() || self.denoise_stage_active() {
+        // GUI-SRCACC-1: repair regions likewise require exact source geometry.
+        if self.generative_stage_active()
+            || self.denoise_stage_active()
+            || !self.recipe.source_actions.is_empty()
+            || self.sidecar_resolution_pending()
+        {
             trace!("GUI render: absolute-frame stage active — draft upgraded to full render");
             return self.render_full(_viewport, roi);
         }
@@ -118,7 +123,13 @@ impl LuminaApp {
         // No generative stage is active here (checked above), so the hook gets
         // an empty artifact set — the core render then cannot hit the
         // generative stage at all.
-        let result = self.render_from(&source, false, roi, GenerativeArtifacts::default());
+        let result = self.render_from(
+            &source,
+            false,
+            roi,
+            GenerativeArtifacts::default(),
+            ResolvedSourceActions::default(),
+        );
         if took_draft {
             self.draft_original = Some(source);
         }

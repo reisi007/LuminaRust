@@ -1,5 +1,6 @@
 //! GUI export parity, targets and format/options tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
+use super::source_actions::{action_fixture, replace_fixture_artifact, ActionFixtureMode};
 use super::*;
 
 // ---- F-103-N5: shared export path is byte-identical to the CLI ----
@@ -103,6 +104,75 @@ fn gui_jpeg_export_is_functional_and_byte_identical_to_shared_path() {
     // And the decoded JPEG has the same pixel dimensions as the source.
     let decoded = ImageFrame::decode(&gui_bytes).unwrap();
     assert_eq!((decoded.width, decoded.height), (frame.width, frame.height));
+}
+
+/// GUI-SRCACC-1: a persisted repair region must be applied by the GUI export
+/// exactly once and produce the same bytes as the CLI/shared Core context.
+#[test]
+fn gui_source_action_export_is_byte_identical_to_cli_shared_path() {
+    let fixture = action_fixture(ActionFixtureMode::Valid);
+    let mut app = new_app();
+    open_and_decode(&mut app, fixture.source.display().to_string());
+    assert!(app.error().is_none());
+    let recipe = app.recipe().clone();
+    let resolved = app.resolve_current_source_actions(&fixture.frame).unwrap();
+    let options = ExportOptions {
+        format: ImageFileFormat::Png,
+        quality: 90,
+        dither: false,
+        ..Default::default()
+    };
+    let cli_bytes = lumina_core::export_image(
+        &fixture.frame,
+        &RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: resolved.artifacts(),
+            masks: None,
+            lensfun: None,
+            depth: None,
+        },
+        options,
+    )
+    .unwrap();
+
+    app.export_format = ImageFileFormat::Png;
+    app.export_quality = 90;
+    let output = fixture._dir.path().join("source-action-export.png");
+    app.export_to(output.clone()).unwrap();
+    assert_eq!(std::fs::read(&output).unwrap(), cli_bytes);
+    assert_eq!(
+        &ImageFrame::decode(&cli_bytes).unwrap().pixels[..4],
+        &[201, 0, 0, 255]
+    );
+
+    // A valid artifact revision must be visible in a fresh export, never
+    // served from the previous export bytes.
+    let changed = replace_fixture_artifact(&fixture, [7, 8, 9, 255, 1, 1, 1, 1]);
+    app.recipe.source_actions[0].artifact.checksum = changed.checksum();
+    let changed_output = fixture._dir.path().join("source-action-export-v2.png");
+    app.export_to(changed_output.clone()).unwrap();
+    assert_ne!(
+        std::fs::read(output).unwrap(),
+        std::fs::read(changed_output).unwrap()
+    );
+}
+
+/// A broken persisted reference is a loud pre-write export failure, never a
+/// silently encoded recipe-only/original image.
+#[test]
+fn gui_source_action_export_missing_bundle_writes_nothing() {
+    let fixture = action_fixture(ActionFixtureMode::MissingBundle);
+    let mut app = new_app();
+    open_and_decode(&mut app, fixture.source.display().to_string());
+    assert!(app.error().is_some(), "open must expose missing bundle");
+    let output = fixture._dir.path().join("must-not-exist.png");
+    let error = app.export_to(output.clone()).unwrap_err().to_string();
+    assert!(error.contains("source-action bundle"), "{error}");
+    assert!(
+        !output.exists(),
+        "failed source action must write no export"
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 use super::*;
 use lumina_core::{ImageFileFormat, ImageFrame};
-use lumina_sidecar::{load_sidecar, sidecar_path_for};
+use lumina_sidecar::{load_sidecar, save_sidecar, sidecar_path_for};
 use std::path::Path;
 
 fn new_app() -> LuminaApp {
@@ -218,10 +218,10 @@ fn adopt_is_explicit_and_never_auto_rates() {
     );
 }
 
-/// The authoritative read state detects a changed source as stale and an
-/// explicit adopt refuses without mutating the sidecar.
+/// The authoritative read state detects a changed source as stale when the
+/// sidecar's source identity itself is current.
 #[test]
-fn changed_source_makes_the_proposal_stale_and_refuses_adopt() {
+fn changed_source_makes_the_proposal_stale() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("photo.png");
     save_png(&source, 3);
@@ -232,8 +232,16 @@ fn changed_source_makes_the_proposal_stale_and_refuses_adopt() {
         app.culling_read_state(),
         CullingReadState::Valid(_)
     ));
-    // Change the source pixels: the content hash no longer matches.
+
     save_png(&source, 9);
+    let sidecar_path = sidecar_path_for(&source);
+    let mut document = load_sidecar(&sidecar_path).unwrap();
+    let live_bytes = std::fs::read(&source).unwrap();
+    document.source.content_hash = format!("blake3:{}", blake3::hash(&live_bytes).to_hex());
+    document.source.byte_length = live_bytes.len() as u64;
+    save_sidecar(&sidecar_path, &document).unwrap();
+    let sidecar_before = std::fs::read(&sidecar_path).unwrap();
+
     let mut reopened = new_app();
     open_and_decode(&mut reopened, &source);
     assert!(matches!(
@@ -250,13 +258,6 @@ fn changed_source_makes_the_proposal_stale_and_refuses_adopt() {
         reopened.source_bytes.as_ref().unwrap().len() as u64,
         "live identity must use loaded source bytes, not SidecarDocument.source"
     );
-
-    let sidecar_path = sidecar_path_for(&source);
-    let sidecar_before = std::fs::read(&sidecar_path).unwrap();
-    let document_before = reopened.document.clone();
-    let error = reopened.adopt_culling().unwrap_err();
-    assert!(error.to_string().contains("source identity conflict"));
-    assert_eq!(reopened.document.as_ref(), document_before.as_ref());
     assert_eq!(std::fs::read(&sidecar_path).unwrap(), sidecar_before);
 }
 

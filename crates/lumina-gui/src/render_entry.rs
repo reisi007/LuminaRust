@@ -48,9 +48,26 @@ impl LuminaApp {
         _viewport: [u32; 2],
         roi: Option<[u32; 4]>,
     ) -> Result<(), GuiError> {
+        if self.original.is_none() && self.sidecar_resolution_pending() {
+            return Err(GuiError::Io(
+                "cannot render while the file-backed sidecar is unresolved".into(),
+            ));
+        }
         let Some(original) = self.original.take() else {
             self.status = Str::NoImageLoaded.t().into();
             return Ok(());
+        };
+        // GUI-SRCACC-1: repair regions are full-source artifacts. Resolve and
+        // validate them before changing any preview/session state; any missing,
+        // stale, corrupt, or invalid record restores the original frame and
+        // aborts loudly rather than rendering a recipe-only approximation.
+        let source_actions = match self.resolve_current_source_actions(&original) {
+            Ok(actions) => actions,
+            Err(error) => {
+                self.invalidate_source_action_preview();
+                self.original = Some(original);
+                return Err(GuiError::Io(error.to_string()));
+            }
         };
         // GUI-JANKLOG-19: a full render outside an action scope (the 150 ms
         // debounce commit) is an outermost `kind=render` scope; inside an
@@ -95,11 +112,17 @@ impl LuminaApp {
         // documented exception, alongside export and the 1:1 loupe) — the
         // artifact-aware CPU render is authoritative and runs at full frame
         // geometry.
-        let absolute_stage_active = self.generative_stage_active() || self.denoise_stage_active();
+        // GUI-SRCACC-1: repair-region dimensions are defined against the full
+        // decoded source. Keep the same absolute-frame policy as denoise and
+        // generative artifacts instead of downscaling a source while silently
+        // leaving its action behind.
+        let absolute_stage_active = self.generative_stage_active()
+            || self.denoise_stage_active()
+            || !source_actions.is_empty();
         let roi = if absolute_stage_active {
             if roi.is_some() {
                 trace!(
-                    "GUI render: absolute-frame stage active (generative/denoise) — zoom ROI disabled"
+                    "GUI render: absolute-frame stage active (generative/denoise/source action) — zoom ROI disabled"
                 );
             }
             None
@@ -123,7 +146,7 @@ impl LuminaApp {
         // never a silent uncapped or empty render.
         let (source, roi) = if absolute_stage_active {
             trace!(
-                "GUI render: absolute-frame stage active — preview cap suspended (full-resolution render)"
+                "GUI render: absolute-frame stage active — preview cap suspended (generative/denoise/source action)"
             );
             self.preview_cap_state.capped_src = None;
             (original.clone(), roi)
@@ -177,7 +200,7 @@ impl LuminaApp {
                 }
             }
         };
-        let generative = match self.resolve_generative_artifacts(&original) {
+        let generative = match self.resolve_generative_artifacts(&original, &source_actions) {
             Ok(artifacts) => artifacts,
             Err(error) => {
                 self.original = Some(original);
@@ -187,7 +210,7 @@ impl LuminaApp {
         // R3-LOG-1: wall time of the committed full render plus the output
         // dimensions — the heavy work behind a module switch / settled edit.
         let render_stopwatch = timing::Stopwatch::now();
-        let result = self.render_from(&source, true, roi, generative);
+        let result = self.render_from(&source, true, roi, generative, source_actions);
         let render_ms = render_stopwatch.elapsed_ms();
         self.original = Some(original);
         if result.is_ok() {

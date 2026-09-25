@@ -234,6 +234,9 @@ impl LuminaApp {
     /// could serve a verdict for a long-gone recipe.
     #[cfg(feature = "gpu")]
     pub(crate) fn recipe_has_unsupported_gpu_stages(&mut self) -> bool {
+        if self.sidecar_resolution_pending() {
+            return true;
+        }
         if self.refresh_gpu_stage_gate() {
             self.gpu_stage_gate
                 .as_ref()
@@ -250,6 +253,9 @@ impl LuminaApp {
     /// …) instead of only the generic headline — never a silent fallback.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_unsupported_stage_reasons(&mut self) -> Vec<String> {
+        if self.sidecar_resolution_pending() {
+            return vec!["source sidecar unavailable".to_string()];
+        }
         if self.refresh_gpu_stage_gate() {
             self.gpu_stage_gate
                 .as_ref()

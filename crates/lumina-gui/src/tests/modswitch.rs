@@ -31,6 +31,10 @@ fn red_png() -> Vec<u8> {
         .unwrap()
 }
 
+fn source_hash(path: &std::path::Path) -> String {
+    crate::source_actions::source_fingerprint(&std::fs::read(path).unwrap()).content_hash
+}
+
 /// Pump the thumbnail worker results like the real `update` loop does, bounded
 /// so a genuine failure cannot hang the suite.
 fn drain_thumbnails(app: &mut LuminaApp, ctx: &egui::Context, key: &str) {
@@ -51,10 +55,11 @@ fn module_switch_thumbnail_cache_hit_is_off_thread_and_assigned() {
     // Seed the standard preview the scheduler will report as a metadata hit.
     let cache = DiskFolderCache::for_image(&source).unwrap();
     cache
-        .store_preview(
+        .store_preview_with_source_hash(
             &source.file_name().unwrap().to_string_lossy(),
             THUMB_VIRTUAL_COPY,
             PreviewKind::Standard,
+            &source_hash(&source),
             &red_png(),
         )
         .unwrap();
@@ -100,10 +105,11 @@ fn corrupt_cached_preview_is_a_visible_failure() {
     let name = source.file_name().unwrap().to_string_lossy().to_string();
     let cache = DiskFolderCache::for_image(&source).unwrap();
     cache
-        .store_preview(
+        .store_preview_with_source_hash(
             &name,
             THUMB_VIRTUAL_COPY,
             PreviewKind::Standard,
+            &source_hash(&source),
             b"not-a-png",
         )
         .unwrap();

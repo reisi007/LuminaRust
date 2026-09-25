@@ -305,6 +305,27 @@ Cache und Einstellungen, keine autoritativen Rezepte.
 > primärer Byte-Vergleichsanker. Der Originalpfad wird beim Export nie
 > überschrieben (nicht-destruktiver Export).
 
+> **Source-Action-Artefaktparität (GUI-SRCACC-1, SOLL 2026-09-24):** Die oben
+> beschriebene gemeinsame Renderlogik umfasst auch persistierte Source-Actions:
+> Die GUI lädt die referenzierten Repair-Regionen aus der jeweiligen
+> `.lumina.zdata`-Datei und reicht exakt dieselben Runtime-Artefakte in aktive
+> Vorschau und Export. Auflösung, Referenz-/Pfadprüfung, BLAKE3-Prüfsumme,
+> u16-Plane, RGBA8-Replacement und Quellauflösung werden vor jeder Pixelmutation
+> strikt geprüft. Missing/stale/corrupt/invalid ist ein sichtbarer Fehler, kein
+> Rezept-only- oder Originalbild-Fallback. Die Artefakt-IDs/Prüfsummen gehören
+> in die GUI-Preview-/Basis-Cache-Identität, sodass sowohl eine geänderte
+> Rezeptaktion als auch ein geändertes Bundle einen Cache-Miss erzwingt.
+>
+> Navigator, Neighbor-Preview und Filmstrip-Thumbnail lösen die Aktionen ihrer
+> jeweiligen Quelle ebenfalls auf und wenden sie vor einer eventuellen
+> Verkleinerung in Quellauflösung an. Alternativ wäre eine ausdrücklich
+> sichtbare Recipe-only-Degradation erlaubt; sie darf weder Pixelparität noch
+> Parität behaupten. Für diesen Slice ist die vollständige Auflösung normative
+> DoD. Abnahme sind `crates/lumina-gui/src/tests/source_actions.rs` mit
+> Missing-Bundle/-Artefakt, Checksummenkonflikt, invalidem Plane/Replacement,
+> Dimensionsfehler, Pixel-/Export-/CLI-Parität und Cache-Invalidierung. Der Task
+> bleibt bis zum positiven unabhängigen Verifikationsbericht offen.
+
 Für v1 ist egui/eframe festgelegt. Tauri ist keine v1-Abhängigkeit und kann in
 einer späteren Architekturentscheidung erneut bewertet werden.
 

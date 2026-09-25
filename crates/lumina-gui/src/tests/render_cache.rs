@@ -1,5 +1,6 @@
 //! base-stage preview render cache tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
+use super::source_actions::{action_fixture, replace_fixture_artifact, ActionFixtureMode};
 use super::*;
 
 #[test]
@@ -293,4 +294,58 @@ fn render_key_digest_separates_export_options_and_source_action_hashes() {
         key.with_source_action_hashes(["blake3:repair-artifact".to_owned()])
             .digest()
     );
+}
+
+/// GUI-SRCACC-1: a changed runtime artifact must miss the prepared base and
+/// change preview/export identity, while a recipe-only source-action change
+/// invalidates the final preview/export identity but may reuse the same pixels.
+#[test]
+fn source_action_artifact_and_action_changes_invalidate_gui_cache_keys() {
+    let fixture = action_fixture(ActionFixtureMode::Valid);
+    let mut app = new_app();
+    open_and_decode(&mut app, fixture.source.display().to_string());
+    assert!(app.error().is_none());
+    let initial_cache_len = app.base_stage_cache_len();
+
+    // A normal downstream edit still reuses the action-aware base.
+    app.set_adjustment("exposure", 0.5);
+    app.render().unwrap();
+    assert!(app.last_stage_work().unwrap().base_cache_hit);
+    // Return to a neutral adjustment before comparing raw repair pixels. The
+    // first render above still proves that a downstream edit reuses the
+    // action-aware base; the artifact revision below is then the only input
+    // changing between the two identities.
+    app.set_adjustment("exposure", 0.0);
+    app.render().unwrap();
+    let initial_key = app.render_key().unwrap().clone();
+
+    // Revise both the binary artifact and the in-memory reference checksum.
+    // The new checksum is a different base identity, so stale repaired pixels
+    // cannot be served.
+    let changed = replace_fixture_artifact(&fixture, [7, 8, 9, 255, 1, 1, 1, 1]);
+    app.recipe.source_actions[0].artifact.checksum = changed.checksum();
+    app.mark_dirty();
+    app.render().unwrap();
+    let changed_key = app.render_key().unwrap().clone();
+    assert_ne!(initial_key.digest(), changed_key.digest());
+    assert_ne!(
+        initial_key.stage_digest(CacheStage::Export),
+        changed_key.stage_digest(CacheStage::Export)
+    );
+    assert!(!app.last_stage_work().unwrap().base_cache_hit);
+    assert_eq!(app.base_stage_cache_len(), initial_cache_len + 1);
+    assert_eq!(&app.preview().unwrap().pixels[..4], &[7, 8, 9, 255]);
+
+    // The operation kind is part of recipe identity but not the composited
+    // bytes. Preview/export must still miss; the artifact-aware base may hit.
+    app.recipe.source_actions[0].kind = lumina_sidecar::SourceActionKind::AiReplacement;
+    app.mark_dirty();
+    app.render().unwrap();
+    let changed_action_key = app.render_key().unwrap().clone();
+    assert_ne!(changed_key.digest(), changed_action_key.digest());
+    assert_ne!(
+        changed_key.stage_digest(CacheStage::Export),
+        changed_action_key.stage_digest(CacheStage::Export)
+    );
+    assert!(app.last_stage_work().unwrap().base_cache_hit);
 }

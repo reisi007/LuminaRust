@@ -323,11 +323,51 @@ Bundle auf). Umgesetzt ist F-049 (Pixel-Modulation invert/feather/blur/density);
 offen bleibt die Geometrie-Ausrichtung von Masken. Der Matching-Messbereich nach Crop/Masken
 ist mit F-041 umgesetzt (siehe „Exposure Matching").
 
-**Restgrenze (ehrlich):** Die GUI reicht Source-Actions beim Rendern bisher
-noch nicht aus dem `.lumina.zdata`-Bundle auf (sie liefert vorerst eine leere
-Liste); CLI und Renderpfad sind vollständig verdrahtet. Repair-Regionen werden
-im MVP 1:1 in Quellauflösung angewandt (keine Resampling-Semantik in F-042-N1);
-die Geometrie-Ausrichtung von Masken bleibt wie in F-042 dokumentiert offen.
+**Normative GUI-Parität (GUI-SRCACC-1, Doku-first 2026-09-24):** Persistierte
+Source-Actions dürfen in der Desktop-GUI weder als leere Runtime-Liste noch als
+unbeachtete Rezeptreferenz gerendert werden. Vor jedem GUI-Render aus dem
+`.lumina.zdata`-Bundle der geladenen Quelle werden alle referenzierten
+Repair-Regionen in Reihenfolge strikt aufgelöst. Fehlendes/unlesbares Bundle,
+fehlende Artefakt-ID, abweichende Referenz, ungültiger relativer Pfad,
+Prüfsummenabweichung, ungültige u16-Region oder ungültiges/dimensioniertes
+RGBA8-Replacement sowie eine Quellauflösung, die nicht zur Artefaktauflösung
+passt, sind laute Fehler. Es gibt weder Rezept-only-Fallback noch partielles
+Anwenden. Die aufgelösten Artefakte gehen durch `prepare_source_base` und
+`RenderContext` in aktive Vorschau und Export; die Preview-/Basis-Cache-Identität
+enthält ihre stabilen Artefakt-Prüfsummen. Damit wird Decode erst nach
+SourceActions geteilt, während Preview und alle nachgelagerten Stufen einschließlich
+Export bei geänderter Aktion oder geändertem Artefakt invalidiert werden.
+
+**Stand-in-Vertrag:** Navigator, Neighbor-Preview und Filmstrip-Thumbnail sind
+ebenfalls rezept- und artefaktbewusst. Die Aktion wird nach Decode in
+Quellauflösung aufgelöst und angewandt; erst danach wird für Neighbor/Thumbnail
+herunterskaliert. Ein nicht auflösbarer Stand-in meldet sichtbar `Failed`/
+`stale` bzw. den bestehenden Vorschaufehler und darf nie die bisherige
+rezeptlose oder rohe Ersatzdarstellung als gültige Parität ausgeben. Erst nach
+unabhängiger Verifizierung darf die bisherige Restgrenze als geschlossen gelten.
+
+**Definition of Done (GUI-SRCACC-1):** (1) ein gemeinsamer strikter GUI-Resolver
+liefert atomar Runtime-Artefakte plus Identitäten und wird von aktiver Vorschau,
+Export und allen benannten Stand-ins genutzt; (2) gültige Repair-Regionen sind in
+GUI-Preview und GUI-Export byte-/pixelgleich zum CLI/Core-Pfad; (3) Ändern von
+Aktion, Bundle-Artefakt oder Prüfsumme invalidiert Preview- und Export-Cache,
+während reine nachgelagerte Regler den Quellbasis-Eintrag weiterverwenden
+dürfen; (4) Missing-Bundle/-Artefakt, Checksummenkonflikt, ungültige Region,
+ungültiges Replacement und Dimensionskonflikt schlagen vor Pixelmutation laut
+fehl; (5) Navigator/Neighbor/Thumbnail sind entweder vollständig aufgelöst oder
+als explizit sichtbare Recipe-only-Degradation ausgewiesen (hier ist vollständige
+Auflösung SOLL), ohne Paritätsbehauptung bei Degradation; (6) Regressionstests
+liegen in `crates/lumina-gui/src/tests/source_actions.rs` und decken Preview-,
+Export-/CLI-Paritäts- sowie Cache-Identitätsänderungen ab; (7) Targets bleiben
+auf LibRaw 0.22.2 gepinnt, alle vorgeschriebenen fmt/Test/Clippy/Ratchet- und
+Diff-Gates sind grün und ein unabhängiger Agent bestätigt die Abnahme.
+
+**Restgrenze bis zur Verifikation:** Vor unabhängiger Verifikation bleibt der
+Bug dokumentiert: Die GUI reicht Source-Actions beim Rendern nicht aus dem
+`.lumina.zdata`-Bundle auf und kann dadurch Recipe-only-Pixel/Exporte liefern.
+Repair-Regionen werden im MVP 1:1 in Quellauflösung angewandt (keine
+Resampling-Semantik in F-042-N1); die Geometrie-Ausrichtung von Masken bleibt wie
+in F-042 dokumentiert offen.
 
 **Status (F-048 / F-051):** Über der bisherigen zdata-Tile-Auswertung liegt
 nun die intelligente Masken-Ladeentscheidung (`lumina-core::mask_loader`):

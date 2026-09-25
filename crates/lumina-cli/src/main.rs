@@ -58,7 +58,10 @@ use lumina_gpu::{unsupported_gpu_stages_with_context, Frame, GpuContext};
 // Visible backend-selection logging (no silent fallback to CPU).
 use log::info;
 #[allow(unused_imports)]
-use lumina_sidecar::{append_repair_region, load_zdata, zdata_path_for, RepairRegionArtifact};
+use lumina_sidecar::{
+    append_repair_region, load_validated_source_action_bundle, load_zdata, zdata_path_for,
+    RepairRegionArtifact,
+};
 // LRPAR-G12-FACE-IMPL-20-REST: the `face_embedding` write path only exists in
 // the `onnx-rt` build (the only build that can produce real vectors).
 use lumina_sidecar::{
@@ -7676,9 +7679,9 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
 }
 
 /// Resolves the recipe's persisted source actions into runtime artifacts by
-/// reading the `.lumina.zdata` bundle.  A missing bundle, a missing artifact id
-/// or a checksum mismatch against the recipe reference is a hard error — there
-/// is no silent fallback (reproducibility over convenience).
+/// reading the `.lumina.zdata` bundle. A malformed path/version, missing bundle,
+/// missing artifact id, or checksum mismatch is a hard error — there is no
+/// silent fallback (reproducibility over convenience).
 fn resolve_source_actions(
     recipe: &EditRecipe,
     zdata_path: &Path,
@@ -7686,12 +7689,8 @@ fn resolve_source_actions(
     if recipe.source_actions.is_empty() {
         return Ok(Vec::new());
     }
-    let container = load_zdata(zdata_path).map_err(|error| {
-        CliError::Message(format!(
-            "could not read source-action bundle `{}`: {error}",
-            zdata_path.display()
-        ))
-    })?;
+    let container =
+        load_validated_source_action_bundle(recipe, zdata_path).map_err(CliError::Message)?;
     let mut artifacts = Vec::with_capacity(recipe.source_actions.len());
     for spec in &recipe.source_actions {
         let region = container

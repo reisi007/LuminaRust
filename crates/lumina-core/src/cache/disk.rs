@@ -26,6 +26,10 @@ struct PreviewRecord {
     source: String,
     virtual_copy: String,
     kind: PreviewKind,
+    /// Exact source bytes that authorized this preview. `None` is a legacy
+    /// filename-only record and must never satisfy an identified lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_content_hash: Option<String>,
 }
 
 /// A cache rooted at the `.lumina` directory belonging to an image folder.
@@ -123,6 +127,35 @@ impl DiskFolderCache {
         kind: PreviewKind,
         bytes: &[u8],
     ) -> Result<bool, DiskCacheError> {
+        self.store_preview_record(source, virtual_copy, kind, None, bytes)
+    }
+
+    /// Store a preview authorized by exact source-content identity.
+    pub fn store_preview_with_source_hash(
+        &self,
+        source: &str,
+        virtual_copy: &str,
+        kind: PreviewKind,
+        source_content_hash: &str,
+        bytes: &[u8],
+    ) -> Result<bool, DiskCacheError> {
+        self.store_preview_record(
+            source,
+            virtual_copy,
+            kind,
+            Some(source_content_hash.to_owned()),
+            bytes,
+        )
+    }
+
+    fn store_preview_record(
+        &self,
+        source: &str,
+        virtual_copy: &str,
+        kind: PreviewKind,
+        source_content_hash: Option<String>,
+        bytes: &[u8],
+    ) -> Result<bool, DiskCacheError> {
         if !self.effective_settings()?.allows(kind) {
             return Ok(false);
         }
@@ -132,6 +165,7 @@ impl DiskFolderCache {
             source: source.into(),
             virtual_copy: virtual_copy.into(),
             kind,
+            source_content_hash,
         })?;
         atomic_write(&meta, &record)?;
         Ok(true)
@@ -148,6 +182,33 @@ impl DiskFolderCache {
         }
         let (meta, data) = self.entry_paths(source, virtual_copy, kind);
         if !meta.is_file() || !data.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(fs::read(data)?))
+    }
+
+    /// Load only a preview whose persisted record names the exact expected
+    /// source bytes. Legacy filename-only and mismatched records are misses.
+    pub fn load_preview_with_source_hash(
+        &self,
+        source: &str,
+        virtual_copy: &str,
+        kind: PreviewKind,
+        source_content_hash: &str,
+    ) -> Result<Option<Vec<u8>>, DiskCacheError> {
+        if !self.effective_settings()?.allows(kind) {
+            return Ok(None);
+        }
+        let (meta, data) = self.entry_paths(source, virtual_copy, kind);
+        if !meta.is_file() || !data.is_file() {
+            return Ok(None);
+        }
+        let record: PreviewRecord = serde_json::from_slice(&fs::read(meta)?)?;
+        if record.source != source
+            || record.virtual_copy != virtual_copy
+            || record.kind != kind
+            || record.source_content_hash.as_deref() != Some(source_content_hash)
+        {
             return Ok(None);
         }
         Ok(Some(fs::read(data)?))
@@ -322,6 +383,53 @@ mod tests {
         let effective = child.effective_settings().unwrap();
         assert!(effective.reset_sliders_automatically);
         assert!(effective.standard_preview);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn identified_preview_rejects_legacy_and_wrong_source_content() {
+        let (path, cache) = setup();
+        cache
+            .store_preview_with_source_hash(
+                "a.raw",
+                "main",
+                PreviewKind::Standard,
+                "blake3:source-a",
+                b"a",
+            )
+            .unwrap();
+        assert!(cache
+            .load_preview_with_source_hash(
+                "a.raw",
+                "main",
+                PreviewKind::Standard,
+                "blake3:source-b",
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            cache
+                .load_preview_with_source_hash(
+                    "a.raw",
+                    "main",
+                    PreviewKind::Standard,
+                    "blake3:source-a",
+                )
+                .unwrap(),
+            Some(b"a".to_vec())
+        );
+        cache
+            .store_preview("a.raw", "main", PreviewKind::Standard, b"legacy")
+            .unwrap();
+        assert!(cache
+            .load_preview_with_source_hash(
+                "a.raw",
+                "main",
+                PreviewKind::Standard,
+                "blake3:source-a",
+            )
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(path).unwrap();
     }
 

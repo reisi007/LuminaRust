@@ -36,7 +36,9 @@ fn generative_status_text_covers_all_states() {
     app.generative_memo = None;
     app.recipe.generative_edit.as_mut().unwrap().seed = Some(999);
     // The persisted link is for seed 7, so the current identity is stale.
-    let error = app.resolve_generative_artifacts(&frame).unwrap_err();
+    let error = app
+        .resolve_generative_artifacts(&frame, &ResolvedSourceActions::default())
+        .unwrap_err();
     assert!(
         error.to_string().to_lowercase().contains("stale"),
         "got {error}"
@@ -53,7 +55,9 @@ fn generative_status_text_covers_all_states() {
     app.generative_artifacts = GenerativeArtifacts::default();
     app.generative_memo = None;
     app.recipe.generative_edit.as_mut().unwrap().seed = Some(7);
-    let error = app.resolve_generative_artifacts(&frame).unwrap_err();
+    let error = app
+        .resolve_generative_artifacts(&frame, &ResolvedSourceActions::default())
+        .unwrap_err();
     assert!(
         error.to_string().to_lowercase().contains("corrupt"),
         "a damaged bundle must read corrupt, got {error}"
@@ -180,7 +184,9 @@ fn generative_double_role_record_renders() {
         Some(true),
         "the persisted auto-fill flag must be restored"
     );
-    let resolved = reloaded.resolve_generative_artifacts(&frame).unwrap();
+    let resolved = reloaded
+        .resolve_generative_artifacts(&frame, &ResolvedSourceActions::default())
+        .unwrap();
     assert!(
         resolved.auto_fill.is_some(),
         "auto-fill must resolve from the bundle"
